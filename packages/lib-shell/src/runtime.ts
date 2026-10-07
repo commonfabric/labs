@@ -6,11 +6,10 @@ import {
   legacySpaceDid,
   Session,
 } from "@commonfabric/identity";
-import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricPlainObject } from "@commonfabric/data-model";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import { navigate } from "@commonfabric/navigation";
-import { PROMPT_CAVEAT_FAMILY_KINDS } from "@commonfabric/runner/cfc/prompt-caveat-kinds";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import { slugIdForSpace } from "@commonfabric/runner/slugs";
 import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 import { NameSchema } from "@commonfabric/runner/schemas";
@@ -67,39 +66,13 @@ export type RuntimeRenderConfidentialityCeiling = NonNullable<
 >;
 
 /**
- * The §8.10.6 initial display-sink release ceiling (Epic H3a/H3b,
- * docs/history/plans/cfc-future-work-implementation.md): what a display surface
- * admits when no authored policy covers it. The audience of a display sink
- * is the acting user, so the identity/personal-space principal forms naming
- * exactly that audience are admissible by construction. Shared `Space(...)`
- * principals are NOT listed here — they resolve to the acting user via the
- * verified `HasRole` exchange rules at the render boundary (H3b), so the
- * runner-side resolver admits them without widening this static ceiling.
- *
- * Tighten-only evolution (spec §8.10.6): removing an entry needs no
- * ceremony; admitting a new atom family or caveat kind is a release
- * decision that needs authored policy or verified authority.
+ * The §8.10.6 initial display-sink release ceiling for `actingUser`, which
+ * `@commonfabric/runner/cfc/default-display-ceiling` describes.
  */
 export function defaultRenderConfidentialityCeiling(
   actingUser: DID,
 ): RuntimeRenderConfidentialityCeiling {
-  return {
-    // Acting-user identity atoms: the audience of a display sink is the
-    // acting user, so atoms naming exactly that audience are admissible by
-    // construction (spec §8.10.6). Both the §15.2 principal atom objects
-    // (`User`, `PersonalSpace`) and the legacy DID-string form are listed —
-    // the ceiling is a set, and every entry names exactly this audience.
-    atoms: [
-      cfcAtom.user(actingUser),
-      cfcAtom.personalSpace(actingUser),
-      actingUser,
-    ],
-    // The whole §10.1 prompt-caveat family (SC-54, proposed §8.10.6),
-    // screening tiers included. A prompt caveat says not to trust the
-    // content as instructions to a model; a display shows it to the acting
-    // user. Admitting it is not discharging it: it stays on the value.
-    caveatKinds: [...PROMPT_CAVEAT_FAMILY_KINDS],
-  };
+  return defaultDisplayCeiling(actingUser);
 }
 
 export type RuntimeNavigationTarget = { spaceDid: DID; pieceId: string };

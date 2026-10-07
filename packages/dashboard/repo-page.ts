@@ -31,6 +31,7 @@ import {
 } from "./ci-jobs-page.ts";
 import { LOOM_REPO, RECENT_DISPLAY, REPO, REPOS_PATH } from "./config.ts";
 import { median, pullRequestLinks, runDurationMs } from "./lib.ts";
+import { GREEN_STAR_RULES, greenStar, greenWords } from "./green-star.ts";
 import { type LivePageContent, livePageResponse } from "./live-page.ts";
 import { STATUS_EDGE, STATUS_WASH } from "./palette.ts";
 import { textureRules } from "./render.ts";
@@ -289,6 +290,7 @@ const STATUS_TEXT = (["good", "warn", "bad", "unknown"] as const).map((
 const STYLES = `
   ${tileContentRules(SPARKLINE_HEIGHT)}
   ${statusDotRules(9)}
+  ${GREEN_STAR_RULES}
   ${textureRules(["hero", ...CARDS])}
   ${STATUS_SURFACES}
   ${STATUS_TEXT}
@@ -339,13 +341,17 @@ const STYLES = `
   /* A snapshot's runs: a bar for each, as tall as the run took. */
   .runs section+section{margin-top:18px}
   .chart-frame{max-width:calc(var(--bars) * 24px + 64px);margin-left:auto}
-  .runs-chart{position:relative;height:96px;margin-right:64px;border-bottom:1px solid var(--border-strong)}
+  /* The top margin holds a star over the diamond of a failed run cut square. */
+  .runs-chart{position:relative;height:96px;margin:24px 64px 0 0;border-bottom:1px solid var(--border-strong)}
   .bars{position:absolute;inset:0;display:flex;align-items:flex-end;justify-content:flex-end;gap:2px}
   .bar{flex:1 1 0;max-width:22px;min-width:2px;border-radius:4px 4px 0 0;position:relative;background:var(--status-unknown);opacity:.9;transition:opacity .1s}
   .bar:hover{opacity:1;outline:1px solid var(--text-muted);outline-offset:1px}
   .bar.green{background:var(--status-good)}.bar.red{background:var(--status-bad)}.bar.run{background:var(--running);opacity:.6}
   .bar.over{border-radius:0}
   .bar.red::after{content:"";position:absolute;left:50%;top:-10px;width:7px;height:7px;transform:translateX(-50%);background:var(--status-bad);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
+  /* A star stands over its bar, and over the diamond of a failed run. */
+  .bar span.green-star{position:absolute;left:50%;bottom:calc(100% + 2px);transform:translateX(-50%);margin:0;font-size:11px}
+  .bar.red span.green-star{bottom:calc(100% + 12px)}
   .median{position:absolute;left:0;right:0;border-top:1px dashed var(--text-faint);pointer-events:none}
   .median span{position:absolute;left:100%;top:0;transform:translateY(-50%);margin-left:10px;font-size:10px;line-height:1.25;color:var(--text-muted);white-space:nowrap}
   .chart-foot{margin-right:64px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:5px;font-size:10px;color:var(--text-muted)}
@@ -585,10 +591,11 @@ const runTitle = (run: Run, source: RunSource): string =>
  * that passed drawn across and named in the gutter to its right. The scale's
  * top is the longest run but one in ten, so a single run that hung does not
  * flatten the rest, and at least MEDIAN_HEADROOM times the median, so the
- * runs around it keep room to differ; a bar past the top is cut square. Each
- * bar links to its run for a pointer, and the keyboard passes over it, since
- * the list under the chart links the newest runs and the section's heading
- * links every run on GitHub.
+ * runs around it keep room to differ; a bar past the top is cut square. A
+ * star stands over a bar whose commit the repository's green branch is or
+ * was at. Each bar links to its run for a pointer, and the keyboard passes
+ * over it, since the list under the chart links the newest runs and the
+ * section's heading links every run on GitHub.
  */
 function runsChart(shown: readonly Run[], source: RunSource, now: number) {
   const took = shown.map((run) => tookMs(run, now) ?? 0);
@@ -603,16 +610,19 @@ function runsChart(shown: readonly Run[], source: RunSource, now: number) {
     .reverse().map(({ run, took }) => {
       const { dot, text } = runOutcome(run);
       const height = Math.max(4, Math.min(100, (took / top) * 100));
-      const title = `${runTitle(run, source)} — ${text} · ${
-        humanDuration(took)
-      } · ${compactSpan(now - Date.parse(run.run_started_at))} ago`;
+      const title = [
+        `${runTitle(run, source)} — ${text}`,
+        humanDuration(took),
+        `${compactSpan(now - Date.parse(run.run_started_at))} ago`,
+        ...(run.green === undefined ? [] : [greenWords(run.green)]),
+      ].join(" · ");
       return `<a class="bar ${dot}${
         took > top ? " over" : ""
       }" style="height:${height.toFixed(1)}%" href="${
         escapeHtml(run.html_url)
       }" target="_blank" rel="noopener" tabindex="-1" title="${
         escapeHtml(title)
-      }"></a>`;
+      }">${greenStar(run.green)}</a>`;
     }).join("");
   const line = middle === undefined ? "" : `<div class="median" style="bottom:${
     ((middle / top) * 100).toFixed(1)
@@ -666,8 +676,8 @@ function latestRow(
     }">${humanDuration(took)}</a>`;
   const started = Date.parse(run.run_started_at);
   return `<li><span class="dot ${dot}"></span><span class="what">${
-    pullRequestLinks(title, source.repo, run.html_url)
-  }</span><a class="result" href="${
+    greenStar(run.green)
+  }${pullRequestLinks(title, source.repo, run.html_url)}</span><a class="result" href="${
     escapeHtml(run.html_url)
   }" target="_blank" rel="noopener">${
     escapeHtml(text)

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { parseCfHarnessCliArgs } from "../src/cli.ts";
+import { parseCfHarnessCliArgs } from "./support/on-linux.ts";
 import {
   HARNESS_COMMAND_CATALOG_LIMIT,
   HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,

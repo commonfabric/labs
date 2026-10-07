@@ -470,12 +470,32 @@ async function githubResponse(
   return { response: response!, operation };
 }
 
+/** A page of a GitHub response, and the path of the page after it, if any. */
+export interface GitHubPage<T> {
+  /** The page's JSON. */
+  readonly value: T;
+
+  /** The path of the next page, relative to the GitHub API, if any. */
+  readonly next: string | undefined;
+}
+
+/**
+ * The path, relative to the GitHub API, of the page that a `Link` header names
+ * as the next one.
+ */
+function nextPagePath(link: string | null): string | undefined {
+  const next = link?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+  if (next === undefined) return undefined;
+  const { pathname, search } = new URL(next);
+  return `${pathname}${search}`;
+}
+
 async function githubJson<T>(
   path: string,
   credential: GitHubCredential,
   performance: boolean,
   options: GitHubRequestOptions,
-): Promise<T> {
+): Promise<GitHubPage<T>> {
   const { response: res, operation } = await githubResponse(
     path,
     credential,
@@ -513,7 +533,7 @@ async function githubJson<T>(
   try {
     const value = await res.json() as T;
     finishGitHubOperation(operation, res, false);
-    return value;
+    return { value, next: nextPagePath(res.headers.get("link")) };
   } catch (error) {
     console.error(
       `GitHub API operation ${operation.id} for ${operation.path} could not read valid JSON ` +
@@ -531,7 +551,25 @@ export async function github<T = unknown>(
   options: GitHubRequestOptions = {},
 ): Promise<T> {
   const t = githubCredential(path, credential);
-  return await githubJson<T>(path, t, false, options);
+  return (await githubJson<T>(path, t, false, options)).value;
+}
+
+/**
+ * Like `github()`, except that it also returns the path of the next page, for
+ * a list GitHub pages through a cursor in the `Link` header rather than by
+ * page number.
+ */
+export async function githubPage<T = unknown>(
+  path: string,
+  credential?: GitHubCredential,
+  options: GitHubRequestOptions = {},
+): Promise<GitHubPage<T>> {
+  return await githubJson<T>(
+    path,
+    githubCredential(path, credential),
+    false,
+    options,
+  );
 }
 
 export async function githubDownload(
@@ -554,7 +592,7 @@ export async function performanceGithub<T = unknown>(
   options: GitHubRequestOptions = {},
 ): Promise<T> {
   const t = githubCredential(path, credential);
-  return await githubJson<T>(path, t, true, options);
+  return (await githubJson<T>(path, t, true, options)).value;
 }
 
 export async function performanceGithubDownload(

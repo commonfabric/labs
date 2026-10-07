@@ -24,14 +24,15 @@
 `--cf-harness` starts a cf-harness console against the fabric these scripts are
 starting, on the port Weaver pairs with, and stops it with the pair.
 `restart-local-dev.sh` forwards the flag. The console resolves the rest from
-that fabric — the toolshed URL and store from this script's own values, the
-sandbox's sidecar directories from Docker's runtime registration — and prints
-every value beside the record that decided it, so a wrong one names where to fix
-it. Two values it cannot derive: set `CF_IDENTITY` to an identity keyfile and
-`CF_SPACE` to a space name, or the console's own `CF_HARNESS_FABRIC_IDENTITY`
-and `CF_HARNESS_FABRIC_SPACE`, which name the same two and win over them. Under
-loom there is no need — loom exports `LOOM_INSTANCE_ID`, and the console reads
-the identity and space off that instance's `pieces.json`.
+that fabric — the toolshed URL and store from this script's own values, and,
+where its sandbox is Docker, the sandbox's sidecar directories from Docker's
+runtime registration — and prints every value beside the record that decided
+it, so a wrong one names where to fix it. Two values it cannot derive: set
+`CF_IDENTITY` to an identity keyfile and `CF_SPACE` to a space name, or the
+console's own `CF_HARNESS_FABRIC_IDENTITY` and `CF_HARNESS_FABRIC_SPACE`, which
+name the same two and win over them. Under loom there is no need — loom exports
+`LOOM_INSTANCE_ID`, and the console reads the identity and space off that
+instance's `pieces.json`.
 
 Each value the console needs is settled the same way: what the command line
 named, then what the instance recorded, then what the shell exported, then an
@@ -52,11 +53,17 @@ owner; it is off unless named here or exported as
 `GET /api/status` when it is on. `packages/cf-harness/console/README.md` has the
 rest.
 
-The console is a surface on the fabric rather than part of it. It needs Docker
-and a connected model provider, and when it cannot start — either of those
-missing, its port taken, a value underivable — it says so in the script's output
-and in `packages/cf-harness/local-dev-console.log`, and the shell and toolshed
-keep running. `packages/cf-harness/console/README.md` covers the console itself,
+The console is a surface on the fabric rather than part of it. It needs a
+sandbox runtime and a connected model provider, and when it cannot start —
+either of those missing, its port taken, a value underivable — it says so in
+the script's output and in `packages/cf-harness/local-dev-console.log`, and the
+shell and toolshed keep running. The sandbox runtime is the one
+`CF_HARNESS_SANDBOX_RUNTIME` names, `docker` or `runsc`. With none named, a Mac
+serves on its native runtime, the cfc-vm store gVisor's macOS installer writes,
+and does not start where that store is not set up; every other platform serves
+on Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
+is set the console is launched for that loom instance, and with no runtime named
+it does not start on any platform, saying that Loom must name one. `packages/cf-harness/console/README.md` covers the console itself,
 and [`../../packages/cf-harness/docs/WEAVER.md`](../../packages/cf-harness/docs/WEAVER.md)
 the operator procedure it belongs to.
 
@@ -378,8 +385,13 @@ configured with under `CF_HARNESS_HOME`; `--model` names a model, and
 tools. A run's workspace and artifacts go under `--work-root`, which defaults to
 `$CF_HARNESS_HOME/agent-runs`.
 
-A run's sandbox is the harness's Docker `runsc-cfc` sandbox, so
-`CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+A run's sandbox is the one the harness selects.
+`CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`; with none named, a
+Mac runs each run on its native runtime, from the cfc-vm store, while every
+other platform runs Docker. The runner derives that selection as it starts, and
+where the harness would refuse its runs, a Mac whose store is not set up among
+them, it exits with the harness's refusal before either of its lanes, the
+Fabric lane or local jobs, serves anything. On Docker, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` name the two sidecar directories
 Docker's `runsc-cfc` runtime is registered with. A run's task is bound to the
 prompt-slot role `context`, and the run returns its structured result through

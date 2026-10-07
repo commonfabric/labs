@@ -1262,6 +1262,12 @@ home directory. The Fabric lane uses the `context` prompt role, so the default
 `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
+A run's sandbox, and a local job's, is the one `cf-harness` selects from the
+environment: `CF_HARNESS_SANDBOX_RUNTIME` names `docker` or `runsc`, and with
+none named a Mac runs on its native runtime and every other platform on Docker.
+The runner derives that selection as it starts, before either lane serves, and
+exits with the harness's refusal where the harness would refuse its jobs.
+
 What the Fabric lane does, in order:
 
 1. Connects to the home toolshed as the identity, creates the home pattern if

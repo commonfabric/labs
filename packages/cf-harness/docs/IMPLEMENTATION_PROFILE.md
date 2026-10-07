@@ -135,10 +135,14 @@ advertised capability as dependency readiness.
   broken Codex binding does not fall back to gateway billing or retention. The
   dedicated local Loom host uses the fixed credential owner `local`, a canonical
   home identity, and the persisted provider/authentication source.
-- Execution substrate: a gVisor sandbox reached through one of two drivers. The
-  default is Docker, normally with the sibling gVisor `runsc-cfc` runtime, with
+- Execution substrate: a gVisor sandbox reached through one of two drivers. One
+  is Docker, normally with the sibling gVisor `runsc-cfc` runtime, with
   configurable image and runtime. The other invokes a `runsc` binary directly,
-  with no Docker and with a configurable rootfs, CFC policy, and binary.
+  with no Docker and with a configurable rootfs, CFC policy, and binary. A run
+  names its driver; where it names none, macOS takes the direct driver over its
+  native cfc-vm store, refusing where that is not set up, and every other
+  platform takes Docker, except that the Loom local host, and a console launched
+  for a Loom instance, refuse where none is named.
   [Sandbox runtimes](CURRENT_STATE.md#sandbox-runtimes) describes both.
 - CFC authority: Common Fabric runner/runtime evidence and trusted sandbox
   sidecars. Harness-local policy logic is conservative transport/enforcement,

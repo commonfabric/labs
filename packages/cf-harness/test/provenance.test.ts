@@ -13,7 +13,8 @@ import {
   withRunManifest,
 } from "../src/provenance.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
-import { cfHarnessCliCommandName, runCfHarnessCli } from "../src/cli.ts";
+import { cfHarnessCliCommandName } from "../src/cli.ts";
+import { runCfHarnessCli } from "./support/on-linux.ts";
 
 function envFrom(values: Record<string, string>): EnvReader {
   return (name) => values[name];

@@ -8,6 +8,7 @@
 
 import { Identity } from "@commonfabric/identity";
 import { isDIDKey } from "@commonfabric/identity/did";
+import { loadHarnessIdentity } from "./identity-key.ts";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   fabricSessionPresetCfcDials,
@@ -143,8 +144,7 @@ async () => {
   const foreignSpaces = validateHarnessForeignSpaces(
     config.foreignSpaces ?? {},
   );
-  const loadIdentity = deps.loadIdentity ??
-    (async (path: string) => Identity.fromPkcs8(await Deno.readFile(path)));
+  const loadIdentity = deps.loadIdentity ?? loadHarnessIdentity;
   const initialize = deps.initialize ??
     ((options) => PiecesController.initialize(options));
   const identity = await loadIdentity(config.identityKeyPath);

@@ -5899,6 +5899,11 @@ export class CfHarnessPromptLoop {
         ownedRunscSandboxConfig: this.engine.ownedRunscSandboxConfig,
         configuredSandbox: this.engine.config.sandbox,
       }, childAcquiredSkill),
+      // Whichever of those it is, the child runs on the runtime this run's
+      // entrypoint selected, and records that it was selected the same way.
+      ...(this.engine.sandboxRuntimeChoice !== undefined
+        ? { sandboxRuntimeChoice: this.engine.sandboxRuntimeChoice }
+        : {}),
       // The parent's own record, narrowed to the one skill. Narrowed rather
       // than rebuilt so the child's record keeps the time the acquisition was
       // written, which is what it is a record of.

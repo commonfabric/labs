@@ -1,16 +1,16 @@
 /** Checks explicit CLI configuration and per-turn Loom context isolation. */
 
-import { createLoomLocalCfHarnessHost } from "../src/loom-local-host.ts";
-import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
 import {
-  parseHarnessInteractiveChatStdioCliOptions,
+  createLoomLocalCfHarnessHost,
+  parseCfHarnessCliArgs,
+  resolveConsoleConfig,
   runHarnessInteractiveChatStdioCli,
-} from "../src/interactive-chat-stdio.ts";
+} from "./support/on-linux.ts";
+import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
+import { parseHarnessInteractiveChatStdioCliOptions } from "../src/interactive-chat-stdio.ts";
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { parseCfHarnessCliArgs } from "../src/cli.ts";
-import { resolveConsoleConfig } from "../console/server.ts";
 import { HarnessInteractiveChatService } from "../src/interactive-chat-service.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import { createHarnessRunState } from "../src/run-state.ts";

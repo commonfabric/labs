@@ -28,10 +28,9 @@ import {
   formatCfHarnessCliUsage,
   formatCfHarnessTranscriptEvent,
   installCfHarnessSignalHandlers,
-  parseCfHarnessCliArgs,
   resolveCfHarnessCliSystemPrompt,
-  runCfHarnessCli,
 } from "../src/cli.ts";
+import { parseCfHarnessCliArgs, runCfHarnessCli } from "./support/on-linux.ts";
 import type { HarnessBrowserHost } from "../src/contracts/browser-host.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
@@ -73,6 +72,18 @@ const createIoBuffers = (): {
     stderr,
   };
 };
+
+/**
+ * The operator summary of a run this file's `runCfHarnessCli()` made without
+ * naming a sandbox runtime: Docker, by the default of Linux, the platform
+ * that function runs as here.
+ */
+const defaultedDockerSummary = (result: HarnessPromptLoopResult): string =>
+  formatCfHarnessCliResult(result, "operator", {
+    runtime: "docker",
+    source: "default",
+    platform: "linux",
+  });
 
 const completedCliResult = (
   runId: string,
@@ -2720,7 +2731,7 @@ Deno.test("runCfHarnessCli registers and disposes signal handlers around a run",
   assertEquals(disposed, true);
   assertEquals(stderr, []);
   assertEquals(stdout, [
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "Done.",
       transcript: [
@@ -3008,7 +3019,7 @@ Deno.test("runCfHarnessCli executes the prompt loop and prints result metadata",
   assertEquals(
     stdout,
     [
-      formatCfHarnessCliResult({
+      defaultedDockerSummary({
         model: "gpt-5.4",
         finalAssistantText: "Inspection complete.",
         transcript: [
@@ -3985,7 +3996,7 @@ Deno.test("runCfHarnessCli can stream transcript events as they happen", async (
     'assistant -> tools: read_file(path="README.md")\n',
     "tool read_file: outputId=read-1\n",
     "assistant: Inspection complete.\n",
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "Inspection complete.",
       transcript: [
@@ -5040,7 +5051,7 @@ Deno.test("runCfHarnessCli allows no-auth gateway mode without an API key", asyn
   assertEquals(createdOptions?.gatewayAuthMode, "none");
   assertEquals(createdOptions?.apiKey, undefined);
   assertEquals(stdout, [
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "No auth path.",
       transcript: [
@@ -5170,7 +5181,7 @@ Deno.test("runCfHarnessCli can resume from persisted run artifacts", async () =>
   );
   assertEquals(runTranscriptOptions?.promptSlotBinding, promptSlotBinding);
   assertEquals(stdout, [
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "Resumed.",
       transcript: [
