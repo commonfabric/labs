@@ -36,7 +36,8 @@ create a space for the conversation, with the room as its chat, in four steps:
 1. Create the conversation's space, with only this user granted (OWNER), and
    instantiate `FabriChatRoom` there with its `about`. The space's root, its
    default pattern, comes from its host the first time someone opens it.
-2. Grant each other member WRITE on the room's space, by principal.
+2. Grant each other member OWNER on the room's space, by principal, so any
+   member may add others.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
    deliver.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the

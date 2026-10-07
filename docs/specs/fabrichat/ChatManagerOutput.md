@@ -181,7 +181,7 @@ conversation from splitting.
 - `members: string[]` — The DIDs of the people to admit besides this user,
   each a principal's. Duplicates, and this user's own DID, are ignored. It may
   be empty, which creates a group room of one, and people can be added later
-  through the space's own tools.
+  from the room's add control.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 - `joinableByLink?: boolean` — Whether the room admits anyone who has its
