@@ -334,6 +334,37 @@ Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolu
   }
 });
 
+Deno.test("resolveRunscSandboxConfig refuses a writable mount inside the rootfs, and takes a read-only one", async () => {
+  const rootfs = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-rootfs-" }),
+  );
+  try {
+    await Deno.mkdir(join(rootfs, "etc"));
+    const mount = (readOnly: boolean) =>
+      config({
+        rootfs,
+        additionalMounts: [{
+          kind: "host-bind",
+          name: "image-etc",
+          hostPath: join(rootfs, "etc"),
+          sandboxPath: "/image-etc",
+          readOnly,
+        }],
+      });
+
+    assertThrows(
+      () => mount(false),
+      Error,
+      `the writable mount ${
+        join(rootfs, "etc")
+      } lies inside the sandbox rootfs ${rootfs}: the sandbox could rewrite the image later containers start from`,
+    );
+    assertEquals(mount(true).rootfs, rootfs);
+  } finally {
+    await Deno.remove(rootfs, { recursive: true });
+  }
+});
+
 Deno.test("resolveRunscSandboxConfig refuses an empty runsc binary, which names none", () => {
   assertThrows(
     () => config({ runscBinary: "" }),

@@ -181,8 +181,10 @@ export const parseHostMountSpecs = async (
  * way the batch CLI derives it, so a chat session and a batch run started
  * from one environment execute in the same sandbox. `host` says what applies
  * where `env` names no runtime, the default of a platform or a refusal for an
- * entrypoint whose caller must name one, and `host.homeDir` is the home an
- * entrypoint kept aside from `env`. Both `env` and `host` are required so
+ * entrypoint whose caller must name one; `host.homeDir` is the home an
+ * entrypoint kept aside from `env`, and `host.arch`, `host.uid`,
+ * `host.readSysctl` and `host.which` describe the process a platform's
+ * default is for, each the process's own where absent. Both `env` and `host` are required so
  * that a new entrypoint cannot leave the selection out. The entrypoints this
  * serves take no selection flag, so a refusal names the variable alone.
  *

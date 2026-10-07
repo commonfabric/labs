@@ -67,6 +67,11 @@ import {
  *   gets a container id minted here, fixed in width, so no id is a prefix
  *   of another (runsc resolves abbreviated ids).
  *
+ * No session is offered under pasta's network (see {@link PASTA_ARGS}):
+ * pasta starts what it runs in a PID namespace of its own, so a session's
+ * container started under it records pids that `exec` and the control
+ * commands, run outside pasta, cannot find.
+ *
  * Sessions and CFC. A session call carries its own invocation context in on
  * fd 3 and gets a result out on fd 4, but that result is NOT a sound basis
  * for enforcement, and sessions are refused in enforcing modes:
@@ -837,6 +842,19 @@ export const resolveRunscSandboxConfig = (
     rootfs,
     canonicalHostPath("sandbox rootfs", rootfs),
   );
+  // The other way round as well: a writable mount inside the rootfs lets a
+  // sandbox rewrite the image every later container starts from. On Linux
+  // the rootfs is that image's own directory tree.
+  for (const mount of hostMounts) {
+    if (
+      !mount.readOnly &&
+      mount.canonical.some((root) => inside(root, [canonicalRootfs]))
+    ) {
+      throw new Error(
+        `the writable mount ${mount.hostPath} lies inside the sandbox rootfs ${rootfs}: the sandbox could rewrite the image later containers start from${unnamed}`,
+      );
+    }
+  }
   const cfcPolicyPath = options.cfcPolicyPath === undefined
     ? undefined
     : trusted(
