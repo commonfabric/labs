@@ -8,9 +8,10 @@ A run that acts on the person's data — making a loom, writing a page — needs
 reach the operations the host offers without the harness naming any of them. The
 host already describes those operations in its command manifest and already
 narrows them per run with a broker. Two generic tools put that in front of the
-model: `list_commands` shows the commands the host lets this run run, and
-`run_command` runs one, as the agent. Which commands those are is the host's
-decision alone; nothing in cf-harness names a command.
+model: `list_commands` shows the commands the host lets this run run, each as a
+typed signature, and `run_command` runs one or a batch of them, as the agent.
+Which commands those are is the host's decision alone; nothing in cf-harness
+names a command.
 
 ## Host configuration
 
@@ -58,15 +59,58 @@ ambient process environment select the id.
 | `list_commands` | `loom command list --json`                                       |
 | `run_command`   | `loom command run <id> --args-json - --json [--loom] [--expect]` |
 
+`list_commands`, and the first `run_command` of a run, read the listing;
+`run_command` runs the CLI once for each call it sends.
+
+## The run's catalog
+
+Both tools read one catalog, held for the run: the host's listing is read the
+first time either tool needs it and kept for the rest of the run, so a run that
+calls many commands lists once. An explicit `list_commands` reads the host
+afresh and holds what it read. A read that fails is not held; the next call asks
+the host again.
+
 ## `list_commands`
 
-Returns the commands the broker listed, each as a callable descriptor
-(`src/contracts/callable.ts`): `name`, `title`, `description`, `inputSchema`,
-and `effect` where the host declares one, plus the command's `target` (`global`,
-or `loom` for one that takes a `loomId`) and the field names its answer declares
-among its `outputs`. A catalog larger than the model bound keeps its first
-entries whole and the rest without schema and description; `detail` names up to
-sixteen commands to keep whole.
+Takes an optional `detail`, naming up to sixteen commands. Returns:
+
+```json
+{
+  "outputId": "…",
+  "status": "ok",
+  "notice": "A command's effect is shown only where the host declares it; …",
+  "entries": [
+    {
+      "name": "people-discovery.dossier",
+      "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]",
+      "title": "Gather what is known about a person.",
+      "description": "…"
+    }
+  ],
+  "hidden": 1
+}
+```
+
+Each entry's `signature` is one line read from the command's argument schema
+(`src/loom-command-signature.ts`):
+
+- the parameters, required ones first and without `?`, optional ones with `?`,
+  each group in the schema's order; a default follows `=`;
+- an enum reads `a|b|c`, an array `T[]`, an object with declared properties
+  `{...}` and one without `object`, a `$ref` the name it ends in; `(...)` is a
+  schema that leaves its arguments open;
+- `-> {a, b}` names the fields the command's answer declares among its
+  `outputs`, and is left out when it declares none;
+- the bracket holds the command's effect where the host declares one, then its
+  target: `global`, or `loom` for one that takes a `loomId`.
+
+A line is cut to 400 characters, its trailing parameters replaced by `…`. A
+command named in `detail` also carries its full `inputSchema`. Every schema the
+model sees, and every schema a call is checked against, has its `x-*` extension
+keywords removed. A listing larger than the model bound keeps its first entries
+whole and the rest without description; a command named in `detail` is always
+kept whole. `omitted` counts rows that could not be read or fell past the
+catalog limit, and `compacted` the entries shown without description.
 
 A manifest row is left out, and counted as `hidden`, when its own declarations
 say an agent may not run it:
@@ -88,35 +132,105 @@ data.
 
 ## `run_command`
 
-Takes `command`, `args`, an optional `loomId`, and an optional
-`expectedVersion`. The arguments are bounded at 16 KiB of JSON before anything
-is sent. The host's listing is read before each command, and a command it does
-not show is refused before it reaches the host, so what a run can call is what
-it can see — a command the host withdrew mid-run included. That read is one more
-host call per command.
+Takes one call:
 
-Its answer has three shapes:
+```json
+{
+  "command": "people-discovery.dossier",
+  "args": { "entity_id": "e-1" },
+  "loomId": "loom-0123456789abcdef",
+  "expectedVersion": 3
+}
+```
+
+or a batch of independent calls, each of the same shape:
+
+```json
+{ "calls": [{ "command": "…", "args": {} }, { "command": "…", "args": {} }] }
+```
+
+A batch carries one to sixteen calls, and one that names `command` as well as
+`calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. Before
+anything is sent, each call is checked against the run's catalog: a command the
+catalog does not show is refused, so what a run can call is what it can see, and
+the call's `args` are validated against the command's `inputSchema` with the
+runtime's JSON Schema validator. A schema that validator cannot itself read is
+left to the host's command layer, which validates every call it is sent. The
+broker refuses a command the host has withdrawn since the catalog was read.
+
+A batch's calls run concurrently, at most four in flight to the host at once,
+and one call's failure does not stop the others.
+
+### A call's result
+
+Each call, alone or in a batch, comes back as one of:
 
 - `executed`: the command layer answered. `outcome` holds `ok`, `id`, `code`,
   `mayHaveLanded`, `completed`, and `bodyBytes`, each text cut to an
   identifier's length and `completed` to its first 32 operation ids, so the
-  summary stays small beside the answer's measured entry. A refusal by the
+  summary stays small beside the answer's measured `entry`. A refusal by the
   broker (`forbidden`) or by the command layer (`refused`) reads as
   `code: "not_granted"`, with the host's code beside it as `hostCode` and a
   `hint` telling the model to offer the command to the person in its result
-  rather than retry it.
-- `failed_to_deliver` with `landed: "no"`: nothing was sent — no configuration,
-  malformed input, a cancelled turn, an unreadable listing, or a command the
-  listing does not show.
+  rather than retry it. An answer the command layer refused as `bad-args`
+  carries the command's `signature`.
+- `invalid_args`: the args do not match the command's schema, and nothing was
+  sent:
+
+  ```json
+  {
+    "outputId": "…",
+    "status": "invalid_args",
+    "command": "people-discovery.dossier",
+    "path": "args.limit",
+    "expected": "integer",
+    "given": "\"ten\"",
+    "problem": "value does not match type integer",
+    "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]"
+  }
+  ```
+
+  `given` is `absent` for a required field the call left out, and `expected` is
+  `no such parameter` for a field a closed schema does not declare.
+- `unknown_command`: the catalog shows no command by that name, and nothing was
+  sent. `suggestions` names up to three listed commands nearest the one called —
+  names containing it first, then by edit distance — and `hint` points the model
+  back to `list_commands`.
+- `failed_to_deliver` with `landed: "no"`: nothing was sent — `not_configured`,
+  `invalid_input` (a malformed call), `batch_too_large` (more than sixteen
+  calls), `cancelled`, or the catalog could not be read (`command_failed`,
+  `malformed_payload`). In a batch, a malformed call, and a call reached after
+  the turn was cancelled, come back as that call's result; the rest stop the
+  whole tool call and come back in place of the batch.
 - `failed_to_deliver` with `landed: "unknown"`: the answer was lost after the
   command was sent, and the command may have taken effect.
 
-The tool's effect class is `write` for every call, because the host does not say
-which commands only read. Policy treats it as any other write: under
-`enforce-explicit` and `enforce-strict` a call runs only when the run's task is
-bound as a `direct-command` prompt slot, so a task that arrived as `context` — a
-request a pattern submitted, say — can list commands but not run one, a read
-command included.
+### A batch's result
+
+```json
+{
+  "outputId": "…",
+  "status": "batch",
+  "results": [{ "status": "executed", "…": "…" }, { "status": "invalid_args" }],
+  "truncated": false
+}
+```
+
+`results` holds one result per call, in the calls' order, each exactly as the
+call alone would have returned it, its own `outputId` included. The answers are
+measured in order against one output bound for the whole batch, so a batch shows
+the model no more than one call may; an answer that no longer fits is left out
+of its result, which is marked truncated, and `truncated` says whether any was.
+
+### Authorization
+
+The tool's effect class is `write` for every call, a batch included, because the
+host does not say which commands only read. Policy judges a tool call, so a
+batch is authorized or refused whole, as one write. Policy treats it as any
+other write: under `enforce-explicit` and `enforce-strict` a call runs only when
+the run's task is bound as a `direct-command` prompt slot, so a task that
+arrived as `context` — a request a pattern submitted, say — can list commands
+but not run one, a read command included.
 
 ## The answer is Loom data
 
@@ -137,4 +251,5 @@ measured against the run's observation ceiling.
   marked truncated.
 
 The admitted answer's label is recorded as the run's model-context observation
-over the output channel; the label itself stays on the artifact.
+over the output channel; the label itself stays on the artifact. A batch records
+one observation, the join of its admitted answers' labels.
