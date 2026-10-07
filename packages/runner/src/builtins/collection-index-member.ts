@@ -80,7 +80,8 @@ export function collectionIndexMember(
     // stamp, so one added source element re-ran every member the index
     // already had. The resolution's probe of the document itself is plumbing
     // too: where a link is an atomic value, that probe reads the document's
-    // root, which every bucket write overlaps.
+    // root, which every bucket write overlaps. The cell resolution kicks a
+    // sync of any cross-space target, so the trace walk kicks none.
     const hops: CfcAddress[] = [];
     const [state, index] = tx.runWithAmbientReadMeta(
       { ...ignoreReadForScheduling, ...machineryRead },
@@ -90,6 +91,8 @@ export function collectionIndexMember(
             runtime,
             tx,
             args.key(slot).getAsNormalizedFullLink(),
+            "value",
+            { kickCrossSpaceTargets: false },
           );
           for (const trace of traces) hops.push(trace.source);
           return args.key(slot).resolveAsCell().asSchema<T>(undefined);
