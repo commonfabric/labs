@@ -48,6 +48,7 @@ import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
   experimentalOptionsFromEnv,
+  getPatternEnvironment,
   type PatternCoverageData,
   setPatternEnvironment,
   writePatternCoverageLcov,
@@ -691,6 +692,7 @@ export class MultiRuntimeHarness {
   readonly pieceId: string;
   #server?: HostedServer;
   #awaitsServedConsequences: boolean;
+  #restorePatternEnvironment: () => void;
 
   private constructor(
     sessions: MultiRuntimeSession[],
@@ -698,12 +700,14 @@ export class MultiRuntimeHarness {
     pieceId: string,
     server: HostedServer | undefined,
     awaitsServedConsequences: boolean,
+    restorePatternEnvironment: () => void,
   ) {
     this.sessions = sessions;
     this.spaceDid = spaceDid;
     this.pieceId = pieceId;
     this.#server = server;
     this.#awaitsServedConsequences = awaitsServedConsequences;
+    this.#restorePatternEnvironment = restorePatternEnvironment;
   }
 
   static async create(
@@ -742,7 +746,10 @@ export class MultiRuntimeHarness {
     // serving loop runs in, which a toolshed sets to its own address. The
     // serving loop hosted here runs in this process, so this process's is set
     // to the address the harness hosts, as a handler run by a session's own
-    // runtime sees it.
+    // runtime sees it, until the harness is disposed.
+    const savedPatternEnvironment = getPatternEnvironment();
+    const restorePatternEnvironment = () =>
+      setPatternEnvironment(savedPatternEnvironment);
     if (serverExecutionOn && server !== undefined) {
       setPatternEnvironment({ apiUrl: targetUrl });
     }
@@ -839,6 +846,7 @@ export class MultiRuntimeHarness {
         pieceId,
         server,
         server === undefined || serverExecutionOn,
+        restorePatternEnvironment,
       );
     } catch (error) {
       await bootstrap?.terminate();
@@ -846,6 +854,7 @@ export class MultiRuntimeHarness {
         await session.disposeSession().catch(() => {});
       }
       await server?.close().catch(() => {});
+      restorePatternEnvironment();
       throw error;
     }
   }
@@ -995,7 +1004,11 @@ export class MultiRuntimeHarness {
         console.warn(`Failed to dispose session "${session.label}":`, error);
       });
     }
-    await this.#server?.close();
+    try {
+      await this.#server?.close();
+    } finally {
+      this.#restorePatternEnvironment();
+    }
   }
 
   /**
