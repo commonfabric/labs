@@ -1351,9 +1351,10 @@ with no fabric session. Every tool call, including delegated calls, counts as
 progress; prose, reasoning and ordinary tool results do not. A `step` carries
 `{turn, tool}`, and a `command` records each command the host ran for it.
 Children add `child: {profile, childRunId, parentToolCallId, depth}` to either
-body. The harness admits one level of delegation, so depth is `1`. The browser
-child's steps also carry `action` (such as `click` or `snapshot`), without the
-operation's arguments or page content.
+body. The harness admits one level of delegation, so depth is `1`. Only a
+child's `browser` tool steps carry `action` (such as `click` or `snapshot`),
+without the operation's arguments or page content. Other child tool steps, such
+as `submit_result`, omit `action`.
 
 The lane coalesces consecutive steps with the same tool, child and browser
 action, ignoring turn numbers. Thus N identical browser operations publish one
@@ -1361,10 +1362,11 @@ step; changing action or child publishes a new one. Commands are never
 coalesced, and a command breaks the step's repetition. Volume is bounded by
 these visible transitions plus command receipts, rather than transcript size.
 The job snapshot's `step` names the active child's tool until the parent's
-`delegate_task` result arrives. Among pending siblings the latest activity wins;
-a returning child reveals its sibling's last step, and the parent's step resumes
-when no child remains. Children cannot delegate further; nested progress needs
-lineage in the harness's transcript contract before that restriction is widened.
+`delegate_task` result arrives. Among pending siblings the latest activity wins,
+including command receipts; a returning child reveals its sibling's last step,
+and the parent's step resumes when no child remains. Children cannot delegate
+further; nested progress needs lineage in the harness's transcript contract
+before that restriction is widened.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an

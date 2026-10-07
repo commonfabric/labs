@@ -376,6 +376,19 @@ export class LocalJobLane {
               }
               for (const { kind, body } of localJobEventsOf(event)) {
                 if (kind === "command") {
+                  if (event.subagent !== undefined) {
+                    const id = event.subagent.parentToolCallId;
+                    const step = childSteps.get(id);
+                    if (
+                      step !== undefined &&
+                      step !== [...childSteps.values()].at(-1)
+                    ) {
+                      childSteps.delete(id);
+                      childSteps.set(id, step);
+                      // Publish the promoted tool before its landed receipt.
+                      reportStep(step);
+                    }
+                  }
                   lastStep = undefined;
                   store.report(job.id, kind, body);
                 } else if (event.subagent !== undefined) {

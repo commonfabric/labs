@@ -569,6 +569,97 @@ describe("local-jobs/lane", () => {
       await reached(store, id, "failed");
     });
 
+    it("makes a child receipt the latest sibling activity and keeps that order on return", async () => {
+      const { store, lane, nextRun, enqueue } = laneWith();
+      lane.start();
+      const id = enqueue("sibling receipts");
+      const run = await nextRun(0);
+      const events = delegatedBrowse();
+      const child = { ...browserChild, profile: "default" as const };
+      const message = {
+        role: "assistant" as const,
+        content: "",
+        toolCalls: [{
+          id: "command",
+          type: "function" as const,
+          function: {
+            name: "run_command",
+            arguments: '{"command":"page.write"}',
+          },
+        }],
+      };
+      await run.options.onEvent?.(events[0]);
+      await run.options.onEvent?.({
+        message,
+        transcript: [message],
+        subagent: child,
+      });
+      for (const n of [2, 3]) {
+        await run.options.onEvent?.({
+          ...events[1],
+          subagent: {
+            ...browserChild,
+            parentToolCallId: `delegate-${n}`,
+            childRunId: `job-browse.subagent.${n}`,
+          },
+        });
+      }
+      expect(store.get(id)!.step).toMatchObject({
+        child: { childRunId: "job-browse.subagent.3" },
+      });
+      const answer = {
+        role: "tool" as const,
+        toolName: "run_command",
+        toolCallId: "command",
+        content: '{"status":"executed","outcome":{"ok":true}}',
+      };
+      const receipt = {
+        message: answer,
+        transcript: [message, answer],
+        subagent: child,
+      };
+      await run.options.onEvent?.(receipt);
+      expect(store.get(id)!.step).toMatchObject({
+        tool: "run_command",
+        child: { childRunId: child.childRunId },
+      });
+      const before = store.get(id)!.seq;
+      await run.options.onEvent?.(receipt);
+      expect(store.get(id)!.seq).toBe(before + 1);
+      expect(store.get(id)!.commands).toHaveLength(2);
+      expect(store.get(id)!.commands[1]).toMatchObject({
+        command: "page.write",
+        child: { childRunId: child.childRunId },
+      });
+      const returned = events.find((event) =>
+        event.message.role === "tool" &&
+        event.message.toolName === "delegate_task"
+      )!;
+      if (returned.message.role !== "tool") {
+        throw new Error("Expected a delegate result");
+      }
+      for (const n of [2, 1, 3]) {
+        await run.options.onEvent?.({
+          ...returned,
+          message: { ...returned.message, toolCallId: `delegate-${n}` },
+        });
+        if (n === 2) {
+          expect(store.get(id)!.step).toMatchObject({
+            tool: "run_command",
+            child: { childRunId: child.childRunId },
+          });
+        } else if (n === 1) {
+          expect(store.get(id)!.step).toMatchObject({
+            tool: "browser",
+            child: { childRunId: "job-browse.subagent.3" },
+          });
+        }
+      }
+      expect(store.get(id)!.step).toEqual({ turn: 1, tool: "delegate_task" });
+      run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
+      await reached(store, id, "failed");
+    });
+
     it("keeps every child command and reports the same tool again after a receipt", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
       lane.start();
