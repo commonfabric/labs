@@ -300,8 +300,8 @@ export interface MainOutput {
   retainedPrivateInboxes: RetainedPrivateInboxes;
 
   /**
-   * Gives the stand-in Home a private inbox if it holds none, and points
-   * profiles at it.
+   * Gives the stand-in Home the private inbox its profiles advertise, or one of
+   * its own, and points profiles at it.
    */
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
 
@@ -399,7 +399,7 @@ export default pattern<MainInput, MainOutput>((
   );
   const adoptingHome = HomeStandIn({ label: "Adopting Home" });
   const refusingHome = HomeStandIn({ label: "Refusing Home" });
-  const readoptingHome = HomeStandIn({ label: "Re-adopting Home" });
+  const readoptingHome = HomeStandIn({ label: "Home adopting again" });
   return {
     [NAME]: "Private inbox fixture",
     [UI]: <div>private inbox fixture</div>,

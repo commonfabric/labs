@@ -161,8 +161,8 @@ profile pointing at another inbox as it is. While it holds none, as after a
 failed vetting, a profile that points at no inbox stays unpointed. A profile
 created once Home holds the inbox is pointed at it as it is created; one
 created earlier is pointed by the next ensure. Home decides only when an
-ensure runs, so a pointer that moves is decided at the next bring-up of Home in
-a runtime worker. A loom daemon does the same in the other direction, adopting
+ensure runs, so a pointer that moves is decided at the first bring-up of Home
+in the next runtime worker to start. A loom daemon does the same in the other direction, adopting
 the inbox a profile advertises and never replacing a pointer to a different
 one.
 [The private inbox](../../features/private-inbox.md) describes the whole

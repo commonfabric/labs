@@ -397,15 +397,26 @@ describe("private inbox across runtimes", () => {
     ).toBe(sender.identity.did());
   });
 
-  it("keeps the adopted inbox and retains nothing more when ensured again", async () => {
+  it("keeps the adopted inbox, retains nothing more and points a profile created since when ensured again", async () => {
+    // The adopted inbox's link names its result document, so Home's holder
+    // carries the offers' label now; the pointing waits on the ensure's own
+    // run having committed.
     const loom = await owner.link(["readoptLoomInbox", "piece"]);
+    await owner.send("createReadoptingProfile");
+    await harness.settle();
 
     const again = await ensureThroughHost(["readoptingHome"]);
-    await harness.settle();
+    await harness.settleUntil(async () =>
+      await pointed(["readoptingHome", "profiles", 1])
+    );
 
     expect(again.outcome).toBe("held");
     expect(
       (await owner.link(["readoptingHome", "privateInbox", "piece"])).id,
+    ).toBe(loom.id);
+    expect(
+      (await owner.link(["readoptingHome", "profiles", 1, "inbox", "piece"]))
+        .id,
     ).toBe(loom.id);
     expect(
       ((await owner.readRaw([

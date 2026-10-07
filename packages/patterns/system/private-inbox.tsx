@@ -189,8 +189,7 @@ export type PrivateInboxHolder = {
  * Home stopped holding them, and none of them the one it holds. Home gives up
  * an inbox when it adopts the one its profiles advertise in place of one no
  * profile advertises, and keeps the link so that the offers senders delivered
- * to the earlier inbox stay readable. Nothing reads the list yet; it is there
- * for the intake that reads Home's offers.
+ * to the earlier inbox stay readable.
  */
 export type RetainedPrivateInboxes = Cell<PrivateInboxPiece>[];
 
@@ -351,7 +350,8 @@ export function advertisedInbox(
 
 /**
  * Whether some profile in `profiles` points at `inbox`, comparing links as
- * `equals()` does. Call it as {@link advertisedInbox} is called.
+ * `equals()` does, which reads only link shape in the inbox's space. Call it as
+ * {@link advertisedInbox} is called.
  */
 function isAdvertised(
   profiles: readonly (PointTarget | undefined)[] | undefined,
@@ -441,7 +441,7 @@ export const ensurePrivateInbox = handler<
       });
     }
   } else if (held === undefined || !isAdvertised(profiles, held)) {
-    // A comparison of links, which reads nothing in the inbox's space.
+    // A comparison of links, which reads only link shape in the inbox's space.
     if (event?.adopt !== undefined && equals(event.adopt, advertised)) {
       if (held !== undefined) {
         retainInbox(retainedPrivateInboxes, held, event.adopt);

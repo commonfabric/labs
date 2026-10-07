@@ -551,10 +551,10 @@ export default pattern(() => {
   // held; when the host names none, as when the advertised inbox failed
   // vetting, or names another, Home keeps the one it holds.
   const readoptingAdvertising = ProfileHome({
-    initialName: "Re-adopting advertising",
+    initialName: "Adopting again advertising",
   });
   const readoptingUnpointed = ProfileHome({
-    initialName: "Re-adopting unpointed",
+    initialName: "Adopting again unpointed",
   });
   const readopting = new Writable<PrivateInboxHolder>({});
   const readoptingRetained = new Writable<RetainedPrivateInboxes>([]);
@@ -589,6 +589,23 @@ export default pattern(() => {
       keepingUnpointed,
       // deno-lint-ignore no-explicit-any
     ] as any,
+  });
+  // One holding the link Home's holder reached the inbox through when it
+  // created it, while its profile is given the inbox's own result document, so
+  // the two links are equal only once both are resolved.
+  const aliasKeepingOtherFirst = ProfileHome({
+    initialName: "Alias keeping other first",
+  });
+  const aliasKeepingAdvertising = ProfileHome({
+    initialName: "Alias keeping advertising",
+  });
+  const aliasKeeping = new Writable<PrivateInboxHolder>({});
+  const aliasKeepingRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureAliasKeeping = EnsuringHome({
+    privateInbox: aliasKeeping,
+    retainedPrivateInboxes: aliasKeepingRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [aliasKeepingOtherFirst, aliasKeepingAdvertising] as any,
   });
   const keepingUnadvertisedPointed = ProfileHome({
     initialName: "Keeping unadvertised pointed",
@@ -636,6 +653,9 @@ export default pattern(() => {
     returningAdvertising.setInbox.send({ inbox: advertised });
     keepingOtherFirst.setInbox.send({ inbox: advertised });
     keepingAdvertising.setInbox.send({ inbox: homeInbox });
+    aliasKeepingOtherFirst.setInbox.send({ inbox: advertised });
+    aliasKeepingAdvertising.setInbox.send({ inbox: homeInbox });
+    aliasKeeping.set({ piece: home.get().piece });
     refusingAdvertising.setInbox.send({ inbox: advertised });
     guardedAdvertising.setInbox.send({ inbox: advertised });
     for (
@@ -667,6 +687,7 @@ export default pattern(() => {
     ensureReadopting.ensure.send({ adopt: vetted });
     ensureReturning.ensure.send({ adopt: vetted });
     ensureKeeping.ensure.send({ adopt: vetted });
+    ensureAliasKeeping.ensure.send({ adopt: vetted });
     ensureKeepingUnadvertised.ensure.send({});
     ensureRefusing.ensure.send({});
     ensureGuarded.ensure.send({ adopt: another });
@@ -711,6 +732,15 @@ export default pattern(() => {
     equals(keepingOtherFirst.inbox?.piece, elsewhere.get().piece) &&
     equals(keepingAdvertising.inbox?.piece, home.get().piece)
   );
+  const assert_a_held_inbox_advertised_through_its_result_document_is_kept =
+    assert(() =>
+      equals(aliasKeeping.get().piece, home.get().piece) &&
+      !aliasKeeping.get().piece?.equalLinks(
+        aliasKeepingAdvertising.inbox?.piece,
+      ) &&
+      aliasKeepingRetained.get().length === 0 &&
+      equals(aliasKeepingOtherFirst.inbox?.piece, elsewhere.get().piece)
+    );
   const assert_a_held_inbox_is_kept_when_none_is_advertised = assert(() =>
     equals(keepingUnadvertised.get().piece, home.get().piece) &&
     keepingUnadvertisedRetained.get().length === 0 &&
@@ -782,6 +812,10 @@ export default pattern(() => {
       },
       { assertion: assert_an_inbox_adopted_again_leaves_the_retained_list },
       { assertion: assert_an_advertised_held_inbox_is_kept },
+      {
+        assertion:
+          assert_a_held_inbox_advertised_through_its_result_document_is_kept,
+      },
       { assertion: assert_a_held_inbox_is_kept_when_none_is_advertised },
       {
         assertion:
@@ -802,6 +836,10 @@ export default pattern(() => {
       },
       { assertion: assert_an_inbox_adopted_again_leaves_the_retained_list },
       { assertion: assert_an_advertised_held_inbox_is_kept },
+      {
+        assertion:
+          assert_a_held_inbox_advertised_through_its_result_document_is_kept,
+      },
       { assertion: assert_a_held_inbox_is_kept_when_none_is_advertised },
       {
         assertion:

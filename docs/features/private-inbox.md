@@ -62,8 +62,9 @@ advertise different ones, after an earlier split. The inbox is usable when:
   concrete owner grants neither;
 - the piece holds a list of `offers` and a `receive` stream.
 
-A failure to read the inbox's space that is not a refusal of access, such as
-a lost connection, rejects the ensure, and the next bring-up tries again.
+A failure to read the inbox's space that is not a refusal of access, such as a
+lost connection, rejects the ensure, and the next time that worker brings up
+Home it tries again.
 
 The host then sends Home's `ensurePrivateInbox` stream, naming the inbox to
 adopt when it is usable, and no inbox otherwise. A Home pattern without the
@@ -76,10 +77,10 @@ vetted it is decided by where it now points:
 - When Home holds an inbox and no profile points at an inbox, Home keeps it.
 - Otherwise, when the event names an inbox, Home adopts it if the first
   profile in the list that points at an inbox still points at that one, a
-  comparison of the two links that reads nothing in the inbox's space; if not,
-  as when the pointer moved after the host vetted it, Home is left as it is.
-  An inbox Home held until then, which no profile points at, goes to the end
-  of Home's `retainedPrivateInboxes` list.
+  comparison of the two links that reads only link shape in the inbox's space;
+  if not, as when the pointer moved after the host vetted it, Home is left as
+  it is. An inbox Home held until then, which no profile points at, goes to the
+  end of Home's `retainedPrivateInboxes` list.
 - Otherwise, when Home holds no inbox and no profile in the list points at an
   inbox, Home creates one, as "Where it lives" says.
 - Otherwise a profile advertises an inbox that failed vetting, and Home neither
@@ -111,20 +112,22 @@ Home adopts again only when an ensure runs, which is once per runtime worker, at
 the worker's first bring-up of Home. So when a pointer moves away from the inbox
 Home holds, as when a daemon writes the pointer last or the owner points a
 profile elsewhere, Home goes on holding the earlier inbox while senders deliver
-to the new one, until a runtime worker next brings Home up. Nothing watches the
-pointers in between. A loom daemon instead reads its profile's pointer again at
-intervals. Two further changes could close that window: a `setInbox` that sets
-the pointer only while it is unset, which needs older profile vintages detected
-and still leaves the side that loses to adopt the winner; or a single minter,
-where a loom daemon asks Home to ensure its inbox when Home has the stream and
-adopts the result. Either would need the loom side to agree.
+to the new one, until the next runtime worker to start brings Home up. Nothing
+watches the pointers in between. A loom daemon instead reads its profile's
+pointer again at intervals. Two further changes could close that window: a
+`setInbox` that sets the pointer only while it is unset, which needs older
+profile vintages detected and still leaves the side that loses to adopt the
+winner; or a single minter, where a loom daemon asks Home to ensure its inbox
+when Home has the stream and adopts the result. Either would need the loom side
+to agree.
 
-The host learns only whether the event was sent, not whether Home's handler
-committed: a stream's `send` returns before the handler runs. So an exception
-raised while sending it, such as Home failing to come up, is logged, and the
-next time that worker brings up Home it sends the event again; a failure inside
-the handler is not seen, and the event is not sent again until another worker
-brings Home up.
+Home opens without waiting for the ensure, which reads every profile's pointer
+and loads inbox documents in other spaces. The host learns only whether the
+event was sent, not whether Home's handler committed: a stream's `send` returns
+before the handler runs. So an exception raised while sending it, such as Home
+failing to come up, is logged, and the next time that worker brings up Home it
+sends the event again; a failure inside the handler is not seen, and the event
+is not sent again until another worker brings Home up.
 
 A profile is pointed in one of two ways:
 
@@ -164,18 +167,20 @@ The host, the handler, the pointing step and the seed step read each profile's
 pointer, and the handler reads the inbox the event names, the inbox Home holds
 and the ones it retains, as a typed link, `Cell<ShareInboxPiece>`; the host
 reads it through `inboxPieceLinkSchema` in
-`packages/piece/src/ops/private-inbox.ts`, the same type as a schema. The link
-carries the label of what it reaches, and the inbox labels its offers
-confidential to its owner. Read as an untyped link, `Cell<unknown>`, the pointer
-joins that label, from another space, into the reading run. Writer-fit then
-refuses the run's own sends, whichever path delivered it. When the event drain,
-rather than the wave that queued it, delivered the run, it also refuses the
-run's record that it handled the event, and the event is lost. Read as the typed
-link, the pointer joins no confidentiality. `private-inbox.pointer-type.test.ts`
-fails to compile if any reader's pointer type, the host's, the ensure's and the
-pointing step's, the seed step's, the profile's own or Home's holder and
-retained list, becomes unconstrained, or names a member of the inbox's result
-other than its name.
+`packages/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
+that names the inbox's own result document, as `setInbox` and an adoption write
+it, carries the label of what it reaches, and the inbox labels its offers
+confidential to its owner; a profile's pointer, and Home's holder once Home has
+adopted an inbox, hold such a link. Read as an untyped link, `Cell<unknown>`,
+the pointer joins that label, from another space, into the reading run.
+Writer-fit then refuses the run's own sends, whichever path delivered it. When
+the event drain, rather than the wave that queued it, delivered the run, it also
+refuses the run's record that it handled the event, and the event is lost. Read
+as the typed link, the pointer joins no confidentiality.
+`private-inbox.pointer-type.test.ts` fails to compile if any reader's pointer
+type, the host's, the ensure's and the pointing step's, the seed step's, the
+profile's own or Home's holder and retained list, becomes unconstrained, or
+names a member of the inbox's result other than its name.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them
