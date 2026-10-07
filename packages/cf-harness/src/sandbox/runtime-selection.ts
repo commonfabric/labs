@@ -1161,8 +1161,11 @@ export const resolveSandboxRuntimeSelection = async (
       `${SANDBOX_NETWORK_MODE_ENV} must be one of none, bridge, or host`,
     );
   }
-  // The docker network vocabulary maps onto runsc's: none stays none, bridge
-  // is runsc's own netstack, host is the host's stack.
+  // The docker network vocabulary maps onto runsc's: none stays none, host is
+  // the host's stack, and bridge is runsc's own `sandbox` network, which on
+  // macOS is the VM's, and on Linux, where the default hands the driver a
+  // `pasta` below, is pasta's namespace taken as runsc's host network; with
+  // no helper Linux's is loopback alone.
   const sandboxRunscNetworkMode: RunscNetworkMode | undefined =
     rawNetwork === "none"
       ? "none"
