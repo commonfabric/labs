@@ -306,12 +306,18 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
-  // spaceAccess(target, principal?) reads a principal's level, the current
-  // one's unless given, from the space's access list and returns a string or
-  // `undefined`. It builds no graph node,
+  // spaceAccess(target?) reads the current principal's level from the space's
+  // access list and returns a string or `undefined`. It builds no graph node,
   // so it is a plain call inside the computation or handler that makes it.
   {
     exportName: "spaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // spaceAccessOf(target, principal) reads a named principal's level the same
+  // way, and builds no graph node either.
+  {
+    exportName: "spaceAccessOf",
     category: "ignored",
     reactiveOrigin: false,
   },

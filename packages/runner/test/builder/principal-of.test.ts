@@ -687,7 +687,7 @@ describe("principalOf()", () => {
     });
   });
 
-  describe("with `followLink` of `false`", () => {
+  describe('with `label` of `"written"`', () => {
     /** Calls `principalOf(target, kind, options)` in a handler frame. */
     const callAt = (target: unknown, kind: unknown, options: unknown) =>
       inFrame(edit(), "handler", () => principalOf(target, kind, options));
@@ -720,16 +720,16 @@ describe("principalOf()", () => {
       ]);
       const field = holder.key("by");
       expect(callIn(edit(), field, "represents-principal")).toBe(bob.did());
-      expect(callAt(field, "represents-principal", { followLink: true }))
+      expect(callAt(field, "represents-principal", { label: "resolved" }))
         .toBe(bob.did());
-      expect(callAt(field, "represents-principal", { followLink: false }))
+      expect(callAt(field, "represents-principal", { label: "written" }))
         .toBe(alice.did());
       expect(
         inFrame(
           edit(),
           "handler",
           () =>
-            principalsOf(field, "represents-principal", { followLink: false }),
+            principalsOf(field, "represents-principal", { label: "written" }),
         ),
       ).toEqual([alice.did()]);
     });
@@ -737,14 +737,14 @@ describe("principalOf()", () => {
     it("does not count the claim a link carries from the document it leads to", async () => {
       const holder = await holding("holder", [carried]);
       const field = holder.key("by");
-      expect(callAt(field, "represents-principal", { followLink: false }))
+      expect(callAt(field, "represents-principal", { label: "written" }))
         .toBeUndefined();
       expect(
         inFrame(
           edit(),
           "handler",
           () =>
-            principalsOf(field, "represents-principal", { followLink: false }),
+            principalsOf(field, "represents-principal", { label: "written" }),
         ),
       ).toEqual([]);
     });
@@ -759,7 +759,7 @@ describe("principalOf()", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
-        callAt(via.key("by"), "represents-principal", { followLink: false }),
+        callAt(via.key("by"), "represents-principal", { label: "written" }),
       ).toBe(alice.did());
     });
 
@@ -771,7 +771,7 @@ describe("principalOf()", () => {
         claimsAt(["by"], claim("represents-principal", alice.did())),
       ], { by: profile.getAsWriteRedirectLink() });
       expect(
-        callAt(holder.key("by"), "represents-principal", { followLink: false }),
+        callAt(holder.key("by"), "represents-principal", { label: "written" }),
       ).toBe(bob.did());
     });
 
@@ -780,7 +780,7 @@ describe("principalOf()", () => {
         claimsAt(["name"], claim("authored-by", bob.did())),
       ]);
       const field = record.key("name" as never);
-      expect(callAt(field, "authored-by", { followLink: false })).toBe(
+      expect(callAt(field, "authored-by", { label: "written" })).toBe(
         bob.did(),
       );
       expect(callIn(edit(), field, "authored-by")).toBe(bob.did());
@@ -790,9 +790,9 @@ describe("principalOf()", () => {
       const profile = await seed("profile", [
         claimsAt([], claim("represents-principal", bob.did())),
       ]);
-      for (const options of [null, "no", [], { followLink: "no" }]) {
+      for (const options of [null, "no", [], { label: "field" }]) {
         expect(() => callAt(profile, "represents-principal", options))
-          .toThrow("takes `options` of `{ followLink?: boolean }`");
+          .toThrow('takes `options` of `{ label?: "written" | "resolved" }`');
       }
     });
   });

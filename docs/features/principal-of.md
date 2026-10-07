@@ -51,15 +51,17 @@ document's label says. A panel's `addedByProfile` in the Loom root links the
 profile its adder acted under, and any participant may link any profile, so
 the profile's label names its owner while the field's names who acted.
 
-`principalOf(target, kind, { followLink: false })` and the same call of
-`principalsOf()` read the field's label. Links on the way to `target` are
-followed, and so is a redirect stored there, which is where a write to `target`
-would land; a link `target` holds as its value is not. The claims are read in
-the same places relative to that field, and the copies of the linked document's
-claims that the link carries are not counted, as in the default read. For a
-field holding no link, the two reads are the same. `options` throws when it is
-not an object, or when its `followLink` is neither a boolean nor absent; an
-absent `followLink` means the default, and other keys are not read.
+`principalOf(target, kind, { label: "written" })` and the same call of
+`principalsOf()` read the field's label, where the default, `"resolved"`,
+reads the label on the document the field's value resolves to. Links on the
+way to `target` are followed, and so is a redirect stored there, which is where
+a write to `target` would land; a link `target` holds as its value is not. The
+claims are read in the same places relative to that field, and the copies of
+the linked document's claims that the link carries are not counted, as in the
+default read. For a field holding no link, the two reads are the same.
+`options` throws when it is not an object, or when its `label` is neither
+`"written"`, `"resolved"` nor absent; an absent `label` means `"resolved"`, and
+other keys are not read.
 
 ## What it returns
 

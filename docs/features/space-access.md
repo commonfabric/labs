@@ -67,8 +67,11 @@ two principals demanding the same derived value each get their own.
 
 ## Another principal's level
 
-`spaceAccess(target, principal)`, with a DID, returns that principal's level
-instead of the caller's own, read from the same access list the same way. A
+`spaceAccessOf(target, principal)` returns `principal`'s level, where
+`spaceAccess(target)` returns the caller's own, read from the same access list
+the same way. It is a function of its own because the two answers differ in
+kind: the caller's own depends on who is asking, and narrows a computation to
+a per-user value; another principal's does not. A
 handler that must know whether the principal a label names still belongs to
 the space asks this: the Loom root lets an OWNER remove a panel whose attested
 adder the list grants nothing. The answer does not depend on who is asking, so

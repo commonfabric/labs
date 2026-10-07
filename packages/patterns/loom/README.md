@@ -94,7 +94,7 @@ is longer than 195 characters, the bound every `addedBy` is held to, is refused.
 The actor is read from the panel document's stored label map as for
 `addedByProfile`: the `authored-by` atom of the entry whose path is exactly
 `["addedBy"]` and whose `origin` is not `"link"`. Patterns read the adder with
-`principalOf(panel.key("addedBy"), "authored-by", { followLink: false })`, which
+`principalOf(panel.key("addedBy"), "authored-by", { label: "written" })`, which
 reads the stamp on the field itself rather than the label of a document a link
 stored there leads to, and every principal the field attests with
 `principalsOf`, which tells a contested field from an unattested one; authorship
@@ -127,7 +127,7 @@ piece link. Neither operation deletes the target.
 
 Only the principal who added an occurrence removes it, unless they have left.
 `removePanel` reads the adder from the runtime's stamps on the occurrence's own
-fields, with `principalsOf` and `followLink: false`: `authored-by` at `addedBy`,
+fields, with `principalsOf` and `label: "written"`: `authored-by` at `addedBy`,
 whatever the field holds, and `represents-principal` at `addedByProfile`, which
 names whoever acted under the profile rather than the profile's owner. It
 removes an occurrence those stamps attest to the principal the event acts for
@@ -140,7 +140,7 @@ there because the alternative is a panel nobody can remove; the other field's
 stamp, when well formed, still names the adder. It refuses one attested to
 another principal, with one exception: an OWNER of the Loom's space, by
 `spaceAccess(panels)`, removes an occurrence whose attested adder the Loom's
-access list grants nothing, by `spaceAccess(panels, adder)`, so that what a
+access list grants nothing, by `spaceAccessOf(panels, adder)`, so that what a
 participant who has left added can be cleared up. Both reads are anchored in the
 Loom's list, never in the occurrence, which `addPanel` may have linked from
 another space whose list says nothing about the Loom. A list the replica has not

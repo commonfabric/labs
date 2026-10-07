@@ -14,7 +14,7 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { defer } from "@commonfabric/utils/defer";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
-import { spaceAccess } from "../../src/builder/space-access.ts";
+import { spaceAccess, spaceAccessOf } from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
@@ -270,7 +270,7 @@ describe("spaceAccess()", () => {
       }
     });
 
-    it("returns another principal's level when asked for one, by the list alone", async () => {
+    it("returns another principal's level through `spaceAccessOf()`, by the list alone", async () => {
       const setAcl = await aclWriter();
       await setAcl({
         [alice.did()]: "OWNER",
@@ -288,7 +288,7 @@ describe("spaceAccess()", () => {
         const tx = runtime.edit();
         const frame = pushFrame({ runtime, tx, space, frameKind: kind });
         try {
-          return { level: spaceAccess(target, principal as never), tx };
+          return { level: spaceAccessOf(target, principal as never), tx };
         } finally {
           popFrame(frame);
         }
@@ -302,7 +302,7 @@ describe("spaceAccess()", () => {
       const asked = ask(bob.did(), "lift");
       expect(asked.level).toBe("WRITE");
       expect(asked.tx.getNarrowestReadScope()).not.toBe("user");
-      for (const principal of ["*", "bob", 42, null]) {
+      for (const principal of [undefined, "*", "bob", 42, null]) {
         expect(() => ask(principal)).toThrow("takes a principal's DID");
       }
     });

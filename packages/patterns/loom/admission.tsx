@@ -12,6 +12,7 @@ import {
   principalsOf,
   type RepresentsCurrentUser,
   spaceAccess,
+  spaceAccessOf,
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
@@ -168,7 +169,7 @@ function adderFields(
  */
 function attestedAdders(panel: Writable<Panel>): DID[] | undefined {
   return principalsOf(panel.key("addedBy"), "authored-by", {
-    followLink: false,
+    label: "written",
   });
 }
 
@@ -197,7 +198,7 @@ export function assertRemovable(
     ...new Set([
       ...(attestedAdders(panel) ?? []),
       ...(principalsOf(panel.key("addedByProfile"), "represents-principal", {
-        followLink: false,
+        label: "written",
       }) ?? []),
     ]),
   ];
@@ -209,7 +210,7 @@ export function assertRemovable(
   // grants nothing, as the list stands on this replica. A list not yet read
   // admits nobody's removal of another's panel.
   if (
-    spaceAccess(panels) === "OWNER" && spaceAccess(panels, adder) === "none"
+    spaceAccess(panels) === "OWNER" && spaceAccessOf(panels, adder) === "none"
   ) return;
   throw new Error(
     "Only the principal who added a panel can remove it, unless they have left the Loom and an OWNER removes it",

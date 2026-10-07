@@ -431,11 +431,12 @@ const inviteBaker = handler<
   for none, several for a contested one. Read it where a value nobody attests
   is fine but one someone else attests is not.
 - A field that links a document has its own label, separate from the linked
-  document's. `principalOf(field, kind, { followLink: false })` reads the
+  document's. `principalOf(field, kind, { label: "written" })` reads the
   field's claim of `kind`, such as who wrote the link, while the default reads
   the linked document's claim of `kind`.
-- `spaceAccess(target, principal)` returns another principal's level, so a
+- `spaceAccessOf(target, principal)` returns another principal's level, so a
   handler can tell whether the principal a label names is still a member.
+  It narrows no computation to per-user scope, as `spaceAccess(target)` does.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 

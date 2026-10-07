@@ -43,22 +43,17 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  * a handler it is the event's actor. In a pattern body it throws, since a
  * pattern body builds one graph for every viewer.
  *
- * With `principal`, a DID, the answer is that principal's level instead, by
- * the access list alone: whether the memory server has refused this runtime
- * the space says nothing about another principal, and the answer does not
- * depend on who asks, so a computation's scope is left as it is.
- *
  * The level names no principal, and tells a member only what a member can
  * already read, since any member can read the whole access list.
+ * {@link spaceAccessOf} returns another principal's level.
  *
  * @throws If called outside a handler or a reactive computation, with no
- *   `target`, with a `target` that is neither a cell nor `undefined`, or with
- *   a `principal` that is neither a well-formed DID nor `undefined`.
+ *   `target`, or with a `target` that is neither a cell nor `undefined`.
  */
 export function spaceAccess(
   // Optional here, though the declared API requires it, so that the runtime
   // check below has a case to catch from untyped callers.
-  ...args: [target?: unknown, principal?: unknown]
+  ...args: [target?: unknown]
 ): SpaceAccessLevel | undefined {
   const frame = topFrame();
   const kind = frame?.frameKind;
@@ -77,18 +72,10 @@ export function spaceAccess(
       "`spaceAccess()` requires a `target`: a cell in the space to ask about.",
     );
   }
-  const [target, asked] = args;
-  if (asked !== undefined && !isWellFormedDID(asked)) {
-    throw new Error(
-      "`spaceAccess(target, principal)` takes a principal's DID; " +
-        debugStr`got $quote${asked}.`,
-    );
-  }
+  const [target] = args;
 
   let principal: string | undefined;
-  if (asked !== undefined) {
-    principal = asked;
-  } else if (kind === "lift") {
+  if (kind === "lift") {
     // The answer depends on who is asking, so the computation's value is a
     // per-user one whatever the principal turns out to be. This goes first so
     // that no return below skips it.
@@ -107,7 +94,66 @@ export function spaceAccess(
     spaceOfTarget(target, "spaceAccess(target)"),
     principal,
     kind === "lift",
-    asked === undefined,
+    true,
+  );
+}
+
+/**
+ * Returns `principal`'s access to the space `target`'s value lives in, where
+ * {@link spaceAccess} returns the current principal's own: that principal's
+ * membership as the space's access list states it, read the same way. A
+ * handler that must know whether the principal a label names still belongs
+ * to the space asks this.
+ *
+ * The answer is the list's alone. Whether the memory server has refused this
+ * runtime the space says nothing about another principal, so a refusal does
+ * not enter into it, and the answer does not depend on who asks, so a
+ * computation calling it keeps its read scope. `undefined` means the list has
+ * not arrived, the space has no list, or `target` was passed as `undefined`.
+ *
+ * @throws If called outside a handler or a reactive computation, with no
+ *   `target`, with a `target` that is neither a cell nor `undefined`, or
+ *   with a `principal` that is not a well-formed DID.
+ */
+export function spaceAccessOf(
+  // Optional here, though the declared API requires both, so that the runtime
+  // checks below have cases to catch from untyped callers.
+  ...args: [target?: unknown, principal?: unknown]
+): SpaceAccessLevel | undefined {
+  const frame = topFrame();
+  const kind = frame?.frameKind;
+  if (kind !== "lift" && kind !== "handler") {
+    throw new Error(
+      "`spaceAccessOf(target, principal)` can only be called from a handler " +
+        "or a reactive computation.",
+    );
+  }
+  const { runtime, tx } = frame!;
+  if (runtime === undefined || tx === undefined) {
+    throw new Error(
+      "`spaceAccessOf(target, principal)` requires an executing runtime.",
+    );
+  }
+  if (args.length === 0) {
+    throw new Error(
+      "`spaceAccessOf()` requires a `target`: a cell in the space to ask about.",
+    );
+  }
+  const [target, principal] = args;
+  if (!isWellFormedDID(principal)) {
+    throw new Error(
+      "`spaceAccessOf(target, principal)` takes a principal's DID; " +
+        debugStr`got $quote${principal}.`,
+    );
+  }
+  if (target === undefined) return undefined;
+  return accessLevel(
+    runtime,
+    tx,
+    spaceOfTarget(target, "spaceAccessOf(target, principal)"),
+    principal,
+    kind === "lift",
+    false,
   );
 }
 

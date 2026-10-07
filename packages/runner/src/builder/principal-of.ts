@@ -38,12 +38,14 @@ import { cellOfTarget } from "./space-access.ts";
  * adds no confidentiality to the result. If that classification ever made the
  * subject protected, this throws, since no label could be carried for it.
  *
- * With `options.followLink` of `false`, the read is of the label where a
- * write to `target` lands instead: links on the way to `target` are followed,
- * and so is a redirect stored there, but a link `target` holds as its value is
- * not. That reads what the runtime stamped on a field holding a link, such as
- * who wrote the link, where the default reads the document the link leads to.
- * The claims a link carries from that document are not counted either way.
+ * `options.label` says which label is read. `"resolved"`, the default, is the
+ * label on the document `target`'s value resolves to. `"written"` is the label
+ * where a write to `target` lands instead: links on the way to `target` are
+ * followed, and so is a redirect stored there, but a link `target` holds as
+ * its value is not. That reads what the runtime stamped on a field holding a
+ * link, such as who wrote the link, where `"resolved"` reads the document the
+ * link leads to. The claims a link carries from that document are not counted
+ * either way.
  *
  * The DID returned is data. Written into a label as a claim's subject, it is a
  * literal like any other, which the runtime refuses from a pattern unless the
@@ -53,8 +55,8 @@ import { cellOfTarget } from "./space-access.ts";
  * @throws If called outside a handler or a reactive computation, with a
  *   `kind` that is not a principal claim kind, with a `target` that is
  *   neither a cell nor `undefined`, or with `options` that is not an object
- *   whose `followLink`, if present, is a boolean; if the target's label cannot
- *   be read,
+ *   whose `label`, if present, is `"written"` or `"resolved"`; if the target's
+ *   label cannot be read,
  *   including one stored in a form this build cannot interpret
  *   (`StoredCfcMetadataError`); and if the label-metadata classification
  *   makes a claim's subject anything but public.
@@ -85,7 +87,7 @@ export function principalOf(
  * when a claim there is in any form but the one a runtime mints, since no
  * principal can then be read from it, and for a `target` passed as
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,
- * `options.followLink` included.
+ * `options.label` included.
  *
  * @throws In every case `principalOf()` throws.
  */
@@ -137,27 +139,27 @@ function attestedPrincipals(
       debugStr`\`${name}\` cannot carry a label for the subject of a $quote${claimKind} claim, which is not classified public.`,
     );
   }
-  let followLink = true;
+  let label: "written" | "resolved" = "resolved";
   if (options !== undefined) {
-    const given = isObjectNotArray(options) ? options.followLink : undefined;
+    const given = isObjectNotArray(options) ? options.label : undefined;
     if (
       !isObjectNotArray(options) ||
-      (given !== undefined && typeof given !== "boolean")
+      (given !== undefined && given !== "written" && given !== "resolved")
     ) {
       throw new Error(
-        debugStr`\`${name}\` takes \`options\` of \`{ followLink?: boolean }\`, not $quote${options}`,
+        debugStr`\`${name}\` takes \`options\` of \`{ label?: "written" | "resolved" }\`, not $quote${options}`,
       );
     }
-    followLink = given ?? true;
+    label = given ?? "resolved";
   }
   if (target === undefined) return undefined;
 
   // Resolution follows the link chain, which reads pointers and not the
-  // value they lead to. Without `followLink` it stops where a write to the
+  // value they lead to. For the written label it stops where a write to the
   // cell lands: a link stored there as its value is left unfollowed, so the
   // label read is the one on the field itself.
   const cell = cellOfTarget(target, name).withTx(tx);
-  const link = !followLink
+  const link = label === "written"
     ? resolveLink(
       runtime,
       runtime.readTx(tx),
