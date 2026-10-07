@@ -14,6 +14,7 @@ import {
   type Cell,
   isCell,
   isStream,
+  loadDocument,
   orderProfileCandidates,
   profileCellIsValid,
   type Runtime,
@@ -152,9 +153,10 @@ async function vetAdvertisedInbox(
  * The first of `home`'s profiles, in the order `#profile` answers in, that
  * points at an inbox, with the link it holds; `undefined` when none does.
  * Loads what `orderProfileCandidates()` reads first. A profile whose document
- * is absent is left out, as `#profile` leaves it out.
+ * is absent is left out, as `#profile` leaves it out, and one whose document
+ * failed to load is ordered with the rest, as `#profile` orders it.
  *
- * @throws When a profile ordered ahead of the one found cannot be read, since
+ * @throws When a profile ordered ahead of the one found failed to load, since
  *   whether it advertises an inbox is then unknown.
  */
 async function decidingProfile(
@@ -165,23 +167,30 @@ async function decidingProfile(
   const length = Array.isArray(list) ? list.length : 0;
   if (length === 0) return undefined;
   const profilesCell = home.key("profiles").resolveAsCell();
-  const candidates: Cell<unknown>[] = [];
-  const unreadable = new Set<Cell<unknown>>();
-  await Promise.all(
+  const unreadable = new Map<Cell<unknown>, unknown>();
+  const loaded = await Promise.all(
     Array.from({ length }, async (_, index) => {
       const entry = profilesCell.key(index);
       const profile = entry.resolveAsCell();
-      if (
-        !profileCellIsValid(profile, entry.getRaw() !== undefined, home.space)
-      ) {
-        return;
+      const valid = profileCellIsValid(
+        profile,
+        entry.getRaw() !== undefined,
+        home.space,
+      );
+      if (!valid) return undefined;
+      try {
+        if (!await loadDocument(runtime, profile)) return undefined;
+      } catch (error) {
+        unreadable.set(profile, error);
+        return profile;
       }
-      await profile.sync();
-      if (accessRefused(runtime, profile.space)) unreadable.add(profile);
-      else if (profile.getRaw() === undefined) return;
-      candidates[index] = profile;
+      if (accessRefused(runtime, profile.space)) {
+        unreadable.set(profile, new Error("access refused"));
+      }
+      return profile;
     }),
   );
+  const candidates = loaded.filter((each) => each !== undefined);
   if (candidates.length === 0) return undefined;
   await Promise.all(
     ["defaultProfile", "legacyDefaultProfile", "mru"].map((key) =>
@@ -192,12 +201,13 @@ async function decidingProfile(
     runtime,
     home,
     home.space,
-    candidates.filter((each) => each !== undefined),
+    candidates,
   );
   for (const profile of ordered) {
     if (unreadable.has(profile)) {
       throw new Error(
         `Cannot read the profile that decides Home's private inbox: ${profile.space}`,
+        { cause: unreadable.get(profile) },
       );
     }
     const piece = await storedPointer(profile.key("inbox"));

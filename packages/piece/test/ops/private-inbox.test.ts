@@ -378,6 +378,86 @@ describe("ensurePrivateInboxOf()", () => {
     });
   });
 
+  describe("profiles that do not load", () => {
+    it("names no inbox when Home's list is empty", async () => {
+      await listProfiles([]);
+
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "none-advertised" });
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+    });
+
+    it("names no inbox when no entry in Home's list is a profile", async () => {
+      await listProfiles([null as unknown as Cell<unknown>]);
+
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "none-advertised" });
+    });
+
+    it("passes over a profile whose document is absent", async () => {
+      const inbox = await usableInbox();
+      const absent = runtime.getCell<unknown>(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+        crypto.randomUUID(),
+      );
+      await listProfiles([absent, await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(
+        result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+      ).toEqual(addressOf(inbox));
+    });
+
+    it("decides by an earlier profile when a later one fails to load", async () => {
+      const inbox = await usableInbox();
+      const failing = await profilePointingAt(await usableInbox());
+      await listProfiles([await profilePointingAt(inbox), failing]);
+      const sync = storage.syncCell.bind(storage);
+      using _failed = stub(
+        storage,
+        "syncCell",
+        (cell, options) =>
+          cell.space === failing.space
+            ? Promise.reject(new Error("load failed"))
+            : sync(cell, options),
+      );
+
+      const result = await ensure();
+
+      expect(
+        result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+      ).toEqual(addressOf(inbox));
+    });
+
+    it("rejects, sending nothing, when an earlier profile's load is reported failed though its sync resolves", async () => {
+      // A provider reports a failed load in its result, so the sync resolves
+      // with no document and only the storage manager's ledger of loads says
+      // it failed.
+      const failing = await profilePointingAt(await usableInbox());
+      await listProfiles([
+        failing,
+        await profilePointingAt(await usableInbox()),
+      ]);
+      const settled = storage.loadsSettled.bind(storage);
+      using _failed = stub(
+        storage,
+        "loadsSettled",
+        (keys) =>
+          keys.some((key) => key.includes(failing.space))
+            ? Promise.reject(new Error("load failed"))
+            : settled(keys),
+      );
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+        .toThrow("Cannot read the profile that decides");
+      await runtime.idle();
+      expect(await home.key("ensured" as never).pull()).toBe(0);
+    });
+  });
+
   describe("when Home holds an inbox", () => {
     /** Has Home hold `inbox` as its private inbox. */
     async function hold(inbox: Cell<unknown>): Promise<void> {

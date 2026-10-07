@@ -42,8 +42,8 @@ place of another, and a loom daemon adopts a pointer that moved; each keeps
 reading the inbox it held. A loom daemon does its half as loom #7300 describes;
 the loom release that carries it is what the two halves wait on.
 
-The host gives Home its inbox, once per runtime worker, when it first brings up
-the user's Home pattern: `PiecesController.ensurePrivateInbox()` in
+The host gives Home its inbox, normally once per runtime worker, when it first
+brings up the user's Home pattern: `PiecesController.ensurePrivateInbox()` in
 `packages/piece`, called from `RuntimeProcessor` in `packages/runtime-client`,
 which does it through `ensurePrivateInboxOf()` in
 `packages/piece/src/ops/private-inbox.ts`. It decides by one profile: the first,
@@ -81,10 +81,10 @@ is decided by where it now points:
   is in Home's list and still points at that inbox, comparisons of links that
   read only link shape in the inbox's space; if not, as when the pointer moved
   after the host vetted it or the profile is not one of Home's, Home is left as
-  it is. An inbox Home held until then goes to the end of Home's
-  `retainedPrivateInboxes` list. An event from a host that names no profile is
-  checked against the first profile in the list that points at an inbox, and
-  adopts only while Home holds none.
+  it is. When that adoption succeeds, an inbox Home held until then goes to the
+  end of Home's `retainedPrivateInboxes` list. An event from a host that names
+  no profile is checked against the first profile in the list that points at an
+  inbox, and adopts only while Home holds none.
 - Otherwise, when Home holds no inbox and no profile in the list points at an
   inbox, Home creates one, as "Where it lives" says.
 - Otherwise Home keeps the inbox it holds, or holds none. That is the case when
@@ -97,15 +97,17 @@ is decided by where it now points:
 It then has every profile in the list that points at no inbox point at Home's,
 through the profile's own `setInbox`. A profile pointing at another inbox keeps
 its pointer, so after adopting one of several inboxes, the profiles pointing at
-the others still advertise them. Home gives up a held inbox when the deciding
-profile points elsewhere, whichever profile still points at it. While Home holds
-no inbox, as after a refusal, a profile that points at none stays unpointed,
-until a later ensure finds a usable advertisement or none. Sending the stream
-again creates nothing, re-points nothing and retains nothing more. Creation is
-tested by `packages/patterns/integration/private-inbox-multi-runtime.test.ts`,
-with server execution on and off; keeping, adopting, adopting again and refusing
-are tested there, by `packages/patterns/system/private-inbox.test.tsx` and,
-vetting rule by rule, by `packages/piece/test/ops/private-inbox.test.ts`.
+the others still advertise them. Home gives up a held inbox when it adopts the
+inbox the deciding profile points at instead, whichever profile still points at
+the held one; when that inbox fails vetting, Home keeps the one it holds. While
+Home holds no inbox, as after a refusal, a profile that points at none stays
+unpointed, until a later ensure finds a usable advertisement or none. Sending
+the stream again creates nothing, re-points nothing and retains nothing more.
+Creation is tested by
+`packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with server
+execution on and off; keeping, adopting, adopting again and refusing are tested
+there, by `packages/patterns/system/private-inbox.test.tsx` and, vetting rule by
+rule, by `packages/piece/test/ops/private-inbox.test.ts`.
 
 `retainedPrivateInboxes` holds a link to each inbox Home gave up, in the order
 it gave them up, and never the one it holds: adopting an inbox the list holds,
@@ -114,18 +116,18 @@ offers senders delivered to an earlier inbox stay readable, by the intake that
 reads Home's offers; nothing reads it yet. Like `privateInbox`, nothing clears
 it.
 
-Home adopts again only when an ensure runs, which is once per runtime worker, at
-the worker's first bring-up of Home. So when a pointer moves away from the inbox
-Home holds, as when a daemon writes the pointer last or the owner points a
-profile elsewhere, Home goes on holding the earlier inbox while senders deliver
-to the new one, until the next runtime worker to start brings Home up. Nothing
-watches the pointers in between. A loom daemon instead reads its profile's
-pointer again at intervals. Two further changes could close that window: a
-`setInbox` that sets the pointer only while it is unset, which needs older
-profile vintages detected and still leaves the side that loses to adopt the
-winner; or a single minter, where a loom daemon asks Home to ensure its inbox
-when Home has the stream and adopts the result. Either would need the loom side
-to agree.
+Home adopts again only when an ensure runs, which is at a runtime worker's first
+bring-up of Home, and again at the worker's next bring-up of Home if that ensure
+failed. So when a pointer moves away from the inbox Home holds, as when a daemon
+writes the pointer last or the owner points a profile elsewhere, Home goes on
+holding the earlier inbox while senders deliver to the new one, until the next
+runtime worker to start brings Home up. Nothing watches the pointers in between.
+A loom daemon instead reads its profile's pointer again at intervals. Two
+further changes could close that window: a `setInbox` that sets the pointer only
+while it is unset, which needs older profile vintages detected and still leaves
+the side that loses to adopt the winner; or a single minter, where a loom daemon
+asks Home to ensure its inbox when Home has the stream and adopts the result.
+Either would need the loom side to agree.
 
 Home opens without waiting for the ensure, which reads every profile's pointer
 and loads inbox documents in other spaces. The host learns only whether the

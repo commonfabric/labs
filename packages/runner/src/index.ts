@@ -216,6 +216,7 @@ export {
   SYSTEM_PATTERN_SOURCE_SCHEME,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
+export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {
   orderProfileCandidates,
   profileCellIsValid,

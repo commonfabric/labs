@@ -187,9 +187,9 @@ export type PrivateInboxHolder = {
 /**
  * The inboxes Home held before the one it holds now, as links, in the order
  * Home stopped holding them, and none of them the one it holds. Home gives up
- * an inbox when it adopts the one its profiles advertise in place of one no
- * profile advertises, and keeps the link so that the offers senders delivered
- * to the earlier inbox stay readable.
+ * an inbox when it adopts the deciding profile's inbox in its place, whatever
+ * other profiles still point at, and keeps the link so that the offers senders
+ * delivered to the earlier inbox stay readable.
  */
 export type RetainedPrivateInboxes = Cell<PrivateInboxPiece>[];
 

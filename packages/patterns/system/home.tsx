@@ -144,8 +144,9 @@ export type HomeOutput = {
   // Home's list and still points at it, or creates one when Home holds none
   // and no profile points at an inbox, and points every profile that points at
   // no inbox at Home's.
-  // The host sends it once per runtime worker, the first time the worker
-  // brings up Home, so Home adopts again only at a worker's first bring-up.
+  // The host sends it the first time a runtime worker brings up Home, and
+  // again at that worker's next bring-up if the ensure failed, so Home adopts
+  // again only then.
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;

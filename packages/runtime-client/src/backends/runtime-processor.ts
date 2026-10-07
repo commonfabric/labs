@@ -1361,8 +1361,6 @@ export class RuntimeProcessor {
         }
         this.#vdomMounts.clear();
 
-        // An ensure still in flight reads and sends through this runtime.
-        await this.#privateInboxEnsured;
         await this.#runtime.storageManager.synced();
         await this.#runtime.dispose();
       } catch (e) {
@@ -2646,11 +2644,15 @@ export class RuntimeProcessor {
     });
     await this.#legacySpacesAdopted;
     // The ensure reads every profile's pointer and loads inbox documents in
-    // other spaces, so Home opens without waiting for it. A failure is
-    // reported, and the next ensure of Home in this worker starts it again.
+    // other spaces, so Home opens without waiting for it, and disposal does
+    // not wait for it either: one still in flight then fails against the
+    // disposed runtime, which is expected and goes unreported. Any other
+    // failure is reported, and the next ensure of Home in this worker starts
+    // it again.
     this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox().catch(
       (error) => {
         this.#privateInboxEnsured = undefined;
+        if (this.#isDisposed) return;
         console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
       },
     );
