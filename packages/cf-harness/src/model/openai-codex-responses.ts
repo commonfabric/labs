@@ -1,10 +1,28 @@
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+
+import type { OpenAICodexOAuthCredential } from "../auth/types.ts";
+import {
+  defaultHarnessFetch,
+  type HarnessFetch,
+} from "../contracts/http-fetch.ts";
 import { OPENAI_WEB_SEARCH_NATIVE_MODEL_TOOL } from "../contracts/native-model-tool.ts";
-import type { HarnessFetch } from "../contracts/http-fetch.ts";
 import {
   type HarnessCredentialOwnerRef,
   harnessCredentialOwnersEqual,
 } from "../contracts/run-manifest.ts";
-import { defaultHarnessFetch } from "../contracts/http-fetch.ts";
+import { HarnessControlError } from "../control-errors.ts";
+import type {
+  HarnessModelAttemptDiagnostic,
+  HarnessModelCatalogEntry,
+  HarnessModelClient,
+  HarnessModelTurnRequest,
+  HarnessModelTurnResult,
+} from "./client.ts";
+import {
+  assertHarnessModelInputBound,
+  assertHarnessModelLimits,
+} from "./limits.ts";
+import { assertOpenAIReasoningEffortSupported } from "./openai-reasoning.ts";
 import {
   describeProviderError,
   type HarnessProviderError,
@@ -27,18 +45,6 @@ import {
   type HarnessTransportRetryOptions,
   TransportRetrySchedule,
 } from "./transport-retry.ts";
-import type { OpenAICodexOAuthCredential } from "../auth/types.ts";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-
-import { HarnessControlError } from "../control-errors.ts";
-import type {
-  HarnessModelAttemptDiagnostic,
-  HarnessModelCatalogEntry,
-  HarnessModelClient,
-  HarnessModelTurnRequest,
-  HarnessModelTurnResult,
-} from "./client.ts";
-import { assertOpenAIReasoningEffortSupported } from "./openai-reasoning.ts";
 import { normalizeOpenAIUsage } from "./usage.ts";
 
 export const OPENAI_CODEX_RESPONSES_URL =
@@ -489,6 +495,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
   async complete(
     request: HarnessModelTurnRequest,
   ): Promise<HarnessModelTurnResult> {
+    assertHarnessModelLimits(request);
     if (request.promptCacheMode !== undefined) {
       throw new Error(
         "prompt cache mode controls are not supported by openai-codex; omit promptCacheMode to use the subscription backend's implicit prompt cache",
@@ -540,6 +547,9 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     );
     const body = JSON.stringify({
       model: request.model,
+      ...(request.maxOutputTokens !== undefined
+        ? { max_output_tokens: request.maxOutputTokens }
+        : {}),
       store: false,
       stream: true,
       instructions: converted.instructions,
@@ -558,6 +568,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       tool_choice: "auto",
       parallel_tool_calls: true,
     });
+    assertHarnessModelInputBound(body, request.maxInputBytes);
     const exchange: CodexExchange = { request, credential, body, affinityKey };
     // Nothing leaves this loop until an attempt reaches a completed terminal
     // response, so a tool call streamed by an attempt that failed is never
@@ -586,13 +597,15 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       redactCredentialValues(text, credential);
     const startedAt = this.#now();
     const startedAtMs = this.#monotonicNowMs();
+    const bounded = request.maxInputBytes !== undefined ||
+      request.maxOutputTokens !== undefined;
     const attemptBase = {
       type: "cf-harness.model-attempt" as const,
       providerId: this.providerId,
       operation: "responses.stream",
       endpoint: this.#endpoint,
       attempt,
-      maxTransportAttempts: this.#retrySchedule.maxAttempts,
+      maxTransportAttempts: bounded ? 1 : this.#retrySchedule.maxAttempts,
       startedAt: startedAt.toISOString(),
       request: {
         model: request.model,
@@ -612,7 +625,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       record: Omit<HarnessModelAttemptDiagnostic, keyof typeof attemptBase>,
       error: HarnessControlError,
     ): Promise<CodexAttemptOutcome> => {
-      const retry = request.signal?.aborted
+      const retry = bounded || request.signal?.aborted
         ? undefined
         : this.#retrySchedule.retryAfter(attempt, kind);
       await emitAttempt(request.onAttempt, {

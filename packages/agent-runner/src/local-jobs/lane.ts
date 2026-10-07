@@ -109,6 +109,9 @@ export const localJobSpecOf = (
   const model = profile.model ?? runner.model;
   return {
     task: request.task,
+    ...(request.imageAttachments !== undefined
+      ? { imageAttachments: request.imageAttachments }
+      : {}),
     commandJobId: job.id,
     taskRole: profile.taskRole,
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
@@ -120,6 +123,12 @@ export const localJobSpecOf = (
       ? { subagentProfiles: [LOCAL_JOB_BROWSER_SUBAGENT_PROFILE] }
       : {}),
     maxModelTurns: profile.maxModelTurns,
+    ...(profile.maxInputBytes !== undefined
+      ? { maxInputBytes: profile.maxInputBytes }
+      : {}),
+    ...(profile.maxOutputTokens !== undefined
+      ? { maxOutputTokens: profile.maxOutputTokens }
+      : {}),
     ...(framing.length > 0 ? { instructions: framing.join("\n\n") } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(loomRetrievalConfigPath !== undefined

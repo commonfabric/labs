@@ -6,6 +6,8 @@ import type {
   CreateHarnessPromptLoopOptions,
   HarnessPromptLoopResult,
 } from "@commonfabric/cf-harness/prompt-loop";
+import type { HarnessImageAttachment } from "@commonfabric/cf-harness/contracts/image";
+import { materializeImageAttachmentContentPart } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { renderCellReference } from "@commonfabric/runner/shared";
@@ -40,6 +42,7 @@ const plainSpec = (
 interface Seen {
   loopOptions?: CreateHarnessPromptLoopOptions;
   prompt?: string;
+  images?: readonly HarnessImageAttachment[];
   role?: string;
   systemPrompt?: string;
   maxModelTurns?: number;
@@ -122,6 +125,7 @@ describe("runHarnessJob()", () => {
           return {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
+              seen.images = prompt.imageAttachments;
               seen.systemPrompt = prompt.systemPrompt;
               seen.maxModelTurns = prompt.maxModelTurns ??
                 loopOptions.maxModelTurns;
@@ -155,6 +159,38 @@ describe("runHarnessJob()", () => {
       await Deno.writeTextFile(resultPath, JSON.stringify({ answer }));
       return loopResult(runRoot);
     };
+
+  it("snapshots inline image bytes inside the job workspace and sends the image to the model", async () => {
+    const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" } as const;
+    const { seen } = await runScripted(
+      plainSpec({ imageAttachments: [image] }),
+      answering("Titan"),
+    );
+    expect(seen.images).toHaveLength(1);
+    const attachment = seen.images![0];
+    expect(
+      attachment.hostPath.startsWith(
+        await Deno.realPath(join(runRoot, "workspace", ".job-images")) + "/",
+      ),
+    ).toBe(true);
+    expect(await materializeImageAttachmentContentPart(attachment))
+      .toMatchObject({
+        type: "image_url",
+        image_url: { url: "data:image/png;base64," + image.base64 },
+      });
+    expect(attachment.digest).toMatch(/^sha256:/);
+  });
+
+  it("passes model ceilings into the loop's shared model client", async () => {
+    const { seen } = await runScripted(
+      plainSpec({ maxInputBytes: 65536, maxOutputTokens: 8192 }),
+      answering("Titan"),
+    );
+    expect(seen.loopOptions).toMatchObject({
+      maxInputBytes: 65536,
+      maxOutputTokens: 8192,
+    });
+  });
 
   it("passes the trusted job identity through the commands config into the harness", async () => {
     const configPath = join(runRoot, "commands.json");

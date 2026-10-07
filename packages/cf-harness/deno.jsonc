@@ -52,6 +52,7 @@
     "./contracts/client-action": "./src/contracts/client-action.ts",
     "./contracts/client-command": "./src/contracts/client-command.ts",
     "./contracts/image": "./src/contracts/image.ts",
+    "./image-attachments": "./src/image-attachments.ts",
     "./contracts/run-manifest": "./src/contracts/run-manifest.ts",
     "./contracts/observation": "./src/contracts/observation.ts",
     "./contracts/policy": "./src/contracts/policy.ts",

@@ -121,6 +121,77 @@ describe("local-jobs/api", () => {
   });
 
   describe("POST /jobs", () => {
+    it("accepts inline image bytes and binds them to idempotency without granting host paths", async () => {
+      const { post, store } = apiWith();
+      const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" };
+      try {
+        const response = await post("/jobs", {
+          ...BODY,
+          imageAttachments: [image],
+        });
+        expect(response.status).toBe(201);
+        expect((await response.json()).job.request.imageAttachments).toEqual([
+          image,
+        ]);
+        expect((await post("/jobs", { ...BODY, imageAttachments: [] })).status)
+          .toBe(409);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("refuses malformed images, undeclared host paths and too many images before enqueue", async () => {
+      const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" };
+      for (
+        const imageAttachments of [
+          {},
+          [null],
+          [{ ...image, mediaType: "image/jpeg" }],
+          [{ ...image, base64: "not base64!" }],
+          [{ ...image, base64: "" }],
+          [{ ...image, hostPath: "/private/owner/image.png" }],
+          [{ ...image, base64: "iVBORw0KGgo=\n" }],
+          Array(9).fill(image),
+        ]
+      ) {
+        const { post, store, kicked } = apiWith();
+        try {
+          expect((await post("/jobs", { ...BODY, imageAttachments })).status)
+            .toBe(400);
+          expect(store.list(10)).toEqual([]);
+          expect(kicked).toEqual([]);
+        } finally {
+          store.close();
+        }
+      }
+    });
+
+    it("retains valid caller model limits and rejects invalid bounds before enqueue", async () => {
+      const { post, store } = apiWith();
+      try {
+        const response = await post("/jobs", {
+          ...BODY,
+          maxInputBytes: 65536,
+          maxOutputTokens: 8192,
+        });
+        expect(response.status).toBe(201);
+        expect((await response.json()).job.request).toMatchObject({
+          maxInputBytes: 65536,
+          maxOutputTokens: 8192,
+        });
+        for (const bad of [0, -1, 1.5, "8192", Number.MAX_SAFE_INTEGER + 1]) {
+          expect((await post("/jobs", { ...BODY, maxInputBytes: bad })).status)
+            .toBe(400);
+          expect(
+            (await post("/jobs", { ...BODY, maxOutputTokens: bad })).status,
+          ).toBe(400);
+        }
+        expect(store.list(10)).toHaveLength(1);
+      } finally {
+        store.close();
+      }
+    });
+
     it("accepts a body of exactly 1 MiB and refuses the next UTF-8 byte", async () => {
       const { post, store, kicked } = apiWith();
       const empty = JSON.stringify({ ...BODY, task: "" });

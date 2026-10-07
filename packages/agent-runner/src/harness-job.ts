@@ -16,12 +16,16 @@
 
 import { join } from "@std/path";
 
+import type { JSONSchema } from "@commonfabric/api";
 import {
   type CfHarnessStructuredResultValidation,
   runCfHarnessCli,
   type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
+import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
+import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
+import { createHarnessImageAttachmentFromBase64 } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
@@ -31,7 +35,6 @@ import {
   type CreateHarnessPromptLoopOptions,
   type HarnessPromptLoopResult,
 } from "@commonfabric/cf-harness/prompt-loop";
-import type { JSONSchema } from "@commonfabric/api";
 import {
   type AgentRunErrorCode,
   INVALID_RESULT,
@@ -64,9 +67,12 @@ export interface HarnessJobFabric {
 }
 
 /** One job, as plain data. */
-export interface HarnessJobSpec {
+export interface HarnessJobSpec extends HarnessModelLimits {
   /** The task text, given to the model as the prompt. */
   task: string;
+
+  /** Inline host-owned images, snapshotted into this job workspace. */
+  imageAttachments?: readonly HarnessInlineImageAttachment[];
 
   /**
    * The prompt-slot role the task binds as. It is the job's authority: a
@@ -283,6 +289,14 @@ export const runHarnessJob = async (
     resultPath,
   );
 
+  for (const image of spec.imageAttachments ?? []) {
+    const snapshot = await createHarnessImageAttachmentFromBase64({
+      ...image,
+      snapshotDir: join(workspace, ".job-images"),
+    });
+    argv.push("--image", snapshot.hostPath);
+  }
+
   // The harness builds its loop through this seam, so wrapping it is how the
   // job takes its abort signal, tells the caller of each transcript event the
   // harness persists, and hands back the loop's full result.
@@ -313,7 +327,15 @@ export const runHarnessJob = async (
       options.harnessDeps?.onStructuredResultValidation?.(validation);
     },
     createPromptLoop: (loopOptions) => {
-      const loop = createInnerLoop(loopOptions);
+      const loop = createInnerLoop({
+        ...loopOptions,
+        ...(spec.maxInputBytes !== undefined
+          ? { maxInputBytes: spec.maxInputBytes }
+          : {}),
+        ...(spec.maxOutputTokens !== undefined
+          ? { maxOutputTokens: spec.maxOutputTokens }
+          : {}),
+      });
       return {
         runPrompt: async (promptOptions) => {
           try {

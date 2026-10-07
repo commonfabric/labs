@@ -69,7 +69,15 @@ export interface HarnessModelAttemptDiagnostic {
   retry?: HarnessModelAttemptRetry;
 }
 
-export interface HarnessModelTurnRequest {
+/** Optional host ceilings; bounded turns make exactly one provider attempt. */
+export interface HarnessModelLimits {
+  /** Final serialized request bytes; this is a byte bound, not a token estimate. */
+  maxInputBytes?: number;
+  /** Generated tokens, including hidden reasoning, enforced by the provider. */
+  maxOutputTokens?: number;
+}
+
+export interface HarnessModelTurnRequest extends HarnessModelLimits {
   model: string;
   transcript: readonly HarnessTranscriptMessage[];
   tools: readonly HarnessModelToolDescriptor[];

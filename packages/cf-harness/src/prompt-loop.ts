@@ -178,8 +178,10 @@ import {
 import type {
   HarnessModelAttemptDiagnostic,
   HarnessModelClient,
+  HarnessModelLimits,
   HarnessModelUsage,
 } from "./model/client.ts";
+import { limitHarnessModelClient } from "./model/limits.ts";
 import { OpenAICompatibleGatewayModelClient } from "./model/openai-compatible-gateway.ts";
 import { sumHarnessModelUsage } from "./model/usage.ts";
 import {
@@ -264,7 +266,7 @@ const DEFAULT_MAX_MODEL_TURNS = 8;
 const BASH_CWD_MARKER_PREFIX = "__CF_HARNESS_CWD__";
 
 export interface CreateHarnessPromptLoopOptions
-  extends CreateHarnessEngineOptions {
+  extends CreateHarnessEngineOptions, HarnessModelLimits {
   engine?: CfHarnessEngine;
   gatewayClient?: OpenAICompatibleGatewayClient;
   modelClient?: HarnessModelClient;
@@ -3114,6 +3116,7 @@ export class CfHarnessPromptLoop {
         this.#gatewayClient!,
       );
     }
+    this.modelClient = limitHarnessModelClient(this.modelClient, options);
     if (
       isHarnessModelProviderId(this.modelClient.providerId) &&
       this.modelClient.providerId !== this.engine.config.modelProvider

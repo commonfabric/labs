@@ -410,6 +410,14 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
   async complete(
     request: HarnessModelTurnRequest,
   ): Promise<HarnessModelTurnResult> {
+    if (
+      request.maxInputBytes !== undefined ||
+      request.maxOutputTokens !== undefined
+    ) {
+      throw new Error(
+        "bounded model calls require the openai-codex provider; gateway limit enforcement is unavailable",
+      );
+    }
     toNativeModelTools(request.nativeModelToolIds);
     assertSupportedToolCombination(request.model, request.nativeModelToolIds);
     assertCompactThresholdSupported(

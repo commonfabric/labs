@@ -8,7 +8,7 @@
  * - `GET /health` — the lane is serving.
  * - `POST /jobs` — enqueue `{caller, profile, idempotencyKey, task,
  *   instructions?, context?, resultSchema, tools?, maxModelTurns?,
- *   browserHost?}`;
+ *   maxInputBytes?, maxOutputTokens?, imageAttachments?, browserHost?}`;
  *   answers `201` with the new job, or `200` with the one the key already
  *   names for the same request.
  * - `GET /jobs?limit=n` — the newest jobs, newest first.
@@ -27,6 +27,8 @@
  * A refusal is `{ok: false, code, error}` with a 4xx status.
  */
 
+import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
+import { decodeHarnessInlineImage } from "@commonfabric/cf-harness/image-attachments";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { LocalJobBrowserHost } from "./browser-host.ts";
@@ -92,6 +94,36 @@ const json = (status: number, body: unknown): Response =>
 const refuse = (status: number, code: string, error: string): Response =>
   json(status, { ok: false, code, error });
 
+/** Reads only inline image bytes; a caller can never name a host file. */
+const imagesOf = (
+  value: unknown,
+): HarnessInlineImageAttachment[] | undefined => {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new Error(
+      "`imageAttachments` must contain at most eight inline images.",
+    );
+  }
+  return value.map((image: unknown) => {
+    if (
+      image === null || typeof image !== "object" || Array.isArray(image) ||
+      !("base64" in image) || typeof image.base64 !== "string" ||
+      !("mediaType" in image) ||
+      (image.mediaType !== "image/png" && image.mediaType !== "image/jpeg" &&
+        image.mediaType !== "image/gif" && image.mediaType !== "image/webp") ||
+      Object.keys(image).some((key) => key !== "base64" && key !== "mediaType")
+    ) {
+      throw new Error("Each image must contain only `mediaType` and `base64`.");
+    }
+    const result: HarnessInlineImageAttachment = {
+      base64: image.base64,
+      mediaType: image.mediaType,
+    };
+    decodeHarnessInlineImage(result);
+    return result;
+  });
+};
+
 /** Helper for enqueue, which reads a request body or names what is wrong. */
 const enqueueRequestOf = (
   value: unknown,
@@ -114,7 +146,10 @@ const enqueueRequestOf = (
     resultSchema,
     tools,
     maxModelTurns,
+    maxInputBytes,
+    maxOutputTokens,
     browserHost,
+    imageAttachments,
   } = value as Record<string, unknown>;
   const name = (field: unknown) =>
     typeof field === "string" && field.length > 0 &&
@@ -147,8 +182,35 @@ const enqueueRequestOf = (
   ) {
     return { error: "`maxModelTurns` must be a whole number of 1 or more." };
   }
+  for (
+    const [name, limit] of [["maxInputBytes", maxInputBytes], [
+      "maxOutputTokens",
+      maxOutputTokens,
+    ]]
+  ) {
+    const minimum = name === "maxOutputTokens" ? 16 : 1;
+    if (
+      limit !== undefined &&
+      (typeof limit !== "number" || !Number.isSafeInteger(limit) ||
+        limit < minimum)
+    ) {
+      return {
+        error: `\`${name}\` must be a safe whole number of ${minimum} or more.`,
+      };
+    }
+  }
   if (browserHost !== undefined && !isObjectNotArray(browserHost)) {
     return { error: "`browserHost` must be an object." };
+  }
+  let images: HarnessInlineImageAttachment[] | undefined;
+  try {
+    images = imagesOf(imageAttachments);
+  } catch (error) {
+    return {
+      error: error instanceof Error
+        ? error.message
+        : "Invalid image attachments.",
+    };
   }
   return {
     caller: caller as string,
@@ -156,11 +218,14 @@ const enqueueRequestOf = (
     idempotencyKey: idempotencyKey as string,
     request: {
       task,
+      ...(images !== undefined ? { imageAttachments: images } : {}),
       ...(instructions !== undefined ? { instructions } : {}),
       ...(context !== undefined ? { context } : {}),
       resultSchema,
       ...(tools !== undefined ? { tools: tools as string[] } : {}),
       ...(maxModelTurns !== undefined ? { maxModelTurns } : {}),
+      ...(typeof maxInputBytes === "number" ? { maxInputBytes } : {}),
+      ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
       ...(browserHost !== undefined
         ? { browserHost: browserHost as Record<string, unknown> }
         : {}),

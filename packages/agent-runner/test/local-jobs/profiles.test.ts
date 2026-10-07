@@ -47,6 +47,34 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("retains host model bounds and refuses widening them", async () => {
+      const profile = (await read({
+        ask: { ...ASK, maxInputBytes: 65536, maxOutputTokens: 8192 },
+      })).get("ask")!;
+      expect(profile).toMatchObject({
+        maxInputBytes: 65536,
+        maxOutputTokens: 8192,
+      });
+      expect(narrowLocalJobProfile(profile, { maxInputBytes: 65537 }))
+        .toHaveProperty("refusal");
+      expect(narrowLocalJobProfile(profile, { maxOutputTokens: 8193 }))
+        .toHaveProperty("refusal");
+      expect(
+        narrowLocalJobProfile(profile, {
+          maxInputBytes: 4096,
+          maxOutputTokens: 1024,
+        }),
+      ).toMatchObject({
+        profile: { maxInputBytes: 4096, maxOutputTokens: 1024 },
+      });
+      for (const bad of [0, -1, 1.5, "8192", Number.MAX_SAFE_INTEGER + 1]) {
+        await expect(read({ ask: { ...ASK, maxOutputTokens: bad } })).rejects
+          .toThrow("maxOutputTokens");
+        await expect(read({ ask: { ...ASK, maxInputBytes: bad } })).rejects
+          .toThrow("maxInputBytes");
+      }
+    });
+
     it("reads a browser host grant, and leaves a withheld one out", async () => {
       const profiles = await read({
         ask: { ...ASK, browserHost: true },

@@ -456,6 +456,8 @@ Deno.test("CfHarnessPromptLoop executes injected model-client tool calls through
       assertEquals(request.cacheAffinityKey, "stable-cache");
       assertEquals(request.promptCacheMode, "explicit");
       assertEquals(request.reasoningEffort, "low");
+      assertEquals(request.maxInputBytes, 65536);
+      assertEquals(request.maxOutputTokens, 8192);
       return Promise.resolve(
         turns === 1
           ? {
@@ -497,6 +499,8 @@ Deno.test("CfHarnessPromptLoop executes injected model-client tool calls through
     cacheAffinityKey: "stable-cache",
     promptCacheMode: "explicit",
     reasoningEffort: "low",
+    maxInputBytes: 65536,
+    maxOutputTokens: 8192,
     engine: new CfHarnessEngine({
       sandboxRuntime: sandbox,
       runId: "run-model-client",
