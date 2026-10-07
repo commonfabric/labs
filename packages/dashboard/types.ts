@@ -92,8 +92,21 @@ export interface Ctx {
   env(key: string): string | undefined;
 }
 
+/**
+ * That a repository's green branch is at a run's commit, or was at it: the
+ * branch CI moves to the newest commit of main whose tests passed.
+ */
+export interface GreenMark {
+  /** The branch's name, such as `main-green`. */
+  readonly branch: string;
+
+  /** Whether the branch is at the commit now. */
+  readonly current: boolean;
+}
+
 export interface Run {
   repo?: string; // the "owner/name" the run was fetched for (tagged by the fetcher)
+  green?: GreenMark; // set by the fetcher when the repo's green branch is or was at the commit
   id: number;
   status: string;
   conclusion: string | null;

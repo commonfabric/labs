@@ -40,6 +40,8 @@ dashboard/
   config.ts     port, repo, tunable status thresholds
   palette.ts    THE ONE PLACE status colors and washes are chosen
   status-dot.ts THE ONE PLACE the status dot's shapes are chosen
+  green-star.ts THE ONE PLACE the green branch's star is drawn
+  green-branch.ts the commits each repository's green branch is at and was at
   detail-list.ts  the row list a tile's body is built from
   theme.ts      light/dark surface colors, theme switch markup and browser behavior
   lib.ts        shared helpers (github, memo, escapeHtml, sparkline, strip, …)
@@ -141,6 +143,24 @@ and sorts the combined list whenever either snapshot arrives. If one snapshot
 has not arrived yet, it shows the runs from the available snapshot in gray and
 names the pending source. If a later refresh fails, it keeps the last good
 snapshot for that source and shows the combined list in gray with the error.
+
+A repository can have a green branch: a branch its own CI moves to the newest
+commit of main whose tests passed. `GREEN_BRANCHES` in `config.ts` names it by
+repository; loom's is `main-green`. Each fetch of a repository's main snapshot
+also reads the updates of its green branch from GitHub's activity record for the
+repository, which lists every update of a branch, the ones CI makes through the
+API included. The first fetch reads back as far as the snapshot's age cutoff,
+each later one reads only the updates made since, and updates older than the
+cutoff are forgotten. A read that fails is logged and changes nothing, so the
+next one reads what it missed, and the snapshot is unaffected. Each run in the
+snapshot carries what the branch says of its commit. Every view that draws a run
+on main large enough to carry it marks such a commit with a green star: solid
+while the branch is at the commit, and hollow once the branch has moved past it.
+A commit the branch moved past without stopping at gets no star, although the
+branch contains it. The views are the rows of the recent main runs tile, the
+bars of a repository page's main-branch chart and the runs listed under it, and
+the heading of the commit CI Gantt page. The star's tooltip names the branch and
+says whether it is or was at the commit.
 
 Each event connection receives the current tile snapshot before it waits for new
 collections. The browser matches each tile in that snapshot with the tile of the
@@ -501,7 +521,8 @@ window the same parts follow one another down the page.
 - On the left, for each of its run sources, main before pull requests, a chart
   of its newest runs, as many as the recent main runs tile shows: a bar for
   each run, oldest on the left, as tall as the run took and colored by what it
-  concluded, with the dashboard's diamond over each failure. The charts share
+  concluded, with the dashboard's diamond over each failure and the green
+  branch's star over each commit it is or was at. The charts share
   the panel's height, so a taller window draws taller bars. A dashed line marks
   the median of the runs that passed. The chart's scale reaches the longest run
   but one in ten, and at least 1.7 times that median, so one run that hung does
@@ -576,8 +597,8 @@ installation with the same permissions; see [Credentials](#credentials).
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` in `commonfabric/labs`), via the REST API. Trust reads the runs on main; duration reads the pull request runs | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml`) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
 | weaver ci trust, weaver ci duration | the same two tiles for `commonfabric/commonfabric-weaver` (`ci.yml`). The duration tile is not a link, because the history views cover only labs and loom | `GH_TOKEN` (read access to weaver); optional `DASHBOARD_WEAVER_REPO` |
-| recent main runs | Labs and Loom main-run snapshots, refreshed independently and merged chronologically whenever either arrives; each row is tagged with its repo and links to its run, except that a pull request number in its title, such as "(#1234)", links to that pull request, and its arrow links to the pull request that landed the commit, or to the commit when its title names none | `GH_TOKEN` |
-| commit CI Gantt → `/ci-gantt` | job and step timing for every successful main workflow run attached to one commit, linked from run durations in recent main runs | `GH_TOKEN` |
+| recent main runs | Labs and Loom main-run snapshots, refreshed independently and merged chronologically whenever either arrives; each row is tagged with its repo and links to its run, except that a pull request number in its title, such as "(#1234)", links to that pull request, and its arrow links to the pull request that landed the commit, or to the commit when its title names none; a row whose commit the repository's green branch is or was at opens with a star, read from GitHub's activity record for the repository | `GH_TOKEN` |
+| commit CI Gantt → `/ci-gantt` | job and step timing for every successful main workflow run attached to one commit, linked from run durations in recent main runs; the commit wears the green branch's star when the branch is or was at it | `GH_TOKEN` |
 | CI duration history → `/bench?view=ci` | labs and loom job, shard-group, and end-to-end workflow duration trends. The labs and loom duration tiles open their repository's view, which charts runs on main rather than the pull request runs the tiles measure | `GH_TOKEN` |
 | CI run Gantt → `/bench?view=gantt` | detailed labs or loom job phases from `scripts/ci-gantt.ts`, backed by the CI history cache | `GH_TOKEN` |
 | flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it. Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |

@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-10-05\
-Revision: `6e09d52765`
+Last verified: 2026-10-06\
+Revision: `698601e13c`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -777,11 +777,17 @@ The current package provides:
   interactive `turn_completed` events, console polling and SSE carry the same
   outcome with its answer and actions, session identity, and current
   continuation availability. The live pane renders the answer, question, or
-  reason. Children report blockers to the parent. Missing-input discovery
-  distinguishes released evidence, absence within an enumerated granted scope,
-  and unknown reads; it stops for input rather than repeating author delegation.
-  Shared target-selection guidance asks for an unnamed, unattached piece without
-  a registry read and preserves established conversation targets. The parent
+  reason. A return referent's string reaches the console's pages, in a turn's
+  answer or beside a call in the live pane, only when its label fits the
+  console's display ceiling: the shared default ceiling for the identity the
+  console's fabric session signs as. `/api/runs/<runId>` returns the fitting
+  strings as `revealed`, their sites as `sites`, and the other tokens as
+  `hidden`, and its run state carries no return referents. Children report
+  blockers to the parent. Missing-input discovery distinguishes released
+  evidence, absence within an enumerated granted scope, and unknown reads; it
+  stops for input rather than repeating author delegation. Shared
+  target-selection guidance asks for an unnamed, unattached piece without a
+  registry read and preserves established conversation targets. The parent
   resolves a user-supplied slug with `resolve_piece` before author delegation,
   using the input-cell path's exact-address resolver and space restriction. Only
   an opaque handle returns; source remains child-only. An unheld slug or a

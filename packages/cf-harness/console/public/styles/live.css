@@ -1,12 +1,18 @@
 /*
  * The live pane: one session's work, in a column about as wide as a phone.
  * It loads `console.css` first and takes the shared vocabulary from there —
- * the badge, the CFC line, the omission block — so a step reads the same here
- * as it does in the console's own timeline. What this file adds is the column
- * those pieces sit in, and the dark scheme, because a pane docked beside
- * another application follows that application's appearance rather than its
- * own.
+ * the badge and the omission block. What this file adds is the column, the
+ * one-row steps and the words that explain them, and the dark scheme, because
+ * a pane docked beside another application follows that application's
+ * appearance rather than its own.
  */
+
+/* The amber of a shield over a step CFC withheld from or flagged; the dark
+   scheme below restates it at a weight that reads on the dark page. */
+.live-policy.warn,
+.live-why-heading.warn {
+  color: #b54708;
+}
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -38,7 +44,9 @@
 
   .badge.warn,
   .cfc-withheld,
-  .withheld-rule {
+  .withheld-rule,
+  .live-policy.warn,
+  .live-why-heading.warn {
     color: #e8a04a;
   }
 
@@ -122,7 +130,20 @@ console-live {
 }
 
 .live-dot.running {
+  animation: live-pulse 1.2s ease-in-out infinite alternate;
   background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot.running {
+    animation: none;
+  }
+}
+
+@keyframes live-pulse {
+  to {
+    opacity: 0.35;
+  }
 }
 
 .live-dot.completed {
@@ -132,6 +153,122 @@ console-live {
 .live-dot.failed,
 .live-dot.denied {
   background: var(--bad);
+}
+
+.live-dot.canceled {
+  background: var(--muted);
+}
+
+/* One step of the work: a status dot, what happened, and quiet details at the
+   end of the row. A row with more to say opens to show it. */
+.live-entry.call,
+.live-entry.subagent {
+  margin-bottom: 0.25rem;
+}
+
+.live-row:not(details),
+.live-row > summary {
+  align-items: baseline;
+  border-radius: 4px;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.15rem 0.25rem;
+}
+
+.live-row > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.live-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.live-row > summary:hover,
+.live-row[open] > summary {
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.live-row > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A row that opens says so at its end, and turns the mark when it is open. */
+.live-row > summary .live-meta::after {
+  content: "›";
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 0.1s;
+}
+
+.live-row[open] > summary .live-meta::after {
+  transform: rotate(90deg);
+}
+
+/* Words for a reader who cannot see the mark they stand beside. */
+.live-spoken {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.live-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The name of a tool, where a row names the tool rather than saying what the
+   call did in a sentence of its own. */
+.live-tool {
+  font-weight: 600;
+}
+
+/* The details at the end of a row sit beside its first line, however many
+   lines the row wraps onto: the box is one line of the row's text tall, and
+   centers its smaller contents in that line. */
+.live-meta {
+  align-items: center;
+  align-self: flex-start;
+  color: var(--muted);
+  display: inline-flex;
+  flex: none;
+  gap: 0.4rem;
+  height: 1lh;
+  white-space: nowrap;
+}
+
+.live-meta > * {
+  font-size: 0.75rem;
+}
+
+.live-policy {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+.live-policy svg {
+  fill: currentColor;
+  height: 0.85rem;
+  width: 0.85rem;
+}
+
+.live-policy.ok {
+  color: var(--ok);
+  opacity: 0.75;
+}
+
+.live-policy.bad {
+  color: var(--bad);
+}
+
+.live-detail {
+  margin: 0.25rem 0 0.5rem 1.25rem;
 }
 
 .live-line {
@@ -191,6 +328,83 @@ console-live {
   border: 1px dotted currentColor;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Something a line names rather than writes out — an element of the page, a
+   value another agent found, a stored item — shown as what it stands for,
+   boxed so it never reads as the agent's own words, and sitting on the line
+   of text around it. A box that wraps stays open where the line breaks, so it
+   reads as one box rather than several. */
+.live-reference {
+  border: 1px dotted var(--muted);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* The page's own text, in quotation marks the view draws, so no mark in the
+   text can close them early. */
+.live-reference.quoted > :first-child::before {
+  content: "“";
+}
+
+.live-reference.quoted > :first-child::after {
+  content: "”";
+}
+
+/* The site a value from a page came from, named beside the value. */
+.live-reference-source {
+  color: var(--muted);
+  font-size: 0.8em;
+  margin-left: 0.35em;
+}
+
+/* Words saying what kind of thing a reference is, where the view does not
+   know the thing itself. */
+.live-reference.vague {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* A lock before a value the view may not show. */
+.live-reference.sealed::before {
+  background: currentColor;
+  content: "";
+  display: inline-block;
+  height: 0.75em;
+  margin-right: 0.3em;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 7V5a3 3 0 0 1 6 0v2h1v7H4V7zm1.5 0h3V5a1.5 1.5 0 0 0-3 0z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  width: 0.75em;
+}
+
+/* Why CFC decided what it did about a step, opened under its row. */
+.live-why {
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* The verdict sits on the line of the sentence after it, and stays in one
+   piece; its shield sits among its words, a little below their baseline as a
+   capital letter's bowl would. */
+.live-why-heading {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.live-why-heading svg {
+  fill: currentColor;
+  height: 0.85em;
+  margin-right: 0.25em;
+  vertical-align: -0.1em;
+  width: 0.85em;
+}
+
+.live-why-heading.ok {
+  color: var(--ok);
+}
+
+.live-why-heading.bad {
+  color: var(--bad);
 }
 
 .live-found-badge {

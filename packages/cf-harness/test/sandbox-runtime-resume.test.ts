@@ -376,7 +376,7 @@ describe("sandbox-runtime-resume", () => {
       ]).toEqual([undefined, "runsc", choice]);
     });
 
-    it("keeps how the runtime was chosen when the run started, through a resume that chose it another way", async () => {
+    it("keeps how the runtime was chosen when the run started, through a resume that chose it another way", () => {
       const started = new CfHarnessEngine({
         ...on("runsc"),
         sandboxRuntimeChoice: { runtime: "runsc", source: "environment" },

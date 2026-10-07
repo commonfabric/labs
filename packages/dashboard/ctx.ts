@@ -12,6 +12,7 @@ import {
   REPO,
 } from "./config.ts";
 import { type GitHubRun, type RunFilter, RunLists } from "./github-runs.ts";
+import { type GreenBranch, greenBranchOf } from "./green-branch.ts";
 import {
   type Ctx,
   type Run,
@@ -49,11 +50,20 @@ function startedBefore(run: GitHubRun, cutoff: number): boolean {
 // Up to CI_RUNS_MAX runs of one source, newest first, stopping early once runs
 // pass the age cutoff — i.e. min(CI_RUNS_MAX, ~2 months). Each run is tagged
 // with the repo it came from so a combined stream (recent-runs) can link each
-// row to the right repo. Each tile slices this base to its own window.
-async function fetchRuns(lists: RunLists, source: RunSource): Promise<Run[]> {
+// row to the right repo, and a run on main with what the repo's green branch
+// says of its commit, read alongside the runs. Each tile slices this base to
+// its own window.
+async function fetchRuns(
+  lists: RunLists,
+  source: RunSource,
+  greenBranchOf: (repo: string) => GreenBranch | undefined,
+): Promise<Run[]> {
   const scope = SCOPES[source.scope];
   const cutoff = Date.now() - CI_RUNS_MAX_AGE_DAYS * 86_400_000;
-  const runs = await lists.runs(
+  const green = source.scope === "main"
+    ? greenBranchOf(source.repo)
+    : undefined;
+  const [runs] = await Promise.all([lists.runs(
     (path, options) => github(path, undefined, options),
     source.repo,
     source.workflow,
@@ -67,13 +77,24 @@ async function fetchRuns(lists: RunLists, source: RunSource): Promise<Run[]> {
       // GitHub stops that thirty days after a run is created.
       until: (run) => Date.parse(run.created_at) < cutoff,
     },
-  );
+  ), green?.refresh(cutoff)]);
   return runs
     .filter((run) => !startedBefore(run, cutoff))
-    .map((run) => ({ ...run, repo: source.repo }));
+    .map((run) => {
+      const mark = green?.mark(run.head_sha);
+      return mark === undefined
+        ? { ...run, repo: source.repo }
+        : { ...run, repo: source.repo, green: mark };
+    });
 }
 
-export function makeCtx(): Ctx {
+/**
+ * Builds the context, reading each repository's green branch through
+ * `green`, which defaults to the branches `GREEN_BRANCHES` names.
+ */
+export function makeCtx(
+  green: (repo: string) => GreenBranch | undefined = greenBranchOf,
+): Ctx {
   // One memoized fetcher per source, created on first use and shared for ~20s
   // across every tile that reads it.
   const lists = new RunLists();
@@ -82,7 +103,7 @@ export function makeCtx(): Ctx {
     const key = runSourceKey(source);
     let fetch = fetchers.get(key);
     if (!fetch) {
-      fetch = memo(20_000, () => fetchRuns(lists, source));
+      fetch = memo(20_000, () => fetchRuns(lists, source, green));
       fetchers.set(key, fetch);
     }
     return fetch();
