@@ -580,6 +580,13 @@ that no runtime is named, where the store is, and that Docker is selected with
 `CF_HARNESS_SANDBOX_RUNTIME=docker`. A run whose workspace is the home directory
 gets it, since the default store is under the home.
 
+The other way round, a writable mount is refused where it lies inside the
+rootfs, since the sandbox could rewrite the image later containers start from.
+The native store is held both ways too: on macOS the cfc-vm store, and on Linux,
+given a home, the runsc-cfc store under it, may not lie inside a writable mount,
+and no writable mount may lie inside it, so no image of the store, one this run
+does not use included, can be rewritten for a later run.
+
 Each of the three is resolved once, when the configuration is resolved, to the
 path the filesystem leads to, and that path is both what is compared with the
 mounts and what is used from then on: it is the command that is executed, the

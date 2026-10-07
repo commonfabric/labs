@@ -979,7 +979,7 @@ describe("sandbox-runtime-default", () => {
           await select(
             { HOME: home, CF_HARNESS_RUNSC_BINARY: "/usr/local/bin/runsc" },
             {},
-            { uid: () => 1000 },
+            { uid: () => 1000, readSysctl: () => Promise.resolve(undefined) },
           ),
         ).toEqual({
           // The named `runsc` runs as it is, and pasta as this user does: no
@@ -1145,6 +1145,51 @@ describe("sandbox-runtime-default", () => {
               "util-linux, or name a network with",
           );
         }
+      });
+
+      it("throws for a `runsc` named by a process that is not root on a host that allows it no user namespace, which pasta's network needs", async () => {
+        await installLinuxStore(home);
+
+        const refusal = await rejection(
+          select(
+            { HOME: home, CF_HARNESS_RUNSC_BINARY: "/usr/local/bin/runsc" },
+            {},
+            {
+              uid: () => 1000,
+              readSysctl: (name) =>
+                Promise.resolve(
+                  name === "kernel.unprivileged_userns_clone" ? "0" : undefined,
+                ),
+            },
+          ),
+        );
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(messageOf(refusal)).toContain(
+          "its network is `pasta`'s, and this process is not root (uid 1000), " +
+            "so pasta runs in a user namespace of its own, and " +
+            "`kernel.unprivileged_userns_clone` is 0, which allows none to a " +
+            "process that is not root. Allow one with `sudo sysctl -w " +
+            "kernel.unprivileged_userns_clone=1` (and a file in " +
+            "`/etc/sysctl.d` to keep it across boots), run as root, or name " +
+            "a network with `CF_HARNESS_DOCKER_NETWORK_MODE=none` or " +
+            "`CF_HARNESS_DOCKER_NETWORK_MODE=host`",
+        );
+        // A network that needs no pasta needs no user namespace of it.
+        expect(
+          await select(
+            {
+              HOME: home,
+              CF_HARNESS_RUNSC_BINARY: "/usr/local/bin/runsc",
+              CF_HARNESS_DOCKER_NETWORK_MODE: "none",
+            },
+            {},
+            {
+              uid: () => 1000,
+              readSysctl: () => Promise.reject(new Error("not read")),
+            },
+          ),
+        ).toMatchObject({ sandboxRunscNetworkMode: "none" });
       });
 
       it("throws for a `runsc` named by a process whose user cannot be read, rather than guess how pasta runs", async () => {

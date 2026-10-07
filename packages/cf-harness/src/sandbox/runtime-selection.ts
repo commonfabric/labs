@@ -1198,15 +1198,32 @@ export const resolveSandboxRuntimeSelection = async (
     }
     // Root's pasta runs in a mount namespace of its own; whoever else runs
     // has pasta make a user namespace, whether its `runsc` is rootless or a
-    // named one that runs as it is.
-    if (
-      !rootless &&
-      processUid(
+    // named one that runs as it is, which the host has to allow. A rootless
+    // `runsc` was checked for that already.
+    const uid = processUid(
+      nativePlatform,
+      "whether `pasta` runs as root, in a mount namespace of its own, or in a " +
+        "user namespace of its own",
+    );
+    if (uid !== 0 && !rootless) {
+      const blocked = await userNamespacesBlocked(
+        options.readSysctl ?? procSysctlReader(),
+      );
+      if (blocked !== undefined) {
+        throw nativeDefaultRefusal(
           nativePlatform,
-          "whether `pasta` runs as root, in a mount namespace of its own, or " +
-            "in a user namespace of its own",
-        ) === 0
-    ) {
+          `its network is \`pasta\`'s, and this process is not root (${
+            uid === null ? "its user cannot be told" : `uid ${uid}`
+          }), so pasta runs in a user namespace of its own, and ` +
+            blocked.problem,
+          `${blocked.remedy}, run as root, or name a network with ` +
+            `\`${SANDBOX_NETWORK_MODE_ENV}=none\` or ` +
+            `\`${SANDBOX_NETWORK_MODE_ENV}=host\``,
+          options.flags,
+        );
+      }
+    }
+    if (uid === 0) {
       unshare = which("unshare");
       if (unshare === undefined) {
         throw nativeDefaultRefusal(
