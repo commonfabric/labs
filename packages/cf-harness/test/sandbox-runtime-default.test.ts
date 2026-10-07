@@ -971,6 +971,21 @@ describe("sandbox-runtime-default", () => {
         );
       });
 
+      it("throws where the platform reports no user for the process, rather than take it for one that is not root", async () => {
+        await installLinuxStore(home);
+
+        const refusal = await rejection(
+          select({ HOME: home }, {}, { uid: () => null }),
+        );
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(messageOf(refusal)).toContain(
+          "which user this process runs as is not known (the platform " +
+            "reports none), so whether the store's `runsc` runs as root or " +
+            "rootless is not known. Select",
+        );
+      });
+
       it("returns the native runtime for a process that is not root where a `runsc` is named, which takes none from the store", async () => {
         const store = await installLinuxStore(home);
         await Deno.remove(join(store, LINUX_RUNSC));

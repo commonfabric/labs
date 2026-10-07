@@ -68,8 +68,13 @@ first run does without.
    where that store is not set up; on Linux they do the same from the store
    gVisor's Linux installer writes, rootless for a user that is not root, with
    `pasta` for the network; on every other platform those entrypoints default to
-   Docker. Two entrypoints take no default on any platform and refuse to start
-   unless a runtime is named: the Loom local host, and `console:launch` given
+   Docker. On Linux the default also needs passt's `pasta` and util-linux's
+   `setpriv` on `PATH`, and `unshare` too for root, and for a user that is not
+   root a host that allows unprivileged user namespaces; each refusal names what
+   is missing, the `sysctl` that allows user namespaces, or the network
+   (`CF_HARNESS_DOCKER_NETWORK_MODE=none` or `host`) that needs none of it. Two
+   entrypoints take no default on any platform and refuse to start unless a
+   runtime is named: the Loom local host, and `console:launch` given
    `--instance`. The package README's
    [Sandbox runtimes](README.md#sandbox-runtimes) covers the direct driver and
    the default. On macOS, follow the gVisor

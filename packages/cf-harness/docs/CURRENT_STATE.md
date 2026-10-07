@@ -185,8 +185,9 @@ The Linux default's `sandbox` network, unless `CF_HARNESS_DOCKER_NETWORK_MODE`
 names another, is `pasta`'s, from passt, found on `PATH` as the selection runs;
 with none there the default is refused, naming passt and the two networks that
 need none. The driver starts each container inside
-`pasta --config-net -a 10.0.2.15 -n 24 -g 10.0.2.2` with every port forward off
-(for root with `--netns-only --runas 0`, inside
+`pasta --config-net --quiet -4 -a 10.0.2.15 -n 24 -g 10.0.2.2` with every port
+forward off (`-t none -u none -T none -U none`) and its log in
+`--log-file <scratch>/pasta.log` (for root with `--netns-only --runas 0`, inside
 `unshare --mount --propagation private`, since pasta then mounts its own `/proc`
 in the mount namespace it runs in, and refused where no `unshare` is on `PATH`;
 whoever else runs, a named `runsc` included, has pasta make a user namespace),

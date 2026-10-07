@@ -121,6 +121,23 @@ Deno.test("DenoProcessRunner throws the reason of a signal that stopped the proc
   }
 });
 
+Deno.test("DenoProcessRunner throws the reason of a signal that stopped a process its input was still being written to", async () => {
+  const runner = new DenoProcessRunner();
+  const stop = new AbortController();
+
+  // More input than a pipe holds, to a process that reads none: the write is
+  // still in flight when the process is stopped.
+  const running = runner.run({
+    command: "/bin/sh",
+    args: ["-c", "exec sleep 60"],
+    stdinText: "x".repeat(4 * 1024 * 1024),
+    signal: stop.signal,
+  });
+  stop.abort(new Error("stopped by its caller"));
+
+  await assertRejects(() => running, Error, "stopped by its caller");
+});
+
 Deno.test("DenoProcessRunner refuses, running nothing, a run whose signal has already aborted", async () => {
   const runner = new DenoProcessRunner();
   const stop = new AbortController();

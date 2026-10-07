@@ -917,17 +917,18 @@ export const resolveSandboxRuntimeSelection = async (
   let nativeStore: string | undefined;
   let rootless = false;
   // The user this process runs as, read once, where something turns on it.
-  let uidRead: { uid: number | null } | undefined;
+  let uidRead: number | undefined;
   const processUid = (
     platform: NativeRuntimePlatform,
     turnsOn: string,
-  ): number | null => {
+  ): number => {
     if (uidRead === undefined) {
+      // Not known to be root, nor known not to be, so nothing that turns on
+      // it is chosen.
+      let uid: number | null;
       try {
-        uidRead = { uid: (options.uid ?? Deno.uid)() };
+        uid = (options.uid ?? Deno.uid)();
       } catch (error) {
-        // Not known to be root, nor known not to be, so nothing that turns
-        // on it is chosen.
         throw nativeDefaultRefusal(
           platform,
           `which user this process runs as could not be read (${error}), ` +
@@ -936,8 +937,18 @@ export const resolveSandboxRuntimeSelection = async (
           options.flags,
         );
       }
+      if (uid === null) {
+        throw nativeDefaultRefusal(
+          platform,
+          "which user this process runs as is not known (the platform " +
+            `reports none), so ${turnsOn} is not known`,
+          undefined,
+          options.flags,
+        );
+      }
+      uidRead = uid;
     }
-    return uidRead.uid;
+    return uidRead;
   };
   if (nativePlatform !== undefined) {
     const arch = options.arch ?? Deno.build.arch;
@@ -987,9 +998,8 @@ export const resolveSandboxRuntimeSelection = async (
         if (blocked !== undefined) {
           throw nativeDefaultRefusal(
             nativePlatform,
-            `this process is not root (${
-              uid === null ? "its user cannot be told" : `uid ${uid}`
-            }), so the store's \`runsc\` runs rootless, in a user namespace ` +
+            `this process is not root (uid ${uid}), so the store's \`runsc\` ` +
+              "runs rootless, in a user namespace " +
               `of its own, and ${blocked.problem}`,
             `${blocked.remedy}, or run as root`,
             options.flags,
@@ -1212,9 +1222,8 @@ export const resolveSandboxRuntimeSelection = async (
       if (blocked !== undefined) {
         throw nativeDefaultRefusal(
           nativePlatform,
-          `its network is \`pasta\`'s, and this process is not root (${
-            uid === null ? "its user cannot be told" : `uid ${uid}`
-          }), so pasta runs in a user namespace of its own, and ` +
+          `its network is \`pasta\`'s, and this process is not root (uid ${uid}), ` +
+            "so pasta runs in a user namespace of its own, and " +
             blocked.problem,
           `${blocked.remedy}, run as root, or name a network with ` +
             `\`${SANDBOX_NETWORK_MODE_ENV}=none\` or ` +

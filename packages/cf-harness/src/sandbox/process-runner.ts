@@ -155,11 +155,17 @@ export class DenoProcessRunner implements ProcessRunner {
         }
       };
 
+      // A write the process stopped short of failing is told only once the
+      // process has ended, and only where nothing stopped it: a stopped
+      // process closes its stdin under a write in flight.
+      let inputFailure: { error: unknown } | undefined;
       const [status, stdout, stderr] = await Promise.all([
         child.status,
         readStreamText(child.stdout),
         readStreamText(child.stderr),
-        writeInput(),
+        writeInput().catch((error: unknown) => {
+          inputFailure = { error };
+        }),
       ]);
 
       // Whatever status the process ends with: one that answers SIGTERM by
@@ -172,6 +178,7 @@ export class DenoProcessRunner implements ProcessRunner {
         );
       }
       request.signal?.throwIfAborted();
+      if (inputFailure !== undefined) throw inputFailure.error;
 
       return {
         stdout,

@@ -38,8 +38,8 @@
  * reads the same environment to decide whether Docker is involved at all,
  * and a flag it cannot see would leave the launch and the server describing
  * two different sandboxes. Where the environment names none, a console takes
- * its platform's default, the native runtime on macOS and Linux and Docker
- * elsewhere,
+ * its platform's default, the native runtime on macOS (Apple silicon alone:
+ * any other Mac is refused) and Linux and Docker elsewhere,
  * unless `host.sandboxRuntimeNamedBy` says its caller must name one, as
  * `console:launch` says for a console it launches for a Loom instance; that
  * console is refused on every platform instead.
