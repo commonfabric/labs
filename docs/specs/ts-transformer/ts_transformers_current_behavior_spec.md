@@ -2017,15 +2017,19 @@ adjustments:
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
   than a blanket root read) and suppresses the redundant blanket `.get()` read.
-  An element access contributes a path segment when its key is a literal or an
-  expression of literal type (`offers[KEY]` with `const KEY = "k"` records
-  `["offers", "k"]`, as `offers.k` does). A key that can name any member
-  (`offers[key.get()]`, a `string`-typed variable, a callback parameter) leaves
-  the chain unresolved, and the suppression applies only to a chain that
-  resolves in full, so such a chain keeps the blanket read: the `.get()`
-  receiver is read in full (`policy/capability-analysis.ts`; fixtures
+  An element access contributes a path segment when its key is a literal, an
+  expression of a single literal type (`offers[KEY]` with `const KEY = "k"`
+  records `["offers", "k"]`, as `offers.k` does), or a Common Fabric key such
+  as `NAME`. A key that can name any member (`offers[key.get()]`, a
+  `string`-typed variable, a callback parameter, a union of literal types)
+  leaves the chain unresolved. The suppression applies only to the calls of a
+  chain that resolves in full, including a chain nested in a fallback that
+  resolves by its other operand (`a.get().p ?? x.get().offers[key].space`), so
+  an unresolved chain keeps the blanket read: its `.get()` receiver is read in
+  full (`policy/capability-analysis.ts`; fixtures
   `closures/computed-element-access-*`,
-  `handler-schema/handler-element-access-dynamic-key`)
+  `handler-schema/handler-element-access-dynamic-key`,
+  `schema-injection/lift-element-access-dynamic-key`)
 - optional `.get()` chains retain an explicit readonly read of the receiver
   Cell even when a projected result member is observed; this preserves the
   nested Cell in synthesized closure schemas without widening the enclosing

@@ -2077,11 +2077,14 @@ export function analyzeFunctionCapabilities(
     // READER_METHODS handler encounters these, it skips the blanket [] read.
     const resolvedGetCalls = new Set<ts.Node>();
 
-    // The calls a resolution in progress passed through, which join
-    // `resolvedGetCalls` only once the outermost `resolveBinding()` returns a
-    // binding. A chain that resolves partway and then fails, as at an element
-    // access by a key no static path can name, leaves its calls to the
-    // READER_METHODS handler's blanket read.
+    // The calls the innermost `resolveBinding()` in progress passed through.
+    // Each call keeps its own list: on success it hands the list to the call
+    // enclosing it, or adds it to `resolvedGetCalls` when it is the outermost,
+    // and on failure it drops the list. So a chain that resolves partway and
+    // then fails, as at an element access by a key no static path can name,
+    // leaves its calls to the READER_METHODS handler's blanket read, even
+    // where an enclosing resolution succeeds by another branch, as
+    // `a.get().p ?? x.get().offers[key].space` does by its left operand.
     let pendingResolvedGetCalls: ts.Node[] | undefined;
 
     // Track alias names (e.g. "notes") that were resolved with specific
@@ -2255,26 +2258,30 @@ export function analyzeFunctionCapabilities(
     const resolveBinding = (
       expression: ts.Expression,
     ): AliasBinding | undefined => {
-      if (pendingResolvedGetCalls) {
-        return resolveBindingUncommitted(expression);
-      }
+      const enclosing = pendingResolvedGetCalls;
       const pending: ts.Node[] = [];
       pendingResolvedGetCalls = pending;
+      let binding: AliasBinding | undefined;
       try {
-        const binding = resolveBindingUncommitted(expression);
-        if (binding) {
-          for (const call of pending) resolvedGetCalls.add(call);
-        }
-        return binding;
+        binding = resolveBindingUncommitted(expression);
       } finally {
-        pendingResolvedGetCalls = undefined;
+        pendingResolvedGetCalls = enclosing;
       }
+      if (binding) {
+        for (const call of pending) {
+          if (enclosing) {
+            enclosing.push(call);
+          } else {
+            resolvedGetCalls.add(call);
+          }
+        }
+      }
+      return binding;
     };
 
-    /**
-     * Helper for `resolveBinding()`, which resolves `expression` and records
-     * each call whose result it resolved through in `pendingResolvedGetCalls`.
-     */
+    // The body of `resolveBinding()`. It pushes each call whose result it
+    // resolves through onto `pendingResolvedGetCalls`, and `resolveBinding()`
+    // decides what becomes of them.
     const resolveBindingUncommitted = (
       expression: ts.Expression,
     ): AliasBinding | undefined => {
