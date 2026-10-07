@@ -2,6 +2,9 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
+import type { HarnessTranscriptMessage } from "@commonfabric/cf-harness/contracts/transcript";
+
+import { browserChild, delegatedBrowse } from "./fixtures/delegated-browse.ts";
 import type { HarnessJobResult } from "../../src/harness-job.ts";
 import { startLocalJobs } from "../../src/local-jobs/service.ts";
 
@@ -338,16 +341,42 @@ describe("startLocalJobs()", () => {
         // handed, under the tools and profiles the lane gave it.
         runJob: async (spec, options): Promise<HarnessJobResult> => {
           const host = options.browserHost!;
+
           log.push(`run ${spec.tools.join(",")} ${spec.subagentProfiles}`);
+          await options.onEvent?.(delegatedBrowse()[0]);
+          const transcript: HarnessTranscriptMessage[] = [];
+          const step = async (action: string) => {
+            const message: HarnessTranscriptMessage = {
+              role: "assistant",
+              content: "",
+              toolCalls: [{
+                id: action,
+                type: "function",
+                function: {
+                  name: "browser",
+                  arguments: JSON.stringify({ action }),
+                },
+              }],
+            };
+            transcript.push(message);
+            await options.onEvent?.({
+              message,
+              transcript: [...transcript],
+              subagent: browserChild,
+            });
+          };
+          await step("open");
           const opened = await host.perform({
             action: "open",
             url: "https://example.com",
-          });
+          }, options.signal);
+          await step("snapshot");
           const snapshot = await host.perform({
             action: "snapshot",
             interactive: true,
-          });
+          }, options.signal);
           const abort = new AbortController();
+          await step("click");
           const click = host.perform(
             { action: "click", ref: "@e1" },
             abort.signal,
@@ -357,7 +386,11 @@ describe("startLocalJobs()", () => {
           // The withdrawn call rejects at once; the host's answer to it is
           // the acknowledgment the next operation waits on.
           clickAnswer = await click;
-          const title = await host.perform({ action: "get", kind: "title" });
+          await step("get");
+          const title = await host.perform(
+            { action: "get", kind: "title" },
+            options.signal,
+          );
           return {
             outcome: "completed",
             structuredResult: { opened, snapshot, title },
@@ -376,6 +409,7 @@ describe("startLocalJobs()", () => {
         headers: { authorization: `Bearer ${token}` },
         client,
       } as never);
+    let cancelStream = async () => {};
     try {
       const enqueued = await (await request("/jobs", {
         method: "POST",
@@ -402,6 +436,7 @@ describe("startLocalJobs()", () => {
       const stream = await request(`/jobs/${id}/browser/stream`);
       const lines = stream.body!.pipeThrough(new TextDecoderStream())
         .getReader();
+      cancelStream = () => lines.cancel();
       let buffer = "";
       read: for (;;) {
         const { value, done } = await lines.read();
@@ -420,6 +455,18 @@ describe("startLocalJobs()", () => {
             }`,
           );
           if (event === "close") break read;
+          if (event === "request") {
+            const snapshot = await (await request(`/jobs/${id}`)).json();
+            expect(snapshot.job.step).toMatchObject({
+              tool: "browser",
+              action: data.operation.action,
+              child: {
+                profile: "browser",
+                childRunId: browserChild.childRunId,
+                depth: 1,
+              },
+            });
+          }
           if (event === "withdraw") {
             await answer(data.id, { status: "failed", message: "withdrawn" });
           } else if (data.operation.action === "click") {
@@ -452,6 +499,18 @@ describe("startLocalJobs()", () => {
       expect(clickAnswer).toBe("rejected: the run moved on");
       const events = await (await request(`/jobs/${id}/events`)).text();
       expect(events).toContain('"state":"completed"');
+      const steps = events.split("\n").filter((line) =>
+        line.startsWith("data: ")
+      ).map((line) => JSON.parse(line.slice(6))).filter((event) =>
+        typeof event.tool === "string"
+      );
+      expect(steps.map((event) => event.action)).toEqual([
+        undefined,
+        "open",
+        "snapshot",
+        "click",
+        "get",
+      ]);
       const { job } = await (await request(`/jobs/${id}`)).json();
       expect(job.result).toEqual({
         opened: { status: "ok", page },
@@ -460,6 +519,8 @@ describe("startLocalJobs()", () => {
       });
       expect(job.browser).toMatchObject({ state: "closed", outstanding: 0 });
     } finally {
+      clickDelivered();
+      await cancelStream();
       client.close();
       await running.stop();
     }

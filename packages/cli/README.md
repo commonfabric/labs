@@ -1347,8 +1347,23 @@ binds as, and whether a job may bring a browser host (`browserHost: true`). A
 request may name fewer tools and fewer turns, and, under a profile that admits
 one, declare a browser host (below); leaving it out declines the browser. It may
 set nothing else. A job runs through the same `cf-harness` path as an agent run,
-with no fabric session, and reports a `step` event for each tool its loop calls
-and a `command` event for each command the host ran for it.
+with no fabric session. Every tool call, including delegated calls, counts as
+progress; prose, reasoning and ordinary tool results do not. A `step` carries
+`{turn, tool}`, and a `command` records each command the host ran for it.
+Children add `child: {profile, childRunId, parentToolCallId, depth}` to either
+body. The harness admits one level of delegation, so depth is `1`. The browser
+child's steps also carry `action` (such as `click` or `snapshot`), without the
+operation's arguments or page content.
+
+The lane coalesces consecutive steps with the same tool, child and browser
+action, ignoring turn numbers. Thus N identical browser operations publish one
+step; changing action or child publishes a new one. Commands are never
+coalesced, and a command breaks the step's repetition. Volume is bounded by
+these visible transitions plus command receipts, rather than transcript size.
+The job snapshot's `step` names the active child's tool until the parent's
+`delegate_task` result arrives, then resumes the parent's step. Children cannot
+delegate further; nested progress needs lineage in the harness's transcript
+contract before that restriction is widened.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an
