@@ -73,6 +73,8 @@ a line for each new document to the index below.
 
 ## Identity and people
 
+- [`meeting-room-coordination.md`](meeting-room-coordination.md) — shared
+  creator and allocation decisions for calendar-driven social looms
 - [`shared-space-catalog.md`](shared-space-catalog.md) — portable collection
   membership, transactional registration, and archive/restore confirmation
 - [`did-identifiers.md`](did-identifiers.md) — what makes a string a DID, the
