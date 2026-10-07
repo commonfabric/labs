@@ -294,6 +294,40 @@ describe("agent runner", () => {
     expect(result.key("result").get()).toEqual({ answer: "Hyperion" });
   });
 
+  for (const complete of [true, false, undefined]) {
+    it(`retains observed model attribution with completeness ${complete} across a new runtime`, async () => {
+      const result = await submit();
+      const runtime = connect(CLOUD);
+      const attribution = complete === undefined ? {} : {
+        actualModels: ["provider-served-model"],
+        modelAttributionComplete: complete,
+        modelResponses: [
+          { modelTurn: 1, model: "provider-served-model" },
+          { modelTurn: 2, model: complete ? "provider-served-model" : null },
+        ],
+      };
+      await startRunner(async (run) => {
+        const execution = await completing(() => runtime)(run);
+        return {
+          ...execution,
+          report: { ...execution.report, ...attribution },
+        };
+      }, { runtimeForHost: () => Promise.resolve(runtime) });
+      await waitForState(result, "completed");
+
+      const fresh = connect(CLOUD);
+      const record = await waitForCellValue<AgentRunRecord>(
+        fresh,
+        recordOf(result, fresh),
+        (value) => value?.state === "completed",
+      );
+      expect(record.actualModels).toEqual(attribution.actualModels);
+      expect(record.modelResponses).toEqual(attribution.modelResponses);
+      expect(record.modelAttributionComplete).toBe(complete);
+      expect(record.modelTurns).toBe(2);
+    });
+  }
+
   it("ends a record `failed` with the executor's error code", async () => {
     const result = await submit();
     await startRunner(() =>

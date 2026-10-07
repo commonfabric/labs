@@ -93,6 +93,9 @@ export type AgentRun = {
   startedAt?: string;
   finishedAt?: string;
   modelTurns?: number;
+  actualModels?: string[];
+  modelAttributionComplete?: boolean;
+  modelResponses?: { modelTurn: number; model: string | null }[];
   toolCalls?: number;
   usage?: AgentRunUsage;
   usageCoverage?: "direct" | "including-descendants";
