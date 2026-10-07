@@ -652,8 +652,12 @@ Options:
                                 ~/.local/share/runsc-cfc, rootless for a process that is not
                                 root (the host must allow unprivileged user namespaces),
                                 with pasta (passt) giving it egress and the host as
-                                host.docker.internal, and each refuses to start where its
-                                store is not set up; every other platform runs docker
+                                host.docker.internal; that network needs pasta and setpriv
+                                on PATH, unshare too for root, and user namespaces for a
+                                process that is not root (a refusal names the sysctl -w
+                                to run), and CF_HARNESS_DOCKER_NETWORK_MODE=none or host
+                                needs none of them. Each refuses to start where its store
+                                is not set up; every other platform runs docker
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
                                 on Linux, default images/kitchensink in the Linux store;
                                 on macOS the cfc-vm image marker, default
