@@ -103,7 +103,7 @@ export const compareTimes = (a: FabricEpochNsec, b: FabricEpochNsec): number =>
 //
 
 /**
- * The part of a person's profile a room reads. It is a view of the person's
+ * The part of a person's profile the room reads. It is a view of the person's
  * shared profile, reached through a link, and never a copy.
  */
 export interface ChatProfile {

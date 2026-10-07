@@ -272,6 +272,11 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       { label: "bob-done" },
     ],
+    // TODO(danfuzz): The first run of the event offering the room fails to
+    // commit, and the runner drops the offer that run sent with a warning,
+    // though the event's next run sends the offer again. Expect no warnings
+    // once the runner drops it quietly, or the first run commits.
+    allowConsoleWarnings: true,
   };
 });
 

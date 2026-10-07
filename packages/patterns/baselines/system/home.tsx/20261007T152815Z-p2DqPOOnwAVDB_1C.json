@@ -352,7 +352,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
                   "path": [
                     "setAvatar"
                   ]
@@ -378,7 +378,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
                   "path": [
                     "setBio"
                   ]
@@ -403,7 +403,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
                   "path": [
                     "mutateElements"
                   ]
@@ -432,7 +432,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
                   "path": [
                     "mutateExternalProfileLinks"
                   ]
@@ -461,7 +461,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
                   "path": [
                     "setInbox"
                   ]
@@ -492,7 +492,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
                   "path": [
                     "setName"
                   ]
@@ -572,7 +572,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
                   "path": [
                     "publishVerifiedIdentities"
                   ]
@@ -600,51 +600,6 @@
           "isEditing",
           "initialNameApplied",
           "$UI"
-        ],
-        "type": "object"
-      },
-      "ChatInbox": {
-        "properties": {
-          "offers": {
-            "description": "The offers received, readable by the inbox's owner alone.",
-            "items": {
-              "$ref": "#/$defs/ChatInboxOffer"
-            },
-            "type": "array"
-          },
-          "receive": {
-            "$ref": "#/$defs/ChatRoomOfferEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Appends an offer."
-          }
-        },
-        "type": "object"
-      },
-      "ChatInboxOffer": {
-        "properties": {
-          "entry": {
-            "$ref": "#/$defs/ChatRoomLink",
-            "description": "The piece offered, if the sender named one."
-          },
-          "from": {
-            "description": "The DID of the principal who sent the offer, as the inbox recorded it.",
-            "type": "string"
-          },
-          "id": {
-            "description": "The offer's id, unique in its inbox, which the inbox chose when it\nreceived the offer.",
-            "type": "string"
-          },
-          "kind": {
-            "description": "What is offered; a room's offer is `fabrichat-room`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "id",
-          "from"
         ],
         "type": "object"
       },
@@ -696,28 +651,6 @@
         ],
         "type": "object"
       },
-      "ChatManagerOffer": {
-        "properties": {
-          "from": {
-            "description": "The DID of the principal who offered it.",
-            "type": "string"
-          },
-          "key": {
-            "description": "The offer's key, which `accept` and `dismissOffer` name it by.",
-            "type": "string"
-          },
-          "room": {
-            "$ref": "#/$defs/ChatRoomLink",
-            "description": "The room offered."
-          }
-        },
-        "required": [
-          "key",
-          "room",
-          "from"
-        ],
-        "type": "object"
-      },
       "ChatManagerProfile": {
         "properties": {
           "avatar": {
@@ -725,13 +658,8 @@
             "type": "string"
           },
           "inbox": {
-            "description": "Where the person's offers are delivered: a link to their private inbox,\nabsent while they have none.",
-            "properties": {
-              "piece": {
-                "$ref": "#/$defs/ChatInbox"
-              }
-            },
-            "type": "object"
+            "$ref": "#/$defs/ProfileInbox",
+            "description": "Where the person's offers are delivered: a link to their share inbox,\nabsent while they have none."
           },
           "name": {
             "description": "The person's display name, if they have set one.",
@@ -859,23 +787,6 @@
         },
         "type": "object"
       },
-      "ChatRoomOfferEvent": {
-        "properties": {
-          "entry": {
-            "$ref": "#/$defs/ChatRoomLink",
-            "description": "The room offered."
-          },
-          "kind": {
-            "description": "What is offered; a room's offer is `fabrichat-room`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "entry"
-        ],
-        "type": "object"
-      },
       "ChatRoomPolicy": {
         "properties": {
           "deletionIsObliteration": {
@@ -946,6 +857,15 @@
               }
             },
             "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "EnsurePrivateInboxEvent": {
+        "properties": {
+          "adopt": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "An inbox a profile advertises, which the host has vetted for Home to\nadopt; absent when the host vetted none."
           }
         },
         "type": "object"
@@ -1035,26 +955,12 @@
             "properties": {},
             "type": "object"
           },
-          "dismissOffer": {
-            "$ref": "#/$defs/ManagerStreamEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Sets an offer aside without accepting it."
-          },
           "forget": {
             "$ref": "#/$defs/ManagerStreamEvent",
             "asCell": [
               "stream"
             ],
             "description": "Removes a room from this user's list."
-          },
-          "offers": {
-            "description": "The rooms offered to this user that they haven't acted on, oldest first.",
-            "items": {
-              "$ref": "#/$defs/ChatManagerOffer"
-            },
-            "type": "array"
           },
           "openDirect": {
             "$ref": "#/$defs/ManagerStreamEvent",
@@ -1091,13 +997,11 @@
           "direct",
           "requests",
           "outgoingNotices",
-          "offers",
           "openDirect",
           "createGroup",
           "accept",
           "forget",
           "delivered",
-          "dismissOffer",
           "$NAME",
           "$UI",
           "$VIEWS"
@@ -1135,26 +1039,12 @@
             "properties": {},
             "type": "object"
           },
-          "dismissOffer": {
-            "$ref": "#/$defs/ManagerStreamEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Sets an offer aside without accepting it."
-          },
           "forget": {
             "$ref": "#/$defs/ManagerStreamEvent",
             "asCell": [
               "stream"
             ],
             "description": "Removes a room from this user's list."
-          },
-          "offers": {
-            "description": "The rooms offered to this user that they haven't acted on, oldest first.",
-            "items": {
-              "$ref": "#/$defs/ChatManagerOffer"
-            },
-            "type": "array"
           },
           "openDirect": {
             "$ref": "#/$defs/ManagerStreamEvent",
@@ -1187,7 +1077,6 @@
           }
         },
         "required": [
-          "offers",
           "rooms",
           "direct",
           "requests",
@@ -1196,8 +1085,7 @@
           "createGroup",
           "accept",
           "forget",
-          "delivered",
-          "dismissOffer"
+          "delivered"
         ],
         "type": "object"
       },
@@ -1301,16 +1189,12 @@
             },
             "type": "array"
           },
-          "offer": {
-            "description": "The key of the offer accepted or dismissed.",
-            "type": "string"
-          },
           "profile": {
             "$ref": "#/$defs/ChatManagerProfile",
-            "description": "A direct room's other member's profile, through whose private inbox a new\nroom is offered to them."
+            "description": "A direct room's other member's profile, through whose share inbox a new\nroom is offered to them."
           },
           "requestId": {
-            "description": "Chosen by the sender; the outcome is recorded under it.",
+            "description": "Chosen by the sender; the outcome is recorded under it, except for a start\nthat would create a room without its reviewed `ChatStart`, which is\nrefused whole and records none.",
             "type": "string"
           },
           "room": {
@@ -1318,8 +1202,16 @@
             "description": "A room to accept or forget."
           },
           "target": {
-            "description": "A rendered control's text.",
+            "description": "A rendered control's text, or the principal it starts a direct room with.",
             "properties": {
+              "dataset": {
+                "properties": {
+                  "counterpart": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
               "value": {
                 "type": "string"
               }
@@ -1388,16 +1280,8 @@
       "PrivateInboxHolder": {
         "properties": {
           "piece": {
-            "$ref": "#/$defs/PrivateInboxPiece",
+            "$ref": "#/$defs/ShareInboxPiece",
             "description": "The inbox piece."
-          }
-        },
-        "type": "object"
-      },
-      "PrivateInboxPiece": {
-        "properties": {
-          "$NAME": {
-            "type": "string"
           }
         },
         "type": "object"
@@ -1744,7 +1628,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-create.tsx",
-                  "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+                  "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
                   "path": [
                     "setDefaultProfile"
                   ]
@@ -1772,7 +1656,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1788,7 +1672,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1808,7 +1692,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
               "path": [
                 "setMruProfile"
               ]
@@ -1832,7 +1716,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/packages/patterns/system/profile-create.tsx",
-                "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+                "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
                 "path": [
                   "setMruProfile"
                 ]
@@ -1972,9 +1856,9 @@
         "$ref": "#/$defs/TrustedDefaultProfile"
       },
       "ensurePrivateInbox": {
+        "$ref": "#/$defs/EnsurePrivateInboxEvent",
         "asCell": [
-          "stream",
-          "opaque"
+          "stream"
         ]
       },
       "favorites": {
