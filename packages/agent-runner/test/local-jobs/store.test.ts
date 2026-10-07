@@ -1,7 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 import { Database } from "@db/sqlite";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   type LocalJob,
@@ -428,6 +431,73 @@ describe("local-jobs/store", () => {
   });
 
   describe("open()", () => {
+    it("recovers an acknowledged job after the writer is killed and preserves its idempotency key", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "local-jobs-killed-" });
+      const path = join(dir, "jobs.sqlite");
+      const module = new URL("../../src/local-jobs/store.ts", import.meta.url);
+      try {
+        const child = await runDenoCommandWithTemporaryLock({
+          root: fromFileUrl(new URL("../../../../", import.meta.url)),
+          args: () => [
+            "eval",
+            "--no-lock",
+            `
+            import { LocalJobStore } from ${JSON.stringify(module.href)};
+            const store = LocalJobStore.open(${JSON.stringify(path)});
+            const result = store.enqueue("caller", "read", "key", ${
+              JSON.stringify(request())
+            });
+            await Deno.stdout.write(new TextEncoder().encode(JSON.stringify(result)));
+            Deno.kill(Deno.pid, "SIGKILL");
+          `,
+          ],
+        });
+        expect(child.signal).toBe("SIGKILL");
+        const acknowledged = JSON.parse(new TextDecoder().decode(child.stdout));
+        expect(acknowledged.created).toBe(true);
+        const reopened = LocalJobStore.open(path);
+        try {
+          expect(reopened.get(acknowledged.job.id)).toMatchObject({
+            state: "queued",
+            request: request(),
+            seq: 1,
+          });
+          expect(added(reopened.enqueue("caller", "read", "key", request())))
+            .toMatchObject({
+              created: false,
+              job: { id: acknowledged.job.id },
+            });
+          expect(reopened.enqueue("caller", "read", "key", request("other")))
+            .toHaveProperty("conflict");
+          expect(reopened.list(10)).toHaveLength(1);
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("uses full synchronous WAL commits for acknowledged jobs", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "local-jobs-durable-" });
+      const exec = spy(Database.prototype, "exec");
+      let store: LocalJobStore | undefined;
+      try {
+        store = LocalJobStore.open(join(dir, "jobs.sqlite"));
+        const database = exec.calls[0].self;
+        expect(database?.prepare("PRAGMA journal_mode").get()).toEqual({
+          journal_mode: "wal",
+        });
+        expect(database?.prepare("PRAGMA synchronous").get()).toEqual({
+          synchronous: 2,
+        });
+      } finally {
+        exec.restore();
+        store?.close();
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
     it("keeps refused command details in events and the job snapshot across a reopen", async () => {
       const dir = await Deno.makeTempDir({ prefix: "local-jobs-errors-" });
       try {

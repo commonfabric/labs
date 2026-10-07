@@ -37,6 +37,7 @@ export type BuiltinToolId =
   | "loom_profile"
   | "list_commands"
   | "run_command"
+  | "run_read_command"
   | "submit_result";
 
 export const DEFAULT_PARENT_TOOL_IDS = [
@@ -174,6 +175,7 @@ export const LOOM_RETRIEVAL_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
 export const LOOM_COMMAND_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
   "list_commands",
   "run_command",
+  "run_read_command",
 ]);
 
 /**

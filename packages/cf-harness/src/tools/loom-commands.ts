@@ -1,6 +1,6 @@
 /**
- * The two tools through which a run reaches the commands its host admits:
- * `list_commands` shows them, and `run_command` runs one, as the agent. The
+ * Tools through which a run reaches the commands its host admits:
+ * `list_commands` shows them, and the command tools run one, as the agent. The
  * host's broker decides both — what is listed and what runs — and stamps the
  * actor and run on every command it forwards (`loom-commands.ts`).
  *
@@ -110,7 +110,7 @@ export type ListCommandsOutput =
     message: string;
   };
 
-/** What `run_command` takes. */
+/** Inputs shared by the command execution tools. */
 export interface RunCommandInput {
   command: string;
   args: Record<string, unknown>;
@@ -186,7 +186,7 @@ export type RunCommandOutput =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   isObjectNotArray(value);
 
-/** Helper for both tools, which lists the host's catalog as an agent sees it. */
+/** Helper for command tools, which lists the host's catalog as an agent sees it. */
 const listCatalog = async (
   context: HarnessToolContext,
   config: HarnessLoomCommandsConfig,
@@ -273,7 +273,7 @@ export const listCommandsTool: HarnessToolDefinition<
   },
 };
 
-/** Helper for `run_command`, which reads the summary out of an answer. */
+/** Helper for command results, which reads the summary out of an answer. */
 const outcomeOf = (body: JSONObject, bodyBytes: number): LoomCommandOutcome => {
   // Each field is cut to an identifier's length, and `completed` to a few
   // dozen ids, so the summary stays a small fraction of the output bound the
@@ -306,19 +306,23 @@ const outcomeOf = (body: JSONObject, bodyBytes: number): LoomCommandOutcome => {
   };
 };
 
-/** Runs one command the host lets this run run, as the agent. */
-export const runCommandTool: HarnessToolDefinition<
+/** Helper for command tools with the authority their invocation demands. */
+const commandTool = (
+  toolId: "run_command" | "run_read_command",
+): HarnessToolDefinition<
   RunCommandInput,
   RunCommandOutput
-> = {
+> => ({
   descriptor: {
-    toolId: "run_command",
-    title: "Run Command",
-    // Unknown until the host declares each command's effect, so every call
-    // is authorized as one that may change something.
-    effectClass: "write",
+    toolId,
+    title: toolId === "run_read_command" ? "Run Read Command" : "Run Command",
+    effectClass: toolId === "run_read_command" ? "read" : "write",
     description:
-      `Run one command list_commands showed, as the agent, with args matching its schema. Pass loomId for a command whose target is loom, and expectedVersion to refuse a stale write. Returns the command's outcome (ok, code, mayHaveLanded, completed) and its full answer as an entry measured against this run's confidentiality ceiling: admitted, with a handle a structured result can name, or withheld with no content. A command this run may not run comes back not_granted: do not retry it; if the person should run it, name it in your result as an offer for them. ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
+      `Run one command list_commands showed, as the agent, with args matching its schema. ${
+        toolId === "run_read_command"
+          ? "Requires effect read and readOnlyGranted true in the host's fresh listing; the broker rechecks both when executing. "
+          : ""
+      }Pass loomId for a command whose target is loom, and expectedVersion to refuse a stale write. Returns the command's outcome (ok, code, mayHaveLanded, completed) and its full answer as an entry measured against this run's confidentiality ceiling: admitted, with a handle a structured result can name, or withheld with no content. A command this run may not run comes back not_granted: do not retry it; if the person should run it, name it in your result as an offer for them. ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -333,7 +337,7 @@ export const runCommandTool: HarnessToolDefinition<
     tags: ["loom", "command"],
   },
   async invoke(context, input) {
-    const outputId = context.nextOutputId("run_command");
+    const outputId = context.nextOutputId(toolId);
     const notSent = (
       code: RunCommandFailureCode,
       reason: string,
@@ -367,7 +371,7 @@ export const runCommandTool: HarnessToolDefinition<
     ) {
       return notSent(
         "invalid_input",
-        "run_command requires a command name list_commands showed, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.",
+        `${toolId} requires a command name list_commands showed, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.`,
       );
     }
     if (harnessCommandJsonBytes(args) > HARNESS_COMMAND_ARGS_MAX_BYTES) {
@@ -387,10 +391,23 @@ export const runCommandTool: HarnessToolDefinition<
     if (listed.status === "error") {
       return notSent(listed.code, listed.message);
     }
-    if (!listed.catalog.entries.some((entry) => entry.name === command)) {
+    const entry = listed.catalog.entries.find((entry) =>
+      entry.name === command
+    );
+    if (entry === undefined) {
       return notSent(
         "not_granted",
         "The host lists no command by that name for this run.",
+        notGrantedHint(command),
+      );
+    }
+    if (
+      toolId === "run_read_command" &&
+      (entry.effect !== "read" || entry.readOnlyGranted !== true)
+    ) {
+      return notSent(
+        "not_granted",
+        "The host has not granted read-only execution of this command with `effect: read`.",
         notGrantedHint(command),
       );
     }
@@ -401,6 +418,7 @@ export const runCommandTool: HarnessToolDefinition<
         args: args as JSONObject,
         ...(loomId !== undefined ? { loomId } : {}),
         ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        ...(toolId === "run_read_command" ? { readOnly: true } : {}),
       },
       context.hostProcessRunner,
     );
@@ -445,7 +463,7 @@ export const runCommandTool: HarnessToolDefinition<
       JSON.stringify(skeleton).length + LABEL_JOIN_ALLOWANCE,
       mint === undefined ? undefined : (referent) =>
         mint({
-          source: "run_command",
+          source: toolId,
           value: referent.value,
           label: referent.label,
           labelSource: "command",
@@ -453,10 +471,10 @@ export const runCommandTool: HarnessToolDefinition<
         }),
     );
     const observedLabel = mergeConfidentialityOnlyLabels(measured.labels);
-    const [entry] = measured.entries;
+    const [answerEntry] = measured.entries;
     return {
       ...skeleton,
-      ...(entry !== undefined ? { entry } : {}),
+      ...(answerEntry !== undefined ? { entry: answerEntry } : {}),
       truncated: measured.truncated,
       cfc: {
         version: 1,
@@ -464,10 +482,20 @@ export const runCommandTool: HarnessToolDefinition<
       },
     };
   },
-};
+});
 
-/** The two command tools, in registration order. */
-export const LOOM_COMMAND_TOOLS = [listCommandsTool, runCommandTool] as const;
+/** Runs one host-granted command with write-class authority. */
+export const runCommandTool = commandTool("run_command");
+
+/** Runs a host-declared read with a broker-issued read-only grant. */
+export const runReadCommandTool = commandTool("run_read_command");
+
+/** Command tools, in registration order. */
+export const LOOM_COMMAND_TOOLS = [
+  listCommandsTool,
+  runCommandTool,
+  runReadCommandTool,
+] as const;
 
 /**
  * The model-context observation a command's answer contributes: its label

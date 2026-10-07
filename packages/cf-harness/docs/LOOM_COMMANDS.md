@@ -7,18 +7,18 @@ Status: current implementation reference
 A run that acts on the person's data — making a loom, writing a page — needs to
 reach the operations the host offers without the harness naming any of them. The
 host already describes those operations in its command manifest and already
-narrows them per run with a broker. Two generic tools put that in front of the
-model: `list_commands` shows the commands the host lets this run run, and
-`run_command` runs one, as the agent. Which commands those are is the host's
-decision alone; nothing in cf-harness names a command.
+narrows them per run with a broker. `list_commands` shows the commands the host
+lets this run run. `run_command` runs one with write-class authority, and
+`run_read_command` runs a broker-granted read. Which commands those are is the
+host's decision alone; nothing in cf-harness names a command.
 
 ## Host configuration
 
 The batch CLI accepts `--loom-commands-config /absolute/host-config.json` or
 `CF_HARNESS_LOOM_COMMANDS_CONFIG`. The file is supplied by the operator, read on
-the host, and never passed into the sandbox. Without it both tools are absent,
-including when `--allow-tool` names one: naming one without the configuration is
-refused at argument parsing.
+the host, and never passed into the sandbox. Without it the command tools are
+absent, including when `--allow-tool` names one: naming one without the
+configuration is refused at argument parsing.
 
 ```json
 {
@@ -53,20 +53,22 @@ digits, and underscores, starting with a letter or underscore, and cannot
 replace `PATH` or `LOOM_PAGE_RPC_QUEUE`. Neither the model's arguments nor
 ambient process environment select the id.
 
-| Tool            | Host command                                                     |
-| --------------- | ---------------------------------------------------------------- |
-| `list_commands` | `loom command list --json`                                       |
-| `run_command`   | `loom command run <id> --args-json - --json [--loom] [--expect]` |
+| Tool               | Host command                                                     |
+| ------------------ | ---------------------------------------------------------------- |
+| `list_commands`    | `loom command list --json`                                       |
+| `run_command`      | `loom command run <id> --args-json - --json [--loom] [--expect]` |
+| `run_read_command` | The same invocation, with `--read-only` appended                 |
 
 ## `list_commands`
 
 Returns the commands the broker listed, each as a callable descriptor
 (`src/contracts/callable.ts`): `name`, `title`, `description`, `inputSchema`,
-and `effect` where the host declares one, plus the command's `target` (`global`,
-or `loom` for one that takes a `loomId`) and the field names its answer declares
-among its `outputs`. A catalog larger than the model bound keeps its first
-entries whole and the rest without schema and description; `detail` names up to
-sixteen commands to keep whole.
+and `effect` where the host declares one, plus `readOnlyGranted: true` where the
+broker grants read-only execution, the command's `target` (`global`, or `loom`
+for one that takes a `loomId`) and the field names its answer declares among its
+`outputs`. A catalog larger than the model bound keeps its first entries whole
+and the rest without schema and description; `detail` names up to sixteen
+commands to keep whole.
 
 A manifest row is left out, and counted as `hidden`, when its own declarations
 say an agent may not run it:
@@ -82,9 +84,10 @@ say an agent may not run it:
 The filter is presentation. The broker's scope is what decides; a row the host
 declares nothing about is shown.
 
-The host's manifest declares no effect today, so entries normally carry none.
-The listing's `notice` says to assume such a command may change the person's
-data.
+An absent or unknown effect grants no read-only authority. The listing's
+`notice` says to assume such a command may change the person's data. A broker's
+`readOnlyGranted` stamp is separate from the command's declared effect and from
+the consent `grant` that hides a row.
 
 ## `run_command`
 
@@ -111,12 +114,28 @@ Its answer has three shapes:
 - `failed_to_deliver` with `landed: "unknown"`: the answer was lost after the
   command was sent, and the command may have taken effect.
 
-The tool's effect class is `write` for every call, because the host does not say
-which commands only read. Policy treats it as any other write: under
+The tool's effect class is `write` for every call, even when the host declares
+the command a read. Policy treats it as any other write: under
 `enforce-explicit` and `enforce-strict` a call runs only when the run's task is
 bound as a `direct-command` prompt slot, so a task that arrived as `context` — a
-request a pattern submitted, say — can list commands but not run one, a read
-command included.
+request a pattern submitted, say — cannot invoke this tool.
+
+## `run_read_command`
+
+Shares `run_command`'s inputs, catalog lookup, argument checks, output, and
+confidentiality measurement. Its effect class is `read`, so an enforcing
+context-bound task may invoke it. Before execution it reads the host's catalog
+afresh and requires that the selected row has both `effect: "read"` and the
+broker's literal `readOnlyGranted: true`. A missing command, changed or unknown
+effect, or absent read-only grant returns `not_granted` with `landed: "no"`
+without issuing a command.
+
+The invocation appends `--read-only`, outside the model's JSON arguments. A host
+that supports this tool must propagate that demand to its broker and refuse the
+call unless the command's current effect is `read` and the current job's grant
+permits read-only execution. This final check covers changes between discovery
+and execution. The broker supplies the catalog stamp; neither model arguments
+nor source content may supply it. `run_command` sends no read-only demand.
 
 ## The answer is Loom data
 

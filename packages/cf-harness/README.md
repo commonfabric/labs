@@ -201,11 +201,12 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
-  - `list_commands` and `run_command` (present only with
+  - `list_commands`, `run_command`, and `run_read_command` (present only with
     `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
-    the host's broker admits for this run, run as the agent; each answer
-    `run_command` returns is measured like a retrieval row, and the listing is
-    the host's command metadata, unmeasured)
+    the host's broker admits for this run, run as the agent; each command result
+    is measured like a retrieval row, and the listing is the host's command
+    metadata, unmeasured; `run_read_command` requires a fresh read declaration
+    and read-only broker grant, while `run_command` remains write-class)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,

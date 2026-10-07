@@ -1336,10 +1336,11 @@ The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
 instructions?, context?, resultSchema, tools?, maxModelTurns?, browserHost?}`
-with `POST /jobs`, reads a job with `GET /jobs/<id>` or the newest with
-`GET /jobs?limit=n`, stops one with `POST /jobs/<id>/cancel`, and watches one
-with `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that
-ends after the job's terminal state. `GET /health` says which lanes run.
+with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
+with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
+`POST /jobs/<id>/cancel`, and watches one with
+`GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that ends
+after the job's terminal state. `GET /health` says which lanes run.
 
 A profile, named in the host's file, is the authority a job runs with: its
 tools, its host Loom files, its model-turn cap, the prompt-slot role its task
@@ -1349,6 +1350,11 @@ one, declare a browser host (below); leaving it out declines the browser. It may
 set nothing else. A job runs through the same `cf-harness` path as an agent run,
 with no fabric session, and reports a `step` event for each tool its loop calls
 and a `command` event for each command the host ran for it.
+
+Enqueue commits its job and first event in a SQLite WAL transaction with
+`synchronous = FULL` before acknowledging it. Repeating a caller's idempotency
+key with the same request returns that job; a different request or profile
+returns a conflict.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an

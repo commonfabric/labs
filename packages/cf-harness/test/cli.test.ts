@@ -7895,11 +7895,14 @@ Deno.test("parseCfHarnessCliArgs reads the host command broker configuration fro
       "/trusted/commands.json",
       "--allow-tool",
       "run_command",
+      "--allow-tool",
+      "run_read_command",
     ],
     { cwd: "/tmp/project", env: {}, readTextFile },
   );
   if ("help" in flagged) throw new Error("expected config result");
   assertEquals(flagged.loomCommands, commands);
+  expect(flagged.allowedToolIds).toContain("run_read_command");
   const fromEnvironment = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -7919,15 +7922,17 @@ Deno.test("parseCfHarnessCliArgs reads the host command broker configuration fro
 });
 
 Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without the broker configuration", async () => {
-  await assertRejects(
-    () =>
-      parseCfHarnessCliArgs(
-        ["--prompt", "hi", "--allow-tool", "list_commands"],
-        { cwd: "/tmp/project", env: {} },
-      ),
-    Error,
-    "--allow-tool list_commands requires a host command broker configuration",
-  );
+  for (const tool of ["list_commands", "run_command", "run_read_command"]) {
+    await assertRejects(
+      () =>
+        parseCfHarnessCliArgs(
+          ["--prompt", "hi", "--allow-tool", tool],
+          { cwd: "/tmp/project", env: {} },
+        ),
+      Error,
+      `--allow-tool ${tool} requires a host command broker configuration`,
+    );
+  }
 });
 
 Deno.test("parseCfHarnessCliArgs rejects --allow-tool acquire_skill without both backings", async () => {

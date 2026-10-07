@@ -42,6 +42,9 @@ import {
 /** Longest idempotency key, caller or profile name a request may carry. */
 const MAX_NAME_LENGTH = 200;
 
+/** Largest JSON enqueue body accepted by the private socket. */
+const MAX_ENQUEUE_BYTES = 1024 * 1024;
+
 /** How often an open event stream says it is alive when nothing happens. */
 export const LOCAL_JOB_HEARTBEAT_MS = 15_000;
 
@@ -320,8 +323,8 @@ const browserStream = (
 };
 
 /**
- * Helper for a browser result, which reads `request`'s body as text, or
- * answers `undefined` once it runs past `limit` bytes as they arrive, and
+ * Helper for request parsing, which reads `request`'s body as text, or
+ * returns `undefined` once it runs past `limit` bytes as they arrive, and
  * stops reading it there, whatever length the request declared. The
  * console's `boundedBodyText`.
  */
@@ -430,7 +433,11 @@ async (request: Request): Promise<Response> => {
     if (request.method === "POST") {
       let body: unknown;
       try {
-        body = await request.json();
+        const text = await boundedBodyText(request, MAX_ENQUEUE_BYTES);
+        if (text === undefined) {
+          return refuse(413, "too_large", "The enqueue body is too large.");
+        }
+        body = JSON.parse(text);
       } catch {
         return refuse(400, "invalid_request", "The body must be JSON.");
       }

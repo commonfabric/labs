@@ -5598,7 +5598,10 @@ export class CfHarnessPromptLoop {
         ),
       };
     }
-    if (toolId === "run_command" && isObjectNotArray(output)) {
+    if (
+      (toolId === "run_command" || toolId === "run_read_command") &&
+      isObjectNotArray(output)
+    ) {
       // A command's answer is measured like a retrieval row: the model sees
       // the entry, and the answer's label stays on the artifact as the
       // observation the run's model context accumulates.

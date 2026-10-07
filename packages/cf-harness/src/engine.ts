@@ -368,6 +368,7 @@ export interface BuiltinToolInputMap {
   loom_profile: LoomProfileInput;
   list_commands: ListCommandsInput;
   run_command: RunCommandInput;
+  run_read_command: RunCommandInput;
   submit_result: SubmitResultInput;
 }
 
@@ -408,6 +409,7 @@ export interface BuiltinToolOutputMap {
   loom_profile: LoomRetrievalToolOutput;
   list_commands: ListCommandsOutput;
   run_command: RunCommandOutput;
+  run_read_command: RunCommandOutput;
   submit_result: SubmitResultOutput;
 }
 

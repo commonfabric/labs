@@ -102,10 +102,8 @@ export interface HarnessJobSpec {
   loomRetrievalConfigPath?: string;
 
   /**
-   * The host-owned file naming the command broker behind `list_commands`
-   * and `run_command`. Those tools, and the harness flag this becomes, come
-   * with labs#8467; a harness without them refuses the flag and the job
-   * fails.
+   * The host-owned file naming the command broker behind `list_commands`,
+   * `run_command`, and `run_read_command`.
    */
   loomCommandsConfigPath?: string;
 

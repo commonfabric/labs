@@ -175,6 +175,7 @@ const engineWith = (
   options: {
     ceiling?: readonly unknown[];
     cfcEnforcementMode?: CfcEnforcementMode;
+    manifest?: () => string;
   } = {},
 ) => {
   const calls: ProcessRunRequest[] = [];
@@ -201,7 +202,7 @@ const engineWith = (
         calls.push(request);
         return Promise.resolve({
           stdout: request.args[1] === "list"
-            ? JSON.stringify(MANIFEST)
+            ? options.manifest?.() ?? JSON.stringify(MANIFEST)
             : answer,
           stderr: "",
           exitCode: 0,
@@ -224,10 +225,11 @@ describe("loom-commands tools", () => {
       docsCorpusAvailable: false,
     };
 
-    it("names the two tools, listing as a read and running as a write", () => {
+    it("classifies the command tools by their authority", () => {
       expect([...LOOM_COMMAND_TOOL_IDS]).toEqual([
         "list_commands",
         "run_command",
+        "run_read_command",
       ]);
       expect(getBuiltinTool("list_commands")?.descriptor.effectClass).toBe(
         "read",
@@ -235,8 +237,11 @@ describe("loom-commands tools", () => {
       expect(getBuiltinTool("run_command")?.descriptor.effectClass).toBe(
         "write",
       );
+      expect(getBuiltinTool("run_read_command")?.descriptor.effectClass).toBe(
+        "read",
+      );
       expect(LOOM_COMMAND_TOOLS.map((tool) => tool.descriptor.toolId))
-        .toEqual(["list_commands", "run_command"]);
+        .toEqual(["list_commands", "run_command", "run_read_command"]);
     });
 
     it("withholds the tools without a host command broker and offers them with one", () => {
@@ -766,6 +771,166 @@ describe("loom-commands tools", () => {
   });
 
   describe("prompt loop", () => {
+    /** Lists commands, invokes one read, then finishes a context-bound task. */
+    const readOnce = (engine: CfHarnessEngine) => {
+      const payloads = ["list_commands", "run_read_command"].map((name) => ({
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{
+              id: name,
+              type: "function",
+              function: {
+                name,
+                arguments: JSON.stringify(
+                  name === "list_commands" ? {} : {
+                    command: "loom.inspect",
+                    args: {},
+                    loomId: "loom-0123456789abcdef",
+                  },
+                ),
+              },
+            }],
+          },
+        }],
+      }));
+      let index = 0;
+      return new CfHarnessPromptLoop({
+        engine,
+        apiKey: "synthetic-test-key",
+        model: "gpt-5.4",
+        allowedToolIds: ["list_commands", "run_read_command"],
+        fetchFn: (_url, init) =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify(
+                responsesBodyFromChatFixture(
+                  payloads[index++] ?? {
+                    choices: [{
+                      index: 0,
+                      message: { role: "assistant", content: "Done" },
+                    }],
+                  },
+                  init?.body,
+                ),
+              ),
+              { status: 200 },
+            ),
+          ),
+      }).runPrompt({
+        prompt: "Read the trip loom",
+        promptSlotBinding: {
+          type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+          source: { type: "test.prompt-slot", subject: "preparation" },
+          role: "context",
+          kernelName: "cf-harness",
+          surface: "test",
+          subject: "preparation",
+          eventId: "event-preparation",
+        },
+      });
+    };
+
+    it("runs a broker-granted read for a context-bound task and records its observation", async () => {
+      const { engine, calls } = engineWith(
+        JSON.stringify({
+          ok: true,
+          outputs: { title: "Trip loom" },
+          ifc: { confidentiality: [OWNER] },
+        }),
+        {
+          cfcEnforcementMode: "enforce-explicit",
+          manifest: () =>
+            JSON.stringify({
+              commands: [{
+                id: "loom.inspect",
+                effect: "read",
+                readOnlyGranted: true,
+              }],
+            }),
+        },
+      );
+      const result = await readOnce(engine);
+      expect(calls.map((call) => call.args)).toEqual([
+        ["command", "list", "--json"],
+        ["command", "list", "--json"],
+        [
+          "command",
+          "run",
+          "loom.inspect",
+          "--args-json",
+          "-",
+          "--json",
+          "--loom",
+          "loom-0123456789abcdef",
+          "--read-only",
+        ],
+      ]);
+      expect(result.runState.policyDecisions).toContainEqual(
+        expect.objectContaining({
+          toolId: "run_read_command",
+          decision: "allowed",
+        }),
+      );
+      const message = result.transcript.find((entry) =>
+        entry.role === "tool" && entry.toolName === "run_read_command"
+      );
+      expect(message).toBeDefined();
+      if (message?.role !== "tool") throw new Error("Missing read output");
+      expect(JSON.parse(message.content)).toMatchObject({ status: "executed" });
+      expect(JSON.parse(message.content)).not.toHaveProperty("cfc");
+      expect(engine.getRunState().cfcModelContext?.observations).toContainEqual(
+        expect.objectContaining({
+          toolId: "run_read_command",
+          label: { confidentiality: [OWNER] },
+        }),
+      );
+    });
+
+    for (
+      const row of [
+        { id: "loom.inspect", effect: "change", readOnlyGranted: true },
+        { id: "loom.inspect", readOnlyGranted: true },
+        { id: "loom.inspect", effect: "unknown", readOnlyGranted: true },
+        { id: "loom.inspect", effect: "read" },
+        { id: "loom.inspect", effect: "read", readOnlyGranted: false },
+        { id: "loom.inspect", effect: "read", readOnlyGranted: "true" },
+      ]
+    ) {
+      it(`refuses a context-bound read when the fresh broker row is ${JSON.stringify(row)}`, async () => {
+        let lists = 0;
+        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+          cfcEnforcementMode: "enforce-explicit",
+          manifest: () =>
+            JSON.stringify({
+              commands: [
+                ++lists === 1
+                  ? {
+                    id: "loom.inspect",
+                    effect: "read",
+                    readOnlyGranted: true,
+                  }
+                  : row,
+              ],
+            }),
+        });
+        const result = await readOnce(engine);
+        expect(calls.map((call) => call.args[1])).toEqual(["list", "list"]);
+        const message = result.transcript.find((entry) =>
+          entry.role === "tool" && entry.toolName === "run_read_command"
+        );
+        expect(message).toBeDefined();
+        if (message?.role !== "tool") throw new Error("Missing read output");
+        expect(JSON.parse(message.content)).toMatchObject({
+          status: "failed_to_deliver",
+          code: "not_granted",
+          landed: "no",
+        });
+      });
+    }
+
     /** Has the model run `loom.compose` once under `binding`, then finish. */
     const composeOnce = (
       engine: CfHarnessEngine,
@@ -843,6 +1008,14 @@ describe("loom-commands tools", () => {
       ) {
         const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
           cfcEnforcementMode: "enforce-explicit",
+          manifest: () =>
+            JSON.stringify({
+              commands: [{
+                id: "loom.compose",
+                effect: "read",
+                readOnlyGranted: true,
+              }],
+            }),
         });
         const result = await composeOnce(engine, binding);
         const record = (result.runState.policyDecisions ?? []).find((entry) =>

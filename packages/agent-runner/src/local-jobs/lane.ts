@@ -133,7 +133,7 @@ export const localJobSpecOf = (
 
 /**
  * The progress events one transcript event reports: a `step` for each tool
- * the model called, and a `command` for each `run_command` the host ran.
+ * the model called, and a `command` for each command the host ran.
  * A child loop's events report nothing; the job's own loop is what a caller
  * watches.
  */
@@ -150,7 +150,11 @@ export const localJobEventsOf = (
       body: { turn, tool: call.function.name },
     }));
   }
-  if (message.role !== "tool" || message.toolName !== "run_command") return [];
+  if (
+    message.role !== "tool" ||
+    (message.toolName !== "run_command" &&
+      message.toolName !== "run_read_command")
+  ) return [];
   let output: unknown;
   try {
     output = JSON.parse(message.content);

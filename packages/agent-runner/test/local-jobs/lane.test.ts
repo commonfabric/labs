@@ -233,6 +233,23 @@ describe("local-jobs/lane", () => {
       ).toEqual([]);
     });
 
+    it("reports a read-only command's admitted output", () => {
+      expect(localJobEventsOf(event(
+        answer({
+          status: "executed",
+          outcome: { ok: true, id: "loom.inspect" },
+          entry: {
+            status: "admitted",
+            value: { ok: true, outputs: { title: "Trip" } },
+          },
+        }, "run_read_command"),
+        [calling("run_read_command")],
+      ))).toEqual([{
+        kind: "command",
+        body: { command: "loom.inspect", ok: true, outputs: { title: "Trip" } },
+      }]);
+    });
+
     it("reports a command the host ran, with its outputs when the answer was admitted", () => {
       const call = calling("run_command");
 
