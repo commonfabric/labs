@@ -1082,7 +1082,10 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     return {
       kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
-      sessions: true,
+      // Pasta starts what it runs in a PID namespace of its own, so a
+      // session's container started under it records pids that `exec` and
+      // the control commands, run outside it, cannot find.
+      sessions: this.#pasta() === undefined,
       cfc: {
         runtimeRequested: this.config.cfcPolicyPath !== undefined,
         image: this.config.rootfs,
@@ -1817,6 +1820,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     const refusal = this.#refusedForEnforcement(request);
     if (refusal !== undefined) return refusal;
     if (request.session !== undefined) {
+      if (this.#pasta() !== undefined) {
+        throw new SandboxSessionUnavailableError(
+          "sandbox sessions are not offered under pasta's network: pasta " +
+            "starts a session's container in a PID namespace of its own, " +
+            "which the session's later calls cannot reach",
+          "start-failed",
+        );
+      }
       return await this.#runInSession(request, request.session);
     }
     return await this.#runOnce(request);

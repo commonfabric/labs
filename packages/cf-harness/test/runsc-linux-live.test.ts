@@ -39,7 +39,7 @@ const context = (command: string) =>
 describe("runsc-linux-live", () => {
   it({
     name:
-      "runs calls and a session on the Linux default, with pasta's network, as whoever this process is",
+      "runs calls on the Linux default with pasta's network, and a session with none, as whoever this process is",
     ignore: home === undefined || Deno.build.os !== "linux",
     // The host server below outlives nothing, and the runtime is closed.
     fn: async () => {
@@ -73,6 +73,16 @@ describe("runsc-linux-live", () => {
         rootless: selection.sandboxRunscRootless === true,
         networkHelper: selection.sandboxRunscNetworkHelper,
         unshare: selection.sandboxRunscUnshare,
+        platform: "linux",
+        homeDir: home,
+      }));
+      const sessions = new RunscSandboxRuntime(resolveRunscSandboxConfig({
+        workspaceHostPath: workspace,
+        rootfs: selection.sandboxRootfs,
+        runscBinary: selection.sandboxRunscBinary,
+        cfcPolicyPath: selection.sandboxCfcPolicy,
+        rootless: selection.sandboxRunscRootless === true,
+        networkMode: "none",
         platform: "linux",
         homeDir: home,
       }));
@@ -126,17 +136,21 @@ describe("runsc-linux-live", () => {
         });
         expect(interfaces.stdout).not.toContain("docker0");
 
-        await runtime.run({
+        // Under pasta no session is offered; with no network, one keeps
+        // its state between calls.
+        expect(runtime.describe().sessions).toBe(false);
+        await sessions.run({
           argv: ["/bin/sh", "-c", "echo kept > /tmp/state"],
           session: "live",
         });
-        const later = await runtime.run({
+        const later = await sessions.run({
           argv: ["/bin/cat", "/tmp/state"],
           session: "live",
         });
         expect([later.exitCode, later.stdout]).toEqual([0, "kept\n"]);
       } finally {
         await runtime.close();
+        await sessions.close();
         await host.shutdown();
         await Deno.remove(workspace, { recursive: true });
       }

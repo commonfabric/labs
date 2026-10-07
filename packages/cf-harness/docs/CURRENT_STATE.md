@@ -189,10 +189,13 @@ in the mount namespace it runs in, and refused where no `unshare` is on `PATH`),
 runs runsc there with `--network=host` and a bundle with no network namespace of
 its own, and binds a hosts file over `/etc/hosts` that names the gateway, which
 pasta maps to the host's loopback, `host.docker.internal`. The container has
-egress and the host, and sees none of the host's interfaces. `exec` and the
-control commands reach a running container from outside pasta. `none` gives the
-container loopback alone, and `host` the host's own network, with no network
-namespace of its own either.
+egress and the host, and sees none of the host's interfaces. Pasta starts what
+it runs in a PID namespace of its own, so a session's container started under it
+would record pids that `exec` and the control commands, run outside it, cannot
+find: under pasta's network the runtime describes no sessions, the `bash` tool
+offers no `session`, and a session asked of the runtime directly is refused as
+`start-failed`. `none` gives the container loopback alone, and `host` the host's
+own network, with no network namespace of its own either.
 
 The macOS default is refused for three more things, and the Linux default for
 the first and the last, each checked before the pieces above:

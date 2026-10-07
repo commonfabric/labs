@@ -1081,7 +1081,10 @@ sockets, and a connection to the gateway reaches the host's own loopback, which
 a hosts file the driver binds over `/etc/hosts` names `host.docker.internal`.
 For root, pasta makes no user namespace and keeps root, and runs in a mount
 namespace of its own that `unshare` (util-linux) makes, since it then mounts its
-own `/proc` in the mount namespace it runs in. No port is forwarded into the
+own `/proc` in the mount namespace it runs in. Pasta starts what it runs in a
+PID namespace of its own, so a session's container started under it would record
+pids its later calls could not find: under pasta's network no sandbox session is
+offered, and the `bash` tool takes no `session`. No port is forwarded into the
 container, or from the container's loopback to the host's. Where no `pasta` is
 on `PATH` the default is refused, saying to install passt
 (`sudo apt install passt`) or to name a network:

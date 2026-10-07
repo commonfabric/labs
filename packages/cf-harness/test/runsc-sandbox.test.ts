@@ -1749,20 +1749,29 @@ Deno.test("under pasta as root, a call is refused, starting nothing, where no un
   );
 });
 
-Deno.test("under pasta, a session's container starts in pasta's namespace and its calls exec into it from outside", async () => {
+Deno.test("under pasta, no session is offered, and one asked for is refused, starting nothing", async () => {
   const runner = new UnderPasta();
   const runtime = new RunscSandboxRuntime(
     config({ networkHelper: PASTA, rootless: true }),
     runner,
   );
 
-  await runtime.run({ argv: ["/bin/true"], session: "build" });
-
-  assertEquals(runner.fake.spawns.length, 1);
-  const execs = runner.given.filter((request) => request.args.includes("exec"));
-  assertEquals(execs.length, 1);
-  assertEquals(execs[0].command, "/bin/sh");
-  await runtime.close();
+  assertEquals(runtime.describe().sessions, false);
+  const refusal = await assertRejects(
+    () => runtime.run({ argv: ["/bin/true"], session: "build" }),
+    SandboxSessionUnavailableError,
+    "not offered under pasta's network",
+  );
+  assertEquals(refusal.reason, "start-failed");
+  assertEquals(runner.given, []);
+  // Every other network mode keeps them.
+  assertEquals(
+    new RunscSandboxRuntime(
+      config({ networkHelper: PASTA, networkMode: "none" }),
+      runner,
+    ).describe().sessions,
+    true,
+  );
 });
 
 Deno.test("a network other than runsc's own takes no pasta, whatever is configured", async () => {
