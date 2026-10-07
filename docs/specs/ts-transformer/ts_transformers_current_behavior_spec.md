@@ -2020,13 +2020,17 @@ adjustments:
   An element access contributes a path segment when its key is a literal, an
   expression of a single literal type (`offers[KEY]` with `const KEY = "k"`
   records `["offers", "k"]`, as `offers.k` does), or a Common Fabric key such
-  as `NAME`. A key that can name any member (`offers[key.get()]`, a
-  `string`-typed variable, a callback parameter, a union of literal types)
-  leaves the chain unresolved. The suppression applies only to the calls of a
-  chain that resolves in full, including a chain nested in a fallback that
-  resolves by its other operand (`a.get().p ?? x.get().offers[key].space`), so
-  an unresolved chain keeps the blanket read: its `.get()` receiver is read in
-  full (`policy/capability-analysis.ts`; fixtures
+  as `NAME`. The key's literal type is trusted as its run-time value, so a key
+  whose type is wrong about it — an `as` cast, or a flow narrowing gone stale
+  after a closure reassigned the variable — narrows the schema to the key the
+  type names rather than the one read. A key that can name any member
+  (`offers[key.get()]`, a `string`-typed variable or a widened `let`, a
+  callback parameter, a union of literal types) leaves the chain unresolved.
+  The suppression applies only to the calls of a chain that resolves in full,
+  including a chain nested in a fallback that resolves by its other operand
+  (`a.get().p ?? x.get().offers[key].space`), so an unresolved chain keeps the
+  blanket read: its `.get()` receiver is read in full
+  (`policy/capability-analysis.ts`; fixtures
   `closures/computed-element-access-*`,
   `handler-schema/handler-element-access-dynamic-key`,
   `schema-injection/lift-element-access-dynamic-key`)
