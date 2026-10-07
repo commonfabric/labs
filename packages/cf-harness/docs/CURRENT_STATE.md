@@ -595,9 +595,14 @@ The current package provides:
   a label is given the query's label, an assumption the implementation profile
   publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
 - the commands a host admits, listed and run as the agent through the host's
-  scoped broker, which decides what is listed and what runs; each answer is
-  measured against the run's observation ceiling like a retrieval row. See
-  [Host commands](LOOM_COMMANDS.md);
+  scoped broker, which decides what is listed and what runs. The listing is read
+  once per run and held for it, an explicit `list_commands` reading it again,
+  and shows each command as a one-line typed signature; `run_command` takes one
+  call or a batch of up to sixteen, run four at a time, refuses a name the held
+  listing does not show with the nearest listed names, and returns a host
+  `bad-args` refusal with the command's signature. Each answer is measured
+  against the run's observation ceiling like a retrieval row, a batch's answers
+  within one output bound. See [Host commands](LOOM_COMMANDS.md);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
 - refusal of any flag an entrypoint does not declare — the batch CLI and its

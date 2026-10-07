@@ -98,21 +98,28 @@ Each entry's `signature` is one line read from the command's argument schema
   each group in the schema's order; a default follows `=`; a required input the
   host fills from the call's context (`x-source` in the manifest row) reads as
   optional, since a call may leave it out;
-- an enum reads `a|b|c`, an array `T[]`, an object with declared properties
-  `{...}` and one without `object`, a `$ref` the name it ends in; `(...)` is a
+- an enum reads `a|b|c`, a member that is empty or holds whitespace, `|`, a
+  quote, a backslash, or a control character quoted and escaped as JSON; an
+  array reads `T[]`, an object with declared properties `{...}` and one without
+  `object`, a `$ref` the name it ends in, and a position nothing can satisfy
+  (`false`, or an empty `enum`, `anyOf`, or `oneOf`) `never`; `(...)` is a
   schema that leaves its arguments open;
 - `-> {a, b}` names the fields the command's answer declares among its
   `outputs`, and is left out when it declares none;
 - the bracket holds the command's effect where the host declares one, then its
-  target: `global`, or `loom` for one that takes a `loomId`.
+  target: the `scope` the host declares for it, as the host writes it (`global`
+  where it declares none). A command whose target is `loom` takes a `loomId`;
+  `run_command` passes the one a call names and infers none from the target.
 
 A line is cut to 400 characters, its trailing parameters replaced by `…`. A
-command named in `detail` also carries its full `inputSchema`. Every schema the
-model sees has its `x-*` extension keywords removed. A listing larger than the
-model bound keeps its first entries whole and the rest without description; a
-command named in `detail` is always kept whole. `omitted` counts rows that could
-not be read or fell past the catalog limit, and `compacted` the entries shown
-without description.
+command named in `detail` also carries its `inputSchema`: the host's schema with
+its `x-*` extension keywords removed, which every schema the model sees is, or
+`true`, open, where the host's is not an object or is larger than 16 KiB once
+those keywords are removed. A listing larger than the model bound keeps its
+first entries whole and the rest without description; a command named in
+`detail` is always kept whole. `omitted` counts rows that could not be read or
+fell past the catalog limit, and `compacted` the entries shown without
+description.
 
 A manifest row is left out, and counted as `hidden`, when its own declarations
 say an agent may not run it:

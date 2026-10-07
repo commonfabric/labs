@@ -25,9 +25,13 @@ export const LOOM_COMMAND_SIGNATURE_MAX_LENGTH = 400;
 /** Longest rendering of a default or an enum member. */
 const LITERAL_MAX_LENGTH = 40;
 
-/** Keywords whose value is one subschema. */
+/**
+ * Keywords whose value is one subschema, or, for draft-07 tuple `items`, a
+ * list of them.
+ */
 const SINGLE_SUBSCHEMA_KEYWORDS: ReadonlySet<string> = new Set([
   "items",
+  "additionalItems",
   "additionalProperties",
   "not",
   "if",
@@ -48,13 +52,17 @@ const LIST_SUBSCHEMA_KEYWORDS: ReadonlySet<string> = new Set([
   "prefixItems",
 ]);
 
-/** Keywords whose value maps names to subschemas. */
+/**
+ * Keywords whose value maps names to subschemas. A draft-07 `dependencies`
+ * entry may instead be a list of names, which is left as it is.
+ */
 const RECORD_SUBSCHEMA_KEYWORDS: ReadonlySet<string> = new Set([
   "properties",
   "patternProperties",
   "$defs",
   "definitions",
   "dependentSchemas",
+  "dependencies",
 ]);
 
 /**
@@ -72,10 +80,12 @@ const mapSchemaNodes = (
   return rebuild(Object.fromEntries(
     Object.entries(schema).map(([key, value]) => [
       key,
-      SINGLE_SUBSCHEMA_KEYWORDS.has(key)
-        ? node(value)
-        : LIST_SUBSCHEMA_KEYWORDS.has(key) && Array.isArray(value)
+      (SINGLE_SUBSCHEMA_KEYWORDS.has(key) ||
+          LIST_SUBSCHEMA_KEYWORDS.has(key)) &&
+        Array.isArray(value)
         ? value.map(node)
+        : SINGLE_SUBSCHEMA_KEYWORDS.has(key)
+        ? node(value)
         : RECORD_SUBSCHEMA_KEYWORDS.has(key) && isObjectNotArray(value)
         ? Object.fromEntries(
           Object.entries(value).map(([name, child]) => [name, node(child)]),
@@ -108,9 +118,16 @@ const cut = (text: string, max: number): string =>
 const literalOf = (value: JSONValue): string =>
   cut(JSON.stringify(value), LITERAL_MAX_LENGTH);
 
-/** Helper for rendering, which shows an enum member: strings unquoted. */
+/**
+ * Helper for rendering, which shows an enum member: a string bare where that
+ * reads unambiguously, and quoted and escaped where it is empty or holds
+ * whitespace, `|`, a quote, a backslash, or a control character, which would
+ * break the line or blur where one member ends.
+ */
 const memberOf = (value: JSONValue): string =>
-  typeof value === "string" ? cut(value, LITERAL_MAX_LENGTH) : literalOf(value);
+  typeof value === "string" && /^[^\s|"'\\\p{Cc}]+$/u.test(value)
+    ? cut(value, LITERAL_MAX_LENGTH)
+    : literalOf(value);
 
 /** Helper for rendering, which joins alternatives, each shown once. */
 const alternatives = (types: readonly string[]): string =>
@@ -142,13 +159,15 @@ const namedTypeOf = (schema: JSONObject, name: JSONValue): string =>
 /**
  * The type a schema position accepts, as a signature shows it: `any` for an
  * open position or one whose schema says nothing this reads, `never` for a
- * closed one.
+ * closed one, `false` or an empty `enum`, `anyOf`, or `oneOf`.
  */
 export const typeOfSchema = (schema: JSONValue | undefined): string => {
   if (schema === false) return "never";
   if (!isObjectNotArray(schema)) return "any";
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    return alternatives(schema.enum.map(memberOf));
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.length > 0
+      ? alternatives(schema.enum.map(memberOf))
+      : "never";
   }
   if (schema.const !== undefined) return memberOf(schema.const);
   const union = Array.isArray(schema.anyOf)
@@ -156,8 +175,8 @@ export const typeOfSchema = (schema: JSONValue | undefined): string => {
     : Array.isArray(schema.oneOf)
     ? schema.oneOf
     : undefined;
-  if (union !== undefined && union.length > 0) {
-    return alternatives(union.map(typeOfSchema));
+  if (union !== undefined) {
+    return union.length > 0 ? alternatives(union.map(typeOfSchema)) : "never";
   }
   if (typeof schema.$ref === "string") {
     return schema.$ref.split("/").at(-1) || "any";

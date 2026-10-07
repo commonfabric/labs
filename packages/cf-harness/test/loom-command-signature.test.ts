@@ -135,6 +135,17 @@ describe("loom-command-signature", () => {
       expect(typeOfSchema({ const: "fixed" })).toBe("fixed");
     });
 
+    it("returns an enum member that would break the line or blur the `|` quoted and escaped, and a plain one bare", () => {
+      expect(typeOfSchema({ enum: ["plain", "a|b", "two\nlines", ""] }))
+        .toBe('plain|"a|b"|"two\\nlines"|""');
+    });
+
+    it("returns `never` for an empty `enum`, `anyOf`, or `oneOf`", () => {
+      expect(typeOfSchema({ enum: [] })).toBe("never");
+      expect(typeOfSchema({ anyOf: [] })).toBe("never");
+      expect(typeOfSchema({ oneOf: [] })).toBe("never");
+    });
+
     it("returns `any` for an open position and `never` for a closed one", () => {
       expect(typeOfSchema(undefined)).toBe("any");
       expect(typeOfSchema(true)).toBe("any");
@@ -167,6 +178,38 @@ describe("loom-command-signature", () => {
         },
         anyOf: [{ required: ["name"] }],
         $defs: { Person: { type: "object" } },
+      });
+    });
+
+    it("removes `x-*` keywords from tuple `items`, `additionalItems`, and draft-07 `dependencies`", () => {
+      expect(
+        withoutSchemaExtensions({
+          type: "object",
+          properties: {
+            pair: {
+              type: "array",
+              items: [{ type: "string", "x-a": 1 }, {
+                type: "number",
+                "x-b": 2,
+              }],
+              additionalItems: { type: "boolean", "x-c": 3 },
+            },
+          },
+          dependencies: {
+            pair: { required: ["other"], "x-d": 4 },
+            other: ["pair"],
+          },
+        }),
+      ).toEqual({
+        type: "object",
+        properties: {
+          pair: {
+            type: "array",
+            items: [{ type: "string" }, { type: "number" }],
+            additionalItems: { type: "boolean" },
+          },
+        },
+        dependencies: { pair: { required: ["other"] }, other: ["pair"] },
       });
     });
 

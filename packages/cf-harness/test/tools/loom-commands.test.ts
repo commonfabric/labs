@@ -306,6 +306,13 @@ describe("loom-commands tools", () => {
       ).toBe(true);
     });
 
+    it("offers `run_command` an input schema with no top-level combinator, which some providers refuse", () => {
+      const schema = getBuiltinTool("run_command")?.descriptor.inputSchema;
+      for (const keyword of ["oneOf", "anyOf", "allOf", "not"]) {
+        expect(schema).not.toHaveProperty(keyword);
+      }
+    });
+
     it("lists the tools among the CLI's selectable parent tools", () => {
       const capabilities = createCfHarnessCliCapabilities();
       for (const toolId of LOOM_COMMAND_TOOL_IDS) {
@@ -443,6 +450,8 @@ describe("loom-commands tools", () => {
 
     it("refuses malformed input before starting a process", async () => {
       const inputs = [
+        {},
+        { args: {} },
         { command: "-bad", args: {} },
         { command: 7, args: {} },
         { command: `a${"b".repeat(128)}`, args: {} },

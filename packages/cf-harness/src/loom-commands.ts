@@ -231,10 +231,14 @@ export const loomCommandEntryOfRow = (
     HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
   );
   // Extension keywords are the host's annotations for its own surfaces; no
-  // schema shown to the model or checked here carries them.
-  const inputSchema = isRecord(inputs) &&
-      harnessCommandJsonBytes(inputs) <= HARNESS_COMMAND_SCHEMA_MAX_BYTES
+  // schema shown to the model carries them. The size bound applies to what
+  // is shown, so annotations alone never make a typed schema read as open.
+  const stripped = isRecord(inputs)
     ? withoutSchemaExtensions(inputs as JSONObject)
+    : undefined;
+  const inputSchema = stripped !== undefined &&
+      harnessCommandJsonBytes(stripped) <= HARNESS_COMMAND_SCHEMA_MAX_BYTES
+    ? stripped
     : true;
   // A compacted entry keeps its target and output names, so both are cut
   // to an identifier's length and the names to a few dozen.

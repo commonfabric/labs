@@ -358,6 +358,19 @@ describe("loom-commands", () => {
         .not.toHaveProperty("hostFilled");
     });
 
+    it("keeps a schema typed whose `x-*` annotations alone pass the size bound", () => {
+      expect(
+        loomCommandEntryOfRow({
+          id: "a.b",
+          inputs: {
+            type: "object",
+            "x-help": "x".repeat(HARNESS_COMMAND_SCHEMA_MAX_BYTES),
+            properties: { title: { type: "string" } },
+          },
+        })?.inputSchema,
+      ).toEqual({ type: "object", properties: { title: { type: "string" } } });
+    });
+
     it("shows an argument schema that is not an object, or is too large, as open", () => {
       expect(loomCommandEntryOfRow({ id: "a.b", inputs: [1] })?.inputSchema)
         .toBe(true);
