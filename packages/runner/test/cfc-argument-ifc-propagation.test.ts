@@ -281,6 +281,28 @@ describe("cfc-argument-ifc-propagation", () => {
       expect(inputConfidentialityOf(factory.resultSchema)).toBeUndefined();
     });
 
+    it("names the join as an input join beside a nested declaration of the same clause", () => {
+      // The nested declaration is persisted at its own path, so the result's
+      // root need not declare the clause as well.
+      const factory = createNodeFactory({
+        type: "javascript",
+        implementation: (input: { content: string }) => ({
+          note: input.content,
+        }),
+        argumentSchema: ARGUMENT_SCHEMA,
+        resultSchema: {
+          type: "object",
+          properties: {
+            note: { type: "string", ifc: { confidentiality: [HEALTH_ATOM] } },
+          },
+        },
+      });
+
+      expect(inputConfidentialityOf(factory.resultSchema)).toEqual([
+        HEALTH_ATOM,
+      ]);
+    });
+
     it("names no input join for a clause the result schema declares itself", () => {
       const factory = createNodeFactory({
         type: "javascript",

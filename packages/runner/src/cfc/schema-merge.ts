@@ -17,10 +17,10 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
-import { ContextualFlowControl } from "../cfc.ts";
 import { registerSchemaDocument } from "../schema-registry.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { normalizeClause } from "./clause.ts";
+import { ifcConfidentialitySources, withInputJoin } from "./input-join.ts";
 import {
   bindCurrentPrincipalToStoredClauses,
   isCurrentPrincipalUserClause,
@@ -42,8 +42,7 @@ import {
 /** Every `ifc` key the runtime understands. {@link IfcKey} names one of them. */
 const IFC_KEYS = [
   "confidentiality",
-  // The part of `confidentiality` an input join put there, which `mergeIfc`
-  // settles against what either side declares.
+  // Settled by `mergeIfc` against what either side declares.
   "inputConfidentiality",
   "integrity",
   "addIntegrity",
@@ -284,10 +283,6 @@ const mergeSetLikeIfcArray = (
       }
       return mergeArraySet(existingArray, candidateArray);
     }
-    case "inputConfidentiality":
-      return Array.isArray(existing) && Array.isArray(candidate)
-        ? mergeArraySet(existing, candidate)
-        : candidate;
     case "integrity":
     case "maxConfidentiality":
     case "writeAuthorizedBy": {
@@ -427,22 +422,23 @@ const mergeIfc = (
   }
   // A clause either side declares is declared in the merge, so only the
   // clauses neither side declares remain an input join's.
-  if (merged.inputConfidentiality !== undefined) {
-    const fromInputs = new Set<unknown>();
-    const declared = new Set<unknown>();
-    for (const ifc of [existing, candidate]) {
-      ContextualFlowControl.noteInputConfidentiality(
-        fromInputs,
-        declared,
-        ifc,
-      );
-    }
-    const inputs = ContextualFlowControl.inputConfidentialityOnly(
-      fromInputs,
-      declared,
+  if (
+    existingIfc.inputConfidentiality !== undefined ||
+    candidateIfc.inputConfidentiality !== undefined
+  ) {
+    const settled = withInputJoin(
+      merged as JSONSchemaObj["ifc"],
+      Array.isArray(merged.confidentiality) ? merged.confidentiality : [],
+      [
+        ifcConfidentialitySources(existing),
+        ifcConfidentialitySources(candidate),
+      ],
     );
-    if (inputs.length > 0) merged.inputConfidentiality = inputs;
-    else delete merged.inputConfidentiality;
+    if (settled.inputConfidentiality !== undefined) {
+      merged.inputConfidentiality = settled.inputConfidentiality;
+    } else {
+      delete merged.inputConfidentiality;
+    }
   }
   // Each side may name its writers in one shape while the other names them in
   // the other, and the two do not combine: a position holding both is one

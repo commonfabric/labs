@@ -1,12 +1,11 @@
 import type { JSONSchema } from "@commonfabric/api";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   forEachSubschema,
   isSubschema,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { ContextualFlowControl } from "../cfc.ts";
-import { type CfcConfClause, normalizeClause } from "./clause.ts";
+import { holdsClause, ifcConfidentialitySources } from "./input-join.ts";
 import { isPrefix } from "./path-prefix-index.ts";
 import {
   cfcSchemaResolvedRoot,
@@ -87,12 +86,8 @@ export const cfcSchemaEntries = (
     )
     : schemaRoot;
   if (isObjectOrArray(resolved.ifc)) {
-    const inputConfidentiality = ContextualFlowControl.inputConfidentialityOnly(
-      Array.isArray(resolved.ifc.inputConfidentiality)
-        ? resolved.ifc.inputConfidentiality
-        : [],
-      [],
-    );
+    const inputConfidentiality = ifcConfidentialitySources(resolved.ifc)
+      .inputJoin;
     entries.push({
       path,
       label: {
@@ -175,14 +170,6 @@ const declaredObservationClass = (
       observes === "enumerate" || observes === "followRef"
     ? observes
     : undefined;
-};
-
-/** Whether `clauses` holds `clause`, each compared in its normal form. */
-const holdsClause = (clauses: readonly unknown[], clause: unknown): boolean => {
-  const normal = normalizeClause(clause as CfcConfClause);
-  return clauses.some((other) =>
-    deepEqual(normalizeClause(other as CfcConfClause), normal)
-  );
 };
 
 /**

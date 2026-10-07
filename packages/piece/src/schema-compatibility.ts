@@ -417,6 +417,13 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   // between two versions of this pattern, which is what this comparison
   // decides.
   addIntegrity: "derived",
+  // `inputConfidentiality` names which clauses of `confidentiality` the node
+  // factories joined in from a module's inputs, which decides whether the
+  // runtime mints them as store policy or leaves them to the label it
+  // measures on the module's writes. The clauses themselves are compared
+  // under `confidentiality`, so naming a clause differently is no contract
+  // change.
+  inputConfidentiality: "derived",
 };
 
 /**

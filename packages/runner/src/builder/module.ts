@@ -68,7 +68,7 @@ export function createNodeFactory<T = any, R = any>(
   module.resultSchema = applyArgumentIfcToResult(
     module.argumentSchema,
     module.resultSchema,
-    measuresOutputs(module),
+    { measured: measuresOutputs(module) },
   );
   const factory = Object.assign(
     (inputs: FactoryInput<T>): Reactive<R> => {
@@ -222,7 +222,9 @@ function handlerInternal<E, T>(
   // module with no result schema rather than acquiring the join's `true`.
   const resultSchema = options?.resultSchema === undefined
     ? undefined
-    : applyArgumentIfcToResult(schema, options.resultSchema, true);
+    : applyArgumentIfcToResult(schema, options.resultSchema, {
+      measured: true,
+    });
 
   const module: Handler<E, T> & toEncodableForm & toJSON & {
     bind: (inputs: FactoryInput<StripCell<T>>) => Stream<E>;

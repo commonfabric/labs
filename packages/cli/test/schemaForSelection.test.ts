@@ -14,6 +14,7 @@ import { externalizeSchema } from "../../runner/src/link-utils.ts";
 /** A value of the shape the runtime reads each `ifc` key as. */
 const SAMPLES = {
   confidentiality: ["source-secret"],
+  inputConfidentiality: ["beside"],
   observes: "shape",
   integrity: ["source-endorsed"],
   addIntegrity: ["source-added"],
@@ -39,6 +40,7 @@ const SAMPLES = {
  */
 const EXPECTED = {
   confidentiality: "carried",
+  inputConfidentiality: "dropped",
   observes: "carried",
   integrity: "dropped",
   addIntegrity: "dropped",

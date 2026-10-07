@@ -70,26 +70,26 @@ describe("mergeCfcSchemaEnvelopes", () => {
     // merge, so a stored schema that declared it keeps it declared.
     const ifcOf = (schema: JSONSchema) => (schema as JSONSchemaObj).ifc;
 
-    it("keeps declared a clause one side declares and the other holds as an input join", () => {
-      for (
-        const [existing, candidate] of [
-          [{ confidentiality: ["x"] }, {
-            confidentiality: ["x"],
-            inputConfidentiality: ["x"],
-          }],
-          [{ confidentiality: ["x"], inputConfidentiality: ["x"] }, {
-            confidentiality: ["x"],
-          }],
-        ] as const
-      ) {
+    for (
+      const [declaring, existing, candidate] of [
+        ["stored", { confidentiality: ["x"] }, {
+          confidentiality: ["x"],
+          inputConfidentiality: ["x"],
+        }],
+        ["incoming", { confidentiality: ["x"], inputConfidentiality: ["x"] }, {
+          confidentiality: ["x"],
+        }],
+      ] as const
+    ) {
+      it(`keeps declared a clause the ${declaring} side declares and the other holds as an input join`, () => {
         const merged = mergeCfcSchemaEnvelopes(
           { type: "string", ifc: existing },
           { type: "string", ifc: candidate },
         );
         expect(ifcOf(merged)?.confidentiality).toEqual(["x"]);
         expect(ifcOf(merged)?.inputConfidentiality).toBeUndefined();
-      }
-    });
+      });
+    }
 
     it("keeps as an input join a clause both sides hold as one", () => {
       const merged = mergeCfcSchemaEnvelopes(

@@ -1,10 +1,15 @@
 import { FabricInstance, refuseFabricInstance } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { exportCell, isCell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
+import {
+  confidentialitySources,
+  holdsClause,
+  ifcConfidentialitySources,
+  withInputJoin,
+} from "../cfc/input-join.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
@@ -56,28 +61,27 @@ export function connectInputAndOutputs(node: NodeRef) {
   // assembled before anything is read, so the join over-approximates what any
   // one attempt goes on to consume. For a module whose writes the runtime
   // measures (`measuresOutputs`) the join stands in for that measurement and
-  // is named `ifc.inputConfidentiality` as well, which a runtime persisting
-  // flow labels does not persist as declared policy: the measurement, with
-  // its exchange-rule releases (CFC §5.3), labels what the module writes.
-  // For any other module it is the floor: it mints a `declared` entry, and a
-  // path's effective label is the join of all its components, so no later
-  // measurement narrows it. `docs/specs/cfc-render-boundary-composition.md`
-  // states the rest.
-  applyInputIfcToOutput(
-    node.inputs,
-    node.outputs,
-    measuresOutputs(node.module),
-  );
+  // is named as an input join as well (`cfc/input-join.ts`), which a runtime
+  // persisting flow labels does not mint as declared policy: the measurement,
+  // with its exchange-rule releases (CFC §5.3), labels what the module
+  // writes. For any other module it is the floor: it mints a `declared`
+  // entry, and a path's effective label is the join of all its components,
+  // so no later measurement narrows it.
+  // `docs/specs/cfc-render-boundary-composition.md` states the rest.
+  applyInputIfcToOutput(node.inputs, node.outputs, {
+    measured: measuresOutputs(node.module),
+  });
 }
 
 /**
  * Whether the runtime measures what `module` writes against what it reads,
  * in the one transaction that does both: a JavaScript action, or a builtin
  * whose execution is a replayable derivation of its inputs
- * (`REPLAYABLE_BUILTIN_REFS`). A builtin that writes later, after a fetch or
- * a model call, is measured against nothing it was given.
+ * (`REPLAYABLE_BUILTIN_REFS`), which reads and writes in the attempt that
+ * replay reproduces. A builtin that writes later, after a fetch or a model
+ * call, is measured against nothing it was given.
  */
-export function measuresOutputs(module: unknown): boolean {
+export function measuresOutputs(module: NodeRef["module"]): boolean {
   if (!isObjectOrArray(module)) return false;
   const { type, implementation } = module as {
     type?: unknown;
@@ -88,16 +92,24 @@ export function measuresOutputs(module: unknown): boolean {
       REPLAYABLE_BUILTIN_REFS.has(implementation));
 }
 
+/** How a module's input join reaches the schema of what it outputs. */
+export interface InputJoinOptions {
+  /**
+   * Whether the runtime measures what the module writes
+   * (`measuresOutputs`), which names the join as an input join as well.
+   */
+  readonly measured?: boolean;
+}
+
 /**
- * `resultSchema` joined with the confidentiality `argumentSchema` declares.
- * When `measured`, the module's writes are measured (`measuresOutputs`), and
- * the joined clauses the result schema does not declare itself are also
- * named in `ifc.inputConfidentiality`.
+ * `resultSchema` joined with the confidentiality `argumentSchema` declares,
+ * named as an input join where the clauses are no declaration of the result
+ * schema's own and `options.measured` holds (`cfc/input-join.ts`).
  */
 export function applyArgumentIfcToResult(
   argumentSchema?: JSONSchema,
   resultSchema?: JSONSchema,
-  measured = false,
+  options: InputJoinOptions = {},
 ): JSONSchema | undefined {
   if (argumentSchema !== undefined) {
     const joined = new Set<unknown>();
@@ -106,7 +118,7 @@ export function applyArgumentIfcToResult(
       ? ContextualFlowControl.schemaWithLub(
         resultSchema ?? true,
         ContextualFlowControl.lub(joined),
-        { fromInputs: measured },
+        { measured: options.measured },
       )
       : resultSchema;
   }
@@ -114,13 +126,13 @@ export function applyArgumentIfcToResult(
 }
 
 /**
- * Carries the ifc tags of `inputs` through to `outputs`, as
- * `ifc.inputConfidentiality` too when `measured` (`measuresOutputs`).
+ * Carries the ifc tags of `inputs` through to `outputs`, named as an input
+ * join where `options.measured` holds (`cfc/input-join.ts`).
  */
 export function applyInputIfcToOutput<T, R>(
   inputs: FactoryInput<T>,
   outputs: FactoryInput<R>,
-  measured = false,
+  options: InputJoinOptions = {},
 ) {
   const collectedClassifications = new Set<unknown>();
   traverseValue(inputs, (item: unknown) => {
@@ -135,7 +147,7 @@ export function applyInputIfcToOutput<T, R>(
     attachCfcToOutputs(
       outputs,
       ContextualFlowControl.lub(collectedClassifications),
-      measured,
+      options.measured === true,
     );
   }
 }
@@ -154,30 +166,21 @@ function attachCfcToOutputs(
     // we may have fields in the output schema, so incorporate those
     const joined = new Set<unknown>(lubConfidentiality);
     ContextualFlowControl.joinSchema(joined, outputSchema);
-    // What the output schema declares anywhere, its own input join aside,
-    // stays declared; only the rest of the inputs' join stands in for the
-    // measurement.
+    // `joinSchema` hoists every clause the output schema declares, at its
+    // root or below it, into the root's confidentiality, so each counts as
+    // declared there; the root's own input join is the one exception.
     const ownIfc = isObjectOrArray(outputSchema) ? outputSchema.ifc : undefined;
-    const ownInputs = ContextualFlowControl.uniqueAtoms(
-      ownIfc?.inputConfidentiality ?? [],
-    );
-    const fromInputs = new Set<unknown>([
-      ...(measured ? lubConfidentiality : []),
-      ...ownInputs,
+    const own = ifcConfidentialitySources(ownIfc);
+    const ifc = withInputJoin(ownIfc, ContextualFlowControl.lub(joined), [
+      confidentialitySources(lubConfidentiality, measured),
+      own,
+      confidentialitySources(
+        [...ContextualFlowControl.joinSchema(new Set(), outputSchema)].filter(
+          (clause) => !holdsClause(own.inputJoin, clause),
+        ),
+        false,
+      ),
     ]);
-    const declared = new Set<unknown>(measured ? [] : lubConfidentiality);
-    for (
-      const atom of ContextualFlowControl.joinSchema(new Set(), outputSchema)
-    ) {
-      if (!ownInputs.some((input) => deepEqual(input, atom))) {
-        declared.add(atom);
-      }
-    }
-    const ifc = ContextualFlowControl.withConfidentiality(
-      ownIfc,
-      ContextualFlowControl.lub(joined),
-      ContextualFlowControl.inputConfidentialityOnly(fromInputs, declared),
-    );
     const cfcSchema: JSONSchema = {
       ...ContextualFlowControl.toSchemaObj(outputSchema),
       ifc,
