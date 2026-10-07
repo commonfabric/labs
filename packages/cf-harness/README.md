@@ -205,9 +205,9 @@ What works today:
     `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
     the host's broker admits for this run, run as the agent; the listing shows
     each command as a one-line signature and is the host's command metadata,
-    unmeasured; `run_command` checks each call's args against the command's
-    schema before sending it, takes one call or a batch of up to sixteen, and
-    measures each answer like a retrieval row)
+    unmeasured; `run_command` refuses a name the listing does not show, takes
+    one call or a batch of up to sixteen, and measures each answer like a
+    retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,

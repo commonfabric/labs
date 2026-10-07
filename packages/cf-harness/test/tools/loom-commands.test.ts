@@ -536,73 +536,6 @@ describe("loom-commands tools", () => {
       }
     });
 
-    it("returns `invalid_args` with the field, the expectation, the given value, and the signature, sending nothing", async () => {
-      for (
-        const [args, path, expected, given] of [
-          [{ entity_id: "e", limit: "ten" }, "args.limit", "integer", '"ten"'],
-          [{ limit: 5 }, "args.entity_id", "string", "absent"],
-        ] as const
-      ) {
-        const { context, calls } = contextWith();
-        expect(
-          await runCommandTool.invoke(context, {
-            command: "people-discovery.dossier",
-            args,
-          }),
-        ).toEqual({
-          outputId: expect.any(String),
-          status: "invalid_args",
-          command: "people-discovery.dossier",
-          path,
-          expected,
-          given,
-          problem: expect.any(String),
-          signature: DOSSIER_SIGNATURE,
-        });
-        expect(calls.map((call) => call.args[1])).toEqual(["list"]);
-      }
-    });
-
-    it("sends a call that leaves out a required input the host fills from context", async () => {
-      const { context, calls } = contextWith({
-        manifest: JSON.stringify({
-          commands: [{
-            id: "pane.rename",
-            inputs: {
-              type: "object",
-              required: ["pane", "title"],
-              properties: {
-                pane: { type: "string", "x-source": "context.pane" },
-                title: { type: "string" },
-              },
-            },
-          }],
-        }),
-      });
-      executed(
-        await runCommandTool.invoke(context, {
-          command: "pane.rename",
-          args: { title: "Trip" },
-        }),
-      );
-      expect(calls.map((call) => call.args[1])).toEqual(["list", "run"]);
-    });
-
-    it("sends args the command's schema admits", async () => {
-      const { context, calls } = contextWith();
-      executed(
-        await runCommandTool.invoke(context, {
-          command: "people-discovery.dossier",
-          args: { entity_id: "e", limit: 5 },
-        }),
-      );
-      expect(calls.map((call) => call.args[1])).toEqual(["list", "run"]);
-      expect(JSON.parse(calls[1].stdinText ?? "")).toEqual({
-        entity_id: "e",
-        limit: 5,
-      });
-    });
-
     it("adds the signature to an answer the host refused as `bad-args`, and to no other", async () => {
       for (const [code, signed] of [["bad-args", true], ["other", false]]) {
         const { context } = contextWith({
@@ -644,7 +577,7 @@ describe("loom-commands tools", () => {
     });
 
     describe("batches", () => {
-      it("returns one result per call in order, running the valid calls and sending nothing for an invalid one", async () => {
+      it("returns one result per call in order, running the listed calls and sending nothing for an unknown one", async () => {
         const { context, calls } = contextWith({
           answer: (request) =>
             Promise.resolve({
@@ -657,7 +590,7 @@ describe("loom-commands tools", () => {
           await runCommandTool.invoke(context, {
             calls: [
               { command: "loom.compose", args: { title: "Trip" } },
-              { command: "people-discovery.dossier", args: { limit: 5 } },
+              { command: "loom.compse", args: {} },
               {
                 command: "loom.inspect",
                 args: {},
@@ -668,13 +601,12 @@ describe("loom-commands tools", () => {
         );
         expect(output.results.map((result) => result.status)).toEqual([
           "executed",
-          "invalid_args",
+          "unknown_command",
           "executed",
         ]);
         expect(executed(output.results[0]).outcome.id).toBe("loom.compose");
         expect(output.results[1]).toMatchObject({
-          path: "args.entity_id",
-          signature: DOSSIER_SIGNATURE,
+          suggestions: expect.arrayContaining(["loom.compose"]),
         });
         expect(executed(output.results[2]).outcome.id).toBe("loom.inspect");
         const sequence = output.results.map((result) =>
@@ -824,45 +756,7 @@ describe("loom-commands tools", () => {
         );
       });
 
-      it("compacts the summaries that no longer fit the batch's output bound, keeping a result for every call", async () => {
-        const long = "c".repeat(HARNESS_COMMAND_ID_MAX_LENGTH);
-        const completed = Array.from(
-          { length: LOOM_COMMAND_COMPLETED_LIMIT },
-          (_, index) => `${index}${long}`,
-        );
-        const { context } = contextWith({
-          answer: JSON.stringify({ ok: false, code: long, completed }),
-        });
-        const output = batched(
-          await runCommandTool.invoke(context, {
-            calls: Array.from(
-              { length: RUN_COMMAND_BATCH_LIMIT },
-              () => ({ command: "loom.compose", args: {} }),
-            ),
-          }),
-        );
-        expect(
-          JSON.stringify(runCommandModelView({ ...output }).output).length,
-        ).toBeLessThanOrEqual(LOOM_RETRIEVAL_MAX_OUTPUT_CHARS);
-        const results = output.results.map(executed);
-        expect(results).toHaveLength(RUN_COMMAND_BATCH_LIMIT);
-        expect(results[0].outcome.completed).toHaveLength(
-          LOOM_COMMAND_COMPLETED_LIMIT,
-        );
-        const last = results.at(-1)!;
-        expect(last.outcome).toMatchObject({
-          ok: false,
-          code: long,
-          completedOmitted: LOOM_COMMAND_COMPLETED_LIMIT,
-        });
-        expect(last.outcome).not.toHaveProperty("completed");
-        for (const result of results) {
-          expect(result.outcome.ok).toBe(false);
-          expect(result.outcome.code).toBe(long);
-        }
-      });
-
-      it("reserves every call's compacted summary before restoring any whole, so summaries of the bound's size still fit", async () => {
+      it("keeps the batch's model view within the output bound whatever the summaries carry", async () => {
         const { context } = contextWith({
           answer: JSON.stringify({
             ok: false,
@@ -884,8 +778,37 @@ describe("loom-commands tools", () => {
         ).toBeLessThanOrEqual(LOOM_RETRIEVAL_MAX_OUTPUT_CHARS);
         const results = output.results.map(executed);
         expect(results).toHaveLength(RUN_COMMAND_BATCH_LIMIT);
-        expect(results[0].outcome.completed).toHaveLength(32);
-        expect(results.at(-1)?.outcome.completedOmitted).toBe(32);
+        for (const result of results) {
+          expect(result.outcome).not.toHaveProperty("completed");
+          expect(result.outcome.completedOmitted).toBe(32);
+        }
+      });
+
+      it("leaves out a result's hint and keeps the signature a `bad-args` refusal carries", async () => {
+        const { context } = contextWith({
+          answer: (request) =>
+            Promise.resolve({
+              stdout: JSON.stringify({
+                ok: false,
+                code: request.args[2] === "loom.compose"
+                  ? "forbidden"
+                  : "bad-args",
+              }),
+              stderr: "",
+              exitCode: 0,
+            }),
+        });
+        const [refused, badArgs] = batched(
+          await runCommandTool.invoke(context, {
+            calls: [
+              { command: "loom.compose", args: {} },
+              { command: "people-discovery.dossier", args: {} },
+            ],
+          }),
+        ).results.map(executed);
+        expect(refused.outcome.code).toBe("not_granted");
+        expect(refused).not.toHaveProperty("hint");
+        expect(badArgs.signature).toBe(DOSSIER_SIGNATURE);
       });
 
       it("withholds a call's answer above the ceiling and leaves its label out of the batch's", async () => {

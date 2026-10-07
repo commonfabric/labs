@@ -95,7 +95,9 @@ Each entry's `signature` is one line read from the command's argument schema
 (`src/loom-command-signature.ts`):
 
 - the parameters, required ones first and without `?`, optional ones with `?`,
-  each group in the schema's order; a default follows `=`;
+  each group in the schema's order; a default follows `=`; a required input the
+  host fills from the call's context (`x-source` in the manifest row) reads as
+  optional, since a call may leave it out;
 - an enum reads `a|b|c`, an array `T[]`, an object with declared properties
   `{...}` and one without `object`, a `$ref` the name it ends in; `(...)` is a
   schema that leaves its arguments open;
@@ -106,11 +108,11 @@ Each entry's `signature` is one line read from the command's argument schema
 
 A line is cut to 400 characters, its trailing parameters replaced by `…`. A
 command named in `detail` also carries its full `inputSchema`. Every schema the
-model sees, and every schema a call is checked against, has its `x-*` extension
-keywords removed. A listing larger than the model bound keeps its first entries
-whole and the rest without description; a command named in `detail` is always
-kept whole. `omitted` counts rows that could not be read or fell past the
-catalog limit, and `compacted` the entries shown without description.
+model sees has its `x-*` extension keywords removed. A listing larger than the
+model bound keeps its first entries whole and the rest without description; a
+command named in `detail` is always kept whole. `omitted` counts rows that could
+not be read or fell past the catalog limit, and `compacted` the entries shown
+without description.
 
 A manifest row is left out, and counted as `hidden`, when its own declarations
 say an agent may not run it:
@@ -152,38 +154,9 @@ or a batch of independent calls, each of the same shape:
 A batch carries one to sixteen calls, and one that names `command` as well as
 `calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. Before
 anything is sent, each call is checked against the run's catalog: a command the
-catalog does not show is refused, so what a run can call is what it can see, and
-the call's `args` are checked against the command's `inputSchema`
-(`findCommandArgsProblem`). The check applies the rules of the host's command
-layer (`validate_inputs` in Loom's `src/lib/loom_commands.py`) and no others, so
-it refuses no call the host would run:
-
-- an input passed as `null` is read as left out;
-- an input without `type` whose `oneOf` is a list must have the type of one of
-  its branches;
-- any other input must have its `type`, read as `string` when absent: `string`,
-  `integer` (a boolean is not one), `number` (a boolean is one), `boolean`,
-  `object`, or `array`; any other type name is not checked;
-- an `array` input's elements are checked against an `items` that names a `type`
-  or an `enum`, by both, unless that type (read as `string` when absent) is
-  `array` or one the host does not check;
-- an input with an `enum` must equal one of its members, compared as Python's
-  `==` compares: a number equal to a boolean of its value, and objects by their
-  keys in any order;
-- an input the schema does not declare is refused where the schema closes its
-  properties (`additionalProperties: false`); the host refuses it whatever the
-  schema says;
-- a required input left out is refused unless it has a default, which the host
-  gives it, or the host fills it from the call's context (one marked `x-source`
-  in the manifest row, which the signature shows as optional).
-
-The last rule is the one place the check is stricter than the host, which would
-ask for such an input rather than refuse it; a request for input leaves an agent
-with nothing to do, and `invalid_args` with the signature lets it correct the
-call. Every other keyword — a nested object's properties, `minimum`,
-`maxLength`, `pattern`, `format`, `$ref`, `anyOf`, `allOf` — is the host's to
-judge. The broker refuses a command the host has withdrawn since the catalog was
-read.
+catalog does not show is refused, so what a run can call is what it can see. The
+host's command layer checks each call's `args` against the command's schema; the
+broker refuses a command the host has withdrawn since the catalog was read.
 
 A batch's calls run concurrently, at most four in flight to the host at once,
 and one call's failure does not stop the others.
@@ -199,26 +172,9 @@ Each call, alone or in a batch, comes back as one of:
   broker (`forbidden`) or by the command layer (`refused`) reads as
   `code: "not_granted"`, with the host's code beside it as `hostCode` and a
   `hint` telling the model to offer the command to the person in its result
-  rather than retry it. An answer the command layer refused as `bad-args`
-  carries the command's `signature`.
-- `invalid_args`: the args do not match the command's schema, and nothing was
-  sent:
-
-  ```json
-  {
-    "outputId": "…",
-    "status": "invalid_args",
-    "command": "people-discovery.dossier",
-    "path": "args.limit",
-    "expected": "integer",
-    "given": "\"ten\"",
-    "problem": "value does not match type integer",
-    "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]"
-  }
-  ```
-
-  `given` is `absent` for a required field the call left out, and `expected` is
-  `no such parameter` for a field a closed schema does not declare.
+  rather than retry it. An answer the command layer refused as `bad-args` — the
+  args do not match the command's schema — carries the command's `signature`,
+  the line `list_commands` showed, so the model can correct the call.
 - `unknown_command`: the catalog shows no command by that name, and nothing was
   sent. `suggestions` names up to three listed commands nearest the one called —
   names containing it first, then by edit distance — and `hint` points the model
@@ -238,25 +194,26 @@ Each call, alone or in a batch, comes back as one of:
 {
   "outputId": "…",
   "status": "batch",
-  "results": [{ "status": "executed", "…": "…" }, { "status": "invalid_args" }],
+  "results": [
+    { "status": "executed", "…": "…" },
+    { "status": "unknown_command" }
+  ],
   "truncated": false
 }
 ```
 
 `results` holds one result per call, in the calls' order, each in the shape the
 call alone would have returned, with its own `outputId`, minted in the calls'
-order. Two things differ from sending the calls one at a time. A batch shows the
-model no more than one call may, under one output bound for the whole batch.
-Every call's result is first reserved at its smallest: an executed call's keeps
-its outcome's `ok`, `id`, codes, and `mayHaveLanded`, and leaves out its
-`completed` ids, counted as `outcome.completedOmitted`, and its `hint` and
-`signature`, named in `omitted`. What remains of the bound restores results
-whole in the calls' order. The answers are then measured in the same order
-against what is left: an answer that would have fit alone can be left out of its
-result, which is then marked truncated, and `truncated` says whether any was.
-And an answer without a label of its own takes the label of the batch's input as
-a whole, which covers every call's arguments: for a call whose own arguments
-carried less, that is the conservative choice.
+order. Three things differ from sending the calls one at a time. An executed
+call's summary is always compact: `completed` is replaced by its count,
+`outcome.completedOmitted`, and `hint` is left out; the `signature` a `bad-args`
+refusal carries is kept. The summaries are thus bounded together, and the
+answers are measured in the calls' order against one output bound for the whole
+batch, what the summaries leave: an answer that would have fit alone can be left
+out of its result, which is then marked truncated, and `truncated` says whether
+any was. And an answer without a label of its own takes the label of the batch's
+input as a whole, which covers every call's arguments: for a call whose own
+arguments carried less, that is the conservative choice.
 
 ### Authorization
 

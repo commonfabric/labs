@@ -4,8 +4,8 @@
  * batch of them, as the agent. The host's broker decides both — what is
  * listed and what runs — and stamps the actor and run on every command it
  * forwards (`loom-commands.ts`). Both read the run's catalog, held for the
- * run, and `run_command` checks each call's args against the command's
- * schema before anything is sent (`loom-command-signature.ts`).
+ * run, and `run_command` refuses a name the catalog does not show before
+ * anything is sent; the host checks the args of every call it is sent.
  *
  * A command's answer is Loom data, so it is measured the way the retrieval
  * tools measure a row: one row, labeled by its own `ifc` or else by the query
@@ -38,11 +38,7 @@ import {
   mergeConfidentialityOnlyLabels,
 } from "../contracts/cfc-model-context.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
-import {
-  type CommandArgsProblem,
-  findCommandArgsProblem,
-  renderCommandSignature,
-} from "../loom-command-signature.ts";
+import { renderCommandSignature } from "../loom-command-signature.ts";
 import {
   createLoomCommandCatalogSource,
   type HarnessLoomCommandsConfig,
@@ -53,11 +49,7 @@ import {
   nearestCommandNames,
   runLoomCommand,
 } from "../loom-commands.ts";
-import {
-  LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
-  type LoomRetrievalEntry,
-  measureLoomRows,
-} from "./loom-retrieval.ts";
+import { type LoomRetrievalEntry, measureLoomRows } from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
 /** The notice every listing carries beside its entries. */
@@ -196,7 +188,7 @@ export interface LoomCommandOutcome {
   /** Operation ids that landed before a failure. */
   completed?: string[];
 
-  /** How many ids `completed` held, where a batch's bound left it out. */
+  /** How many ids `completed` held, in a batch, which names none. */
   completedOmitted?: number;
 
   /** UTF-8 bytes of the JSON answer. */
@@ -229,9 +221,6 @@ export type RunCommandCallOutput =
     /** The command's signature, when the host refused its args. */
     signature?: string;
 
-    /** Summary fields a batch's output bound left out of this result. */
-    omitted?: ("hint" | "signature")[];
-
     /** The answer's label, kept for the artifact and the observation. */
     cfc: { version: 1; observedLabel?: IFCLabel };
   }
@@ -245,14 +234,6 @@ export type RunCommandCallOutput =
     landed: "no" | "unknown";
     hint?: string;
   }
-  | {
-    /** The args do not match the command's schema; nothing was sent. */
-    outputId: ToolOutputId;
-    status: "invalid_args";
-    command: string;
-  }
-    & CommandArgsProblem
-    & { signature: string }
   | {
     /** The listing names no such command; nothing was sent. */
     outputId: ToolOutputId;
@@ -489,7 +470,7 @@ const readCall = (
   };
 };
 
-/** A call that passed every local check, with the entry it was checked by. */
+/** A call the catalog shows, with the entry that shows it. */
 interface SendableCall {
   outputId: ToolOutputId;
   invocation: LoomCommandInvocation;
@@ -520,20 +501,6 @@ const checkCall = (
         catalog.entries.map((candidate) => candidate.name),
       ),
       hint: unknownCommandHint(command),
-    };
-  }
-  const problem = findCommandArgsProblem(
-    entry.inputSchema,
-    invocation.args,
-    entry.hostFilled,
-  );
-  if (problem !== undefined) {
-    return {
-      outputId,
-      status: "invalid_args",
-      command,
-      ...problem,
-      signature: renderCommandSignature(entry),
     };
   }
   return { outputId, invocation, entry };
@@ -700,7 +667,7 @@ export const runCommandTool: HarnessToolDefinition<
     // something.
     effectClass: "write",
     description:
-      `Run commands list_commands showed, as the agent. Pass one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}, which run concurrently and come back as results, one per call in order. Pass loomId for a command whose target is loom, and expectedVersion to refuse a stale write. Each call's args are checked against the command's signature before anything is sent: a mismatch comes back invalid_args naming the field, what it expects, what was given, and the signature, and a name the listing does not show comes back unknown_command with the nearest listed names; correct the call and send it again. An executed call returns its outcome (ok, code, mayHaveLanded, completed) and its full answer as an entry measured against this run's confidentiality ceiling: admitted, with a handle a structured result can name, or withheld with no content. A command this run may not run comes back not_granted: do not retry it; if the person should run it, name it in your result as an offer for them. ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
+      `Run commands list_commands showed, as the agent. Pass one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}, which run concurrently and come back as results, one per call in order. Pass loomId for a command whose target is loom, and expectedVersion to refuse a stale write. A name the listing does not show comes back unknown_command with the nearest listed names, and nothing is sent. The host checks each call's args: a call it refuses for them comes back executed with outcome code bad-args and the command's signature; correct the call and send it again. An executed call returns its outcome (ok, code, mayHaveLanded, completed) and its full answer as an entry measured against this run's confidentiality ceiling: admitted, with a handle a structured result can name, or withheld with no content. A command this run may not run comes back not_granted: do not retry it; if the person should run it, name it in your result as an offer for them. ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -814,20 +781,16 @@ const readCatalog = async (
 };
 
 /**
- * Helper for batches, which cuts an executed call's summary to what says
- * what became of it — its outcome's `ok`, `id`, codes, and whether it may
- * have landed — naming what it left out: `completed` as the count of its
- * ids, and the hint and signature by name.
+ * Helper for batches, which cuts an executed call's summary to a size
+ * bounded by construction: `completed` becomes the count of its ids, and
+ * the hint is left out. The signature a `bad-args` refusal carries is kept,
+ * since it is what the refusal is for, and is bounded.
  */
 const compactSkeleton = (
   skeleton: AnsweredCall["skeleton"],
 ): AnsweredCall["skeleton"] => {
-  const { hint, signature, outcome, ...rest } = skeleton;
+  const { hint: _hint, outcome, ...rest } = skeleton;
   const { completed, ...kept } = outcome;
-  const omitted = [
-    ...(hint !== undefined ? ["hint" as const] : []),
-    ...(signature !== undefined ? ["signature" as const] : []),
-  ];
   return {
     ...rest,
     outcome: {
@@ -836,57 +799,35 @@ const compactSkeleton = (
         ? { completedOmitted: completed.length }
         : {}),
     },
-    ...(omitted.length > 0 ? { omitted } : {}),
   };
 };
 
 /**
- * Helper for `run_command`, which fits a batch into one output bound for
- * the whole batch, so a batch shows the model no more than one call may.
- * Every call's result is first reserved at its smallest, an executed call's
- * summary compacted; the rest of the bound then restores summaries whole in
- * the calls' order, so every call keeps a result. The answers are then measured in the same order against
- * what is left, and an answer that no longer fits is left out and its result
- * marked truncated, as a lone call's would be. A result that is not an
- * answer is small and bounded, and is kept whole.
+ * Helper for `run_command`, which measures a batch's answers in the calls'
+ * order against one output bound for the whole batch, so a batch shows the
+ * model no more than one call may. Every result's summary is compact, so
+ * the summaries together are bounded; what they leave holds the answers,
+ * and an answer that no longer fits is left out and its result marked
+ * truncated, as a lone call's would be.
  */
 const measureBatch = async (
   context: HarnessToolContext,
   outputId: ToolOutputId,
   sent: readonly (AnsweredCall | RunCommandCallOutput)[],
 ): Promise<RunCommandBatchOutput> => {
+  const compacted = sent.map((call) =>
+    isAnswered(call)
+      ? { ...call, skeleton: compactSkeleton(call.skeleton) }
+      : call
+  );
   let reserved = JSON.stringify({
     outputId,
     status: "batch",
-    results: [],
-    truncated: false,
+    results: compacted.map((call) => isAnswered(call) ? call.skeleton : call),
+    truncated: true,
   }).length + LABEL_JOIN_ALLOWANCE;
-  // Each result also costs the comma that separates it from the next, and an
-  // answered one its `truncated` turning from `true` to `false`.
-  const charge = (result: object) => JSON.stringify(result).length + 1;
-  const answeredCharge = (skeleton: object) => charge(skeleton) + 1;
-  // Every call's smallest result is reserved first, so no later call can be
-  // left without room; what remains upgrades summaries to whole in the
-  // calls' order, and then holds the answers.
-  const compacted = sent.map((call) =>
-    isAnswered(call) ? compactSkeleton(call.skeleton) : undefined
-  );
-  sent.forEach((call, index) => {
-    const small = compacted[index];
-    reserved += small === undefined ? charge(call) : answeredCharge(small);
-  });
-  const fitted = sent.map((call, index) => {
-    const small = compacted[index];
-    if (!isAnswered(call) || small === undefined) return call;
-    const upgrade = answeredCharge(call.skeleton) - answeredCharge(small);
-    if (reserved + upgrade <= LOOM_RETRIEVAL_MAX_OUTPUT_CHARS) {
-      reserved += upgrade;
-      return call;
-    }
-    return { ...call, skeleton: small };
-  });
   const results: RunCommandCallOutput[] = [];
-  for (const call of fitted) {
+  for (const call of compacted) {
     if (!isAnswered(call)) {
       results.push(call);
       continue;
