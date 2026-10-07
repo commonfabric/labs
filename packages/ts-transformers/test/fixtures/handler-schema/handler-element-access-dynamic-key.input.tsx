@@ -4,7 +4,7 @@ const ANY_KEY: string = "k";
 
 // FIXTURE: handler-element-access-dynamic-key
 // Verifies: a handler state member read through an element access by a key that can name any member stays in the state schema
-//   catalog.get().offers[ANY_KEY].space reads catalog in full, beside the write to n
+//   catalog.get().offers[ANY_KEY].space keeps catalog in the state schema, beside the write to n
 // Context: Two state members, so a dropped read would shrink catalog out of the state schema
 const touch = handler<
   void,

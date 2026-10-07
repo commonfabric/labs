@@ -184,8 +184,8 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-element-access-dynamic-key
 // Verifies: an element access whose key can name any member leaves its `.get()` chain unresolved, so the receiver is read in full
-//   catalog.get().offers[key.get()].space, offers[ANY_KEY], offers[String(KEY)], and offers[k] in a map callback each record a full read of catalog
-//   items.get()[idx.get()] directly on the `.get()` result reads items in full the same way
+//   catalog.get().offers[key.get()].space, offers[ANY_KEY], offers[String(KEY)], and offers[k] in a map callback each keep catalog in the lift's input
+//   items.get()[idx.get()] directly on the `.get()` result keeps items the same way
 //   a typed capture read through offers[ANY_KEY] keeps its unread meta, since the whole cell is read
 // Context: Every lift has at least two captures, so a dropped read would shrink one out
 export default pattern(() => {

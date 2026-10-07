@@ -13,45 +13,140 @@ const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const KEY = "k";
 const INNER = "j";
+type Nested = {
+    offers: {
+        k: {
+            j: {
+                space: string;
+                size: number;
+            };
+            i: {
+                space: string;
+            };
+        };
+        other: {
+            space: string;
+        };
+    };
+    meta: {
+        x: number;
+    };
+};
 const __cfLift_1 = __cfHelpers.lift<{
     n: __cfHelpers.ReadonlyCell<number>;
-    catalog: __cfHelpers.ReadonlyCell<Record<string, any>>;
-}, boolean>(({ n, catalog }) => n.get() === 1 && catalog.get().offers[KEY][INNER].space === "room", {
+    nested: __cfHelpers.ReadonlyCell<{
+        offers: {
+            k: {
+                j: {
+                    space: string;
+                };
+            };
+        };
+    }>;
+}, boolean>(({ n, nested }) => n.get() === 1 && nested.get().offers[KEY][INNER].space === "room", {
     type: "object",
     properties: {
         n: {
             type: "number",
             asCell: ["readonly"]
         },
-        catalog: {
+        nested: {
             type: "object",
-            properties: {},
-            additionalProperties: true,
+            properties: {
+                offers: {
+                    type: "object",
+                    properties: {
+                        k: {
+                            type: "object",
+                            properties: {
+                                j: {
+                                    type: "object",
+                                    properties: {
+                                        space: {
+                                            type: "string"
+                                        }
+                                    },
+                                    required: ["space"]
+                                }
+                            },
+                            required: ["j"]
+                        }
+                    },
+                    required: ["k"]
+                }
+            },
+            required: ["offers"],
             asCell: ["readonly"]
         }
     },
-    required: ["n", "catalog"]
+    required: ["n", "nested"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 const __cfLift_2 = __cfHelpers.lift<{
     n: __cfHelpers.ReadonlyCell<number>;
-    catalog: __cfHelpers.ReadonlyCell<Record<string, any>>;
-}, boolean>(({ n, catalog }) => n.get() === 1 && catalog.get().offers[KEY] !== undefined, {
+    nested: __cfHelpers.ReadonlyCell<{
+        offers: {
+            k: {
+                j: {
+                    space: string;
+                    size: number;
+                };
+                i: {
+                    space: string;
+                };
+            };
+        };
+    }>;
+}, boolean>(({ n, nested }) => n.get() === 1 && nested.get().offers[KEY] !== undefined, {
     type: "object",
     properties: {
         n: {
             type: "number",
             asCell: ["readonly"]
         },
-        catalog: {
+        nested: {
             type: "object",
-            properties: {},
-            additionalProperties: true,
+            properties: {
+                offers: {
+                    type: "object",
+                    properties: {
+                        k: {
+                            type: "object",
+                            properties: {
+                                j: {
+                                    type: "object",
+                                    properties: {
+                                        space: {
+                                            type: "string"
+                                        },
+                                        size: {
+                                            type: "number"
+                                        }
+                                    },
+                                    required: ["space", "size"]
+                                },
+                                i: {
+                                    type: "object",
+                                    properties: {
+                                        space: {
+                                            type: "string"
+                                        }
+                                    },
+                                    required: ["space"]
+                                }
+                            },
+                            required: ["j", "i"]
+                        }
+                    },
+                    required: ["k"]
+                }
+            },
+            required: ["offers"],
             asCell: ["readonly"]
         }
     },
-    required: ["n", "catalog"]
+    required: ["n", "nested"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
@@ -117,10 +212,73 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-element-access-const-key-nested
 // Verifies: literal-typed element keys compose into one static path in each position they can take
-//   offers[KEY][INNER].space → catalog.offers.k.j.space; offers[KEY] with no member after it → catalog.offers.k
-//   two captures each read through offers[KEY] are both kept; a typed capture shrinks to offers, dropping the unread meta
+//   offers[KEY][INNER].space shrinks nested to offers.k.j.space; offers[KEY] with no member after it shrinks it to offers.k
+//   two captures each read through offers[KEY] are both kept; a capture typed as a Record shrinks to offers, dropping the unread meta
 // Context: Every lift has two captures, so a dropped read would shrink one out
 export default pattern(() => {
+    const nested = new Writable<Nested>({
+        offers: {
+            k: { j: { space: "", size: 0 }, i: { space: "" } },
+            other: { space: "" },
+        },
+        meta: { x: 1 },
+    }, {
+        type: "object",
+        properties: {
+            offers: {
+                type: "object",
+                properties: {
+                    k: {
+                        type: "object",
+                        properties: {
+                            j: {
+                                type: "object",
+                                properties: {
+                                    space: {
+                                        type: "string"
+                                    },
+                                    size: {
+                                        type: "number"
+                                    }
+                                },
+                                required: ["space", "size"]
+                            },
+                            i: {
+                                type: "object",
+                                properties: {
+                                    space: {
+                                        type: "string"
+                                    }
+                                },
+                                required: ["space"]
+                            }
+                        },
+                        required: ["j", "i"]
+                    },
+                    other: {
+                        type: "object",
+                        properties: {
+                            space: {
+                                type: "string"
+                            }
+                        },
+                        required: ["space"]
+                    }
+                },
+                required: ["k", "other"]
+            },
+            meta: {
+                type: "object",
+                properties: {
+                    x: {
+                        type: "number"
+                    }
+                },
+                required: ["x"]
+            }
+        },
+        required: ["offers", "meta"]
+    } as const satisfies __cfHelpers.JSONSchema).for("nested", true);
     const catalog = new Writable<Record<string, any>>({ offers: {} }, {
         type: "object",
         properties: {},
@@ -171,11 +329,11 @@ export default pattern(() => {
     } as const satisfies __cfHelpers.JSONSchema).for("n", true);
     const nestedKeys = __cfLift_1({
         n: n,
-        catalog: catalog
+        nested: nested
     }).for("nestedKeys", true);
     const noMemberAfterKey = __cfLift_2({
         n: n,
-        catalog: catalog
+        nested: nested
     }).for("noMemberAfterKey", true);
     const twoCapturesSameShape = __cfLift_3({
         catalog: catalog,
