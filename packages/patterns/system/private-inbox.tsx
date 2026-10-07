@@ -408,6 +408,12 @@ export type EnsurePrivateInboxEvent = {
  * holds, or holds none. A profile pointing at another inbox keeps its pointer.
  * Running it again creates, re-points and retains nothing.
  *
+ * The check is list membership and the profile's pointer, not order: which
+ * profile decides is the host's alone. So an event the owner's own code sends,
+ * naming another profile in the list, can move Home between two inboxes its
+ * profiles advertise. Each move retains the inbox given up and drops the one
+ * adopted from the retained list, so that list holds each inbox at most once.
+ *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
  * The space grants every principal `WRITE`, so a sender's write is admitted

@@ -1361,6 +1361,10 @@ export class RuntimeProcessor {
         }
         this.#vdomMounts.clear();
 
+        // A private inbox ensure still in flight is not waited for: a remote
+        // read it has stalled on must not hold disposal. It then fails against
+        // the disposed runtime, the failure is dropped unreported, and the next
+        // worker's first bring-up of Home starts the ensure again.
         await this.#runtime.storageManager.synced();
         await this.#runtime.dispose();
       } catch (e) {
@@ -2644,11 +2648,9 @@ export class RuntimeProcessor {
     });
     await this.#legacySpacesAdopted;
     // The ensure reads every profile's pointer and loads inbox documents in
-    // other spaces, so Home opens without waiting for it, and disposal does
-    // not wait for it either: one still in flight then fails against the
-    // disposed runtime, which is expected and goes unreported. Any other
-    // failure is reported, and the next ensure of Home in this worker starts
-    // it again.
+    // other spaces, so Home opens without waiting for it. A failure is
+    // reported unless the processor has been disposed, as `dispose()` says,
+    // and the next ensure of Home in this worker starts it again.
     this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox().catch(
       (error) => {
         this.#privateInboxEnsured = undefined;
