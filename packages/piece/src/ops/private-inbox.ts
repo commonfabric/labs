@@ -39,10 +39,12 @@ export type InboxAdoptionRefusal =
  * profile advertising any; `none-advertised` when Home holds none and no
  * profile advertises one; `adopt` when the deciding profile's inbox passed
  * vetting; `refused` when it failed, for `reason`. `profile` is the deciding
- * profile.
+ * profile. `abandoned` is an ensure stopped before its send, which sent
+ * nothing, and `unavailable` one over a Home without the stream.
  */
 export type PrivateInboxEnsure =
   | { outcome: "unavailable" }
+  | { outcome: "abandoned" }
   | { outcome: "held" }
   | { outcome: "none-advertised" }
   | { outcome: "adopt"; inbox: Cell<unknown>; profile: Cell<unknown> }
@@ -93,16 +95,23 @@ const pointerSchema = {
  *
  * Resolves once the event is sent, which is before Home's handler runs.
  * Rejects, sending nothing, when a profile ordered ahead of the deciding one
- * cannot be loaded, since which profile decides is then unknown.
+ * cannot be loaded, since which profile decides is then unknown. Sends
+ * nothing, and returns `abandoned`, when `signal` has aborted or `runtime`
+ * has begun disposal by the time the reads are done, so that an ensure its
+ * caller has stopped waiting for sends no event after teardown.
  */
 export async function ensurePrivateInboxOf(
   runtime: Runtime,
   home: Cell<unknown>,
   identity: DID,
+  signal?: AbortSignal,
 ): Promise<PrivateInboxEnsure> {
   const ensure = home.key("ensurePrivateInbox");
   if (ensure.getRaw() === undefined) return { outcome: "unavailable" };
   const found = await vetAdvertisedInbox(runtime, home, identity);
+  if (signal?.aborted || runtime.writeTeardownSignal.aborted) {
+    return { outcome: "abandoned" };
+  }
   if (found.outcome === "refused") {
     logger.warn("adoption-refused", () => [
       `Not adopting the inbox a profile advertises (${found.reason}):`,

@@ -567,6 +567,23 @@ describe("ensurePrivateInboxOf()", () => {
     });
   });
 
+  it("sends nothing, and returns `abandoned`, once its signal has aborted", async () => {
+    await listProfiles([await profilePointingAt(await usableInbox())]);
+    const stopped = new AbortController();
+    stopped.abort();
+
+    const result = await ensurePrivateInboxOf(
+      runtime,
+      home,
+      identity.did(),
+      stopped.signal,
+    );
+    await runtime.idle();
+
+    expect(result).toEqual({ outcome: "abandoned" });
+    expect(await home.key("ensured" as never).pull()).toBe(0);
+  });
+
   it("is the function the package's ops entry point exports", () => {
     expect(ops.ensurePrivateInboxOf).toBe(ensurePrivateInboxOf);
   });

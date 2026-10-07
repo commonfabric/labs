@@ -113,8 +113,8 @@ rule, by `packages/piece/test/ops/private-inbox.test.ts`.
 it gave them up, and never the one it holds: adopting an inbox the list holds,
 as when a profile is pointed back at it, takes it out. It is there so that the
 offers senders delivered to an earlier inbox stay readable, by the intake that
-reads Home's offers; nothing reads it yet. Like `privateInbox`, nothing clears
-it.
+reads Home's offers; no intake reads offers from it yet. Like `privateInbox`,
+nothing clears it.
 
 Home adopts again only when an ensure runs, which is at a runtime worker's first
 bring-up of Home, and again at the worker's next bring-up of Home if that ensure

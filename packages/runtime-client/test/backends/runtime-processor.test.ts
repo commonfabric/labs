@@ -4293,6 +4293,21 @@ describe("runtime-processor", () => {
       expect(worker.privateInboxSends()).toBe(1);
     });
 
+    it("sends no private inbox event once disposed, though the ensure's reads then return", async () => {
+      const readable = Promise.withResolvers<void>();
+      await using worker = await homeWorker([], () => {}, readable.promise);
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      const ensured = worker.processor.accessForTestingOnly.privateInboxEnsured;
+
+      await worker.processor.dispose();
+      readable.resolve();
+      await ensured;
+
+      expect(worker.privateInboxSends()).toBe(0);
+    });
+
     it("disposes without waiting for a private inbox ensure still reading, and reports nothing when it then fails", async () => {
       // A disposal that waited for the ensure would never return here, since
       // the ensure's reads fail only after it.

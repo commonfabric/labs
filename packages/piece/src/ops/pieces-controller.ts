@@ -2249,15 +2249,17 @@ export class PiecesController<T = unknown> {
    * profiles' pointers or loading the inbox documents they name fails, when a
    * profile ordered ahead of the deciding one cannot be read, or when vetting
    * or the send itself throws; a failure inside the handler is not reported
-   * here.
+   * here. Once `signal` aborts, or the runtime begins disposal, it sends
+   * nothing.
    */
-  async ensurePrivateInbox(): Promise<void> {
+  async ensurePrivateInbox(signal?: AbortSignal): Promise<void> {
     this.#assertHomeSpace("ensure a private inbox");
     const home = (await this.ensureDefaultPattern()).getCell();
     await ensurePrivateInboxOf(
       this.runtime,
       home,
       this.runtime.userIdentityDID,
+      signal,
     );
   }
 

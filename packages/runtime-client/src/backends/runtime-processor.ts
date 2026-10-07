@@ -940,6 +940,9 @@ export class RuntimeProcessor {
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
   #privateInboxEnsured: Promise<void> | undefined;
+  // Aborted as disposal begins, so an inbox ensure still in flight sends
+  // nothing after it.
+  #disposal = new AbortController();
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -1325,6 +1328,7 @@ export class RuntimeProcessor {
   dispose(): Promise<void> {
     if (this.#disposingPromise) return this.#disposingPromise;
     this.#isDisposed = true;
+    this.#disposal.abort();
     this.#disposingPromise = (async () => {
       this.#telemetry.removeEventListener("telemetry", this.#onTelemetry);
       try {
@@ -1362,9 +1366,10 @@ export class RuntimeProcessor {
         this.#vdomMounts.clear();
 
         // A private inbox ensure still in flight is not waited for: a remote
-        // read it has stalled on must not hold disposal. It then fails against
-        // the disposed runtime, the failure is dropped unreported, and the next
-        // worker's first bring-up of Home starts the ensure again.
+        // read it has stalled on must not hold disposal. Disposal aborted its
+        // signal above, so it sends nothing once its reads return; a read that
+        // fails against the disposed runtime is dropped unreported; and the
+        // next worker's first bring-up of Home starts the ensure again.
         await this.#runtime.storageManager.synced();
         await this.#runtime.dispose();
       } catch (e) {
@@ -2651,7 +2656,9 @@ export class RuntimeProcessor {
     // other spaces, so Home opens without waiting for it. A failure is
     // reported unless the processor has been disposed, as `dispose()` says,
     // and the next ensure of Home in this worker starts it again.
-    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox().catch(
+    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox(
+      this.#disposal.signal,
+    ).catch(
       (error) => {
         this.#privateInboxEnsured = undefined;
         if (this.#isDisposed) return;
