@@ -180,7 +180,7 @@ export class ShareIntake {
   #changedInboxes = new Set<string>();
   #draining = false;
   #drained: Promise<void> = Promise.resolve();
-  #reports = new Set<Promise<void>>();
+  #pending = new Set<Promise<void>>();
   #stopped = false;
 
   /**
@@ -240,11 +240,12 @@ export class ShareIntake {
   /**
    * Resolves once every change the instance has been told of so far has been
    * taken up: each offer then in an inbox decided or left for the next change,
-   * and each receipt of a registration whose handling has committed read.
+   * and each registration sent to Home handled and its receipt read. A
+   * registration whose handling never settles holds it.
    */
   async idle(): Promise<void> {
     await this.#drained;
-    await Promise.all(this.#reports);
+    await Promise.all(this.#pending);
   }
 
   /** Stops following the inboxes; an offer being vetted is not sent. */
@@ -378,9 +379,20 @@ export class ShareIntake {
    * cannot be read, since Home's handler refuses a duplicate in any case.
    */
   async #receipts(): Promise<Set<string>> {
-    const catalog = await this.#home.key("sharedSpaceCatalog").asSchema(
-      catalogSchema,
-    ).pull();
+    let catalog;
+    try {
+      catalog = await this.#home.key("sharedSpaceCatalog").asSchema(
+        catalogSchema,
+      ).pull();
+    } catch (error) {
+      if (!this.#halted) {
+        logger.warn("catalog-unreadable", () => [
+          "Reading the receipts in Home's catalog:",
+          error,
+        ]);
+      }
+      return new Set();
+    }
     return new Set(
       isObjectNotArray(catalog?.offers) ? Object.keys(catalog.offers) : [],
     );
@@ -423,24 +435,36 @@ export class ShareIntake {
       });
       return;
     }
-    this.#decide(row, raw, "sent");
-    sendEvent(
-      this.#home.key("registerSharedSpace"),
-      {
-        space: offer.space,
-        host: offer.host,
-        kind: offer.kind,
-        ...(offer.title === "" ? {} : { title: offer.title }),
-        offer: { from: offer.from, id: offer.id },
-      },
-      (tx) => {
-        const link = tx.handlingReceiptLink;
-        if (link === undefined) return;
-        const report = this.#reportConflict(row, receipt, link);
-        this.#reports.add(report);
-        void report.finally(() => this.#reports.delete(report));
-      },
+    // The handling is tracked from before the send, so that `idle()` waits
+    // for it however soon the send settles.
+    const handled = Promise.withResolvers<NormalizedFullLink | undefined>();
+    const pending = handled.promise.then((link) =>
+      link === undefined ? undefined : this.#reportConflict(row, receipt, link)
     );
+    try {
+      sendEvent(
+        this.#home.key("registerSharedSpace"),
+        {
+          space: offer.space,
+          host: offer.host,
+          kind: offer.kind,
+          ...(offer.title === "" ? {} : { title: offer.title }),
+          offer: { from: offer.from, id: offer.id },
+        },
+        (tx) => handled.resolve(tx.handlingReceiptLink),
+      );
+    } catch (error) {
+      // The row is left undecided, to be vetted again when its inbox next
+      // changes.
+      logger.warn("send-failed", () => [
+        `Sending Home the offer ${receipt}:`,
+        error,
+      ]);
+      return;
+    }
+    this.#decide(row, raw, "sent");
+    this.#pending.add(pending);
+    void pending.finally(() => this.#pending.delete(pending));
   }
 
   /**

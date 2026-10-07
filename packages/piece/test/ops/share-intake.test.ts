@@ -150,6 +150,8 @@ describe("share-intake", () => {
   let home: Cell<unknown>;
   let inbox: Cell<unknown>;
   let intake: ShareIntake | undefined;
+  // Stops an intake a case starts over a stand-in for Home.
+  let after: (() => void) | undefined;
 
   beforeEach(async () => {
     storage = StorageManager.emulate({ as: identity });
@@ -179,6 +181,8 @@ describe("share-intake", () => {
   afterEach(async () => {
     intake?.stop();
     intake = undefined;
+    after?.();
+    after = undefined;
     await controller.dispose();
     await storage.close();
   });
@@ -537,10 +541,66 @@ describe("share-intake", () => {
       const before = conflictsLogged();
       await deliver([offerOf(space, "conflicting", { title: "Conflicting" })]);
       await registeredThrough("conflicting");
-      await runtime.idle();
+      // `idle()` alone waits for the handling's receipt to be read.
       await intake.idle();
 
       expect(conflictsLogged() - before).toBe(1);
+    });
+
+    it("is registered when its inbox next changes after sending it to Home failed", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let sendable = false;
+      // Home, but for a `registerSharedSpace` that is no stream until
+      // `sendable`, so that sending to it throws.
+      const unsendable = {
+        key: (name: string) =>
+          name === "registerSharedSpace" && !sendable
+            ? { getRaw: () => ({ $stream: true }) }
+            : home.key(name as never),
+      };
+      const intake = startShareIntakeOf(
+        runtime,
+        unsendable as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await deliver([offerOf(space, "unsent")]);
+      await runtime.idle();
+      await intake.idle();
+      sendable = true;
+      await deliver([offerOf(space, "after the failed send")]);
+
+      expect(registeredIds(await registeredThrough("unsent"))).toContain(
+        "unsent",
+      );
+    });
+
+    it("is registered when Home's catalog cannot be read", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      // Home, but for a catalog whose every read fails.
+      const unreadable = {
+        key: (name: string) =>
+          name === "sharedSpaceCatalog"
+            ? {
+              asSchema: () => ({
+                pull: () => Promise.reject(new Error("catalog unreadable")),
+              }),
+            }
+            : home.key(name as never),
+      };
+      const intake = startShareIntakeOf(
+        runtime,
+        unreadable as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await deliver([offerOf(space, "uncatalogued")]);
+
+      expect(registeredIds(await registeredThrough("uncatalogued"))).toEqual([
+        "uncatalogued",
+      ]);
     });
 
     it("is sent once, though the inbox changes again after it", async () => {
