@@ -225,14 +225,16 @@ evidence cannot disagree.
 Archive is the person's removal from the ordinary collection; it retains the
 membership and receipt evidence. Home's `removeSharedSpace` handler instead
 takes an entry back out of the catalog, so that an application that registered
-spaces on the person's behalf can undo that import. Home renders no control for
-it. It takes the space DID and the revision its caller observed, and removes the
-entry only while it is still at that revision and no offer receipt names it. The
-result is `removed`, or `conflict` with the reason `missing`, `revision`, or
-`offer`. An entry a receipt names stays: deleting the entry alone leaves invalid
-receipts, and deleting its receipts as well loses replay evidence and permits a
-stale offer to recreate the entry. The caller keeps the entry it observed as its
-backup.
+spaces on the person's behalf can undo that import. That is its only purpose: it
+is not a general way to delete or clean up entries, nothing a person invokes
+calls it, and Home renders no control for it. The caller removes only entries it
+can show it registered itself. It takes the space DID and the revision its
+caller observed, and removes the entry only while it is still at that revision
+and no offer receipt names it. The result is `removed`, or `conflict` with the
+reason `missing`, `revision`, or `offer`. An entry a receipt names stays:
+deleting the entry alone leaves invalid receipts, and deleting its receipts as
+well loses replay evidence and permits a stale offer to recreate the entry. The
+caller keeps the entry it observed as its backup.
 
 Removal leaves no record in the catalog. A later registration admits the space
 as a new entry, so an application undoing its import stops registering those

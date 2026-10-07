@@ -392,13 +392,26 @@ export const changeSharedSpaceMembership = handler<
 );
 
 /**
- * Removes one entry that no offer receipt names, at the revision its remover
- * observed. This repairs an import: an application that registered spaces on
- * the person's behalf can take back an entry that has not changed since it
- * observed it. Archive is the person's removal from the ordinary collection. An
- * entry a receipt names stays, since removing it alone leaves an invalid
- * receipt, and removing the receipt as well forgets the offer that it refuses
- * to replay.
+ * Removes one entry from the catalog, for one purpose only: an application
+ * that registered spaces on the person's behalf undoing that import. It is not
+ * how a person puts a shared space away (archive is, and nothing a person
+ * invokes calls this), and it is not a general way to delete, clean up,
+ * repair, or compact entries.
+ *
+ * It removes the entry only while the entry is still at `expectedRevision`,
+ * the revision its caller observed, so a membership choice made since is never
+ * lost, and only when no offer receipt names the space: removing such an entry
+ * alone leaves an invalid receipt, and removing the receipt as well forgets the
+ * offer that it refuses to replay. Removal grants and revokes no access.
+ *
+ * The rest of a safe undo is the caller's, since only the caller knows it:
+ * - remove only entries it can show it registered itself;
+ * - keep the complete entry it observed, as its backup, before calling;
+ * - stop registering those spaces first, because a later registration admits a
+ *   removed space again as a new entry, and a re-admitted invocation of the
+ *   original registration recreates it at its original revision.
+ *
+ * CFS's `share.catalog-undo` is the caller written to these rules.
  */
 export const removeSharedSpace = handler<
   SharedSpaceRemoval,

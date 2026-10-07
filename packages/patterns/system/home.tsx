@@ -141,9 +141,11 @@ export type HomeOutput = {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
-  // Takes back an entry an application registered, when no offer receipt names
-  // it and it is still at the revision the remover observed. Home renders no
-  // control for it: archive is the person's way to drop a shared space.
+  // Only for an application undoing its own import of shared spaces: removes
+  // one entry no offer receipt names, at the revision the caller observed (see
+  // `removeSharedSpace` for what the caller must do). Home renders no control
+  // for it, and nothing a person invokes calls it: archive is how a person puts
+  // a shared space away.
   removeSharedSpace: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
   createProfile: Stream<CreateProfileEvent>;
   // Gives Home the private inbox the deciding profile advertises: it adopts the
