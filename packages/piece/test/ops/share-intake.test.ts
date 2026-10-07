@@ -1147,8 +1147,8 @@ describe("share-intake", () => {
     it("decides nothing once stopped while reading the inboxes Home holds", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       await deliver([offerOf(space, "never read")]);
-      let started: ShareIntake | undefined;
-      // Home, but for a read of what it retains that stops the intake.
+      // Home, but for a read of what it retains that stops the intake, which
+      // happens only after the intake has been made.
       const stopping = {
         key: (name: string) =>
           name !== "retainedPrivateInboxes" ? home.key(name as never) : {
@@ -1164,7 +1164,11 @@ describe("share-intake", () => {
             },
           },
       };
-      started = startShareIntakeOf(runtime, stopping as never, identity.did());
+      const started = startShareIntakeOf(
+        runtime,
+        stopping as never,
+        identity.did(),
+      );
       if (started === undefined) throw new Error("Home has no stream");
       await runtime.idle();
       await started.idle();
