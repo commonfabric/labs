@@ -23,6 +23,7 @@ import {
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -369,19 +370,22 @@ const handleSetTitle = handler<
 
 const WeeklyCalendar = pattern<Input, Output>(
   ({ title, events, isCalendar, isHidden }) => {
-    const pieceRegistry = wish<EventPiece[]>({
+    const pieceRegistryWish = wish<EventPiece[]>({
       query: "#pieceRegistry",
-    }).result!;
+    });
+    const pieceRegistry = resultOf(pieceRegistryWish.result);
 
-    // Reactive #now for date defaults (filled once it resolves; the ambient
-    // clock is not available at pattern body).
+    // Reactive #now for date defaults; dependent computations remain
+    // unavailable until it resolves because the ambient clock is not readable
+    // from the pattern body.
     const nowCell = wish<number>({ query: "#now" });
+    const nowCellValue = resultOf(nowCell.result);
 
     // Navigation State
     const startDate = new Cell("");
     computed(() => {
-      const nowMs = nowCell.result;
-      if (nowMs != null && startDate.get() === "") {
+      const nowMs = nowCellValue;
+      if (startDate.get() === "") {
         startDate.set(getWeekStart(getTodayDate(nowMs)));
       }
     });
@@ -392,8 +396,8 @@ const WeeklyCalendar = pattern<Input, Output>(
     const newEventTitle = new Writable<string>("");
     const newEventDate = new Writable<string>("");
     computed(() => {
-      const nowMs = nowCell.result;
-      if (nowMs != null && newEventDate.get() === "") {
+      const nowMs = nowCellValue;
+      if (newEventDate.get() === "") {
         newEventDate.set(getTodayDate(nowMs));
       }
     });
@@ -433,8 +437,8 @@ const WeeklyCalendar = pattern<Input, Output>(
       return s === "" ? [] : getWeekDates(s, 7);
     });
     const todayDate = computed(() => {
-      const nowMs = nowCell.result;
-      return nowMs != null ? getTodayDate(nowMs) : "";
+      const nowMs = nowCellValue;
+      return getTodayDate(nowMs);
     });
 
     // Navigation Actions (using action for internal logic)

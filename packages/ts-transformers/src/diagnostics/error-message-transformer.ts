@@ -42,6 +42,20 @@ export function createReactiveErrorTransformer(
       return clarification;
     }
 
+    const asyncResultProperty = message.match(
+      /^Property '(result|pending|error|partial)' does not exist on type 'Async(?:Stream)?Result<.*>'/,
+    );
+    if (asyncResultProperty) {
+      const clarification =
+        "Async built-ins return AsyncResult<T> or AsyncStreamResult<T> directly. Use " +
+        "resultOf(request) for usable data, isPending(request) and " +
+        "hasError(request) to branch on state, and partialResultOf(request) " +
+        "for intermediate output from generateTextStream() or streamData().";
+      return verbose
+        ? `${clarification}\n\nOriginal TypeScript error: ${message}`
+        : clarification;
+    }
+
     return null; // No transformation applies
   };
 }

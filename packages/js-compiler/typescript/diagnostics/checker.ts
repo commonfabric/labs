@@ -1,4 +1,6 @@
-import { type Diagnostic, type Program, type SourceFile } from "typescript";
+import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
+import ts, { type Diagnostic, type Program, type SourceFile } from "typescript";
+
 import {
   CompilerError,
   type DiagnosticMessageTransformer,
@@ -44,6 +46,166 @@ const KNOWN_EXPORTED_SYMBOLS = [
 // CT-1916). Authoring paths stay strict — there the author is present and
 // removing the stale directive is the right fix.
 const UNUSED_TS_EXPECT_ERROR = 2578;
+
+/** Proves that every reachable result-brand key belongs to the native API. */
+function hasOnlyNativeResultKeys(
+  type: ts.Type,
+  location: ts.Node,
+  checker: ts.TypeChecker,
+): boolean {
+  const seen = new Set<ts.Type>();
+  const keys = new Set<ts.Symbol>();
+  // Expanding generic arguments can produce a fresh type at every descent.
+  // An exhausted structural proof keeps the declaration diagnostic intact.
+  const maxDepth = 64;
+  const maxTypes = 128;
+  let complete = true;
+  const add = (candidate: ts.Symbol | undefined) => {
+    if (!candidate) return;
+    const symbol = candidate.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(candidate)
+      : candidate;
+    if (symbol.getName() === "CELL_RESULT_TYPE") keys.add(symbol);
+  };
+  const walk = (value: ts.Type, depth: number): void => {
+    if (!complete) return;
+    if (seen.has(value)) return;
+    if (depth >= maxDepth || seen.size >= maxTypes) {
+      complete = false;
+      return;
+    }
+    seen.add(value);
+    if (value.flags & ts.TypeFlags.UniqueESSymbol) {
+      add(value.getSymbol());
+      return;
+    }
+    add(value.aliasSymbol);
+    add(value.getSymbol());
+    if (
+      value.flags &
+      (ts.TypeFlags.Conditional | ts.TypeFlags.IndexedAccess |
+        ts.TypeFlags.Substitution | ts.TypeFlags.Index)
+    ) {
+      complete = false;
+      return;
+    }
+    if (value.flags & ts.TypeFlags.TypeParameter) {
+      const constraint = checker.getBaseConstraintOfType(value);
+      if (constraint) walk(constraint, depth + 1);
+      else complete = false;
+      return;
+    }
+    if (value.isUnionOrIntersection()) {
+      for (const member of value.types) walk(member, depth + 1);
+    }
+    if (!complete) return;
+    if (
+      !(value.flags &
+        (ts.TypeFlags.Object | ts.TypeFlags.Union | ts.TypeFlags.Intersection |
+          ts.TypeFlags.TypeParameter))
+    ) return;
+    for (const argument of value.aliasTypeArguments ?? []) {
+      walk(argument, depth + 1);
+    }
+    if (!complete) return;
+    if ((value as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) {
+      for (
+        const argument of checker.getTypeArguments(value as ts.TypeReference)
+      ) {
+        walk(argument, depth + 1);
+      }
+    }
+    if (!complete) return;
+    const properties = value.getProperties();
+    for (const property of properties) {
+      for (const declaration of property.declarations ?? []) {
+        const name = (declaration as ts.NamedDeclaration).name;
+        if (name && ts.isComputedPropertyName(name)) {
+          add(checker.getSymbolAtLocation(name.expression));
+          const keyType = checker.getTypeAtLocation(name.expression);
+          if (keyType.flags & ts.TypeFlags.UniqueESSymbol) {
+            add(keyType.getSymbol());
+          }
+        }
+      }
+    }
+    const symbols = [value.aliasSymbol, value.getSymbol()].filter(
+      (symbol): symbol is ts.Symbol => symbol !== undefined,
+    );
+    // Native type arguments and keys are inspected, but expanding native Cell
+    // methods would recursively instantiate fresh generic wrappers.
+    if (symbols.some(isCommonFabricSymbol)) return;
+    if ((value as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) {
+      complete = false;
+      return;
+    }
+    if (
+      symbols.some((symbol) =>
+        symbol.declarations?.some((declaration) =>
+          declaration.getSourceFile().isDeclarationFile
+        )
+      )
+    ) {
+      complete = false;
+      return;
+    }
+    for (const property of properties) {
+      if (!complete) return;
+      walk(checker.getTypeOfSymbolAtLocation(property, location), depth + 1);
+    }
+    if (!complete) return;
+    for (
+      const signature of [
+        ...value.getCallSignatures(),
+        ...value.getConstructSignatures(),
+      ]
+    ) {
+      if (!complete) return;
+      walk(signature.getReturnType(), depth + 1);
+      for (const parameter of signature.parameters) {
+        if (!complete) return;
+        walk(checker.getTypeOfSymbolAtLocation(parameter, location), depth + 1);
+      }
+      for (const parameter of signature.typeParameters ?? []) {
+        if (!complete) return;
+        const constraint = checker.getBaseConstraintOfType(parameter);
+        if (constraint) walk(constraint, depth + 1);
+      }
+    }
+    if (!complete) return;
+    for (const index of checker.getIndexInfosOfType(value)) {
+      walk(index.type, depth + 1);
+    }
+  };
+  walk(type, 0);
+  return complete && keys.size > 0 && [...keys].every(isCommonFabricSymbol);
+}
+
+/** The exported value whose inferred type a declaration diagnostic reports. */
+function declarationDiagnosticValue(
+  diagnostic: Diagnostic,
+  sourceFile: SourceFile,
+): ts.Node | undefined {
+  if (diagnostic.start === undefined) return undefined;
+  const start = diagnostic.start;
+  let location: ts.Node = sourceFile;
+  const visit = (node: ts.Node): void => {
+    if (node.pos <= start && start < node.end) {
+      location = node;
+      ts.forEachChild(node, visit);
+    }
+  };
+  visit(sourceFile);
+  while (location !== sourceFile) {
+    if (ts.isExportAssignment(location)) return location.expression;
+    if (ts.isVariableDeclaration(location)) return location.name;
+    if (
+      ts.isFunctionDeclaration(location) || ts.isClassDeclaration(location)
+    ) return location.name;
+    location = location.parent;
+  }
+  return undefined;
+}
 
 /** Diagnostic codes dropped when compiling stored source (see
  * `CheckerOptions.storedSource`). */
@@ -136,7 +298,16 @@ export class Checker {
         message.includes(`private name '${sym}'`) ||
         message.includes(`name '${sym}' from external module`)
       );
-      if (!isKnownSymbol) {
+      const nativeResultKey =
+        (diagnostic.code === 4025 || diagnostic.code === 4082) &&
+        message.includes("private name 'CELL_RESULT_TYPE'") &&
+        declarationDiagnosticValue(diagnostic, sourceFile);
+      const isNativeResultKey = nativeResultKey && hasOnlyNativeResultKeys(
+        this.#program.getTypeChecker().getTypeAtLocation(nativeResultKey),
+        nativeResultKey,
+        this.#program.getTypeChecker(),
+      );
+      if (!isKnownSymbol && !isNativeResultKey) {
         errors.push({ diagnostic, source: sourceFile.text });
       }
     }

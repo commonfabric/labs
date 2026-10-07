@@ -1,8 +1,18 @@
+import {
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
+
 import type { JSONSchema } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
+
 import { CompilerError } from "@commonfabric/js-compiler/errors";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
-import { type BuiltInCompileAndRunParams } from "commonfabric";
+import type {
+  BuiltInCompileAndRunParams,
+  CompileDiagnostic,
+} from "commonfabric";
 
 import type { CellScope } from "../builder/types.ts";
 import { type Cell } from "../cell.ts";
@@ -24,6 +34,33 @@ import type {
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
 import { resolvedCellScope } from "./scope-policy.ts";
+import { selectUnavailableInput } from "../data-unavailability.ts";
+
+/** Converts a compiler failure message into a terminal compilation marker. */
+function compileUnavailable(
+  message: string,
+): UnavailableVariant {
+  return unavailableError(message, "compile");
+}
+
+function markerIsPending(marker: UnavailableVariant): boolean {
+  return marker.reason === "pending" || marker.reason === "syncing";
+}
+
+function markerErrorMessage(
+  marker: UnavailableVariant,
+): string | undefined {
+  return marker.rawErrorMessage ?? undefined;
+}
+
+function compileRequestHash(
+  program: RuntimeProgram | undefined,
+  unavailable: UnavailableVariant | undefined,
+): string {
+  return unavailable === undefined
+    ? hashOf(program ?? { files: [], main: "" }).toString()
+    : hashOf({ unavailable }).toString();
+}
 
 /** Durable state of a compile request, including its instantiation outcome. */
 type CompileMemo = {
@@ -89,20 +126,9 @@ export function compileAndRun(
   let previousCallHash: string | undefined = undefined;
   let cellsInitialized = false;
   let pending: Cell<boolean>;
-  let result: Cell<string | undefined>;
+  let result: Cell<unknown>;
   let error: Cell<string | undefined>;
-  let errors: Cell<
-    | Array<
-      {
-        line: number;
-        column: number;
-        message: string;
-        type: string;
-        file?: string;
-      }
-    >
-    | undefined
-  >;
+  let errors: Cell<CompileDiagnostic[] | undefined>;
   let cellScope: CellScope | undefined;
   let internal: Cell<CompileMemo | undefined>;
   let reportedCreatedHash: string | undefined;
@@ -118,6 +144,13 @@ export function compileAndRun(
 
   return (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
+    const rawInputs = inputsCell.withTx(tx).getRaw();
+    const unavailableInput = selectUnavailableInput(rawInputs, {
+      runtime,
+      tx,
+      base: inputsCell,
+    });
+
     // TODO(seefeld): Ideally, this cell already has this schema, because we set
     // it on the node itself.
     // Detached from the input view once, here: the program is hashed, handed
@@ -147,7 +180,7 @@ export function compileAndRun(
       );
       pending.send(false);
 
-      result = ownedCell<string | undefined>(
+      result = ownedCell<unknown>(
         runtime,
         tx,
         parentCell,
@@ -174,18 +207,7 @@ export function compileAndRun(
         outputScope,
       );
 
-      errors = ownedCell<
-        | Array<
-          {
-            line: number;
-            column: number;
-            message: string;
-            type: string;
-            file?: string;
-          }
-        >
-        | undefined
-      >(
+      errors = ownedCell<CompileDiagnostic[] | undefined>(
         runtime,
         tx,
         parentCell,
@@ -237,6 +259,7 @@ export function compileAndRun(
           internal,
         },
         program,
+        unavailableInput,
         issuedRequests,
         announce,
         reportCreated,
@@ -248,60 +271,64 @@ export function compileAndRun(
     const errorWithLog = error.withTx(tx);
     const errorsWithLog = errors.withTx(tx);
 
-    const hash = hashOf(program ?? { files: [], main: "" }).toString();
+    // Concrete input values do not require recompilation, but availability
+    // transitions do. Include the controlling marker so an unavailable input
+    // can settle back into the same source program.
+    const hash = hashOf({
+      program: program ?? null,
+      unavailable: unavailableInput ?? null,
+    }).toString();
 
     // Return if the same request is being made again, either concurrently (same
     // as previousCallHash) or when rehydrated from storage (same as the
     // contents of the requestHash doc).
     if (hash === previousCallHash) return;
 
-    // Check if inputs are undefined/empty (e.g., during rehydration before cells load)
-    const hasValidInputs = program && program.main && program.files &&
-      program.files.length > 0;
-
-    // Special case: if inputs are invalid AND this is the hash for empty inputs,
-    // the user intentionally cleared them - proceed to clear outputs
-    const emptyInputsHash = hashOf({ files: [], main: "" }).toString();
-    const isIntentionallyEmpty = !hasValidInputs && hash === emptyInputsHash;
-
-    // If we have a previous valid result and inputs are currently invalid (likely rehydrating),
-    // don't clear the outputs - just wait for real inputs to load
-    // BUT if inputs are intentionally empty, we should clear
-    if (
-      !hasValidInputs && previousCallHash && previousCallHash !== hash &&
-      !isIntentionallyEmpty
-    ) {
-      // Don't update previousCallHash - we'll wait for valid inputs
-      return;
-    }
-
     previousCallHash = hash;
 
     // Abort any in-flight compilation before starting a new one
     abortController?.abort("New compilation started");
-    abortController = new AbortController();
+    abortController = undefined;
     requestId = crypto.randomUUID();
 
     runtime.runner.stop(result);
-    resultWithLog.set(undefined);
     errorWithLog.set(undefined);
     errorsWithLog.set(undefined);
 
-    // Undefined inputs => Undefined output, not pending
-    if (!hasValidInputs) {
+    if (unavailableInput !== undefined) {
+      resultWithLog.setRawUntyped(unavailableInput, true);
+      pendingWithLog.set(markerIsPending(unavailableInput));
+      errorWithLog.set(markerErrorMessage(unavailableInput));
+      return;
+    }
+
+    const hasValidInputs = program?.main && program.files &&
+      program.files.length > 0;
+    if (!hasValidInputs || program === undefined) {
+      resultWithLog.setRawUntyped(
+        unavailableError(
+          "Compilation requires a main entrypoint and files",
+          "invalidInput",
+        ),
+        true,
+      );
       pendingWithLog.set(false);
       return;
     }
 
     // Main file not found => Error, not pending
     if (!program.files.some((file) => file?.name === program.main)) {
-      errorWithLog.set(`"${program.main}" not found in files`);
+      const message = `"${program.main}" not found in files`;
+      resultWithLog.setRawUntyped(compileUnavailable(message), true);
+      errorWithLog.set(message);
       pendingWithLog.set(false);
       return;
     }
 
     // Now we're sure that we have a new file to compile
+    resultWithLog.setRawUntyped(UNAVAILABLE_PENDING, true);
     pendingWithLog.set(true);
+    abortController = new AbortController();
 
     // Capture requestId for this compilation run
     const thisRequestId = requestId;
@@ -309,40 +336,55 @@ export function compileAndRun(
     const compilePromise = runtime.patternManager
       .compileOrGetPattern(program, parentCell.space)
       .catch(
-        (err) => {
+        async (err) => {
           // Only process this error if the request hasn't been superseded
           if (requestId !== thisRequestId) return;
           if (abortController?.signal.aborted) return;
 
-          runtime.editWithRetry((asyncTx) => {
+          await runtime.editWithRetry((asyncTx) => {
+            if (requestId !== thisRequestId) return;
+            if (abortController?.signal.aborted) return;
+
             // Extract structured errors if this is a CompilerError
             if (err instanceof CompilerError) {
-              const structuredErrors = err.errors.map((e) => ({
-                line: e.line ?? 1,
-                column: e.column ?? 1,
-                message: e.message,
-                type: e.type,
-                file: e.file,
-              }));
+              const structuredErrors: CompileDiagnostic[] = err.errors.map(
+                (e) => ({
+                  line: e.line ?? 1,
+                  column: e.column ?? 1,
+                  message: e.message,
+                  type: e.type,
+                  file: e.file,
+                }),
+              );
               errors.withTx(asyncTx).set(structuredErrors);
+              result.withTx(asyncTx).setRawUntyped(
+                compileUnavailable(err.message),
+                true,
+              );
             } else {
-              error.withTx(asyncTx).set(
-                err.message + (err.stack ? "\n" + err.stack : ""),
+              const message = err instanceof Error
+                ? err.message + (err.stack ? "\n" + err.stack : "")
+                : String(err);
+              error.withTx(asyncTx).set(message);
+              result.withTx(asyncTx).setRawUntyped(
+                compileUnavailable(message),
+                true,
               );
             }
           });
         },
-      ).finally(() => {
+      ).finally(async () => {
         // Only update pending if this is still the current request
         if (requestId !== thisRequestId) return;
         // Always clear pending state, even if cancelled, to avoid stuck state
 
-        runtime.editWithRetry((asyncTx) => {
+        await runtime.editWithRetry((asyncTx) => {
+          if (requestId !== thisRequestId) return;
           pending.withTx(asyncTx).set(false);
         });
       });
 
-    compilePromise.then((pattern) => {
+    const work = compilePromise.then((pattern) => {
       // Only run the result if this is still the current request
       if (requestId !== thisRequestId) return;
       if (abortController?.signal.aborted) return;
@@ -364,7 +406,27 @@ export function compileAndRun(
       }
       // TODO(seefeld): Add capturing runtime errors.
     });
+    runtime.trackAsyncWork(work, parentCell);
   };
+}
+
+/** Direct-result module ref used by newly compiled graphs. */
+export function compileAndRunResult(
+  inputsCell: Cell<BuiltInCompileAndRunParams<any>>,
+  sendResult: (tx: IExtendedStorageTransaction, result: any) => void,
+  addCancel: (cancel: () => void) => void,
+  cause: any,
+  parentCell: Cell<any>,
+  runtime: Runtime,
+): Action {
+  return compileAndRun(
+    inputsCell,
+    (tx, state) => sendResult(tx, state.result),
+    addCancel,
+    cause,
+    parentCell,
+    runtime,
+  );
 }
 
 /** Output and memo cells addressed at the requesting node's scope. */
@@ -396,28 +458,28 @@ function compileAndRunServed(
   inputs: Cell<BuiltInCompileAndRunParams<any>>,
   parent: Cell<any>,
   cells: ServedCompileCells,
-  program: RuntimeProgram,
+  program: RuntimeProgram | undefined,
+  unavailableInput: UnavailableVariant | undefined,
   issuedRequests: Map<string, string>,
   announce: (tx: IExtendedStorageTransaction) => void,
   reportCreated: (hash: string) => void,
 ): void | Promise<never> {
   const { pending, result, error, errors, internal } = cells;
   const memo = internal.withTx(tx).get();
-  const hash = hashOf(program ?? { files: [], main: "" }).toString();
+  const hash = compileRequestHash(program, unavailableInput);
   const valid = !!(program?.main && program.files?.length);
   if (memo?.requestHash === hash && memo.phase === "resolved") {
     runtime.effectMemoObserver?.({ kind: "hit", id: `compileAndRun:${hash}` });
     const child = result.withTx(tx).get();
+    const succeeded = valid && error.withTx(tx).get() === undefined &&
+      errors.withTx(tx).get() === undefined;
     // The child body materializes its result after setup. Reading it here
     // rearms this derivation when that value arrives.
-    if (runtime.servingPosture && child !== undefined) {
+    if (runtime.servingPosture && succeeded && child !== undefined) {
       result.withTx(tx).key("isHidden").set(true);
     }
     if (
-      !runtime.servingPosture && valid &&
-      error.withTx(tx).get() === undefined &&
-      errors.withTx(tx).get() === undefined &&
-      child?.isHidden === true
+      !runtime.servingPosture && succeeded && child?.isHidden === true
     ) {
       reportCreated(hash);
     }
@@ -426,6 +488,16 @@ function compileAndRunServed(
   if (!runtime.servingPosture) return;
 
   const newRequest = memo?.requestHash !== hash;
+  if (unavailableInput !== undefined) {
+    runtime.runner.clearInTransaction(tx, result);
+    result.withTx(tx).setRawUntyped(unavailableInput, true);
+    error.withTx(tx).set(markerErrorMessage(unavailableInput));
+    errors.withTx(tx).set(undefined);
+    pending.withTx(tx).set(markerIsPending(unavailableInput));
+    internal.withTx(tx).set({ requestHash: hash, phase: "resolved" });
+    return;
+  }
+
   if (!valid) {
     const intentionallyEmpty = program?.main === "" &&
       program.files?.length === 0;
@@ -434,13 +506,23 @@ function compileAndRunServed(
     }
   }
 
-  const missingMain = valid &&
+  const missingMain = valid && program !== undefined &&
     !program.files.some((file) => file?.name === program.main);
-  if (!valid || missingMain) {
+  if (!valid || program === undefined || missingMain) {
     runtime.runner.clearInTransaction(tx, result);
-    error.withTx(tx).set(
-      missingMain ? `"${program.main}" not found in files` : undefined,
+    const message = missingMain
+      ? `"${program.main}" not found in files`
+      : undefined;
+    result.withTx(tx).setRawUntyped(
+      message === undefined
+        ? unavailableError(
+          "Compilation requires a main entrypoint and files",
+          "invalidInput",
+        )
+        : compileUnavailable(message),
+      true,
     );
+    error.withTx(tx).set(message);
     errors.withTx(tx).set(undefined);
     pending.withTx(tx).set(false);
     internal.withTx(tx).set({ requestHash: hash, phase: "resolved" });
@@ -461,6 +543,7 @@ function compileAndRunServed(
   if (compiled !== undefined) {
     // Child setup belongs to the graph run, whose transaction carries the
     // requesting instance and whose stop/start order owns the result cell.
+    runtime.runner.clearInTransaction(tx, result);
     const started = runtime.runner.runInTransaction(
       tx,
       compiled,
@@ -492,6 +575,7 @@ function compileAndRunServed(
   ) return;
 
   runtime.runner.clearInTransaction(tx, result);
+  result.withTx(tx).setRawUntyped(UNAVAILABLE_PENDING, true);
   error.withTx(tx).set(undefined);
   errors.withTx(tx).set(undefined);
   pending.withTx(tx).set(true);
@@ -551,8 +635,12 @@ function compileAndRunServed(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
                   .get(),
               );
+              const currentUnavailable = selectUnavailableInput(
+                inputs.withTx(settleTx).getRaw(),
+                { runtime, tx: settleTx, base: inputs },
+              );
               if (
-                hashOf(current ?? { files: [], main: "" }).toString() !== hash
+                compileRequestHash(current, currentUnavailable) !== hash
               ) {
                 return;
               }
@@ -561,7 +649,10 @@ function compileAndRunServed(
                 return;
               }
               pending.withTx(settleTx).set(false);
-              result.withTx(settleTx).set(undefined);
+              result.withTx(settleTx).setRawUntyped(
+                compileUnavailable(rejection.message),
+                true,
+              );
               error.withTx(settleTx).set(rejection.message);
               errors.withTx(settleTx).set(undefined);
               internal.withTx(settleTx).set({
@@ -621,8 +712,16 @@ async function performServedCompile(
     if (memo.phase === "resolved") return;
     // Completion labels include the current source projection as well as the
     // accepted request marker. Its value does not select the child program.
+    const rawCurrent = inputs.withTx(tx).getRaw();
+    const currentUnavailable = selectUnavailableInput(rawCurrent, {
+      runtime,
+      tx,
+      base: inputs,
+    });
     snapshotQueryResult(
-      inputs.asSchema<RuntimeProgram>(programSchema).withTx(tx).get(),
+      currentUnavailable === undefined
+        ? inputs.asSchema<RuntimeProgram>(programSchema).withTx(tx).get()
+        : rawCurrent,
     );
     if (compiled) {
       // The derivation reads this marker and performs child setup in its own
@@ -632,18 +731,27 @@ async function performServedCompile(
     }
     if (failed) {
       if (failure instanceof CompilerError) {
-        cells.errors.withTx(tx).set(failure.errors.map((error) => ({
+        const diagnostics = failure.errors.map((error) => ({
           line: error.line ?? 1,
           column: error.column ?? 1,
           message: error.message,
           type: error.type,
           file: error.file,
-        })));
+        }));
+        cells.errors.withTx(tx).set(diagnostics);
+        cells.result.withTx(tx).setRawUntyped(
+          compileUnavailable(failure.message),
+          true,
+        );
       } else {
         const message = failure instanceof Error
           ? failure.message + (failure.stack ? "\n" + failure.stack : "")
           : String(failure);
         cells.error.withTx(tx).set(message);
+        cells.result.withTx(tx).setRawUntyped(
+          compileUnavailable(message),
+          true,
+        );
       }
     }
     cells.pending.withTx(tx).set(false);

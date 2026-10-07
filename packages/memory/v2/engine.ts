@@ -1218,7 +1218,7 @@ export type ApplyCommitOptions = {
   /** Map of cell-db id -> attach alias for `sqlite` ops in this commit. The
    *  server attaches these BEFORE applyCommit (ATTACH can't run in a txn); the
    *  apply loop executes the SQL inside the commit's transaction against the
-   *  alias. (docs/specs/sqlite-builtin/plans/atomic-writes.md) */
+   *  alias. (docs/specs/sqlite-builtin/04-server-execution-and-transactions.md) */
   sqliteAttachments?: ReadonlyMap<string, string>;
 
   /** The commit's class (docs/specs/server-side-execution/protocol.md §1),

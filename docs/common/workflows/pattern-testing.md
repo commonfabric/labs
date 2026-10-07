@@ -536,12 +536,11 @@ handler, so it can read the clock's current value and write a fixed number:
 ```tsx
 // Shown inside a pattern body.
 const nowCell = wish<number>({ query: "#now/300" });
+const now = resultOf(nowCell.result);
 const glazes = Writable.of<{ name: string; bakedAt: number }[]>([]);
 const tray = DonutTray({ glazes });
 
 const action_seed_glazes = action(() => {
-  const now = nowCell.result;
-  if (now === undefined) return;
   glazes.set([{ name: "maple", bakedAt: now - 86_400_000 }]);
 });
 ```
@@ -550,6 +549,13 @@ Run that action as the first step, and assert the seed landed before anything
 depends on it — reading the seeded value back, rather than only its absence
 from a filtered view, so an unresolved wish fails the test instead of passing
 it for the wrong reason.
+
+`resultOf()` is a zero-node projection of the current clock channel, not a
+stored seed. If the channel is unavailable, the action parks before dispatch
+and resumes when its input becomes usable. After dispatch, later clock ticks
+do not rerun the action or replace the values it wrote into `glazes`. Passing a
+computed clock-derived array directly as writable state has different behavior:
+each recomputation replaces that array.
 
 ### Testing Initial State
 

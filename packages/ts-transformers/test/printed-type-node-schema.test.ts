@@ -2659,7 +2659,14 @@ export const rules = exchangeRules([neverRelease]);`,
         moduleIdentities: new Map([["/rules.ts", "sha256:rules"]]),
       });
       const [capture] = callSchemas(parseModule(output["/main.tsx"]!), "lift");
-      return (capture!.properties as Schema)[name];
+      const member = (capture!.properties as Schema)[name] as Schema;
+      const ref = member.$ref;
+      return typeof ref === "string" && ref.startsWith("#/$defs/")
+        ? {
+          ...(capture!.$defs as Schema)[ref.slice("#/$defs/".length)] as Schema,
+          ...member,
+        }
+        : member;
     }
 
     it("reads the policy of a value captured whole", async () => {
@@ -2851,7 +2858,7 @@ export default pattern(() => {
 
     it("reads a member naming a type the module does not import by its type", async () => {
       const output = await transformSource(
-        `import { computed, generateObject, pattern, UI } from "commonfabric";
+        `import { computed, generateObject, isPending, resultOf, pattern, UI } from "commonfabric";
 interface Item { content: string; }
 interface Sentiment { label: string; }
 export default pattern<{ items: Item[] }>(({ items }) => {
@@ -2865,8 +2872,8 @@ export default pattern<{ items: Item[] }>(({ items }) => {
         {analyses.map((entry, i) => (
           <div key={i}>
             {computed(() => {
-              const pending = entry.analysis.pending;
-              const label = entry.analysis.result?.label;
+              const pending = isPending(entry.analysis);
+              const label = resultOf(entry.analysis)?.label;
               return pending ? "…" : label;
             })}
           </div>
@@ -2891,13 +2898,12 @@ export default pattern<{ items: Item[] }>(({ items }) => {
       expect(element).toMatchObject({
         properties: {
           analysis: {
-            type: "object",
-            properties: {
-              pending: { type: "boolean" },
-              result: {
-                anyOf: [{ $ref: "#/$defs/Sentiment" }, { type: "undefined" }],
-              },
-            },
+            anyOf: expect.arrayContaining([
+              { $ref: "#/$defs/Sentiment" },
+              { $ref: "#/$defs/IsPending" },
+              { $ref: "#/$defs/IsSyncing" },
+              { $ref: "#/$defs/HasError" },
+            ]),
           },
         },
       });
@@ -2971,28 +2977,30 @@ export default pattern<Record<string, never>>(() => {
       // union unfolds, and the scoped cell is kept whole rather than taken
       // apart.
       const { input: capture } = await liftSchemas(
-        `import { computed, pattern, wish, Writable, type PerUser } from "commonfabric";
+        `import { computed, pattern, wish, resultOf, Writable, type PerUser } from "commonfabric";
 interface Note { title: string; }
 export default pattern<{ x: string }>(() => {
   const found = wish<{ note?: PerUser<Writable<Note>>; count: number }>({
     query: "#note",
     headless: true,
   });
-  return { title: computed(() => found.result?.note?.get()?.title) };
+  return { title: computed(() => resultOf(found.result)?.note?.get()?.title) };
 });`,
-        "found.result?.note",
+        "resultOf(found.result)?.note",
       );
 
       expect((capture as Schema).properties).toMatchObject({
         found: {
           properties: {
             result: {
-              properties: {
-                note: {
-                  $ref: "#/$defs/Note",
-                  asCell: [{ kind: "cell", scope: "user" }],
-                },
-              },
+              anyOf: expect.arrayContaining([expect.objectContaining({
+                properties: expect.objectContaining({
+                  note: {
+                    $ref: "#/$defs/Note",
+                    asCell: [{ kind: "cell", scope: "user" }],
+                  },
+                }),
+              })]),
             },
           },
         },
@@ -3034,7 +3042,7 @@ export default pattern<{
       // With empty tuples printable, the cell's value is printed expanded, and
       // keeps its items and default.
       const { input: capture } = await liftSchemas(
-        `import { Cell, computed, Default, pattern, wish } from "commonfabric";
+        `import { Cell, computed, Default, pattern, wish, resultOf } from "commonfabric";
 interface Entry { readonly profile: Cell<{ name: string }>; }
 type EntriesValue = Entry[] | Default<[]>;
 export default pattern<{ x: string }>(() => {
@@ -3044,29 +3052,31 @@ export default pattern<{ x: string }>(() => {
   });
   return {
     out: computed(() =>
-      found.result?.label + String(found.result?.entries.get().length)
+      resultOf(found.result)?.label + String(resultOf(found.result)?.entries.get().length)
     ),
   };
 });`,
-        "found.result?.entries",
+        "resultOf(found.result)?.entries",
       );
 
       expect((capture as Schema).properties).toMatchObject({
         found: {
           properties: {
             result: {
-              anyOf: [{
-                properties: {
-                  entries: {
-                    type: "array",
-                    items: { $ref: "#/$defs/Entry" },
-                    default: [],
-                    asCell: ["cell"],
-                  },
-                },
-              }, { type: "undefined" }],
+              anyOf: expect.arrayContaining([expect.objectContaining({
+                properties: expect.objectContaining({
+                  entries: { $ref: "#/$defs/EntriesValue", asCell: ["cell"] },
+                }),
+              })]),
             },
           },
+        },
+      });
+      expect((capture as Schema).$defs).toMatchObject({
+        EntriesValue: {
+          type: "array",
+          items: { $ref: "#/$defs/Entry" },
+          default: [],
         },
       });
     });
@@ -3183,11 +3193,10 @@ export default pattern<{
 
     it("holds a printed nullable scoped value's nullish alternatives inside its scope wrapper", async () => {
       const { input: capture } = await liftSchemas(
-        `import { pattern, wish, Writable, type PerUser } from "commonfabric";
+        `import { computed, pattern, Writable, type PerUser } from "commonfabric";
 interface Named { name: string; }
-export default pattern<{ x: string }>(() => {
-  const found = wish<Writable<PerUser<Named>>>({ query: "#named", headless: true });
-  const name = found.result?.get()?.name;
+export default pattern<{ found: { result?: Writable<PerUser<Named>> } }>(({ found }) => {
+  const name = computed(() => found.result?.get()?.name);
   return { name };
 });`,
         "found.result",
@@ -3205,6 +3214,106 @@ export default pattern<{ x: string }>(() => {
           },
         },
       });
+    });
+
+    for (
+      const [wrapper, scope] of [["PerUser", "user"], ["PerSession", "session"]]
+    ) {
+      it(`keeps native availability outside a printed ${scope}-scoped cell capability`, async () => {
+        const { input: capture } = await liftSchemas(
+          `import { computed, pattern, wish, resultOf, Writable, type ${wrapper} } from "commonfabric";
+interface Named { name: string; }
+export default pattern<{ x: string }>(() => {
+  const found = wish<Writable<${wrapper}<Named>>>({ query: "#named", headless: true });
+  const name = computed(() => resultOf(found.result)?.get()?.name);
+  return { name };
+});`,
+          "resultOf(found.result)",
+        );
+        const result =
+          ((capture as Schema).properties as Record<string, Schema>).found!;
+        const slot = (result.properties as Record<string, Schema>).result!;
+        expect(slot.scope).toBe(scope);
+        expect(slot.asCell).toBeUndefined();
+        expect(slot.anyOf).toContainEqual({
+          $ref: "#/$defs/Named",
+          asCell: ["readonly"],
+        });
+        for (const name of ["IsPending", "IsSyncing", "HasError"]) {
+          expect(slot.anyOf).toContainEqual({ $ref: `#/$defs/${name}` });
+          expect((capture as Schema).$defs).toHaveProperty(name, {
+            type: "FabricUnavailable",
+          });
+        }
+      });
+    }
+
+    for (const wrapper of [undefined, "PerUser", "PerSession"]) {
+      it(`keeps a readonly unavailable capture's writer and owner labels at ${wrapper ?? "space"} scope`, async () => {
+        const owned = "Owned<Named, typeof setName>";
+        const success = `Writable<${wrapper ? `${wrapper}<${owned}>` : owned}>`;
+        const { input: capture } = await liftSchemas(
+          `import { Cfc, computed, CurrentPrincipal, handler, hasError, pattern, PerUser, PerSession, RepresentsCurrentUser, resultOf, wish, Writable, WriteAuthorizedBy } from "commonfabric";
+interface Named { name: string; }
+type Owned<T, B> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, B>, { ownerPrincipal: CurrentPrincipal }>>;
+export default pattern(() => {
+  const setName = handler<string, { doc: Writable<Named> }>((name, { doc }) => doc.set({ name }));
+  const found = wish<${success}>({ query: "#name", headless: true });
+  const usable = resultOf(found.result);
+  const name = computed(() => hasError(found.result) ? found.result.errorMessage : usable.get().name);
+  return { name, setName };
+});`,
+          "hasError",
+        );
+        const found = ((capture as Schema).properties as Record<string, Schema>)
+          .found!;
+        const slot = (found.properties as Record<string, Schema>).result!;
+        const successful = (slot.anyOf as Schema[]).find((arm) => arm.asCell)!;
+        expect(successful.asCell).toEqual(["readonly"]);
+        expect(successful.ifc).toMatchObject({
+          writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+          ownerPrincipal: { __ctCurrentPrincipal: true },
+          addIntegrity: [{
+            kind: "represents-principal",
+            subject: { __ctCurrentPrincipal: true },
+          }],
+        });
+        for (
+          const marker of (slot.anyOf as Schema[]).filter((arm) => !arm.asCell)
+        ) {
+          expect(marker.ifc).toBeUndefined();
+          expect(marker.scope).toBeUndefined();
+        }
+      });
+    }
+
+    it("keeps unavailable states outside a captured stream capability", async () => {
+      const output = await transformSource(
+        `
+import { action, pattern, resultOf, Stream, wish } from "commonfabric";
+export default pattern(() => {
+  const request = wish<Stream<{ name: string }>>({ query: "#channel" });
+  const usable = resultOf(request.result);
+  return { send: action(() => usable.send({ name: "hello" })) };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const schemas = callSchemas(root, "handler");
+      const capture = schemas.find((schema) =>
+        (schema.properties as Schema | undefined)?.usable
+      );
+      expect(capture).toBeDefined();
+      const slot = (capture!.properties as Record<string, Schema>).usable!;
+      const success = (slot.anyOf as Schema[]).find((arm) => arm.asCell)!;
+      expect(success.asCell).toEqual(["stream"]);
+      expect(success.properties).toEqual({ name: { type: "string" } });
+      for (const name of ["IsPending", "IsSyncing", "HasError"]) {
+        expect(slot.anyOf).toContainEqual({ $ref: `#/$defs/${name}` });
+        expect((capture as Schema).$defs).toHaveProperty(name, {
+          type: "FabricUnavailable",
+        });
+      }
     });
 
     it("refuses a type argument that holds a piece of a print", async () => {

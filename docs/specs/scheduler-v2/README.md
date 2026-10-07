@@ -689,7 +689,8 @@ what makes it safe to publish before the outcome exists.
 
 Per pass, for each lane's head event:
 
-1. **Preflight.** Compute the handler's read closure in a read-only,
+1. **Preflight.** Presync handler-only input documents, then compute the
+   handler's read closure in a read-only,
    commit-as-no-op transaction (CFC-inert, as today): declared writable-input
    links when present, else the `$event`-scoped schema closure — the one
    place a deep schema read survives in v2. **Default is
@@ -724,8 +725,27 @@ Per pass, for each lane's head event:
    that was already in flight at the preflight snapshot re-parks; a generation
    first kicked by that same preflight is history-suppressed, avoiding a
    self-created park livelock.
-3. **Dispatch** once the closure is clean: presync handler inputs
-   (`presyncInputs`, unchanged), run the handler in an immediate transaction
+3. **Availability gate.** A plain captured value which currently carries a
+   transient `FabricUnavailable` reason (`pending` or `syncing`) parks the same
+   FIFO head on a one-shot watcher over its preflight reads. A change wakes and
+   rechecks the original event; it is never reconstructed or reordered. This
+   input park is quiescent for `idle()` so a fetch or generation producer may
+   itself await idle before publishing the wakeup. It is deliberately distinct
+   from the replica-load park above, which must settle before at-most-once
+   dispatch.
+
+   Terminal errors, including `errorKind: "schemaMismatch"`, do not park.
+   Argument validation suppresses the invalid handler call and records a
+   terminal handler-not-run disposition. A client-owned dispatch aborts and
+   settles with a visible `EventHandlerNotRunError`; a served dispatch withdraws
+   its mark and effects and reports a dropped-event failure. An events-down
+   client echo seals only its empty speculative transaction, leaving the
+   authoritative failure to the server. `$event` is excluded because an
+   immutable bad payload cannot become valid while queued; `Writable<T>` and
+   other Cell capabilities are excluded because the handle itself is usable. Exact reason
+   and queue depth are included in opt-in preflight telemetry.
+4. **Dispatch** once the closure and availability gates are clear: run the
+   handler in an immediate transaction
    stamped with the handler's id, commit optimistically (changes propagate
    through the one channel), retry a stale-basis rejection by re-queueing at
    the lane head (backoff-parked via `notBefore`), then run the internal
@@ -1104,9 +1124,10 @@ the spacing between the re-run and the local writer it raced.
 At pass end, if no work is runnable now but some `invalid ∧ live` node (or
 parked head event) has a future `eligibleAt`, set a single timer for the
 minimum. `idle()` resolves when: no run in flight, no tracked background task,
-no tick queued, no runnable work now, and no parked event — i.e.
-exactly v1's contract with the special cases collapsed into the gate
-primitive. A background task is work the runtime has undertaken off the graph
+no tick queued, no runnable work now, and no replica-load-parked event.
+Availability-input parks are quiescent for `idle()` as described in §7.5, so
+their producer can await idle before publishing a usable input. A background
+task is work the runtime has undertaken off the graph
 and whose result the graph is waiting on: a piece being started so a queued
 event can be delivered, or a system pattern being fetched so a surface a
 builtin has already emitted can be filled in. Work the graph does not depend

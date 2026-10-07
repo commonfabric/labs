@@ -21,12 +21,20 @@
  * SqliteDb handle
  */
 import {
+  type AsyncResult,
   computed,
   Default,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   type SqliteDb,
+  type SqliteQueryResult,
   UI,
   type VNode,
 } from "commonfabric";
@@ -68,6 +76,8 @@ export interface LedgerMonthTransactionsOutput {
 
   rows: LedgerTransaction[];
   rowCount: number;
+
+  /** Whether the rows are pending or awaiting replica synchronization. */
   pending: boolean;
 
   /** Why the read failed, empty while it has not. */
@@ -105,51 +115,48 @@ const rowsSql = (): string =>
     "LIMIT 500",
   ].join("\n");
 
-/**
- * What a query reports about a failure, empty when it has not failed.
- *
- * The same narrowing the sqlite builtin applies before it writes one, so a
- * value that reaches here already a message passes through unchanged.
- */
-const errorText = (error: unknown): string =>
-  error === undefined || error === null
-    ? ""
-    : error instanceof Error
-    ? error.message
-    : String(error);
-
 /** `amount` as a signed figure in `code`, to the cent. */
 const money = (amount: number, code: string): string =>
   `${(amount || 0).toFixed(2)} ${code || "USD"}`;
 
-export const LedgerMonthTransactions = pattern<
-  LedgerMonthTransactionsInput,
+/** Query results displayed by the transaction list. */
+export interface LedgerMonthTransactionsPresentationInput {
+  monthRead: AsyncResult<SqliteQueryResult<{ month: string }>>;
+  rowsRead: AsyncResult<SqliteQueryResult<LedgerTransaction>>;
+}
+
+/** Presents transactions, reserving the empty state for a completed read. */
+export const LedgerMonthTransactionsPresentation = pattern<
+  LedgerMonthTransactionsPresentationInput,
   LedgerMonthTransactionsOutput
->(({ bank, month }) => {
-  // The param is a value READ out of `month`, not `month` itself. A query
-  // binds the reference it is handed and resolves it without the declared
-  // default, so a month a caller forwarded and nobody supplied reaches the
-  // query as `undefined`, and an undefined param fails the whole read rather
-  // than resolving to the month the SQL above answers an empty string with.
-  const monthParam = computed(() => month);
+>(({ monthRead, rowsRead }) => {
+  const observedMonthRead = observeAvailability(monthRead);
+  const observedRowsRead = observeAvailability(rowsRead);
+  const monthValue = resultOf(observedMonthRead);
+  const rowsValue = resultOf(observedRowsRead);
 
-  const monthRead = bank.query<{ month: string }>(monthSql(), {
-    params: [monthParam],
-    scope: "session",
-  });
-  const rowsRead = bank.query<LedgerTransaction>(rowsSql(), {
-    params: [monthParam],
-    scope: "session",
-  });
-
-  const resolvedMonth = computed(() => monthRead.result?.[0]?.month ?? "");
-  const rows = computed(() => rowsRead.result ?? []);
-  const rowCount = computed(() => (rowsRead.result ?? []).length);
-  const pending = computed(() => rowsRead.pending === true);
-  const errorMessage = computed(() => errorText(rowsRead.error));
-  const hasError = computed(() => errorMessage !== "");
+  const resolvedMonth = computed(() =>
+    isPending(observedMonthRead) || hasError(observedMonthRead) ||
+      isSyncing(observedMonthRead) || hasSchemaMismatch(observedMonthRead)
+      ? ""
+      : monthValue.rows[0]?.month ?? ""
+  );
+  const rows = computed(() =>
+    isPending(observedRowsRead) || hasError(observedRowsRead) ||
+      isSyncing(observedRowsRead) || hasSchemaMismatch(observedRowsRead)
+      ? []
+      : rowsValue.rows
+  );
+  const rowCount = computed(() => rows.length);
+  const pending = computed(() =>
+    isPending(observedRowsRead) || isSyncing(observedRowsRead)
+  );
+  const errorMessage = computed(() =>
+    hasError(observedRowsRead) ? observedRowsRead.errorMessage : ""
+  );
+  const hasQueryError = computed(() => errorMessage !== "");
   const isEmpty = computed(() =>
-    !pending && !hasError && (rowsRead.result ?? []).length === 0
+    !pending && !hasQueryError && rows.length === 0
   );
 
   const listRows = rows.map((row: LedgerTransaction) => (
@@ -178,7 +185,7 @@ export const LedgerMonthTransactions = pattern<
         </cf-hstack>
 
         {ifElse(
-          hasError,
+          hasQueryError,
           <cf-alert status="error">{errorMessage}</cf-alert>,
           null,
         )}
@@ -200,6 +207,28 @@ export const LedgerMonthTransactions = pattern<
     pending,
     errorMessage,
   };
+});
+
+export const LedgerMonthTransactions = pattern<
+  LedgerMonthTransactionsInput,
+  LedgerMonthTransactionsOutput
+>(({ bank, month }) => {
+  // The param is a value READ out of `month`, not `month` itself. A query
+  // binds the reference it is handed and resolves it without the declared
+  // default, so a month a caller forwarded and nobody supplied reaches the
+  // query as `undefined`, and an undefined param fails the whole read rather
+  // than resolving to the month the SQL above answers an empty string with.
+  const monthParam = computed(() => month);
+
+  const monthRead = bank.query<{ month: string }>(monthSql(), {
+    params: [monthParam],
+    scope: "session",
+  });
+  const rowsRead = bank.query<LedgerTransaction>(rowsSql(), {
+    params: [monthParam],
+    scope: "session",
+  });
+  return LedgerMonthTransactionsPresentation({ monthRead, rowsRead });
 });
 
 export default LedgerMonthTransactions;

@@ -1,0 +1,92 @@
+{
+  "argumentSchema": {
+    "asCell": [
+      "opaque"
+    ]
+  },
+  "pattern": "examples/reactive-now.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "charCount": {
+        "description": "Length of `typed`, derived — updates as the keystroke write propagates.",
+        "type": "number"
+      },
+      "echo": {
+        "description": "`typed` upper-cased, derived — a second observer of the same cell flip.",
+        "type": "string"
+      },
+      "lastTapAt": {
+        "description": "Coarse time the last tap was delivered (\"—\" before the first).",
+        "type": "string"
+      },
+      "loadedAt": {
+        "description": "The one-shot load time, \"HH:MM:SS\"; unavailable before #now resolves.",
+        "tags": [
+          "now"
+        ],
+        "type": "string"
+      },
+      "now": {
+        "description": "The ticking current time, \"HH:MM:SS\"; unavailable while loading.",
+        "type": "string"
+      },
+      "sinceLoad": {
+        "description": "Whole seconds since load, e.g. \"12s ago\"; unavailable while loading.",
+        "type": "string"
+      },
+      "tap": {
+        "additionalProperties": false,
+        "asCell": [
+          "stream"
+        ],
+        "description": "The tap event stream (also driven by the button).",
+        "properties": {},
+        "type": "object"
+      },
+      "taps": {
+        "description": "How many times the tap handler has actually been delivered.",
+        "type": "number"
+      },
+      "type": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Test-only stream to set the text box (the browser uses the `$value` bind).",
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "typed": {
+        "description": "The current text of the bound `$value` box.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "loadedAt",
+      "now",
+      "sinceLoad",
+      "taps",
+      "lastTapAt",
+      "tap",
+      "typed",
+      "charCount",
+      "echo",
+      "type",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

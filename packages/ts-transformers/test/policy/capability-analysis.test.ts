@@ -2851,6 +2851,30 @@ Deno.test(
 );
 
 Deno.test(
+  "Capability analysis treats availability guard operands as identity-only",
+  () => {
+    const { program, sourceFile } = createProgramWithFiles({
+      "/test.ts": `
+        import { hasError as failed } from "commonfabric";
+
+        const fn = (input: { request: { name: string }[] }) =>
+          failed(input.request);
+      `,
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+    });
+    const summary = analyzeFunctionCapabilities(
+      findArrowByVariableName(sourceFile, "fn"),
+      { checker: program.getTypeChecker() },
+    );
+    const input = getPaths(summary, "input");
+
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths.length, 0);
+    assert(input.identityPaths.includes("request"));
+  },
+);
+
+Deno.test(
   "Capability analysis treats .equals() receiver and argument as identity-only",
   () => {
     const fn = parseFirstCallback(

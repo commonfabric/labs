@@ -83,10 +83,9 @@ export class ModuleRegistry {
   /**
    * The module registered under `ref`.
    *
-   * A `defaultScope` is applied to a COPY: the registered module is shared by
-   * every node that names the ref, while a scope belongs to the one call site
-   * that declared it (`.asScope("user")`, or the `PerUser<>` annotation the
-   * transformer lowers to it).
+   * A default scope, call-site schema, or availability policy is applied to a
+   * copy: the registered module is shared by every node that names the ref,
+   * while these bindings belong to the individual call site.
    *
    * The copy is named and recorded through {@link recordRegisteredModule} like
    * the module it copies, so it keeps the `{ kind: "builtin", builtinId }`
@@ -94,12 +93,28 @@ export class ModuleRegistry {
    * {@link registeredBuiltinRef}. A copy made any other way is not on record,
    * and writes unattributed.
    */
-  getModule(ref: string, defaultScope?: CellScope): Module {
+  getModule(
+    ref: string,
+    defaultScope?: CellScope,
+    overrides?: Pick<
+      Module,
+      "argumentSchema" | "resultSchema" | "unavailableInputPolicy"
+    >,
+  ): Module {
     if (typeof ref !== "string") throw new Error(`Unknown module ref: ${ref}`);
     const module = this.#moduleMap.get(ref);
     if (!module) throw new Error(`Unknown module ref: ${ref}`);
-    if (defaultScope === undefined) return module;
-    const scoped: Module = { ...module, defaultScope };
+    if (defaultScope === undefined && overrides === undefined) return module;
+    const scoped: Module = {
+      ...module,
+      ...(defaultScope !== undefined && { defaultScope }),
+      ...(overrides?.argumentSchema !== undefined &&
+        { argumentSchema: overrides.argumentSchema }),
+      ...(overrides?.resultSchema !== undefined &&
+        { resultSchema: overrides.resultSchema }),
+      ...(overrides?.unavailableInputPolicy !== undefined &&
+        { unavailableInputPolicy: overrides.unavailableInputPolicy }),
+    };
     recordRegisteredModule(scoped, ref);
     return scoped;
   }

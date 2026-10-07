@@ -124,8 +124,16 @@ async function runRetryScenario(
       id: "of:forced-reconciliation",
       scope: "space",
     }];
-    storageManager.pendingLoadGeneration = () => 1;
-    storageManager.loadsSettled = () => {
+    const isForcedReconciliation = (key: string) =>
+      key.endsWith("/space/of:forced-reconciliation");
+    storageManager.pendingLoadGeneration = (key) =>
+      isForcedReconciliation(key) ? 1 : originalPendingLoadGeneration(key);
+    storageManager.loadsSettled = (keys) => {
+      const realKeys = keys.filter((key) => !isForcedReconciliation(key));
+      const realLoadsSettled = realKeys.length === 0
+        ? Promise.resolve()
+        : originalLoadsSettled(realKeys);
+      if (!keys.some(isForcedReconciliation)) return realLoadsSettled;
       reconciliationCalls++;
       if (
         reconciliationCalls === 1 && identityMode === "replace-session"
@@ -135,7 +143,7 @@ async function runRetryScenario(
           sessionId: `replacement-${crypto.randomUUID()}`,
         };
       }
-      return Promise.resolve();
+      return realLoadsSettled;
     };
     provider.presentCount = () => reconciliationCalls === 1 ? 1 : 0;
     replica.enqueueEventAppend = (append) => {

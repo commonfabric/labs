@@ -1,8 +1,10 @@
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import {
   FabricInstance,
   FabricPrimitive,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { isStreamValue } from "./builder/types.ts";
@@ -451,28 +453,34 @@ function createViewProxy<T>(
     );
   }
 
-  // `FabricPrimitive`s (byte sequences, temporal values, hashes, ...) are
-  // immutable leaves that behave like primitives -- there is no reactive
-  // substructure to resolve and they are already frozen. Hand back the value
-  // directly, exactly as for JS primitives above; wrapping one in a live proxy
-  // serves no purpose and would leak that proxy into any consumer that
-  // deep-clones or freezes the surrounding value (e.g. schema interning).
-  if (!isObjectOrArray(value) || value instanceof FabricPrimitive) {
+  // `FabricPrimitive`s (byte sequences, temporal values, hashes, ...) and the
+  // runtime-owned FabricUnavailable control value are immutable leaves -- there
+  // is no reactive substructure to resolve and they are already frozen. Hand
+  // back the value directly, exactly as for JS primitives above; wrapping one
+  // in a live proxy serves no purpose and would erase FabricUnavailable's type
+  // identity or leak the proxy into a consumer which deep-clones or freezes the
+  // surrounding value (e.g. schema interning).
+  if (
+    isUnavailable(value) ||
+    !isObjectOrArray(value) ||
+    value instanceof FabricPrimitive
+  ) {
     // The SHAPE_READ above tracks only the container's shape, but a
     // FabricPrimitive is an atomic VALUE the consumer materializes here (handed
     // back directly, like a JS primitive), not a container whose shape it
     // inspects. Register a recursive value read so an in-place change to the
     // primitive (e.g. a FabricBytes updated to different bytes) re-triggers
     // consumers — a nonRecursive read is compared shape-only and would miss it.
-    if (value instanceof FabricPrimitive) {
+    if (value instanceof FabricPrimitive || isUnavailable(value)) {
       viewTx.readValueOrThrow(link);
     }
     return remember(value);
   }
 
-  // A `FabricInstance` is _not_ exempted here the way a `FabricPrimitive` is
-  // above, so one gets wrapped in a proxy -- and that has a consequence outside
-  // this file which is easy to miss from here.
+  // A general `FabricInstance` is _not_ exempted here the way a
+  // `FabricPrimitive` and FabricUnavailable are above, so one gets wrapped in a
+  // proxy -- and that has a consequence outside this file which is easy to
+  // miss from here.
   //
   // The proxy target is an empty stub and there is no `getPrototypeOf` trap, so
   // a proxied instance's prototype is `Object.prototype` and
@@ -1082,7 +1090,12 @@ export function snapshotQueryResult<T>(value: T): T {
     // and the proxy erases the prototype, so a proxied `FabricInstance` still
     // reaches the rebuild below and snapshots as `{}`. The fix is the one the
     // marker further down this file names.
-    if (!isWalkableObjectOrArray(current)) return current;
+    if (
+      isUnavailable(current) ||
+      !isWalkableObjectOrArray(current)
+    ) {
+      return current;
+    }
     const existing = seen.get(current);
     if (existing !== undefined) return existing;
     if (Array.isArray(current)) {

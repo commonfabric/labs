@@ -18,7 +18,7 @@ describe("wish state schema", () => {
     const properties = stateProperties(wishStateSchemaForResult(handle));
     expect(properties.candidates).toEqual({ type: "array", items: handle });
     expect(properties.result).toEqual({
-      anyOf: [{ type: "undefined" }, handle],
+      anyOf: [{ type: "undefined" }, { type: "FabricUnavailable" }, handle],
     });
   });
 
@@ -26,7 +26,7 @@ describe("wish state schema", () => {
     const properties = stateProperties(wishStateSchemaForResult(false));
     expect(properties.candidates).toEqual({ type: "array", items: false });
     expect(properties.result).toEqual({
-      anyOf: [{ type: "undefined" }, false],
+      anyOf: [{ type: "undefined" }, { type: "FabricUnavailable" }, false],
     });
   });
 
@@ -37,7 +37,11 @@ describe("wish state schema", () => {
       items: { asCell: ["cell"] },
     });
     expect(properties.result).toEqual({
-      anyOf: [{ type: "undefined" }, { asCell: ["cell"] }],
+      anyOf: [
+        { type: "undefined" },
+        { type: "FabricUnavailable" },
+        { asCell: ["cell"] },
+      ],
     });
   });
 
@@ -69,7 +73,7 @@ describe("wish state schema", () => {
     const dense = wishStateSchemaForResult(requested([undefined]));
 
     expect(sparse).not.toBe(dense);
-    const [, resultSchema] = (stateProperties(sparse).result as {
+    const [, , resultSchema] = (stateProperties(sparse).result as {
       anyOf: { default: unknown[] }[];
     }).anyOf;
     expect(resultSchema.default.length).toBe(1);

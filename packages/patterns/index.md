@@ -143,6 +143,18 @@ System patterns: `system/` — live, load-bearing product patterns (home,
 default-app, suggestions). They run the product but are of mixed idiom vintage;
 not a style reference.
 
+`system/summary-index.tsx` propagates unavailable mentionable discovery through
+its entries and search results. `system/space-overview.tsx` and
+`cheeseboard.tsx` propagate unavailable dialog and fetch results through their
+derived views. Their exported presentation patterns accept native results
+independently of the provider, and their availability tests exercise waiting,
+failure, empty data, and recovery through those production views.
+
+`system/journal.tsx` reports a current journal or clock failure even while the
+other input is pending, beside its retained complete entries. The weekly-rollup
+view in `notes/daily-journal.tsx` shows terminal provider errors as alerts and
+clears them on recovery, independently of the successful rollup's content.
+
 ## fixture
 
 Every fixture pattern source carries the fixture marker, so the file says so
@@ -229,7 +241,8 @@ interface AnnotationOutput {
 
 ```ts
 // Find all annotations in the space
-const annotations = wish<AnnotationPiece[]>({ query: "#annotation" }).result;
+const annotationWish = wish<AnnotationPiece[]>({ query: "#annotation" });
+const annotations = resultOf(annotationWish.result);
 
 // Create an annotation pointing at a specific piece
 const ann = Annotation({
@@ -391,10 +404,12 @@ interface AgentOutput {
 
 ```ts
 // Find all agents in the space
-const agents = wish<AgentPiece[]>({ query: "#agent" }).result;
+const agentWish = wish<AgentPiece[]>({ query: "#agent" });
+const agents = resultOf(agentWish.result);
 
 // Bootstrap: agent finds its own piece
-const self = wish<AgentPiece>({ query: "Wisher" }).result;
+const selfWish = wish<AgentPiece>({ query: "Wisher" });
+const self = resultOf(selfWish.result);
 const directive = self.directive; // read directive
 self.markRunning.send({}); // mark as running
 // ... do work ...
@@ -1278,6 +1293,10 @@ type Output = {
 Upload images and get AI-powered analysis and descriptions. Supports multiple
 images with customizable prompts.
 
+`pending` stays true while the analysis request is pending or syncing. A
+terminal error clears the response and ends the waiting indicator; a usable
+response, including an empty string, also ends it.
+
 **Keywords:** vision, image, generateText, cf-image-input
 
 ### Input Schema
@@ -1327,9 +1346,14 @@ capability-gate, timing, delivery-shaping, token-bucket, input
 
 ## `examples/profile-aware-writer.tsx`
 
-Example pattern demonstrating how to use the `#profile` wish to personalize LLM
-output. Fetches the user's profile summary and injects it into the system prompt
-for personalized text generation.
+Example pattern demonstrating how to use the `#learnedSummary` wish to
+personalize LLM output. Fetches the user's profile summary and injects it into
+the system prompt for personalized text generation.
+
+The result exposes `availability`, `error`, and `errorKind`. A terminal failure
+has availability `"error"`, including schema mismatch, with its canonical error
+kind and message. Synchronization displays a waiting status rather than an
+alert.
 
 **Keywords:** profile, wish, generateText, llm, personalization
 
@@ -1346,7 +1370,10 @@ type Input = {
 ```ts
 type Output = {
   topic: Writable<string>;
-  response: string | undefined;
+  response: string;
+  availability: string;
+  error: string;
+  errorKind: UnavailableErrorKind | undefined;
 };
 ```
 
@@ -1505,9 +1532,13 @@ type SummaryOutput = {
 
 ## `suggestable/checklist.tsx`
 
-Generates a checklist of actionable steps from a topic and context. The topic is
-what asks for the steps: with none given the pattern holds the request back, so
-`pending` stays `false` and `items` stays empty until a caller names a subject.
+Generates a checklist of actionable steps from a topic and context. Terminal
+generation failures expose their message and render an alert rather than a
+successful empty list. The topic is what asks for the steps: with none given the
+pattern holds the request back, so `pending` stays `false` and `items` stays
+empty until a caller names a subject. An active request keeps `pending` true
+while pending or syncing. A terminal error clears the items and ends the waiting
+indicator, as does a usable checklist, including one with no steps.
 
 **Keywords:** checklist, generateObject, suggestion-fuel
 
@@ -1601,6 +1632,10 @@ what asks for the diagram: with none given the pattern holds the request back,
 so `pending` stays `false` and `diagram` stays empty until a caller names a
 subject.
 
+With a topic, `pending` covers both generation and synchronization.
+Synchronization is displayed as a non-error status; terminal failures expose
+availability `"error"` with the producer's canonical `errorKind` and message.
+
 **Keywords:** diagram, SVG, generateText, suggestion-fuel, cf-svg
 
 ### Input Schema
@@ -1619,6 +1654,9 @@ type SvgDiagramOutput = {
   topic: string;
   diagram: string;
   pending: boolean;
+  availability: string;
+  error: string;
+  errorKind: UnavailableErrorKind | undefined;
 };
 ```
 
@@ -1859,6 +1897,11 @@ row's own data while the ssn column carries a static "pii" label. The same rows
 flow as a diagnosis projection under a declared ceiling but are REFUSED as an
 ssn projection (the per-column pii label exceeds the ceiling) — fail-closed
 composition of both label sources.
+
+The diagnosis list propagates the query's native unavailable state during
+refresh or failure; an empty list means a successful query returned no rows. Its
+production presentation is tested through pending, syncing, failure, empty
+success, and recovery, alongside the demo's diagnosis/SSN privacy ceiling.
 
 **Keywords:** cfc, sqlite, per-row, per-column, ifc, pii, label, composition,
 ceiling, maxConfidentiality, fail-closed, records

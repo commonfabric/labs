@@ -238,6 +238,32 @@ export const ACCEPTED_STATE_DROPS: readonly AcceptedStateDrop[] = [
       "vintage's capture user derives as not-joined under profile comparison.",
     record: "docs/history/lunch-poll-identity-break.md",
   },
+  {
+    // The option card receives `isAdmin` from the identity-derived root. The
+    // name-keyed vintage's capture user no longer qualifies as the host, so
+    // its generated-art child is disabled and the card's view of that child's
+    // old per-user fetch result retires with the same identity decision.
+    pattern: "lunch-poll/poll-option-card.tsx",
+    paths: ["artSyncState"],
+    capturedThrough: "2026-07-30T21-32-46.548Z",
+    reason: "Lunch-poll identity moved from display names to profile cells. " +
+      "The name-keyed vintage's capture user is no longer the host, so the " +
+      "option card no longer publishes the old host-only generated-art state.",
+    record: "docs/history/lunch-poll-identity-break.md",
+  },
+  {
+    // Same downstream edge as the option card above. These fields describe a
+    // per-user fetch owned by the old name-keyed host; they are not the shared
+    // option image, which remains compared without an exemption.
+    pattern: "lunch-poll/generated-art.tsx",
+    paths: ["fetchState", "imageDataUrl"],
+    capturedThrough: "2026-07-30T21-32-46.548Z",
+    reason: "Lunch-poll identity moved from display names to profile cells. " +
+      "The name-keyed vintage's capture user is no longer the host, so its " +
+      "old per-user generated-art fetch view is no longer published; the " +
+      "shared option image remains gated separately.",
+    record: "docs/history/lunch-poll-identity-break.md",
+  },
 ];
 
 /** One `(pattern, path)` drop, for reporting which entries were needed. */

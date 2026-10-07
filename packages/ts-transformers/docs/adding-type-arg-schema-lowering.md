@@ -80,17 +80,18 @@ To lower `myBuiltin<Row>(args)` into
   `schema-injection.ts` (the `createToSchemaCall` definition and its call
   sites). The runtime stub that throws when the transformer didn't run is in
   [`packages/runner/src/builder/factory.ts`](../../runner/src/builder/factory.ts).
-- **`generateObject` / `generate-object`** — injects a _result_ schema from a
-  type argument; the closest analog to "result row" lowering. See the
+- **`generateObject` / `generateObjectStream` / `generate-object`** — both
+  public forms share the dedicated call kind which injects a _result_ schema
+  from a type argument; the closest analog to "result row" lowering. See the
   function-first argument-order handling
   (`[function, inputSchema, resultSchema]`) in `schema-injection.ts`.
 - **`lift` / `lift-applied`** — input + result schema injection from two type
   arguments.
-- **`sqliteQuery<Row>`** — the canonical _nested-result_ case: the branch
+- **`sqliteQuery<Row>`** — the canonical _structured-result_ case: the branch
   injects the **bare** `Row` schema as a `rowSchema` property and the **runtime
-  builtin** (not the transformer) composes it into `result.items`. Use this as
-  the model when the type argument describes a value nested inside the builtin's
-  return shape. Keyed on
+  builtin** (not the transformer) applies it to the successful value's `rows`
+  array, consumed as `resultOf(query).rows`. Use this as the model when the type
+  argument describes a value nested inside the builtin's return shape. Keyed on
   `callKind.kind === "runtime-call" && exportName === "sqliteQuery"` (a
   `runtime-call` registry entry gets NO schema injection by itself — a dedicated
   branch is required). Fixtures: `sqlite-query-row-schema.{input,expected}` and

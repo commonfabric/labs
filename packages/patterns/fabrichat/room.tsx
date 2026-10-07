@@ -21,10 +21,12 @@ import {
   type FabricEpochNsec,
   grantSpaceAccess,
   handler,
+  hasError,
   NAME,
   pattern,
   type PerSession,
   principalOf,
+  resultOf,
   SELF,
   spaceAccess,
   Stream,
@@ -77,7 +79,6 @@ import {
   CHAT_START_SURFACE,
   type ChatDisplay,
   type ChatIndexEntry,
-  type ChatProfile,
   type ChatRoomAbout,
   type ChatRoomActivity,
   type ChatRoomKind,
@@ -601,7 +602,7 @@ export const FabriChatRoomCore = pattern<
   // whose default pattern isn't there yet lists none.
   const space = wish<{ participants?: ProfileCell[] }>({ query: "#default" });
   const spaceParticipants = computed(
-    () => [...(space.result?.participants ?? [])],
+    () => [...(resultOf(space.result).participants ?? [])],
   );
   const participants = computed(() =>
     participantsOf(spaceParticipants, entries)
@@ -893,7 +894,11 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     // The room itself, the link another member's manager lists it by.
     [SELF]: self,
   }) => {
-    const profileWish = wish<ChatProfile>({ query: "#profile" });
+    const profileWish = wish<ProfileCell>({ query: "#profile" });
+    const profile = resultOf(profileWish.result);
+    const myProfile = computed(() =>
+      hasError(profileWish.result) ? undefined : profile
+    );
     // The viewer's manager, which starts a direct chat with a participant,
     // and lists this room when asked to.
     const managerWish = wish<{
@@ -901,15 +906,27 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       accept: Stream<AcceptRoomEvent>;
       rooms: ChatIndexEntry[];
     }>({ query: "#chatManager" });
-    const startsDirect = computed(() => managerWish.result !== undefined);
+    const manager = resultOf(managerWish.result);
+    const startsDirect = computed(() =>
+      hasError(managerWish.result) ? false : manager !== undefined
+    );
+    const startDirect = computed(() =>
+      hasError(managerWish.result) ? undefined : manager.openDirect
+    );
+    const listed = computed(() =>
+      hasError(managerWish.result) ? undefined : manager.rooms
+    );
+    const accept = computed(() =>
+      hasError(managerWish.result) ? undefined : manager.accept
+    );
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a
     // value, as `FabriChatMessageRow` says.
     const setupDisplay = computed((): ChatDisplay =>
-      profileWish.result === undefined ? "block" : "none"
+      hasError(profileWish.result) ? "block" : "none"
     );
     const room = FabriChatRoomCore(
       {
-        myProfile: profileWish.result,
+        myProfile,
         about,
         messages,
         reactionLists,
@@ -918,7 +935,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         activity,
         counters,
         startsDirect,
-        startDirect: managerWish.result?.openDirect,
+        startDirect,
       },
     );
 
@@ -942,8 +959,8 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         <cf-screen>
           <AddToChats
             room={self}
-            listed={managerWish.result?.rooms}
-            accept={managerWish.result?.accept}
+            listed={listed}
+            accept={accept}
           />
           {room[UI]}
           <div

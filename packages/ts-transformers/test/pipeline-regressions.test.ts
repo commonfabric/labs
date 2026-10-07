@@ -246,6 +246,7 @@ Deno.test(
       "CfcPolicyOfValidationTransformer",
       "JsxExpressionSiteRouterTransformer",
       "AssertDiagnosticsTransformer",
+      "AvailabilityAnalysisTransformer",
       "LiftLoweringTransformer",
       "ClosureTransformer",
       "PatternOwnedExpressionSiteLoweringTransformer",
@@ -961,6 +962,132 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
         isInsideCallNamed(call, "derive")
       ),
       "expected mapped pattern factory invocation to stay structural instead of being wrapped in derive",
+    );
+  },
+);
+
+Deno.test(
+  "Pipeline regression: local wish UI reads keep a key-specific dependency",
+  async () => {
+    const source =
+      `import { pattern, UI, type VNode, wish } from "commonfabric";
+
+type Profile = { name: string };
+
+export default pattern<{}, { [UI]: VNode }>(() => {
+  const profile = wish<Profile>({ query: "#profile" }).for("profile", true);
+  return { [UI]: <div>{profile[UI]}</div> };
+});
+`;
+
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
+    const root = parseModule(output);
+
+    assert(
+      callsNamed(root, "key").some((call) => {
+        const callee = call.expression;
+        if (
+          !ts.isPropertyAccessExpression(callee) ||
+          !ts.isIdentifier(callee.expression) ||
+          callee.expression.text !== "profile"
+        ) return false;
+        const arg = call.arguments[0];
+        return arg !== undefined && ts.isPropertyAccessExpression(arg) &&
+          arg.name.text === "UI" && ts.isIdentifier(arg.expression) &&
+          arg.expression.text === "__cfHelpers";
+      }),
+      "expected profile.key(__cfHelpers.UI) in-place lowering",
+    );
+    assertEquals(
+      callsNamed(root, "lift").length,
+      0,
+      "expected no whole-WishState lift around profile[UI]",
+    );
+  },
+);
+
+Deno.test(
+  "Pipeline regression: local wish UI reads stay key-specific in helper JSX branches",
+  async () => {
+    const source =
+      `import { computed, pattern, UI, type VNode, wish } from "commonfabric";
+
+type Profile = { name: string };
+
+export default pattern<{}, { [UI]: VNode }>(() => {
+  const profile = wish<Profile>({ query: "#profile" });
+  const hasIdentity = computed(() => false);
+  return {
+    [UI]: hasIdentity ? null : <div>{profile[UI]}</div>,
+  };
+});
+`;
+
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
+    const root = parseModule(output);
+
+    assert(
+      callsNamed(root, "key").some((call) => {
+        const callee = call.expression;
+        if (
+          !ts.isPropertyAccessExpression(callee) ||
+          !ts.isIdentifier(callee.expression) ||
+          callee.expression.text !== "profile"
+        ) return false;
+        const arg = call.arguments[0];
+        return arg !== undefined && ts.isPropertyAccessExpression(arg) &&
+          arg.name.text === "UI" && ts.isIdentifier(arg.expression) &&
+          arg.expression.text === "__cfHelpers";
+      }),
+      "expected profile.key(__cfHelpers.UI) inside the helper branch",
+    );
+    assertEquals(
+      output.includes(
+        "(({ profile }) => profile[__cfHelpers.UI]",
+      ),
+      false,
+      "expected no whole-WishState lift inside the helper branch",
+    );
+  },
+);
+
+Deno.test(
+  "Pipeline regression: local wish UI reads stay key-specific in pattern arguments",
+  async () => {
+    const source =
+      `import { pattern, UI, type VNode, wish } from "commonfabric";
+
+type Profile = { name: string };
+
+const Child = pattern<{ setup?: VNode }, { [UI]: VNode }>(({ setup }) => ({
+  [UI]: <div>{setup}</div>,
+}));
+
+export default pattern<{}, { [UI]: VNode }>(() => {
+  const profile = wish<Profile>({ query: "#profile" });
+  const child = Child({ setup: profile[UI] });
+  return { [UI]: child[UI] };
+});
+`;
+
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
+
+    assert(
+      output.includes("setup: profile.key(__cfHelpers.UI)"),
+      "expected the pattern argument to retain a key-specific wish UI link",
+    );
+    assertEquals(
+      output.includes(
+        "(({ profile }) => profile[__cfHelpers.UI]",
+      ),
+      false,
+      "expected no whole-WishState lift in the pattern argument",
     );
   },
 );

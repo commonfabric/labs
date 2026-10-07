@@ -1,9 +1,17 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  unavailableMismatch,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 import type {
   FetchBinaryResult,
   JSONSchema,
   JSONSchemaObj,
 } from "@commonfabric/api";
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
+
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
@@ -42,8 +50,13 @@ import {
 import {
   computeInputHashFromValue,
   internalSchema,
+  legacyFetchResultMarker,
+  liveFetchClaimMatches,
+  releaseFetchMutexClaim,
+  selectUnavailableFetchInput,
   tryClaimMutex,
   tryWriteResult,
+  writeUnavailableFetchResult,
 } from "./fetch-utils.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
@@ -221,10 +234,16 @@ async function processJsonResponse(
   if (schema !== undefined) {
     const failure = validateAgainstSchema(schemaWithOpenObjects(schema), data);
     if (failure !== undefined) {
-      throw new Error(`fetchJson result failed schema validation: ${failure}`);
+      throw new FetchResponseSchemaMismatch(
+        `fetchJson result failed schema validation: ${failure}`,
+      );
     }
   }
   return data;
+}
+
+class FetchResponseSchemaMismatch extends Error {
+  override readonly name = "FetchResponseSchemaMismatch";
 }
 
 async function processBinaryResponse(
@@ -362,9 +381,10 @@ function mutexTimeoutForCell(
  * memoization, a cross-tab mutex, abort handling, and a CFC sink request
  * enqueued per fetch.
  *
- * Returns the fetched result as `result`. `pending` is true while a request
- * is pending; failures (including fetchJson schema verification failures)
- * land on `error`.
+ * The internal node still publishes `{ pending, result, error }` while the
+ * builder projects its `result` child as the public value. That child is the
+ * fetched value when usable and a FabricUnavailable marker otherwise; the
+ * sibling pending/error cells remain temporarily for compatibility.
  */
 function fetchBuiltin(kind: FetchKind) {
   const snapshotInputs = snapshotInputsFor(kind);
@@ -546,7 +566,8 @@ function fetchBuiltin(kind: FetchKind) {
 
       function run(
         tx: IExtendedStorageTransaction,
-        inputsSnapshot: FetchInputs,
+        inputsSnapshot: FetchInputs | undefined,
+        unavailableInput: UnavailableVariant | undefined,
         mutexTimeoutMs: number | undefined,
         outputScope: CellScope,
         identity?: ScopeKeyIdentity,
@@ -657,16 +678,47 @@ function fetchBuiltin(kind: FetchKind) {
           });
         }
 
+        if (unavailableInput !== undefined) {
+          abortController?.abort("Inputs unavailable");
+          abortController = undefined;
+          myRequestId = undefined;
+          writeUnavailableFetchResult(
+            tx,
+            pending,
+            result,
+            error,
+            unavailableInput,
+          );
+          internal.withTx(tx).set({
+            requestId: "",
+            lastActivity: 0,
+            inputHash: "",
+          });
+          return;
+        }
+
         const url = inputsSnapshot?.url;
         if (!url) {
+          abortController?.abort("URL unavailable");
+          abortController = undefined;
+          myRequestId = undefined;
           // Only update if values actually need to change to reduce transaction conflicts
           const currentPending = pending.withTx(tx).get();
-          const currentResult = result.withTx(tx).get();
+          const currentResult = result.withTx(tx).getRaw();
           const currentError = error.withTx(tx).get();
           const currentInternal = internal.withTx(tx).get();
 
           if (currentPending !== false) pending.withTx(tx).set(false);
-          if (currentResult !== undefined) result.withTx(tx).set(undefined);
+          const unavailable = unavailableError(
+            "Fetch requires a URL",
+            "invalidInput",
+          );
+          if (
+            !isUnavailable(currentResult) ||
+            !valueEqual(currentResult, unavailable)
+          ) {
+            result.withTx(tx).setRaw(unavailable);
+          }
           if (currentError !== undefined) error.withTx(tx).set(undefined);
           // Clear internal state when URL is empty so we don't think we have cached results
           if (currentInternal.inputHash !== "") {
@@ -683,7 +735,7 @@ function fetchBuiltin(kind: FetchKind) {
         // Check if we're already working on or have the result for these inputs
         const currentInternal = internal.withTx(tx).get();
         const currentPending = pending.withTx(tx).get();
-        const currentResult = result.withTx(tx).get();
+        let currentResult = result.withTx(tx).getRaw();
         const currentError = error.withTx(tx).get();
         // Taken before this run writes to them, for an abandoned request's
         // ending to compare with (see `cellsBeforeStage`).
@@ -696,6 +748,23 @@ function fetchBuiltin(kind: FetchKind) {
 
         const inputsMatch = currentInternal?.inputHash === inputHash;
 
+        // Upgrade state persisted before the direct AsyncResult cutover. Legacy
+        // fetches kept pending/error only in sibling cells and left result
+        // undefined; without this repair a matching terminal error never retries
+        // and the public projection would remain undefined forever. Recreating a
+        // pending marker also activates the normal persisted-claim lease path.
+        if (inputsMatch && !runtime.experimental.serverExecution) {
+          const legacyMarker = legacyFetchResultMarker(
+            currentResult,
+            currentPending,
+            currentError,
+          );
+          if (legacyMarker !== undefined) {
+            result.withTx(tx).setRaw(legacyMarker);
+            currentResult = legacyMarker;
+          }
+        }
+
         // If inputs changed, clear everything and abort any in-flight request
         if (!inputsMatch) {
           if (myRequestId) {
@@ -703,9 +772,22 @@ function fetchBuiltin(kind: FetchKind) {
             myRequestId = undefined;
           }
 
-          pending.withTx(tx).set(false);
-          result.withTx(tx).set(undefined);
-          error.withTx(tx).set(undefined);
+          if (!runtime.experimental.serverExecution) {
+            writeUnavailableFetchResult(
+              tx,
+              pending,
+              result,
+              error,
+              UNAVAILABLE_PENDING,
+            );
+          } else {
+            // Serving publishes the pending marker in the claim's
+            // effect-completion transaction. Keeping the staging transaction
+            // free of pending output lets the outbox release that claim.
+            pending.withTx(tx).set(false);
+            result.withTx(tx).set(undefined);
+            error.withTx(tx).set(undefined);
+          }
           internal.withTx(tx).update({
             inputHash,
             requestId: "",
@@ -714,7 +796,9 @@ function fetchBuiltin(kind: FetchKind) {
         }
 
         // If we have a result OR error for these inputs, we're done
-        const hasValidResult = inputsMatch && currentResult !== undefined;
+        const hasValidResult = inputsMatch && currentResult !== undefined &&
+          !(isUnavailable(currentResult) &&
+            currentResult.reason === "pending");
         const hasError = inputsMatch && currentError !== undefined;
         if (hasValidResult || hasError) {
           // The §4 memo hit (server-execution v2): the stored request hash
@@ -795,16 +879,40 @@ function fetchBuiltin(kind: FetchKind) {
                     return;
                   }
 
-                  // Clear any previous result/error when starting a new fetch
-                  // This ensures observers see a clean pending state
-                  runtime.editWithRetry((tx) => {
-                    if (identity !== undefined) {
-                      tx.tx.scopeKeyIdentity = identity;
+                  const controller = new AbortController();
+                  abortController = controller;
+                  myRequestId = newRequestId;
+
+                  // The mutex claim atomically published pending. Revalidate at
+                  // the claim-to-effect hand-off so an unavailable/new input
+                  // committed in that window cannot launch the approved old
+                  // request.
+                  if (
+                    !liveFetchClaimMatches(
+                      runtime,
+                      inputsCell,
+                      snapshotInputs,
+                      inputHash,
+                      internal,
+                      result,
+                      newRequestId,
+                      identity,
+                    )
+                  ) {
+                    controller.abort("Inputs changed before fetch started");
+                    if (myRequestId === newRequestId) {
+                      myRequestId = undefined;
+                      abortController = undefined;
                     }
-                    markEffectCompletion(tx, effectKey);
-                    result.withTx(tx).set(undefined);
-                    error.withTx(tx).set(undefined);
-                  });
+                    await releaseFetchMutexClaim(
+                      runtime,
+                      internal,
+                      inputHash,
+                      newRequestId,
+                      identity,
+                    );
+                    return;
+                  }
 
                   // Check if URL became empty while waiting for mutex
                   if (!inputsSnapshot.url) {
@@ -816,7 +924,12 @@ function fetchBuiltin(kind: FetchKind) {
                       }
                       markEffectCompletion(tx, effectKey);
                       pending.withTx(tx).set(false);
-                      result.withTx(tx).set(undefined);
+                      result.withTx(tx).setRaw(
+                        unavailableError(
+                          "Fetch requires a URL",
+                          "invalidInput",
+                        ),
+                      );
                       error.withTx(tx).set(undefined);
                       internal.withTx(tx).set({
                         requestId: "",
@@ -827,12 +940,9 @@ function fetchBuiltin(kind: FetchKind) {
                     return;
                   }
 
-                  abortController = new AbortController();
-
                   // We claimed the mutex, start the fetch. `startFetch` compares
                   // against the input hash, not the claim id: any request for
                   // these inputs may write the result.
-                  myRequestId = newRequestId;
                   requestIdentity = identity;
                   await startFetch(
                     runtime,
@@ -845,7 +955,7 @@ function fetchBuiltin(kind: FetchKind) {
                     result,
                     error,
                     internal,
-                    abortController.signal,
+                    controller.signal,
                     effectKey,
                     identity,
                   );
@@ -931,9 +1041,14 @@ function fetchBuiltin(kind: FetchKind) {
                       if (inFlight || writtenSinceStaged) {
                         return;
                       }
-                      pending.withTx(settleTx).set(false);
-                      result.withTx(settleTx).set(undefined);
-                      error.withTx(settleTx).set(rejection.message);
+                      writeUnavailableFetchResult(
+                        settleTx,
+                        pending,
+                        result,
+                        error,
+                        unavailableError(rejection),
+                        rejection.message,
+                      );
                     },
                   ),
                   staging,
@@ -954,8 +1069,16 @@ function fetchBuiltin(kind: FetchKind) {
 
     return (tx: IExtendedStorageTransaction) => {
       tx.resetNarrowestReadScope();
-      const inputsSnapshot = snapshotInputs(inputsCell.withTx(tx));
-      const mutexTimeoutMs = mutexTimeoutForCell(kind, inputsCell.withTx(tx));
+      const unavailableInput = selectUnavailableFetchInput(
+        inputsCell.withTx(tx).getRaw(),
+        { runtime, tx, base: inputsCell },
+      );
+      const inputsSnapshot = unavailableInput === undefined
+        ? snapshotInputs(inputsCell.withTx(tx))
+        : undefined;
+      const mutexTimeoutMs = unavailableInput === undefined
+        ? mutexTimeoutForCell(kind, inputsCell.withTx(tx))
+        : undefined;
       const outputScope = tx.getNarrowestReadScope();
       const identity = waveRunContextOf(tx)?.scopeKeyIdentity;
       const instanceKey = identity === undefined
@@ -966,7 +1089,14 @@ function fetchBuiltin(kind: FetchKind) {
         instance = createInstance(instanceKey, identity !== undefined);
         instances.set(instanceKey, instance);
       }
-      instance.run(tx, inputsSnapshot, mutexTimeoutMs, outputScope, identity);
+      instance.run(
+        tx,
+        inputsSnapshot,
+        unavailableInput,
+        mutexTimeoutMs,
+        outputScope,
+        identity,
+      );
       instance.releaseIfIdle();
     };
   };
@@ -1039,6 +1169,7 @@ async function startFetch(
       apiBase,
       options,
     );
+    if (abortSignal.aborted) return;
     const response = await runtime.fetch(
       resolvedUrl,
       {
@@ -1051,7 +1182,9 @@ async function startFetch(
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     const data = await kind.process(response, inputsSnapshot);
+    if (abortSignal.aborted) return;
     await runtime.idle();
+    if (abortSignal.aborted) return;
 
     // Try to write result - any tab can write if inputs match
     const written = await tryWriteResult(
@@ -1061,7 +1194,7 @@ async function startFetch(
       inputHash,
       (tx) => {
         pending.withTx(tx).set(false);
-        result.withTx(tx).set(data);
+        result.withTx(tx).setRaw(data as FabricValue);
         error.withTx(tx).set(undefined);
       },
       snapshotInputs,
@@ -1089,13 +1222,25 @@ async function startFetch(
 
     await runtime.idle();
 
+    const unavailable = err instanceof FetchResponseSchemaMismatch
+      ? unavailableMismatch(err.message)
+      : unavailableError(
+        err instanceof Error ? err : new Error(String(err)),
+      );
+
     // Write error - but only update inputHash if inputs haven't changed
     const errorWritten = await runtime.editWithRetry((tx) => {
       if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
-      markEffectCompletion(tx, effectKey);
+      const unavailableInput = selectUnavailableFetchInput(
+        inputsCell.withTx(tx).getRaw(),
+        { runtime, tx, base: inputsCell },
+      );
+      if (unavailableInput !== undefined) return;
+
       const currentHash = computeInputHashFromValue(
         snapshotInputs(inputsCell.withTx(tx)),
       );
+      if (currentHash !== inputHash) return;
 
       pending.withTx(tx).set(false);
 
@@ -1104,18 +1249,22 @@ async function startFetch(
       // inputs came from the other one, and this failure says nothing about
       // it, so leave it standing rather than replacing it with this error.
       if (
-        currentHash === inputHash && result.withTx(tx).get() !== undefined
+        result.withTx(tx).getRaw() !== undefined &&
+        !isUnavailable(result.withTx(tx).getRaw())
       ) {
         return;
       }
 
-      result.withTx(tx).set(undefined);
-
-      // Only write error and inputHash if inputs still match
-      if (currentHash === inputHash) {
-        error.withTx(tx).set(err);
-        internal.withTx(tx).update({ inputHash });
-      }
+      markEffectCompletion(tx, effectKey);
+      writeUnavailableFetchResult(
+        tx,
+        pending,
+        result,
+        error,
+        unavailable,
+        err,
+      );
+      internal.withTx(tx).update({ inputHash });
     });
     if (errorWritten.error !== undefined) {
       // Neither the result nor an error-shaped result could commit: the
@@ -1135,29 +1284,29 @@ async function startFetch(
 /**
  * Fetch binary data from a URL.
  *
- * Returns the response body as `result`, shaped `{ bytes, mediaType }` where
- * `bytes` is a FabricBytes byte buffer. `pending` is true while a request is
- * pending; failures land on `error`.
+ * The builder projects the result child as `{ bytes, mediaType }`, where
+ * `bytes` is a FabricBytes byte buffer. Unavailable states are carried by the
+ * same child at runtime.
  */
 export const fetchBinary = fetchBuiltin(fetchBinaryKind);
 
 /**
  * Fetch text from a URL.
  *
- * Returns the response body decoded as UTF-8 text as `result`. `pending` is
- * true while a request is pending; failures land on `error`.
+ * The builder projects the result child as UTF-8 text. Unavailable states are
+ * carried by the same child at runtime.
  */
 export const fetchText = fetchBuiltin(fetchTextKind);
 
 /**
  * Fetch JSON from a URL.
  *
- * Returns the parsed response body as `result`. When a `schema` input is
+ * Returns the parsed response body. When a `schema` input is
  * present, the parsed body is verified against it at fetch time; a
- * verification failure lands on `error` and `result` stays undefined.
+ * verification failure publishes a schemaMismatch unavailable marker.
  * Verification follows standard JSON Schema semantics for object
  * properties not named in the schema (allowed unless the schema declares
- * `additionalProperties`). `pending` is true while a request is pending.
+ * `additionalProperties`).
  */
 export const fetchJson = fetchBuiltin(fetchJsonKind);
 

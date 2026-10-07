@@ -224,7 +224,11 @@ export function rewritePatternCallbackBody(
   opaqueRootSymbols: Set<ts.Symbol>,
   context: TransformationContext,
 ): ts.ConciseBody {
-  const preRewrittenBody = rewriteInlineReactiveOriginChains(body, context);
+  const preRewrittenBody = rewriteInlineReactiveOriginChains(
+    body,
+    context,
+    opaqueRootSymbols,
+  );
   reportInlineReactiveRootAccesses(preRewrittenBody, context);
   const rewrittenBody = rewriteTrackedOpaquePatternBody(
     preRewrittenBody,
@@ -1064,6 +1068,7 @@ function rewriteNestedLiftAppliedCallbackBodies(
       callbackArg.body,
       context,
     );
+    processedBody = rewriteInlineReactiveOriginChains(processedBody, context);
 
     const localOpaqueRootSymbols = collectLocalOpaqueRootSymbols(
       processedBody,
@@ -1208,10 +1213,13 @@ function hasLocalOpaqueOriginBinding(
     if (ts.isFunctionLike(node) && node !== body) return;
 
     if (ts.isVariableDeclaration(node) && node.initializer) {
-      const initializer = unwrapExpression(node.initializer);
       if (
-        ts.isCallExpression(initializer) &&
-        isOpaqueOriginCall(initializer, context)
+        isOpaqueSourceExpression(
+          node.initializer,
+          new Set(),
+          new Set(),
+          context,
+        )
       ) {
         found = true;
         return;
@@ -1244,15 +1252,20 @@ function hasLocalOpaqueOriginBinding(
  * Non-null assertions inside the chain are dropped (they have no runtime
  * effect). Casts and parens at the root of the chain are preserved.
  *
- * The rewrite only fires when the chain bottoms out on an opaque-origin
- * call (per `isOpaqueOriginCall`) with NO intermediate named binding —
+ * The rewrite only fires when the chain bottoms out on an opaque source
+ * call (including resultOf of a reactive producer) with no named binding —
  * exactly the source shape that the existing walker can't lower in place.
  */
 function rewriteInlineReactiveOriginChains(
   body: ts.ConciseBody,
   context: TransformationContext,
+  opaqueRootSymbols: ReadonlySet<ts.Symbol> = new Set(),
 ): ts.ConciseBody {
   const { factory } = context;
+  const knownRoots = new Set([
+    ...opaqueRootSymbols,
+    ...collectLocalOpaqueRootSymbols(body, context),
+  ]);
 
   const tryRewriteDeclaration = (
     declaration: ts.VariableDeclaration,
@@ -1264,16 +1277,19 @@ function rewriteInlineReactiveOriginChains(
     const unwrappedInitializer = unwrapExpression(declaration.initializer);
     if (ts.isIdentifier(unwrappedInitializer)) return undefined;
     if (ts.isCallExpression(unwrappedInitializer)) return undefined;
-    // The initializer must be a property-access chain bottoming on an
-    // opaque-origin call. Element-access (computed key) terminals don't
-    // fit cleanly into a destructure pattern; skip them.
+    // Static property and element segments form a destructuring path; a
+    // dynamic key cannot identify a binding statically.
     if (
       !ts.isPropertyAccessExpression(unwrappedInitializer) &&
       !ts.isElementAccessExpression(unwrappedInitializer)
     ) {
       return undefined;
     }
-    const chain = collectInlineOpaqueChain(unwrappedInitializer, context);
+    const chain = collectInlineOpaqueChain(
+      unwrappedInitializer,
+      context,
+      knownRoots,
+    );
     if (!chain) return undefined;
     const wrappedBinding = wrapBindingPatternInDestructureChain(
       declaration.name,
@@ -1320,7 +1336,7 @@ function rewriteInlineReactiveOriginChains(
         );
       }
     }
-    return ts.visitEachChild(node, visit, context.tsContext);
+    return visitEachChildWithJsx(node, visit, context.tsContext);
   };
 
   return ts.visitNode(body, visit) as ts.ConciseBody;
@@ -1335,12 +1351,13 @@ function rewriteInlineReactiveOriginChains(
  * rewrite). Non-semantic wrappers BETWEEN accesses (e.g. `wish().result!.x`)
  * are stripped — they're type-only and have no runtime effect once the chain
  * is restructured into a destructure pattern. Returns undefined if the
- * receiver isn't an opaque-origin call or the chain contains a computed/
+ * receiver isn't an opaque source call or the chain contains a computed/
  * non-static access key.
  */
 function collectInlineOpaqueChain(
   access: ts.PropertyAccessExpression | ts.ElementAccessExpression,
   context: TransformationContext,
+  opaqueRootSymbols: ReadonlySet<ts.Symbol>,
 ): { segments: string[]; rootInitializer: ts.Expression } | undefined {
   const segments: string[] = [];
   let current: ts.Expression = access;
@@ -1359,11 +1376,18 @@ function collectInlineOpaqueChain(
   }
   if (segments.length === 0) return undefined;
   // `current` is now the call (possibly still wrapped in casts/satisfies).
-  // Inspect the unwrapped form to verify it's an opaque-origin call, but
+  // Inspect the unwrapped form to verify it's an opaque source call, but
   // return `current` unchanged so any preserved wrappers stay attached.
   const unwrappedRoot = unwrapExpression(current);
   if (!ts.isCallExpression(unwrappedRoot)) return undefined;
-  if (!isOpaqueOriginCall(unwrappedRoot, context)) return undefined;
+  if (
+    !isOpaqueSourceExpression(
+      unwrappedRoot,
+      new Set(),
+      opaqueRootSymbols,
+      context,
+    )
+  ) return undefined;
   return { segments, rootInitializer: current };
 }
 

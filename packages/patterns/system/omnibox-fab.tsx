@@ -6,6 +6,7 @@ import {
   navigateTo,
   pattern,
   patternTool,
+  resultOf,
   Stream,
   UI,
   when,
@@ -104,28 +105,34 @@ const wishTool = pattern<WishToolParameters, boolean>(
       return { query, ...(context && { context }) };
     });
     const wishResult = wish<any>(wishParams);
+    const wishedValue = resultOf(wishResult.result);
 
     // Navigate to wishResult.result (the actual cell), not the entire wish state object
-    return when(wishResult.result, navigateTo(wishResult.result));
+    return when(wishedValue, navigateTo(wishedValue));
   },
 );
 
 export default pattern<OmniboxFABInput>(
   ({ extraTools, extraSystemPrompt }) => {
-    const mentionable =
-      wish<MentionablePiece[]>({ query: "#mentionable" }).result;
-    const { entries: summaryEntries } = wish<{
+    const mentionableWish = wish<MentionablePiece[]>({
+      query: "#mentionable",
+    });
+    const mentionable = resultOf(mentionableWish.result);
+    const summaryWish = wish<{
       entries: SummaryIndexEntry[];
-    }>({ query: "#summaryIndex" }).result!;
+    }>({ query: "#summaryIndex" });
+    const { entries: summaryEntries } = resultOf(summaryWish.result);
 
     const profile = wish<string>({ query: "#learnedSummary" });
+    const profileText = resultOf(profile.result);
 
     const patternIndexUrl = wish<{ url: Writable<string> }>({
       query: "#patternIndex",
     });
+    const patternIndexLocation = resultOf(patternIndexUrl.result);
     const resolvedPatternUrl = new Writable<string>("/api/patterns/index.md");
     computed(() => {
-      const urlRef = patternIndexUrl?.result?.url;
+      const urlRef = patternIndexLocation.url;
       const urlValue = typeof urlRef?.get === "function"
         ? urlRef.get()
         : (typeof urlRef === "string" ? urlRef : undefined);
@@ -134,12 +141,12 @@ export default pattern<OmniboxFABInput>(
       }
     });
 
-    const { result: patternIndex } = fetchText({
+    const patternIndexRequest = fetchText({
       url: resolvedPatternUrl,
     });
+    const patternIndex = resultOf(patternIndexRequest);
 
     const profileContext = computed(() => {
-      const profileText = profile.result;
       return profileText
         ? `\n\n--- User Context ---\n${profileText}\n---\n`
         : "";

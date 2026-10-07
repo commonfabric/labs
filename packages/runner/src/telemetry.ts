@@ -330,6 +330,12 @@ export type RuntimeTelemetryMarker = {
   dirtyDependencyCount: number;
   hasDirtyDependencies: boolean;
   skipped: boolean;
+  inputUnavailableReason?:
+    | "pending"
+    | "error"
+    | "syncing"
+    | "schemaMismatch";
+  queueDepth: number;
   populateMs: number;
   txToLogMs: number;
   depCommitMs: number;

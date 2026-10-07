@@ -10,6 +10,7 @@ import type {
   BuilderSourceSitesV1,
   CfcPolicyCompilerManifestV1,
 } from "./runtime-contract.ts";
+import type { AvailabilityObservation } from "../availability/types.ts";
 
 /**
  * Per-node side table, mirroring the TypeScript compiler's internal `NodeLinks`
@@ -64,6 +65,10 @@ export interface NodeTypeLinks {
    * reading a print by its type, would read as a node.
    */
   printedWithin?: ts.TypeNode;
+  /** The source type of a generated availability-observing capture slot. */
+  availabilityCapture?: ts.Type;
+  /** Authored successful value type, preserving value-bound writer identities. */
+  availabilitySuccess?: ts.TypeNode;
 }
 
 /**
@@ -71,10 +76,10 @@ export interface NodeTypeLinks {
  * communication registries.
  *
  * Replaces the formerly-separate registry fields on `TransformationOptions`.
- * Each registry is keyed by AST node or symbol identity, preserved across
- * `ts.transform()` stages. See `core/mod.ts` for the per-registry contract.
+ * Registries use AST node identity, symbol identity, or a variant-name string.
+ * See `core/mod.ts` for the per-registry contract.
  *
- * Storage is organized into three families (see `core/mod.ts` for the full
+ * Storage is organized into four families (see `core/mod.ts` for the full
  * rationale):
  *   1. Bare cross-package maps — `typeRegistry`, `schemaHints`. The published
  *      boundary contract: the separate schema-generator package reads them
@@ -86,6 +91,9 @@ export interface NodeTypeLinks {
  *      schemaInjected), reached only through the record/lookup/mark/is methods.
  *   3. The marker family — node/symbol-keyed WeakSets whose mutators are
  *      coupled to the context's reactive-analysis cache invalidation.
+ *   4. Availability provenance — node- and symbol-keyed observation WeakMaps,
+ *      plus a variant-name-keyed Map of canonical unavailable types. Node
+ *      observations retain original-node lookup across stage replacements.
  *
  * Division of responsibility with `TransformationContext`:
  *   - CrossStageState owns the DATA and exposes pure data operations
@@ -177,6 +185,15 @@ export class CrossStageState {
   /** The fourth marker-family WeakSet, held to the same contract. */
   readonly syntheticReactiveCollectionRegistry:
     SyntheticReactiveCollectionRegistry = new WeakSet();
+  readonly availabilityObservationNodeRegistry = new WeakMap<
+    ts.Node,
+    AvailabilityObservation
+  >();
+  readonly availabilityObservationSymbolRegistry = new WeakMap<
+    ts.Symbol,
+    AvailabilityObservation
+  >();
+  readonly availabilityVariantTypes = new Map<string, ts.Type>();
 
   /** Get-or-create the links entry for a node (lazy, like getNodeLinks). */
   #linksFor(node: ts.Node): NodeTypeLinks {
@@ -239,6 +256,60 @@ export class CrossStageState {
 
   isSyntheticReactiveCollection(symbol: ts.Symbol): boolean {
     return this.syntheticReactiveCollectionRegistry.has(symbol);
+  }
+
+  //
+  // availability observation provenance
+  //
+
+  recordAvailabilityObservation(
+    key: ts.Node | ts.Symbol,
+    observation: AvailabilityObservation,
+  ): void {
+    if ("kind" in key) {
+      this.availabilityObservationNodeRegistry.set(key, observation);
+      const original = ts.getOriginalNode(key);
+      if (original !== key) {
+        this.availabilityObservationNodeRegistry.set(original, observation);
+      }
+      return;
+    }
+    this.availabilityObservationSymbolRegistry.set(key, observation);
+  }
+
+  lookupAvailabilityObservation(
+    key: ts.Node | ts.Symbol,
+  ): AvailabilityObservation | undefined {
+    if ("kind" in key) {
+      return this.availabilityObservationNodeRegistry.get(key) ??
+        this.availabilityObservationNodeRegistry.get(ts.getOriginalNode(key));
+    }
+    return this.availabilityObservationSymbolRegistry.get(key);
+  }
+
+  recordAvailabilityVariantType(name: string, type: ts.Type): void {
+    this.availabilityVariantTypes.set(name, type);
+  }
+
+  lookupAvailabilityVariantType(name: string): ts.Type | undefined {
+    return this.availabilityVariantTypes.get(name);
+  }
+
+  recordAvailabilityCapture(
+    node: ts.Node,
+    type: ts.Type,
+    success?: ts.TypeNode,
+  ): void {
+    this.#linksFor(node).availabilityCapture = type;
+    if (success) this.#linksFor(node).availabilitySuccess = success;
+  }
+
+  availabilityCapture(node: ts.Node): ts.Type | undefined {
+    return this.nodeLinks.get(node)?.availabilityCapture;
+  }
+
+  availabilitySuccess(node: ts.Node): ts.TypeNode | undefined {
+    return this.nodeLinks.get(node)?.availabilitySuccess;
   }
 
   //

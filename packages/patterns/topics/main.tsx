@@ -1,13 +1,18 @@
 import {
   action,
+  computed,
   Default,
   equals,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   lift,
   NAME,
   pattern,
   type PerSession,
   type ReadonlyCell,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -247,43 +252,17 @@ export interface TopicIndexRow {
 }
 
 /**
- * Each source's mention list, read once per source.
- *
- * A source whose value has not materialized yet — a topic appended a moment
- * ago, still mid-sync — reads back as `undefined`, and taking `.mentions` of
- * that throws. Thrown here it kills the whole pivot, and with it the append
- * that caused it: the board goes on serving every topic it already had and
- * silently accepts no new one.
- *
- * `mentionedBy` below already declares this element as `| undefined` and
- * already guards it with `mentions[from]?.some(...)`. So the tolerance is not
- * being added here; the producer is being made to honor the contract its own
- * consumer states.
- *
- * A read taken straight off the cell gets no help from the compiler. `get()` on
- * `ReadonlyCell<TopicMentionSource>` is declared to return a value rather than
- * `T | undefined` — `IReadable` in `packages/api/index.ts` — so omitting the
- * second `?.` there type-checks exactly as well as including it, and every gate
- * stays green over a board that silently accepts no new topic. Only a read
- * against a board with an in-flight append tells the two apart.
- *
- * Declaring the source structurally is what changes that. The parameter type
- * says `get(): { mentions: M } | undefined`, so omitting the second `?.` HERE
- * is a compile error: `deno task cfcheck` fails with "Object is possibly
- * 'undefined'". `deno task check` passes either way — it walks the
- * hand-maintained path list in `tasks/typecheck.ts`, which this package is not
- * on, and patterns are checked by `cfcheck`. So the structural declaration buys
- * two things rather than one: the read becomes testable, and the optionality
- * moves somewhere the pattern typechecker can see it.
- *
- * Whether a cell's `get()` may return undefined against its declared type is a
- * question about the cell contract rather than about this pattern, and it is
- * not answered here.
+ * Reads mention lists from optional cell-shaped fixtures, tolerating ordinary
+ * absent sources or values. The production pivot uses its separate narrow
+ * value projection and unavailable-input preflight before writing any rows.
  */
-export function mentionListsOf<M>(
+export function mentionListsOf<M extends readonly unknown[]>(
   sources: readonly ({ get(): { mentions: M } | undefined } | undefined)[],
 ): (M | undefined)[] {
-  return Array.from(sources, (source) => source?.get()?.mentions);
+  return Array.from(sources, (source) => {
+    const mentions = source?.get()?.mentions;
+    return Array.isArray(mentions) ? mentions : undefined;
+  });
 }
 
 /**
@@ -338,10 +317,17 @@ export function mentionedBy<T extends object>(
 export function distinctByIdentity<T extends object>(
   list: readonly (T | undefined)[],
 ): T[] {
-  const distinct: T[] = [];
-  for (const entry of list) {
-    if (entry && !distinct.some((kept) => equals(kept, entry))) {
-      distinct.push(entry);
+  return distinctEntriesByIdentity(list).map(({ value }) => value);
+}
+
+/** Keeps each distinct reference with its original position in the input. */
+function distinctEntriesByIdentity<T extends object>(
+  list: readonly (T | undefined)[],
+): { value: T; index: number }[] {
+  const distinct: { value: T; index: number }[] = [];
+  for (const [index, value] of list.entries()) {
+    if (value && !distinct.some((kept) => equals(kept.value, value))) {
+      distinct.push({ value, index });
     }
   }
   return distinct;
@@ -375,35 +361,42 @@ export function distinctByIdentity<T extends object>(
  * is reordered. That is what lets every topic's lookup lift re-run freely on
  * any board change and still write nothing: an unchanged row recomputes to the
  * same links at the same address.
+ *
+ * `sources` supplies stable identity handles, and `values` reads only the
+ * mention lists from those same input positions. Normal unavailable-input
+ * preflight checks the value projection before this callback runs. Pending,
+ * syncing, or error data propagates through the pivot without replacing
+ * durable backlinks with an empty graph.
+ * Ordinary absent entries have no source identity and are omitted; the value
+ * default for those unused slots does not apply to native unavailable markers.
  */
-const crossrefTable = lift(
+export const crossrefTable = lift(
   (
-    { sources }: {
-      // An array of CELLS, which is what lets ONE declaration answer both of
-      // the pivot's questions: the cell is the topic's identity, and its value
-      // is the short list of what that topic points at. A cell always writes as
-      // a link, so the rows below are deterministic; an element read as a value
-      // writes a link only while it still carries provenance and an inline copy
-      // once it does not, which makes the same inputs produce two different
-      // documents and fails the idempotency recheck.
-      sources: ReadonlyCell<TopicMentionSource>[] | Default<[]>;
+    { sources, values }: {
+      // Reference handles keep row causes and backlinks identity-stable.
+      // The separate narrow value projection lets unavailable-input preflight
+      // stop this entire join before it writes any durable rows.
+      sources: (ReadonlyCell<TopicMentionSource> | undefined)[] | Default<[]>;
+      values: Default<TopicMentionSource, { mentions: [] }>[] | Default<[]>;
     },
   ): TopicCrossrefRow[] => {
     const rows: unknown[] = [];
     // Every pass below reads this plain array: an element read through the
     // reactive array resolves a link every time, and the passes read each
     // element many times. It holds each distinct topic at its first entry, and
-    // is both the list of rows and the join's sources. An entry with nothing
-    // behind it yet (mid-sync) has no identity to address a row by, and
+    // is both the list of rows and the join's sources. An ordinary absent
+    // entry has no identity to address a row by, and
     // `Writable.for(undefined)` is not a cause, so `distinctByIdentity` leaves
     // it out. It gets no row rather than a junk one — the lookup is by
     // identity, not by position, so a shorter table costs nothing.
-    const list = distinctByIdentity(Array.from(sources));
-    // Materialize each mention array once, from `list` itself, so `mentions[i]`
-    // is what `list[i]` points at; scanning a reactive array resolves its
-    // elements again for every destination topic.
-    const mentions = mentionListsOf(list).map((refs) =>
-      refs === undefined ? undefined : Array.from(refs)
+    const entries = distinctEntriesByIdentity(Array.from(sources));
+    const list = entries.map(({ value }) => value);
+    // Deduplication retains input positions so every mention list stays paired
+    // with its original reference, including duplicate or absent sources.
+    const mentions = entries.map(({ index }) =>
+      values[index] === undefined
+        ? undefined
+        : Array.from(values[index].mentions)
     );
     list.forEach((topic) => {
       const inbound = mentionedBy(topic, list, mentions);
@@ -653,7 +646,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   const topicCount = topics.get().length;
   const cards = cardsByActivity({ rows: topics });
   // Derived once for the whole board; every topic reads its own row out of it.
-  const crossrefs = crossrefTable({ sources: topics });
+  const crossrefs = crossrefTable({ sources: topics, values: topics });
   // Also derived once for the whole board: the mention universe every
   // child's editor autocompletes over, as one document of copies instead of
   // the topics themselves.
@@ -677,9 +670,25 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // the fields once here would pin the composer to the empty profile the board
   // started with: the Start button never enables, and a topic filed through it
   // carries blank attribution.
-  const profileName = profileWish.result?.name ?? "";
-  const profileAvatar = profileWish.result?.avatar ?? "";
+  const profileName = computed(() => {
+    if (
+      hasError(profileWish.result) || isPending(profileWish.result) ||
+      isSyncing(profileWish.result)
+    ) return "";
+    return resultOf(profileWish.result).name ?? "";
+  });
+  const profileAvatar = computed(() => {
+    if (
+      hasError(profileWish.result) || isPending(profileWish.result) ||
+      isSyncing(profileWish.result)
+    ) return "";
+    return resultOf(profileWish.result).avatar ?? "";
+  });
   const hasProfile = profileName.trim().length > 0;
+  const profileView = computed(() => ({
+    name: profileName,
+    avatar: profileAvatar,
+  }));
 
   const addTopic = action<AddTopicEvent, AddTopicResult>((
     { title, body, agentName },
@@ -760,7 +769,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
                 {hasProfile
                   ? (
                     <cf-profile-badge
-                      $profile={profileWish.result}
+                      $profile={profileView}
                       size="sm"
                       noNavigate
                     />

@@ -3,9 +3,15 @@ import {
   Default,
   generateObject,
   handler,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   UI,
   type VNode,
   Writable,
@@ -55,7 +61,7 @@ const Question = pattern<QuestionInput, QuestionOutput>(
       return `Generate a single, thoughtful clarifying question about: ${topic}. Include 2-4 multiple choice options if appropriate, or leave options empty for a free-text answer.`;
     });
 
-    const response = generateObject<{
+    const responseRequest = generateObject<{
       question: string;
       options: string[];
     }>({
@@ -76,6 +82,25 @@ const Question = pattern<QuestionInput, QuestionOutput>(
       },
       model: "anthropic:claude-haiku-4-5",
     });
+    const observedResponse = observeAvailability(responseRequest);
+    const responseState = computed(() => {
+      if (isPending(observedResponse)) {
+        return {
+          response: { question: "", options: [] },
+          pending: true,
+        };
+      }
+      if (
+        hasError(observedResponse) || isSyncing(observedResponse) ||
+        hasSchemaMismatch(observedResponse)
+      ) {
+        return {
+          response: { question: "", options: [] },
+          pending: false,
+        };
+      }
+      return { response: resultOf(observedResponse), pending: false };
+    });
 
     const answer = new Writable("");
 
@@ -91,16 +116,16 @@ const Question = pattern<QuestionInput, QuestionOutput>(
 
           <cf-vstack gap="3" style="padding: 1.5rem;">
             {ifElse(
-              response.pending,
+              responseState.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
                 <cf-loader show-elapsed /> Generating question...
               </div>,
               <cf-question
                 question={computed(
-                  () => response.result?.question || "",
+                  () => responseState.response.question || "",
                 )}
                 options={computed(
-                  () => response.result?.options || [],
+                  () => responseState.response.options || [],
                 )}
                 oncf-answer={onAnswer({ answer })}
               />,
@@ -109,10 +134,10 @@ const Question = pattern<QuestionInput, QuestionOutput>(
         </cf-screen>
       ),
       topic,
-      question: computed(() => response.result?.question || ""),
-      options: computed(() => response.result?.options || []),
+      question: computed(() => responseState.response.question || ""),
+      options: computed(() => responseState.response.options || []),
       answer,
-      pending: response.pending,
+      pending: responseState.pending,
     };
   },
 );

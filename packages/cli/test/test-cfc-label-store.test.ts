@@ -44,14 +44,14 @@ describe("test-cfc-label-store", {
         expect(result.runtimeErrors).toEqual([]);
         expect(result.results.every((r) => r.passed)).toBe(true);
         const root = reader.getCell<{
-          small: { query: { result: { id: number; title: string }[] } };
+          small: { query: { rows: { id: number; title: string }[] } };
           copied: { id: number; title: string }[];
         }>(identity.did(), resultCause);
         await root.sync();
         for (
           const [cell, labeled] of [
             [
-              root.key("small").key("query").key("result").key(0).key("title"),
+              root.key("small").key("query").key("rows").key(0).key("title"),
               true,
             ],
             [

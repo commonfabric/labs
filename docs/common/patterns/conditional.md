@@ -46,6 +46,10 @@ declared with a `Default` and returned through a ternary, or through `&&` or
 `||`, reads as its default when the input holds no value, exactly as the input
 itself does.
 
+An unavailable condition propagates its native pending, syncing, or error
+state before a branch is selected. A schema default does not replace that
+state. Once the condition is available, selection and schema forwarding resume.
+
 ## Showing and Hiding Through a Prop
 
 A ternary in child position renders nothing until its condition has a value,

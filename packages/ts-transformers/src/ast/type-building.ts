@@ -20,6 +20,7 @@ import {
 import { unwrapExpression } from "../utils/expression.ts";
 import {
   ensureTypeNodeRegistered,
+  getTypeFromTypeNodeWithFallback,
   inferWidenedTypeFromExpression,
   isUnknownType,
   TYPE_NODE_FLAGS,
@@ -31,6 +32,16 @@ import {
   isOptionalSymbol,
   setParentPointers,
 } from "./utils.ts";
+import {
+  type AvailabilityCaptureOverride,
+  availabilityPathKey,
+} from "../availability/captures.ts";
+
+import {
+  authoredAvailabilitySuccess,
+  resolveAvailabilityValueProvenance,
+  typeContainsAvailabilityVariant,
+} from "../availability/analysis.ts";
 
 /**
  * Rewrite commonfabric type references in a TypeNode tree to the canonical
@@ -1480,11 +1491,14 @@ export function buildTypeElementsFromCaptureTree(
   context: TransformationContext,
   parentExpr?: ts.Expression,
   parentType?: ts.Type,
+  availabilityOverrides?: ReadonlyMap<string, AvailabilityCaptureOverride>,
+  pathPrefix: readonly string[] = [],
 ): ts.TypeElement[] {
   const { factory, checker } = context;
   const properties: ts.TypeElement[] = [];
 
   for (const [propName, childNode] of entries) {
+    const capturePath = [...pathPrefix, propName];
     let typeNode: ts.TypeNode;
     let questionToken: ts.QuestionToken | undefined = undefined;
     let currentType: ts.Type | undefined = undefined;
@@ -1502,7 +1516,13 @@ export function buildTypeElementsFromCaptureTree(
     // Determine optionality and get Type for this property
     if (childNode.expression) {
       // Leaf node with source expression - use it directly
-      typeNode = expressionToTypeNode(childNode.expression, context);
+      const availabilityOverride = availabilityOverrides?.get(
+        availabilityPathKey(capturePath),
+      );
+      typeNode = expressionToTypeNode(
+        availabilityOverride?.source ?? childNode.expression,
+        context,
+      );
       const declaring = ts.isIdentifier(childNode.expression)
         ? destructuredSourceProperty(childNode.expression, propName, checker) ??
           readValueSymbol(childNode.expression, checker)
@@ -1534,6 +1554,37 @@ export function buildTypeElementsFromCaptureTree(
             : undefined));
       if (annotation && namesValueBinding(annotation, checker)) {
         context.state.recordSchemaHint(typeNode, { spelledBy: annotation });
+      }
+
+      if (availabilityOverride) {
+        typeNode = widenTypeNodeForAvailability(
+          typeNode,
+          {
+            ...availabilityOverride,
+            source: availabilityOverride.source ?? childNode.expression,
+          },
+          context,
+        );
+      } else {
+        const provenance = resolveAvailabilityValueProvenance(
+          childNode.expression,
+          context,
+        );
+        const sourceType =
+          context.state.availabilityCapture(childNode.expression) ??
+            (provenance && inferWidenedTypeFromExpression(
+              provenance.source,
+              checker,
+              context.state.typeRegistry,
+            ));
+        if (sourceType) {
+          context.state.recordAvailabilityCapture(
+            typeNode,
+            sourceType,
+            context.state.availabilitySuccess(childNode.expression) ??
+              authoredAvailabilitySuccess(childNode.expression, context),
+          );
+        }
       }
 
       // Judge unknown-ness from the type that drives the emitted schema — the
@@ -1639,27 +1690,51 @@ export function buildTypeElementsFromCaptureTree(
         }
       }
 
-      // Build nested type literal for objects (including array property access like .length)
-      const nested = buildTypeElementsFromCaptureTree(
-        childNode.properties,
-        context,
-        currentExpr,
-        currentType,
+      const availabilityOverride = availabilityOverrides?.get(
+        availabilityPathKey(capturePath),
       );
-      typeNode = createRegisteredTypeLiteral(
-        nested,
-        {
-          factory,
-          checker,
-          typeRegistry: context.state.typeRegistry,
-        },
-      );
-      if (currentType) {
-        const declared = declaredTypeNode(declaring);
-        context.state.recordNarrowedFrom(typeNode, {
-          type: currentType,
-          ...(declared && { typeNode: declared }),
-        });
+      if (
+        availabilityOverride && (availabilityOverride.source || currentType)
+      ) {
+        // A marker's members belong to its native arm, not to the successful
+        // payload. Keep an observed root whole when its members are captured.
+        const source = availabilityOverride.source;
+        typeNode = widenTypeNodeForAvailability(
+          source
+            ? expressionToTypeNode(source, context)
+            : typeToTypeNodeWithRegistry(
+              currentType!,
+              context,
+              context.state.typeRegistry,
+            ),
+          availabilityOverride,
+          context,
+        );
+      } else {
+        // Build nested type literal for objects (including array property access like .length)
+        const nested = buildTypeElementsFromCaptureTree(
+          childNode.properties,
+          context,
+          currentExpr,
+          currentType,
+          availabilityOverrides,
+          capturePath,
+        );
+        typeNode = createRegisteredTypeLiteral(
+          nested,
+          {
+            factory,
+            checker,
+            typeRegistry: context.state.typeRegistry,
+          },
+        );
+        if (currentType) {
+          const declared = declaredTypeNode(declaring);
+          context.state.recordNarrowedFrom(typeNode, {
+            type: currentType,
+            ...(declared && { typeNode: declared }),
+          });
+        }
       }
     }
 
@@ -1680,8 +1755,15 @@ export function buildCaptureTypeElements(
   captureTree: Iterable<[string, CaptureTreeNode]>,
   context: TransformationContext,
   renameMap?: ReadonlyMap<string, string>,
+  availabilityOverrides?: ReadonlyMap<string, AvailabilityCaptureOverride>,
 ): ts.TypeElement[] {
-  const elements = buildTypeElementsFromCaptureTree(captureTree, context);
+  const elements = buildTypeElementsFromCaptureTree(
+    captureTree,
+    context,
+    undefined,
+    undefined,
+    availabilityOverrides,
+  );
   if (!renameMap || renameMap.size === 0) {
     return elements;
   }
@@ -1705,4 +1787,176 @@ export function buildCaptureTypeElements(
       element.type,
     );
   });
+}
+
+export function widenTypeNodeForAvailability(
+  base: ts.TypeNode,
+  override: AvailabilityCaptureOverride,
+  context: TransformationContext,
+): ts.TypeNode {
+  const members: ts.TypeNode[] = [base];
+  const baseType = getTypeFromTypeNodeWithFallback(
+    base,
+    context.checker,
+    context.options.state?.typeRegistry,
+  );
+
+  for (const variant of override.variants) {
+    if (
+      baseType && variant.type &&
+      typeContainsAvailabilityVariant(
+        baseType,
+        variant.type,
+        context.checker,
+      )
+    ) {
+      continue;
+    }
+    if (variant.type) {
+      members.push(
+        typeToTypeNodeWithRegistry(
+          variant.type,
+          context,
+          context.options.state?.typeRegistry,
+        ),
+      );
+      continue;
+    }
+    members.push(
+      context.factory.createTypeReferenceNode(
+        context.factory.createQualifiedName(
+          context.factory.createIdentifier("__cfHelpers"),
+          context.factory.createIdentifier(variant.name),
+        ),
+        undefined,
+      ),
+    );
+  }
+
+  const result = members.length === 1
+    ? base
+    : context.factory.createUnionTypeNode(members);
+  if (baseType) {
+    context.state.recordAvailabilityCapture(
+      result,
+      (override.source && context.state.availabilityCapture(override.source)) ??
+        baseType,
+      override.source &&
+        (context.state.availabilitySuccess(override.source) ??
+          authoredAvailabilitySuccess(override.source, context)),
+    );
+  }
+  return result;
+}
+
+function typeElementNameText(
+  name: ts.PropertyName | undefined,
+): string | undefined {
+  if (!name) return undefined;
+  if (
+    ts.isIdentifier(name) || ts.isStringLiteralLike(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  return undefined;
+}
+
+/**
+ * Apply exact relative-path availability overrides to an already constructed
+ * type node. This is used for destructured explicit lift inputs, whose observed
+ * leaves live inside the original input object rather than the closure capture
+ * tree.
+ */
+export function applyAvailabilityOverridesToTypeNode(
+  base: ts.TypeNode,
+  overrides: readonly AvailabilityCaptureOverride[],
+  context: TransformationContext,
+): ts.TypeNode {
+  if (overrides.length === 0) return base;
+
+  const printedType = context.state.printedFrom(base);
+  if (printedType && ts.isTypeLiteralNode(base)) {
+    // A printed object is indivisible. Build fresh member roots from their
+    // semantic types before adding an exact-path availability union.
+    base = context.factory.createTypeLiteralNode(
+      printedType.getProperties().map((property) =>
+        context.factory.createPropertySignature(
+          undefined,
+          createPropertyName(property.name, context.factory),
+          isOptionalSymbol(property)
+            ? context.factory.createToken(ts.SyntaxKind.QuestionToken)
+            : undefined,
+          typeToTypeNodeWithRegistry(
+            context.checker.getTypeOfSymbol(property),
+            context,
+            context.state.typeRegistry,
+          ),
+        )
+      ),
+    );
+  }
+
+  const exact = overrides.filter((override) => override.path.length === 0);
+  if (exact.length > 0) {
+    let result = exact[0]?.source
+      ? expressionToTypeNode(exact[0].source, context)
+      : base;
+    for (const override of exact) {
+      result = widenTypeNodeForAvailability(result, override, context);
+    }
+    return result;
+  }
+
+  if (ts.isParenthesizedTypeNode(base)) {
+    return context.factory.updateParenthesizedType(
+      base,
+      applyAvailabilityOverridesToTypeNode(base.type, overrides, context),
+    );
+  }
+
+  if (ts.isTypeLiteralNode(base)) {
+    const byHead = new Map<string, AvailabilityCaptureOverride[]>();
+    for (const override of overrides) {
+      const [head, ...rest] = override.path;
+      if (!head) continue;
+      const entries = byHead.get(head) ?? [];
+      entries.push({ ...override, path: rest });
+      byHead.set(head, entries);
+    }
+    const members = base.members.map((member) => {
+      if (!ts.isPropertySignature(member) || !member.type) return member;
+      const name = typeElementNameText(member.name);
+      const nested = name === undefined ? undefined : byHead.get(name);
+      if (!nested || nested.length === 0) return member;
+      return context.factory.updatePropertySignature(
+        member,
+        member.modifiers,
+        member.name,
+        member.questionToken,
+        applyAvailabilityOverridesToTypeNode(member.type, nested, context),
+      );
+    });
+    return context.factory.updateTypeLiteralNode(
+      base,
+      context.factory.createNodeArray(members),
+    );
+  }
+
+  if (ts.isTupleTypeNode(base)) {
+    const elements = base.elements.map((element, index) => {
+      const nested = overrides
+        .filter((override) => override.path[0] === String(index))
+        .map((override) => ({ ...override, path: override.path.slice(1) }));
+      return nested.length > 0
+        ? applyAvailabilityOverridesToTypeNode(element, nested, context)
+        : element;
+    });
+    return context.factory.updateTupleTypeNode(
+      base,
+      context.factory.createNodeArray(elements),
+    );
+  }
+
+  return base;
 }

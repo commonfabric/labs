@@ -1,11 +1,13 @@
 import ts from "typescript";
 import { CFHelpers } from "../../core/cf-helpers.ts";
 import {
+  detectCallKind,
   getExpressionText,
   getTypeAtLocationWithFallback,
   preserveSourceMapRange,
   setParentPointers,
   unwrapOpaqueLikeType,
+  visitEachChildWithJsx,
 } from "../../ast/mod.ts";
 import {
   buildCapturePropertyAssignments,
@@ -19,6 +21,12 @@ import {
   reserveIdentifier,
 } from "../../utils/identifiers.ts";
 import {
+  type CaptureBinding,
+  collectCaptureBindingNames,
+  planCaptureBindings,
+  rewriteCaptureBindingReferences,
+} from "../../utils/capture-bindings.ts";
+import {
   buildCaptureTypeElements,
   createRegisteredTypeLiteral,
   expressionToTypeNode,
@@ -27,6 +35,15 @@ import {
 } from "../../ast/type-building.ts";
 import { registerLiftAppliedCallType } from "../../ast/type-inference.ts";
 import type { TransformationContext } from "../../core/mod.ts";
+import {
+  availabilityOverridesByPath,
+  collectAvailabilityGuardCaptures,
+  createUnavailableInputPolicyOptions,
+} from "../../availability/captures.ts";
+import {
+  canonicalizeResultOfCaptures,
+  rewriteResultOfAliasReferences,
+} from "../../availability/analysis.ts";
 
 /**
  * Replace Reactive expressions with parameter identifiers in the callback body.
@@ -62,7 +79,7 @@ function replaceReactivesWithParams(
         return newIdentifier;
       }
     }
-    return ts.visitEachChild(node, visit, tsContext);
+    return visitEachChildWithJsx(node, visit, tsContext);
   };
   return visit(expression) as ts.Expression;
 }
@@ -129,20 +146,31 @@ function createParameterForPlan(
   captureTree: ReturnType<typeof groupCapturesByRoot>,
   fallbackEntries: readonly FallbackEntry[],
   refToParamName: Map<ts.Expression, string>,
+  captureBindings: ReadonlyMap<string, CaptureBinding>,
+  expression: ts.Expression,
+  context: TransformationContext,
 ): ts.ParameterDeclaration {
   const bindings: ts.BindingElement[] = [];
-  const usedNames = new Set<string>();
+  const usedNames = collectCaptureBindingNames(
+    expression,
+    new Set([...captureBindings.values()].map((entry) => entry.symbol)),
+    context,
+  );
+  for (const entry of captureBindings.values()) {
+    usedNames.add(entry.bindingName);
+  }
 
   const register = (candidate: string): ts.Identifier => {
     return reserveIdentifier(candidate, usedNames, factory);
   };
 
-  const captureBindings = createBindingElementsFromNames(
+  const captureElements = createBindingElementsFromNames(
     captureTree.keys(),
     factory,
-    register,
+    (root) =>
+      factory.createIdentifier(captureBindings.get(root)?.bindingName ?? root),
   );
-  for (const binding of captureBindings) bindings.push(binding);
+  for (const binding of captureElements) bindings.push(binding);
 
   for (const entry of fallbackEntries) {
     const bindingIdentifier = register(entry.paramName);
@@ -207,10 +235,28 @@ export function createLiftAppliedCall(
   }
 
   const { factory, tsContext, cfHelpers, context } = options;
+  const canonical = canonicalizeResultOfCaptures(refs, context, expression);
+  const canonicalExpression = rewriteResultOfAliasReferences(
+    expression,
+    canonical.aliases,
+    context,
+    tsContext,
+  );
+  const availabilityCaptures = collectAvailabilityGuardCaptures(
+    canonicalExpression,
+    context,
+  );
   const { captureTree, fallbackEntries, refToParamName } =
     planLiftAppliedInputEntries(
-      refs,
+      [...canonical.captures],
     );
+  const captureBindings = planCaptureBindings(
+    canonical.captures,
+    canonicalExpression,
+    new Map([...captureTree.keys()].map((root) => [root, root])),
+    context,
+    expression,
+  );
   if (captureTree.size === 0 && fallbackEntries.length === 0) {
     return undefined;
   }
@@ -222,15 +268,22 @@ export function createLiftAppliedCall(
     captureTree,
     fallbackEntries,
     refToParamName,
+    captureBindings,
+    canonicalExpression,
+    context,
   );
 
-  const lambdaBody = replaceReactivesWithParams(
-    expression,
-    refToParamName,
-    factory,
-    tsContext,
-    context.checker,
-    context.state.typeRegistry,
+  const lambdaBody = rewriteCaptureBindingReferences(
+    replaceReactivesWithParams(
+      canonicalExpression,
+      refToParamName,
+      factory,
+      tsContext,
+      context.checker,
+      context.state.typeRegistry,
+    ),
+    captureBindings,
+    context,
   );
 
   // Callback arrow: source-map-range only (emit-safe position carry). See
@@ -270,18 +323,23 @@ export function createLiftAppliedCall(
     captureTree,
     fallbackEntries,
     context,
+    availabilityOverridesByPath(availabilityCaptures),
   );
 
   // Infer the expression result when the caller supplies no output type.
   const resultTypeNode = options.resultTypeNode ??
     buildResultTypeNode(expression, context);
+  const availabilityOptions = createUnavailableInputPolicyOptions(
+    availabilityCaptures,
+    factory,
+  );
 
   // Inner lift call: __cfHelpers.lift<inputTypeNode, resultTypeNode>(callback)
   const innerLiftCall = cfHelpers.createHelperCall(
     "lift",
     expression,
     [inputTypeNode, resultTypeNode],
-    [arrowFunction],
+    [arrowFunction, ...(availabilityOptions ? [availabilityOptions] : [])],
   );
 
   // Outer applied call: (inputObject). Source-map-range ONLY: this wrapper
@@ -323,6 +381,7 @@ function buildInputTypeNode(
   captureTree: ReturnType<typeof groupCapturesByRoot>,
   fallbackEntries: readonly FallbackEntry[],
   context: TransformationContext,
+  availabilityOverrides: ReturnType<typeof availabilityOverridesByPath>,
 ): ts.TypeNode {
   const { factory } = context;
   const typeElements: ts.TypeElement[] = [];
@@ -331,6 +390,8 @@ function buildInputTypeNode(
   const captureTypeElements = buildCaptureTypeElements(
     captureTree,
     context,
+    undefined,
+    availabilityOverrides,
   );
   for (const typeElement of captureTypeElements) typeElements.push(typeElement);
 
@@ -368,6 +429,18 @@ function buildResultTypeNode(
     context.state.typeRegistry,
   );
   if (constructedCell) return constructedCell;
+
+  // Availability guards are predicates and therefore always produce a
+  // boolean. In transformer fixtures (and other syntax-only consumers) the
+  // commonfabric module can be intentionally unresolved, causing the checker
+  // to report `any` for the call. The runtime registry remains authoritative
+  // for the call kind, so preserve the guard's precise output contract here.
+  if (
+    ts.isCallExpression(expression) &&
+    detectCallKind(expression, checker)?.kind === "availability-guard"
+  ) {
+    return factory.createKeywordTypeNode(ts.SyntaxKind.BooleanKeyword);
+  }
 
   // Try to get the type of the result expression
   // Use getTypeAtLocationWithFallback to handle synthetic nodes that may have

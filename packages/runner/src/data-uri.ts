@@ -29,6 +29,7 @@ import {
   type FabricValue,
   refuseFabricInstance,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import {
   dataUriFromValue,
   isFabricDataUri,
@@ -233,7 +234,9 @@ export function findAndInlineDataUriLinks(value: any): any {
       // Only the payload itself is checked, because a decoded payload is
       // returned rather than walked -- nothing here descends one, so there is
       // no descent for a nested instance to be caught by.
-      if (dataValue instanceof FabricInstance) {
+      if (
+        dataValue instanceof FabricInstance && !isUnavailable(dataValue)
+      ) {
         refuseFabricInstance(
           dataValue,
           "when inlining a `data:` URI whose content is a `FabricInstance`",
@@ -264,6 +267,10 @@ export function findAndInlineDataUriLinks(value: any): any {
     // A leaf, and `isObjectOrArray`, so it leaves ahead of the record branch below.
     // It holds no link to inline, so returning it whole is the answer rather
     // than an omission.
+    return value;
+  } else if (isUnavailable(value)) {
+    // Availability markers cannot carry cell links, so there is nothing below
+    // this terminal control value for the inliner to rewrite.
     return value;
   } else if (value instanceof FabricInstance) {
     // Refused. An instance's state can carry a `data:` URI link, and inlining

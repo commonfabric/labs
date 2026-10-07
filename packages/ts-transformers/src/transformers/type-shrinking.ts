@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { isCommonFabricAvailabilityType } from "@commonfabric/schema-generator/availability-brand";
 import type { SchemaScope } from "@commonfabric/api";
 import { getCellWrapperInfo } from "@commonfabric/schema-generator/cell-brand";
 import {
@@ -955,6 +956,52 @@ function shrinkTypeToNode(
     typeRegistry?.set(wrapped, type);
     return wrapped;
   }
+  // Native unavailable values are atomic, even when only their metadata is read.
+  if (isCommonFabricAvailabilityType(type, undefined)) {
+    return typeToTypeNodeWithRegistry(
+      type,
+      { factory, checker, sourceFile, state },
+      typeRegistry,
+    );
+  }
+  if (
+    type.isUnion() &&
+    type.types.some((member) =>
+      isCommonFabricAvailabilityType(member, undefined)
+    )
+  ) {
+    if (normalized.some((path) => path.length === 0)) {
+      return typeToTypeNodeWithRegistry(
+        type,
+        { factory, checker, sourceFile, state },
+        typeRegistry,
+      );
+    }
+    return factory.createUnionTypeNode(
+      type.types.map((member) => {
+        const original = typeToTypeNodeWithRegistry(
+          member,
+          { factory, checker, sourceFile, state },
+          typeRegistry,
+        );
+        if (
+          !(member.flags & (ts.TypeFlags.Object | ts.TypeFlags.Union |
+            ts.TypeFlags.Intersection | ts.TypeFlags.TypeParameter))
+        ) return original;
+        return buildShrunkTypeNodeFromType(
+          member,
+          paths,
+          checker,
+          sourceFile,
+          factory,
+          typeRegistry,
+          state,
+          fullShapePaths,
+          visiting,
+        ) ?? original;
+      }),
+    );
+  }
   // A (type, requested-paths) pair already on the descent path cannot be
   // materialized as a literal — the recursion would never bottom out. The
   // paths are part of the key because revisiting the same type with narrower
@@ -1585,6 +1632,14 @@ function carryNarrowing(
   const to = unwrapTypeParentheses(result);
   const value = state.narrowedFrom(from) ?? state.declaredValue(from);
   if (value) state.recordNarrowedFrom(to, value);
+  const availability = state.availabilityCapture(from);
+  if (availability) {
+    state.recordAvailabilityCapture(
+      to,
+      availability,
+      state.availabilitySuccess(from),
+    );
+  }
   // A print rebuilt as a print of the same type is read as the annotation the
   // print it rebuilds was read as.
   const spelledBy = state.lookupSchemaHint(from)?.spelledBy;
@@ -1639,6 +1694,11 @@ function shrinkTypeNode(
   sourceFile: ts.SourceFile | undefined,
 ): ts.TypeNode | undefined {
   const printedType = state?.printedFrom(node);
+  const semanticType = printedType ??
+    (checker && getTypeFromTypeNodeWithFallback(node, checker, typeRegistry));
+  if (semanticType && isCommonFabricAvailabilityType(semanticType, node)) {
+    return node;
+  }
   // A scoped cell's print is kept whole: only its alias names its scope.
   // Narrowing rebuilds it around its cell, which is shrunk through the rebuilt
   // wrapper.
@@ -3466,6 +3526,121 @@ function groupCellCapabilityPathsByHead(
   return grouped;
 }
 
+/**
+ * Narrows the usable cell arm of an availability capture without turning its
+ * markers into cell capabilities. A uniformly scoped cell gives the generated
+ * result slot its scope; marker arms remain ordinary native values.
+ */
+function narrowAvailabilityCellCapture(
+  node: ts.TypeNode,
+  capability: ReactiveCapability | undefined,
+  factory: ts.NodeFactory,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeNode | undefined {
+  if (!capability || !state) return undefined;
+  const type = state.availabilityCapture(node);
+  if (!type?.isUnion()) return undefined;
+  const markers: ts.Type[] = [];
+  const cells: ts.Type[] = [];
+  for (const member of type.types) {
+    if (isCommonFabricAvailabilityType(member, undefined)) {
+      markers.push(member);
+    } else {
+      cells.push(member);
+    }
+  }
+  if (markers.length === 0 || cells.length !== 1) return undefined;
+  const cell = cells[0]!;
+  const print = (type: ts.Type): ts.TypeNode =>
+    typeToTypeNodeWithRegistry(
+      type,
+      { checker, factory, sourceFile, state },
+      typeRegistry,
+    );
+  if (isStreamCellType(cell, checker) || isSqliteCellType(cell, checker)) {
+    // Capability handles keep their authored kind; unavailable arms do not
+    // acquire that capability merely by occupying the same capture slot.
+    const scope = getScopeBrand(cell, checker);
+    const successful = scope
+      ? factory.createUnionTypeNode(
+        scope.payload.map((parts) =>
+          parts.length === 1
+            ? print(parts[0]!)
+            : factory.createIntersectionTypeNode(parts.map(print))
+        ),
+      )
+      : print(cell);
+    const union = factory.createUnionTypeNode([
+      successful,
+      ...markers.map(print),
+    ]);
+    return scope
+      ? createHelperWrapperTypeNode(
+        union,
+        SCOPE_WRAPPER_FOR_SCOPE[scope.scope],
+        factory,
+      )
+      : union;
+  }
+  if (
+    !isCellLikeType(cell, checker)
+  ) return undefined;
+  const value = unwrapCellLikeType(cell, checker);
+  if (!value) return undefined;
+  const scope = getScopeBrand(value, checker);
+  const handleScope = getScopeBrand(cell, checker);
+  if (scope && handleScope && scope.scope !== handleScope.scope) {
+    return undefined;
+  }
+  const payload = scope
+    ? factory.createUnionTypeNode(
+      scope.payload.map((parts) =>
+        parts.length === 1
+          ? print(parts[0]!)
+          : factory.createIntersectionTypeNode(parts.map(print))
+      ),
+    )
+    : print(value);
+  const authored = state.availabilitySuccess(node);
+  const authoredCell = authored &&
+    scopedCellNode(authored, checker, typeRegistry);
+  const inner = authored &&
+    getAuthoredCellValueTypeNode(authoredCell?.cell ?? authored, checker);
+  const unwrapped = inner && unwrapTypeParentheses(inner);
+  const authoredPayload = unwrapped && namesScopeWrapper(unwrapped, checker) &&
+      ts.isTypeReferenceNode(unwrapped)
+    ? unwrapped.typeArguments?.[0]
+    : inner;
+  const successfulCell = wrapTypeNodeWithCapability(
+    payload,
+    capability,
+    factory,
+  );
+  if (authoredPayload) {
+    const provenance = {
+      type: checker.getTypeFromTypeNode(authoredPayload),
+      typeNode: authoredPayload,
+    };
+    state.recordNarrowedFrom(payload, provenance);
+    state.recordNarrowedFrom(successfulCell, provenance);
+  }
+  const union = factory.createUnionTypeNode([
+    successfulCell,
+    ...markers.map(print),
+  ]);
+  const slotScope = scope?.scope ?? handleScope?.scope;
+  return slotScope
+    ? createHelperWrapperTypeNode(
+      union,
+      SCOPE_WRAPPER_FOR_SCOPE[slotScope],
+      factory,
+    )
+    : union;
+}
+
 function applyCellCapabilityPathsToTypeNode(
   node: ts.TypeNode,
   paths: readonly CellCapabilityPath[],
@@ -3541,6 +3716,15 @@ function applyCellCapabilityPathsToTypeNode(
     }
 
     let updated = member.type;
+    const availableCell = narrowAvailabilityCellCapture(
+      updated,
+      selectCellPathCapability(childPaths),
+      factory,
+      checker,
+      sourceFile,
+      typeRegistry,
+      state,
+    );
     const scopedCell = scopedCellParts(
       updated,
       checker,
@@ -3563,7 +3747,9 @@ function applyCellCapabilityPathsToTypeNode(
       typeRegistry,
       state,
     );
-    if (inner) {
+    if (availableCell) {
+      updated = availableCell;
+    } else if (inner) {
       const capability = selectCellPathCapability(childPaths);
       if (capability) {
         updated = wrapTypeNodeWithCapabilityOrStream(

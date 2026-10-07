@@ -28,6 +28,13 @@ keep the two consistent: `direct` holds one entry per counterpart, including
 forgotten rooms, and `rooms` can also hold a second direct room with the same
 counterpart after crossing creations.
 
+The viewer's profile is an optional capability. A terminal error resolving
+`#profile` leaves the manager's indexes readable, disables its start controls,
+and makes start requests record a refusal without creating rooms or notices.
+Pending and syncing profiles retain their native unavailable states. A usable
+profile is passed through as its original cell handle, preserving its identity
+and principal labels.
+
 ## Creating a room
 
 `openDirect` (when there is no entry for the counterpart) and `createGroup`

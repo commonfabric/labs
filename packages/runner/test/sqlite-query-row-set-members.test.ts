@@ -36,6 +36,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 
 import { encodeCfLinkValue } from "../src/builtins/sqlite/cf-link.ts";
 import { SQLITE_ROW_SALT } from "../src/builtins/sqlite/row-identity.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "../src/cfc/observation.ts";
@@ -261,8 +262,8 @@ describe("sqlite-query-row-set-members", () => {
       { plain: string; labeled: string; useLabeled: boolean }
     >((input) => {
       const query = scope === "session"
-        ? cf.sqliteQuery.asScope("session")
-        : cf.sqliteQuery;
+        ? sqliteQueryStateNodeFactory.asScope("session")
+        : sqliteQueryStateNodeFactory;
       const rows = query(
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
         {
@@ -306,8 +307,8 @@ describe("sqlite-query-row-set-members", () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
     const testPattern = cf.pattern<Record<string, never>>(() => {
       const query = scope === "session"
-        ? cf.sqliteQuery.asScope("session")
-        : cf.sqliteQuery;
+        ? sqliteQueryStateNodeFactory.asScope("session")
+        : sqliteQueryStateNodeFactory;
       // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
       return { rows: query({ db, reactOn: db, sql } as any) };
     });

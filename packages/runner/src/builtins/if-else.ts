@@ -19,7 +19,8 @@ import { forwardReferenceAction } from "./forward-reference.ts";
  * declared reads.
  *
  * `condition` stays a plain (value-read) input, so a condition change keeps
- * re-running ifElse. The action decides on its truthiness alone, which it reads
+ * re-running ifElse. An unavailable condition propagates its native marker
+ * without selecting a branch. Otherwise the action decides on truthiness, read
  * from the condition's root (`readsTruthyAtRoot()`), so nothing below the root
  * of a condition that is a record or an array is read.
  */

@@ -45,6 +45,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-sqlite-control");
 const space = signer.did();
@@ -345,14 +346,14 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       String((keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? "")
     );
     const testPattern = cf.pattern<Record<string, never>>(() => {
-      const keys = cf.sqliteQuery.asScope("session")(
+      const keys = sqliteQueryStateNodeFactory.asScope("session")(
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
         { db, reactOn: db, sql: KEYS_SQL } as any,
       );
       const params = options.literalParameter !== undefined
         ? [options.literalParameter]
         : parameterOf(keys);
-      const bodies = cf.sqliteQuery.asScope("session")(
+      const bodies = sqliteQueryStateNodeFactory.asScope("session")(
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
         { db, reactOn: db, sql: BODIES_SQL, params } as any,
       );
@@ -434,7 +435,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     });
     const testPattern = cf.pattern<{ pick: number }>(({ pick }) => {
       const keys = ["k1", "k2", "k3"].map((name) =>
-        cf.sqliteQuery.asScope("session")(
+        sqliteQueryStateNodeFactory.asScope("session")(
           {
             db,
             reactOn: db,
@@ -443,7 +444,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
           } as any,
         )
       );
-      const bodies = cf.sqliteQuery.asScope("session")(
+      const bodies = sqliteQueryStateNodeFactory.asScope("session")(
         {
           db,
           reactOn: db,
@@ -578,7 +579,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
     const parameterOf = parameterLift((pick) => String(pick ?? ""));
     const testPattern = cf.pattern<{ picked: string }>(({ picked }) => {
-      const bodies = cf.sqliteQuery.asScope("session")(
+      const bodies = sqliteQueryStateNodeFactory.asScope("session")(
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
         {
           db,
@@ -645,11 +646,11 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         String((keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? "")
       );
       const testPattern = cf.pattern<Record<string, never>>(() => {
-        const keys = cf.sqliteQuery.asScope("session")(
+        const keys = sqliteQueryStateNodeFactory.asScope("session")(
           // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
           { db, reactOn: db, sql: KEYS_SQL } as any,
         );
-        const rows = cf.sqliteQuery(
+        const rows = sqliteQueryStateNodeFactory(
           // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
           { db, reactOn: db, sql, params: parameterOf(keys) } as any,
         );
@@ -1034,11 +1035,11 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         String((keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? "")
       );
       const testPattern = cf.pattern<{ db: unknown }>(({ db: handleInput }) => {
-        const keys = cf.sqliteQuery(
+        const keys = sqliteQueryStateNodeFactory(
           // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
           { db: handleInput, sql: KEYS_SQL } as any,
         );
-        const bodies = cf.sqliteQuery(
+        const bodies = sqliteQueryStateNodeFactory(
           // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
           {
             db: handleInput,
@@ -1134,7 +1135,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       const testPattern = cf.pattern<{ db: unknown; note: unknown }>((
         { db: handleInput, note },
       ) =>
-        cf.sqliteQuery(
+        sqliteQueryStateNodeFactory(
           {
             db: handleInput,
             sql: "SELECT container_id FROM messages WHERE container_id = ?1",
@@ -1234,7 +1235,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         const testPattern = cf.pattern<{ db: unknown; container: string }>((
           { db: handleInput, container: chosen },
         ) =>
-          cf.sqliteQuery(
+          sqliteQueryStateNodeFactory(
             {
               db: handleInput,
               sql: "SELECT container_id FROM messages WHERE container_id = ?1",
@@ -1313,7 +1314,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       const testPattern = cf.pattern<{ db: unknown; container: string }>((
         { db: handleInput, container: chosen },
       ) =>
-        cf.sqliteQuery(
+        sqliteQueryStateNodeFactory(
           {
             db: handleInput,
             sql: "SELECT container_id FROM messages WHERE container_id = ?1",

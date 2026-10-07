@@ -21,6 +21,7 @@ import {
   type Pattern,
   type Reactive as _Reactive,
   type Stream,
+  type UnavailableInputPolicy,
 } from "../src/builder/types.ts";
 import {
   action,
@@ -121,6 +122,24 @@ describe("module", () => {
       expect(isModule(greet)).toBe(true);
       const module = greet as unknown as Module;
       expect(module.argumentSchema).toEqual(schema);
+    });
+
+    it("copies unavailable input policy from scheduler options", () => {
+      const unavailableInputPolicy = [{
+        path: ["repo", "owner"],
+        reasons: ["error", "pending"],
+      }] as const satisfies UnavailableInputPolicy;
+
+      const probe = lift(
+        ({ repo }: { repo: { owner: string } }) => repo.owner,
+        true,
+        { type: "string" },
+        { unavailableInputPolicy },
+      );
+
+      const module = probe as unknown as Module;
+      expect(module.unavailableInputPolicy).toBe(unavailableInputPolicy);
+      expect(module.type).toBe("javascript-availability");
     });
 
     it("supports schema validation with description", () => {

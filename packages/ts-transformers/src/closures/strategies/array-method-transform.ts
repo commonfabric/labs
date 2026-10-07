@@ -11,8 +11,15 @@ import {
   typeToTypeNodeWithRegistry,
   visitEachChildWithJsx,
 } from "../../ast/mod.ts";
+import {
+  canonicalizeResultOfCaptures,
+  rewriteResultOfAliasReferences,
+} from "../../availability/analysis.ts";
 import type { TransformationContext } from "../../core/mod.ts";
-import type { CaptureTreeNode } from "../../utils/capture-tree.ts";
+import {
+  type CaptureTreeNode,
+  groupCapturesByRoot,
+} from "../../utils/capture-tree.ts";
 import {
   normalizeBindingName,
   reserveIdentifier,
@@ -424,17 +431,33 @@ export function transformArrayMethodCallback(
   context.markAsArrayMethodCallback(callback);
 
   const collector = new CaptureCollector(checker);
-  const { captureTree } = collector.analyzeCurrentAndOriginal(callback);
+  const { captures } = collector.analyzeCurrentAndOriginal(callback);
+  // A projected result alias must cross the mapWithPattern boundary as its
+  // physical AsyncResult source. Otherwise a nested computed() can retain the
+  // alias's authored symbol, canonicalize it back to the outer source, and
+  // emit a callback that reads an out-of-scope identifier.
+  const canonicalCaptures = canonicalizeResultOfCaptures(
+    captures,
+    context,
+    methodCall,
+  );
+  const captureTree = groupCapturesByRoot(canonicalCaptures.captures);
 
   const originalParams = callback.parameters;
   const elemParam = originalParams[0];
   const indexParam = originalParams[1];
   const arrayParam = originalParams[2];
 
+  const canonicalBody = rewriteResultOfAliasReferences(
+    callback.body,
+    canonicalCaptures.aliases,
+    context,
+    context.tsContext,
+  );
   const family = classifyArrayMethodCall(methodCall)?.family;
   const body = family === "groupBy" || family === "keyBy"
-    ? tagSelectorReturns(callback.body, context)
-    : callback.body;
+    ? tagSelectorReturns(canonicalBody, context)
+    : canonicalBody;
   const transformedBody = expandCapturedObjectSpreads(
     ts.visitNode(body, visitor) as ts.ConciseBody,
     callback,

@@ -5,6 +5,7 @@ import {
   type FabricValue,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -38,13 +39,15 @@ const UNRESOLVED_LINK_PLACEHOLDER = Object.freeze({
  * Whether `value` needs no schema check where it stands: an opaque Cell whose
  * wrapper the schema declares, or the placeholder
  * {@link overlayUnreadableLinkPlaceholders} leaves for a stored link this
- * replica cannot read. The two together are what let a document be judged
- * here without judging values that are owned elsewhere.
+ * replica cannot read, or a runtime-owned unavailable marker. These cases
+ * preserve handles and availability while checking the document's ordinary
+ * values; reactive argument materialization enforces availability at use.
  */
 export const acceptsOpaqueCellOrUnresolvedLink = (
   value: unknown,
   schema: JSONSchema,
 ): boolean =>
+  isUnavailable(value) ||
   value === UNRESOLVED_LINK_PLACEHOLDER ||
   schemaAcceptsOpaqueCellValue(value, schema);
 
@@ -312,6 +315,12 @@ export function storedArgumentValidationIssue(
     { mergeMaterializedLinks: true },
   );
   const validationOptions = {
+    // Availability is a transient control state, not the stored argument's
+    // business value. A candidate must be able to replace the producer while
+    // one of its linked arguments is pending, disconnected, or invalid; the
+    // ordinary runtime preflight parks consumers until that value is usable.
+    // Authenticate the concrete FabricInstance here rather than teaching an
+    // object schema to accept arbitrary branded values.
     acceptOpaqueValue: acceptsOpaqueCellOrUnresolvedLink,
     // An OPTIONAL key holding `undefined` carries no data, and a handler
     // mints one without meaning to: `comments.push({ author, ... })` with

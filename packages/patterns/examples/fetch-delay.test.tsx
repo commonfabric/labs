@@ -3,7 +3,14 @@
 // instantly. The assertion's read is what starts the fetch, and the harness
 // waits for the delayed response before it reads again, so the result is
 // observed deterministically once it lands.
-import { assert, computed, fetchJson, pattern, TESTS } from "commonfabric";
+import {
+  assert,
+  computed,
+  fetchJson,
+  pattern,
+  resultOf,
+  TESTS,
+} from "commonfabric";
 
 export const fetchMocks = [
   {
@@ -17,7 +24,8 @@ export const fetchMocks = [
 export default pattern(() => {
   const url = computed(() => "https://example.test/api/slow");
   const fetched = fetchJson<{ v: number }>({ url });
-  const result_is_7 = assert(() => fetched.result?.v === 7);
+  const result = resultOf(fetched);
+  const result_is_7 = assert(() => result.v === 7);
   return {
     [TESTS]: [
       { assertion: result_is_7 },

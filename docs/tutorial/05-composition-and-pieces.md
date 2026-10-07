@@ -141,33 +141,40 @@ Patterns can call language models declaratively — `generateText` /
 
 ```tsx
 // Shown inside a pattern body.
-const response = generateText({
+const responseRequest = generateText({
   prompt: userInput,                       // reactive — re-runs when it changes
   system: "You are a helpful assistant.",
 });
-// response: { pending: boolean, result?: string, error?: unknown,
-//             partial?: string /* streaming text so far */ }
+const response = resultOf(responseRequest);
 
-{response.pending ? <cf-loader /> : <cf-markdown>{response.result}</cf-markdown>}
+{isPending(responseRequest) || isSyncing(responseRequest)
+  ? <cf-loader />
+  : hasError(responseRequest)
+  ? <div>{responseRequest.errorMessage}</div>
+  : <cf-markdown>{response}</cf-markdown>}
 ```
 
 The request flows through the server's LLM proxy (Toolshed — Chapter 11),
-results are cached per distinct input, and `pending`/`error`/`result` are
-just cells your UI binds to. A real use from
+results are cached per distinct input, and unavailable states propagate through
+ordinary dataflow until the result exists. A real use from
 `packages/patterns/shopping-list.tsx` — note it's *inside a `.map()`*, one
 cached classification per item:
 
 ```tsx
 // Shown inside a pattern body.
 const itemsWithAisles = items.map((item) => {
-  const aisleResult = generateObject<AisleResult>({
+  const aisleRequest = generateObject<AisleResult>({
     system: "You are a grocery store assistant. ...respond with one of the exact locations...",
     prompt: `Store layout:\n${effectiveLayout}\n\nItem: ${item.title}\n...`,
     model: "anthropic:claude-haiku-4-5",
   });
-  return { item, aisle: aisleResult };
+  return { item, aisleRequest };
 });
 ```
+
+Keeping the request beside the item lets each JSX leaf render pending or error
+state before projecting the usable aisle with `resultOf(aisleRequest)`. This is
+the same state/usable-view split as the single-request example above.
 
 Model names must be `vendor:model` (e.g. `"anthropic:claude-sonnet-4-5"`,
 `"openai:gpt-4o"`); a malformed name fails with an unhelpful `TypeError`.

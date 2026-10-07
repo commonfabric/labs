@@ -41,11 +41,19 @@ long way without a query-dependency analyzer.
   metadata only to the documents it writes, so a row whose label changed
   under unchanged content lands on a document of its own that the commit
   writes and labels. Any re-declaration of the handle re-keys every labeled
-  row the same way. What a re-run writes is the result cell (its `pending`
-  flag, request hash, and the array of row links) plus one document per row
+  row the same way. What a re-run writes is the runtime's internal request
+  state (its `pending` flag, request hash, and the array of row links), the
+  direct availability-aware value channel, plus one document per row
   whose key is new to this result cell. Documents no result references any
   longer are not collected: a result cell accumulates one document per
   distinct row it has ever held.
+
+The public query request is `AsyncResult<SqliteQueryResult<Row>>`, not the
+internal state record. `isPending(request)` and `isSyncing(request)` observe
+waiting; `hasError(request)` observes terminal failure and exposes
+`errorKind`/`errorMessage`. Ordinary consumers read `resultOf(request).rows`.
+Unaccepted unavailable states propagate through dependent computations rather
+than becoming a successful empty row array.
 
 This is deliberately the same shape the runtime uses elsewhere: reactivity is
 driven by observing cells, and the handle cell's changing `rev` stands in for

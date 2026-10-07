@@ -2,6 +2,7 @@ import {
   cfSqlite,
   handler,
   pattern,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   table,
@@ -130,8 +131,8 @@ export default pattern(() => {
   );
 
   return {
-    q,
-    qStaging,
+    q: resultOf(q),
+    qStaging: resultOf(qStaging),
     seed: seed({ db }),
     copyBad: copyBad({ db }),
     copyGood: copyGood({ db }),

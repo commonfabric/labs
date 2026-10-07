@@ -8,6 +8,7 @@ import {
   toDebugKindString,
   valueEqual,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import {
   extractDataUriPayloadText,
   isDataUriMediaType,
@@ -217,7 +218,7 @@ export const resolve = (
     // function is declared to return, so a caller handles it like every other
     // unresolvable address. The fetch builtins store a `FabricError` as a
     // result, and resolving a link whose path continues past one lands here.
-    if (value instanceof FabricInstance) {
+    if (isUnavailable(value) || value instanceof FabricInstance) {
       return {
         error: TypeMismatchError(
           { ...address, path: path.slice(0, at + 1) },

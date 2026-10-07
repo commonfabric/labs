@@ -1,4 +1,8 @@
-import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
+import {
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { startReadStats } from "../read-stats.ts";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -117,7 +121,11 @@ export type ActionInvocationResult =
 
 export function invokeReactiveAction(state: {
   readonly runtime: Runtime;
-  readonly setExecutingAction: (action: Action, actionId: string) => void;
+  readonly setExecutingAction: (
+    action: Action,
+    actionId: string,
+    identity?: ScopeKeyIdentity,
+  ) => void;
   readonly clearExecutingAction: () => void;
 }, args: {
   readonly action: Action;
@@ -131,7 +139,11 @@ export function invokeReactiveAction(state: {
   const measureDetail = () => actionMeasureDetail(args.action, args.actionId);
   try {
     // Track executing action for parent-child relationship tracking.
-    state.setExecutingAction(args.action, args.actionId);
+    state.setExecutingAction(
+      args.action,
+      args.actionId,
+      args.tx.tx.scopeKeyIdentity,
+    );
     logger.timeStart("scheduler", "run", "action");
     return Promise.resolve(
       state.runtime.harness.invoke(() => {
@@ -533,7 +545,11 @@ export interface SchedulerActionRunState {
   readonly isDisposed?: () => boolean;
   readonly parkLocalRead?: (action: Action, log: ReactivityLog) => void;
   readonly queueExecution: () => void;
-  readonly setExecutingAction: (action: Action, actionId: string) => void;
+  readonly setExecutingAction: (
+    action: Action,
+    actionId: string,
+    identity?: ScopeKeyIdentity,
+  ) => void;
   readonly clearExecutingAction: () => void;
 }
 

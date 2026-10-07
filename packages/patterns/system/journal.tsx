@@ -5,10 +5,20 @@
  * Access via: wish({ query: "#journal" })
  */
 import {
+  type AsyncResult,
   computed,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  ifElse,
+  isPending,
+  isSyncing,
+  latestComplete,
+  lift,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   toIndentedDebugString,
   UI,
   wish,
@@ -85,26 +95,69 @@ const clearJournal = handler<
   journal.set([]);
 });
 
+/** Reports the journal and clock's availability beside the retained entries. */
+export const journalAvailability = lift(
+  ({ journal, nowMs }: {
+    journal: AsyncResult<JournalEntry[]>;
+    nowMs: AsyncResult<number>;
+  }) => {
+    if (hasSchemaMismatch(journal) || hasSchemaMismatch(nowMs)) {
+      return {
+        availability: "schemaMismatch",
+        error: "Journal data has an unexpected format.",
+      };
+    }
+    if (hasError(journal)) {
+      return { availability: "error", error: journal.errorMessage };
+    }
+    if (hasError(nowMs)) {
+      return { availability: "error", error: nowMs.errorMessage };
+    }
+    if (isPending(journal) || isPending(nowMs)) {
+      return { availability: "pending", error: "" };
+    }
+    if (isSyncing(journal) || isSyncing(nowMs)) {
+      return { availability: "syncing", error: "" };
+    }
+    return { availability: "ready", error: "" };
+  },
+);
+
 export default pattern<Record<string, never>>((_) => {
   // Use wish() to access journal from home.tsx via defaultPattern
   const journalResult = wish<Array<JournalEntry>>({
     query: "#journal",
   });
+  const journal = resultOf(journalResult.result);
 
   // Current time, ticking every 60 seconds so relative-time labels
   // ("just now", "5m ago", ...) refresh as time passes.
   const nowCell = wish<number>({ query: "#now/60" });
+  const journalSnapshot = latestComplete({
+    journal: journalResult.result,
+    nowMs: nowCell.result,
+  });
+  const observedJournalSnapshot = observeAvailability(journalSnapshot);
+  const displaySnapshot = computed(() => {
+    if (
+      isPending(observedJournalSnapshot) ||
+      hasError(observedJournalSnapshot) ||
+      isSyncing(observedJournalSnapshot)
+    ) return { journal: [], nowMs: 0 };
+    return resultOf(observedJournalSnapshot);
+  });
+  const availabilityState = journalAvailability({
+    journal: journalResult.result,
+    nowMs: nowCell.result,
+  });
+
+  // Keep the last complete pair so a transient reconnect does not replace a
+  // populated journal with an empty state or fabricate a reference time.
+  const entries = computed(() => [...displaySnapshot.journal].reverse());
 
   // Debug: stringify raw result for the debug panel
   const debugRaw = computed(() => {
-    const raw = journalResult.result;
-    return toIndentedDebugString(raw);
-  });
-
-  // Most recent entries first
-  const entries = computed(() => {
-    const journal = journalResult.result || [];
-    return [...journal].reverse();
+    return toIndentedDebugString(entries);
   });
 
   const entryCount = computed(() => entries.length);
@@ -124,13 +177,27 @@ export default pattern<Record<string, never>>((_) => {
           <h2 style={{ margin: "0" }}>Activity Journal</h2>
           {entryCount > 0 && (
             <cf-button
-              onClick={clearJournal({ journal: journalResult.result! })}
+              onClick={clearJournal({ journal })}
               variant="secondary"
             >
               Clear Journal
             </cf-button>
           )}
         </div>
+
+        {ifElse(
+          computed(() =>
+            availabilityState.availability === "pending" ||
+            availabilityState.availability === "syncing"
+          ),
+          <p role="status">Loading journal data…</p>,
+          null,
+        )}
+        {ifElse(
+          availabilityState.error,
+          <p role="alert">{availabilityState.error}</p>,
+          null,
+        )}
 
         {/* Debug section */}
         <details style={{ marginBottom: "16px", fontSize: "12px" }}>
@@ -204,9 +271,10 @@ export default pattern<Record<string, never>>((_) => {
                     color: "#666",
                   }}
                 >
-                  {nowCell.result == null
-                    ? ""
-                    : formatTimestamp(entry.timestamp, nowCell.result)}
+                  {formatTimestamp(
+                    entry.timestamp,
+                    displaySnapshot.nowMs,
+                  )}
                 </span>
               </div>
 
@@ -264,5 +332,7 @@ export default pattern<Record<string, never>>((_) => {
         </div>
       </div>
     ),
+    availability: availabilityState.availability,
+    error: availabilityState.error,
   };
 });

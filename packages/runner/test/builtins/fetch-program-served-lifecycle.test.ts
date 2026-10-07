@@ -330,6 +330,26 @@ describe("fetch-program-served-lifecycle", () => {
     };
   }
 
+  it("keeps a recreated node's claim after the stopped node is accepted late", async () => {
+    const old = fixture();
+    await old.seed(aliceOne, "user");
+    await commit(old.stage(aliceOne, true, true));
+    old.cancels[0]();
+    await old.dispatches[0]();
+    await runtime.settled();
+    expect(old.cacheState(aliceOne, "user")).toBe("idle");
+
+    const replacement = fixture();
+    await commit(replacement.stage(aliceOne));
+    expect(replacement.cacheState(aliceOne, "user")).toBe("fetching");
+    for (const callback of old.accepted) callback();
+    await runtime.settled();
+    expect(replacement.cacheState(aliceOne, "user")).toBe("fetching");
+    replacement.cancels[0]();
+    await runtime.settled();
+    expect(replacement.cacheState(aliceOne, "user")).toBe("idle");
+  });
+
   it("releases an accepted claim stopped before dispatch", async () => {
     const f = fixture();
     await f.seed(aliceOne, "user");

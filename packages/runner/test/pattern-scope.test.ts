@@ -2483,7 +2483,7 @@ Deno.test("when keeps condition scope while selecting narrower value link", asyn
   }
 });
 
-Deno.test("fetchJson state cells use narrowest input scope", async () => {
+Deno.test("fetchJson direct result uses narrowest input scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2510,7 +2510,7 @@ Deno.test("fetchJson state cells use narrowest input scope", async () => {
 
     const resultCell = runtime.getCell(
       space,
-      "fetchJson state cells use narrowest input scope",
+      "fetchJson direct result uses narrowest input scope",
       undefined,
       tx,
     );
@@ -2522,13 +2522,10 @@ Deno.test("fetchJson state cells use narrowest input scope", async () => {
     await runtime.storageManager.synced();
     await result.pull();
 
-    const pendingLink = parseLink(result.key("pending").getRaw(), result);
-    const resultLink = parseLink(result.key("result").getRaw(), result);
-    const errorLink = parseLink(result.key("error").getRaw(), result);
-    assertEquals(pendingLink?.scope, "user");
-    assertEquals(resultLink?.scope, "user");
-    assertEquals(errorLink?.scope, "user");
-    assertEquals(result.key("pending").get() as unknown, false);
+    assertEquals(
+      result.resolveAsCell().getAsNormalizedFullLink().scope,
+      "user",
+    );
   } finally {
     await runtime.dispose();
     await storageManager.close();
@@ -2577,10 +2574,10 @@ Deno.test("generateText result cell uses narrowest input scope", async () => {
     await runtime.storageManager.synced();
     await result.pull();
 
-    const rawText = result.key("text").getRaw({ lastNode: "writeRedirect" });
-    const textLink = parseLink(rawText, result);
-    assertEquals(textLink?.scope, "user");
-    assertEquals(result.key("text").key("pending").get() as unknown, false);
+    assertEquals(
+      result.key("text").resolveAsCell().getAsNormalizedFullLink().scope,
+      "user",
+    );
   } finally {
     await runtime.dispose();
     await storageManager.close();

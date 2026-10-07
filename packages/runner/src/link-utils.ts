@@ -3,7 +3,7 @@ import {
   deepFreeze,
   type FabricValue,
   isDeepFrozen,
-  isWalkableObjectOrArray,
+  isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
@@ -814,7 +814,7 @@ function recursiveStripAsCellFromSchema(
     // property name and would return `{}`, so a fabric-valued default (which
     // `Cell.of()` embeds into schemas) would be lost from the sanitized
     // schema that rides on links.
-    if (isWalkableObjectOrArray(value)) {
+    if (isKeyableObjectOrArray(value)) {
       if (key === "$defs") {
         // Process each definition in $defs (they contain schemas that may have asCell/asStream)
         const processedDefs: Record<string, any> = {};
@@ -823,7 +823,7 @@ function recursiveStripAsCellFromSchema(
             value as Record<string, any>,
           )
         ) {
-          if (isWalkableObjectOrArray(defSchema)) {
+          if (isKeyableObjectOrArray(defSchema)) {
             processedDefs[defName] = recursiveStripAsCellFromSchema(
               defSchema,
               context,
@@ -837,7 +837,7 @@ function recursiveStripAsCellFromSchema(
       } else if (Array.isArray(value)) {
         // Handle arrays
         (result as Record<string, unknown>)[key] = value.map((item) =>
-          isWalkableObjectOrArray(item)
+          isKeyableObjectOrArray(item)
             ? recursiveStripAsCellFromSchema(
               item,
               context,

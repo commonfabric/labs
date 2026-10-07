@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import {
+  FabricUnavailable,
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableMismatch,
+} from "@commonfabric/data-model/availability";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { Cell } from "../../src/cell.ts";
@@ -89,7 +96,7 @@ describe("forward-reference", () => {
     cancels.push(typed.sink(() => {}));
     await runtime.settled();
     await runtime.idle();
-    return { result, resultSchema: pattern.resultSchema! };
+    return { result, argumentCell, resultSchema: pattern.resultSchema! };
   }
 
   /**
@@ -125,6 +132,37 @@ describe("forward-reference", () => {
       it("reads the input's default by the field's own path", async () => {
         const { result } = await run(exportName, {});
         expect(result.key("v").asSchema({ type: "number" }).get()).toBe(0);
+      });
+
+      it("propagates native condition states instead of a schema default and recovers", async () => {
+        const conditionKey = exportName === "Or" ? "off" : "on";
+        const { result, argumentCell } = await run(exportName, {});
+        const states = [
+          UNAVAILABLE_PENDING,
+          UNAVAILABLE_SYNCING,
+          unavailableError(new Error("condition failed")),
+          unavailableMismatch("condition must be boolean"),
+        ];
+        for (const state of states) {
+          const tx = runtime.edit();
+          argumentCell.withTx(tx).key(conditionKey).setRaw(state);
+          runtime.prepareTxForCommit(tx);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.settled();
+          const unavailable = result.key("v").resolveAsCell().getRaw();
+          expect(unavailable).toBeInstanceOf(FabricUnavailable);
+          expect(unavailable).toEqual(state);
+
+          const recoveryTx = runtime.edit();
+          argumentCell.withTx(recoveryTx).key(conditionKey).set(
+            exportName !== "Or",
+          );
+          runtime.prepareTxForCommit(recoveryTx);
+          expect((await recoveryTx.commit().settled).error).toBeUndefined();
+          await runtime.settled();
+          expect(result.key("v").asSchema({ type: "number" }).get()).toBe(0);
+          expect(forwardedReference(result).schema).toBeDefined();
+        }
       });
     });
   }

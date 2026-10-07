@@ -15,6 +15,10 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import {
+  type FabricUnavailable,
+  isUnavailable,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { table } from "@commonfabric/memory/sqlite/schema";
@@ -29,10 +33,12 @@ import { createTrustedBuilder } from "./support/trusted-builder.ts";
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
 
-interface QueryState {
-  pending: boolean;
-  result?: unknown;
-  error?: unknown;
+type QueryValue = { rows: unknown[] } | FabricUnavailable;
+
+function queryErrorMessage(value: QueryValue): string | undefined {
+  return isUnavailable(value) && value.reason === "error"
+    ? value.errorMessage
+    : undefined;
 }
 
 describe("sqliteQuery()", () => {
@@ -62,7 +68,7 @@ describe("sqliteQuery()", () => {
   async function settledQueryOver(
     label: string,
     dbInput: unknown,
-  ): Promise<QueryState> {
+  ): Promise<QueryValue> {
     const queryPattern = cf.pattern(() =>
       // The cast is the subject: each case supplies a `db` the handle type
       // excludes, which is what a read resolving to nothing produces at
@@ -77,29 +83,27 @@ describe("sqliteQuery()", () => {
     );
     const result = runtime.run(tx, queryPattern, {}, resultCell);
     await tx.commit().settled;
-    return await waitForCellValue<QueryState>(
+    return await waitForCellValue<QueryValue>(
       runtime,
       result,
-      (value) => value?.pending === false,
+      (value) => isUnavailable(value) && value.reason === "error",
     );
   }
 
   describe("a `db` that is not a database handle", () => {
     it("settles an empty object with `error` naming the invalid handle", async () => {
       const state = await settledQueryOver("empty-object", {});
-      expect(state.error).toBe("sqlite: invalid database handle");
-      expect(state.result).toBeUndefined();
-      expect(state.pending).toBe(false);
+      expect(queryErrorMessage(state)).toBe("sqlite: invalid database handle");
     });
 
     it("settles a handle missing its `id` with the same `error`", async () => {
       const state = await settledQueryOver("no-id", { tables: {} });
-      expect(state.error).toBe("sqlite: invalid database handle");
+      expect(queryErrorMessage(state)).toBe("sqlite: invalid database handle");
     });
 
     it("settles a string `db` with the same `error`", async () => {
       const state = await settledQueryOver("string", "of:fid1:not-a-handle");
-      expect(state.error).toBe("sqlite: invalid database handle");
+      expect(queryErrorMessage(state)).toBe("sqlite: invalid database handle");
     });
   });
 
@@ -152,23 +156,23 @@ describe("sqliteQuery()", () => {
       const result = runtime.run(tx, queryPattern, inputs, resultCell);
       await tx.commit().settled;
 
-      const failed = await waitForCellValue<QueryState>(
+      const failed = await waitForCellValue<QueryValue>(
         runtime,
         result,
-        (value) => value?.pending === false,
+        (value) => isUnavailable(value) && value.reason === "error",
       );
-      expect(failed.error).toBe("sqlite: invalid database handle");
+      expect(queryErrorMessage(failed)).toBe("sqlite: invalid database handle");
 
       await runtime.editWithRetry((edit) => {
         inputs.withTx(edit).key("db").set(dbRef);
       });
 
-      const recovered = await waitForCellValue<QueryState>(
+      const recovered = await waitForCellValue<QueryValue>(
         runtime,
         result,
-        (value) => value?.pending === false && value?.error === undefined,
+        (value) => value !== undefined && !isUnavailable(value),
       );
-      expect(recovered.result).toEqual([{ body: "recovered" }]);
+      expect(recovered).toEqual({ rows: [{ body: "recovered" }] });
     });
   });
 });

@@ -60,7 +60,7 @@ export type Stream<T = unknown> = {
   lastEvent?: T;
 };
 export type VNode = unknown;
-export type WishState<T> = { result?: T; candidates?: T[] };
+export type WishState<T> = { result: AsyncResult<T>; candidates: T[] };
 
 export const NAME = "__name";
 export const UI = "__ui";
@@ -320,84 +320,157 @@ export function unless<T>(condition: unknown, value: T): T | undefined {
 }
 
 export function wish<T>({ query }: { query: string }): WishState<T> {
-  return { result: wishResults.get(query) as T | undefined };
+  return {
+    result: wishResults.has(query)
+      ? wishResults.get(query) as T
+      : { pending: true },
+    candidates: [],
+  };
 }
 
 export function fetchJson<T>(
   _params: Record<string, unknown>,
-): { pending: false; result: T; error: undefined } {
-  return {
-    pending: false,
-    // A GitHub-repo-shaped stub: covers both `stargazers_count` readers and
-    // patterns that walk further into the response (owner, name, etc.).
-    result: fetchJsonResult as T,
-    error: undefined,
-  };
+): T {
+  // A GitHub-repo-shaped stub: covers both `stargazers_count` readers and
+  // patterns that walk further into the response (owner, name, etc.).
+  return fetchJsonResult as T;
 }
 
 export function fetchJsonUnchecked(
   _params: Record<string, unknown>,
-): { pending: false; result: unknown; error: undefined } {
-  return {
-    pending: false,
-    result: { stargazers_count: 123 },
-    error: undefined,
-  };
+): unknown {
+  return { stargazers_count: 123 };
 }
 
 export function fetchText(
   _params: Record<string, unknown>,
-): { pending: false; result: string; error: undefined } {
-  return {
-    pending: false,
-    result: "stub text",
-    error: undefined,
-  };
+): string {
+  return "stub text";
 }
 
 export function fetchBinary(
   _params: Record<string, unknown>,
-): {
-  pending: false;
-  result: { bytes: Uint8Array; mediaType: string };
-  error: undefined;
-} {
-  return {
-    pending: false,
-    result: { bytes: new Uint8Array(), mediaType: "application/octet-stream" },
-    error: undefined,
-  };
+): { bytes: Uint8Array; mediaType: string } {
+  return { bytes: new Uint8Array(), mediaType: "application/octet-stream" };
+}
+
+type PendingResult = { pending: true };
+type ErrorResult = { error: Error };
+type SyncingResult = { syncing: true };
+type SchemaMismatchResult = { schemaMismatch: true };
+type UnavailableResult =
+  | PendingResult
+  | ErrorResult
+  | SyncingResult
+  | SchemaMismatchResult;
+export type AsyncResult<T> = T | UnavailableResult;
+
+function currentGenerateTextValue(): string | UnavailableResult {
+  if (generateTextResult.pending) return { pending: true };
+  if (generateTextResult.error) {
+    return {
+      error: generateTextResult.error instanceof Error
+        ? generateTextResult.error
+        : new Error(String(generateTextResult.error)),
+    };
+  }
+  return typeof generateTextResult.result === "string"
+    ? generateTextResult.result
+    : "";
+}
+
+export function resultOf<T>(value: T): Exclude<T, UnavailableResult> {
+  return value as Exclude<T, UnavailableResult>;
+}
+
+export function isPending(value: unknown): value is PendingResult {
+  return typeof value === "object" && value !== null &&
+    (value as { pending?: unknown }).pending === true;
+}
+
+export function hasError(value: unknown): value is ErrorResult {
+  return typeof value === "object" && value !== null &&
+    (value as { error?: unknown }).error instanceof Error;
+}
+
+export function isSyncing(value: unknown): value is SyncingResult {
+  return typeof value === "object" && value !== null &&
+    (value as { syncing?: unknown }).syncing === true;
+}
+
+export function hasSchemaMismatch(
+  value: unknown,
+): value is SchemaMismatchResult {
+  return typeof value === "object" && value !== null &&
+    (value as { schemaMismatch?: unknown }).schemaMismatch === true;
+}
+
+export function observeAvailability<T>(value: T): T {
+  return value;
+}
+
+export function latestComplete<T>(value: T): T {
+  return value;
 }
 
 export function generateObject<T>(
   _params: Record<string, unknown>,
-): { pending: false; result: T; error: undefined } {
-  return { pending: false, result: {} as T, error: undefined };
+): T | UnavailableResult {
+  return {} as T;
 }
 
-export function generateText<T>(
+export function generateText(
   _params: Record<string, unknown>,
-): { pending: boolean; result?: T; error?: unknown } {
-  return generateTextResult as {
-    pending: boolean;
-    result?: T;
-    error?: unknown;
-  };
+): string | UnavailableResult {
+  return currentGenerateTextValue();
+}
+
+export function generateObjectStream<T>(
+  _params: Record<string, unknown>,
+): T | UnavailableResult {
+  return {} as T;
+}
+
+export function generateTextStream(
+  _params: Record<string, unknown>,
+): string | UnavailableResult {
+  return currentGenerateTextValue();
+}
+
+export function partialResultOf(
+  _value: unknown,
+): string {
+  return currentGenerateTextValue() as string;
 }
 
 export function llmDialog<T>(
   _params: Record<string, unknown>,
 ): {
   pending: false;
-  result?: T;
+  result: AsyncResult<T>;
   addMessage: Stream<BuiltInLLMMessage>;
   error?: string;
 } {
   return {
     pending: false,
+    result: { pending: true },
     addMessage: handler<BuiltInLLMMessage, Record<string, never>>(() => {})({}),
   };
 }
+
+// Compile-time contract checks: async state projections are always present
+// and carry either their declared value or an availability marker.
+function assertAvailabilityResultTypes(): void {
+  const wishResult: number | UnavailableResult = wish<number>({
+    query: "#type-check",
+  }).result;
+  const dialogResult: { answer: number } | UnavailableResult = llmDialog<{
+    answer: number;
+  }>({}).result;
+  void wishResult;
+  void dialogResult;
+}
+void assertAvailabilityResultTypes;
 
 export function patternTool<T>(
   patternValue: unknown,
@@ -435,16 +508,18 @@ export function navigateTo(value: unknown): unknown {
   return value;
 }
 
-export function compileAndRun(): { pending: false; result: undefined } {
-  return { pending: false, result: undefined };
+export function compileAndRun<T = unknown>(): T | UnavailableResult {
+  return {} as T;
 }
 
-export function fetchProgram(): { pending: false; result: undefined } {
-  return { pending: false, result: undefined };
+export function fetchProgram(): { files: never[]; main: string } {
+  return { files: [], main: "" };
 }
 
-export function streamData(): { pending: false; result: undefined } {
-  return { pending: false, result: undefined };
+export function streamData<T>(
+  _params: Record<string, unknown>,
+): T | UnavailableResult {
+  return {} as T;
 }
 
 export function byRef(_ref: string): () => Record<string, never> {

@@ -36,45 +36,45 @@ runtime binds a database to.
 ## db.query
 
 `db.query<Row>(sql, options?)` is a reactive read, not a promise. Never `await`
-it. Call it in the pattern body and read `pending` / `error` / `result`
-reactively; it re-runs when its inputs change, and results are memoized per
-request.
+it. Call it in the pattern body, keep the request when the UI needs to inspect
+availability, and project its usable value with `resultOf()`. It re-runs when
+its inputs change, and results are memoized per request.
 
 ```tsx
 // Shown at module scope.
+import { resultOf } from "commonfabric";
+
 export default pattern<{ orders: SqliteDb }>(({ orders }) => {
-  const pending = orders.query<{ id: number; glaze: string; boxes: number }>(
+  const request = orders.query<{ id: number; glaze: string; boxes: number }>(
     "SELECT id, glaze, boxes FROM orders WHERE shipped = 0 ORDER BY id LIMIT 200",
   );
+  const result = resultOf(request);
 
-  return lift((rows?: Array<{ glaze: string; boxes: number }>) =>
-    (rows ?? []).map((row) => `${row.boxes} × ${row.glaze}`).join(", ")
-  )(pending.result);
+  return lift((rows: Array<{ glaze: string; boxes: number }>) =>
+    rows.map((row) => `${row.boxes} × ${row.glaze}`).join(", ")
+  )(result.rows);
 });
 ```
 
-The call returns an envelope, not the rows:
-`{ pending, result?, error?, withheld? }`. `result` holds the rows once there
-are any, so a field typed as the rows themselves — `PerSession<Row[]>` — cannot
-take the call's value, and reading `.result` is what gets from one to the
-other. `withheld` counts the rows a read-time clearance kept from this reader,
-and is absent unless the query asked for one.
+The call returns an `AsyncResult<SqliteQueryResult<Row>>`, not the rows alone.
+On success, `resultOf(request)` exposes `{ rows, withheld? }`. `withheld` counts
+the rows a read-time clearance kept from this reader and is absent unless the
+query asked for one. Keep `request` itself for `isPending()` or `hasError()`
+guards; computations which only consume the projected result wait while the
+request is unavailable.
 
-Render the failure, not just the wait. A pattern that branches only on
-`pending` shows a loading view for as long as the query stays broken, because a
-query that failed is settled — `pending` is `false` and `error` holds the
-reason — and nothing further arrives to move it on. `error` reaches the pattern
-for a statement the database refuses and for a handle that does not read back
-as one, so a view that shows it is the difference between a page that says what
-went wrong and a page that spins.
+Render the failure when the UI needs to explain it. Guard the original request
+with `hasError(request)` and read `request.errorMessage`; otherwise the unavailable
+error propagates and downstream computations do not run. Query errors include
+a statement the database refuses and a handle that does not read back as one.
 
 A read refused for labeling arrives the same way and is the case most easily
 mistaken for an empty source: where a table declares a per-row label rule, a
 query that does not project every column the rule reads is refused rather than
-returned unlabeled, and `error` names the column and says to select it.
-`result` is then absent, not empty — so a view that renders "none found" over
-it states a fact about the data that nobody established. Branch on `error`
-before branching on emptiness.
+returned unlabeled, and `errorMessage` names the column and says to select it.
+The request is then unavailable, not empty — so a view that renders "none found"
+over it states a fact about the data that nobody established. Branch on
+`hasError(request)` before branching on emptiness.
 
 The `<Row>` type argument names the columns the statement projects, and is what
 turns a result into something typed. Without it the rows come back as
@@ -94,7 +94,9 @@ react to.
 
 A bind param is resolved as the statement is issued, and `undefined` is refused
 rather than bound: the whole read fails with "sqlite: param is undefined",
-`error` carries that text, and every field computed from the result is empty.
+`hasError(request)` is true and `request.errorMessage` carries that text.
+Computations consuming `resultOf(request)` propagate the unavailable error
+instead of inventing empty fields.
 `null` is what binds SQL NULL.
 
 An input's declared default is applied when the input is READ, so an input
@@ -147,7 +149,7 @@ document, a row the result held before takes its old document back, and a
 re-run whose rows are unchanged writes no row documents. A row whose data or
 label changed is another document, and the one it had stays in the space. A
 reference a pattern keeps to a row therefore does not change when the query
-runs again: read the query's `result` for the current rows. The query is not
+runs again: read `resultOf(request).rows` for the current rows. The query is not
 the only writer that can reach a row document, though: other code holding a
 reference to one can write to it. Three things re-key every row of a labeled
 database at once and write it again: changing which database the query
@@ -226,8 +228,10 @@ something else. Two databases in one task can disagree about this, and each is
 right about itself.
 
 An empty result is a value rather than a failure. A statement matching nothing
-settles the way one matching everything does — `pending` false, `error` absent,
-`result` an empty list — and every field computed from it is empty in turn, so
+settles the way one matching everything does — `isPending(request)` and
+`isSyncing(request)` are false, `hasError(request)` is false, and
+`resultOf(request).rows` is an empty list. Fields computed from those rows can
+report emptiness, so
 the view renders its empty state and nothing reports a problem. The run
 succeeded; the emptiness is data.
 
@@ -289,20 +293,20 @@ and dropping the rows that exceed it.
 
 Where the label lands decides where to look for it. Each result row splits into
 its own entity doc and the column's label sits on that doc, at the column's own
-path. The query document labels `result` membership with the join of the
+path. The query document labels `rows` membership with the join of the
 source rows' labels and the label of the query's own statement and parameters,
 and labels the `withheld` count with that same join. A shared result joins
 every source row's label, including rows skipped by the query contract; a
 session-scoped result joins the labels of the rows it holds. Which row sits at
-a position of `result` carries the label of the query's statement and
+a position of `rows` carries the label of the query's statement and
 parameters and that row's label. A
 reader outside the join therefore cannot observe the array's membership,
 length, or withheld count, and code that reads any of them carries the join
 into what it writes: a row count of a query over labeled columns carries the
-columns' labels, and so does anything computed by mapping over `result`,
-which reads its membership. A row read through `result` by its position
+columns' labels, and so does anything computed by mapping over `rows`,
+which reads its membership. A row read through `rows` by its position
 carries the label of the query's statement and parameters and that row's own
-labels, and not the other rows'. `cf cell get-label <cell> <path>/result/<i>/<col>` follows the links
+labels, and not the other rows'. `cf cell get-label <cell> <path>/rows/<i>/<col>` follows the links
 the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.

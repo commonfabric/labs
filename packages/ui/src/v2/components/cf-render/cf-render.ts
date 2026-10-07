@@ -187,6 +187,27 @@ export class CFRender extends BaseElement {
       overflow: auto;
     }
 
+    /* The renderer owns pending semantics; cf-render owns their presentation.
+      Ambient custom properties cross the shadow boundary just like the rest of
+      the theme, so hosts can tune the treatment without runtime style tags. */
+    .render-container [data-cf-pending="true"]:not([data-cf-pending="true"] [data-cf-pending="true"]) {
+      opacity: var(--cf-render-pending-opacity, 0.55) !important;
+      filter: var(--cf-render-pending-filter, grayscale(0.8)) !important;
+    }
+
+    .render-container :is(cf-fragment, span[style*="display"][style*="contents"])[data-cf-pending="true"]:not([data-cf-pending="true"] [data-cf-pending="true"]) {
+      opacity: 1 !important;
+      filter: none !important;
+    }
+
+    /* Walk through any number of transparent wrappers, then style only the
+      first box-producing element on each branch so opacity does not stack on
+      its descendants. Bare text has no box or interactive surface to treat. */
+    .render-container :is(cf-fragment, span[style*="display"][style*="contents"])[data-cf-pending="true"]:not([data-cf-pending="true"] [data-cf-pending="true"]) :not(:is(cf-fragment, span[style*="display"][style*="contents"])):not([data-cf-pending="true"] :not(:is(cf-fragment, span[style*="display"][style*="contents"])) *) {
+      opacity: var(--cf-render-pending-opacity, 0.55) !important;
+      filter: var(--cf-render-pending-filter, grayscale(0.8)) !important;
+    }
+
     .piece-menu-highlight {
       z-index: 1;
       pointer-events: none;

@@ -599,6 +599,35 @@ export interface FabricUnavailableConstructor {
 
 export declare const FabricUnavailable: FabricUnavailableConstructor;
 
+/** A pending result whose producer has not completed. */
+export type IsPending = FabricUnavailable & { readonly reason: "pending" };
+
+/** A result awaiting replica synchronization. */
+export type IsSyncing = FabricUnavailable & { readonly reason: "syncing" };
+
+/** A terminal unavailable result with its error kind and message. */
+export type HasError = FabricUnavailable & {
+  readonly reason: "error";
+  readonly errorKind: UnavailableErrorKind;
+  readonly errorMessage: string;
+};
+
+/** A terminal result whose value does not satisfy its schema. */
+export type HasSchemaMismatch = HasError & {
+  readonly errorKind: "schemaMismatch";
+};
+
+/** The discriminated states of the canonical unavailable primitive. */
+export type UnavailableVariant = IsPending | IsSyncing | HasError;
+
+/** Availability observations selectable at a computation boundary. */
+export type UnavailableObservationKind = UnavailableReason | "schemaMismatch";
+
+/** The unavailable state selected by an observation kind. */
+export type UnavailableFor<K extends UnavailableObservationKind> = K extends
+  "schemaMismatch" ? HasSchemaMismatch
+  : Extract<UnavailableVariant, { readonly reason: K }>;
+
 //
 // The `FabricPrimitive` schema `type` vocabulary
 //

@@ -18,10 +18,13 @@ import {
   equals,
   generateObject,
   handler,
+  hasError,
   ifElse,
+  isPending,
   lift,
   NAME,
   pattern,
+  resultOf,
   Stream,
   toIndentedDebugString,
   UI,
@@ -1713,7 +1716,7 @@ export default pattern<ClassifierInput, ClassifierOutput>(
     });
 
     // LLM classification - only runs when there's a prompt
-    const llmResult = generateObject<LLMClassificationResult>({
+    const classificationRequest = generateObject<LLMClassificationResult>({
       prompt: classificationPrompt,
       system:
         `You are a precise classifier. Analyze the input and determine if it matches the question criteria.
@@ -1723,6 +1726,7 @@ Respond with:
 - confidence: a number between 0 and 1 indicating your confidence
 - reasoning: a brief explanation of why you classified it this way`,
     });
+    const llmClassification = resultOf(classificationRequest);
 
     // When LLM result arrives, compute the classification result
     // IMPORTANT: This computed has NO SIDE EFFECTS - it only derives state
@@ -1732,9 +1736,11 @@ Respond with:
       classification: ClassificationResult;
     } | null => {
       // Skip if still pending or error
-      if (llmResult.pending || llmResult.error) return null;
+      if (
+        isPending(classificationRequest) || hasError(classificationRequest)
+      ) return null;
 
-      const llmResultValue = llmResult.result;
+      const llmResultValue = llmClassification;
       if (!llmResultValue || !llmResultValue.itemId) return null;
 
       // Get the current item being classified
@@ -1959,7 +1965,7 @@ Each rule should:
       suggestions: RuleSuggestion[];
     }
 
-    const ruleGenResult = generateObject<RuleSuggestionsResult>({
+    const ruleSuggestionsRequest = generateObject<RuleSuggestionsResult>({
       prompt: ruleGenerationPrompt,
       system:
         `You are a pattern recognition expert. Analyze the examples and generate regex rules.
@@ -1970,14 +1976,18 @@ Each suggestion should have:
 - predicts: true for YES, false for NO
 - reasoning: why this pattern indicates the classification`,
     });
+    const ruleSuggestions = resultOf(ruleSuggestionsRequest);
 
     // Derive visible suggestions from LLM result, filtered by dismissed indices
     // This is pure derivation with no side effects
     const visibleSuggestions = computed(
       (): Array<{ suggestion: RuleSuggestion; originalIndex: number }> => {
-        if (ruleGenResult.pending || ruleGenResult.error) return [];
+        if (
+          isPending(ruleSuggestionsRequest) ||
+          hasError(ruleSuggestionsRequest)
+        ) return [];
 
-        const result = ruleGenResult.result;
+        const result = ruleSuggestions;
         if (!result || !result.suggestions || result.suggestions.length === 0) {
           return [];
         }

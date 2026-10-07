@@ -3,6 +3,7 @@ import {
   handler,
   NAME,
   pattern,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -21,9 +22,10 @@ import {
 //                                  FIRST-EVER load; reloads and other
 //                                  runtimes read the original capture
 //      wish({ query: "#now/N" })   a fresh snapshot every N seconds
-//    Both are coarse (one second) and grid-aligned, and read `null` until the
-//    wish resolves — so guard for that load window. `new Date(ms)` with an
-//    explicit argument is deterministic and is NOT gated.
+//    Both are coarse (one second) and grid-aligned. Their results are
+//    unavailable until the wish resolves, so `resultOf()` projects each
+//    timestamp and dependent values remain unavailable during that window.
+//    `new Date(ms)` with an explicit argument is deterministic and is NOT gated.
 //    For a one-off timestamp of the TRIGGERING EVENT, `Date.now()` / `new Date()`
 //    are allowed directly inside a handler/action — no wish needed. That is the
 //    event's own instant, frozen for the whole handler cascade and coarsened to
@@ -106,22 +108,21 @@ export const ReactiveNow = pattern<void, ReactiveNowOutput>(() => {
   // One-shot: resolves once, then holds durably — "when this piece FIRST
   // loaded", shared by every later reload and runtime (not per-session).
   const loadedAtCell = wish<number>({ query: "#now" });
+  const loadedAtCellValue = resultOf(loadedAtCell.result);
   // Ticking: a fresh coarse timestamp every second.
   const nowCell = wish<number>({ query: "#now/1" });
+  const nowCellValue = resultOf(nowCell.result);
 
-  const loadedAt = computed(() =>
-    loadedAtCell.result == null ? "…" : formatClock(loadedAtCell.result)
-  );
-  const now = computed(() =>
-    nowCell.result == null ? "…" : formatClock(nowCell.result)
-  );
+  const loadedAt = computed(() => formatClock(loadedAtCellValue));
+  const now = computed(() => formatClock(nowCellValue));
   // Elapsed since load. Both operands are #now-derived, so the subtraction stays
   // reactive and idempotent — no raw clock read anywhere.
   const sinceLoad = computed(() => {
-    if (loadedAtCell.result == null || nowCell.result == null) return "…";
     const seconds = Math.max(
       0,
-      Math.round((nowCell.result - loadedAtCell.result) / 1000),
+      Math.round(
+        (nowCellValue - loadedAtCellValue) / 1000,
+      ),
     );
     return `${seconds}s ago`;
   });

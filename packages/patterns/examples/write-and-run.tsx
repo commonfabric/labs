@@ -1,13 +1,21 @@
+/** Generates pattern source from a prompt, then compiles and presents it. */
+
 import {
+  type AsyncResult,
   compileAndRun,
   computed,
   Default,
   generateText,
   handler,
+  hasError,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
   navigateTo,
+  observeAvailability,
   pattern,
+  resultOf,
   UI,
   type VNode,
   Writable,
@@ -17,10 +25,12 @@ interface Input {
   prompt: string | Default<"Create a simple counter">;
 }
 
+/** The generation prompt, presentation, and current stage's error message. */
 export interface Output {
   [NAME]: string;
   [UI]: VNode;
   prompt: string;
+  error?: string;
 }
 
 const updatePrompt = handler<
@@ -35,6 +45,87 @@ const updatePrompt = handler<
 
 const visit = handler<unknown, { result: Writable<any> }>((_, { result }) => {
   return navigateTo(result);
+});
+
+/** Displays the stage that owns a generation or compilation outcome. */
+export const WriteAndRunStatus = pattern<
+  {
+    generatedRequest: AsyncResult<string>;
+    // Matches the compiler's open-ended generated-pattern result boundary.
+    compileRequest: any;
+  },
+  { [UI]: VNode; error?: string }
+>(({ generatedRequest, compileRequest }) => {
+  const observedCompileRequest = observeAvailability(compileRequest);
+
+  const isGenerating = computed(() =>
+    hasError(generatedRequest)
+      ? false
+      : isPending(generatedRequest) || isSyncing(generatedRequest)
+  );
+  const generationFailed = hasError(generatedRequest);
+  const generationError = computed(() =>
+    hasError(generatedRequest) ? generatedRequest.errorMessage : undefined
+  );
+  const isCompiling = computed(() =>
+    hasError(observedCompileRequest)
+      ? false
+      : isPending(observedCompileRequest) || isSyncing(observedCompileRequest)
+  );
+  const compileFailed = hasError(observedCompileRequest);
+  const compileError = computed(() =>
+    hasError(observedCompileRequest)
+      ? observedCompileRequest.errorMessage
+      : undefined
+  );
+  const isReady = computed(() =>
+    !isPending(observedCompileRequest) && !isSyncing(observedCompileRequest) &&
+    !hasError(observedCompileRequest)
+  );
+  const compiledPiece = resultOf(observedCompileRequest);
+
+  return {
+    [UI]: (
+      <div
+        style={{
+          padding: "12px",
+          backgroundColor: "#f5f5f5",
+          borderRadius: "8px",
+        }}
+      >
+        {ifElse(
+          isGenerating,
+          <span>Generating code...</span>,
+          ifElse(
+            generationFailed,
+            <div style={{ color: "red" }}>
+              <b>Generation error:</b> {generationError}
+            </div>,
+            ifElse(
+              isCompiling,
+              <span>Compiling pattern...</span>,
+              ifElse(
+                compileFailed,
+                <div style={{ color: "red" }}>
+                  <b>Compile error:</b> {compileError}
+                </div>,
+                ifElse(
+                  isReady,
+                  <cf-button onClick={visit({ result: compiledPiece })}>
+                    Open Generated Pattern
+                  </cf-button>,
+                  <span style={{ opacity: 0.6 }}>
+                    Enter a prompt to generate a pattern
+                  </span>,
+                ),
+              ),
+            ),
+          ),
+        )}
+      </div>
+    ),
+    error: computed(() => generationFailed ? generationError : compileError),
+  };
 });
 
 export default pattern<Input, Output>(({ prompt }) => {
@@ -87,15 +178,15 @@ ${template}
 Generate ONLY the TypeScript code, no explanations or markdown.`;
 
   // Step 1: Generate pattern source code from prompt
-  const generated = generateText({
+  const generatedRequest = generateText({
     system: systemPrompt,
     prompt,
   });
+  const generated = resultOf(generatedRequest);
 
   const processedResult = computed(() => {
-    const result = generated?.result ?? "";
     // Remove wrapping ```typescript``` if it exists
-    return result.replace(/^```typescript\n?/, "").replace(/\n?```$/, "");
+    return generated.replace(/^```typescript\n?/, "").replace(/\n?```$/, "");
   });
 
   // Step 2: Compile the generated code when ready
@@ -106,14 +197,14 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
     main: processedResult ? "/main.tsx" : "",
   }));
 
-  const compiled = compileAndRun(compileParams);
+  const compileRequest = compileAndRun(compileParams);
+  const compiledPiece = resultOf(compileRequest);
 
-  // Compute states
-  const isGenerating = generated.pending;
-  const hasCode = computed(() => !!generated.result);
-  const hasError = computed(() => !!compiled.error);
+  const status = WriteAndRunStatus({ generatedRequest, compileRequest });
+  const hasCode = computed(() => !!generated);
   const isReady = computed(() =>
-    !compiled.pending && !!compiled.result && !compiled.error
+    !isPending(compileRequest) && !isSyncing(compileRequest) &&
+    !hasError(compileRequest)
   );
 
   return {
@@ -137,33 +228,7 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
           oncf-send={updatePrompt({ prompt })}
         />
 
-        <div
-          style={{
-            padding: "12px",
-            backgroundColor: "#f5f5f5",
-            borderRadius: "8px",
-          }}
-        >
-          {ifElse(
-            isGenerating,
-            <span>Generating code...</span>,
-            ifElse(
-              hasError,
-              <div style={{ color: "red" }}>
-                <b>Compile error:</b> {compiled.error}
-              </div>,
-              ifElse(
-                isReady,
-                <cf-button onClick={visit({ result: compiled.result })}>
-                  Open Generated Pattern
-                </cf-button>,
-                <span style={{ opacity: 0.6 }}>
-                  Enter a prompt to generate a pattern
-                </span>,
-              ),
-            ),
-          )}
-        </div>
+        {status[UI]}
 
         {ifElse(
           isReady,
@@ -177,7 +242,7 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
                 backgroundColor: "#fff",
               }}
             >
-              {compiled.result}
+              {compiledPiece}
             </div>
           </div>,
           <span />,
@@ -188,7 +253,7 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
           <div>
             <h3>Generated Code</h3>
             <cf-code-editor
-              value={generated.result}
+              value={generated}
               language="text/x.typescript"
               readonly
             />
@@ -198,8 +263,8 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
       </div>
     ),
     prompt,
-    generatedCode: generated.result,
-    compiledPiece: compiled.result,
-    error: compiled.error,
+    generatedCode: generated,
+    compiledPiece,
+    error: status.error,
   };
 });

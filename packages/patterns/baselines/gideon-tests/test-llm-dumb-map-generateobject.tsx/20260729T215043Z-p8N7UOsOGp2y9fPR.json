@@ -1,0 +1,362 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "items": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "type": "object"
+  },
+  "pattern": "gideon-tests/test-llm-dumb-map-generateobject.tsx",
+  "resultSchema": {
+    "$defs": {
+      "BuiltInLLMContent": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/BuiltInLLMContentPart"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "BuiltInLLMContentPart": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BuiltInLLMTextPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMImagePart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolCallPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolResultPart"
+          }
+        ]
+      },
+      "BuiltInLLMImagePart": {
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "image"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMMessage": {
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/BuiltInLLMContent"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "system",
+              "assistant",
+              "tool"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMTextPart": {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolCallPart": {
+        "properties": {
+          "input": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-call"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "input"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolResultPart": {
+        "properties": {
+          "output": {
+            "anyOf": [
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "value": true
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-result"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "output"
+        ],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content"
+        ],
+        "type": "object"
+      },
+      "JSXElement": {
+        "anyOf": [
+          {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          {
+            "$ref": "#/$defs/UIRenderable"
+          },
+          {
+            "properties": {},
+            "type": "object"
+          }
+        ]
+      },
+      "LegacySentimentAnalysis": {
+        "properties": {
+          "cancelGeneration": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/BuiltInLLMMessage"
+            },
+            "type": "array"
+          },
+          "partial": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/Sentiment"
+              }
+            ]
+          }
+        },
+        "required": [
+          "pending",
+          "cancelGeneration"
+        ],
+        "type": "object"
+      },
+      "Sentiment": {
+        "properties": {
+          "confidence": {
+            "type": "number"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sentiment": {
+            "enum": [
+              "positive",
+              "neutral",
+              "negative"
+            ]
+          }
+        },
+        "required": [
+          "sentiment",
+          "confidence",
+          "keywords"
+        ],
+        "type": "object"
+      },
+      "UIRenderable": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          }
+        },
+        "required": [
+          "$UI"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "#/$defs/JSXElement"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "sentimentAnalyses": {
+        "items": {
+          "properties": {
+            "analysis": {
+              "$ref": "#/$defs/LegacySentimentAnalysis"
+            },
+            "content": {
+              "type": "string"
+            },
+            "itemId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "itemId",
+            "content",
+            "analysis"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "items",
+      "sentimentAnalyses"
+    ],
+    "type": "object"
+  }
+}

@@ -8,6 +8,8 @@ import { forwardReferenceAction } from "./forward-reference.ts";
 /**
  * `unless(condition, fallback)`, the `||` of a pattern: forwards a reference
  * to the condition when it is truthy, and to `fallback` otherwise.
+ * An unavailable condition propagates its native marker without selecting
+ * either input.
  */
 export function unless(
   inputsCell: Cell<{ condition: any; fallback: any }>,

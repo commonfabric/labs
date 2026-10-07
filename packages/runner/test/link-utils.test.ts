@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { deepFreeze } from "@commonfabric/data-model";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
+import { FabricMap } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -786,6 +787,26 @@ describe("link-utils", () => {
   });
 
   describe("sanitizeSchemaForLinks through references", () => {
+    it("preserves Fabric instances inside array defaults and examples", () => {
+      const atomic = new FabricMap(new Map([["answer", 42]]));
+      const schema = {
+        type: "array",
+        items: { type: "object", asCell: ["cell"] },
+        default: [atomic],
+        examples: [[atomic]],
+      };
+
+      const sanitized = sanitizeSchemaForLinks(schema as unknown as JSONSchema);
+      expect(sanitized).toBeDefined();
+      if (sanitized === undefined || typeof sanitized === "boolean") {
+        throw new Error("Expected a sanitized object schema");
+      }
+
+      expect((sanitized?.default as unknown[])[0]).toBe(atomic);
+      expect((sanitized?.examples?.[0] as unknown[])[0]).toBe(atomic);
+      expect(sanitized?.items).toEqual({ type: "object" });
+    });
+
     for (const position of ["root", "nested"]) {
       it(`revisits canonical bindings when a ${position} schema arrives`, () => {
         setContentAddressedSchemasConfig(true);

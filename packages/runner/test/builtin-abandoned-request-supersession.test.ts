@@ -19,12 +19,15 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import { fetchJsonState } from "../src/builder/built-in.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 import { getPatternEnvironment, setPatternEnvironment } from "../src/env.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -137,10 +140,10 @@ describe("whose cells an abandoned request's ending writes", () => {
         }),
       );
 
-    const { pattern, fetchJson } = commonfabric;
+    const { pattern } = commonfabric;
     const testPattern = pattern<{ url: string }>(({ url }) =>
       // deno-lint-ignore no-explicit-any
-      fetchJson({ url } as any)
+      fetchJsonState({ url } as any)
     );
 
     const hostileUrl = runtime.getCell<string>(
@@ -170,7 +173,7 @@ describe("whose cells an abandoned request's ending writes", () => {
     const answered = await waitForCellValue<{ result?: { from?: string } }>(
       runtime,
       result,
-      (value) => value?.result !== undefined,
+      (value) => typeof value?.result?.from === "string",
     );
     expect(answered.result?.from).toContain("/api/first");
 
@@ -194,7 +197,10 @@ describe("whose cells an abandoned request's ending writes", () => {
     expect(result.withTx().key("pending").get()).toBe(false);
     // The answer the pattern was left holding described the url it no longer
     // asks about, so the ending clears it along with the flag.
-    expect(result.withTx().key("result").get()).toBeUndefined();
+    const rawResult = result.withTx().key("result").resolveAsCell().getRaw();
+    expect(isUnavailable(rawResult)).toBe(true);
+    if (!isUnavailable(rawResult)) throw new Error("expected unavailable");
+    expect(rawResult.reason).toBe("error");
   });
 
   it("leaves a running fetch's claim alone when the next request is refused", async () => {
@@ -205,10 +211,10 @@ describe("whose cells an abandoned request's ending writes", () => {
       return held.promise;
     };
 
-    const { pattern, fetchJson } = commonfabric;
+    const { pattern } = commonfabric;
     const testPattern = pattern<{ url: string }>(({ url }) =>
       // deno-lint-ignore no-explicit-any
-      fetchJson({ url } as any)
+      fetchJsonState({ url } as any)
     );
 
     const hostileUrl = runtime.getCell<string>(
@@ -284,7 +290,7 @@ describe("whose cells an abandoned request's ending writes", () => {
   });
 
   it("replaces a finished query's rows when the next query is refused", async () => {
-    const { pattern, sqliteQuery } = commonfabric;
+    const { pattern } = commonfabric;
     // A database of this case's own: the emulated engine keeps a file per
     // handle id, so a fixed id would carry one run's rows into the next.
     const db: SqliteDbRef = {
@@ -317,7 +323,7 @@ describe("whose cells an abandoned request's ending writes", () => {
 
     const testPattern = pattern<{ sql: string }>(({ sql }) =>
       // deno-lint-ignore no-explicit-any
-      sqliteQuery({ db, sql, reactOn: db } as any)
+      sqliteQueryStateNodeFactory({ db, sql, reactOn: db } as any)
     );
     const resultCell = runtime.getCell(
       space,

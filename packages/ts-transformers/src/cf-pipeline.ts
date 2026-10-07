@@ -11,6 +11,7 @@ import type {
   BuilderSourceSitesV1,
   CfcPolicyCompilerManifestV1,
 } from "./core/runtime-contract.ts";
+import { AvailabilityAnalysisTransformer } from "./availability/transformer.ts";
 import { LiftLoweringTransformer } from "./lift/transformer.ts";
 import {
   AssertDiagnosticsTransformer,
@@ -57,6 +58,7 @@ const CFC_TRANSFORMER_STAGES: readonly TransformerStage[] = [
   // follows rewrites the operands inside its capture calls as it would any
   // other reactive expression.
   AssertDiagnosticsTransformer,
+  AvailabilityAnalysisTransformer,
   LiftLoweringTransformer,
   ClosureTransformer,
   PatternOwnedExpressionSiteLoweringTransformer,

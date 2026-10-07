@@ -1,9 +1,17 @@
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { Logger } from "@commonfabric/utils/logger";
+import {
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
+import {
+  preferDataUnavailable,
+  readAvailabilityAwareCell,
+} from "../data-unavailability.ts";
 import {
   linkResolutionProbe,
   machineryRead,
@@ -49,7 +57,7 @@ export type ElementContribution = (
   value: unknown,
   inputElement: unknown,
   out: any[],
-) => "pending" | void;
+) => "pending" | UnavailableVariant | void;
 
 export interface ResumeRepublisher {
   /**
@@ -194,6 +202,7 @@ export function createResumeRepublisher(
       const keyCounts = new Map<string, number>();
       const out: any[] = [];
       const stillPending: Cell<any>[] = [];
+      let unavailable: UnavailableVariant | undefined;
       for (let i = 0; i < list.length; i++) {
         if (!(i in list)) continue;
         const { dedupKey, linkKey } = cellIdentityKey(list[i]);
@@ -202,13 +211,21 @@ export function createResumeRepublisher(
         const elementKey = JSON.stringify([...linkKey, occurrence]);
         const entry = elementRuns.get(elementKey);
         if (!entry) continue;
-        const value = entry.resultCell.withTx(tx).get();
+        const value = readAvailabilityAwareCell(tx, entry.resultCell);
+        const contribution = contribute(value, list[i], out);
+        if (isUnavailable(contribution)) {
+          unavailable = preferDataUnavailable(unavailable, contribution);
+        }
         if (
-          contribute(value, list[i], out) === "pending" &&
+          contribution === "pending" &&
           !awaited.has(entry.resultCell.getAsNormalizedFullLink().id)
         ) {
           stillPending.push(entry.resultCell);
         }
+      }
+      if (unavailable !== undefined) {
+        result.withTx(tx).setRawUntyped(unavailable, true);
+        return stillPending;
       }
       if (stillPending.length > 0) return stillPending;
       // The element reads above are real content reads (the aggregate genuinely

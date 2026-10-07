@@ -19,6 +19,7 @@ import {
 } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { Runtime } from "../src/runtime.ts";
 
 import {
   createStorageAddressResolver,
@@ -224,6 +225,61 @@ describe("storage admission notice", () => {
       expect(home.error).toBeUndefined();
       return manager;
     };
+
+    it("retries an initially denied absent linked target after automatic admission", async () => {
+      const manager = new RecordingStorageManager({
+        as: guest,
+        memoryHost,
+      }, factory);
+      cleanups.push(() => manager.close());
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { sharedMemoryConnection: true },
+      });
+      cleanups.push(() => runtime.dispose());
+      const states: { status: string; epoch: number }[] = [];
+      const cancel = manager.subscribeConnectionState(space, (state) => {
+        states.push({ status: state.status, epoch: state.epoch });
+      });
+      cleanups.push(() => Promise.resolve(cancel()));
+      const target = runtime.getCell<unknown>(
+        space,
+        "initially denied absent linked target",
+      );
+      const link = target.getAsNormalizedFullLink();
+
+      expect(runtime.ensureLinkedDocLoaded(link, guest.did())).toBe("pending");
+      await manager.synced();
+      expect(runtime.ensureLinkedDocLoaded(link, guest.did())).toBe("error");
+      expect(runtime.linkedDocLoadError(link)?.name).toBe(
+        "ReplicaLoadFailureError",
+      );
+      expect(manager.spaceAccessError(space)?.name).toBe("AuthorizationError");
+      expect(states).toEqual([{ status: "idle", epoch: 0 }]);
+
+      await writeAcl(ownerSession, 2, { [guest.did()]: "READ" });
+      // This round trip follows the admission notice on the shared socket.
+      const home = await manager.open(guest.did()).sync(`of:${guest.did()}`);
+      expect(home.error).toBeUndefined();
+      expect(manager.retries.map((retry) => retry.space)).toEqual([space]);
+      await manager.retries[0].done;
+
+      expect(manager.spaceAccessError(space)).toBeUndefined();
+      expect(states).toEqual([
+        { status: "idle", epoch: 0 },
+        { status: "ready", epoch: 1 },
+      ]);
+      expect(runtime.linkedDocLoadError(link)).toBeUndefined();
+      expect(runtime.ensureLinkedDocLoaded(link, guest.did())).toBe("pending");
+      await manager.synced();
+      expect(runtime.ensureLinkedDocLoaded(link, guest.did())).toBe("settled");
+      expect(runtime.linkedDocLoadError(link)).toBeUndefined();
+      const confirmed = await manager.open(space).sync(link.id);
+      expect(confirmed.error).toBeUndefined();
+      expect(confirmed.ok).toBeDefined();
+      expect(target.getRaw()).toBeUndefined();
+    });
 
     it("retries a space it was refused, once a grant admits its principal, and is readmitted", async () => {
       const manager = await refuseThenGrant();

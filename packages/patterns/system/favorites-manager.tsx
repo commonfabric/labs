@@ -6,6 +6,7 @@ import {
   handler,
   NAME,
   pattern,
+  resultOf,
   UI,
   wish,
   Writable,
@@ -61,15 +62,16 @@ const onUpdateUserTags = handler<
 
 export default pattern<Record<string, never>>((_) => {
   // Use wish() to access favorites from home.tsx via defaultPattern
-  const { result: favorites } = wish<Array<Favorite> | Default<[]>>({
+  const favoritesWish = wish<Array<Favorite> | Default<[]>>({
     query: "#favorites",
   });
+  const favorites = resultOf(favoritesWish.result);
 
   return {
     [NAME]: "Favorites Manager",
     [UI]: (
       <cf-vstack gap="3">
-        {favorites!.map((item) => (
+        {favorites.map((item) => (
           <cf-vstack gap="2">
             <cf-hstack gap="2" align="center">
               <cf-cell-link $cell={item.cell} spaceName={item.spaceName} />
@@ -77,7 +79,7 @@ export default pattern<Record<string, never>>((_) => {
                 variant="destructive"
                 size="sm"
                 onClick={onRemoveFavorite({
-                  favorites: favorites!,
+                  favorites,
                   id: item.id,
                   item: item.cell,
                 })}

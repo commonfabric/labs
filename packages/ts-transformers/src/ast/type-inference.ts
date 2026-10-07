@@ -85,6 +85,9 @@ export function widenLiteralType(
     const widenedMembers = type.types.map((member) =>
       widenLiteralType(member, checker)
     );
+    if (widenedMembers.every((member, index) => member === type.types[index])) {
+      return type;
+    }
 
     // Deduplicate by comparing type IDs (handles cases like string literals → string)
     const seen = new Set<number>();

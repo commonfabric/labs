@@ -563,11 +563,14 @@ name and profile wish UI:
 export default pattern(() => {
   const profile = wish({ query: "#profile" });
   const name = wish<string>({ query: "#profileName" });
+  const profileName = hasError(name.result)
+    ? "No profile"
+    : resultOf(name.result);
   return {
     [NAME]: "Profile Name Demo",
     [UI]: (
       <div>
-        <div>{name.result ?? "No profile"}</div>
+        <div>{profileName}</div>
         <div>{profile}</div>
       </div>
     ),
@@ -613,8 +616,8 @@ Add focused runner tests for `wish()`:
 - `scope: ["profile"]` is not treated as a DID
 - profile hashtag search reads `homeSpaceCell.defaultPattern.profile`
 - mixed scope ordering is stable
-- missing profile link returns an empty/error `WishState` without throwing out
-  of the scheduler action
+- missing profile link returns an error availability value on
+  `WishState.result` without throwing out of the scheduler action
 - `wish({ query: "#profile" })` returns the profile default pattern
 
 The [shared-profile participant roster guide](shared-profile-rosters.md) shows

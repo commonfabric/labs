@@ -1,3 +1,8 @@
+import {
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  unavailableMismatch,
+} from "@commonfabric/data-model/availability";
 /**
  * Alignment tests verifying that runtime JSON schemas correctly materialize
  * values matching the TypeScript types defined in packages/api/index.ts.
@@ -14,6 +19,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type {
   BuiltInGenerateObjectParams,
@@ -390,6 +396,32 @@ describe("LLM schema alignment", () => {
   });
 
   describe("result schemas", () => {
+    it("materializes generateText unavailable results", () => {
+      const marker = UNAVAILABLE_PENDING;
+      const value = materialize<any>(
+        runtime,
+        tx,
+        label(),
+        { pending: true, result: marker },
+        GenerateTextResultSchema,
+      );
+
+      expect(value.result).toBe(marker);
+    });
+
+    it("materializes generateObject unavailable results", () => {
+      const marker = unavailableMismatch();
+      const value = materialize<any>(
+        runtime,
+        tx,
+        label(),
+        { pending: false, result: marker },
+        GenerateObjectResultSchema,
+      );
+
+      expect(value.result).toBe(marker);
+    });
+
     it("materializes llm string errors", () => {
       const value = materialize<any>(
         runtime,
@@ -406,33 +438,67 @@ describe("LLM schema alignment", () => {
     });
 
     it("materializes generateText string errors", () => {
+      const marker = unavailableError(new Error("rate limited"));
       const value = materialize<any>(
         runtime,
         tx,
         label(),
         {
           pending: false,
+          result: marker,
           error: "rate limited",
         },
         GenerateTextResultSchema,
       );
 
       expect(value.error).toBe("rate limited");
+      expect(value.result).toBe(marker);
     });
 
     it("materializes generateObject string errors", () => {
+      const marker = unavailableError(
+        new Error("invalid structured output"),
+      );
       const value = materialize<any>(
         runtime,
         tx,
         label(),
         {
           pending: false,
+          result: marker,
           error: "invalid structured output",
         },
         GenerateObjectResultSchema,
       );
 
       expect(value.error).toBe("invalid structured output");
+      expect(value.result).toBe(marker);
+    });
+
+    it("materializes legacy generateText state without result", () => {
+      const value = materialize<any>(
+        runtime,
+        tx,
+        label(),
+        { pending: false, error: "legacy text failure" },
+        GenerateTextResultSchema,
+      );
+
+      expect(value.error).toBe("legacy text failure");
+      expect(value.result).toBeUndefined();
+    });
+
+    it("materializes legacy generateObject state without result", () => {
+      const value = materialize<any>(
+        runtime,
+        tx,
+        label(),
+        { pending: false, error: "legacy object failure" },
+        GenerateObjectResultSchema,
+      );
+
+      expect(value.error).toBe("legacy object failure");
+      expect(value.result).toBeUndefined();
     });
   });
 

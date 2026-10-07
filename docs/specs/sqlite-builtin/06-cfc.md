@@ -114,7 +114,7 @@ than a crash.
 Provenance is captured **server-side** (where the prepared statement lives); the
 **runner** maps each origin → the column's `ifc` and writes the result rows under
 a **per-field label schema** (`labelResultSchema`), so a consumer reading
-`q.result[i].<col>` inherits that column's label:
+`resultOf(q).rows[i].<col>` inherits that column's label:
 
 - An origin column's `ifc` is copied to its result field.
 - A `null`-origin column (expression / literal / aggregate) does NOT refuse the
@@ -735,14 +735,21 @@ Demos:
 
 ## The query's control state
 
-A query result cell holds the rows under `/result` and the request's own
-bookkeeping beside them: `/pending`, `/requestHash`, `/error`. The rows'
+A runtime-owned query state cell holds the rows under `/result` and the
+request's own bookkeeping beside them: `/pending`, `/requestHash`, `/error`. The rows'
 policy is the author's — the columns a table declares, and the rule a row
 carries. The bookkeeping's is not, and cannot be: a request hash is a digest
 over the statement, the parameters, the ceiling and the reader, so a parameter
 read out of a labeled row puts that row's label on the hash. Which atoms that
 is depends on what the transaction issuing the request read, which no `ifc`
 written into a schema can say.
+
+These are internal storage paths, retained for compiled state consumers. The
+public query request is the direct `AsyncResult<SqliteQueryResult<Row>>`
+channel at `/value`, with successful rows at `/value/rows`. Authors guard that
+request and read `resultOf(request).rows`; they do not read a public `.pending`
+flag or `.result` envelope. The native channel carries the corresponding
+control-state and row-membership observations, not a weaker policy.
 
 So the result cell is a store the runtime owns, and its control paths declare
 their policy from the issuing transaction — CFC spec §8.12.5 route 2, the

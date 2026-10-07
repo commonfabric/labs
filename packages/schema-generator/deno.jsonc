@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "exports": {
     ".": "./src/index.ts",
+    "./availability-brand": "./src/typescript/availability-brand.ts",
     "./cell-brand": "./src/typescript/cell-brand.ts",
     "./common-fabric-symbols": "./src/typescript/common-fabric-symbols.ts",
     "./default-brand": "./src/typescript/default-brand.ts",

@@ -1,0 +1,1 @@
+{"date":"2026-10-06","from":{"k":"unit","s":"cli","n":"agent-inspection > lists no runs when the home queue is absent"},"to":{"k":"unit","s":"cli","n":"agent-inspection > refuses an uninitialized home queue as pending"}}

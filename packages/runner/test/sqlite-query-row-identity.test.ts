@@ -9,6 +9,7 @@ import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 import type { Cell } from "../src/cell.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";
@@ -125,7 +126,7 @@ describe("sqlite-query-row-identity", () => {
     tick.set(0);
     const queryPattern = cf.pattern<{ tick: number; db: SqliteDbRef }>(
       ({ tick, db }) =>
-        cf.sqliteQuery({
+        sqliteQueryStateNodeFactory({
           db,
           sql,
           reactOn: tick,

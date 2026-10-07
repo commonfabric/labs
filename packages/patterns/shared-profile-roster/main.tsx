@@ -4,10 +4,16 @@ import {
   Default,
   equals,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -109,23 +115,27 @@ export type JoinEvent = void;
 const join = handler<JoinEvent, {
   roster: RosterCell;
   viewer: ViewerCell;
-  // May be undefined until the viewer's `#profile` wish resolves; guarded below.
-  profile: ParticipantProfileCell | undefined;
+  profile: ParticipantProfileCell;
+  profileAvailable: boolean;
   name: string;
   avatar: string;
-}>((_event, { roster, viewer, profile, name, avatar }) => {
+}>((_event, { roster, viewer, profile, profileAvailable, name, avatar }) => {
   const trimmed = (name ?? "").trim();
   if (!trimmed) return; // No resolved profile name yet — nothing to contribute.
-  if (!profile) return; // No resolved profile cell — no stable identity yet.
+  if (!profileAvailable) return;
+  const availableProfile = profile.resolveAsCell();
+  if (availableProfile.get() === undefined) return;
 
   // Idempotent: don't re-add this viewer. Compare by profile-cell identity so a
   // viewer who later renames themselves still counts as already-joined, and so
   // two distinct users who happen to share a display name don't block each other.
   const participants = roster.key("participants");
-  const already = participants.get().some((p) => equals(p.profile, profile));
+  const already = participants.get().some((p) =>
+    equals(p.profile, availableProfile)
+  );
   if (!already) {
     participants.push({
-      profile,
+      profile: availableProfile,
       name: trimmed,
       avatar: (avatar ?? "").trim(),
       joinedAt: Date.now(),
@@ -162,11 +172,44 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
+    const observedProfileName = observeAvailability(profileNameWish.result);
+    const observedProfileAvatar = observeAvailability(
+      profileAvatarWish.result,
+    );
+    const observedProfile = observeAvailability(profileWish.result);
 
-    const myName = computed(() => profileNameWish.result ?? "");
-    const myAvatar = computed(() => profileAvatarWish.result ?? "");
-    // The live profile cell — passed to the join handler as the identity key.
-    const myProfile = profileWish.result;
+    const myName = computed(() => {
+      if (
+        hasError(observedProfileName) || isPending(observedProfileName) ||
+        isSyncing(observedProfileName) ||
+        hasSchemaMismatch(observedProfileName)
+      ) return "";
+      return resultOf(observedProfileName);
+    });
+    const myAvatar = computed(() => {
+      if (
+        hasError(observedProfileAvatar) || isPending(observedProfileAvatar) ||
+        isSyncing(observedProfileAvatar) ||
+        hasSchemaMismatch(observedProfileAvatar)
+      ) return "";
+      return resultOf(observedProfileAvatar);
+    });
+    const myProfile = computed(() => {
+      if (
+        hasError(observedProfile) || isPending(observedProfile) ||
+        isSyncing(observedProfile) || hasSchemaMismatch(observedProfile)
+      ) return {};
+      return resultOf(observedProfile);
+    });
+    const profileAvailable = computed(() =>
+      !hasError(observedProfile) && !isPending(observedProfile) &&
+      !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile)
+    );
+    // Keep the badge in static JSX. A VNode-producing computed that captures
+    // the unavailable profile path is blocked before its fallback can run.
+    const currentProfileBadge = (
+      <cf-profile-badge $profile={myProfile} size="md" />
+    );
 
     const participants = roster.participants;
     const participantCount = participants.length;
@@ -181,6 +224,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
       roster,
       viewer,
       profile: myProfile,
+      profileAvailable,
       name: myName,
       avatar: myAvatar,
     });
@@ -206,14 +250,17 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
               >
                 You
               </span>
-              <cf-profile-badge $profile={profileWish.result} size="md" />
+              {currentProfileBadge}
             </cf-vstack>
 
             <cf-hstack justify="between" align="center">
               <cf-heading level={3}>
                 Participants ({participantCount})
               </cf-heading>
-              <cf-button onClick={boundJoin} disabled={hasJoined}>
+              <cf-button
+                onClick={boundJoin}
+                disabled={computed(() => hasJoined || !profileAvailable)}
+              >
                 {joinLabel}
               </cf-button>
             </cf-hstack>

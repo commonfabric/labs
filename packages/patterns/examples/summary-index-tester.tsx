@@ -1,4 +1,12 @@
-import { computed, NAME, pattern, UI, wish, Writable } from "commonfabric";
+import {
+  computed,
+  NAME,
+  pattern,
+  resultOf,
+  UI,
+  wish,
+  Writable,
+} from "commonfabric";
 import { type SummaryIndexEntry } from "../system/summary-index.tsx";
 
 type SummaryIndexResult = {
@@ -9,9 +17,10 @@ type SummaryIndexResult = {
 export default pattern<Record<string, never>>((_) => {
   const query = new Writable("");
 
-  const { entries } = wish<SummaryIndexResult>({
+  const summaryWish = wish<SummaryIndexResult>({
     query: "#summaryIndex",
-  }).result!;
+  });
+  const { entries } = resultOf(summaryWish.result);
 
   const filtered = computed(() => {
     const q = query.get().toLowerCase().trim();

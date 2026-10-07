@@ -15,8 +15,10 @@ import type {
   URI,
 } from "../src/storage/interface.ts";
 import {
+  ignoreReadForCommit,
   internalVerifierRead,
   isInternalVerifierRead,
+  isReadIgnoredForCommit,
   stableInternalVerifierRead,
 } from "../src/storage/reactivity-log.ts";
 
@@ -410,6 +412,70 @@ const committedValue = async (
 };
 
 describe("v2-transaction", () => {
+  describe("trackReadPaths()", () => {
+    it("omits ignored commit validation while retaining read activity", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        for (
+          const [ignored, nonRecursive] of [
+            [false, false],
+            [false, true],
+            [true, false],
+            [true, true],
+          ]
+        ) {
+          const address = {
+            space,
+            id:
+              `of:batched-commit-validation-${ignored}-${nonRecursive}` as URI,
+            type,
+          };
+          const seed = storage.edit();
+          expect(seed.write({ ...address, path: [] }, { value: 1 }).ok)
+            .toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
+
+          const candidate = storage.edit();
+          expect(
+            candidate.trackReadPaths!(address, [["value"]], {
+              nonRecursive,
+              ...(ignored ? { meta: ignoreReadForCommit } : {}),
+            }).ok,
+          ).toBeDefined();
+          const reads = [...candidate.getReadActivities!()];
+          expect(reads).toHaveLength(1);
+          expect(reads[0].path).toEqual(["value"]);
+          expect(reads[0].nonRecursive === true).toBe(nonRecursive);
+          expect(isReadIgnoredForCommit(reads[0].meta)).toBe(ignored);
+          expect(isInternalVerifierRead(reads[0].meta)).toBe(false);
+          expect(
+            candidate.write({
+              ...address,
+              id: `${address.id}-destination` as URI,
+              path: [],
+            }, { value: "unrelated" }).ok,
+          ).toBeDefined();
+
+          const concurrent = storage.edit();
+          expect(concurrent.write({ ...address, path: [] }, { value: 2 }).ok)
+            .toBeDefined();
+          expect((await concurrent.commit().settled).ok).toBeDefined();
+
+          const committed = await candidate.commit().settled;
+          if (ignored) {
+            expect(committed.ok).toBeDefined();
+          } else {
+            expect(committed.error?.name).toBe(
+              "StorageTransactionInconsistent",
+            );
+          }
+        }
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
   describe("getPotentiallyExternalReadActivities()", () => {
     it("retains every raw clock position while excluding sealed verifier records", async () => {
       const storage = StorageManager.emulate({ as: signer });

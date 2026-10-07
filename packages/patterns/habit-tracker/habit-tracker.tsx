@@ -3,6 +3,7 @@ import {
   computed,
   NAME,
   pattern,
+  resultOf,
   UI,
   wish,
   Writable,
@@ -32,9 +33,8 @@ const getDateDaysAgo = (baseTimestamp: number, daysAgo: number): string => {
 export default pattern<HabitTrackerInput, HabitTrackerOutput>(
   ({ habits, logs }) => {
     const nowCell = wish<number>({ query: "#now" });
-    const todayDate = computed(() =>
-      nowCell.result == null ? "" : toDateString(nowCell.result)
-    );
+    const nowCellValue = resultOf(nowCell.result);
+    const todayDate = computed(() => toDateString(nowCellValue));
     const newHabitName = new Writable("");
     const newHabitIcon = new Writable("✓");
 
@@ -93,7 +93,7 @@ export default pattern<HabitTrackerInput, HabitTrackerOutput>(
     const habitCards = computed(() => {
       const habitList = habits.get();
       const logList = logs.get();
-      const todayTimestamp = nowCell.result;
+      const todayTimestamp = nowCellValue;
       if (todayTimestamp == null) return [];
       const today = toDateString(todayTimestamp);
 

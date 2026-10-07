@@ -1,34 +1,30 @@
-import { action, assert, pattern, TESTS, UI } from "commonfabric";
-import {
-  findElementByExactText,
-  findElementByText,
-  propsOf,
-} from "../test/vnode-helpers.ts";
+import { action, assert, pattern, TESTS, Writable } from "commonfabric";
 import Note from "../notes/note.tsx";
-import DefaultAppBen from "./default-app-ben.tsx";
+import DefaultAppBen, {
+  menuDailyJournal,
+  removePiece,
+} from "./default-app-ben.tsx";
 
 type AddPieceStream = { send: (event: { piece: unknown }) => void };
-type ClickStream = { send: (event: Record<string, never>) => void };
-
-const click = (node: unknown) => {
-  (propsOf(node)?.onClick as ClickStream).send({});
-};
 
 export default pattern(() => {
   const subject = DefaultAppBen();
   const note = Note({ title: "Registered Note", content: "" });
   const otherNote = Note({ title: "Other Note", content: "" });
+  const menuOpen = new Writable(false);
 
   const action_register_pieces = action(() => {
     const addPiece = subject.addPiece as AddPieceStream;
     addPiece.send({ piece: note });
     addPiece.send({ piece: otherNote });
   });
-  const action_open_daily_journal = action(() => {
-    click(findElementByText(subject[UI], "cf-button", "Daily Journal"));
+  const action_open_daily_journal = menuDailyJournal({
+    menuOpen,
+    pieceRegistry: subject.pieceRegistry,
   });
-  const action_remove_piece = action(() => {
-    click(findElementByExactText(subject[UI], "cf-button", "🗑️"));
+  const action_remove_piece = removePiece({
+    piece: note,
+    pieceRegistry: subject.pieceRegistry,
   });
 
   const assert_starts_empty = assert(() => subject.pieceRegistry.length === 0);

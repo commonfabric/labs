@@ -3,8 +3,11 @@ import {
   equals,
   generateText,
   handler,
+  hasError,
+  isPending,
   NAME,
   pattern,
+  resultOf,
   toCompactDebugString,
   UI,
   Writable,
@@ -196,9 +199,9 @@ export default pattern(() => {
   const activeTab = new Writable("spaces").for("activeTab");
 
   // === REACTIVE NARRATIVE ENRICHMENT ===
-  // LLM Error Handling: generateText returns { pending, result, error }.
-  // On LLM failure, `error` is set and `result` remains undefined. The writeback
-  // computation checks for errors and marks entries as failed to prevent retry loops.
+  // LLM failures are explicit unavailable values. The writeback checks the
+  // request with availability guards and marks entries as failed to prevent
+  // retry loops.
 
   // Find the first pending entry that needs a narrative
   const pendingEntry = computed(() =>
@@ -216,7 +219,7 @@ export default pattern(() => {
 
   // Generate narrative for pending entry
   // Uses context parameter to properly serialize cell content with schema
-  const narrativeGen = generateText({
+  const narrativeRequest = generateText({
     prompt: computed(() => {
       const entry = pendingEntry;
       if (!entry) return ""; // No-op when nothing pending
@@ -244,12 +247,12 @@ Write in past tense, personal style. Focus on:
       return { favoritedPiece: entry.subject };
     }),
   });
+  const narrative = resultOf(narrativeRequest);
 
   // Idempotent writeback - update entry when narrative is ready (or on error)
   const writeNarrative = computed(() => {
-    const result = narrativeGen.result;
-    const pending = narrativeGen.pending;
-    const error = (narrativeGen as any).error;
+    const pending = isPending(narrativeRequest);
+    const error = hasError(narrativeRequest);
     const entry = pendingEntry;
 
     // Guard: only proceed when not pending and we have an entry
@@ -264,7 +267,7 @@ Write in past tense, personal style. Focus on:
     if (idx === -1) return null;
 
     // Handle error: mark as processed to prevent retry loop
-    if (error && !result) {
+    if (error) {
       const updatedEntry = {
         ...entries[idx],
         narrative: "[Failed to generate narrative]",
@@ -277,12 +280,12 @@ Write in past tense, personal style. Focus on:
     }
 
     // Guard: need a result to proceed
-    if (!result) return null;
+    if (!narrative) return null;
 
     // Create updated entry
     const updatedEntry = {
       ...entries[idx],
-      narrative: result,
+      narrative,
       narrativePending: false,
     };
 
@@ -291,7 +294,7 @@ Write in past tense, personal style. Focus on:
     newEntries[idx] = updatedEntry;
     journal.set(newEntries);
 
-    return result;
+    return narrative;
   });
 
   // Reference writeNarrative to ensure it's evaluated (required for reactive side effects)

@@ -1,3 +1,4 @@
+import { UNAVAILABLE_PENDING } from "@commonfabric/data-model/availability";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
@@ -15,6 +16,7 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
+
 import type { WorkerReconciler } from "@commonfabric/html/worker";
 import {
   FabricBytes,
@@ -6384,6 +6386,20 @@ describe("runtime-processor", () => {
       expect(
         (mapCellRefsToSigilLinks({ b: bytes }) as { b: unknown }).b,
       ).toBe(bytes);
+    });
+
+    it("hands back `FabricUnavailable` whole, nested or not", () => {
+      const unavailable = UNAVAILABLE_PENDING;
+
+      expect(mapCellRefsToSigilLinks(unavailable)).toBe(unavailable);
+      expect(
+        (mapCellRefsToSigilLinks({ unavailable }) as {
+          unavailable: unknown;
+        }).unavailable,
+      ).toBe(unavailable);
+      expect((mapCellRefsToSigilLinks([unavailable]) as unknown[])[0]).toBe(
+        unavailable,
+      );
     });
 
     it("refuses a `FabricInstance`, naming the class and the situation", () => {

@@ -1,3 +1,9 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  unavailableMismatch,
+} from "@commonfabric/data-model/availability";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { Schema } from "@commonfabric/api/schema";
@@ -24,9 +30,7 @@ import {
   RECORD_SUBSCHEMA_KEYS,
   SINGLE_SUBSCHEMA_KEYS,
 } from "@commonfabric/data-model-schema/schema-walk";
-import {
-  isExternalSchemaRef,
-} from "@commonfabric/data-model-schema/schema-refs";
+import { isExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import {
   DEFAULT_MODEL_NAME,
   LLMClient,
@@ -75,6 +79,7 @@ import {
   type CfcLabelView,
   cfcLabelViewForCellFailClosed,
 } from "../cfc/label-view.ts";
+import { validateSchemaValue } from "../cfc/schema-sanitization.ts";
 import {
   cfcConfidentialityForObservationNode,
   type CfcFloorTrustContext,
@@ -315,11 +320,17 @@ function resolveRefsForLLM(
         result[key] = value;
       } else if (Array.isArray(value)) {
         result[key] = value.map((item) =>
-          isWalkableObjectOrArray(item) || typeof item === "boolean"
+          (!isUnavailable(item) &&
+              isWalkableObjectOrArray(item)) ||
+            typeof item === "boolean"
             ? resolve(item, refDepth, activeRefs)
             : item
         );
-      } else if (isWalkableObjectOrArray(value) || typeof value === "boolean") {
+      } else if (
+        (!isUnavailable(value) &&
+          isWalkableObjectOrArray(value)) ||
+        typeof value === "boolean"
+      ) {
         result[key] = resolve(value, refDepth, activeRefs);
       } else {
         result[key] = value;
@@ -920,6 +931,48 @@ function traverseAndCellify(
 }
 
 const resultSchema = LLMDialogResultSchema;
+
+function publishPresentedResultSchemaMismatch(
+  tx: IExtendedStorageTransaction,
+  result: Cell<any>,
+  failure: string,
+): void {
+  const message =
+    `llmDialog presented result failed schema validation: ${failure}`;
+  result.withTx(tx).key("error").set(message);
+
+  const presented = result.withTx(tx).key("result");
+  const raw = presented.getRaw();
+  // Match failed-turn semantics: an invalid later attempt must not erase the
+  // last successfully presented value.
+  if (raw === undefined || isUnavailable(raw)) {
+    presented.setRaw(unavailableMismatch(message));
+  }
+}
+
+function failPresentedResultTurn(
+  tx: IExtendedStorageTransaction,
+  result: Cell<any>,
+  pending: Cell<boolean>,
+  userResultSchema: unknown,
+  error: unknown,
+): void {
+  const message = error instanceof Error ? error.message : String(error);
+  result.withTx(tx).key("error").set(message);
+
+  if (userResultSchema !== undefined) {
+    const presented = result.withTx(tx).key("result");
+    const raw = presented.getRaw();
+    // A later failed turn must not erase the last successfully presented
+    // value. Before the first success, replace any unavailable state with the
+    // terminal error for this attempt.
+    if (raw === undefined || isUnavailable(raw)) {
+      presented.setRaw(unavailableError(new Error(message)));
+    }
+  }
+
+  pending.withTx(tx).set(false);
+}
 
 const internalSchema = internSchema(
   {
@@ -2632,6 +2685,29 @@ function createToolResultMessages(
   });
 }
 
+type ToolResultClassification =
+  | { readonly status: "wait" }
+  | { readonly status: "value"; readonly value: unknown }
+  | { readonly status: "error"; readonly error: Error };
+
+function classifyToolResult(
+  rawResult: unknown,
+  materializedResult: unknown,
+): ToolResultClassification {
+  if (isUnavailable(rawResult)) {
+    if (rawResult.reason === "error") {
+      return {
+        status: "error",
+        error: new Error(rawResult.errorMessage),
+      };
+    }
+    return { status: "wait" };
+  }
+  return materializedResult === undefined
+    ? { status: "wait" }
+    : { status: "value", value: materializedResult };
+}
+
 export const llmDialogTestHelpers = {
   REQUEST_TIMEOUT,
   getCellSchema,
@@ -2651,6 +2727,7 @@ export const llmDialogTestHelpers = {
   resolveRefsForLLM,
   resolveToolCall,
   toolAllowsObservedConfidentiality,
+  classifyToolResult,
 };
 
 /**
@@ -3149,7 +3226,7 @@ async function handleInvoke(
     identityCell,
   );
 
-  const { resolve, promise } = Promise.withResolvers<any>();
+  const { resolve, reject, promise } = Promise.withResolvers<any>();
 
   // Create result cell reference that will be set in the transaction
   let result: Cell<any> = null as any;
@@ -3214,7 +3291,16 @@ async function handleInvoke(
 
   // Wait for the pattern/handler to complete and write the result
   const cancel = result.sink((r) => {
-    r !== undefined && resolve(r);
+    // Async pattern results now publish a concrete pending marker rather than
+    // `undefined`. Keep the existing wait-for-usable tool contract: returning
+    // the marker here would serialize the opaque FabricInstance as `{}` and
+    // let the parent tool loop continue before the child generation finishes.
+    // Read the resolved raw cell because the pattern's ordinary object schema
+    // can materialize the opaque marker as `{}` before this callback sees it.
+    const rawResult = result.resolveAsCell().getRaw();
+    const outcome = classifyToolResult(rawResult, r);
+    if (outcome.status === "value") resolve(outcome.value);
+    else if (outcome.status === "error") reject(outcome.error);
   });
 
   // Ends three ways, each of them an event: the result lands, the run quiesces,
@@ -3971,6 +4057,9 @@ export function llmDialog(
       | undefined;
     result.withTx(tx).setRawUntyped({
       ...stored,
+      ...(stored?.result === undefined &&
+        inputs.key("resultSchema").withTx(tx).get() !== undefined &&
+        { result: UNAVAILABLE_PENDING }),
       pinnedCells: stored?.pinnedCells ?? [],
     } as FabricValue);
     // The dialog's handlers are fields of this document, and a stream holds
@@ -4474,16 +4563,25 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
           // If presentResult was called, cellify the raw input so we can
           // store it on the dialog's result cell (guarded by requestId below).
           let cellifiedResult: unknown | undefined;
+          let hasValidPresentedResult = false;
+          let presentedResultSchemaFailure: string | undefined;
           if (userResultSchema) {
             const presentResultPart = toolCallParts.find(
               (p) => p.toolName === PRESENT_RESULT_TOOL_NAME,
             );
             if (presentResultPart) {
-              cellifiedResult = traverseAndCellify(
-                runtime,
-                space,
+              presentedResultSchemaFailure = validateSchemaValue(
+                toDeepFrozenSchema(userResultSchema),
                 presentResultPart.input,
               );
+              if (presentedResultSchemaFailure === undefined) {
+                cellifiedResult = traverseAndCellify(
+                  runtime,
+                  space,
+                  presentResultPart.input,
+                );
+                hasValidPresentedResult = true;
+              }
             }
           }
 
@@ -4516,7 +4614,13 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
                 messagesCell.withTx(tx).push(
                   errorMessage as Schema<typeof LLMMessageSchema>,
                 );
-                pending.withTx(tx).set(false);
+                failPresentedResultTurn(
+                  tx,
+                  result,
+                  pending,
+                  userResultSchema,
+                  "Some tool calls failed to execute.",
+                );
               },
             );
             return;
@@ -4534,8 +4638,15 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
             (tx) => {
               // Write presentResult atomically with tool result messages,
               // guarded by requestId to prevent stale writes from canceled requests.
-              if (cellifiedResult !== undefined) {
+              if (presentedResultSchemaFailure !== undefined) {
+                publishPresentedResultSchemaMismatch(
+                  tx,
+                  result,
+                  presentedResultSchemaFailure,
+                );
+              } else if (hasValidPresentedResult) {
                 result.withTx(tx).key("result").set(cellifiedResult);
+                result.withTx(tx).key("error").set(undefined);
               }
               const nextIndex = (messagesCell.withTx(tx).get() as
                 | readonly BuiltInLLMMessage[]
@@ -4563,7 +4674,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
           // whose default pattern doesn't export recordSuggestion simply skip
           // recording (caught below) rather than failing the suggestion flow.
           if (
-            success && cellifiedResult !== undefined &&
+            success && hasValidPresentedResult &&
             queueName === "suggestions"
           ) {
             try {
@@ -4612,6 +4723,21 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
           }
         } catch (error: unknown) {
           console.error(error);
+          await safelyPerformUpdate(
+            runtime,
+            pending,
+            internal,
+            requestId,
+            capturedRequest?.scopeKeyIdentity,
+            (tx) =>
+              failPresentedResultTurn(
+                tx,
+                result,
+                pending,
+                userResultSchema,
+                error,
+              ),
+          );
         }
       } else {
         // No tool calls, just add the assistant message
@@ -4666,7 +4792,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
           messagesCell.withTx(tx).push(
             errorMessage as Schema<typeof LLMMessageSchema>,
           );
-          pending.withTx(tx).set(false);
+          failPresentedResultTurn(tx, result, pending, userResultSchema, error);
         },
       );
     });

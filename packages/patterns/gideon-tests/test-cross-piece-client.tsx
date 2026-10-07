@@ -31,6 +31,7 @@ import {
   handler,
   NAME,
   pattern,
+  resultOf,
   Stream,
   toIndentedDebugString,
   UI,
@@ -109,10 +110,10 @@ export default pattern<Input, Output>(
     });
 
     // Access the result from the wish (WishState has a result property)
-    const serverPiece = wishResult.result;
+    const serverPiece = resultOf(wishResult.result);
 
     // Extract the stream via a plain projection (auto-wraps reactively)
-    const serverStream = serverPiece?.incrementCounter;
+    const serverStream = serverPiece.incrementCounter;
 
     return {
       [NAME]: "Cross-Piece Test Client",

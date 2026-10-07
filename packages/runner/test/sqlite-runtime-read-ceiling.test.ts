@@ -39,6 +39,7 @@ import {
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 
 type QueryState = {
   pending?: boolean;
@@ -140,7 +141,7 @@ async function runQuery(
 ): Promise<{ state: QueryState; cell: ReturnType<Runtime["getCell"]> }> {
   const { commonfabric: cf } = createTrustedBuilder(runtime);
   const p = cf.pattern(() =>
-    cf.sqliteQuery.asScope("session")(
+    sqliteQueryStateNodeFactory.asScope("session")(
       // deno-lint-ignore no-explicit-any
       { db, reactOn: db, ...query } as any,
     )
@@ -804,7 +805,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       const { commonfabric: cf } = createTrustedBuilder(rt);
       const p = cf.pattern(() =>
         // deno-lint-ignore no-explicit-any
-        cf.sqliteQuery({ db, reactOn: db, sql: ROWS_SQL } as any)
+        sqliteQueryStateNodeFactory({ db, reactOn: db, sql: ROWS_SQL } as any)
       );
       const tx = rt.edit();
       const cell = rt.getCell(

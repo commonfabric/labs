@@ -1490,6 +1490,23 @@ On disconnect:
    resumes integrating sync from `seenSeq` — declaring what its replica holds
    (section 4.1.2) so the server re-delivers exactly what it lacks
 
+The client session lifecycle API publishes `ready(epoch)`,
+`disconnected(epoch, cause)`, and `closed(epoch, cause)` states. Subscription
+immediately yields the current state. A newly mounted session starts at ready
+epoch 1; disconnect retains that epoch, and the next ready state increments it.
+A space publishes its new ready epoch after the new `hello` handshake and its
+own restoration barrier complete, including watch restoration, presence, and
+retained commit replay. Client-wide reconnect completion waits for all mounted
+spaces to restore. Session revocation publishes `closed` instead of a later
+ready epoch.
+
+`session.connectionState` reads the current state, and
+`session.subscribeConnectionState(callback)` immediately publishes it and
+returns an unsubscribe callback. The state contains `status` and `epoch`, plus
+`cause` for disconnected and closed states. The storage manager exposes
+`subscribeConnectionState(space, callback)` with monotonically increasing ready
+epochs across remounts; an unmounted space initially reports `idle` at epoch 0.
+
 ## 4.9 Blob Transfer
 
 Blob bytes are transferred through dedicated HTTP endpoints. Blob references in

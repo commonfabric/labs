@@ -13,6 +13,7 @@ import {
   equals,
   NAME,
   pattern,
+  resultOf,
   spaceAccess,
   VIEWS,
   wish,
@@ -137,7 +138,7 @@ const FabriChatPlacement = pattern<
   // Wished for as a cell, which the tallies compare reactors against; the
   // placement never tests it for absence, which a cell's handle would defeat.
   const profileWish = wish<ProfileCell>({ query: "#profile" });
-  const viewer = profileWish.result;
+  const viewer = resultOf(profileWish.result);
   const about = computed(() => room.get()?.about);
   // The viewer's access to the room's space decides: `"none"` is not a
   // member, and `undefined`, not known yet, is unavailable, as is a room a

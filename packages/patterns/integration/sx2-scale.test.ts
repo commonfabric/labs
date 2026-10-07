@@ -131,11 +131,11 @@ const waitForStats = async (
 /** A fetch fan-out piece: one network effect per piece, distinct URL →
  * distinct memo key → a real per-piece egress. */
 const FLOOD_PATTERN = [
-  "import { fetchJson, pattern } from 'commonfabric';",
+  "import { fetchJson, pattern, resultOf } from 'commonfabric';",
   "export default pattern<{ url: string }, { status: string }>(",
   "  ({ url }) => {",
-  "    const data = fetchJson<{ ok?: boolean }>({ url });",
-  "    return { status: data.result ? 'done' : 'pending' };",
+  "    const request = fetchJson<{ ok?: boolean }>({ url });",
+  "    return { status: resultOf(request).ok ? 'done' : 'pending' };",
   "  },",
   ");",
 ].join("\n");

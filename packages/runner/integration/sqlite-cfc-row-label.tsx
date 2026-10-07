@@ -2,6 +2,7 @@ import {
   cfSqlite,
   handler,
   pattern,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   table,
@@ -107,5 +108,11 @@ export default pattern(() => {
     { reactOn: db, readClearance: true },
   );
 
-  return { q, qCount, qSkim, qClear, seed: seed({ db }) };
+  return {
+    q: resultOf(q),
+    qCount: resultOf(qCount),
+    qSkim: resultOf(qSkim),
+    qClear: resultOf(qClear),
+    seed: seed({ db }),
+  };
 });

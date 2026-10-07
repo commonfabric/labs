@@ -1,6 +1,11 @@
+import {
+  UNAVAILABLE_PENDING,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -15,6 +20,7 @@ import {
   newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
+import { shouldAwaitResumedListInput } from "../src/builtins/list-resume-state.ts";
 
 // awaitInputThenSettle path in the list builtins (filter/flatMap/map).
 //
@@ -116,12 +122,44 @@ describe("list builtin resume input-settle", () => {
     await server.close();
   });
 
+  it("holds a persisted unavailable result while its list input resyncs", () => {
+    expect(
+      shouldAwaitResumedListInput(
+        true,
+        UNAVAILABLE_PENDING,
+        undefined,
+        0,
+      ),
+    ).toBe(true);
+    expect(
+      shouldAwaitResumedListInput(
+        true,
+        unavailableError(new Error("request failed")),
+        [],
+        0,
+      ),
+    ).toBe(true);
+
+    // Fresh runs and initialized empty containers retain the ordinary list
+    // semantics; the guard is only for durable resume state.
+    expect(
+      shouldAwaitResumedListInput(
+        false,
+        UNAVAILABLE_PENDING,
+        undefined,
+        0,
+      ),
+    ).toBe(false);
+    expect(shouldAwaitResumedListInput(true, [], undefined, 0)).toBe(false);
+  });
+
   async function run(
     program: RuntimeProgram,
     id: string,
     field: string,
     items: unknown[],
     builtValue: unknown[],
+    persistUnavailableOutput = false,
   ): Promise<void> {
     const sm1 = SM.make(signer, server);
     const rt1 = new Runtime({
@@ -153,7 +191,14 @@ describe("list builtin resume input-settle", () => {
     // the runtime down.
     rt1.scheduler.dispose();
     const tx1 = rt1.edit();
-    rc1.withTx(tx1).key("items").set([]);
+    if (persistUnavailableOutput) {
+      rc1.withTx(tx1).key(field).resolveAsCell().setRawUntyped(
+        UNAVAILABLE_PENDING,
+        true,
+      );
+    } else {
+      rc1.withTx(tx1).key("items").set([]);
+    }
     await tx1.commit().settled;
     await rt1.patternManager.flushCompileCacheWrites();
     await sm1.synced();
@@ -182,7 +227,9 @@ describe("list builtin resume input-settle", () => {
       }
       // The container is held while the input confirms, then settled to [] —
       // converging on the confirmed empty input rather than the stale value.
-      expect(rc2.key(field).getAsQueryResult() ?? []).toEqual([]);
+      expect(rc2.key(field).getAsQueryResult() ?? []).toEqual(
+        persistUnavailableOutput ? builtValue : [],
+      );
     } finally {
       await rt2.dispose();
     }
@@ -215,6 +262,36 @@ describe("list builtin resume input-settle", () => {
       "doubled",
       [{ n: 1 }, { n: 2 }, { n: 3 }],
       [2, 4, 6],
+    );
+  });
+
+  it("filter reconciles a persisted unavailable container", async () => {
+    const items = [
+      { keep: true, label: "a" },
+      { keep: false, label: "b" },
+    ];
+    await run(FILTER_PROGRAM, "du-filter", "kept", items, [items[0]], true);
+  });
+
+  it("flatMap reconciles a persisted unavailable container", async () => {
+    await run(
+      FLATMAP_PROGRAM,
+      "du-flatmap",
+      "values",
+      [{ keep: true, n: 1 }, { keep: false, n: 2 }],
+      [1],
+      true,
+    );
+  });
+
+  it("map reconciles a persisted unavailable container", async () => {
+    await run(
+      MAP_PROGRAM,
+      "du-map",
+      "doubled",
+      [{ n: 1 }, { n: 2 }, { n: 3 }],
+      [2, 4, 6],
+      true,
     );
   });
 });

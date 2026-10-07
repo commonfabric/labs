@@ -1,3 +1,8 @@
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
 import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
@@ -16,6 +21,7 @@ import {
   type TransactionSpec,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+
 import { NAME } from "@commonfabric/runner/shared";
 import { type CellHandle, type CellRef } from "@commonfabric/runtime-client";
 import {
@@ -92,6 +98,30 @@ describe("CFCodeEditor", () => {
 
     expect(element.autofocus).toBe(true);
     expect(element.cursorPosition).toBe("end");
+  });
+
+  it("treats an unavailable mentionable list as empty while resolving IDs", async () => {
+    let mentionedUpdates = 0;
+    const mentionable = {
+      lastRead: () => ({ value: UNAVAILABLE_PENDING }),
+    };
+    const fakeThis = {
+      mentionable,
+      _resolvedPieceIds: new Map<number, string>(),
+      _resolveGeneration: 0,
+      _deferredMentionedContent: null,
+      _updateMentionedFromContent: () => mentionedUpdates++,
+      _publishRefShortNames: () => {},
+      _refreshCompletion: () => {},
+    };
+    const resolvePieceIds = (CFCodeEditor.prototype as unknown as {
+      _resolvePieceIds(this: unknown): Promise<void>;
+    })._resolvePieceIds;
+
+    await resolvePieceIds.call(fakeThis);
+
+    expect(fakeThis._resolvedPieceIds.size).toBe(0);
+    expect(mentionedUpdates).toBe(1);
   });
 
   it("should focus the editor when autofocus becomes true", () => {
@@ -1851,6 +1881,50 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     expect(view.state.doc.toString()).toBe("Hello!");
     expect(view.state.readOnly).toBe(false);
   });
+
+  for (
+    const unavailable of [
+      UNAVAILABLE_PENDING,
+      UNAVAILABLE_SYNCING,
+      unavailableError("Cannot read the mention universe", "network"),
+    ]
+  ) {
+    it(`preserves mentions and prevents edits while the universe is ${unavailable.reason}`, async () => {
+      const element = editor();
+      const universe = bound(
+        createMockCellHandle<MentionableArray>([{ [NAME]: "Direct" }], {
+          id: "of:direct",
+        }),
+      );
+      const mentioned = bound(
+        createMockCellHandle<MentionableArray>([], { id: "of:mentioned" }),
+      );
+      element.mentionable = universe;
+      element.mentioned = mentioned;
+      element._editorView = viewOver("See [[Direct (direct)]].");
+      const passes = bind(element, ["mentionable", "mentioned"]);
+      await Promise.all(passes);
+      expect(writesSent(mentioned)).toHaveLength(1);
+      expect(mentioned.get()).toHaveLength(1);
+
+      // The worker admits the marker as a value, not a read refusal.
+      pushUpdate(universe, unavailable as unknown as MentionableArray);
+      await Promise.all(passes);
+      expect(writesSent(mentioned)).toHaveLength(1);
+      expect(mentioned.get()).toHaveLength(1);
+      const view = viewOver("Hello", [], element._refusalGate());
+      view.dispatch({ changes: { from: 5, insert: "!" } });
+      expect(view.state.doc.toString()).toBe("Hello");
+      expect(view.state.readOnly).toBe(true);
+
+      pushUpdate(universe, [{ [NAME]: "Direct" }]);
+      await Promise.all(passes);
+      const recovered = viewOver("Hello", [], element._refusalGate());
+      recovered.dispatch({ changes: { from: 5, insert: "!" } });
+      expect(recovered.state.doc.toString()).toBe("Hello!");
+      expect(recovered.state.readOnly).toBe(false);
+    });
+  }
 
   it("leaves `$mentioned` as it is when `$mentionable` is refused", async () => {
     const element = editor();

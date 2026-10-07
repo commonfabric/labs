@@ -4,6 +4,7 @@ import {
   isFabricSpecialObject,
   refuseFabricInstance,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { type FactoryInput, isPattern, isReactive } from "./types.ts";
 import { noteDerivedCopy } from "./pattern-metadata.ts";
 import { isCell } from "../cell.ts";
@@ -45,7 +46,9 @@ export function traverseValue(
   //
   // TODO(danfuzz): descend a `FabricInstance` by its codec contents, at which
   // point this becomes a walk rather than a refusal.
-  if ((value as object) instanceof FabricInstance) {
+  if (
+    (value as object) instanceof FabricInstance && !isUnavailable(value)
+  ) {
     refuseFabricInstance(
       value as FabricInstance,
       "when traversing a builder value",

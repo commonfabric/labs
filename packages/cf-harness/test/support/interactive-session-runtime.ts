@@ -60,13 +60,13 @@ const db = {
   tables: { messages: table({ id: "integer primary key", body: "text" }) },
 };
 const sourceText = `
-import { computed, pattern, type SqliteDb } from "commonfabric";
+import { computed, hasError, isPending, pattern, resultOf, type SqliteDb } from "commonfabric";
 export default pattern<{ db: SqliteDb; tick: number }>(({ db, tick }) => {
   const query = db.query<{ id: number }>("SELECT id FROM messages", { reactOn: tick });
   return {
-    count: computed(() => query.result?.length ?? 0),
-    pending: query.pending,
-    error: query.error,
+    count: computed(() => resultOf(query).rows.length),
+    pending: computed(() => isPending(query)),
+    error: computed(() => hasError(query) ? query.errorMessage : undefined),
   };
 });
 `;

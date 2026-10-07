@@ -238,11 +238,11 @@ describe("assign-slug", () => {
       const engine = createEngine();
       const result = await engine.invokeBuiltinTool("run_pattern", {
         sourceText: `
-        import { computed, pattern, UI, type SqliteDb } from "commonfabric";
+        import { computed, isPending, pattern, resultOf, UI, type SqliteDb } from "commonfabric";
         export default pattern<{ mail: SqliteDb }, { n: number; pending: boolean }>(({ mail }) => {
           const read = mail.query<{ n: number }>("SELECT count(*) AS n FROM messages", { scope: "session" });
-          const n = computed(() => read.result?.[0]?.n ?? 0);
-          const pending = computed(() => read.pending === true);
+          const n = computed(() => isPending(read) ? 0 : resultOf(read).rows[0]?.n ?? 0);
+          const pending = computed(() => isPending(read));
           return { n, pending, [UI]: <div>{pending ? "Loading" : n}</div> };
         });
       `,

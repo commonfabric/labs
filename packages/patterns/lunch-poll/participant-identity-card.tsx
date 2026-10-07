@@ -3,7 +3,12 @@ import {
   Default,
   equals,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type Stream,
   UI,
@@ -52,6 +57,7 @@ const joinAs = handler<JoinEvent, {
   users: ParticipantIdentityUsersCell;
   host: HostCell | undefined;
   profile: LunchProfileCell | undefined;
+  profileAvailable: boolean;
   // Display strings arrive pre-resolved from `#profileName` / `#profileAvatar`.
   // Field reads off the live `#profile` result are not a reliable display
   // source; the dedicated string wishes are.
@@ -61,7 +67,15 @@ const joinAs = handler<JoinEvent, {
 }>(
   (
     _event,
-    { users, host, profile, profileName, profileAvatar, joinMessage },
+    {
+      users,
+      host,
+      profile,
+      profileAvailable,
+      profileName,
+      profileAvatar,
+      joinMessage,
+    },
   ) => {
     // Gate on the NAME, not on `profile` being falsy: an unset optional CELL
     // input reads as a present-but-empty cell, so `!profile` never fires and a
@@ -81,7 +95,11 @@ const joinAs = handler<JoinEvent, {
     // storing it as-is stores "whoever the READER resolves", which reads as a
     // different person in every runtime. `equals()` comparisons resolve the
     // chain either way; only storage needs the pin.
-    const identity = profile.resolveAsCell();
+    if (!profileAvailable) {
+      joinMessage.set(JOIN_NEEDS_PROFILE);
+      return;
+    }
+    const identity: LunchProfileCell = profile.resolveAsCell();
     // And the identity must READ as present before it may be stored: at
     // `asCell` seams an ABSENT profile arrives as a truthy empty handle
     // (`!profile` above cannot catch it), and pinning that handle stores an
@@ -115,7 +133,8 @@ const claimHost = handler<ClaimHostEvent, {
   users: ParticipantIdentityUsersCell;
   host: HostCell | undefined;
   profile: LunchProfileCell | undefined;
-}>((_event, { users, host, profile }) => {
+  profileAvailable: boolean;
+}>((_event, { users, host, profile, profileAvailable }) => {
   // No display-name gate here, unlike `joinAs`. That gate exists because a
   // JOIN has nothing else to prove a profile resolved; a takeover has the
   // roster, and a participant whose name is momentarily unresolved is still
@@ -123,7 +142,8 @@ const claimHost = handler<ClaimHostEvent, {
   if (!profile || host === undefined) return;
   // Terminal cell for storage, and it must READ as present — both per the
   // joinAs comments (a truthy handle is not an identity).
-  const identity = profile.resolveAsCell();
+  if (!profileAvailable) return;
+  const identity: LunchProfileCell = profile.resolveAsCell();
   if (identity.get() === undefined) return;
   // Only a participant may host, and taking a host role you already hold is a
   // no-op rather than a redundant write.
@@ -205,29 +225,43 @@ export default pattern<
     // different sessions of the same user (the lot-watch `reporterName`
     // scoping).
     const joinMessage = new Writable.perUser("");
+    const profileState = observeAvailability(profile?.get());
+    const profileAvailable = computed(() =>
+      profileState !== undefined && !hasError(profileState) &&
+      !isPending(profileState) && !isSyncing(profileState) &&
+      !hasSchemaMismatch(profileState)
+    );
     const boundJoin = joinAs({
       users,
       host,
       profile,
+      profileAvailable,
       profileName,
       profileAvatar,
       joinMessage,
     });
-    const boundClaimHost = claimHost({ users, host, profile });
+    const boundClaimHost = claimHost({
+      users,
+      host,
+      profile,
+      profileAvailable,
+    });
 
     // Identity is derived, never stored per-user: compare the viewer's profile
     // cell against the roster. `equals()` follows links to the end, and a
     // comparison is position-independent — unlike a `list.key(i)` handle, which
     // follows the slot and retargets when an earlier entry is removed.
     const isJoined = computed(() => {
-      const mine = profile;
-      if (!mine) return false;
+      if (!profileAvailable || profile === undefined) return false;
+      const mine: LunchProfileCell = profile;
       return (users.get() ?? []).some((u) => equals(u.profile, mine));
     });
     const isAdmin = computed(() => {
-      const mine = profile;
       const current = (host?.get() ?? {}).profile;
-      if (!mine || current === undefined) return false;
+      if (
+        !profileAvailable || profile === undefined || current === undefined
+      ) return false;
+      const mine: LunchProfileCell = profile;
       return equals(current, mine);
     });
     const hasProfile = computed(() => trimmedName(profileName) !== "");
@@ -240,9 +274,7 @@ export default pattern<
     // button beside it; the next click succeeded. Reading the document here
     // is what asks the runtime to pull it, and re-runs when it arrives, so the
     // button waits for the identity it would store.
-    const profileLoaded = computed(() =>
-      profile !== undefined && profile.get() !== undefined
-    );
+    const profileLoaded = computed(() => profileAvailable);
     const canJoin = computed(() => hasProfile && profileLoaded);
     // The exported verdict is the handler's, unchanged: a headless caller
     // (the deploy doc's CLI smoke test) reads it to learn whether its join

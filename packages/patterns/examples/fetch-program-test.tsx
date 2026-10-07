@@ -2,10 +2,15 @@ import {
   compileAndRun,
   computed,
   fetchProgram,
+  type FetchProgramResult,
+  hasError,
+  isPending,
   NAME,
   pattern,
+  resultOf,
   toIndentedDebugString,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -13,25 +18,48 @@ import {
  * Test pattern for fetchProgram builtin.
  * Fetches a program from a URL and compiles it.
  */
-export default pattern(() => {
+type FetchProgramTestOutput = {
+  [NAME]: string;
+  [UI]: VNode;
+  url: unknown;
+  program: FetchProgramResult | undefined;
+  result: unknown;
+};
+
+export default pattern<void, FetchProgramTestOutput>(() => {
   // URL to a simple pattern file
   const url = new Writable(
     "https://raw.githubusercontent.com/commonfabric/labs/main/packages/patterns/counter.tsx",
   );
 
   // Step 1: Fetch the program from URL
-  const { pending: fetchPending, result: program, error: fetchError } =
-    fetchProgram({ url });
+  const fetchRequest = fetchProgram({ url });
+  const fetchedProgram = resultOf(fetchRequest);
+  // Preserve the legacy optional output while the direct path below uses
+  // availability to suspend until the program is ready.
+  const program = computed((): FetchProgramResult | undefined =>
+    isPending(fetchRequest) || hasError(fetchRequest)
+      ? undefined
+      : fetchedProgram
+  );
+  const fetchPending = computed(() => isPending(fetchRequest));
+  const fetchError = computed(() =>
+    hasError(fetchRequest) ? fetchRequest.errorMessage : undefined
+  );
 
   // Step 2: Compile and run the fetched program
   // Explicitly map program fields to compileAndRun params
   const compileParams = computed(() => ({
-    files: program?.files ?? [],
-    main: program?.main ?? "",
+    files: fetchedProgram.files,
+    main: fetchedProgram.main,
     input: { value: 10 },
   }));
-  const { pending: compilePending, result, error: compileError } =
-    compileAndRun(compileParams);
+  const compileRequest = compileAndRun(compileParams);
+  const result = resultOf(compileRequest);
+  const compilePending = computed(() => isPending(compileRequest));
+  const compileError = computed(() =>
+    hasError(compileRequest) ? compileRequest.errorMessage : undefined
+  );
 
   return {
     [NAME]: "Fetch Program Test",

@@ -1,19 +1,25 @@
 # Fetching Data
 
-Fetch calls are reactive nodes, not promises: never `await` them. Call them in
-the pattern body and read `pending` / `error` / `result` reactively. Each
-returns `{ pending: boolean, result, error }`, and re-runs automatically when
-its inputs (URL, options) change. Results are memoized per request, so calling
-the same fetch with the same inputs does not re-issue the request.
+Fetch calls are reactive nodes, not promises: never `await` them. Each returns
+an `AsyncResult<T>`: either its usable value or a runtime-owned unavailable
+state. Keep that request value when the UI needs to render a loading or error
+state, and call `resultOf(request)` once to obtain the ordinary `T` view used by
+the rest of the pattern. A consumer of that view waits automatically while the
+request is unavailable.
 
-There are four functions, one per body shape.
+Fetches re-run when their inputs (URL, options) change. Results are memoized per
+request, so calling the same fetch with the same inputs does not re-issue the
+request.
+
+There are five single-result fetch functions: four body shapes plus a program
+loader.
 
 ## fetchJson\<T\>
 
 JSON parsed into a TypeScript type. A type argument is **required** — the
 compiler derives a JSON schema from `T` and verifies the response against it at
 fetch time. A response that is missing a required field or has a mismatched
-type lands on `error` with `result` left undefined; fields the type does not
+type produces the `schemaMismatch` unavailable state; fields the type does not
 mention are allowed through.
 
 ```typescript
@@ -23,14 +29,14 @@ interface Repo {
   stargazers_count: number;
 }
 
-const repo = fetchJson<Repo>({ url: apiUrl });
+const repoRequest = fetchJson<Repo>({ url: apiUrl });
+const repo = resultOf(repoRequest);
 
-// Response: { result: Repo, error: any, pending: boolean }
-{repo.pending
+{isPending(repoRequest)
   ? <span>Loading...</span>
-  : repo.error
-  ? <span>Error: {String(repo.error)}</span>
-  : <p>{repo.result?.name} ({repo.result?.stargazers_count}★)</p>}
+  : hasError(repoRequest)
+  ? <span>Error: {repoRequest.errorMessage}</span>
+  : <p>{repo.name} ({repo.stargazers_count}★)</p>}
 ```
 
 Calling `fetchJson` without a type argument is a compile error. Reach for
@@ -43,17 +49,18 @@ The response body decoded as UTF-8 text.
 ```typescript
 // Shown for illustration only.
 const page = fetchText({ url: resolvedUrl });
-// Response: { result: string, error: any, pending: boolean }
+const text = resultOf(page); // string
 ```
 
 ## fetchJsonUnchecked
 
 JSON parsed without a type or verification — the escape hatch for responses
-whose shape you don't declare. `result` is typed `any`.
+whose shape you don't declare. Its usable value is typed `any`.
 
 ```typescript
 // Shown for illustration only.
 const models = fetchJsonUnchecked({ url: "/api/ai/llm/models" });
+const modelData = resultOf(models); // any
 ```
 
 ## fetchBinary
@@ -63,12 +70,29 @@ The raw response bytes plus the media type.
 ```typescript
 // Shown for illustration only.
 const file = fetchBinary({ url: assetUrl });
-// Response: { result: { bytes: FabricBytes, mediaType: string }, error, pending }
+const binary = resultOf(file); // { bytes: FabricBytes, mediaType: string }
 ```
 
 `bytes` is a `FabricBytes` byte buffer; read it with `slice()` / `copyInto()`.
 `mediaType` comes from the `Content-Type` response header (for example
 `"image/png"`).
+
+## fetchProgram
+
+Fetch a Common Fabric program bundle for `compileAndRun`. The usable result is
+`{ files: Array<{ name, contents }>, main }`.
+
+```typescript
+// Shown for illustration only.
+const programRequest = fetchProgram({ url: sourceUrl });
+const program = resultOf(programRequest);
+const compileRequest = compileAndRun({
+  files: program.files,
+  main: program.main,
+  input,
+});
+const compiled = resultOf(compileRequest);
+```
 
 ## POST and request options
 
@@ -78,7 +102,7 @@ that produces one).
 
 ```typescript
 // Shown for illustration only.
-const result = fetchJson<SearchResult>({
+const request = fetchJson<SearchResult>({
   url: "/api/agent-tools/web-search",
   options: {
     method: "POST",
@@ -86,6 +110,7 @@ const result = fetchJson<SearchResult>({
     body: { query, max_results: 5 },
   },
 });
+const result = resultOf(request);
 ```
 
 ## Processing arrays
@@ -96,13 +121,33 @@ Map over items — memoization is automatic per item:
 // Shown for illustration only.
 const pages = urls.map((url) => ({
   url,
-  data: fetchJson<Page>({ url }),
+  request: fetchJson<Page>({ url }),
 }));
 
-{pages.map(({ url, data }) => (
-  <div>{data.pending ? <em>Loading...</em> : <p>{data.result?.title}</p>}</div>
+{pages.map(({ request }) => (
+  <div>
+    {isPending(request)
+      ? <em>Loading...</em>
+      : <p>{resultOf(request).title}</p>}
+  </div>
 ))}
 ```
+
+The guards `isPending`, `hasError`, `isSyncing`, and `hasSchemaMismatch`
+narrow the request to the corresponding state. You do not need to handle every
+state: if a computation only consumes `resultOf(request)`, unavailability
+propagates through it and the computation runs once usable data exists.
+
+### Migrating fallback-while-loading code
+
+`resultOf(request)` is a type projection, not a defaulting operator. Do not
+translate an old expression such as `request.result ?? previousValue` into
+`resultOf(request) ?? previousValue`: the runtime marker is intentionally
+preserved and is truthy, so the fallback does not provide continuity. Keep the
+request for explicit pending/error branches. If the requirement is to retain
+the last successful value across a new request, use
+`latestComplete(request)`; it provides continuity without hand-written snapshot
+cells while leaving the original request available for guards.
 
 ## URLs
 

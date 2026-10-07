@@ -379,6 +379,12 @@ describe("the session remount (profile-starvation fifth face)", () => {
 
   it("a session revoked by the genesis ACL is REMOUNTED when a commit touches the ACL doc, and the starved cross-space read lands", async () => {
     const serving = servingManager();
+    const connectionStates: string[] = [];
+    const cancelConnectionState = serving.subscribeConnectionState(
+      homeSpace,
+      ({ status, epoch }) => connectionStates.push(`${status}:${epoch}`),
+    );
+    cleanups.push(() => Promise.resolve(cancelConnectionState()));
 
     // (1) Activation before genesis: the serving plane opens its session
     // on a space with no ACL at all. Admitted — a fresh space grants
@@ -441,6 +447,12 @@ describe("the session remount (profile-starvation fifth face)", () => {
       mintProbeId(minter, homeSpace),
     );
     expect(again.error, "the healed session keeps serving").toBeUndefined();
+    expect(connectionStates).toEqual([
+      "idle:0",
+      "ready:1",
+      "closed:1",
+      "ready:2",
+    ]);
   });
 
   it("FAIL-CLOSED: the remount re-runs session.open, it does not decide it — an unauthorized principal is denied there and the read keeps failing, while the SAME trigger heals it the moment the ACL grants READ", async () => {

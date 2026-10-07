@@ -8,8 +8,11 @@
 
 import { assert, assertEquals, assertFalse } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 
 import ts from "typescript";
+import { SchemaGenerator } from "../../src/schema-generator.ts";
+import { isCommonFabricAvailabilityType } from "../../src/typescript/availability-brand.ts";
 
 import {
   getImportTypeModuleName,
@@ -216,6 +219,93 @@ describe("isCommonFabricDeclaration", () => {
 });
 
 describe("isCommonFabricSymbol", () => {
+  it("emits synthesized helper-qualified availability references as native schemas without accepting lookalike references", () => {
+    const { checker } = createProgram({
+      "/author/main.ts": "type Value = any;",
+    });
+    const unavailableNames = [
+      "FabricUnavailable",
+      "IsPending",
+      "IsSyncing",
+      "HasError",
+      "HasSchemaMismatch",
+    ];
+    for (const name of unavailableNames) {
+      const reference = ts.factory.createTypeReferenceNode(
+        ts.factory.createQualifiedName(
+          ts.factory.createIdentifier("__cfHelpers"),
+          name,
+        ),
+      );
+      expect(isCommonFabricAvailabilityType(checker.getAnyType(), reference))
+        .toBe(true);
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          reference,
+          checker,
+        ),
+      ).toEqual({ type: "FabricUnavailable" });
+    }
+
+    for (
+      const [namespace, name] of [
+        ["User", "IsPending"],
+        ["__cfHelpersPending", "IsPending"],
+        ["__cfHelpers", "UserUnavailable"],
+      ] as const
+    ) {
+      const reference = ts.factory.createTypeReferenceNode(
+        ts.factory.createQualifiedName(
+          ts.factory.createIdentifier(namespace),
+          name,
+        ),
+      );
+      expect(isCommonFabricAvailabilityType(checker.getAnyType(), reference))
+        .toBe(false);
+    }
+  });
+
+  it("emits native data-model availability aliases as unavailable primitives", () => {
+    const fileName = "/repo/packages/data-model/src/api.ts";
+    const { program, checker } = createProgram({
+      [fileName]: `
+        declare class NativeUnavailable { readonly native: true; }
+        export type IsPending = NativeUnavailable & { readonly reason: "pending" };
+        export type IsSyncing = NativeUnavailable & { readonly reason: "syncing" };
+        export type HasError = NativeUnavailable & { readonly reason: "error"; readonly errorMessage: string };
+        export type HasSchemaMismatch = HasError & { readonly errorKind: "schemaMismatch" };
+      `,
+    });
+    const sourceFile = program.getSourceFile(fileName)!;
+    for (const node of sourceFile.statements) {
+      if (!ts.isTypeAliasDeclaration(node)) continue;
+      const type = checker.getTypeAtLocation(node.name);
+      expect(isCommonFabricAvailabilityType(type, node.type)).toBe(true);
+      expect(new SchemaGenerator().generateSchema(type, checker, node.type))
+        .toEqual({ type: "FabricUnavailable" });
+    }
+  });
+
+  it("keeps author-defined availability lookalikes as ordinary object schemas", () => {
+    const fileName = "/author/api.ts";
+    const { program, checker } = createProgram({
+      [fileName]: `
+        export type IsPending = { readonly reason: "pending"; readonly label: string };
+        export type IsSyncing = { readonly reason: "syncing"; readonly label: string };
+        export type HasError = { readonly reason: "error"; readonly label: string };
+        export type HasSchemaMismatch = HasError & { readonly errorKind: "schemaMismatch" };
+      `,
+    });
+    const sourceFile = program.getSourceFile(fileName)!;
+    for (const node of sourceFile.statements) {
+      if (!ts.isTypeAliasDeclaration(node)) continue;
+      const type = checker.getTypeAtLocation(node.name);
+      expect(isCommonFabricAvailabilityType(type, node.type)).toBe(false);
+      expect(new SchemaGenerator().generateSchema(type, checker, node.type))
+        .not.toEqual({ type: "FabricUnavailable" });
+    }
+  });
+
   it("matches symbols from Common Fabric source files", () => {
     const { program, checker } = createProgram({
       "/repo/packages/api/index.ts": `
@@ -293,6 +383,22 @@ describe("symbolDeclaresCommonFabricDefault", () => {
   });
 
   describe("user-defined Default type (should return false)", () => {
+    it("returns false for an unrelated type alias symbol", () => {
+      const { program, checker } = createProgram({
+        "/test.ts": `type Plain = string;`,
+      });
+      const sf = program.getSourceFile("/test.ts")!;
+      const declaration = findFirstNode(sf, ts.isTypeAliasDeclaration);
+
+      assert(declaration);
+      assertFalse(
+        symbolDeclaresCommonFabricDefault(
+          checker.getSymbolAtLocation(declaration.name),
+          checker,
+        ),
+      );
+    });
+
     it("returns false when the property type references a user-defined Default alias in the same file", () => {
       // Default is declared in /test.ts — NOT in commonfabric.d.ts.
       const { program, checker } = createProgram({

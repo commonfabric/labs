@@ -59,6 +59,8 @@ Each construct family is classified as one of:
 
 | Construct family | Status | Intended meaning |
 | --- | --- | --- |
+| `compileDiagnosticsOf()` on a direct compilation request in the producer's pattern body | Supported | The accessor returns a live sibling-cell alias without a computation. Bind it to a standalone const before deriving values, or return the alias directly. Stable const aliases of the compilation request are accepted |
+| `compileDiagnosticsOf()` inside a computation, on a subpattern result, or inside an inline derived expression | Unsupported | A materialized request has no diagnostics-channel association. Capture a standalone diagnostics alias into computations and export the diagnostics separately across pattern boundaries |
 | Reactive property access in JSX or helper-owned expressions | Supported | Authored reactive reads like `state.user.name` should remain natural and lower to explicit reactive access as needed |
 | Reactive element access with static or known-symbol keys | Supported | Forms like `items[0]`, `item[NAME]`, `state["foo"]` should lower predictably when the access path is statically representable |
 | `input[SELF]` on a pattern's own input parameter, in the pattern body, JSX, a plain-array callback, or a handler's bound state | Supported | `SELF` names the pattern's own result, and on the input the pattern body receives `input[SELF]` reads the same result as a destructured `[SELF]: self` binding, including a path read through it (`input[SELF].title`, `input[SELF].items.map(...)`), a local bound to it (`const self = input[SELF]`), and a `[SELF]` destructured off the input in the body |
