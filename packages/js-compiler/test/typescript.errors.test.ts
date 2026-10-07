@@ -229,6 +229,45 @@ describe("Checker", () => {
     });
   }
 
+  for (
+    const [exportKind, statement, code] of [
+      ["named", "export const v = { recursive, local: f() };", 4025],
+      ["default", "export default { recursive, local: f() };", 4082],
+    ] as const
+  ) {
+    it(`retains a private result diagnostic beside an expanding generic in a ${exportKind} export`, () => {
+      const checker = new Checker(programFor({
+        "/recursive-result.ts": `
+interface Node<T> { value: T; next: Node<T[]>; }
+declare const recursive: Node<number>;
+function f() {
+  const CELL_RESULT_TYPE: unique symbol = Symbol();
+  return { [CELL_RESULT_TYPE]: 1 };
+}
+${statement}
+`,
+      }));
+      checker.typeCheck();
+      let thrown: unknown;
+      try {
+        checker.declarationCheck();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(CompilerError);
+      expect((thrown as CompilerError).message).toContain(
+        "private name 'CELL_RESULT_TYPE'",
+      );
+      expect(
+        checker.checkableSources().flatMap((source) =>
+          checker.collectDeclarationErrors(source).map(({ diagnostic }) =>
+            diagnostic.code
+          )
+        ),
+      ).toEqual([code]);
+    });
+  }
+
   it("check() tolerates empty diagnostics and throws a CompilerError otherwise", () => {
     const checker = new Checker(
       programFor({ "/ok.ts": "export const x: number = 1;" }),

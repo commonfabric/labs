@@ -104,6 +104,19 @@ describe("computed cell kinds", () => {
       ]);
     });
 
+    it("tags availability-aware lift outputs and their pure upstream inputs as computed", () => {
+      const double = lift((x: number) => x * 2);
+      const identity = lift((value: number) => value, undefined, undefined, {
+        unavailableInputPolicy: [{ path: [], reasons: ["error"] }],
+      });
+      const testPattern = pattern<{ x: number }>(({ x }) => {
+        const doubled = double(x);
+        return { doubled, out: identity(doubled) };
+      });
+      expect(descriptorFor(testPattern, "doubled")?.kind).toBe("computed");
+      expect(descriptorFor(testPattern, "out")?.kind).toBe("computed");
+    });
+
     it("leaves state cells (no compute writer) untagged", () => {
       const double = lift(({ x }: { x: number }) => x * 2);
       const testPattern = pattern<{ x: number }>(() => {
@@ -495,6 +508,39 @@ describe("computed cell kinds", () => {
         out: handlerish({ $ctx: { v: x } }),
       }));
       expect(descriptorFor(testPattern, "out")?.kind).toBeUndefined();
+    });
+
+    it("availability-aware effects disqualify their outputs and input roots", () => {
+      const double = lift((x: number) => x * 2);
+      const effect = mkModule({
+        type: "javascript-availability",
+        implementation: () => 0,
+        isEffect: true,
+        unavailableInputPolicy: [{ path: ["v"], reasons: ["error"] }],
+      });
+      const testPattern = pattern<{ x: number }>(({ x }) => {
+        const doubled = double(x);
+        return { doubled, out: effect({ v: doubled }) };
+      });
+      expect(descriptorFor(testPattern, "out")?.kind).toBeUndefined();
+      expect(descriptorFor(testPattern, "doubled")?.kind).toBeUndefined();
+    });
+
+    it("availability-aware handlers retain fail-closed writer and capture classification", () => {
+      const double = lift((x: number) => x * 2);
+      const handlerish = mkModule({
+        type: "javascript-availability",
+        implementation: () => 0,
+        wrapper: "handler",
+        argumentSchema: { type: "object" },
+        unavailableInputPolicy: [{ path: ["$ctx"], reasons: ["error"] }],
+      });
+      const testPattern = pattern<{ x: number }>(({ x }) => {
+        const doubled = double(x);
+        return { doubled, out: handlerish({ $ctx: { v: doubled } }) };
+      });
+      expect(descriptorFor(testPattern, "out")?.kind).toBeUndefined();
+      expect(descriptorFor(testPattern, "doubled")?.kind).toBeUndefined();
     });
 
     it("a handler argumentSchema without properties disqualifies every capture", () => {

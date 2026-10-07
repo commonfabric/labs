@@ -3570,17 +3570,15 @@ const isDeclarablePolicyStore = (
 // non-link leaf (string, number, boolean, null) makes the value content.
 // Such writes get `structure` (shape-only) stamps instead of covering
 // `derived` ones — see `pureLinkContainerPaths`.
-// A `FabricSpecialObject` is a content leaf like any other: its state is
-// private, so enumerating it finds no members and would classify a byte blob
-// or an unavailable-result marker as pure structure. This classifier has a
-// complete answer for that case without walking the private state: no special
-// object is pure link structure.
+// Native unavailable markers and Fabric primitives are content leaves: their
+// state is private, so enumerating them would classify them as pure structure.
+// Fabric instances pass through the structural walk's refusal because their
+// private state can contain references.
 const isPureLinkStructure = (value: unknown): boolean => {
   if (value === undefined) return true;
   if (isPrimitiveCellLink(value)) return true;
   if (
-    isUnavailable(value) || value instanceof FabricInstance ||
-    value instanceof FabricPrimitive
+    isUnavailable(value) || value instanceof FabricPrimitive
   ) {
     return false;
   }
@@ -3804,8 +3802,7 @@ const pureLinkContainerPaths = (
     return;
   }
   if (
-    isUnavailable(value) || value instanceof FabricInstance ||
-    value instanceof FabricPrimitive
+    isUnavailable(value) || value instanceof FabricPrimitive
   ) {
     return;
   }
@@ -3816,8 +3813,8 @@ const pureLinkContainerPaths = (
     );
     return;
   }
-  // A `FabricSpecialObject` mints no path here: it is a content leaf, not a
-  // container whose shape the writing transaction computed.
+  // Native content leaves mint no structural path; instances are refused by
+  // the structural walk rather than classified through their private state.
   if (isWalkableObjectOrArray(value)) {
     out.push(path);
     for (const [key, member] of Object.entries(value)) {

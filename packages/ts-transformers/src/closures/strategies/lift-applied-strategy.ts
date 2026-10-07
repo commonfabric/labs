@@ -1,7 +1,6 @@
 import ts from "typescript";
 import type {
   CapabilityParamSummary,
-  CrossStageState,
   FunctionCapabilitySummary,
   TransformationContext,
 } from "../../core/mod.ts";
@@ -14,12 +13,15 @@ import {
   qualifyCommonFabricTypeRefs,
   setParentPointers,
   typeToTypeNodeWithRegistry,
-  unwrapOpaqueLikeType,
 } from "../../ast/mod.ts";
 import { analyzeFunctionCapabilities } from "../../policy/capability-analysis.ts";
 import { registerLiftAppliedCallType } from "../../ast/type-inference.ts";
 import { applyShrinkAndWrap } from "../../transformers/type-shrinking.ts";
-import { getCellKind } from "../../transformers/cell-type.ts";
+import {
+  planCaptureBindings,
+  registerCaptureBindingTypes,
+  rewriteCaptureBindingReferences,
+} from "../../utils/capture-bindings.ts";
 import type { CaptureTreeNode } from "../../utils/capture-tree.ts";
 import {
   buildCapturePropertyAssignments,
@@ -47,64 +49,6 @@ import {
   canonicalizeResultOfCaptures,
   rewriteResultOfAliasReferences,
 } from "../../availability/analysis.ts";
-
-/**
- * Pre-register unwrapped types for captured identifiers in a callback body.
- * This allows nested transformations (like map -> mapWithPattern decisions)
- * to see the correct unwrapped types for captured variables.
- *
- * Inside a lift-applied callback:
- * - Reactive<T> captures become T parameters (unwrapped)
- * - Cell<T> captures remain Cell<T> (NOT unwrapped)
- *
- * We register this before the visitor runs so decisions are made correctly.
- */
-function preRegisterCaptureTypes(
-  body: ts.ConciseBody,
-  captureExpressions: Set<ts.Expression>,
-  checker: ts.TypeChecker,
-  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
-): void {
-  if (!typeRegistry) return;
-
-  // Build map: capture name -> type to register
-  // Only unwrap Reactive types (kind === "opaque"), not Cell types
-  const captureTypes = new Map<string, ts.Type>();
-  for (const expr of captureExpressions) {
-    if (ts.isIdentifier(expr)) {
-      const exprType = checker.getTypeAtLocation(expr);
-      if (exprType) {
-        const kind = getCellKind(exprType, checker);
-
-        // Only unwrap if it's a Reactive (kind === "opaque")
-        // Cell and Stream types should NOT be unwrapped
-        if (kind === "opaque") {
-          const unwrapped = unwrapOpaqueLikeType(exprType, checker);
-          if (unwrapped && unwrapped !== exprType) {
-            captureTypes.set(expr.text, unwrapped);
-          }
-        }
-        // For Cell/Stream types, we don't register anything - let TypeScript's natural type be used
-      }
-    }
-    // NOTE: Property access captures like state.items are handled separately
-  }
-
-  if (captureTypes.size === 0) return;
-
-  // Walk the body and register unwrapped types for all matching identifiers
-  const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node)) {
-      const unwrappedType = captureTypes.get(node.text);
-      if (unwrappedType) {
-        typeRegistry.set(node, unwrappedType);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(body);
-}
 
 /**
  * Check if a call expression is a lift-applied call (the lowered form of a
@@ -295,126 +239,6 @@ function buildLiftAppliedInputObject(
 }
 
 /**
- * Rewrite the callback body to use renamed capture identifiers.
- * For example, if `multiplier` was renamed to `multiplier_1`, replace all
- * references to the captured `multiplier` with `multiplier_1`.
- *
- * Also registers the new identifiers with their UNWRAPPED types in typeRegistry,
- * so type-based checks inside the lift-applied callback see the correct types.
- */
-function rewriteCaptureReferences(
-  body: ts.ConciseBody,
-  captureNameMap: Map<string, string>,
-  captureExpressions: Set<ts.Expression>,
-  factory: ts.NodeFactory,
-  checker: ts.TypeChecker | undefined,
-  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
-  state: CrossStageState,
-): ts.ConciseBody {
-  // Build a map: identifier name -> unwrapped type
-  // We need to register all capture references (not just renamed ones) with unwrapped types
-  const captureTypes = new Map<string, ts.Type>();
-  if (checker) {
-    for (const expr of captureExpressions) {
-      // Get the root identifier name from the expression
-      let rootName: string | undefined;
-      if (ts.isIdentifier(expr)) {
-        rootName = expr.text;
-      } else if (ts.isPropertyAccessExpression(expr)) {
-        // For property access like `state.items`, we want to register `items`
-        // but the capture tree uses the full path
-        // For now, skip these - they get handled separately
-        continue;
-      }
-
-      if (rootName) {
-        const exprType = checker.getTypeAtLocation(expr);
-        if (exprType) {
-          const unwrapped = unwrapOpaqueLikeType(exprType, checker);
-          if (unwrapped) {
-            captureTypes.set(rootName, unwrapped);
-          }
-        }
-      }
-    }
-  }
-
-  // Build a map: original name -> renamed name (for all captures, not just renamed)
-  const substitutions = new Map<string, string>();
-  for (const [originalName, renamedName] of captureNameMap) {
-    substitutions.set(originalName, renamedName);
-  }
-
-  if (substitutions.size === 0) {
-    return body; // No captures to substitute
-  }
-
-  const visitor = (node: ts.Node, parent?: ts.Node): ts.Node => {
-    // A printed node names no capture: it stands for its type, and is not
-    // taken apart.
-    if (state.printedFrom(node)) return node;
-
-    // Handle shorthand property assignments specially
-    // { multiplier } needs to become { multiplier: multiplier_1 } if multiplier is renamed
-    if (ts.isShorthandPropertyAssignment(node)) {
-      const substituteName = substitutions.get(node.name.text);
-      if (substituteName) {
-        const newIdentifier = factory.createIdentifier(substituteName);
-        // Register with unwrapped type
-        const unwrappedType = captureTypes.get(node.name.text);
-        if (unwrappedType && typeRegistry) {
-          typeRegistry.set(newIdentifier, unwrappedType);
-        }
-        // Expand shorthand into full property assignment
-        return factory.createPropertyAssignment(
-          node.name, // Property name stays the same
-          newIdentifier, // Value uses renamed identifier
-        );
-      }
-      // No substitution needed, keep as shorthand
-      return node;
-    }
-
-    // Don't substitute identifiers that are property names
-    if (ts.isIdentifier(node)) {
-      // Skip if this identifier is the property name in a property access (e.g., '.get' in 'obj.get')
-      if (
-        parent && ts.isPropertyAccessExpression(parent) && parent.name === node
-      ) {
-        return node;
-      }
-
-      // Skip if this identifier is a property name in an object literal (e.g., 'foo' in '{ foo: value }')
-      if (parent && ts.isPropertyAssignment(parent) && parent.name === node) {
-        return node;
-      }
-
-      const substituteName = substitutions.get(node.text);
-      if (substituteName) {
-        const newIdentifier = factory.createIdentifier(substituteName);
-        // Register with unwrapped type
-        const unwrappedType = captureTypes.get(node.text);
-        if (unwrappedType && typeRegistry) {
-          typeRegistry.set(newIdentifier, unwrappedType);
-        }
-        return newIdentifier;
-      }
-    }
-
-    return ts.visitEachChild(
-      node,
-      (child: ts.Node) => visitor(child, node),
-      undefined,
-    );
-  };
-
-  return ts.visitNode(
-    body,
-    (node: ts.Node) => visitor(node, undefined),
-  ) as ts.ConciseBody;
-}
-
-/**
  * Transform a lift-applied call that has closures in its callback. Returns
  * undefined for any other node.
  * Converts: lift((v) => v * multiplier.get())(value)
@@ -450,6 +274,7 @@ export function transformLiftAppliedCall(
   const canonicalCaptures = canonicalizeResultOfCaptures(
     authoredCaptureExpressions,
     context,
+    inputCall,
   );
   const captureExpressions = canonicalCaptures.captures;
   const captureTree = groupCapturesByRoot(captureExpressions);
@@ -479,33 +304,43 @@ export function transformLiftAppliedCall(
     return undefined;
   }
 
-  // Pre-register unwrapped types for captured identifiers BEFORE the visitor runs.
-  // This allows nested transformations (like map -> mapWithPattern) to see the
-  // correct unwrapped types for captured variables inside this lift-applied callback.
-  preRegisterCaptureTypes(
-    canonicalCallbackBody,
-    captureExpressions,
-    checker,
-    state.typeRegistry,
-  );
-
-  // Recursively transform the callback body first
-  const transformedBody = ts.visitNode(
-    canonicalCallbackBody,
-    visitor,
-  ) as ts.ConciseBody;
-
-  // Determine parameter name for the original input
-  let originalInputParamName = "input"; // Fallback for complex expressions
-
+  let originalInputParamName = "input";
   if (ts.isIdentifier(originalInput)) {
     originalInputParamName = originalInput.text;
   } else if (ts.isPropertyAccessExpression(originalInput)) {
     originalInputParamName = originalInput.name.text;
   }
-
-  // Check if callback originally had zero parameters
   const hadZeroParameters = callback.parameters.length === 0;
+  const captureNameMap = resolveLiftAppliedCaptureNameCollisions(
+    hadZeroParameters ? "" : originalInputParamName,
+    captureTree,
+  );
+  const captureBindings = planCaptureBindings(
+    captureExpressions,
+    callback,
+    captureNameMap,
+    context,
+    inputCall,
+  );
+
+  // Pre-register unwrapped types for captured identifiers BEFORE the visitor runs.
+  // This allows nested transformations (like map -> mapWithPattern) to see the
+  // correct unwrapped types for captured variables inside this lift-applied callback.
+  registerCaptureBindingTypes(
+    canonicalCallbackBody,
+    captureBindings,
+    context,
+  );
+
+  // Lower nested callbacks after assigning scope-safe capture names.
+  const transformedBody = ts.visitNode(
+    rewriteCaptureBindingReferences(
+      canonicalCallbackBody,
+      captureBindings,
+      context,
+    ),
+    visitor,
+  ) as ts.ConciseBody;
 
   const partitionedGuardEntries = partitionGuardCapturesByCallbackInput(
     rawGuardedEntries,
@@ -532,11 +367,6 @@ export function transformLiftAppliedCall(
     ...guardedCaptureEntries,
   ]);
 
-  // Resolve capture name collisions with the original input parameter name
-  const captureNameMap = resolveLiftAppliedCaptureNameCollisions(
-    hadZeroParameters ? "" : originalInputParamName,
-    captureTree,
-  );
   const availabilityPolicyEntries = mergeAvailabilityCaptureOverrides([
     ...originalInputAvailabilityEntries,
     ...guardedInputEntries,
@@ -558,28 +388,27 @@ export function transformLiftAppliedCall(
 
   // Rewrite the body to use renamed capture identifiers
   // Also registers new identifiers with unwrapped types for correct type inference
-  const rewrittenBody = rewriteCaptureReferences(
+  const rewrittenBody = rewriteCaptureBindingReferences(
     transformedBody,
-    captureNameMap,
-    captureExpressions,
-    factory,
-    checker,
-    state.typeRegistry,
-    state,
+    captureBindings,
+    context,
+    true,
   );
 
   // Initialize PatternBuilder
   const builder = new PatternBuilder(context);
   builder.setCaptureTree(captureTree);
   builder.setCaptureRenames(captureNameMap);
+  builder.setCaptureBindingNames(
+    new Map(
+      [...captureBindings].map((
+        [root, binding],
+      ) => [root, binding.bindingName]),
+    ),
+  );
 
-  // Reserve the original input parameter name in the builder's used-names so
-  // captures that collide with it get renamed by reserveIdentifier. Skip
-  // reserving when the callback had zero parameters — there's no original
-  // input binding to collide with, and reserving anyway would cause a capture
-  // that happens to share the fallback name ("input") to be renamed to
-  // input_1, leaving the body's references pointing at the outer-scoped
-  // identifier via lexical closure instead of the destructured binding.
+  // Reserve the original input parameter for other builder-generated names.
+  // A zero-parameter callback has no input binding to reserve.
   if (!hadZeroParameters) {
     builder.registerUsedNames([originalInputParamName]);
   }

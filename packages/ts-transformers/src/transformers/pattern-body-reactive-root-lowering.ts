@@ -224,7 +224,11 @@ export function rewritePatternCallbackBody(
   opaqueRootSymbols: Set<ts.Symbol>,
   context: TransformationContext,
 ): ts.ConciseBody {
-  const preRewrittenBody = rewriteInlineReactiveOriginChains(body, context);
+  const preRewrittenBody = rewriteInlineReactiveOriginChains(
+    body,
+    context,
+    opaqueRootSymbols,
+  );
   reportInlineReactiveRootAccesses(preRewrittenBody, context);
   const rewrittenBody = rewriteTrackedOpaquePatternBody(
     preRewrittenBody,
@@ -1255,8 +1259,13 @@ function hasLocalOpaqueOriginBinding(
 function rewriteInlineReactiveOriginChains(
   body: ts.ConciseBody,
   context: TransformationContext,
+  opaqueRootSymbols: ReadonlySet<ts.Symbol> = new Set(),
 ): ts.ConciseBody {
   const { factory } = context;
+  const knownRoots = new Set([
+    ...opaqueRootSymbols,
+    ...collectLocalOpaqueRootSymbols(body, context),
+  ]);
 
   const tryRewriteDeclaration = (
     declaration: ts.VariableDeclaration,
@@ -1276,7 +1285,11 @@ function rewriteInlineReactiveOriginChains(
     ) {
       return undefined;
     }
-    const chain = collectInlineOpaqueChain(unwrappedInitializer, context);
+    const chain = collectInlineOpaqueChain(
+      unwrappedInitializer,
+      context,
+      knownRoots,
+    );
     if (!chain) return undefined;
     const wrappedBinding = wrapBindingPatternInDestructureChain(
       declaration.name,
@@ -1344,6 +1357,7 @@ function rewriteInlineReactiveOriginChains(
 function collectInlineOpaqueChain(
   access: ts.PropertyAccessExpression | ts.ElementAccessExpression,
   context: TransformationContext,
+  opaqueRootSymbols: ReadonlySet<ts.Symbol>,
 ): { segments: string[]; rootInitializer: ts.Expression } | undefined {
   const segments: string[] = [];
   let current: ts.Expression = access;
@@ -1367,7 +1381,12 @@ function collectInlineOpaqueChain(
   const unwrappedRoot = unwrapExpression(current);
   if (!ts.isCallExpression(unwrappedRoot)) return undefined;
   if (
-    !isOpaqueSourceExpression(unwrappedRoot, new Set(), new Set(), context)
+    !isOpaqueSourceExpression(
+      unwrappedRoot,
+      new Set(),
+      opaqueRootSymbols,
+      context,
+    )
   ) return undefined;
   return { segments, rootInitializer: current };
 }

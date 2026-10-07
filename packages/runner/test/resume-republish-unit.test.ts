@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/utils/logger";
+import { unavailableError } from "@commonfabric/data-model/availability";
 import type { Cell } from "../src/cell.ts";
 import type { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -355,6 +356,40 @@ describe("resume-republish unit", () => {
     // elements.
     expect(result.setValues.length).toBe(1);
     expect(result.setValues[0]).toEqual(inputs);
+  });
+
+  it("publishes an element error while retaining a sibling's confirmation and recovery", async () => {
+    const inputs = [new FakeCell("e0", null), new FakeCell("e1", null)];
+    const failure = unavailableError("element failed", "provider");
+    const failed = new FakeCell("failed", failure);
+    const held = Promise.withResolvers<void>();
+    const pending = new FakeCell("pending", undefined, () => held.promise);
+    const result = new FakeCell("container", ["retained"]);
+    const { runtime, tracked } = makeRuntime();
+    const republisher = makeRepublisher({
+      result,
+      inputsList: inputs,
+      elementRuns: runsFor(inputs, [failed, pending]),
+      runtime,
+      contribute: flatMapContribution,
+    });
+    republisher.awaitPendingThenRepublish([failed] as unknown as Cell<any>[]);
+    await tracked[0];
+    expect(result.setValues).toEqual([failure]);
+    expect(republisher.awaitingResult(pending as unknown as Cell<any>)).toBe(
+      true,
+    );
+    failed.value = ["first recovered"];
+    pending.value = ["second confirmed"];
+    held.resolve();
+    await drain(tracked);
+    expect(result.setValues).toEqual([
+      failure,
+      ["first recovered", "second confirmed"],
+    ]);
+    expect(republisher.awaitingResult(pending as unknown as Cell<any>)).toBe(
+      false,
+    );
   });
 
   it("returns early when the result container is unbound", async () => {

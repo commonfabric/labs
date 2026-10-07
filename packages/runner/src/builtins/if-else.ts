@@ -28,7 +28,8 @@ import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
  * declared reads.
  *
  * `condition` stays a plain (value-read) input, so a condition change keeps
- * re-running ifElse. The action decides on its truthiness alone, which it reads
+ * re-running ifElse. An unavailable condition propagates its native marker
+ * without selecting a branch. For a usable condition, the action reads truthiness
  * from the condition's root (`readsTruthyAtRoot()`), so nothing below the root
  * of a condition that is a record or an array is read.
  */
@@ -59,12 +60,12 @@ export function ifElse(
     const cell = runtime.getCellFromLink(resolvedCondition).withTx(tx);
     return {
       cell,
-      truthy: readsTruthyAtRoot(runtime, tx, resolvedCondition),
+      resolvedCondition,
     };
   };
 
   const action: Action = (tx: IExtendedStorageTransaction) => {
-    const { cell: conditionCell, truthy } = readCondition(tx);
+    const { cell: conditionCell, resolvedCondition } = readCondition(tx);
     const resultScope = resolvedCellScope(runtime, tx, conditionCell);
     // Keyed on the output spot, never on the inputs document: every runtime
     // sharing the piece must mint this one store, whatever its vintage
@@ -91,6 +92,7 @@ export function ifElse(
       resultWithLog.setRaw(condition);
       return;
     }
+    const truthy = readsTruthyAtRoot(runtime, tx, resolvedCondition);
     const inputsWithLog = inputsCell.withTx(tx);
 
     const ref = inputsWithLog.key(truthy ? "ifTrue" : "ifFalse")

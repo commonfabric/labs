@@ -55,6 +55,10 @@ function hasOnlyNativeResultKeys(
 ): boolean {
   const seen = new Set<ts.Type>();
   const keys = new Set<ts.Symbol>();
+  // Expanding generic arguments can produce a fresh type at every descent.
+  // An exhausted structural proof keeps the declaration diagnostic intact.
+  const maxDepth = 64;
+  const maxTypes = 128;
   let complete = true;
   const add = (candidate: ts.Symbol | undefined) => {
     if (!candidate) return;
@@ -63,8 +67,13 @@ function hasOnlyNativeResultKeys(
       : candidate;
     if (symbol.getName() === "CELL_RESULT_TYPE") keys.add(symbol);
   };
-  const walk = (value: ts.Type): void => {
+  const walk = (value: ts.Type, depth: number): void => {
+    if (!complete) return;
     if (seen.has(value)) return;
+    if (depth >= maxDepth || seen.size >= maxTypes) {
+      complete = false;
+      return;
+    }
     seen.add(value);
     if (value.flags & ts.TypeFlags.UniqueESSymbol) {
       add(value.getSymbol());
@@ -82,26 +91,31 @@ function hasOnlyNativeResultKeys(
     }
     if (value.flags & ts.TypeFlags.TypeParameter) {
       const constraint = checker.getBaseConstraintOfType(value);
-      if (constraint) walk(constraint);
+      if (constraint) walk(constraint, depth + 1);
       else complete = false;
       return;
     }
     if (value.isUnionOrIntersection()) {
-      for (const member of value.types) walk(member);
+      for (const member of value.types) walk(member, depth + 1);
     }
+    if (!complete) return;
     if (
       !(value.flags &
         (ts.TypeFlags.Object | ts.TypeFlags.Union | ts.TypeFlags.Intersection |
           ts.TypeFlags.TypeParameter))
     ) return;
-    for (const argument of value.aliasTypeArguments ?? []) walk(argument);
+    for (const argument of value.aliasTypeArguments ?? []) {
+      walk(argument, depth + 1);
+    }
+    if (!complete) return;
     if ((value as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) {
       for (
         const argument of checker.getTypeArguments(value as ts.TypeReference)
       ) {
-        walk(argument);
+        walk(argument, depth + 1);
       }
     }
+    if (!complete) return;
     const properties = value.getProperties();
     for (const property of properties) {
       for (const declaration of property.declarations ?? []) {
@@ -136,26 +150,34 @@ function hasOnlyNativeResultKeys(
       return;
     }
     for (const property of properties) {
-      walk(checker.getTypeOfSymbolAtLocation(property, location));
+      if (!complete) return;
+      walk(checker.getTypeOfSymbolAtLocation(property, location), depth + 1);
     }
+    if (!complete) return;
     for (
       const signature of [
         ...value.getCallSignatures(),
         ...value.getConstructSignatures(),
       ]
     ) {
-      walk(signature.getReturnType());
+      if (!complete) return;
+      walk(signature.getReturnType(), depth + 1);
       for (const parameter of signature.parameters) {
-        walk(checker.getTypeOfSymbolAtLocation(parameter, location));
+        if (!complete) return;
+        walk(checker.getTypeOfSymbolAtLocation(parameter, location), depth + 1);
       }
       for (const parameter of signature.typeParameters ?? []) {
+        if (!complete) return;
         const constraint = checker.getBaseConstraintOfType(parameter);
-        if (constraint) walk(constraint);
+        if (constraint) walk(constraint, depth + 1);
       }
     }
-    for (const index of checker.getIndexInfosOfType(value)) walk(index.type);
+    if (!complete) return;
+    for (const index of checker.getIndexInfosOfType(value)) {
+      walk(index.type, depth + 1);
+    }
   };
-  walk(type);
+  walk(type, 0);
   return complete && keys.size > 0 && [...keys].every(isCommonFabricSymbol);
 }
 

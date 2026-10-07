@@ -251,7 +251,8 @@ is undecided — see Open Questions.) A cell is tagged iff:
   - `type: "ref"` builtins whose `implementation` name is not proven
     replayable (see the registry below) — unknown names fail STRICT.
 
-  `javascript`, `pattern`, and `passthrough` writers qualify. Capture
+  `javascript`, `javascript-availability`, `pattern`, and `passthrough` writers
+  qualify. Capture
   writes and `materializerWriteInputPaths` do NOT disqualify — those
   writes replay. (`captureWritesAnalyzed`, the transformer's
   exhaustive-write assertion, is still emitted but is pure provenance now;
@@ -297,7 +298,8 @@ is undecided — see Open Questions.) A cell is tagged iff:
     every input root disqualifies. Non-replayable builtins may write
     through their inputs — the proof case is `llmDialog`, which pushes
     onto its `messages` input.
-  - *Qualifying `javascript` computes and `passthrough`*: inputs do not
+  - *Qualifying `javascript` / `javascript-availability` computes and
+    `passthrough`*: inputs do not
     disqualify; their (replayable) writes are covered on the writer side.
 - **It is not a stream.**
 

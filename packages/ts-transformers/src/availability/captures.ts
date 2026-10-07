@@ -60,6 +60,7 @@ export function parseAvailabilityCaptureExpression(
   return receiver
     ? {
       root: receiver.root,
+      rootIdentifier: receiver.rootIdentifier,
       path: [...receiver.path, argument.text],
       expression,
     }
@@ -194,6 +195,7 @@ function parseExplicitAvailabilityCaptureExpression(
   return source
     ? {
       root: source.root,
+      rootIdentifier: source.rootIdentifier,
       path: [...source.path, ...parsed.path],
       expression,
     }

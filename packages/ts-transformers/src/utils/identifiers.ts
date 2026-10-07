@@ -207,19 +207,43 @@ export function createBindingElementsFromNames(
 ): ts.BindingElement[] {
   const elements: ts.BindingElement[] = [];
   for (const name of names) {
-    const propertyName = isSafeIdentifierText(name)
+    const bindingName = createBindingName(name);
+    const propertyName = isSafeIdentifierText(name) &&
+        ts.isIdentifier(bindingName) && bindingName.text === name
       ? undefined
       : createPropertyName(name, factory);
     elements.push(
       factory.createBindingElement(
         undefined,
         propertyName,
-        createBindingName(name),
+        bindingName,
         undefined,
       ),
     );
   }
   return elements;
+}
+
+/** Collects authored bindings, including declarations inside nested scopes. */
+export function collectBindingNames(root: ts.Node): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      for (const name of extractBindingNames(node.name)) names.add(name);
+    } else if (
+      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ||
+        ts.isClassDeclaration(node) || ts.isClassExpression(node) ||
+        ts.isEnumDeclaration(node)) && node.name
+    ) {
+      names.add(node.name.text);
+    }
+    if (ts.isModuleDeclaration(node) && ts.isIdentifier(node.name)) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return names;
 }
 
 export interface ParameterFromBindingsOptions {

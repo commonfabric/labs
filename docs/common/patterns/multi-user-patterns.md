@@ -277,17 +277,16 @@ const profileWish = wish({ query: "#profile" });            // the viewer's prof
 const profileNameWish = wish<string>({ query: "#profileName" });
 const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 const profile = resultOf(profileWish.result);
-const myName = hasError(profileNameWish.result)
-  ? ""
-  : resultOf(profileNameWish.result);
-const myAvatar = hasError(profileAvatarWish.result)
-  ? ""
-  : resultOf(profileAvatarWish.result);
-const hasProfile = computed(() => myName.trim() !== "");
+const myName = resultOf(profileNameWish.result);
+const myAvatar = resultOf(profileAvatarWish.result);
 ```
 
 **Never** add a "type your name" field and treat that string as the current user.
 The viewer is whoever the runtime says they are; `#profile` is how you read it.
+A loaded profile's existence is independent of its display name: a nameless
+profile is still an identity. Preserve unavailable name or avatar projections,
+or guard their original channels to display an explicit error; do not interpret
+a failed presentation field as an absent profile.
 
 ### Show every participant with `cf-profile-badge`
 

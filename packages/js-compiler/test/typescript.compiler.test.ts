@@ -798,6 +798,39 @@ ${statement}
     });
   }
 
+  for (const noCheck of [false, true]) {
+    it(`retains an authored private result diagnostic beside an expanding generic with noCheck=${noCheck}`, async () => {
+      const program = new InMemoryProgram("/main.tsx", {
+        "/main.tsx": `
+import type { Stream } from "commonfabric";
+interface Node<T> { value: T; next: Node<T[]>; }
+declare const recursive: Node<number>;
+declare const stream: Stream<number>;
+function f() {
+  const CELL_RESULT_TYPE: unique symbol = Symbol();
+  return { [CELL_RESULT_TYPE]: 1 };
+}
+export default { recursive, stream, local: f() };
+`,
+        ...fabricTypeModules,
+      });
+      const compiler = new TypeScriptCompiler(types);
+      let thrown: unknown;
+      try {
+        await resolveAndCompileToModules(compiler, program, {
+          runtimeModules: FABRIC_RUNTIME_MODULES,
+          noCheck,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(CompilerError);
+      expect((thrown as CompilerError).message).toContain(
+        "private name 'CELL_RESULT_TYPE'",
+      );
+    });
+  }
+
   it("compiles a pattern with a result-bearing native Stream input", async () => {
     const program = new InMemoryProgram("/main.tsx", {
       "/main.tsx": `

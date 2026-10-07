@@ -784,6 +784,9 @@ Diagnostics emitted in all modes:
     non-lowerable computation sites still report this error (so `items[0].name`,
     `name.toUpperCase()` at lowerable top-level sites, and dynamic keys inside
     supported contexts validate clean)
+  - a capture requiring a fresh callback binding without recoverable authored
+    value-symbol identity also reports this error; lowering does not substitute
+    same-spelled references from an unrelated scope
 - **Error** `pattern-context:callback-container`
   - a callback passed to an **unsupported container** in pattern-facing JSX
     (the callback-boundary decision is `unsupported` with
@@ -1710,6 +1713,12 @@ Behavior:
 - merge original input and captures into one input object
 - rewrite callback parameters to explicit destructuring
 - resolve name collisions (`name`, `name_1`, ...)
+- keep serialized capture properties independent of callback binding names;
+  reserve local bindings, nested parameters, destructuring, catch bindings, and
+  referenced non-capture values before choosing those names
+- rewrite captured references by their authored value symbols, including
+  shorthand values and JSX expressions; property keys and same-named local
+  references remain unchanged (`utils/capture-bindings.ts`)
 - preserve/reinfer callback result type
 - skip explicit type args when result type is uninstantiated type parameter
 - register lift-applied call type for downstream inference
@@ -1733,6 +1742,19 @@ Behavior:
 
 The runtime meaning of `materializerWriteInputPaths` is specified in
 `docs/specs/scheduler-v2/README.md` §4.3 (the write-surface tiers).
+
+Synthetic expression lifts use the same symbol-scoped capture binding plan.
+Input schemas and availability policies use serialized property paths rather
+than renamed callback bindings. A capture that needs renaming but has no
+recoverable source binding reports `pattern-context:computation` rather than
+rewriting references by spelling.
+
+Result projections use their physical source path only when that source's root
+symbol is visible at the serialized call site. When a surrounding callback
+shadows that root, lowering captures the whole stable projection handle instead,
+retaining its native availability metadata. Explicit callback bindings are
+rewritten before nested lowering so their fresh names remain distinct from
+nested local parameters.
 
 If no captures are found, the lift-applied call is left unchanged.
 
@@ -1782,9 +1804,10 @@ Primary behaviors:
   already materialized callback capture remains plain, while a projection of
   a local reactive producer remains opaque and receives `.key(...)` lowering
 - static property and element chains in variable initializers directly on
-  `resultOf(...)` of an inline reactive producer are normalized through the
-  destructuring path before
-  opaque-root discovery, including inside nested computed/lift callbacks.
+  `resultOf(...)` of an inline or already-bound reactive producer are normalized
+  through the destructuring path before opaque-root discovery, including inside
+  nested computed/lift callbacks. Bound producers are recognized by their
+  symbols rather than by same-named locals in another scope.
   The producer is evaluated once; projections of materialized captures remain
   ordinary value reads (`runner/test/data-unavailability.test.ts` and
   `ts-transformers/test/inline-producer-projection.test.ts`)

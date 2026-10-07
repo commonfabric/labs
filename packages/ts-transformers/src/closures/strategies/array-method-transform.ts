@@ -436,7 +436,11 @@ export function transformArrayMethodCallback(
   // physical AsyncResult source. Otherwise a nested computed() can retain the
   // alias's authored symbol, canonicalize it back to the outer source, and
   // emit a callback that reads an out-of-scope identifier.
-  const canonicalCaptures = canonicalizeResultOfCaptures(captures, context);
+  const canonicalCaptures = canonicalizeResultOfCaptures(
+    captures,
+    context,
+    methodCall,
+  );
   const captureTree = groupCapturesByRoot(canonicalCaptures.captures);
 
   const originalParams = callback.parameters;

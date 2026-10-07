@@ -223,11 +223,11 @@ export function createResumeRepublisher(
           stillPending.push(entry.resultCell);
         }
       }
-      if (stillPending.length > 0) return stillPending;
       if (unavailable !== undefined) {
         result.withTx(tx).setRawUntyped(unavailable, true);
-        return [];
+        return stillPending;
       }
+      if (stillPending.length > 0) return stillPending;
       // The element reads above are real content reads (the aggregate genuinely
       // depends on them, so they taint J). The container write only diffs prior
       // slots for identity, so it runs under the link-resolution probe (S16) to

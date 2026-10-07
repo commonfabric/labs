@@ -7,6 +7,7 @@ import {
   preserveSourceMapRange,
   setParentPointers,
   unwrapOpaqueLikeType,
+  visitEachChildWithJsx,
 } from "../../ast/mod.ts";
 import {
   buildCapturePropertyAssignments,
@@ -19,6 +20,12 @@ import {
   createPropertyParamNames,
   reserveIdentifier,
 } from "../../utils/identifiers.ts";
+import {
+  type CaptureBinding,
+  collectCaptureBindingNames,
+  planCaptureBindings,
+  rewriteCaptureBindingReferences,
+} from "../../utils/capture-bindings.ts";
 import {
   buildCaptureTypeElements,
   createRegisteredTypeLiteral,
@@ -72,7 +79,7 @@ function replaceReactivesWithParams(
         return newIdentifier;
       }
     }
-    return ts.visitEachChild(node, visit, tsContext);
+    return visitEachChildWithJsx(node, visit, tsContext);
   };
   return visit(expression) as ts.Expression;
 }
@@ -139,20 +146,31 @@ function createParameterForPlan(
   captureTree: ReturnType<typeof groupCapturesByRoot>,
   fallbackEntries: readonly FallbackEntry[],
   refToParamName: Map<ts.Expression, string>,
+  captureBindings: ReadonlyMap<string, CaptureBinding>,
+  expression: ts.Expression,
+  context: TransformationContext,
 ): ts.ParameterDeclaration {
   const bindings: ts.BindingElement[] = [];
-  const usedNames = new Set<string>();
+  const usedNames = collectCaptureBindingNames(
+    expression,
+    new Set([...captureBindings.values()].map((entry) => entry.symbol)),
+    context,
+  );
+  for (const entry of captureBindings.values()) {
+    usedNames.add(entry.bindingName);
+  }
 
   const register = (candidate: string): ts.Identifier => {
     return reserveIdentifier(candidate, usedNames, factory);
   };
 
-  const captureBindings = createBindingElementsFromNames(
+  const captureElements = createBindingElementsFromNames(
     captureTree.keys(),
     factory,
-    register,
+    (root) =>
+      factory.createIdentifier(captureBindings.get(root)?.bindingName ?? root),
   );
-  for (const binding of captureBindings) bindings.push(binding);
+  for (const binding of captureElements) bindings.push(binding);
 
   for (const entry of fallbackEntries) {
     const bindingIdentifier = register(entry.paramName);
@@ -217,7 +235,7 @@ export function createLiftAppliedCall(
   }
 
   const { factory, tsContext, cfHelpers, context } = options;
-  const canonical = canonicalizeResultOfCaptures(refs, context);
+  const canonical = canonicalizeResultOfCaptures(refs, context, expression);
   const canonicalExpression = rewriteResultOfAliasReferences(
     expression,
     canonical.aliases,
@@ -232,6 +250,13 @@ export function createLiftAppliedCall(
     planLiftAppliedInputEntries(
       [...canonical.captures],
     );
+  const captureBindings = planCaptureBindings(
+    canonical.captures,
+    canonicalExpression,
+    new Map([...captureTree.keys()].map((root) => [root, root])),
+    context,
+    expression,
+  );
   if (captureTree.size === 0 && fallbackEntries.length === 0) {
     return undefined;
   }
@@ -243,15 +268,22 @@ export function createLiftAppliedCall(
     captureTree,
     fallbackEntries,
     refToParamName,
+    captureBindings,
+    canonicalExpression,
+    context,
   );
 
-  const lambdaBody = replaceReactivesWithParams(
-    canonicalExpression,
-    refToParamName,
-    factory,
-    tsContext,
-    context.checker,
-    context.state.typeRegistry,
+  const lambdaBody = rewriteCaptureBindingReferences(
+    replaceReactivesWithParams(
+      canonicalExpression,
+      refToParamName,
+      factory,
+      tsContext,
+      context.checker,
+      context.state.typeRegistry,
+    ),
+    captureBindings,
+    context,
   );
 
   // Callback arrow: source-map-range only (emit-safe position carry). See

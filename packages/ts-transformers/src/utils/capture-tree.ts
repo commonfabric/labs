@@ -5,6 +5,7 @@ import { createPropertyName } from "./identifiers.ts";
 
 export interface CapturePathInfo {
   readonly root: string;
+  readonly rootIdentifier: ts.Identifier;
   readonly path: readonly string[];
   readonly expression: ts.Expression;
 }
@@ -26,7 +27,12 @@ export function parseCaptureExpression(
   const unwrapped = unwrapExpression(expr);
 
   if (ts.isIdentifier(unwrapped)) {
-    return { root: unwrapped.text, path: [], expression: expr };
+    return {
+      root: unwrapped.text,
+      rootIdentifier: unwrapped,
+      path: [],
+      expression: expr,
+    };
   }
 
   if (ts.isCallExpression(unwrapped)) {
@@ -55,6 +61,7 @@ export function parseCaptureExpression(
 
       return {
         root: receiver.root,
+        rootIdentifier: receiver.rootIdentifier,
         path: [...receiver.path, ...keySegments],
         expression: expr,
       };
@@ -103,7 +110,12 @@ export function parseCaptureExpression(
     }
 
     if (ts.isIdentifier(current)) {
-      return { root: current.text, path: segments, expression: expr };
+      return {
+        root: current.text,
+        rootIdentifier: current,
+        path: segments,
+        expression: expr,
+      };
     }
   }
 

@@ -39,8 +39,9 @@
  * evaluating the property whole.
  *
  * The root is the exception: a mismatch there yields `undefined`, which is what
- * an eager read yields for the same data, so the runner's existing
- * "argument did not resolve" gate handles it unchanged.
+ * an eager read yields for the same data, and reports `SchemaMismatchError`
+ * through `onFailure`. Callers use that failure to distinguish native schema
+ * mismatch from an unresolved argument.
  */
 
 import type { JSONSchema } from "@commonfabric/api";
@@ -84,9 +85,8 @@ const logger = getLogger("schema-view", { enabled: false, level: "warn" });
 /**
  * Thrown when a reader touches data the schema does not describe.
  *
- * The runner treats one of these as an argument that did not resolve rather
- * than as a fault: the run could not proceed on the data available, which is a
- * non-event, not a failure.
+ * The runner suppresses the callback and publishes a native schema-mismatch
+ * state rather than reporting an ordinary JavaScript execution fault.
  */
 export class SchemaMismatchError extends Error {
   override readonly name: string = "SchemaMismatchError";
@@ -327,8 +327,8 @@ export const defaultForAbsentValue = (
  * against the epoch taken here rather than against whatever the reader writes
  * afterwards. Taking the read again is what fixes a later instant.
  *
- * At the root a mismatch is `undefined` — the answer an eager read gives for
- * the same data. Below it, a mismatch throws.
+ * At the root a mismatch returns `undefined` and reports `SchemaMismatchError`
+ * through `onFailure` when supplied. Below it, a mismatch throws.
  */
 export function materializeSchemaView(
   runtime: Runtime,

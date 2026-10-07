@@ -238,6 +238,14 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   Each distinct topic's row then checks every source's mentions for that topic,
   which grows as the number of topics times the number of mentions.
 
+  The identity and value views are separate inputs of the pivot, bound to the
+  same topics array. Normal unavailable-input preflight checks the narrow
+  mention values before the join writes any rows. A pending, syncing, or error
+  source therefore propagates its native state through the pivot while the
+  durable backlinks remain intact. A usable empty mention list removes edges;
+  recovery recomputes them. Identity deduplication retains original positions so
+  duplicate or absent sources do not misalign the two views.
+
   Each topic then does a lookup rather than the join: `backlinksOf` scans the
   pivot for the row whose topic is itself, and takes that row's `mentionedBy`.
   The scan compares a field nested inside a row, and what lets it is that row's

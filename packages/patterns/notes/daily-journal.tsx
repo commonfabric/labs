@@ -1,5 +1,6 @@
 import {
   action,
+  type AsyncResult,
   type BuiltInLLMMessage,
   computed,
   type Default,
@@ -7,6 +8,7 @@ import {
   hasError,
   ifElse,
   isPending,
+  isSyncing,
   llmDialog,
   NAME,
   navigateTo,
@@ -139,13 +141,33 @@ const handleGoToToday = handler<
 
 // ===== Weekly rollup =====
 
-type WeeklyRollup = {
+export type WeeklyRollup = {
   headline: string;
   themes: Array<{ name: string; detail: string }>;
   accomplishments: string[];
   openThreads: string[];
   mood: string;
 };
+
+/** Displays a rollup's terminal failure without treating it as empty success. */
+export const WeeklyRollupPresentation = pattern(
+  ({ response }: { response: AsyncResult<WeeklyRollup> }) => {
+    const weeklyRollup = computed(() =>
+      isPending(response) || isSyncing(response) || hasError(response)
+        ? undefined
+        : resultOf(response)
+    );
+    const error = computed(() => {
+      if (isPending(response) || isSyncing(response)) return "";
+      return hasError(response) ? response.errorMessage : "";
+    });
+    return {
+      weeklyRollup,
+      error,
+      [UI]: ifElse(error, <p role="alert">{error}</p>, <span />),
+    };
+  },
+);
 
 const triggerRollup = handler<
   unknown,
@@ -322,11 +344,10 @@ ${notesXml}
       pending: rollupPending,
     } = rollupDialog;
 
-    const weeklyRollup = computed(() =>
-      isPending(rollupDialog.result) || hasError(rollupDialog.result)
-        ? undefined
-        : resultOf(rollupDialog.result)
-    );
+    const rollupPresentation = WeeklyRollupPresentation({
+      response: rollupDialog.result,
+    });
+    const weeklyRollup = rollupPresentation.weeklyRollup;
     const hasRollup = computed(() => !!weeklyRollup);
 
     // Suggestion context derived from the weekly rollup
@@ -474,6 +495,7 @@ ${notesXml}
                       })}
                     />
 
+                    {rollupPresentation[UI]}
                     {ifElse(
                       hasRollup,
                       <cf-vstack gap="3">

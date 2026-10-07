@@ -69,6 +69,7 @@ import {
 import { getReaderSchemaPrecedenceConfig } from "./reader-schema-precedence-config.ts";
 import type { Runtime } from "./runtime.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
+import { readAvailabilityValue } from "./storage/read-availability.ts";
 import { markIfcBearingLinkCrossing, schemaHasIfc } from "./schema-ifc.ts";
 import { arrayMatchesPositionally } from "./schema-match.ts";
 import {
@@ -1061,13 +1062,27 @@ function readValueAtResolvedLink(
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
   address: IMemorySpaceValueAddress,
+  { referenceOnly = false }: { referenceOnly?: boolean } = {},
 ): FabricValue | undefined {
   // Read without telling the scheduler. Whatever materializes this value —
   // the traverser or a view — registers its own reads as it walks.
   const meta = {
     meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
   };
-  const value = tx.readOrThrow(address, meta);
+  const read = referenceOnly
+    ? undefined
+    : readAvailabilityValue(tx, address, meta);
+  const value = read?.ok !== undefined
+    ? read.ok.value
+    : tx.readOrThrow(address, meta);
+  if (!referenceOnly && isUnavailable(value)) {
+    // The marker is returned as content, rather than materialized below.
+    // Register its consuming read with the same policy as the logical child.
+    const consumed = readAvailabilityValue(tx, address);
+    return consumed.ok !== undefined
+      ? consumed.ok.value
+      : tx.readOrThrow(address);
+  }
   if (value !== undefined || link.path.at(-1) !== "length") return value;
   const parentLink = { ...link, path: link.path.slice(0, -1) };
   const parent = tx.readOrThrow(toMemorySpaceAddress(parentLink), meta);
@@ -1527,7 +1542,9 @@ export function validateAndTransform(
     const hopAddress = toMemorySpaceAddress(link);
     doc = {
       address: hopAddress,
-      value: readValueAtResolvedLink(tx, link, hopAddress),
+      value: readValueAtResolvedLink(tx, link, hopAddress, {
+        referenceOnly: true,
+      }),
     };
     selector = { path: hopAddress.path, schema: effectiveSchema! };
   } else {

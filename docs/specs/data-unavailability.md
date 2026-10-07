@@ -590,7 +590,8 @@ containers or reading branches the implementation never accesses. Local read
 coverage and CFC refusal checks precede marker preservation.
 
 A child value read whose ancestor holds a native `FabricUnavailable` preserves
-that marker rather than reporting a schema mismatch for the child. The ancestor
+that marker rather than reporting a schema mismatch for the child, through both
+raw and schema-aware reads, including eager and lazy materialization. The ancestor
 is a normal value read, with the transaction's read ceiling and metadata, and
 the returned value retains the requested child's logical address. This does not
 turn a reference-only link probe into an observation of the ancestor's content.

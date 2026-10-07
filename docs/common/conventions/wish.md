@@ -62,7 +62,15 @@ return {
 Wish waits for the backing documents of its discovery collections and candidates
 before selecting a result. This loading behavior applies to every hashtag Wish.
 Pending document loads leave any existing state untouched; a cold Wish with no
-existing state publishes none until loading settles. A favorite, mentionable, or
+existing state publishes none until loading settles. This describes producer
+publication, not a successful `undefined` result: consumers of the required
+result channel remain unavailable until it resolves. Wish does not write a
+fresh `UNAVAILABLE_PENDING` for every backing-document load. Explicit native
+pending states also occur, for example, when a query input is unavailable or a
+headless freeform query awaits resolution. Use `isPending(wishResult.result)`
+when explicitly handling the pending reason; do not infer readiness from an
+empty candidate list or assume a load always replaces a retained result.
+A favorite, mentionable, or
 profile element whose piece document is confirmed absent is excluded from
 matches; its entry remains in the discovery collection. Failed favorite,
 mentionable, and profile element loads are skipped when another readable match

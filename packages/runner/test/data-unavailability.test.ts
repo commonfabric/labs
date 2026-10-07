@@ -14,7 +14,12 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { Module, Pattern } from "../src/builder/types.ts";
-import { type Cell, createCell, sendEvent } from "../src/cell.ts";
+import {
+  type Cell,
+  createCell,
+  getCellWithStatus,
+  sendEvent,
+} from "../src/cell.ts";
 import {
   getDerivedInternalCell,
   parseLink,
@@ -1760,6 +1765,42 @@ export default pattern((input: { request: AsyncResult<{ field: string }> }) => {
         "nested lift chain",
         `return { value: computed(() => lift(() => { const nested = resultOf(computed(() => input.request)).nested; return nested.field; })({})) };`,
       ],
+      [
+        "bound producer chain",
+        `const request = computed(() => input.request); const nested = resultOf(request).nested; return { value: nested.field };`,
+      ],
+      [
+        "callback-local bound producer chain",
+        `return { value: computed(() => { const request = computed(() => input.request); const nested = resultOf(request).nested; return nested.field; }) };`,
+      ],
+      [
+        "captured projection with a shadowed source root",
+        `const usable = resultOf(input.request); return { value: computed(() => { const input = { request: { nested: { field: "local" } } }; if (input.request.nested.field !== "local") throw new Error("Local input must stay local"); return usable.nested.field; }) };`,
+      ],
+      [
+        "captured shorthand beside colliding local suffixes",
+        `const usable = resultOf(input.request); return { value: computed(() => { const input = "local"; const input_1 = "suffix"; const snapshot = { usable }; if (input !== "local" || input_1 !== "suffix") throw new Error("Local bindings must stay local"); return snapshot.usable.nested.field; }) };`,
+      ],
+      [
+        "captured projection inside a shadowing function parameter",
+        `const usable = resultOf(input.request); return { value: computed(() => { const read = (input: string) => { if (input !== "local") throw new Error("Nested parameter must stay local"); return usable.nested.field; }; return read("local"); }) };`,
+      ],
+      [
+        "captured projection beside a destructured binding",
+        `const usable = resultOf(input.request); return { value: computed(() => { const { input } = { input: "local" }; if (input !== "local") throw new Error("Destructured binding must stay local"); return usable.nested.field; }) };`,
+      ],
+      [
+        "captured projection inside a shadowing catch binding",
+        `const usable = resultOf(input.request); return { value: computed(() => { try { throw "local"; } catch (input) { if (input !== "local") throw new Error("Catch binding must stay local"); return usable.nested.field; } }) };`,
+      ],
+      [
+        "synthetic projection inside a shadowing map callback",
+        `const usable = resultOf(input.request); const values = ["local"].map((input) => usable.nested.field + (input === "local" ? "" : input)); return { value: values[0] };`,
+      ],
+      [
+        "computed projection inside a shadowing map callback",
+        `const usable = resultOf(input.request); return { value: computed(() => ["local"].map((input) => usable.nested.field + (input === "local" ? "" : input)).join("")) };`,
+      ],
     ]
   ) {
     it(`updates and preserves availability through an inline producer projection with a ${name}`, async () => {
@@ -1912,6 +1953,85 @@ export default pattern((input: { rows: { id: string }[] }) => ({
     });
   }
 
+  for (const parentPath of [[], ["bundle"]]) {
+    for (const lazy of [false, true]) {
+      it(`preserves unavailable ancestors in ${lazy ? "lazy" : "eager"} typed child reads at ${JSON.stringify(parentPath)}`, async () => {
+        const setup = runtime.edit();
+        const source = runtime.getCell(
+          space,
+          "typed child ancestor",
+          undefined,
+          setup,
+        );
+        source.set(
+          parentPath.length === 0
+            ? { field: "initial" }
+            : { bundle: { field: "initial" } },
+        );
+        expect((await setup.commit().settled).error).toBeUndefined();
+        const parent = source.key(...parentPath);
+        const child = parent.key("field").asSchema({ type: "string" });
+        expect(child.get()).toBe("initial");
+        for (
+          const marker of [
+            UNAVAILABLE_PENDING,
+            UNAVAILABLE_SYNCING,
+            unavailableError("ancestor offline", "network"),
+            unavailableMismatch("ancestor shape"),
+          ]
+        ) {
+          const update = runtime.edit();
+          parent.withTx(update).setRaw(marker);
+          expect((await update.commit().settled).error).toBeUndefined();
+          for (const statusBearing of [false, true]) {
+            const read = runtime.edit();
+            read.markLazyMaterialize(lazy);
+            try {
+              const cell = child.withTx(read);
+              const result = statusBearing
+                ? getCellWithStatus(cell)
+                : { ok: cell.get() };
+              if (!("ok" in result)) {
+                throw new Error(
+                  "Expected an unavailable value, not a schema refusal",
+                );
+              }
+              const observed = expectUnavailable(result.ok, marker.reason);
+              expect(observed.errorKind).toBe(marker.errorKind);
+              expect(observed.errorMessage).toBe(marker.errorMessage);
+              expect(
+                [...getTransactionReadActivities(read)].some((entry) =>
+                  entry.id === source.getAsNormalizedFullLink().id &&
+                  entry.path.length === parentPath.length + 1 &&
+                  !entry.nonRecursive && !isLinkResolutionProbe(entry.meta) &&
+                  !isReadIgnoredForCommit(entry.meta) &&
+                  !isReadIgnoredForScheduling(entry.meta) &&
+                  !isInternalVerifierRead(entry.meta)
+                ),
+              ).toBe(true);
+            } finally {
+              read.abort();
+            }
+          }
+        }
+        const mismatch = runtime.edit();
+        parent.withTx(mismatch).set(17);
+        expect((await mismatch.commit().settled).error).toBeUndefined();
+        const read = runtime.edit();
+        read.markLazyMaterialize(lazy);
+        try {
+          expect("error" in getCellWithStatus(child.withTx(read))).toBe(true);
+        } finally {
+          read.abort();
+        }
+        const recovery = runtime.edit();
+        parent.withTx(recovery).set({ field: "recovered" });
+        expect((await recovery.commit().settled).error).toBeUndefined();
+        expect(child.get()).toBe("recovered");
+      });
+    }
+  }
+
   it("consumes an unavailable ancestor's payload without widening the read ceiling", async () => {
     const childLabel = {
       type: "https://commonfabric.org/cfc/atom/User",
@@ -1991,6 +2111,27 @@ export default pattern((input: { rows: { id: string }[] }) => ({
       cfcReadMaxConfidentiality: [childLabel],
     });
     try {
+      for (const lazy of [false, true]) {
+        const read = denied.edit();
+        read.markLazyMaterialize(lazy);
+        try {
+          const cell = denied.getCell(
+            space,
+            "marker-value-label",
+            undefined,
+            read,
+          )
+            .key("rows").asSchema({ type: "array", items: { type: "string" } });
+          expect(() => getCellWithStatus(cell)).toThrow(
+            /runtime read ceiling withholds this value/,
+          );
+          expect(() => cell.get()).toThrow(
+            /runtime read ceiling withholds this value/,
+          );
+        } finally {
+          read.abort();
+        }
+      }
       const read = denied.edit();
       try {
         expect(() =>

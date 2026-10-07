@@ -10,9 +10,16 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableMismatch,
+} from "@commonfabric/data-model/availability";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLogger } from "@commonfabric/utils/logger";
 import { Runtime } from "../src/runtime.ts";
+import { isCell } from "../src/cell.ts";
 import { isSchemaMismatchError } from "../src/schema-view.ts";
 import { type JSONSchema } from "../src/builder/types.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
@@ -953,6 +960,53 @@ describe("schema-view", () => {
         await lazy.tx.commit().settled;
       }
     });
+  });
+
+  it("keeps unavailable compound opaque children as handles without consuming their content", async () => {
+    for (
+      const marker of [
+        UNAVAILABLE_PENDING,
+        UNAVAILABLE_SYNCING,
+        unavailableError("private error", "network"),
+        unavailableMismatch("private mismatch"),
+      ]
+    ) {
+      const cause = `opaque-unavailable-${marker.reason}-${marker.errorKind}`;
+      const read = await seeded(
+        cause,
+        { slot: marker },
+        {
+          type: "object",
+          properties: {
+            slot: {
+              anyOf: [
+                { type: "string", asCell: ["opaque"] },
+                { type: "number", asCell: ["opaque"] },
+              ],
+            },
+          },
+          required: ["slot"],
+        } as const,
+      );
+      for (const lazy of [false, true]) {
+        const reader = read(lazy);
+        try {
+          const slot = (reader.get() as { slot: unknown }).slot;
+          expect(isCell(slot)).toBe(true);
+          if (!isCell(slot)) throw new Error("Expected an opaque handle");
+          expect(slot.equals(runtime.getCell(space, cause).key("slot"))).toBe(
+            true,
+          );
+          expect(contentReads(reader.tx)).not.toContain(
+            `${
+              runtime.getCell(space, cause).getAsNormalizedFullLink().id
+            }/value/slot`,
+          );
+        } finally {
+          reader.tx.abort();
+        }
+      }
+    }
   });
 
   describe("a property the schema turns down", () => {

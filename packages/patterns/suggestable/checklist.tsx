@@ -33,11 +33,14 @@ export type ChecklistOutput = {
   topic: string;
   items: ChecklistItem[];
   pending: boolean;
+
+  /** Terminal generation failure, or an empty string when none is present. */
+  error: string;
 };
 
 // ===== Pattern =====
 
-/** Presents generated checklist items and their waiting state. */
+/** Presents generated checklist items, waiting state, and terminal failure. */
 export const ChecklistPresentation = pattern<
   { topic: string; responseRequest: AsyncResult<{ items: ChecklistItem[] }> },
   ChecklistOutput
@@ -45,12 +48,16 @@ export const ChecklistPresentation = pattern<
   const observedResponse = observeAvailability(responseRequest);
   const responseState = computed(() => {
     if (isPending(observedResponse) || isSyncing(observedResponse)) {
-      return { response: { items: [] }, pending: true };
+      return { response: { items: [] }, pending: true, error: "" };
     }
     if (hasError(observedResponse)) {
-      return { response: { items: [] }, pending: false };
+      return {
+        response: { items: [] },
+        pending: false,
+        error: observedResponse.errorMessage,
+      };
     }
-    return { response: resultOf(observedResponse), pending: false };
+    return { response: resultOf(observedResponse), pending: false, error: "" };
   });
   const items = computed(() => responseState.response.items || []);
 
@@ -64,6 +71,9 @@ export const ChecklistPresentation = pattern<
           </cf-heading>
         </cf-vstack>
         <cf-vstack gap="2" style="padding: 1.5rem;">
+          {responseState.error
+            ? <p role="alert">{responseState.error}</p>
+            : null}
           {ifElse(
             responseState.pending,
             <div style="color: var(--cf-theme-color-text-secondary);">
@@ -83,6 +93,7 @@ export const ChecklistPresentation = pattern<
     topic,
     items,
     pending: responseState.pending,
+    error: responseState.error,
   };
 });
 

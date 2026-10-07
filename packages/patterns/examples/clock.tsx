@@ -58,10 +58,10 @@ export interface ClockOutput {
   [NAME]: string;
   [UI]: VNode;
 
-  /** "HH:MM:SS" once #now resolves, "--:--:--" during the load window. */
+  /** `HH:MM:SS` once `#now` resolves; unavailable during the load window. */
   time: string;
 
-  /** "Wed 9 Jul 2026" once #now resolves, "" during the load window. */
+  /** A formatted date once `#now` resolves; unavailable during the load window. */
   date: string;
 }
 

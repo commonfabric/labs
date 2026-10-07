@@ -150,6 +150,11 @@ derived views. Their exported presentation patterns accept native results
 independently of the provider, and their availability tests exercise waiting,
 failure, empty data, and recovery through those production views.
 
+`system/journal.tsx` reports a current journal or clock failure even while the
+other input is pending, beside its retained complete entries. The weekly-rollup
+view in `notes/daily-journal.tsx` shows terminal provider errors as alerts and
+clears them on recovery, independently of the successful rollup's content.
+
 ## fixture
 
 Every fixture pattern source carries the fixture marker, so the file says so
@@ -1527,12 +1532,13 @@ type SummaryOutput = {
 
 ## `suggestable/checklist.tsx`
 
-Generates a checklist of actionable steps from a topic and context. The topic is
-what asks for the steps: with none given the pattern holds the request back, so
-`pending` stays `false` and `items` stays empty until a caller names a subject.
-An active request keeps `pending` true while pending or syncing. A terminal
-error clears the items and ends the waiting indicator, as does a usable
-checklist, including one with no steps.
+Generates a checklist of actionable steps from a topic and context. Terminal
+generation failures expose their message and render an alert rather than a
+successful empty list. The topic is what asks for the steps: with none given the
+pattern holds the request back, so `pending` stays `false` and `items` stays
+empty until a caller names a subject. An active request keeps `pending` true
+while pending or syncing. A terminal error clears the items and ends the waiting
+indicator, as does a usable checklist, including one with no steps.
 
 **Keywords:** checklist, generateObject, suggestion-fuel
 

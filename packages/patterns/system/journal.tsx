@@ -5,6 +5,7 @@
  * Access via: wish({ query: "#journal" })
  */
 import {
+  type AsyncResult,
   computed,
   handler,
   hasError,
@@ -13,6 +14,7 @@ import {
   isPending,
   isSyncing,
   latestComplete,
+  lift,
   NAME,
   observeAvailability,
   pattern,
@@ -93,6 +95,34 @@ const clearJournal = handler<
   journal.set([]);
 });
 
+/** Reports the journal and clock's availability beside the retained entries. */
+export const journalAvailability = lift(
+  ({ journal, nowMs }: {
+    journal: AsyncResult<JournalEntry[]>;
+    nowMs: AsyncResult<number>;
+  }) => {
+    if (hasSchemaMismatch(journal) || hasSchemaMismatch(nowMs)) {
+      return {
+        availability: "schemaMismatch",
+        error: "Journal data has an unexpected format.",
+      };
+    }
+    if (hasError(journal)) {
+      return { availability: "error", error: journal.errorMessage };
+    }
+    if (hasError(nowMs)) {
+      return { availability: "error", error: nowMs.errorMessage };
+    }
+    if (isPending(journal) || isPending(nowMs)) {
+      return { availability: "pending", error: "" };
+    }
+    if (isSyncing(journal) || isSyncing(nowMs)) {
+      return { availability: "syncing", error: "" };
+    }
+    return { availability: "ready", error: "" };
+  },
+);
+
 export default pattern<Record<string, never>>((_) => {
   // Use wish() to access journal from home.tsx via defaultPattern
   const journalResult = wish<Array<JournalEntry>>({
@@ -116,35 +146,9 @@ export default pattern<Record<string, never>>((_) => {
     ) return { journal: [], nowMs: 0 };
     return resultOf(observedJournalSnapshot);
   });
-  const availabilityState = computed(() => {
-    if (isPending(journalResult.result) || isPending(nowCell.result)) {
-      return { availability: "pending", error: "" };
-    }
-    if (
-      hasSchemaMismatch(journalResult.result) ||
-      hasSchemaMismatch(nowCell.result)
-    ) {
-      return {
-        availability: "schemaMismatch",
-        error: "Journal data has an unexpected format.",
-      };
-    }
-    if (hasError(journalResult.result)) {
-      return {
-        availability: "error",
-        error: journalResult.result.errorMessage,
-      };
-    }
-    if (hasError(nowCell.result)) {
-      return {
-        availability: "error",
-        error: nowCell.result.errorMessage,
-      };
-    }
-    if (isSyncing(journalResult.result) || isSyncing(nowCell.result)) {
-      return { availability: "syncing", error: "" };
-    }
-    return { availability: "ready", error: "" };
+  const availabilityState = journalAvailability({
+    journal: journalResult.result,
+    nowMs: nowCell.result,
   });
 
   // Keep the last complete pair so a transient reconnect does not replace a

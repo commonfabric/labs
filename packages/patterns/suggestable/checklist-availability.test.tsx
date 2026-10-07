@@ -12,7 +12,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import { findElement, textContent } from "../test/vnode-helpers.ts";
+import { findElement, propValue, textContent } from "../test/vnode-helpers.ts";
 import { type ChecklistItem, ChecklistPresentation } from "./checklist.tsx";
 
 export default pattern(() => {
@@ -77,7 +77,21 @@ export default pattern(() => {
           findElement(subject[UI], "cf-loader") === undefined
         ),
       },
+      {
+        assertion: assert(() => textContent(subject[UI]).includes("refused")),
+      },
+      {
+        assertion: assert(() =>
+          subject.error === "refused" &&
+          propValue(findElement(subject[UI], "p"), "role") === "alert"
+        ),
+      },
       { action: action(() => request.set({ items: [] })) },
+      {
+        assertion: assert(() =>
+          subject.error === "" && findElement(subject[UI], "p") === undefined
+        ),
+      },
       {
         assertion: assert(() =>
           subject.pending === false && subject.items.length === 0
@@ -97,6 +111,11 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           textContent(subject[UI]).includes("Recovered step")
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.error === "" && !textContent(subject[UI]).includes("refused")
         ),
       },
     ],

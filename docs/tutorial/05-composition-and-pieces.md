@@ -147,7 +147,7 @@ const responseRequest = generateText({
 });
 const response = resultOf(responseRequest);
 
-{isPending(responseRequest)
+{isPending(responseRequest) || isSyncing(responseRequest)
   ? <cf-loader />
   : hasError(responseRequest)
   ? <div>{responseRequest.errorMessage}</div>

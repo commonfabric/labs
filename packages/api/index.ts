@@ -3006,7 +3006,7 @@ export type GenerateObjectFunction = <T = any>(
   params: FactoryInput<BuiltInGenerateObjectParams>,
 ) => Reactive<AsyncResult<T>>;
 
-/** Advanced structured-generation API with partial and message state. */
+/** Structured generation with final data and a `partialResultOf()` channel. */
 export type GenerateObjectStreamFunction = <T = any>(
   params: FactoryInput<BuiltInGenerateObjectParams>,
 ) => Reactive<AsyncStreamResult<T, string>>;
@@ -3015,7 +3015,7 @@ export type GenerateTextFunction = (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<AsyncResult<string>>;
 
-/** Advanced text-generation API with partial and grounding state. */
+/** Text generation with final data and a `partialResultOf()` channel. */
 export type GenerateTextStreamFunction = (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<AsyncStreamResult<string, string>>;

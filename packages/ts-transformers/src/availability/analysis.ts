@@ -2,7 +2,11 @@ import ts from "typescript";
 
 import { detectCallKind } from "../ast/call-kind.ts";
 import { getStableConstAliasInitializer } from "../ast/stable-const-alias.ts";
-import { getTypeAtLocationWithFallback } from "../ast/utils.ts";
+import {
+  getIdentifierValueSymbol,
+  getTypeAtLocationWithFallback,
+  visitEachChildWithJsx,
+} from "../ast/utils.ts";
 import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { isCommonFabricAvailabilityType } from "@commonfabric/schema-generator/availability-brand";
 import type { TransformationContext } from "../core/context.ts";
@@ -34,15 +38,7 @@ function valueSymbolAtIdentifier(
   identifier: ts.Identifier,
   context: TransformationContext,
 ): ts.Symbol | undefined {
-  const parent = identifier.parent;
-  if (
-    parent && ts.isShorthandPropertyAssignment(parent) &&
-    parent.name === identifier
-  ) {
-    return context.checker.getShorthandAssignmentValueSymbol(parent) ??
-      context.checker.getSymbolAtLocation(identifier);
-  }
-  return context.checker.getSymbolAtLocation(identifier);
+  return getIdentifierValueSymbol(identifier, context.checker);
 }
 
 export type AvailabilityValueProvenance =
@@ -386,12 +382,14 @@ export interface CanonicalResultOfCaptures {
 export function canonicalizeResultOfCaptures(
   captures: Iterable<ts.Expression>,
   context: TransformationContext,
+  captureSite?: ts.Node,
 ): CanonicalResultOfCaptures {
   const authoredCaptures = [...captures];
   const canonical = new Set<ts.Expression>();
   const aliases = new Map<ts.Symbol, ts.Expression>();
   const resultSources: Array<{
     source: ts.Expression;
+    physicalSource: ts.Expression;
     identity: StableCaptureIdentity | undefined;
     projectionType: ts.Type | undefined;
     capture?: ts.Expression;
@@ -402,6 +400,23 @@ export function canonicalizeResultOfCaptures(
     if (!root) continue;
     const source = resolveResultOfSource(root, context);
     if (!source) continue;
+    const sourceRoot = captureRootIdentifier(source);
+    const sourceSymbol = sourceRoot
+      ? valueSymbolAtIdentifier(sourceRoot, context)
+      : undefined;
+    const visibleSymbol = sourceRoot && captureSite
+      ? context.checker.resolveName(
+        sourceRoot.text,
+        ts.getOriginalNode(captureSite),
+        ts.SymbolFlags.Value,
+        false,
+      )
+      : sourceSymbol;
+    // A projection alias is itself a stable physical handle. Keep that root
+    // when its source spelling names another binding at the serialized call.
+    const visibleSource = sourceSymbol && visibleSymbol !== sourceSymbol
+      ? root
+      : source;
     const identity = stableCaptureIdentity(source, context);
     if (
       !resultSources.some((entry) =>
@@ -409,7 +424,8 @@ export function canonicalizeResultOfCaptures(
       )
     ) {
       resultSources.push({
-        source,
+        source: visibleSource,
+        physicalSource: source,
         identity,
         projectionType: getTypeAtLocationWithFallback(
           root,
@@ -438,7 +454,7 @@ export function canonicalizeResultOfCaptures(
       if (!shared.capture) {
         shared.capture = cloneSourceExpression(shared.source, context.factory);
         const sourceType = getTypeAtLocationWithFallback(
-          shared.source,
+          shared.physicalSource,
           context.checker,
           context.state.typeRegistry,
         );
@@ -446,7 +462,7 @@ export function canonicalizeResultOfCaptures(
           context.state.recordAvailabilityCapture(
             shared.capture,
             sourceType,
-            authoredAvailabilitySuccess(shared.source, context),
+            authoredAvailabilitySuccess(shared.physicalSource, context),
           );
         }
         if (shared.projectionType) {
@@ -555,7 +571,7 @@ export function rewriteResultOfAliasReferences<T extends ts.Node>(
     if (ts.isIdentifier(current)) {
       return replacementFor(current) ?? current;
     }
-    return ts.visitEachChild(current, visit, transformation);
+    return visitEachChildWithJsx(current, visit, transformation);
   };
   return ts.visitNode(node, visit) as T;
 }

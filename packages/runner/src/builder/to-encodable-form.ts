@@ -507,7 +507,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     const implRefValue = (provenance?.symbol
       ? { identity: provenance.identity, symbol: provenance.symbol }
       : undefined) ?? entryRefValue;
-    if (module.type === "javascript" && implRefValue === undefined) {
+    if (isJavaScriptModule && implRefValue === undefined) {
       // This module serializes body-only with no `$implRef` — a shape a
       // reader can resolve only through the bare-SES stringified-source
       // fallback, where module-scope references do not exist. Surfacing it

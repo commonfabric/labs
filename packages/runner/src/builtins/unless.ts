@@ -15,7 +15,8 @@ import { ContextualFlowControl } from "../cfc.ts";
 
 /**
  * unless(condition, fallback) - || semantics
- * Returns condition if truthy, otherwise returns fallback
+ * Propagates an unavailable condition before selecting a value. For a usable
+ * condition, returns it if truthy, otherwise returns the fallback.
  *
  * Truthiness is read from the condition's root (`readsTruthyAtRoot()`), so
  * nothing below the root of a condition that is a record or an array is read.
