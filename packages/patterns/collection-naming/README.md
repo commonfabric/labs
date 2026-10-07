@@ -304,6 +304,4 @@ through `mentionable.ts`. Every place a number shows on either board reads that
 one property: the header, the cards, the survey rows, and the universe rows the
 derivation copies from each member. The deployed Topics board carries the
 namespace — every topic numbered, the `names` map dense with no gaps, and the
-`top` slug bound — so what is still to come there is the operator source push
-that makes those topics publish what they store, which
-[the plan](../../../docs/plans/collection-naming-topics.md) tracks.
+`top` slug bound — and every topic on it publishes the number it stores.

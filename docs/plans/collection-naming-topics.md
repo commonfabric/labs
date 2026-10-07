@@ -19,9 +19,9 @@ This block is LIVE: the change that moves a stage updates it here.
 | S2b — assignment refuses by default | on main (#6898) |
 | S3 — the shell opens `/<space>/top/42` | on main (#6896) |
 | S4 — `#42` in text | on main (#6887) |
-| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937); item 4's numbering is done on the deployed board, and what remains of it is the operator source push that makes those topics publish the numbers they store |
+| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937); item 4 done on the deployed board, its source push [on 2026-10-06](../history/topics-number-rollout-2026-10-06.md) |
 | S6b — a Topic stores its own number | on main (#7774) |
-| S6c — a Topic publishes the number it stores | built; awaiting review and merge |
+| S6c — a Topic publishes the number it stores | on main (#8214); deployed 2026-10-06 |
 | S5 — deferred, not scheduled | — |
 
 ### Built 2026-09-17: a Topic stores its own number
@@ -91,7 +91,7 @@ Topics now does too.
 The stages the table marks on main give a collection that adopts `naming.ts`
 member names end to end: allocation, resolution at the CLI, the shell opening
 `/<space>/top/42`, `#42` in the editor. **That is not the same as the work
-being finished.** Five things are outstanding, and each still needs
+being finished.** Four things are outstanding, and each still needs
 execution.
 
 **Decided 2026-09-15: each member stores its own member name.** Built for the
@@ -148,8 +148,8 @@ by any of this: the board allocates a number on every create, records it in
 `names`, lists it beside its topic in `namesTable`, `addTopic` returns the name
 it allocated, and `top/<n>` resolves. Decision 5 governs how a number renders.
 
-Updating the topics on the deployed board is an operator step, not part of the
-change that lands this in the repository.
+The deployed board and every topic on it run this source as of 2026-10-06, and
+[the rollout record](../history/topics-number-rollout-2026-10-06.md) says how they got there.
 
 1. **Decision 14 — a member takes one input naming its board.** Ruled, and
    measured buildable in
@@ -174,28 +174,13 @@ change that lands this in the repository.
    so the two belong in one pass. `boardNames` is no longer among them on a
    Topic; `boardCrossrefs` and `mentionable` are.
 
-3. **S6 item 4 — the operator source push.** The numbering half is done: the
-   deployed board holds a complete namespace over 1 through 555, the `top` slug
-   is bound, and every topic stores the number the namespace holds for it. What
-   remains is pushing the pattern source that makes those topics publish what
-   they store — a source update for the board and one per topic, and the step
-   this stage enables rather than performs. Until it runs, a deployed topic
-   stores its number and publishes none, so that board shows no badge, no pill
-   number and nothing for `#42`. The sequence, and the contract breaks it
-   needs, are recorded under S6 below; #6969 was closed by #7178, and the
-   patched check accepted the board source retrieved from a local snapshot of
-   the Topics board taken August 31; an optional `unknown` member demand no
-   longer refuses. The
-   [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md)
-   records both.
-
-4. **The `naming` declaration has no reader** (#6986, #6994). Every collection
+3. **The `naming` declaration has no reader** (#6986, #6994). Every collection
    publishes `NamingPolicy`; nothing consumes it. Member resolution applies no
    grammar, no renderer reads `compact`, and `name` is never set. It is an
    extension point with nothing extending through it, recorded in the spec's
    "Deliberately open" rather than claimed as working.
 
-5. **The citation surfaces are partial.** A mention pill shows the name carried
+4. **The citation surfaces are partial.** A mention pill shows the name carried
    by the universe row standing for its destination, so what it shows means
    something only through the collection whose universe is being read, and a
    destination no row stands for shows none whatever it publishes (#6985); a URL
@@ -499,9 +484,9 @@ Mike's call, after S4.
 4. The production backfill has run on the deployed board: the namespace is
    complete over 1 through 555 with no duplicates and no gaps, the `top` slug
    is bound, and every topic stores the number the namespace holds for it
-   (audited 2026-09-28). What that board does not yet do is publish those
-   numbers, which is a source push per topic and one for the board, held to the
-   same rehearsal and authorization rules as the sequence below.
+   (audited 2026-09-28). The source push that makes the board's topics publish
+   those numbers ran on 2026-10-06, topics first and the board after them;
+   [the rollout record](../history/topics-number-rollout-2026-10-06.md) has how it ran and what it checked.
 
    The backfill is rehearsed on a clone per
    `../development/space-clone-rehearsal.md`; the deployed vintage includes
