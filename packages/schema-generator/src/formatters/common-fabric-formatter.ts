@@ -271,13 +271,13 @@ const applyScopeToAsCellEntry = (
 
 /** Whether `schema` declares a cell: an object with an `asCell` entry. */
 const isHandleSchema = (schema: unknown): boolean =>
-  isObjectOrArray(schema) && !Array.isArray(schema) &&
+  isObjectNotArray(schema) &&
   Array.isArray((schema as MutableJSONSchemaObj).asCell) &&
   ((schema as MutableJSONSchemaObj).asCell as unknown[]).length > 0;
 
 /** Whether `schema` is `{ type: "null" }` or `{ type: "undefined" }` alone. */
 const isNullishSchema = (schema: unknown): boolean =>
-  isObjectOrArray(schema) && !Array.isArray(schema) &&
+  isObjectNotArray(schema) &&
   Object.keys(schema).length === 1 &&
   ((schema as { type?: unknown }).type === "null" ||
     (schema as { type?: unknown }).type === "undefined");
@@ -1311,7 +1311,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         context,
         undefined,
       );
-      return this.#applyScopeWrapperSemantics(innerSchema, aliasScope);
+      return this.#applyScopeWrapperSemantics(innerSchema, aliasScope, context);
     }
 
     const resolvedScopeAlias = this.#resolveAliasChainInstantiation(
@@ -1329,6 +1329,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           this.#applyScopeWrapperSemantics(
             this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
             scopeForWrapperName(resolvedScopeAlias.aliasName)!,
+            context,
           ),
       );
     }
@@ -1373,7 +1374,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     // Two scopes' brands on one value are a wrapper nested in another with no
     // cell between them, as the node-driven reading refuses when a node
     // names both.
-    if (hasNestedScopeBrands(type, context.typeChecker)) {
+    if (
+      !context.declaresNoScope &&
+      hasNestedScopeBrands(type, context.typeChecker)
+    ) {
       throw nestedScopeError();
     }
 
@@ -1384,6 +1388,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return this.#applyScopeWrapperSemantics(
         this.#formatScopePayload(type, brand, context),
         brand.scope,
+        context,
       );
     }
 
@@ -1814,7 +1819,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
-    return this.#applyScopeWrapperSemantics(innerSchema, scope);
+    return this.#applyScopeWrapperSemantics(innerSchema, scope, context);
   }
 
   /**
@@ -1868,10 +1873,18 @@ export class CommonFabricFormatter implements TypeFormatter {
       : this.#schemaGenerator.formatStructure(type, payloadContext);
   }
 
+  /**
+   * `schema`, a scope wrapper's payload, in `scope`: the cap on its cell's
+   * handle where it is a cell, and otherwise the scope of its slot. A schema
+   * that declares no scope (`GenerationContext.declaresNoScope`) is the
+   * payload alone.
+   */
   #applyScopeWrapperSemantics(
     schema: MutableJSONSchema,
     scope: SchemaScope,
+    context: GenerationContext,
   ): MutableJSONSchema {
+    if (context.declaresNoScope) return schema;
     if (typeof schema === "boolean") {
       return schema === false ? { not: true, scope } : { scope };
     }
@@ -1902,7 +1915,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         ...schema,
         anyOf: branches.map((branch) =>
           isHandleSchema(branch)
-            ? this.#applyScopeWrapperSemantics(branch, scope)
+            ? this.#applyScopeWrapperSemantics(branch, scope, context)
             : branch
         ),
         scope,
@@ -4506,7 +4519,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       // where the wrapper is still visible.
       const memberScope = resolveScopeWrapperNode(memberNode)?.scope ??
         scopeOfAliasChain(memberType, context.typeChecker);
-      if (memberScope !== undefined) {
+      if (memberScope !== undefined && !context.declaresNoScope) {
         throw scopeInsideUnionError(memberScope);
       }
 

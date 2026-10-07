@@ -119,7 +119,7 @@ const walkSlot = (schema: MutableJSONSchema): void => {
     const branches = schema[keyword];
     if (!Array.isArray(branches)) continue;
     for (const branch of branches) {
-      checkBranch(branch as MutableJSONSchema, slotScope);
+      checkBranch(branch as MutableJSONSchema, slotScope, keyword);
     }
   }
 
@@ -127,22 +127,27 @@ const walkSlot = (schema: MutableJSONSchema): void => {
 };
 
 /**
- * A branch of the slot currently being walked, which declares `slotScope` at
- * its own top level, if any. A scope at the branch's top level belongs to the
- * containing slot, so declaring one here is the defect, except the cap a
- * cell's `asCell` entry declares where it names `slotScope`. Beside that cap,
- * a `scope` is the scope of the value inside the cell.
+ * A branch, under `keyword`, of the slot currently being walked, which
+ * declares `slotScope` at its own top level, if any. A scope at the branch's
+ * top level belongs to the containing slot, so declaring one here is the
+ * defect, except the cap a cell's `asCell` entry declares in an `anyOf` or
+ * `oneOf` branch where it names `slotScope`: the runtime reads a handle's
+ * follow cap through those two (`getAsCellFollowScopeCap`) and through no
+ * `allOf`. Beside that cap, a `scope` is the scope of the value inside the
+ * cell.
  */
 const checkBranch = (
   schema: MutableJSONSchema,
   slotScope: string | undefined,
+  keyword: typeof SAME_SLOT_COMPOUND_KEYWORDS[number],
 ): void => {
   if (!isObjectOrArray(schema)) return;
 
   const scope = topLevelScope(schema);
   if (
     scope !== undefined &&
-    (asCellEntryScope(schema) !== scope || scope !== slotScope)
+    (keyword === "allOf" || asCellEntryScope(schema) !== scope ||
+      scope !== slotScope)
   ) {
     throw scopeInsideUnionError(scope);
   }
@@ -158,7 +163,7 @@ const checkBranch = (
     const branches = schema[keyword];
     if (!Array.isArray(branches)) continue;
     for (const branch of branches) {
-      checkBranch(branch as MutableJSONSchema, innerScope);
+      checkBranch(branch as MutableJSONSchema, innerScope, keyword);
     }
   }
 

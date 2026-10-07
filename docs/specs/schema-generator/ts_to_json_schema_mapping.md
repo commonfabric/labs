@@ -1097,6 +1097,14 @@ reached an `anyOf`/`oneOf`/`allOf` branch by any route. A scope nested deeper
 — on a property of an object that is itself a union member — is that
 property's own top-level declaration and is accepted.
 
+Generated with `declaresNoScope` (`SchemaGenerationOptions`), a schema
+declares no scope at all: each scope wrapper is read as its payload, with no
+`scope` and no cap on a cell's `asCell` entry, a recursive one's references
+included, and neither detection point above has a scope to refuse. The
+transformer generates a lift's result this way where its type is one no
+author wrote (ts-transformers behavior spec §10.4), since the runtime stores a
+lift's result at the narrowest scope its callback reads.
+
 ## 11. CFC Alias Lowering (`ifc` Metadata)
 
 The canonical authoring surface contains 18 names. The inventory is

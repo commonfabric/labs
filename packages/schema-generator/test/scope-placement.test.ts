@@ -96,6 +96,31 @@ describe("scope-placement", () => {
     ).toThrow("A scope wrapper cannot be a member of a union.");
   });
 
+  it("accepts a cell's cap in a `oneOf` branch that names the slot's scope", () => {
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        oneOf: [
+          { type: "null" },
+          { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+        ],
+        scope: "user",
+      })
+    ).not.toThrow();
+  });
+
+  it("throws for a cell's cap in an `allOf` branch, though it names the slot's scope", () => {
+    // The runtime reads a handle's follow cap through `anyOf` and `oneOf`
+    // branches, and through no `allOf`.
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        allOf: [
+          { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+        ],
+        scope: "user",
+      })
+    ).toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
   it("throws for a scope beside an uncapped cell entry in a branch, whatever the slot's scope", () => {
     // Beside a string entry, the `scope` is read as the branch's own.
     expect(() =>

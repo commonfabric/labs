@@ -145,6 +145,38 @@ export const schema = toSchema<Rec>();`,
       });
     });
 
+    for (
+      const [spelling, declaration] of [
+        [
+          "`null` written outside it",
+          "PerUser<{ value: T; next: R<T>[] }> | null",
+        ],
+        [
+          "`null` written inside it",
+          "PerUser<{ value: T; next: R<T>[] } | null>",
+        ],
+        ["no `null` beside it", "PerUser<{ value: T; next: R<T>[] }>"],
+      ] as const
+    ) {
+      it(`keeps the scope at the root of a recursive generic wrapper's schema, ${spelling}`, async () => {
+        // A root promoted to a reference to its definition carries the scope
+        // beside the reference, as every other reference to it does.
+        const [schema] = emittedSchemas(
+          await transformed(
+            `import { toSchema, type PerUser } from "commonfabric";
+type R<T> = ${declaration};
+export const schema = toSchema<R<string>>();`,
+          ),
+        );
+        const { $defs, ...root } = schema as Record<string, unknown>;
+
+        expect(root.scope).toBe("user");
+        for (const definition of Object.values($defs as object)) {
+          expect((definition as Record<string, unknown>).scope).toBeUndefined();
+        }
+      });
+    }
+
     it("keeps the policy a scoped alias's declaration spells where a holder's values are read by type", async () => {
       // Only the declaration spells the policy, bound by `typeof`; the alias
       // the values' type keeps is what reaches it.
@@ -855,5 +887,96 @@ export const alone = toSchema<{ other: string | ${nullish} }>();`,
         });
       });
     }
+  });
+  describe("a lift's result whose type is inferred", () => {
+    // The runtime stores a lift's result at the narrowest scope its callback
+    // reads. A result type no author wrote declares no scope, since a type
+    // inferred through `??` or a union keeps or drops a scope wrapper by how
+    // TypeScript reduces it; one its author wrote keeps the scope it names.
+
+    /** The input and result schemas of the module's last lift. */
+    const liftOf = async (body: string) => {
+      const [input, result] = callSchemas(
+        await transformed(
+          `import { computed, lift, pattern, Writable, type PerSession, type PerUser } from "commonfabric";
+interface A { a: string }
+${body}`,
+        ),
+        "lift",
+      );
+      return { input: input!, result: result! };
+    };
+
+    it("declares no scope on a computed result inferred as the wrapper, and keeps the capture's", async () => {
+      const { input, result } = await liftOf(
+        `export default pattern<{ u: PerUser<string> }>(({ u }) => ({
+  out: computed(() => u),
+}));`,
+      );
+
+      expect((input.properties as Record<string, unknown>).u).toEqual({
+        type: "string",
+        scope: "user",
+      });
+      expect(result).toEqual({ type: "string" });
+    });
+
+    it("declares no scope on a computed result inferred as an object holding the wrapper", async () => {
+      const { result } = await liftOf(
+        `export default pattern<{ u: PerUser<string> }>(({ u }) => ({
+  out: computed(() => ({ who: u, n: 1 })),
+}));`,
+      );
+
+      expect(result).toEqual({
+        type: "object",
+        properties: { who: { type: "string" }, n: { type: "number" } },
+        required: ["who", "n"],
+      });
+    });
+
+    it("declares no scope on a result inferred as the wrapper beside a literal", async () => {
+      // As a declared scope, it could only sit in an `anyOf` branch. The
+      // pattern's own output type is written, so only the lift's result is
+      // read from an inferred type.
+      const { result } = await liftOf(
+        `export default pattern<{ u?: PerUser<string> }, { out: string }>(({ u }) => ({
+  out: computed(() => u ?? "x"),
+}));`,
+      );
+
+      expect(result).toEqual({ type: "string" });
+    });
+
+    it("declares no cap on a cell an inferred result holds", async () => {
+      const { result } = await liftOf(
+        `export default pattern<{ c: PerSession<Writable<A>> }>(({ c }) => ({
+  out: computed(() => ({ c })),
+}));`,
+      );
+
+      expect(JSON.stringify(result)).not.toContain('"scope"');
+    });
+
+    it("keeps the scope of a result whose return type its author wrote", async () => {
+      const { result } = await liftOf(
+        `export default pattern<{ u: PerUser<string> }>(({ u }) => ({
+  out: computed((): PerUser<string> => u),
+}));`,
+      );
+
+      expect(result).toEqual({ type: "string", scope: "user" });
+    });
+
+    it("keeps the scope of a lift's result type argument its author wrote", async () => {
+      const { result } = await liftOf(
+        `const read = lift<{ u: PerUser<string> }, PerUser<string>>(({ u }) => u);
+export default pattern<{ u: PerUser<string> }>(({ u }) => ({
+  out: read({ u }),
+}));`,
+      );
+
+      expect(result).toEqual({ type: "string", scope: "user" });
+    });
   });
 });

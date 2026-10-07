@@ -80,6 +80,14 @@ export interface SchemaGenerationOptions {
   readonly widenLiterals?: boolean;
 
   /**
+   * Generate a schema that declares no scope: each scope wrapper is read as
+   * its payload, with no `scope` and no cap on a cell's `asCell` entry. A
+   * lift's result whose type its author did not write is generated this way,
+   * since the runtime stores it at the narrowest scope its callback reads.
+   */
+  readonly declaresNoScope?: boolean;
+
+  /**
    * Receives each diagnostic, a warning or an error; without a callback the
    * generator logs it. An error says the schema generated is not one to accept.
    */
@@ -191,6 +199,9 @@ export interface GenerationContext {
   /** Widen literal types to base types during schema generation */
   widenLiterals?: boolean;
 
+  /** The schema declares no scope (`SchemaGenerationOptions.declaresNoScope`). */
+  declaresNoScope?: boolean;
+
   /** Receives recoverable schema-generation problems. */
   onDiagnostic?: (diagnostic: SchemaGenerationDiagnostic) => void;
 
@@ -237,8 +248,9 @@ export interface GenerationContext {
 
   /**
    * Types whose scope brand the scope wrapper reading them has taken off, read
-   * here as its payload (`scopePayloadType()`): the type the brand was read
-   * from, and each member of it as a union.
+   * here as its payload: the type the brand was read from, the payload type
+   * itself (`scopePayloadType()`) where it is distinct, and each member of it
+   * as a union.
    */
   scopeBrandRead?: ReadonlySet<ts.Type>;
 
