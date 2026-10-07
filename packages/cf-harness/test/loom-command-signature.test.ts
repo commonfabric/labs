@@ -199,7 +199,7 @@ describe("loom-command-signature", () => {
         path: "args.limit",
         expected: "integer",
         given: '"ten"',
-        problem: "value does not match type integer",
+        problem: "value is not integer",
       });
     });
 
@@ -208,11 +208,11 @@ describe("loom-command-signature", () => {
         path: "args.entity_id",
         expected: "string",
         given: "absent",
-        problem: "missing required property entity_id",
+        problem: "missing required input entity_id",
       });
     });
 
-    it("returns the position inside an array or a nested object", () => {
+    it("returns the position of an array element, and a value outside an enum", () => {
       expect(
         findCommandArgsProblem(DOSSIER_SCHEMA, {
           entity_id: "e",
@@ -237,19 +237,93 @@ describe("loom-command-signature", () => {
           { type: "object", additionalProperties: false, properties: {} },
           { stray: true },
         ),
-      ).toMatchObject({
+      ).toEqual({
         path: "args.stray",
         expected: "no such parameter",
         given: "true",
+        problem: "unknown input stray",
       });
     });
 
-    it("reads an optional input passed as `null` as left out, and a required one as given", () => {
+    it("reads an input passed as `null` as left out", () => {
       expect(
         findCommandArgsProblem(DOSSIER_SCHEMA, { entity_id: "e", limit: null }),
       ).toBeUndefined();
       expect(findCommandArgsProblem(DOSSIER_SCHEMA, { entity_id: null }))
-        .toMatchObject({ path: "args.entity_id", given: "null" });
+        .toMatchObject({ path: "args.entity_id", given: "absent" });
+    });
+
+    describe("compatibility with the host's command layer", () => {
+      // Each case is one the host's `validate_inputs` (Loom,
+      // `src/lib/loom_commands.py`) runs or refuses; the check here refuses
+      // nothing the host would run.
+
+      /** A required input with a default, which the host never finds missing. */
+      const DEFAULTED = {
+        type: "object",
+        required: ["limit"],
+        properties: { limit: { type: "integer", default: 50 } },
+      };
+
+      it("returns `undefined` for a required input with a default left out or passed as `null`", () => {
+        expect(findCommandArgsProblem(DEFAULTED, {})).toBeUndefined();
+        expect(findCommandArgsProblem(DEFAULTED, { limit: null }))
+          .toBeUndefined();
+      });
+
+      it("returns `undefined` past the keywords the host does not check", () => {
+        const schema = {
+          type: "object",
+          properties: {
+            about: { type: "string", maxLength: 400, pattern: "^a" },
+            count: { type: "integer", minimum: 10 },
+            at: { type: "string", format: "date-time" },
+            nested: {
+              type: "object",
+              required: ["x"],
+              properties: { x: { type: "string" } },
+            },
+          },
+        };
+        expect(
+          findCommandArgsProblem(schema, {
+            about: "b".repeat(401),
+            count: 1,
+            at: "not a date",
+            nested: { y: 1 },
+          }),
+        ).toBeUndefined();
+      });
+
+      it("returns a value of the wrong type, and still a value outside an enum", () => {
+        expect(findCommandArgsProblem(DEFAULTED, { limit: "ten" }))
+          .toMatchObject({ path: "args.limit", expected: "integer" });
+        expect(findCommandArgsProblem(DEFAULTED, { limit: true }))
+          .toMatchObject({ path: "args.limit", given: "true" });
+        expect(
+          findCommandArgsProblem(
+            { type: "object", properties: { n: { type: "number" } } },
+            { n: true },
+          ),
+        ).toBeUndefined();
+        expect(
+          findCommandArgsProblem(
+            { type: "object", properties: { label: {} } },
+            { label: 7 },
+          ),
+        ).toMatchObject({ path: "args.label", problem: "value is not string" });
+      });
+
+      it("returns an unknown input only where the schema closes its properties", () => {
+        expect(
+          findCommandArgsProblem(
+            { type: "object", additionalProperties: false },
+            { bogus: 1 },
+          ),
+        ).toMatchObject({ path: "args.bogus", problem: "unknown input bogus" });
+        expect(findCommandArgsProblem({ type: "object" }, { bogus: 1 }))
+          .toBeUndefined();
+      });
     });
 
     it("accepts a value any `oneOf` branch accepts, and refuses one no branch does", () => {
@@ -278,17 +352,8 @@ describe("loom-command-signature", () => {
         .toMatchObject({ path: "args.pane", given: "absent" });
     });
 
-    it("returns `undefined` for an open schema, and for one this validator cannot read", () => {
+    it("returns `undefined` for an open schema", () => {
       expect(findCommandArgsProblem(true, { anything: 1 })).toBeUndefined();
-      expect(
-        findCommandArgsProblem(
-          {
-            type: "object",
-            properties: { at: { type: "string", format: "host-specific" } },
-          },
-          { at: 7 },
-        ),
-      ).toBeUndefined();
     });
   });
 });

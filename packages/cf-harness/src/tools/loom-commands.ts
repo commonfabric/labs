@@ -53,7 +53,11 @@ import {
   nearestCommandNames,
   runLoomCommand,
 } from "../loom-commands.ts";
-import { type LoomRetrievalEntry, measureLoomRows } from "./loom-retrieval.ts";
+import {
+  LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
+  type LoomRetrievalEntry,
+  measureLoomRows,
+} from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
 /** The notice every listing carries beside its entries. */
@@ -192,6 +196,9 @@ export interface LoomCommandOutcome {
   /** Operation ids that landed before a failure. */
   completed?: string[];
 
+  /** How many ids `completed` held, where a batch's bound left it out. */
+  completedOmitted?: number;
+
   /** UTF-8 bytes of the JSON answer. */
   bodyBytes: number;
 }
@@ -221,6 +228,9 @@ export type RunCommandCallOutput =
 
     /** The command's signature, when the host refused its args. */
     signature?: string;
+
+    /** Summary fields a batch's output bound left out of this result. */
+    omitted?: ("hint" | "signature")[];
 
     /** The answer's label, kept for the artifact and the observation. */
     cfc: { version: 1; observedLabel?: IFCLabel };
@@ -804,25 +814,71 @@ const readCatalog = async (
 };
 
 /**
- * Helper for `run_command`, which measures a batch's answers in the calls'
- * order against one output bound for the whole batch, so a batch shows the
- * model no more than one call may. An answer that no longer fits is left
- * out and its result marked truncated, as a lone call's would be.
+ * Helper for batches, which cuts an executed call's summary to what says
+ * what became of it — its outcome's `ok`, `id`, codes, and whether it may
+ * have landed — naming what it left out: `completed` as the count of its
+ * ids, and the hint and signature by name.
+ */
+const compactSkeleton = (
+  skeleton: AnsweredCall["skeleton"],
+): AnsweredCall["skeleton"] => {
+  const { hint, signature, outcome, ...rest } = skeleton;
+  const { completed, ...kept } = outcome;
+  const omitted = [
+    ...(hint !== undefined ? ["hint" as const] : []),
+    ...(signature !== undefined ? ["signature" as const] : []),
+  ];
+  return {
+    ...rest,
+    outcome: {
+      ...kept,
+      ...(completed !== undefined
+        ? { completedOmitted: completed.length }
+        : {}),
+    },
+    ...(omitted.length > 0 ? { omitted } : {}),
+  };
+};
+
+/**
+ * Helper for `run_command`, which fits a batch into one output bound for
+ * the whole batch, so a batch shows the model no more than one call may.
+ * Each call's summary is charged against the bound in the calls' order, and
+ * an executed call's summary that no longer fits is compacted; every call
+ * keeps a result. The answers are then measured in the same order against
+ * what is left, and an answer that no longer fits is left out and its result
+ * marked truncated, as a lone call's would be. A result that is not an
+ * answer is small and bounded, and is kept whole.
  */
 const measureBatch = async (
   context: HarnessToolContext,
   outputId: ToolOutputId,
   sent: readonly (AnsweredCall | RunCommandCallOutput)[],
 ): Promise<RunCommandBatchOutput> => {
-  const skeletons = sent.map((call) => isAnswered(call) ? call.skeleton : call);
   let reserved = JSON.stringify({
     outputId,
     status: "batch",
-    results: skeletons,
+    results: [],
     truncated: true,
   }).length + LABEL_JOIN_ALLOWANCE;
+  // Each result also costs the comma that separates it from the next.
+  const charge = (result: object) => JSON.stringify(result).length + 1;
+  const fitted = sent.map((call) => {
+    if (!isAnswered(call)) {
+      reserved += charge(call);
+      return call;
+    }
+    const whole = charge(call.skeleton);
+    if (reserved + whole <= LOOM_RETRIEVAL_MAX_OUTPUT_CHARS) {
+      reserved += whole;
+      return call;
+    }
+    const skeleton = compactSkeleton(call.skeleton);
+    reserved += charge(skeleton);
+    return { ...call, skeleton };
+  });
   const results: RunCommandCallOutput[] = [];
-  for (const call of sent) {
+  for (const call of fitted) {
     if (!isAnswered(call)) {
       results.push(call);
       continue;

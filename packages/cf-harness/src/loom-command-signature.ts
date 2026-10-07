@@ -17,11 +17,6 @@
  */
 
 import type { JSONObject, JSONValue } from "@commonfabric/api";
-import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import {
-  validateSchemaDefinition,
-  validateSchemaValue,
-} from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { LoomCommandEntry } from "./loom-commands.ts";
@@ -106,21 +101,6 @@ export const withoutSchemaExtensions = (schema: JSONObject): JSONObject =>
         Object.entries(node).filter(([key]) => !key.startsWith("x-")),
       ),
   );
-
-/**
- * `schema` with every `oneOf` read as `anyOf`, which is how the host's
- * command layer reads it: a value matching any branch is accepted, where
- * JSON Schema's `oneOf` would refuse one matching two (`5` against `number`
- * and `integer`). The branches join the node's `allOf`, so a node carrying
- * both keywords keeps both.
- */
-const withOneOfAsAnyOf = (schema: JSONObject): JSONObject =>
-  mapSchemaNodes(schema, (node) => {
-    const { oneOf, ...rest } = node;
-    if (!Array.isArray(oneOf)) return node;
-    const allOf = Array.isArray(rest.allOf) ? rest.allOf : [];
-    return { ...rest, allOf: [...allOf, { anyOf: oneOf }] };
-  });
 
 /** Helper for rendering, which cuts a rendering to `max` characters. */
 const cut = (text: string, max: number): string =>
@@ -292,28 +272,9 @@ export interface CommandArgsProblem {
   /** What the call passed there, as JSON cut short, or `absent`. */
   given: string;
 
-  /** The validator's own account of the mismatch. */
+  /** A short account of the mismatch. */
   problem: string;
 }
-
-/** Helper for checking, which steps one key into a schema position. */
-const childSchemaOf = (
-  schema: JSONValue | undefined,
-  key: string,
-  index: number | undefined,
-): JSONValue | undefined => {
-  if (!isObjectNotArray(schema)) return undefined;
-  if (index !== undefined) {
-    return Array.isArray(schema.prefixItems) &&
-        index < schema.prefixItems.length
-      ? schema.prefixItems[index]
-      : schema.items;
-  }
-  return isObjectNotArray(schema.properties) &&
-      Object.hasOwn(schema.properties, key)
-    ? schema.properties[key]
-    : schema.additionalProperties;
-};
 
 /** Helper for checking, which shows where a path reaches. */
 const pathText = (path: readonly (string | number)[]): string =>
@@ -331,118 +292,137 @@ const pathText = (path: readonly (string | number)[]): string =>
 const givenOf = (value: JSONValue | undefined): string =>
   value === undefined ? "absent" : literalOf(value);
 
-/** Helper for checking, which steps one key into the args, where it leads. */
-const stepInto = (
-  value: JSONValue | undefined,
-  part: string,
-): { value: JSONValue; index?: number } | undefined => {
-  if (Array.isArray(value)) {
-    const index = /^\d+$/.test(part) ? Number(part) : value.length;
-    return index < value.length ? { value: value[index], index } : undefined;
+/**
+ * Whether `value` is of the host's named type, or `undefined` for a name the
+ * host does not check. Python's `isinstance` is the reference: a boolean is
+ * a `number` there but not an `integer`.
+ */
+const hostTypeAccepts = (
+  name: unknown,
+  value: JSONValue,
+): boolean | undefined => {
+  switch (name) {
+    case "string":
+      return typeof value === "string";
+    case "integer":
+      return Number.isInteger(value);
+    case "number":
+      return typeof value === "number" || typeof value === "boolean";
+    case "boolean":
+      return typeof value === "boolean";
+    case "object":
+      return isObjectNotArray(value);
+    case "array":
+      return Array.isArray(value);
+    default:
+      return undefined;
   }
-  return isObjectNotArray(value) && Object.hasOwn(value, part)
-    ? { value: value[part] }
-    : undefined;
 };
 
-/**
- * Reads a validator failure back to the position it names. The validator
- * writes a failure as the keys it descended through, each followed by `: `,
- * then what it found there; this walks the args along those keys for as long
- * as they name what the args hold, so a key that itself contains `: ` ends
- * the walk early rather than misplacing it.
- */
-const problemAt = (
-  schema: JSONObject,
-  args: JSONObject,
-  failure: string,
-): CommandArgsProblem => {
-  const parts = failure.split(": ");
-  const path: (string | number)[] = [];
-  let value: JSONValue | undefined = args;
-  let position: JSONValue | undefined = schema;
-  let consumed = 0;
-  for (const part of parts.slice(0, -1)) {
-    const step = stepInto(value, part);
-    if (step === undefined) break;
-    position = childSchemaOf(position, part, step.index);
-    value = step.value;
-    path.push(step.index ?? part);
-    consumed += 1;
-  }
-  const problem = parts.slice(consumed).join(": ");
-  const missing = /^missing required property (.+)$/.exec(problem);
-  if (missing !== null && isObjectNotArray(value)) {
-    const name = missing[1];
-    return {
-      path: pathText([...path, name]),
-      expected: typeOfSchema(childSchemaOf(position, name, undefined)),
-      given: "absent",
-      problem,
-    };
-  }
-  const extra = /^additional property (.+)$/.exec(problem);
-  if (extra !== null && isObjectNotArray(value)) {
-    const name = extra[1];
-    return {
-      path: pathText([...path, name]),
-      expected: "no such parameter",
-      given: givenOf(value[name]),
-      problem,
-    };
-  }
-  return {
-    path: pathText(path),
-    expected: position === undefined ? problem : typeOfSchema(position),
-    given: givenOf(value),
+/** Helper for checking, which compares values as Python's `==` does. */
+const hostEquals = (left: JSONValue, right: JSONValue): boolean =>
+  (typeof left === "number" || typeof left === "boolean") &&
+    (typeof right === "number" || typeof right === "boolean")
+    ? Number(left) === Number(right)
+    : JSON.stringify(left) === JSON.stringify(right);
+
+/** Helper for checking, which reads an input's value against its schema. */
+const valueProblem = (
+  property: JSONObject,
+  value: JSONValue,
+  path: readonly (string | number)[],
+): CommandArgsProblem | undefined => {
+  const mismatch = (
+    at: readonly (string | number)[],
+    schema: JSONValue | undefined,
+    given: JSONValue,
+    problem: string,
+  ): CommandArgsProblem => ({
+    path: pathText(at),
+    expected: typeOfSchema(schema),
+    given: givenOf(given),
     problem,
-  };
-};
-
-/**
- * `schema` without the names in `required` that the host fills itself,
- * which a call may leave out.
- */
-const withoutHostFilled = (
-  schema: JSONObject,
-  hostFilled: ReadonlySet<string>,
-): JSONObject =>
-  Array.isArray(schema.required) && hostFilled.size > 0
-    ? {
-      ...schema,
-      required: schema.required.filter((name) =>
-        typeof name !== "string" || !hostFilled.has(name)
-      ),
+  });
+  if (property.type === undefined && Array.isArray(property.oneOf)) {
+    const accepted = property.oneOf.some((branch) =>
+      isObjectNotArray(branch) && hostTypeAccepts(branch.type, value) === true
+    );
+    return accepted
+      ? undefined
+      : mismatch(path, property, value, "value matches no oneOf branch");
+  }
+  const type = property.type ?? "string";
+  if (hostTypeAccepts(type, value) === false) {
+    return mismatch(path, property, value, `value is not ${String(type)}`);
+  }
+  const { items } = property;
+  if (
+    type === "array" && Array.isArray(value) && isObjectNotArray(items) &&
+    (items.type !== undefined || items.enum !== undefined)
+  ) {
+    const itemType = items.type ?? "string";
+    for (const [index, element] of value.entries()) {
+      if (
+        itemType !== "array" && hostTypeAccepts(itemType, element) === false
+      ) {
+        return mismatch(
+          [...path, index],
+          items,
+          element,
+          `value is not ${String(itemType)}`,
+        );
+      }
+      if (
+        Array.isArray(items.enum) &&
+        !items.enum.some((member) => hostEquals(member, element))
+      ) {
+        return mismatch(
+          [...path, index],
+          items,
+          element,
+          "value is not in enum",
+        );
+      }
     }
-    : schema;
-
-/**
- * `args` without the top-level `null`s the schema does not require. The
- * host's command layer reads an input passed as `null` as one left out, and
- * gives it its default.
- */
-const withoutOptionalNulls = (
-  schema: JSONObject,
-  args: JSONObject,
-): JSONObject => {
-  const required = Array.isArray(schema.required) ? schema.required : [];
-  return Object.fromEntries(
-    Object.entries(args).filter(([name, value]) =>
-      value !== null || required.includes(name)
-    ),
-  );
+  }
+  if (
+    Array.isArray(property.enum) &&
+    !property.enum.some((member) => hostEquals(member, value))
+  ) {
+    return mismatch(path, property, value, "value is not in enum");
+  }
+  return undefined;
 };
 
 /**
  * What is wrong with `args` under a command's argument schema, or
- * `undefined` when nothing is. The check reads the schema the way the host's
- * command layer does, so a call it would run is not refused here: `oneOf`
- * accepts a value any branch accepts, an optional input passed as `null` is
- * left out, and a required input named in `hostFilled` — one the host fills
- * from the call's context — may be left out. A schema this validator cannot
- * itself read, a format or keyword it does not support, yields `undefined`
- * for every call: the host's command layer validates every call it is sent,
- * so a schema only it can judge is left to it.
+ * `undefined` when nothing is. The check refuses only what the host's
+ * command layer refuses, so no call it would run is refused here. The
+ * host's rules (`validate_inputs` in Loom's `src/lib/loom_commands.py`):
+ *
+ * - an input the schema's `properties` does not declare is refused; here
+ *   only where the schema closes them (`additionalProperties: false`);
+ * - an input passed as `null` is read as left out;
+ * - an input without `type` whose `oneOf` is a list must have the type of
+ *   one of its branches;
+ * - any other input must have its `type`, read as `string` when absent:
+ *   `string`, `integer` (a boolean is not one), `number` (a boolean is
+ *   one), `boolean`, `object`, or `array`; any other type name, a list of
+ *   names included, is not checked;
+ * - an `array` input's elements are checked against an `items` that names
+ *   a `type` (read as `string` when absent) or an `enum`, by that type and
+ *   that enum;
+ * - an input with an `enum` must equal one of its members;
+ * - a default is given to every input left out, before the host looks for
+ *   required inputs left out, which it then fills from the call's context
+ *   or asks for.
+ *
+ * Nothing else is checked: not a nested object's properties, nor
+ * `minimum`, `maxLength`, `pattern`, `format`, `$ref`, `anyOf`, or
+ * `allOf`. The one place this check refuses more than the host is a
+ * required input left out with no default: the host would ask for it,
+ * which leaves an agent stuck, so it is refused here with the signature,
+ * unless it is named in `hostFilled`, one the host fills from context.
  */
 export const findCommandArgsProblem = (
   schema: JSONObject | true,
@@ -450,12 +430,40 @@ export const findCommandArgsProblem = (
   hostFilled: readonly string[] = [],
 ): CommandArgsProblem | undefined => {
   if (schema === true) return undefined;
-  const checked = withOneOfAsAnyOf(
-    withoutHostFilled(schema, new Set(hostFilled)),
-  );
-  if (!isSubschema(checked)) return undefined;
-  if (validateSchemaDefinition(checked) !== undefined) return undefined;
-  const given = withoutOptionalNulls(checked, args);
-  const failure = validateSchemaValue(checked, given);
-  return failure === undefined ? undefined : problemAt(checked, given, failure);
+  const properties = isObjectNotArray(schema.properties)
+    ? schema.properties
+    : {};
+  for (const [name, value] of Object.entries(args)) {
+    if (Object.hasOwn(properties, name)) {
+      const property = properties[name];
+      if (value === null || !isObjectNotArray(property)) continue;
+      const problem = valueProblem(property, value, [name]);
+      if (problem !== undefined) return problem;
+    } else if (schema.additionalProperties === false) {
+      return {
+        path: pathText([name]),
+        expected: "no such parameter",
+        given: givenOf(value),
+        problem: `unknown input ${name}`,
+      };
+    }
+  }
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  for (const name of required) {
+    if (typeof name !== "string" || hostFilled.includes(name)) continue;
+    const property = properties[name];
+    const given = args[name];
+    if (
+      (given === undefined || given === null) &&
+      !(isObjectNotArray(property) && property.default !== undefined)
+    ) {
+      return {
+        path: pathText([name]),
+        expected: typeOfSchema(property),
+        given: "absent",
+        problem: `missing required input ${name}`,
+      };
+    }
+  }
+  return undefined;
 };

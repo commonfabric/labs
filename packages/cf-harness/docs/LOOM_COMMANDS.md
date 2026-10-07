@@ -153,20 +153,34 @@ A batch carries one to sixteen calls, and one that names `command` as well as
 `calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. Before
 anything is sent, each call is checked against the run's catalog: a command the
 catalog does not show is refused, so what a run can call is what it can see, and
-the call's `args` are validated against the command's `inputSchema` with the
-runtime's JSON Schema validator. The check reads the schema as the host's
-command layer does, so it refuses no call the host would run:
+the call's `args` are checked against the command's `inputSchema`
+(`findCommandArgsProblem`). The check applies the rules of the host's command
+layer (`validate_inputs` in Loom's `src/lib/loom_commands.py`) and no others, so
+it refuses no call the host would run:
 
-- an optional input passed as `null` is read as left out, and the host gives it
-  its default; a required input passed as `null` is checked as given;
-- `oneOf` accepts a value any of its branches accepts;
-- a required input the host fills from the call's context — one marked
-  `x-source` in the manifest row — may be left out, though the schema the model
-  sees still lists it as required.
+- an input passed as `null` is read as left out;
+- an input without `type` whose `oneOf` is a list must have the type of one of
+  its branches;
+- any other input must have its `type`, read as `string` when absent: `string`,
+  `integer` (a boolean is not one), `number` (a boolean is one), `boolean`,
+  `object`, or `array`; any other type name is not checked;
+- an `array` input's elements are checked against an `items` that names a `type`
+  or an `enum`;
+- an input with an `enum` must equal one of its members;
+- an input the schema does not declare is refused where the schema closes its
+  properties (`additionalProperties: false`); the host refuses it whatever the
+  schema says;
+- a required input left out is refused unless it has a default, which the host
+  gives it, or the host fills it from the call's context (one marked `x-source`
+  in the manifest row, which the signature shows as optional).
 
-A schema that validator cannot itself read is left to the host's command layer,
-which validates every call it is sent. The broker refuses a command the host has
-withdrawn since the catalog was read.
+The last rule is the one place the check is stricter than the host, which would
+ask for such an input rather than refuse it; a request for input leaves an agent
+with nothing to do, and `invalid_args` with the signature lets it correct the
+call. Every other keyword — a nested object's properties, `minimum`,
+`maxLength`, `pattern`, `format`, `$ref`, `anyOf`, `allOf` — is the host's to
+judge. The broker refuses a command the host has withdrawn since the catalog was
+read.
 
 A batch's calls run concurrently, at most four in flight to the host at once,
 and one call's failure does not stop the others.
@@ -228,9 +242,13 @@ Each call, alone or in a batch, comes back as one of:
 
 `results` holds one result per call, in the calls' order, each in the shape the
 call alone would have returned, with its own `outputId`, minted in the calls'
-order. Two things differ from sending the calls one at a time. The answers are
-measured in order against one output bound for the whole batch, so a batch shows
-the model no more than one call may: an answer that would have fit alone can be
+order. Two things differ from sending the calls one at a time. A batch shows the
+model no more than one call may: each call's result is charged against one
+output bound for the whole batch, in the calls' order. An executed call's result
+that no longer fits keeps its outcome's `ok`, `id`, codes, and `mayHaveLanded`,
+and leaves out its `completed` ids, counted as `outcome.completedOmitted`, and
+its `hint` and `signature`, named in `omitted`. The answers are then measured in
+the same order against what is left: an answer that would have fit alone can be
 left out of its result, which is then marked truncated, and `truncated` says
 whether any was. And an answer without a label of its own takes the label of the
 batch's input as a whole, which covers every call's arguments: for a call whose

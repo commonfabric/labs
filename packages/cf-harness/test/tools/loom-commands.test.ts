@@ -41,6 +41,7 @@ import {
   loomCommandModelContextObservation,
   RUN_COMMAND_BATCH_LIMIT,
   type RunCommandInput,
+  runCommandModelView,
   type RunCommandOutput,
   runCommandTool,
 } from "../../src/tools/loom-commands.ts";
@@ -821,6 +822,44 @@ describe("loom-commands tools", () => {
         expect(JSON.stringify(output).length).toBeLessThanOrEqual(
           LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
         );
+      });
+
+      it("compacts the summaries that no longer fit the batch's output bound, keeping a result for every call", async () => {
+        const long = "c".repeat(HARNESS_COMMAND_ID_MAX_LENGTH);
+        const completed = Array.from(
+          { length: LOOM_COMMAND_COMPLETED_LIMIT },
+          (_, index) => `${index}${long}`,
+        );
+        const { context } = contextWith({
+          answer: JSON.stringify({ ok: false, code: long, completed }),
+        });
+        const output = batched(
+          await runCommandTool.invoke(context, {
+            calls: Array.from(
+              { length: RUN_COMMAND_BATCH_LIMIT },
+              () => ({ command: "loom.compose", args: {} }),
+            ),
+          }),
+        );
+        expect(
+          JSON.stringify(runCommandModelView({ ...output }).output).length,
+        ).toBeLessThanOrEqual(LOOM_RETRIEVAL_MAX_OUTPUT_CHARS);
+        const results = output.results.map(executed);
+        expect(results).toHaveLength(RUN_COMMAND_BATCH_LIMIT);
+        expect(results[0].outcome.completed).toHaveLength(
+          LOOM_COMMAND_COMPLETED_LIMIT,
+        );
+        const last = results.at(-1)!;
+        expect(last.outcome).toMatchObject({
+          ok: false,
+          code: long,
+          completedOmitted: LOOM_COMMAND_COMPLETED_LIMIT,
+        });
+        expect(last.outcome).not.toHaveProperty("completed");
+        for (const result of results) {
+          expect(result.outcome.ok).toBe(false);
+          expect(result.outcome.code).toBe(long);
+        }
       });
 
       it("withholds a call's answer above the ceiling and leaves its label out of the batch's", async () => {
