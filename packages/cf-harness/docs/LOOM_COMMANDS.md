@@ -154,9 +154,19 @@ A batch carries one to sixteen calls, and one that names `command` as well as
 anything is sent, each call is checked against the run's catalog: a command the
 catalog does not show is refused, so what a run can call is what it can see, and
 the call's `args` are validated against the command's `inputSchema` with the
-runtime's JSON Schema validator. A schema that validator cannot itself read is
-left to the host's command layer, which validates every call it is sent. The
-broker refuses a command the host has withdrawn since the catalog was read.
+runtime's JSON Schema validator. The check reads the schema as the host's
+command layer does, so it refuses no call the host would run:
+
+- an optional input passed as `null` is read as left out, and the host gives it
+  its default; a required input passed as `null` is checked as given;
+- `oneOf` accepts a value any of its branches accepts;
+- a required input the host fills from the call's context — one marked
+  `x-source` in the manifest row — may be left out, though the schema the model
+  sees still lists it as required.
+
+A schema that validator cannot itself read is left to the host's command layer,
+which validates every call it is sent. The broker refuses a command the host has
+withdrawn since the catalog was read.
 
 A batch's calls run concurrently, at most four in flight to the host at once,
 and one call's failure does not stop the others.
@@ -216,11 +226,15 @@ Each call, alone or in a batch, comes back as one of:
 }
 ```
 
-`results` holds one result per call, in the calls' order, each exactly as the
-call alone would have returned it, its own `outputId` included. The answers are
+`results` holds one result per call, in the calls' order, each in the shape the
+call alone would have returned, with its own `outputId`, minted in the calls'
+order. Two things differ from sending the calls one at a time. The answers are
 measured in order against one output bound for the whole batch, so a batch shows
-the model no more than one call may; an answer that no longer fits is left out
-of its result, which is marked truncated, and `truncated` says whether any was.
+the model no more than one call may: an answer that would have fit alone can be
+left out of its result, which is then marked truncated, and `truncated` says
+whether any was. And an answer without a label of its own takes the label of the
+batch's input as a whole, which covers every call's arguments: for a call whose
+own arguments carried less, that is the conservative choice.
 
 ### Authorization
 

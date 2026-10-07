@@ -229,6 +229,40 @@ describe("loom-command-signature", () => {
       });
     });
 
+    it("reads an optional input passed as `null` as left out, and a required one as given", () => {
+      expect(
+        findCommandArgsProblem(DOSSIER_SCHEMA, { entity_id: "e", limit: null }),
+      ).toBeUndefined();
+      expect(findCommandArgsProblem(DOSSIER_SCHEMA, { entity_id: null }))
+        .toMatchObject({ path: "args.entity_id", given: "null" });
+    });
+
+    it("accepts a value any `oneOf` branch accepts, and refuses one no branch does", () => {
+      const schema = {
+        type: "object",
+        properties: {
+          amount: { oneOf: [{ type: "number" }, { type: "integer" }] },
+        },
+      };
+      expect(findCommandArgsProblem(schema, { amount: 5 })).toBeUndefined();
+      expect(findCommandArgsProblem(schema, { amount: "five" }))
+        .toMatchObject({ path: "args.amount", given: '"five"' });
+    });
+
+    it("lets a call leave out a required input the host fills, and no other", () => {
+      const schema = {
+        type: "object",
+        required: ["pane", "title"],
+        properties: { pane: { type: "string" }, title: { type: "string" } },
+      };
+      expect(findCommandArgsProblem(schema, { title: "t" }, ["pane"]))
+        .toBeUndefined();
+      expect(findCommandArgsProblem(schema, { pane: "p" }, ["pane"]))
+        .toMatchObject({ path: "args.title", given: "absent" });
+      expect(findCommandArgsProblem(schema, { title: "t" }))
+        .toMatchObject({ path: "args.pane", given: "absent" });
+    });
+
     it("returns `undefined` for an open schema, and for one this validator cannot read", () => {
       expect(findCommandArgsProblem(true, { anything: 1 })).toBeUndefined();
       expect(

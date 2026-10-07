@@ -235,6 +235,58 @@ describe("local-jobs/lane", () => {
       ).toEqual([]);
     });
 
+    it("reports a command for each executed call of a batch, in order, and nothing for one the host never ran", () => {
+      const call = {
+        role: "assistant" as const,
+        content: "",
+        toolCalls: [{
+          id: "call-0",
+          type: "function" as const,
+          function: {
+            name: "run_command",
+            arguments: JSON.stringify({
+              calls: [
+                { command: "loom.compose", args: {} },
+                { command: "loom.inspect", args: {} },
+                { command: "people.find", args: {} },
+              ],
+            }),
+          },
+        }],
+      };
+
+      expect(localJobEventsOf(event(
+        answer({
+          status: "batch",
+          results: [
+            {
+              status: "executed",
+              outcome: { ok: true, id: "loom.compose" },
+              entry: { status: "admitted", value: { ok: true } },
+            },
+            { status: "invalid_args", command: "loom.inspect" },
+            {
+              status: "executed",
+              outcome: { ok: false, code: "not_granted", hostCode: "refused" },
+            },
+          ],
+          truncated: false,
+        }),
+        [call],
+      ))).toEqual([
+        { kind: "command", body: { command: "loom.compose", ok: true } },
+        {
+          kind: "command",
+          body: {
+            command: "people.find",
+            ok: false,
+            code: "not_granted",
+            hostCode: "refused",
+          },
+        },
+      ]);
+    });
+
     it("reports a command the host ran, with its outputs when the answer was admitted", () => {
       const call = calling("run_command");
 

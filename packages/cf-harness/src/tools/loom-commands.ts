@@ -50,7 +50,6 @@ import {
   type LoomCommandCatalogSource,
   type LoomCommandEntry,
   type LoomCommandInvocation,
-  type LoomCommandRunOutput,
   nearestCommandNames,
   runLoomCommand,
 } from "../loom-commands.ts";
@@ -513,7 +512,11 @@ const checkCall = (
       hint: unknownCommandHint(command),
     };
   }
-  const problem = findCommandArgsProblem(entry.inputSchema, invocation.args);
+  const problem = findCommandArgsProblem(
+    entry.inputSchema,
+    invocation.args,
+    entry.hostFilled,
+  );
   if (problem !== undefined) {
     return {
       outputId,
@@ -551,21 +554,14 @@ const sendCall = async (
       "The turn was cancelled before the command.",
     );
   }
-  let answered: LoomCommandRunOutput;
-  try {
-    answered = await runLoomCommand(
-      config,
-      invocation,
-      context.hostProcessRunner,
-    );
-  } catch {
-    answered = {
-      status: "error",
-      code: "command_failed",
-      message: "The host command's answer was lost.",
-      landed: "unknown",
-    };
-  }
+  // `runLoomCommand` reads every failure of the process itself as an answer
+  // that may have been lost; what it throws is an invalid configuration,
+  // found before any process starts, which is not this call's to absorb.
+  const answered = await runLoomCommand(
+    config,
+    invocation,
+    context.hostProcessRunner,
+  );
   if (answered.status === "error") {
     return {
       outputId,
@@ -747,12 +743,16 @@ export const runCommandTool: HarnessToolDefinition<
       }
       const listed = await readCatalog(context, source, outputId);
       if (!("catalog" in listed)) return listed;
-      const sent = await mapWithFanIn(calls, RUN_COMMAND_FAN_IN, (call) => {
-        const checked = checkCall(
-          context.nextOutputId("run_command"),
-          call,
-          listed.catalog,
-        );
+      // Ids are minted in the calls' order, before any call is sent, so a
+      // batch's results carry them in order whatever order the calls end in.
+      const numbered = calls.map((call) => ({
+        call,
+        outputId: context.nextOutputId("run_command"),
+      }));
+      const sent = await mapWithFanIn(numbered, RUN_COMMAND_FAN_IN, (
+        { call, outputId: callOutputId },
+      ) => {
+        const checked = checkCall(callOutputId, call, listed.catalog);
         return "invocation" in checked
           ? sendCall(context, config, checked)
           : Promise.resolve(checked);

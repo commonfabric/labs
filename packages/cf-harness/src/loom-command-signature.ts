@@ -64,21 +64,33 @@ const RECORD_SUBSCHEMA_KEYWORDS: ReadonlySet<string> = new Set([
   "dependentSchemas",
 ]);
 
-/** Helper for stripping, which strips each subschema in a list. */
-const stripEach = (value: JSONValue): JSONValue =>
-  Array.isArray(value) ? value.map(stripSubschema) : value;
-
-/** Helper for stripping, which strips each subschema a record names. */
-const stripValues = (value: JSONValue): JSONValue =>
-  isObjectNotArray(value)
-    ? Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [key, stripSubschema(child)]),
-    )
-    : value;
-
-/** Helper for stripping, which strips a value in a subschema position. */
-const stripSubschema = (value: JSONValue): JSONValue =>
-  isObjectNotArray(value) ? withoutSchemaExtensions(value) : value;
+/**
+ * Helper for schema rewrites, which rebuilds every schema node of `schema`,
+ * children first, through `rebuild`. Only subschema positions are walked:
+ * values under `enum`, `const`, `default`, and `examples`, and the names in
+ * `properties`, are left as they are.
+ */
+const mapSchemaNodes = (
+  schema: JSONObject,
+  rebuild: (node: JSONObject) => JSONObject,
+): JSONObject => {
+  const node = (value: JSONValue): JSONValue =>
+    isObjectNotArray(value) ? mapSchemaNodes(value, rebuild) : value;
+  return rebuild(Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => [
+      key,
+      SINGLE_SUBSCHEMA_KEYWORDS.has(key)
+        ? node(value)
+        : LIST_SUBSCHEMA_KEYWORDS.has(key) && Array.isArray(value)
+        ? value.map(node)
+        : RECORD_SUBSCHEMA_KEYWORDS.has(key) && isObjectNotArray(value)
+        ? Object.fromEntries(
+          Object.entries(value).map(([name, child]) => [name, node(child)]),
+        )
+        : value,
+    ]),
+  ));
+};
 
 /**
  * `schema` without its `x-*` extension keywords, at every subschema position.
@@ -87,20 +99,28 @@ const stripSubschema = (value: JSONValue): JSONValue =>
  * values rather than schemas.
  */
 export const withoutSchemaExtensions = (schema: JSONObject): JSONObject =>
-  Object.fromEntries(
-    Object.entries(schema)
-      .filter(([key]) => !key.startsWith("x-"))
-      .map(([key, value]) => [
-        key,
-        SINGLE_SUBSCHEMA_KEYWORDS.has(key)
-          ? stripSubschema(value)
-          : LIST_SUBSCHEMA_KEYWORDS.has(key)
-          ? stripEach(value)
-          : RECORD_SUBSCHEMA_KEYWORDS.has(key)
-          ? stripValues(value)
-          : value,
-      ]),
+  mapSchemaNodes(
+    schema,
+    (node) =>
+      Object.fromEntries(
+        Object.entries(node).filter(([key]) => !key.startsWith("x-")),
+      ),
   );
+
+/**
+ * `schema` with every `oneOf` read as `anyOf`, which is how the host's
+ * command layer reads it: a value matching any branch is accepted, where
+ * JSON Schema's `oneOf` would refuse one matching two (`5` against `number`
+ * and `integer`). The branches join the node's `allOf`, so a node carrying
+ * both keywords keeps both.
+ */
+const withOneOfAsAnyOf = (schema: JSONObject): JSONObject =>
+  mapSchemaNodes(schema, (node) => {
+    const { oneOf, ...rest } = node;
+    if (!Array.isArray(oneOf)) return node;
+    const allOf = Array.isArray(rest.allOf) ? rest.allOf : [];
+    return { ...rest, allOf: [...allOf, { anyOf: oneOf }] };
+  });
 
 /** Helper for rendering, which cuts a rendering to `max` characters. */
 const cut = (text: string, max: number): string =>
@@ -374,19 +394,62 @@ const problemAt = (
 };
 
 /**
+ * `schema` without the names in `required` that the host fills itself,
+ * which a call may leave out.
+ */
+const withoutHostFilled = (
+  schema: JSONObject,
+  hostFilled: ReadonlySet<string>,
+): JSONObject =>
+  Array.isArray(schema.required) && hostFilled.size > 0
+    ? {
+      ...schema,
+      required: schema.required.filter((name) =>
+        typeof name !== "string" || !hostFilled.has(name)
+      ),
+    }
+    : schema;
+
+/**
+ * `args` without the top-level `null`s the schema does not require. The
+ * host's command layer reads an input passed as `null` as one left out, and
+ * gives it its default.
+ */
+const withoutOptionalNulls = (
+  schema: JSONObject,
+  args: JSONObject,
+): JSONObject => {
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  return Object.fromEntries(
+    Object.entries(args).filter(([name, value]) =>
+      value !== null || required.includes(name)
+    ),
+  );
+};
+
+/**
  * What is wrong with `args` under a command's argument schema, or
- * `undefined` when nothing is. A schema this validator cannot itself read —
- * a format or keyword it does not support — yields `undefined` for every
- * call: the host's command layer validates every call it is sent, so a
- * schema only it can judge is left to it rather than refusing calls it
- * would run.
+ * `undefined` when nothing is. The check reads the schema the way the host's
+ * command layer does, so a call it would run is not refused here: `oneOf`
+ * accepts a value any branch accepts, an optional input passed as `null` is
+ * left out, and a required input named in `hostFilled` — one the host fills
+ * from the call's context — may be left out. A schema this validator cannot
+ * itself read, a format or keyword it does not support, yields `undefined`
+ * for every call: the host's command layer validates every call it is sent,
+ * so a schema only it can judge is left to it.
  */
 export const findCommandArgsProblem = (
   schema: JSONObject | true,
   args: JSONObject,
+  hostFilled: readonly string[] = [],
 ): CommandArgsProblem | undefined => {
-  if (schema === true || !isSubschema(schema)) return undefined;
-  if (validateSchemaDefinition(schema) !== undefined) return undefined;
-  const failure = validateSchemaValue(schema, args);
-  return failure === undefined ? undefined : problemAt(schema, args, failure);
+  if (schema === true) return undefined;
+  const checked = withOneOfAsAnyOf(
+    withoutHostFilled(schema, new Set(hostFilled)),
+  );
+  if (!isSubschema(checked)) return undefined;
+  if (validateSchemaDefinition(checked) !== undefined) return undefined;
+  const given = withoutOptionalNulls(checked, args);
+  const failure = validateSchemaValue(checked, given);
+  return failure === undefined ? undefined : problemAt(checked, given, failure);
 };

@@ -60,6 +60,12 @@ export interface LoomCommandEntry extends HarnessCallableDescriptor {
 
   /** The field names the command's answer declares among its outputs. */
   outputs?: string[];
+
+  /**
+   * Inputs the host fills from a call's context (`x-source` in the row's
+   * schema), which a call may leave out though the schema requires them.
+   */
+  hostFilled?: string[];
 }
 
 /** A host's command manifest, read as the entries an agent may call. */
@@ -237,6 +243,13 @@ export const loomCommandEntryOfRow = (
       .slice(0, LOOM_COMMAND_OUTPUTS_LIMIT)
       .map((name) => name.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH))
     : [];
+  const hostFilled = isRecord(inputs) && isRecord(inputs.properties)
+    ? Object.entries(inputs.properties)
+      .filter(([, property]) =>
+        isRecord(property) && property["x-source"] !== undefined
+      )
+      .map(([name]) => name)
+    : [];
   return {
     name: id,
     ...(title !== undefined ? { title } : {}),
@@ -249,6 +262,7 @@ export const loomCommandEntryOfRow = (
       ? scope.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
       : "global",
     ...(outputNames.length > 0 ? { outputs: outputNames } : {}),
+    ...(hostFilled.length > 0 && inputSchema !== true ? { hostFilled } : {}),
   };
 };
 

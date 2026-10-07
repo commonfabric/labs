@@ -340,6 +340,24 @@ describe("loom-commands", () => {
       });
     });
 
+    it("names the inputs the host fills from context, which the shown schema no longer marks", () => {
+      const entry = loomCommandEntryOfRow({
+        id: "pane.rename",
+        inputs: {
+          type: "object",
+          required: ["pane", "title"],
+          properties: {
+            pane: { type: "string", "x-source": "context.pane" },
+            title: { type: "string" },
+          },
+        },
+      });
+      expect(entry?.hostFilled).toEqual(["pane"]);
+      expect(JSON.stringify(entry?.inputSchema)).not.toContain("x-source");
+      expect(loomCommandEntryOfRow({ id: "a.b", inputs: { type: "object" } }))
+        .not.toHaveProperty("hostFilled");
+    });
+
     it("shows an argument schema that is not an object, or is too large, as open", () => {
       expect(loomCommandEntryOfRow({ id: "a.b", inputs: [1] })?.inputSchema)
         .toBe(true);

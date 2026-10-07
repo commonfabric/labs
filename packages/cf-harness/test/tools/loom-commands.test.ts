@@ -562,6 +562,31 @@ describe("loom-commands tools", () => {
       }
     });
 
+    it("sends a call that leaves out a required input the host fills from context", async () => {
+      const { context, calls } = contextWith({
+        manifest: JSON.stringify({
+          commands: [{
+            id: "pane.rename",
+            inputs: {
+              type: "object",
+              required: ["pane", "title"],
+              properties: {
+                pane: { type: "string", "x-source": "context.pane" },
+                title: { type: "string" },
+              },
+            },
+          }],
+        }),
+      });
+      executed(
+        await runCommandTool.invoke(context, {
+          command: "pane.rename",
+          args: { title: "Trip" },
+        }),
+      );
+      expect(calls.map((call) => call.args[1])).toEqual(["list", "run"]);
+    });
+
     it("sends args the command's schema admits", async () => {
       const { context, calls } = contextWith();
       executed(
@@ -651,8 +676,11 @@ describe("loom-commands tools", () => {
           signature: DOSSIER_SIGNATURE,
         });
         expect(executed(output.results[2]).outcome.id).toBe("loom.inspect");
-        expect(new Set(output.results.map((result) => result.outputId)).size)
-          .toBe(3);
+        const sequence = output.results.map((result) =>
+          Number(result.outputId.split(":").at(-1))
+        );
+        expect(sequence).toEqual([...sequence].sort((a, b) => a - b));
+        expect(new Set(sequence).size).toBe(3);
         expect(calls.map((call) => call.args.slice(1, 3))).toEqual([
           ["list", "--json"],
           ["run", "loom.compose"],
@@ -793,6 +821,61 @@ describe("loom-commands tools", () => {
         expect(JSON.stringify(output).length).toBeLessThanOrEqual(
           LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
         );
+      });
+
+      it("withholds a call's answer above the ceiling and leaves its label out of the batch's", async () => {
+        const { context } = contextWith({
+          ceiling: [OWNER],
+          answer: (request) =>
+            Promise.resolve({
+              stdout: JSON.stringify({
+                ok: true,
+                detail: request.args[2] === "loom.inspect"
+                  ? "secret detail"
+                  : "plain",
+                ifc: {
+                  confidentiality: [
+                    request.args[2] === "loom.inspect" ? HEALTH : OWNER,
+                  ],
+                },
+              }),
+              stderr: "",
+              exitCode: 0,
+            }),
+        });
+        const output = batched(
+          await runCommandTool.invoke(context, {
+            calls: [
+              { command: "loom.compose", args: {} },
+              { command: "loom.inspect", args: {} },
+            ],
+          }),
+        );
+        const [admitted, withheld] = output.results.map(executed);
+        expect(admitted.entry?.status).toBe("admitted");
+        expect(withheld.entry).toEqual({
+          status: "withheld",
+          reasonCode: "cfc_ceiling_exceeded",
+        });
+        expect(JSON.stringify(output)).not.toContain("secret detail");
+        expect(output.cfc).toEqual({
+          version: 1,
+          observedLabel: { confidentiality: [OWNER] },
+        });
+      });
+
+      it("rejects a call whose configuration became invalid after the catalog was read, rather than reporting an answer lost", async () => {
+        for (const batch of [false, true]) {
+          const config = freshConfig();
+          const { context, calls } = contextWith({ config });
+          await listCommandsTool.invoke(context, {});
+          config.cliPath = "loom";
+          const call = { command: "loom.compose", args: {} };
+          await expect(
+            runCommandTool.invoke(context, batch ? { calls: [call] } : call),
+          ).rejects.toThrow("absolute `cliPath`");
+          expect(calls.map((request) => request.args[1])).toEqual(["list"]);
+        }
       });
 
       it("joins the executed calls' labels as the batch's", async () => {
