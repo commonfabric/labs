@@ -4723,11 +4723,16 @@ export class Runtime {
 
   /**
    * Records a runtime-learned HTTP or HTTPS origin for a space (the v0
-   * site-table flow). Storage decides first. A seed or an accepted late hint
-   * fixes the route for the session. A default-host provider stays provisional
-   * while it is read-only. The first hint can replace it and replay its reads.
-   * Compute routing follows when storage accepts the hint. Returns whether
-   * storage accepted or confirmed the hint.
+   * site-table flow). Without a memory URL, storage decides first. A seed or
+   * an accepted late hint fixes the route for the session. A default-host
+   * provider stays provisional while it is read-only. The first hint can
+   * replace it and replay its reads. Compute routing follows when storage
+   * accepts the hint. Returns whether storage accepted or confirmed the hint.
+   *
+   * While a memory URL is set, the runtime decides an unseeded space's hint
+   * first, as {@link registerSpaceHostDetailed} describes, and storage is not
+   * asked: a hint naming `apiUrl`'s origin returns `true` without being
+   * recorded, and a hint naming any other host returns `false`.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
     const route = this.#normalizedSpaceHost(space, host);
