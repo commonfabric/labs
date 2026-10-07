@@ -70,6 +70,9 @@ export interface CreateAndOfferRequest {
 
   /** The DID of the principal the space is offered to. */
   recipient: string;
+
+  /** Whether the room is its space's root; absent, it is. */
+  root?: boolean;
 }
 
 /** A space a sender's handler offers again, under another key. */
@@ -155,9 +158,9 @@ const createProfile = handler<
 });
 
 /**
- * Creates a room as the root of a space of its own, which the event's actor
- * owns and which grants the recipient `OWNER`, and queues offering it to the
- * owner.
+ * Creates a room in a space of its own, as the space's root unless the event
+ * says otherwise, which the event's actor owns and which grants the recipient
+ * `OWNER`, and queues offering it to the owner.
  */
 const createAndOffer = handler<
   CreateAndOfferRequest,
@@ -168,7 +171,9 @@ const createAndOffer = handler<
     "OWNER",
   ]]) as InSpaceGrants;
   const room = roomLinkOf(
-    Room.inSpace(undefined, { grants, root: true })({ title: event.title }),
+    Room.inSpace(undefined, { grants, root: event.root !== false })({
+      title: event.title,
+    }),
   );
   offerRoom.send({ room, id: event.id, title: event.title });
 });

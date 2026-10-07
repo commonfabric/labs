@@ -1060,6 +1060,19 @@ const handlers: Record<
     return { started: intake !== undefined };
   },
 
+  /**
+   * Answers what the share intakes `startShareIntake` started have decided
+   * about the offer whose receipt key is `key`, or `null` when none has.
+   */
+  async shareIntakeDecision({ key }) {
+    for (const intake of shareIntakes) {
+      await intake.idle();
+      const decision = intake.accessForTestingOnly.decided.get(key as string);
+      if (decision !== undefined) return { decision };
+    }
+    return { decision: null };
+  },
+
   /** Reads an explicit held address with the same stored-label gate as any Cell. */
   async readAddress({ link }) {
     const cell = controller().runtime.getCellFromLink(link as never);

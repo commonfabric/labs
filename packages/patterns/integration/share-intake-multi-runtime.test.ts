@@ -66,6 +66,27 @@ describe("share intake across runtimes", () => {
     ((await sender.read(["offered"])) as { id: string; space: string }[] ?? [])
       .find((each) => each.id === id)?.space;
 
+  /** What the owner's host decided about an offer from `from`, keyed `id`. */
+  const decision = async (
+    from: MultiRuntimeSession,
+    id: string,
+  ): Promise<string | null> =>
+    ((await owner.client().call("shareIntakeDecision", {
+      key: receiptKey(from, id),
+    })) as { decision: string | null }).decision;
+
+  /** Whether the owner's inbox holds an offer from `from`, keyed `id`. */
+  const delivered = async (
+    from: MultiRuntimeSession,
+    id: string,
+  ): Promise<boolean> =>
+    ((await owner.read(["offers"], { piece: inbox })) as {
+      id: string;
+      from: string;
+    }[] ?? []).some((each) =>
+      each.id === id && each.from === from.identity.did()
+    );
+
   /** How many offers the owner's host has refused. */
   const refusalsLogged = async (): Promise<number> => {
     const counts = (await owner.loggerCounts())["piece.share-intake"];
@@ -171,6 +192,27 @@ describe("share intake across runtimes", () => {
 
     expect((await catalog())?.offers[receiptKey(stranger, "forged")])
       .toBeUndefined();
+    expect(await decision(stranger, "forged")).toBe("sender-not-member");
+    expect(await refusalsLogged()).toBe(before + 1);
+  });
+
+  it("refuses an offer of a room that is not its space's root, and logs it", async () => {
+    const before = await refusalsLogged();
+    await sender.send("createAndOffer", {
+      id: "unrooted",
+      title: "Room unrooted",
+      recipient: owner.identity.did(),
+      root: false,
+    });
+    await harness.settleUntil(async () => await delivered(sender, "unrooted"));
+
+    // The intake decides an inbox's offers in order, so the unrooted room's
+    // offer was decided by the time an offer after it is registered.
+    await createAndOffer("after the unrooted room");
+
+    expect((await catalog())?.offers[receiptKey(sender, "unrooted")])
+      .toBeUndefined();
+    expect(await decision(sender, "unrooted")).toBe("space-root-missing");
     expect(await refusalsLogged()).toBe(before + 1);
   });
 
