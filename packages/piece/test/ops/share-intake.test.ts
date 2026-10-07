@@ -377,13 +377,18 @@ describe("share-intake", () => {
           },
         } as never)
       );
-      start();
+      const intake = start();
       const before = refusalsLogged();
 
       const registered = await deliverThenBarrier(offerOf(space, "received"));
 
       expect(registeredIds(registered)).toEqual(["barrier"]);
       expect(refusalsLogged()).toBe(before);
+      expect(
+        intake.accessForTestingOnly.decided.get(
+          JSON.stringify([sender, "received"]),
+        ),
+      ).toBe("received");
     });
   });
 
@@ -392,14 +397,20 @@ describe("share-intake", () => {
     // reads what was registered once the second is: the intake decides an
     // inbox's offers in order, so the first was decided by then.
 
-    /** Delivers `refused`, and returns what was registered and logged. */
+    /**
+     * Delivers `refused`, and returns what was registered and logged, and what
+     * the intake decided about it.
+     */
     async function refuse(refused: Row) {
-      start();
+      const intake = start();
       const before = refusalsLogged();
       const registered = await deliverThenBarrier(refused);
       return {
         ids: registeredIds(registered),
         logged: refusalsLogged() - before,
+        decision: intake.accessForTestingOnly.decided.get(
+          JSON.stringify([refused.from, refused.id]),
+        ),
       };
     }
 
@@ -407,7 +418,11 @@ describe("share-intake", () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
 
       expect(await refuse(offerOf(space, "bad space", { space: "room" })))
-        .toEqual({ ids: ["barrier"], logged: 1 });
+        .toEqual({
+          ids: ["barrier"],
+          logged: 1,
+          decision: "offer-malformed",
+        });
     });
 
     it("is not registered, and is logged, when `host` is not its own origin", async () => {
@@ -415,7 +430,11 @@ describe("share-intake", () => {
 
       expect(
         await refuse(offerOf(space, "bad host", { host: `${HOST}/path` })),
-      ).toEqual({ ids: ["barrier"], logged: 1 });
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decision: "offer-malformed",
+      });
     });
 
     it("is not registered, and is logged, when `ownerOrigin` is neither empty nor an origin", async () => {
@@ -425,7 +444,11 @@ describe("share-intake", () => {
         await refuse(
           offerOf(space, "bad owner origin", { ownerOrigin: "elsewhere" }),
         ),
-      ).toEqual({ ids: ["barrier"], logged: 1 });
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decision: "offer-malformed",
+      });
     });
 
     it("is not registered, and is logged, when its `title` is longer than the inbox keeps", async () => {
@@ -433,7 +456,11 @@ describe("share-intake", () => {
 
       expect(
         await refuse(offerOf(space, "long title", { title: "x".repeat(201) })),
-      ).toEqual({ ids: ["barrier"], logged: 1 });
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decision: "offer-malformed",
+      });
     });
 
     it("is not registered, and is logged, when its `host` is another host's", async () => {
@@ -443,7 +470,11 @@ describe("share-intake", () => {
         await refuse(
           offerOf(space, "foreign", { host: "https://elsewhere.example" }),
         ),
-      ).toEqual({ ids: ["barrier"], logged: 1 });
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decision: "offer-foreign-host",
+      });
     });
 
     it("is not registered, and is logged, when `from` holds only the grant to every principal", async () => {
@@ -452,6 +483,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "everyone"))).toEqual({
         ids: ["barrier"],
         logged: 1,
+        decision: "sender-not-member",
       });
     });
 
@@ -461,6 +493,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "reader"))).toEqual({
         ids: ["barrier"],
         logged: 1,
+        decision: "sender-not-member",
       });
     });
 
@@ -470,6 +503,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "absent"))).toEqual({
         ids: ["barrier"],
         logged: 1,
+        decision: "sender-not-member",
       });
     });
 
@@ -481,6 +515,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "ungranted"))).toEqual({
         ids: ["barrier"],
         logged: 1,
+        decision: "recipient-access-refused",
       });
     });
 
@@ -495,6 +530,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "refused"))).toEqual({
         ids: ["barrier"],
         logged: 1,
+        decision: "recipient-access-refused",
       });
     });
 
@@ -504,6 +540,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "rootless"))).toEqual({
         ids: ["barrier"],
         logged: 1,
+        decision: "space-root-missing",
       });
     });
 

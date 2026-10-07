@@ -34,6 +34,13 @@ export type OfferRefusal =
   | "recipient-access-refused"
   | "space-root-missing";
 
+/**
+ * What an instance decided about an offer: `sent` to Home's
+ * `registerSharedSpace`, skipped as `received` because the catalog holds its
+ * receipt, or refused, for the reason given.
+ */
+export type OfferDecision = "sent" | "received" | OfferRefusal;
+
 /** An offer whose envelope is well formed, as the intake registers it. */
 interface VettableOffer {
   kind: string;
@@ -124,7 +131,7 @@ export class ShareIntake {
   #host: string;
   #holders: Cancel[] = [];
   #inboxes = new Map<string, Cancel>();
-  #decided = new Set<string>();
+  #decided = new Map<string, OfferDecision>();
   #dirty = false;
   #draining = false;
   #drained: Promise<void> = Promise.resolve();
@@ -159,6 +166,16 @@ export class ShareIntake {
     this.#holders.push(
       home.key("retainedPrivateInboxes").asSchema(retainedSchema).sink(poke),
     );
+  }
+
+  /**
+   * What the instance has decided about each offer, by the offer's receipt
+   * key, which a test reads to tell one refusal from another.
+   */
+  get accessForTestingOnly(): {
+    readonly decided: ReadonlyMap<string, OfferDecision>;
+  } {
+    return { decided: this.#decided };
   }
 
   /**
@@ -295,7 +312,7 @@ export class ShareIntake {
     const key = JSON.stringify([raw.from ?? null, raw.id ?? null]);
     if (this.#decided.has(key)) return;
     if (receipts.has(key)) {
-      this.#decided.add(key);
+      this.#decided.set(key, "received");
       return;
     }
     const offer = wellFormedOffer(raw);
@@ -312,7 +329,7 @@ export class ShareIntake {
       return;
     }
     if (this.#halted) return;
-    this.#decided.add(key);
+    this.#decided.set(key, refusal ?? "sent");
     if (refusal !== undefined || offer === undefined) {
       logger.warn("offer-refused", () => [
         `Not registering the offer ${key} (${refusal}) of`,
@@ -345,9 +362,6 @@ export class ShareIntake {
     let root;
     try {
       stored = await new ACLManager(runtime, offer.space).getStored();
-      if (accessRefused(runtime, offer.space)) {
-        return "recipient-access-refused";
-      }
       root = await runtime.getSpaceCell(offer.space).key("defaultPattern")
         .pull();
     } catch (error) {

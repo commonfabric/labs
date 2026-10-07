@@ -85,6 +85,7 @@ export {
 } from "./private-inbox.ts";
 export {
   LOOM_OFFER_KIND,
+  type OfferDecision,
   type OfferRefusal,
   ShareIntake,
   startShareIntakeOf,
