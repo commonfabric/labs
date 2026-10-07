@@ -415,11 +415,12 @@ export class CFCodeEditor extends BaseElement {
    * The nearest `<cf-theme>`'s theme. Its color scheme tells CodeMirror
    * whether it sits on a dark page, so the caret, selection, tooltips and
    * panels CodeMirror draws itself stay legible on the surface the
-   * `--cf-theme-*` tokens paint.
+   * `--cf-theme-*` tokens paint. With no `<cf-theme>` above, those tokens
+   * fall back to their light values, and so does this.
    */
   @consume({ context: cfThemeContext, subscribe: true })
   @property({ attribute: false })
-  accessor ambientTheme: CFTheme = defaultTheme;
+  accessor ambientTheme: CFTheme = { ...defaultTheme, colorScheme: "light" };
 
   private _editorView: EditorView | undefined;
   private _lang = new Compartment();

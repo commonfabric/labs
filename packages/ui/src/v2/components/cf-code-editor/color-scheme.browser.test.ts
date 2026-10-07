@@ -138,3 +138,21 @@ Deno.test("an editor asking for theme dark keeps oneDark's caret in a light them
     done();
   }
 });
+
+Deno.test("an editor with no theme around it draws the light base the tokens fall back to", async () => {
+  // A page-wide dark preference is what an "auto" scheme would follow; with
+  // no <cf-theme> the tokens are their light fallbacks, so the base stays light.
+  document.documentElement.setAttribute("data-theme", "dark");
+  const editor = new CFCodeEditor();
+  editor.value = "Meeting notes";
+  document.body.append(editor);
+  try {
+    await editor.updateComplete;
+    await drawSelection(editor);
+    const caret = drawn(editor, ".cm-cursor", "borderLeftColor");
+    assert(!isLight(caret), `the caret is dark, not ${caret}`);
+  } finally {
+    editor.remove();
+    document.documentElement.removeAttribute("data-theme");
+  }
+});
