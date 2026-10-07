@@ -327,30 +327,35 @@ describe("ensurePrivateInboxOf()", () => {
     });
 
     it("decides by the default profile ahead of the most recently used one", async () => {
-      const first = await usableInbox();
-      const deciding = await profilePointingAt(first);
+      const chosen = await usableInbox();
+      const deciding = await profilePointingAt(chosen);
       const recent = await profilePointingAt(await usableInbox());
-      await listProfiles([deciding, recent]);
+      await listProfiles([recent, deciding]);
       await setDefault(deciding);
       await listRecent([recent]);
 
       await ensure();
 
-      expect(await adoptedAddress()).toEqual(addressOf(first));
+      expect(await adoptedAddress()).toEqual(addressOf(chosen));
       expect(await deciderAddress()).toEqual(addressOf(deciding));
     });
 
-    it("passes over a default profile that points at no inbox", async () => {
-      const second = await usableInbox();
+    it("passes over a default profile that points at no inbox, to the next in order", async () => {
+      const chosen = await usableInbox();
       const unpointed = await profilePointingAt(undefined);
-      const advertising = await profilePointingAt(second);
-      await listProfiles([advertising, unpointed]);
+      const recent = await profilePointingAt(chosen);
+      await listProfiles([
+        unpointed,
+        await profilePointingAt(await usableInbox()),
+        recent,
+      ]);
       await setDefault(unpointed);
+      await listRecent([recent]);
 
       await ensure();
 
-      expect(await adoptedAddress()).toEqual(addressOf(second));
-      expect(await deciderAddress()).toEqual(addressOf(advertising));
+      expect(await adoptedAddress()).toEqual(addressOf(chosen));
+      expect(await deciderAddress()).toEqual(addressOf(recent));
     });
 
     it("rejects, sending nothing, when a profile ordered ahead of the deciding one cannot be read", async () => {
