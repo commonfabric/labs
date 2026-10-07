@@ -85,6 +85,28 @@ const SCOPE_ALIAS_TO_CELL_SCOPE: ReadonlyMap<string, CellScope | "any"> =
   ]);
 
 /**
+ * The runtime calls whose required type argument the transformer lowers to an
+ * injected `schema` parameter, with the diagnostic a call without one reports.
+ */
+const TYPED_SCHEMA_CALLS: ReadonlyMap<
+  string,
+  { readonly diagnostic: string; readonly message: string }
+> = new Map([
+  ["fetchJson", {
+    diagnostic: "fetch-json:missing-type-argument",
+    message: "fetchJson requires an explicit type argument, e.g. " +
+      "fetchJson<MyResult>({ url }). Use fetchJsonUnchecked for JSON " +
+      "whose shape isn't declared as a type.",
+  }],
+  ["policySecretHash", {
+    diagnostic: "policy-secret-hash:missing-type-argument",
+    message: "policySecretHash requires an explicit type argument naming " +
+      "its module policy, e.g. policySecretHash<Confidential<string, " +
+      "readonly [PolicyOf<typeof rules>]>>({ input }).",
+  }],
+]);
+
+/**
  * Schema Injection Transformer - TypeRegistry Integration
  *
  * This transformer injects JSON schemas for Common Fabric core functions
@@ -4519,15 +4541,17 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         }
       }
 
-      // fetchJson<T>({ url, ... }) - lowers the T type argument to an
-      // injected `schema` property (mirrors generate-object's `schema` and
-      // sqliteQuery's `rowSchema`). The runtime builtin verifies the fetched
-      // JSON against it at fetch time. A type argument is required;
-      // fetchJsonUnchecked is the untyped escape hatch.
-      if (
-        callKind?.kind === "runtime-call" &&
-        callKind.exportName === "fetchJson"
-      ) {
+      // fetchJson<T>({ url, ... }) and policySecretHash<T>({ input }) lower
+      // the T type argument to an injected `schema` property (mirrors
+      // generate-object's `schema` and sqliteQuery's `rowSchema`). The
+      // fetchJson builtin verifies the fetched JSON against it at fetch time;
+      // the policySecretHash builtin reads the module policy its result
+      // belongs to off it. A type argument is required for both;
+      // fetchJsonUnchecked is fetchJson's untyped escape hatch.
+      const typedSchemaCall = callKind?.kind === "runtime-call"
+        ? TYPED_SCHEMA_CALLS.get(callKind.exportName)
+        : undefined;
+      if (typedSchemaCall !== undefined) {
         const factory = transformation.factory;
         const typeArgs = node.typeArguments;
         const args = node.arguments;
@@ -4535,10 +4559,8 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         if (!typeArgs || typeArgs.length !== 1) {
           context.reportDiagnostic({
             severity: "error",
-            type: "fetch-json:missing-type-argument",
-            message: "fetchJson requires an explicit type argument, e.g. " +
-              "fetchJson<MyResult>({ url }). Use fetchJsonUnchecked for JSON " +
-              "whose shape isn't declared as a type.",
+            type: typedSchemaCall.diagnostic,
+            message: typedSchemaCall.message,
             node,
           });
           return ts.visitEachChild(node, visit, transformation);

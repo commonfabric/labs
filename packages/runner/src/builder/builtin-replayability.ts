@@ -32,7 +32,8 @@
  * request and creates a run record after commit), `navigateTo`, `wish`,
  * `sqliteQuery` (server round-trip, like `llm`),
  * `inspectConfLabel` (reads stored label metadata — ambient CFC state that
- * changes independently of the node's inputs), `cellFromUrl` (resolves a
+ * changes independently of the node's inputs), `policySecretHash` (reads a
+ * runtime secret, which it may have to mint first), `cellFromUrl` (resolves a
  * space name against the runtime's cache, which is ambient in the same sense,
  * and is on its way to probing hosts over the network).
  */

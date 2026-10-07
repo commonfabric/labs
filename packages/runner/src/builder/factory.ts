@@ -61,6 +61,7 @@ import {
   llmDialog,
   navigateTo,
   patternTool,
+  policySecretHash,
   sqliteDatabase,
   sqliteQuery,
   str,
@@ -275,6 +276,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     navigateTo,
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
+    policySecretHash,
     currentPrincipal,
     principalOf,
     principalsOf,

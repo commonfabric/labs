@@ -925,6 +925,7 @@ describe("computed cell kinds", () => {
         "wish",
         "sqliteQuery",
         "inspectConfLabel",
+        "policySecretHash",
         "cellFromUrl",
       ]);
 

@@ -29,6 +29,7 @@ import { llmDialog } from "./llm-dialog.ts";
 import { generateObject, generateText, llm } from "./llm.ts";
 import { map } from "./map.ts";
 import { navigateTo } from "./navigate-to.ts";
+import { policySecretHash } from "./policy-secret-hash.ts";
 import { sqliteDatabase, sqliteQuery } from "./sqlite-builtins.ts";
 import { str, STR_ARGUMENT_SCHEMA } from "./str.ts";
 import { streamData } from "./stream-data.ts";
@@ -135,6 +136,9 @@ export function registerBuiltins(runtime: Runtime) {
   // Pure read/derive/write — not an effect; reactivity comes from its
   // journaled input + envelope reads.
   moduleRegistry.addModuleByRef("inspectConfLabel", raw(inspectConfLabel));
+  // Keyed hashes under a module policy's key. A derivation of its input and
+  // of the key, which is ambient runtime state the node may have to mint.
+  moduleRegistry.addModuleByRef("policySecretHash", raw(policySecretHash));
   moduleRegistry.addModuleByRef(
     "wish",
     raw(wish, { debounce: WISH_DEBOUNCE_MS }),

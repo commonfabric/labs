@@ -3832,6 +3832,30 @@ export type FetchJsonUncheckedFunction = (
 ) => Reactive<{ pending: boolean; result: any; error?: any }>;
 
 /**
+ * A keyed hash of the string `input` under the key of the module policy `T`
+ * names: the lowercase hex of HMAC-SHA-256 over the input, the same for every
+ * runtime and every run given the same input.
+ *
+ * `T` is required, and must be a string confidential to exactly one module
+ * policy, `Confidential<string, readonly [PolicyOf<typeof rules>]>`; the
+ * compiler derives a schema from it and injects it as the `schema` parameter,
+ * which is how the runtime learns the policy. The runtime mints the key once
+ * per space and policy, and no code reads it. The result carries the policy's
+ * clause and the input's labels, so only the exchange rules of the policies
+ * those name release anything computed from it. It is `undefined` until the
+ * key is available, and on a runtime that does not enforce CFC or does not
+ * persist flow labels. docs/specs/cfc-policy-secret.md says what this
+ * protects and what it does not.
+ */
+export type PolicySecretHashFunction = <T>(
+  params: FactoryInput<{
+    input: string;
+    schema?: JSONSchema;
+    result?: T;
+  }>,
+) => Reactive<T | undefined>;
+
+/**
  * The cell a URL names, if it names one.
  *
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
@@ -4757,6 +4781,7 @@ export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
 export declare const navigateTo: NavigateToFunction;
 export declare const inspectConfLabel: InspectConfLabelFunction;
+export declare const policySecretHash: PolicySecretHashFunction;
 export declare const wish: WishFunction;
 
 /**

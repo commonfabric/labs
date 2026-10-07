@@ -281,6 +281,16 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
+  // `policySecretHash` gets type-argument schema injection in
+  // schema-injection.ts, like `fetchJson`: the injected `schema` names the
+  // module policy its result belongs to, and the call is a compile error
+  // without a type argument.
+  {
+    exportName: "policySecretHash",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
   // SQLite builtins. `sqliteQuery` additionally gets dedicated type-argument
   // schema injection in schema-injection.ts (lowering `sqliteQuery<Row>` to an
   // injected `rowSchema`); the others are registered so the factory-injected

@@ -19,6 +19,7 @@ import type {
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
+  PolicySecretHashFunction,
   SqliteDatabaseFunction,
   SqliteQueryFunction,
   UIVariantKind,
@@ -188,6 +189,11 @@ export const cellFromUrl = createNodeFactory({
   type: "ref",
   implementation: "cellFromUrl",
 }) as CellFromUrlFunction;
+
+export const policySecretHash = createNodeFactory({
+  type: "ref",
+  implementation: "policySecretHash",
+}) as PolicySecretHashFunction;
 
 export const fetchJsonUnchecked = createNodeFactory({
   type: "ref",
