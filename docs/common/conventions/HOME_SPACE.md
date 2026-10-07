@@ -288,8 +288,10 @@ cf test ./my-home.test.tsx
 cf wish '#default' -i ./my.key -a http://localhost:8000 \
   -s "$(cf id did ./my.key)" --select @
 
-# Update the existing Home in place, retaining the tested source package
-cf piece setsrc -i ./my.key -a http://localhost:8000 --cell <home-root> \
+# Update the existing Home in place, retaining the tested source package. The
+# wish answers with a relative reference, so the Home space is named here too.
+cf piece setsrc -i ./my.key -a http://localhost:8000 \
+  -s "$(cf id did ./my.key)" --cell <home-root> \
   --test ./my-home.test.tsx ./my-home.tsx
 ```
 
@@ -301,10 +303,16 @@ require an explicit migration, rehearsed on a `cf space clone` first.
 
 A Home updated with `setsrc` is detached: it records no origin, so the
 automatic system-source updates pass it by, which is what a custom Home wants.
-A standard Home should instead follow the system source, with
-`cf piece follow --cell <home-root> system:system/home.tsx`, which adopts the
-current system pattern and records the origin for future updates
-(`packages/cli/README.md`, "Following a piece source").
+A standard Home should instead follow the system source, with the same
+identity, host and Home space:
+
+```bash
+cf piece follow -i ./my.key -a http://localhost:8000 \
+  -s "$(cf id did ./my.key)" --cell <home-root> system:system/home.tsx
+```
+
+That adopts the current system pattern and records the origin for future
+updates (`packages/cli/README.md`, "Following a piece source").
 
 ### A Home that will not load
 
@@ -316,13 +324,13 @@ the first step is to say which kind of trouble it is:
    loaded for its compatibility check (the
    [stale source closure](../../development/debugging/gotchas/stale-source-closure-cfhelpers.md)
    gotcha is the common cause). Find the root with the `#default` wish as
-   above. A standard Home rejoins the system source with `cf piece follow
-   --cell <home-root> system:system/home.tsx`, so that it keeps receiving
-   updates; a custom Home takes `cf piece setsrc` with its authored source and
-   tests. When the old source cannot be loaded to compare against, rehearse
-   the repair on a clone of the space (`cf space clone`, then `verify` and
-   `reset`), and only then run the real one with
-   `--dangerously-allow-incompatible-schema`.
+   above. A standard Home rejoins the system source with `cf piece follow`,
+   as above, so that it keeps receiving updates; a custom Home takes
+   `cf piece setsrc` with its authored source and tests, with the same
+   identity, host and Home space. Either command refuses when the old source
+   cannot be loaded to compare against: rehearse the repair on a clone of the
+   space (`cf space clone`, then `verify` and `reset`), and only then run the
+   real one with `--dangerously-allow-incompatible-schema`.
 2. **Storage is refusing every commit** — nothing in the space can be
    written, not only the Home, and the server's own health says so. That is
    not a Home problem; no operation on the root helps, and the fix is on the
@@ -373,7 +381,8 @@ To share identity between browser and CLI:
 deno run -A packages/cli/mod.ts id from-mnemonic -- phrase.txt > ./browser.key
 
 # 3. Update the existing Home in place, retaining the tested source package
-cf piece setsrc -i ./browser.key -a http://localhost:8000 --cell <home-root> \
+cf piece setsrc -i ./browser.key -a http://localhost:8000 \
+  -s "$(cf id did ./browser.key)" --cell <home-root> \
   --test ./my-home.test.tsx ./my-home.tsx
 ```
 
