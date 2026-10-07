@@ -504,12 +504,13 @@ export class PiecesController<T = unknown> {
   async linkDefaultPattern(
     defaultPatternCell: Cell<any>,
   ): Promise<void> {
-    await this.#spaceCell.key("defaultPattern").sync();
-    if (this.#spaceCell.key("defaultPattern").getRaw() !== undefined) {
-      this.#refuseHomeRoot("replace");
-    }
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
+      // Read in the transaction, as the stored pointer: a retry reruns this
+      // against fresh state, and a target that cannot load is still a root.
+      if (spaceCellWithTx.key("defaultPattern").getRaw() !== undefined) {
+        this.#refuseHomeRoot("replace");
+      }
       spaceCellWithTx.key("defaultPattern").set(defaultPatternCell.withTx(tx));
     });
     if (error) {
@@ -1466,6 +1467,9 @@ export class PiecesController<T = unknown> {
         .key("defaultPattern");
       const linked = defaultPatternCell.get();
       if (linked && piece.resolveAsCell().equals(linked.resolveAsCell())) {
+        // Removing a Home's own root from its registry would drop the root
+        // pointer with it; that is the unlink the Home refuses.
+        this.#refuseHomeRoot("unlink");
         defaultPatternCell.set(undefined);
       }
       return true;
@@ -2056,7 +2060,8 @@ export class PiecesController<T = unknown> {
    * destructive recovery, should one ever be needed, is a separate contract
    * (docs/common/conventions/HOME_SPACE.md, "A Home that will not load").
    * `linkDefaultPattern` shares it once a Home holds a root; before that it is
-   * the creation step itself.
+   * the creation step itself. `remove` shares it for a Home's own root, which
+   * a registry may list, since dropping the registry entry drops the pointer.
    */
   #refuseHomeRoot(verb: "recreate" | "replace" | "unlink"): void {
     if (this.getSpace() !== this.runtime.userIdentityDID) return;

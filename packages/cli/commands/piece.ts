@@ -2132,8 +2132,8 @@ export const SET_HOME_RETIRED_END_DATE = "2026-10-21";
  */
 const SET_HOME_RETIREMENT = "A Home is created on its user's first open, " +
   "and its source is changed in place: " +
-  "cf piece setsrc --cell <home-root> ./my-home.tsx " +
-  "(cf piece ls in the Home space names the root). " +
+  "cf piece setsrc --cell <home-root> ./my-home.tsx, where the root is the " +
+  "link cf wish '#default' --select @ answers with in the Home space. " +
   "This spelling stops answering after " + SET_HOME_RETIRED_END_DATE + ".";
 
 /**

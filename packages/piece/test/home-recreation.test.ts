@@ -5,6 +5,8 @@ import { spy } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import { Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { createBuilder } from "../../runner/src/builder/factory.ts";
+import type { Cell } from "../../runner/src/builder/types.ts";
 
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { installCustomRoot } from "./install-custom-root.ts";
@@ -92,6 +94,10 @@ describe("Home root recreation", () => {
     expect(before).toBeDefined();
     await expect(controller.recreateDefaultPattern({ customProgram: program }))
       .rejects.toThrow("Cannot recreate an identity Home root");
+    const other = runtime.getCell(identity.did(), "another-home");
+    await expect(controller.linkDefaultPattern(other)).rejects.toThrow(
+      "Cannot replace an identity Home root",
+    );
     expect(root.getRaw()).toEqual(before);
   });
 
@@ -119,6 +125,83 @@ describe("Home root recreation", () => {
       "Cannot unlink an identity Home root",
     );
     expect(root.getRaw()).toEqual(before);
+  });
+
+  /** A root that lists its pieces in a writable registry, as a custom Home may. */
+  function registryRoot() {
+    const { commonfabric: { handler, pattern } } = createBuilder();
+    const addPiece = handler<
+      { piece: Cell<unknown> },
+      { pieceRegistry: Cell<Cell<unknown>[]> }
+    >(
+      true,
+      {
+        type: "object",
+        properties: { pieceRegistry: { type: "array", asCell: ["cell"] } },
+      },
+      ({ piece }, { pieceRegistry }) => {
+        pieceRegistry.push(piece);
+      },
+    );
+    return pattern<{ pieceRegistry: Cell<unknown>[] }>(
+      ({ pieceRegistry }) => ({
+        pieceRegistry,
+        addPiece: addPiece({ pieceRegistry }),
+      }),
+    );
+  }
+
+  it("refuses to remove a Home's own root from its registry", async () => {
+    // A registry that lists the root makes ordinary piece removal a way to
+    // drop the root pointer, so that removal carries the unlink refusal.
+    const root = await controller.runPersistent(
+      registryRoot(),
+      { pieceRegistry: [] },
+      "registry-home",
+    );
+    await controller.linkDefaultPattern(root);
+    await runtime.idle();
+    await controller.synced();
+    await controller.add([root]);
+    await runtime.idle();
+    await controller.synced();
+    const pointer = controller.getSpaceCellContents().key("defaultPattern");
+    const before = pointer.getRaw();
+    expect(before).toBeDefined();
+    await expect(controller.remove(root)).rejects.toThrow(
+      "Cannot unlink an identity Home root",
+    );
+    expect(pointer.getRaw()).toEqual(before);
+    expect((await controller.getDefaultPattern(false))?.equals(root)).toBe(
+      true,
+    );
+    const registry = await controller.getPieceRegistry();
+    expect(registry.get().some((member) => member.equals(root))).toBe(true);
+  });
+
+  it("still removes a space's own root from its registry when the space is not a Home", async () => {
+    const other = new PiecesController(
+      createSession({ identity, spaceDid: await runtime.createSpace() }),
+      runtime,
+    );
+    try {
+      await other.synced();
+      const root = await other.runPersistent(
+        registryRoot(),
+        { pieceRegistry: [] },
+        "registry-root",
+      );
+      await other.linkDefaultPattern(root);
+      await runtime.idle();
+      await other.synced();
+      await other.add([root]);
+      await runtime.idle();
+      await other.synced();
+      expect(await other.remove(root)).toBe(true);
+      expect(await other.getDefaultPattern(false)).toBeUndefined();
+    } finally {
+      await other.dispose();
+    }
   });
 
   it("still replaces the root of a space that is not a Home", async () => {

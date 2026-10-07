@@ -271,18 +271,22 @@ but that first open creates the root of an identity Home, and nothing replaces
 or unlinks it: root recreation refuses a Home before stopping, unlinking or
 compiling anything, whether the Home is absent, installed, or pointing at a
 target that cannot currently be loaded, and the low-level link and unlink
-refuse to replace or drop a root a Home holds. (`cf space set-home` is retired; see [Retired: `cf space
-set-home`](../../../packages/cli/README.md#retired-cf-space-set-home).)
+refuse to replace or drop a root a Home holds. (`cf space set-home` is
+retired; see
+[Retired: `cf space set-home`](../../../packages/cli/README.md#retired-cf-space-set-home).)
 
 To run custom Home source, open the Home once so it exists, find its root, and
-update the root in place with the complete authored source and its tests:
+update the root in place with the complete authored source and its tests. The
+system Home exports no piece registry, so `cf piece ls` does not list its
+root; the `#default` wish answers with the root's link without starting it:
 
 ```bash
 # Run its automated pattern test
 cf test ./my-home.test.tsx
 
-# The Home space is the identity's DID; its root is the piece the list names
-cf piece ls -i ./my.key -a http://localhost:8000 -s "$(cf id did ./my.key)"
+# The Home space is the identity's DID; the root is the link the wish answers
+cf wish '#default' -i ./my.key -a http://localhost:8000 \
+  -s "$(cf id did ./my.key)" --select @
 
 # Update the existing Home in place, retaining the tested source package
 cf piece setsrc -i ./my.key -a http://localhost:8000 --cell <home-root> \
@@ -295,19 +299,30 @@ the tests but does not run them, so run each entry with `cf test` first.
 Compatible source changes retain the Home's owned cells; incompatible changes
 require an explicit migration, rehearsed on a `cf space clone` first.
 
+A Home updated with `setsrc` is detached: it records no origin, so the
+automatic system-source updates pass it by, which is what a custom Home wants.
+A standard Home should instead follow the system source, with
+`cf piece follow --cell <home-root> system:system/home.tsx`, which adopts the
+current system pattern and records the origin for future updates
+(`packages/cli/README.md`, "Following a piece source").
+
 ### A Home that will not load
 
 There is no supported reset. A Home that misbehaves is repaired in place, and
 the first step is to say which kind of trouble it is:
 
 1. **The root's source will not load** — the browser shows the Home failing
-   to start, or `cf piece setsrc` reports that the stored source cannot be
+   to start, or the in-place update reports that the stored source cannot be
    loaded for its compatibility check (the
    [stale source closure](../../development/debugging/gotchas/stale-source-closure-cfhelpers.md)
-   gotcha is the common cause). Update the root in place as above. When the
-   old source cannot be loaded to compare against, rehearse the update on a
-   clone of the space (`cf space clone`, then `verify` and `reset`), and only
-   then run the real one with `--dangerously-allow-incompatible-schema`.
+   gotcha is the common cause). Find the root with the `#default` wish as
+   above. A standard Home rejoins the system source with `cf piece follow
+   --cell <home-root> system:system/home.tsx`, so that it keeps receiving
+   updates; a custom Home takes `cf piece setsrc` with its authored source and
+   tests. When the old source cannot be loaded to compare against, rehearse
+   the repair on a clone of the space (`cf space clone`, then `verify` and
+   `reset`), and only then run the real one with
+   `--dangerously-allow-incompatible-schema`.
 2. **Storage is refusing every commit** — nothing in the space can be
    written, not only the Home, and the server's own health says so. That is
    not a Home problem; no operation on the root helps, and the fix is on the
