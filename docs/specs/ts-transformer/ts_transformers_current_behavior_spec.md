@@ -867,16 +867,22 @@ not known, and declares nothing. So these are declared:
   type, or the return type of a signature that names no type parameter
 - a member read through its own declaration, when that declaration writes its
   type without naming a type parameter
+- a field of a class instance, when the class's declaration of the field
+  writes its type, as a property, a parameter property, or a getter's return
+  type; a type naming the class's type parameter counts only when the
+  construction writes its type arguments
 - another pattern's result, which passed this check in its own compile; a
-  cell; a class instance; a literal, a function, or JSX
+  cell; a literal, a function, or JSX
 
 The trace follows a local's initializer, the elements of an array literal, the
 properties and spreads of an object literal, and the callback of `computed()`,
 a lift, and an array's `map()`, `filter()`, `slice()`, `toSorted()`,
 `toReversed()`, `find()`, `findLast()` and `at()`, each callback's parameter
 bound to the value it is called with. A callback is written in place or named,
-as a function declaration or a binding initialized with one, and a lift may be
-held in a binding and applied by its name. Nothing else is declared: an untyped
+and a lift may be held in a binding and applied by its name. A name is followed
+through the bindings nothing writes, to a function declaration or to what a
+binding was initialized with; a callback or a lift read from an object, as a
+member or by destructuring, is not followed. Nothing else is declared: an untyped
 `wish()`, `generateObject()` or `generateText()`, whose type argument is
 inferred; another generic call with no type argument written; a helper whose
 written return type is `unknown`; `x as unknown` and a tuple of `unknown`. A
@@ -899,11 +905,13 @@ A binding's traced positions are those of its initializer, so they hold only
 while nothing writes to it. A binding with no type written that is reassigned,
 or written through — a property or index assignment, `push()`, `unshift()`,
 `splice()`, `fill()`, `set()` or `add()`, `Object.assign()`,
-`Object.defineProperty()` or `Object.defineProperties()`, `delete`, `++` or
-`--` — declares nothing, and a write through a binding initialized with
-another, or with a path through one, counts against that other binding too. A
-binding whose type is written keeps its declared positions, since every write
-must satisfy that type.
+`Object.defineProperty()` or `Object.defineProperties()`, a destructuring
+assignment, a `for…of` or `for…in` loop onto it, `++` or `--` — declares
+nothing, and a write through a binding initialized with another, or with a
+path through one, counts against that other binding too. A `delete` only takes
+a part away, which leaves nothing undeclared, so it is not a write. A binding
+whose type is written keeps its declared positions, since every write must
+satisfy that type.
 
 ### 6.7 Lowerable Expression-Site Categories
 

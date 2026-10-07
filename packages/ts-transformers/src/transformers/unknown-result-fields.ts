@@ -334,8 +334,9 @@ function expressionPositions(
   if (ts.isTaggedTemplateExpression(expression)) {
     return signaturePositions(expression, scope);
   }
-  // A class declares the fields of its instances.
-  if (ts.isNewExpression(expression)) return true;
+  if (ts.isNewExpression(expression)) {
+    return instancePositions(expression, scope);
+  }
   return false;
 }
 
@@ -474,8 +475,7 @@ function destructuredPositions(
 /**
  * The declared positions of member `key` of a value with `object`, read
  * through `name`, the node naming the member. A member of a value with nothing
- * declared is still declared when its own declaration writes its type out
- * without naming a type parameter, whose argument may have been inferred.
+ * declared is still declared when its own declaration writes its type out.
  */
 function memberPositions(
   object: DeclaredPositions,
@@ -484,14 +484,58 @@ function memberPositions(
   scope: TraceScope,
 ): DeclaredPositions {
   if (object !== false) return below(object, key);
+  return writesOwnType(
+    scope.checker.getSymbolAtLocation(name),
+    false,
+    scope.checker,
+  );
+}
+
+/**
+ * The declared positions of the instance `construction` makes, by field. A
+ * class declares a field of its instances when the field's declaration writes
+ * its type out; a field whose type is inferred from its initializer declares
+ * nothing.
+ */
+function instancePositions(
+  construction: ts.NewExpression,
+  scope: TraceScope,
+): DeclaredPositions {
   const { checker } = scope;
-  const symbol = checker.getSymbolAtLocation(name);
-  const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
-  return !!declaration &&
-    (ts.isPropertySignature(declaration) ||
-      ts.isPropertyDeclaration(declaration)) &&
-    !!declaration.type &&
-    !mentionsTypeParameter(declaration.type, checker);
+  const typeArgumentsWritten = !!construction.typeArguments?.length;
+  const positions = new Map<string, DeclaredPositions>();
+  for (
+    const member of checker.getTypeAtLocation(construction).getProperties()
+  ) {
+    positions.set(
+      member.name,
+      writesOwnType(member, typeArgumentsWritten, checker),
+    );
+  }
+  return positions;
+}
+
+/**
+ * Whether the declaration of `member` writes its type out: a property's type,
+ * a parameter property's, or a getter's return type. A type naming a type
+ * parameter counts only when `typeArgumentsWritten`, since otherwise the
+ * parameter's argument may have been inferred.
+ */
+function writesOwnType(
+  member: ts.Symbol | undefined,
+  typeArgumentsWritten: boolean,
+  checker: ts.TypeChecker,
+): boolean {
+  const declaration = member?.valueDeclaration ?? member?.declarations?.[0];
+  const type = declaration &&
+      (ts.isPropertySignature(declaration) ||
+        ts.isPropertyDeclaration(declaration) ||
+        ts.isParameter(declaration) ||
+        ts.isGetAccessorDeclaration(declaration))
+    ? declaration.type
+    : undefined;
+  return !!type &&
+    (typeArgumentsWritten || !mentionsTypeParameter(type, checker));
 }
 
 /**
@@ -633,31 +677,54 @@ function liftPositions(
   );
 }
 
-/**
- * The call that makes the lift `callee` names, when `callee` is a binding
- * initialized with one.
- */
+/** The call that makes the lift `callee` denotes, as `definitionOf()` reads it. */
 function liftFactoryCall(
   callee: ts.Expression,
   scope: TraceScope,
 ): ts.CallExpression | undefined {
-  const target = unwrapCallee(callee);
-  if (!ts.isIdentifier(target)) return undefined;
-  const symbol = scope.checker.getSymbolAtLocation(target);
-  const resolved = symbol && resolveAlias(symbol, scope.checker);
-  const declaration = resolved?.valueDeclaration;
-  if (
-    !resolved || !declaration || !ts.isVariableDeclaration(declaration) ||
-    !declaration.initializer || scope.written.has(resolved)
-  ) {
-    return undefined;
-  }
-  const initializer = unwrapCallee(declaration.initializer);
-  if (!ts.isCallExpression(initializer)) return undefined;
-  const kind = detectCallKind(initializer, scope.checker);
+  const definition = definitionOf(callee, scope);
+  if (!definition || !ts.isCallExpression(definition)) return undefined;
+  const kind = detectCallKind(definition, scope.checker);
   return kind?.kind === "builder" && kind.builderName === "lift"
-    ? initializer
+    ? definition
     : undefined;
+}
+
+/**
+ * What `expression` denotes, read through the names it is spelled with: the
+ * function a name declares, or what a binding nothing writes was initialized
+ * with, read in turn. A name the trace cannot follow, or one it reaches a
+ * second time, denotes nothing.
+ */
+function definitionOf(
+  expression: ts.Expression,
+  scope: TraceScope,
+): ts.Node | undefined {
+  const followed = new Set<ts.Symbol>();
+  let current = unwrapCallee(expression);
+  while (ts.isIdentifier(current)) {
+    const symbol = scope.checker.getSymbolAtLocation(current);
+    const resolved = symbol && resolveAlias(symbol, scope.checker);
+    if (!resolved || followed.has(resolved) || scope.written.has(resolved)) {
+      return undefined;
+    }
+    followed.add(resolved);
+    const declaration = resolved.valueDeclaration ??
+      resolved.declarations?.find((candidate) =>
+        ts.isFunctionDeclaration(candidate) && candidate.body !== undefined
+      );
+    if (declaration && ts.isFunctionDeclaration(declaration)) {
+      return declaration;
+    }
+    if (
+      !declaration || !ts.isVariableDeclaration(declaration) ||
+      !declaration.initializer
+    ) {
+      return undefined;
+    }
+    current = unwrapCallee(declaration.initializer);
+  }
+  return current;
 }
 
 /** `expression` without parentheses, casts, and non-null assertions. */
@@ -695,32 +762,20 @@ function argumentPositions(
 }
 
 /**
- * The function `expression` denotes: written in place, or named, as a
- * function declaration or a binding initialized with one.
+ * The function `expression` denotes, as `definitionOf()` reads it: written in
+ * place, or named, as a function declaration or a binding initialized with
+ * one.
  */
 function resolveCallback(
   expression: ts.Expression | undefined,
   scope: TraceScope,
 ): ts.SignatureDeclaration | undefined {
-  if (!expression) return undefined;
-  const target = unwrapCallee(expression);
-  if (ts.isArrowFunction(target) || ts.isFunctionExpression(target)) {
-    return target;
-  }
-  if (!ts.isIdentifier(target)) return undefined;
-  const symbol = scope.checker.getSymbolAtLocation(target);
-  if (!symbol) return undefined;
-  const resolved = resolveAlias(symbol, scope.checker);
-  const declaration = resolved.valueDeclaration ??
-    resolved.declarations?.find((candidate) =>
-      ts.isFunctionDeclaration(candidate) && candidate.body !== undefined
-    );
-  if (declaration && ts.isFunctionDeclaration(declaration)) {
-    return declaration;
-  }
-  return declaration && ts.isVariableDeclaration(declaration) &&
-      declaration.initializer && !scope.written.has(resolved)
-    ? resolveCallback(declaration.initializer, scope)
+  const definition = expression && definitionOf(expression, scope);
+  return definition &&
+      (ts.isArrowFunction(definition) ||
+        ts.isFunctionExpression(definition) ||
+        ts.isFunctionDeclaration(definition))
+    ? definition
     : undefined;
 }
 
@@ -873,11 +928,12 @@ const writtenSymbolsCache = new WeakMap<
 /**
  * The bindings in `sourceFile` that are reassigned, or whose value is changed
  * through them: an assignment to a binding or through it, an increment, a
- * `delete`, a method that adds to an array, a map, or a set, or an `Object`
- * function writing into it. A binding initialized with another binding, or
- * with a path through one, passes a change made through it on to that other
- * binding, since the two hold the same value. A write through any other path,
- * such as a value passed to a function, is not followed.
+ * method that adds to an array, a map, or a set, or an `Object` function
+ * writing into it. A `delete` only takes a part away, which leaves nothing
+ * undeclared, so it is not a write here. A binding initialized with another
+ * binding, or with a path through one, passes a change made through it on to
+ * that other binding, since the two hold the same value. A write through any
+ * other path, such as a value passed to a function, is not followed.
  */
 function writtenSymbols(
   sourceFile: ts.SourceFile,
@@ -911,7 +967,9 @@ function writtenSymbols(
     if (ts.isObjectLiteralExpression(unwrapped)) {
       for (const property of unwrapped.properties) {
         if (ts.isShorthandPropertyAssignment(property)) {
-          assignTo(property.name);
+          // The name a shorthand writes is the binding's, not a property's.
+          const symbol = checker.getShorthandAssignmentValueSymbol(property);
+          if (symbol) reassigned.add(resolveAlias(symbol, checker));
         } else if (ts.isPropertyAssignment(property)) {
           assignTo(property.initializer);
         } else if (ts.isSpreadAssignment(property)) {
@@ -943,9 +1001,6 @@ function writtenSymbols(
         node.operator === ts.SyntaxKind.MinusMinusToken)
     ) {
       assignTo(node.operand);
-    } else if (ts.isDeleteExpression(node)) {
-      const symbol = rootOf(node.expression);
-      if (symbol) changed.add(symbol);
     } else if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
       !ts.isVariableDeclarationList(node.initializer)

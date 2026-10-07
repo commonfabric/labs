@@ -33,11 +33,12 @@ function diagnosticsFor(
 
 /**
  * The paths each `pattern-result:unknown-type` names for a compiled module
- * importing `computed`, `lift`, `pattern`, `str`, and `wish`.
+ * importing `computed`, `lift`, `pattern`, `str`, `unless`, `when`, and
+ * `wish`.
  */
 async function reportedPaths(body: string): Promise<string[][]> {
   const { diagnostics } = await validateSource(
-    `import { computed, lift, pattern, str, wish } from "commonfabric";\n${body}`,
+    `import { computed, lift, pattern, str, unless, when, wish } from "commonfabric";\n${body}`,
     { types: COMMONFABRIC_TYPES },
   );
   return diagnostics
@@ -393,6 +394,61 @@ export default pattern<{ xs: number[] }>(({ xs }) => ({
       ).toEqual([]);
     });
 
+    it("reports nothing for a callback or a lift named through an alias", async () => {
+      expect(
+        await reportedPaths(`interface Note { ref: unknown }
+function toNote(): Note { return { ref: 1 }; }
+const getNote = lift((n: number): Note => ({ ref: n }));
+const callbackAlias = toNote;
+const liftAlias = getNote;
+export default pattern(() => ({
+  note: computed(callbackAlias),
+  lifted: liftAlias(1),
+}));`),
+      ).toEqual([]);
+    });
+
+    it("reports a callback reassigned after its declaration, and a callback or a lift read from an object", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+interface Note { ref: unknown }
+let toNote = (): Note => ({ ref: 1 });
+toNote = () => ({ ref: op() });
+const lifts = { getNote: lift((n: number): Note => ({ ref: n })) };
+const { getNote: picked } = lifts;
+const { toNote: pickedCallback } = { toNote: (): Note => ({ ref: 1 }) };
+export default pattern(() => ({
+  written: computed(toNote),
+  member: lifts.getNote(1),
+  destructured: picked(1),
+  destructuredCallback: computed(pickedCallback),
+}));`),
+      ).toEqual([[
+        "written.ref",
+        "member.ref",
+        "destructured.ref",
+        "destructuredCallback.ref",
+      ]]);
+    });
+
+    it("returns from tracing a callback that maps itself", async () => {
+      expect(
+        await reportedPaths(`interface Tree { kids: Tree[] }
+function walk(tree: Tree) { return { kids: tree.kids.map(walk) }; }
+export default pattern<{ tree: Tree }>(({ tree }) => ({
+  walked: computed(() => tree.kids.map(walk)),
+}));`),
+      ).toEqual([]);
+    });
+
+    it("reports a callback named only through names that name each other", async () => {
+      expect(
+        await reportedPaths(`var first = second;
+var second = first;
+export default pattern(() => ({ note: computed(first) }));`),
+      ).toEqual([["note"]]);
+    });
+
     it("reports nothing for a declared field only one arm of a conditional has", async () => {
       expect(
         await reportedPaths(`interface Note { ref: unknown }
@@ -421,6 +477,49 @@ export default pattern(() => ({
       ).toEqual([["result.x", "result.p.x", "result.xs[]"]]);
     });
 
+    it("reports a value a destructuring assignment or a `for…of` loop writes into a local", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref: unknown } { return { ref: 1 }; }
+export default pattern(() => ({
+  result: computed(() => {
+    let a = note().ref;
+    let b = note().ref;
+    let o = { ref: note().ref };
+    let c = note().ref;
+    let rest = [note().ref];
+    let { ref: d } = note();
+    ({ a, x: b, ...o } = { a: op(), x: op(), ref: op() });
+    [c, ...rest] = [op(), op()];
+    for (d of [op()]) void d;
+    return { a, b, o, c, rest, d };
+  }),
+}));`),
+      ).toEqual([[
+        "result.a",
+        "result.b",
+        "result.o.ref",
+        "result.c",
+        "result.rest[]",
+        "result.d",
+      ]]);
+    });
+
+    it("reports nothing for a declared value a `delete` takes a part from", async () => {
+      expect(
+        await reportedPaths(
+          `function note(): { ref: unknown; extra?: number } { return { ref: 1 }; }
+export default pattern(() => ({
+  result: computed(() => {
+    const p = { ...note() };
+    delete p.extra;
+    return p;
+  }),
+}));`,
+        ),
+      ).toEqual([]);
+    });
+
     it("reports a destructuring default that is undeclared", async () => {
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
@@ -432,6 +531,92 @@ export default pattern(() => ({
   }),
 }));`),
       ).toEqual([["result.x", "result.y"]]);
+    });
+
+    it("reports a nested destructuring default that is undeclared, and nothing for a declared field at any depth or past a hole", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref: unknown } { return { ref: 1 }; }
+export default pattern<{ pairs: [number, unknown][] }>(({ pairs }) => ({
+  seconds: pairs.map(([, second]) => second),
+  result: computed(() => {
+    const { inner: { ref } } = { inner: note() };
+    const { outer: { v } = { v: op() } } = { outer: { v: note().ref } };
+    return { ref, v };
+  }),
+}));`),
+      ).toEqual([["result.v"]]);
+    });
+
+    it("reports an element or a member read by a key that leads to an undeclared value or that it cannot name", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref: unknown } { return { ref: 1 }; }
+export default pattern<{ k: "a" | "b" }>(({ k }) => ({
+  result: computed(() => {
+    const refs = [note().ref];
+    const byKey = { a: note().ref, b: op() };
+    return {
+      first: refs[0],
+      named: byKey["a"],
+      other: byKey["b"],
+      dynamic: byKey[k],
+    };
+  }),
+}));`),
+      ).toEqual([["result.other", "result.dynamic"]]);
+    });
+
+    it("reports an arm of `when()` or `unless()` that is undeclared", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref: unknown } { return { ref: 1 }; }
+export default pattern<{ flag: boolean }>(({ flag }) => ({
+  declared: when(flag, note().ref),
+  undeclared: unless(flag, op()),
+  undeclaredCondition: when(op(), note().ref),
+}));`),
+      ).toEqual([["undeclared", "undeclaredCondition"]]);
+    });
+
+    it("reports a class field whose type is inferred, and nothing for one whose type is written", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+class Inferred { ref = op(); count = 1; }
+class Written {
+  ref: unknown = 1;
+  constructor(public held: unknown) {}
+}
+class Box<T> { constructor(public value: T) {} }
+export default pattern(() => ({
+  inferred: new Inferred(),
+  written: new Written(2),
+  boxed: new Box(op()),
+  typed: new Box<unknown>(op()),
+}));`),
+      ).toEqual([["inferred.ref", "boxed.value"]]);
+    });
+
+    it("reports nothing for a value of a recursive type written out", async () => {
+      expect(
+        await reportedPaths(`type Tree = { ref: unknown } | Tree[];
+function tree(): Tree { return [{ ref: 1 }]; }
+export default pattern(() => ({ tree: tree() }));`),
+      ).toEqual([]);
+    });
+
+    it("reports a caught error", async () => {
+      expect(
+        await reportedPaths(`export default pattern(() => ({
+  result: computed(() => {
+    try {
+      return { error: undefined };
+    } catch (error) {
+      return { error };
+    }
+  }),
+}));`),
+      ).toEqual([["result.error"]]);
     });
 
     it("reports an undeclared field an optional spread member may not replace", async () => {
