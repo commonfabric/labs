@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
+import { collectionKeyBucket } from "../../src/builtins/collection-index-key.ts";
 import type { MaintainedCollectionIndex } from "../../src/builtins/collection-index-membership.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
@@ -118,24 +119,41 @@ describe("collection-index-label-fanout", () => {
           );
         const index = result.key("index").resolveAsCell();
         const indexId = index.getAsNormalizedFullLink().id;
-        const stamps = () => {
+        type Stamp = { path: string[]; label: { confidentiality?: unknown[] } };
+        /** The label-map entries the member writes have left on the index document. */
+        const stamps = (): Stamp[] => {
           const replica = (storage.open(space) as unknown as {
             replica: {
               getDocument(
                 id: string,
-              ): { cfc?: { labelMap?: { entries: unknown[] } } } | undefined;
+              ): { cfc?: { labelMap?: { entries: Stamp[] } } } | undefined;
             };
           }).replica;
-          return replica.getDocument(indexId)?.cfc?.labelMap?.entries.length ??
-            0;
+          return replica.getDocument(indexId)?.cfc?.labelMap?.entries ?? [];
+        };
+        /** Every stamp on `label`'s bucket carries the source row's secret. */
+        const expectBucketKeepsSecret = (label: string) => {
+          const bucket = collectionKeyBucket({ kind: "string", value: label });
+          const onBucket = stamps().filter((stamp) =>
+            stamp.path[0] === "buckets" && stamp.path[1] === bucket
+          );
+          expect(onBucket.length).toBeGreaterThan(0);
+          for (const stamp of onBucket) {
+            expect(stamp.label.confidentiality).toContain("row-secret");
+          }
         };
         const before = memberRuns();
         expect(before.size).toBe(3);
         // The fixture is only a reproduction when the writes stamp the index.
-        expect(stamps()).toBeGreaterThan(0);
+        expect(stamps().length).toBeGreaterThan(0);
         await addRow("row-3", "d");
         await addRow("row-4", "e");
-        expect(stamps()).toBeGreaterThan(0);
+        // The machinery-read scope changes scheduling only: the stamps the
+        // members leave still carry the source rows' labels, on the buckets
+        // present before the additions and on the ones they created.
+        for (const label of ["a", "b", "c", "d", "e"]) {
+          expectBucketKeepsSecret(label);
+        }
         const after = memberRuns();
         expect(after.size).toBe(5);
         // The three original members did not run again; the two new members
