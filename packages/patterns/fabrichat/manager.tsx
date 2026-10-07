@@ -40,24 +40,23 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import {
-  OFFER_TITLE_MAX_LENGTH,
-  type PrivateInboxOutput,
-} from "../system/private-inbox.tsx";
-import type { ShareInboxPiece } from "../system/profile-home.tsx";
 import FabriChatRoom from "./room.tsx";
 import {
   type AboutRecord,
   CHAT_ROOM_OFFER_KIND,
+  CHAT_ROOM_OFFER_TITLE_MAX_LENGTH,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatDisplay,
+  type ChatInbox,
+  type ChatInboxPiece,
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatManagerProfile,
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
+  type ChatRoomOffer,
   epochNsecFromMsec,
   type ManagerProfileCell,
   nsecOf,
@@ -267,8 +266,8 @@ const lists = (rooms: RoomsCell, room: Cell<ChatRoomLink>): boolean =>
  * `receive` takes an offer. The pointer is typed as a link naming the piece
  * alone, and a link's target is reached as a cell.
  */
-function inboxOf(pointer: Cell<ShareInboxPiece>): Cell<PrivateInboxOutput>;
-function inboxOf(pointer: Cell<ShareInboxPiece>): unknown {
+function inboxOf(pointer: Cell<ChatInboxPiece>): Cell<ChatInbox>;
+function inboxOf(pointer: Cell<ChatInboxPiece>): unknown {
   return pointer;
 }
 
@@ -307,13 +306,13 @@ const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
     const from = currentPrincipal();
     if (!isWellFormedDID(space) || from === undefined) return;
     const origin = new URL(getPatternEnvironment().apiUrl).origin;
-    const offer = {
+    const offer: ChatRoomOffer = {
       kind: CHAT_ROOM_OFFER_KIND,
       id: event.id,
       space,
       host: origin,
       ownerOrigin: origin,
-      title: (event.title ?? "").slice(0, OFFER_TITLE_MAX_LENGTH),
+      title: (event.title ?? "").slice(0, CHAT_ROOM_OFFER_TITLE_MAX_LENGTH),
       from,
       sharedAt: Date.now(),
     };

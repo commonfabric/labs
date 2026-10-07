@@ -322,6 +322,23 @@
         ],
         "type": "object"
       },
+      "ChatInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatInboxPointer": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ChatInboxPiece",
+            "description": "The person's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
       "ChatIndexEntry": {
         "properties": {
           "counterpart": {
@@ -377,8 +394,8 @@
             "type": "string"
           },
           "inbox": {
-            "$ref": "#/$defs/ProfileInbox",
-            "description": "Where the person's offers are delivered: a link to their share inbox,\nabsent while they have none."
+            "$ref": "#/$defs/ChatInboxPointer",
+            "description": "Where the person's offers are delivered."
           },
           "name": {
             "description": "The person's display name, if they have set one.",
@@ -686,23 +703,6 @@
           },
           "title": {
             "description": "A new group room's title.",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "ProfileInbox": {
-        "properties": {
-          "piece": {
-            "$ref": "#/$defs/ShareInboxPiece",
-            "description": "The owner's share inbox piece."
-          }
-        },
-        "type": "object"
-      },
-      "ShareInboxPiece": {
-        "properties": {
-          "$NAME": {
             "type": "string"
           }
         },

@@ -21,7 +21,6 @@ import {
   Writable,
 } from "commonfabric";
 import PrivateInbox, { type Offer } from "../system/private-inbox.tsx";
-import type { ShareInboxPiece } from "../system/profile-home.tsx";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
   type ActivityCounters,
@@ -38,6 +37,7 @@ import {
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
+  type ChatInboxPiece,
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatManagerProfile,
@@ -81,7 +81,7 @@ interface ProfileWriteState {
   name: string;
 
   /** The inbox the profile points at, if any. */
-  inbox?: Cell<ShareInboxPiece>;
+  inbox?: Cell<ChatInboxPiece>;
 }
 
 /** Writes the acting person's own profile, under `name`. */
@@ -97,7 +97,7 @@ const writeOwnProfile = handler<unknown, ProfileWriteState>((
 });
 
 /** An inbox's result, as the link a profile holds. */
-function inboxLinkOf(inbox: unknown): Cell<ShareInboxPiece>;
+function inboxLinkOf(inbox: unknown): Cell<ChatInboxPiece>;
 function inboxLinkOf(inbox: unknown): unknown {
   return inbox;
 }

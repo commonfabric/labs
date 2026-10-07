@@ -7,8 +7,9 @@
  * link, the pointer joins no confidentiality. Every reader, the host vetting
  * the inbox a profile advertises, Home's ensure step, both the profiles'
  * pointers and the inbox the host names for it to adopt, Home's pointing step,
- * the seed step that points a profile once it is created, and a sender reading
- * through `profile-home.tsx`'s own types, therefore reads it as a typed link.
+ * the seed step that points a profile once it is created, a sender reading
+ * through `profile-home.tsx`'s own types, and FabriChat's manager offering a
+ * room, therefore reads it as a typed link.
  *
  * The check is made by the type checker. A pointee that is `unknown` or `any`
  * fails to compile here under `deno task check`, and so does one naming a
@@ -23,6 +24,7 @@ import { expect } from "@std/expect";
 import type { Cell, NAME } from "commonfabric";
 import type { inboxPieceLinkSchema } from "@commonfabric/piece/ops";
 import type { Schema } from "@commonfabric/runner";
+import type { ChatManagerProfile } from "../fabrichat/schemas.tsx";
 import type {
   advertisedInbox,
   EnsurePrivateInboxEvent,
@@ -78,6 +80,10 @@ const seedStepReachesOnlyTheName: ReachesOnlyTheName<
   PointeeOf<NonNullable<SeedProfileTarget["inbox"]>>
 > = true;
 
+const fabriChatManagerReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<NonNullable<ChatManagerProfile["inbox"]>>
+> = true;
+
 describe("private-inbox pointer type", () => {
   it("types the host's pointer as a link naming only the inbox's name", () => {
     expect(hostReachesOnlyTheName).toBe(true);
@@ -101,5 +107,9 @@ describe("private-inbox pointer type", () => {
 
   it("types the seed step's pointer as a link naming only the inbox's name", () => {
     expect(seedStepReachesOnlyTheName).toBe(true);
+  });
+
+  it("types FabriChat's manager's pointer as a link naming only the inbox's name", () => {
+    expect(fabriChatManagerReachesOnlyTheName).toBe(true);
   });
 });
