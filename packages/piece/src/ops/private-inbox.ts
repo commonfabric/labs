@@ -30,7 +30,13 @@ export type InboxAdoptionRefusal =
   | "inbox-offers-invalid"
   | "inbox-receive-missing";
 
-/** What {@link ensurePrivateInboxOf} found, and so what it sent. */
+/**
+ * What {@link ensurePrivateInboxOf} found, and so what it sent: `held` when
+ * Home keeps the inbox it holds, a profile advertising it or none advertising
+ * any; `none-advertised` when Home holds none and no profile advertises one;
+ * `adopt` when the advertised inbox passed vetting; `refused` when it failed,
+ * for `reason`.
+ */
 export type PrivateInboxEnsure =
   | { outcome: "unavailable" }
   | { outcome: "held" }
@@ -67,11 +73,12 @@ const pointerSchema = {
  * its `privateInbox`, `profiles` and `ensurePrivateInbox` are read and sent as
  * Home's are, and `identity` is the identity it belongs to.
  *
- * The event names the inbox to adopt when Home holds none and the advertised
- * inbox passes every check, and names none otherwise. Given none, Home creates
- * an inbox only when no profile advertises one, so an advertised inbox that
- * fails a check is neither adopted nor replaced; that refusal is logged as a
- * warning. A Home without the stream is left as it is.
+ * The event names the inbox to adopt when the advertised inbox passes every
+ * check and Home holds none, or holds one that no profile advertises; it names
+ * none otherwise. Given none, Home creates an inbox only when it holds none and
+ * no profile advertises one, so an advertised inbox that fails a check is
+ * neither adopted nor replaced; that refusal is logged as a warning. A Home
+ * without the stream is left as it is.
  *
  * Resolves once the event is sent, which is before Home's handler runs.
  */
@@ -94,35 +101,57 @@ export async function ensurePrivateInboxOf(
 }
 
 /**
- * Decides which inbox, if any, `home` adopts: none when Home holds one or no
- * profile advertises one, and otherwise the inbox the first profile in Home's
- * list that points at one points at, if it passes every check. A profile whose
- * stored pointer is not an object holding a link advertises nothing.
+ * Decides which inbox, if any, `home` adopts. Home keeps an inbox it holds
+ * while some profile in its list advertises that inbox, or while no profile
+ * advertises one. Otherwise the inbox to vet is the one the first profile in
+ * the list that points at an inbox points at, adopted if it passes every
+ * check. A profile whose stored pointer is not an object holding a link
+ * advertises nothing.
  */
 async function vetAdvertisedInbox(
   runtime: Runtime,
   home: Cell<unknown>,
   identity: DID,
 ): Promise<Exclude<PrivateInboxEnsure, { outcome: "unavailable" }>> {
-  if (await storedPointer(home.key("privateInbox")) !== undefined) {
-    return { outcome: "held" };
-  }
+  const held = await storedPointer(home.key("privateInbox"));
   const profiles = await home.key("profiles").asSchema(profilesSchema).pull();
+  let first: { piece: Cell<unknown>; profile: Cell<unknown> } | undefined;
   for (const profile of Array.isArray(profiles) ? profiles : []) {
     if (!isCell(profile)) continue;
     const piece = await storedPointer(profile.key("inbox"));
     if (piece === undefined) continue;
-    const inbox = piece.resolveAsCell();
-    const reason = await refusalOf(runtime, inbox, {
-      home: home.space,
-      profile: profile.resolveAsCell().space,
-      identity,
-    });
-    return reason === undefined
-      ? { outcome: "adopt", inbox }
-      : { outcome: "refused", reason, inbox };
+    if (held !== undefined && await isSameDocument(piece, held)) {
+      return { outcome: "held" };
+    }
+    first ??= { piece, profile };
+    // Only a held inbox needs every profile read, to learn whether any of
+    // them advertises it.
+    if (held === undefined) break;
   }
-  return { outcome: "none-advertised" };
+  if (first === undefined) {
+    return { outcome: held === undefined ? "none-advertised" : "held" };
+  }
+  const inbox = first.piece.resolveAsCell();
+  const reason = await refusalOf(runtime, inbox, {
+    home: home.space,
+    profile: first.profile.resolveAsCell().space,
+    identity,
+  });
+  return reason === undefined
+    ? { outcome: "adopt", inbox }
+    : { outcome: "refused", reason, inbox };
+}
+
+/**
+ * Whether links `a` and `b` reach one document, as Home's handler compares
+ * them, once the documents they name have loaded.
+ */
+async function isSameDocument(
+  a: Cell<unknown>,
+  b: Cell<unknown>,
+): Promise<boolean> {
+  await Promise.all([a.sync(), b.sync()]);
+  return a.equals(b);
 }
 
 /**

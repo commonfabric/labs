@@ -243,17 +243,93 @@ describe("ensurePrivateInboxOf()", () => {
     expect(await home.key("ensured" as never).pull()).toBe(1);
   });
 
-  it("names no inbox when Home holds one, and vets nothing", async () => {
-    const held = await usableInbox();
-    await runtime.editWithRetry((tx) =>
-      home.withTx(tx).key("privateInbox" as never).set({ piece: held } as never)
-    );
-    await listProfiles([await profilePointingAt(await usableInbox())]);
+  describe("when Home holds an inbox", () => {
+    /** Has Home hold `inbox` as its private inbox. */
+    async function hold(inbox: Cell<unknown>): Promise<void> {
+      await runtime.editWithRetry((tx) =>
+        home.withTx(tx).key("privateInbox" as never).set(
+          { piece: inbox } as never,
+        )
+      );
+    }
 
-    const result = await ensure();
+    it("names no inbox when a profile advertises the held one, though an earlier profile advertises another", async () => {
+      const held = await usableInbox();
+      await hold(held);
+      await listProfiles([
+        await profilePointingAt(await usableInbox()),
+        await profilePointingAt(held),
+      ]);
 
-    expect(result).toEqual({ outcome: "held" });
-    expect(await adopted()).toBeUndefined();
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "held" });
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names no inbox when a profile advertises the held one through another link to it", async () => {
+      const held = await usableInbox();
+      await hold(await documentIn(identity.did(), held));
+      await listProfiles([
+        await profilePointingAt(await usableInbox()),
+        await profilePointingAt(held),
+      ]);
+
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "held" });
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names no inbox when no profile advertises one", async () => {
+      await hold(await usableInbox());
+      await listProfiles([await profilePointingAt(undefined)]);
+
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "held" });
+      expect(await adopted()).toBeUndefined();
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+    });
+
+    it("names the inbox the first advertising profile points at when no profile advertises the held one", async () => {
+      await hold(await usableInbox());
+      const first = await usableInbox();
+      await listProfiles([
+        await profilePointingAt(undefined),
+        await profilePointingAt(first),
+        await profilePointingAt(await usableInbox()),
+      ]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("adopt");
+      const named = await adopted();
+      expect(named === undefined ? undefined : addressOf(named)).toEqual(
+        addressOf(first),
+      );
+    });
+
+    it("names no inbox, and logs the refusal, when the advertised one fails vetting", async () => {
+      await hold(await usableInbox());
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      await listProfiles([
+        await profilePointingAt(await documentIn(space, inboxValue(space))),
+      ]);
+      const before = refusalsLogged();
+
+      const result = await ensure();
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+      expect(await adopted()).toBeUndefined();
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+      expect(refusalsLogged()).toBe(before + 1);
+    });
   });
 
   it("is the function the package's ops entry point exports", () => {

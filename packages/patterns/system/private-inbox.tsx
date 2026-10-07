@@ -184,6 +184,16 @@ export type PrivateInboxHolder = {
   piece?: Cell<PrivateInboxPiece>;
 };
 
+/**
+ * The inboxes Home held before the one it holds now, as links, in the order
+ * Home stopped holding them, and none of them the one it holds. Home gives up
+ * an inbox when it adopts the one its profiles advertise in place of one no
+ * profile advertises, and keeps the link so that the offers senders delivered
+ * to the earlier inbox stay readable. Nothing reads the list yet; it is there
+ * for the intake that reads Home's offers.
+ */
+export type RetainedPrivateInboxes = Cell<PrivateInboxPiece>[];
+
 /** What the pointing step needs of each profile in Home's list. */
 export type PointTarget = InboxPointable;
 
@@ -339,6 +349,37 @@ export function advertisedInbox(
     ?.inbox?.piece;
 }
 
+/**
+ * Whether some profile in `profiles` points at `inbox`, a comparison of links
+ * that reads nothing in the inbox's space. Call it as {@link advertisedInbox}
+ * is called.
+ */
+function isAdvertised(
+  profiles: readonly (PointTarget | undefined)[] | undefined,
+  inbox: Cell<PrivateInboxPiece>,
+): boolean {
+  return (profiles ?? []).some((profile) => {
+    const piece = profile?.inbox?.piece;
+    return piece !== undefined && equals(piece, inbox);
+  });
+}
+
+/**
+ * Helper for {@link ensurePrivateInbox}, which records in `retained` that Home
+ * is giving up `held` for `adopted`. `held` goes at the end, once, and an entry
+ * for `adopted` is dropped, since Home holds that one again.
+ */
+function retainInbox(
+  retained: Writable<RetainedPrivateInboxes>,
+  held: Cell<PrivateInboxPiece>,
+  adopted: Cell<PrivateInboxPiece>,
+): void {
+  const earlier = (retained.get() ?? []).filter((each) =>
+    each !== undefined && !equals(each, held) && !equals(each, adopted)
+  );
+  retained.set([...earlier, held]);
+}
+
 /** What the host sends Home's `ensurePrivateInbox`. */
 export type EnsurePrivateInboxEvent = {
   /**
@@ -349,16 +390,19 @@ export type EnsurePrivateInboxEvent = {
 };
 
 /**
- * Gives Home a private inbox if it holds none, then has each profile in Home's
- * list that points at no inbox point at Home's. An inbox Home holds is kept.
- * Otherwise Home adopts the inbox the event names, when it is the one the
- * first profile in the list that points at an inbox points at, and creates one
- * only when no profile points at an inbox. So when profiles advertise an inbox
- * but the event names none, or names another, Home holds none: the host names
- * an inbox only once it has vetted it, and leaves one that fails vetting where
- * it is (`PiecesController.ensurePrivateInbox()` in `packages/piece`). A
- * profile pointing at another inbox keeps its pointer. Running it again
- * creates nothing and re-points nothing.
+ * Gives Home the private inbox its profiles advertise, or one of its own when
+ * they advertise none, then has each profile in Home's list that points at no
+ * inbox point at Home's. Home keeps an inbox it holds while some profile in
+ * the list points at it, or while no profile points at an inbox. Otherwise
+ * Home adopts the inbox the event names, when it is the one the first profile
+ * in the list that points at an inbox points at; an inbox Home held until then
+ * goes into `retainedPrivateInboxes`. Home creates an inbox only when it holds
+ * none and no profile points at an inbox. So when profiles advertise an inbox
+ * but the event names none, or names another, Home keeps what it holds, or
+ * holds none: the host names an inbox only once it has vetted it, and leaves
+ * one that fails vetting where it is (`PiecesController.ensurePrivateInbox()`
+ * in `packages/piece`). A profile pointing at another inbox keeps its pointer.
+ * Running it again creates nothing and re-points nothing.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
@@ -377,18 +421,18 @@ export const ensurePrivateInbox = handler<
   EnsurePrivateInboxEvent,
   {
     privateInbox: Writable<PrivateInboxHolder>;
+    retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
     profiles: PointTarget[];
     pointProfiles: Stream<void>;
   }
->((event, { privateInbox, profiles, pointProfiles }) => {
-  if (privateInbox.get()?.piece === undefined) {
-    const advertised = advertisedInbox(profiles);
-    if (event?.adopt !== undefined) {
-      // A comparison of links, which reads nothing in the inbox's space.
-      if (advertised !== undefined && equals(event.adopt, advertised)) {
-        privateInbox.set({ piece: event.adopt });
-      }
-    } else if (advertised === undefined) {
+>((
+  event,
+  { privateInbox, retainedPrivateInboxes, profiles, pointProfiles },
+) => {
+  const held = privateInbox.get()?.piece;
+  const advertised = advertisedInbox(profiles);
+  if (advertised === undefined) {
+    if (held === undefined) {
       privateInbox.set({
         piece: inboxLinkOf(
           PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
@@ -396,6 +440,14 @@ export const ensurePrivateInbox = handler<
           })({ offers: [] }),
         ),
       });
+    }
+  } else if (held === undefined || !isAdvertised(profiles, held)) {
+    // A comparison of links, which reads nothing in the inbox's space.
+    if (event?.adopt !== undefined && equals(event.adopt, advertised)) {
+      if (held !== undefined) {
+        retainInbox(retainedPrivateInboxes, held, event.adopt);
+      }
+      privateInbox.set({ piece: event.adopt });
     }
   }
   pointProfiles.send();

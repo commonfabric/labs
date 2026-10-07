@@ -145,19 +145,26 @@ The home default pattern holds the user's private inbox in
 own, where other people deliver offers to the user. The user has one inbox,
 whichever side creates it. The host sends Home's `ensurePrivateInbox` stream
 once per runtime worker, the first time the worker brings up Home. Home keeps
-an inbox it holds. Otherwise the host takes the first inbox a profile in the
-`profiles` list points at, in list order, such as a loom daemon's, and vets it
-as a loom daemon vets one; Home adopts it if it passes. Home creates an inbox from
-`packages/patterns/system/private-inbox.tsx` only when no profile points at
-one. An advertised inbox that fails vetting is neither adopted nor replaced,
-and Home holds none. While Home holds an inbox, it points each profile that
-points at no inbox at it, through the profile's `inbox` field, which is how a
-sender finds it, and leaves a profile pointing at another inbox as it is. While
-it holds none, as after a failed vetting, a profile that points at no inbox
-stays unpointed. A profile created once Home holds the inbox is pointed at it
-as it is created; one created earlier is pointed by the next ensure. A loom
-daemon does the same in the other direction, adopting the inbox a profile
-advertises and never replacing a pointer to a different one.
+an inbox it holds while a profile in the `profiles` list points at it, or while
+no profile points at an inbox. Otherwise the host takes the first inbox a
+profile in the list points at, in list order, such as a loom daemon's, and vets
+it as a loom daemon vets one; Home adopts it if it passes, and moves an inbox
+it held, which no profile points at, to `defaultPattern.retainedPrivateInboxes`,
+a list kept so that what senders delivered there stays readable. Nothing reads
+that list yet. Home creates an inbox from
+`packages/patterns/system/private-inbox.tsx` only when it holds none and no
+profile points at one. An advertised inbox that fails vetting is neither
+adopted nor replaced, and Home keeps what it holds, or holds none. While Home
+holds an inbox, it points each profile that points at no inbox at it, through
+the profile's `inbox` field, which is how a sender finds it, and leaves a
+profile pointing at another inbox as it is. While it holds none, as after a
+failed vetting, a profile that points at no inbox stays unpointed. A profile
+created once Home holds the inbox is pointed at it as it is created; one
+created earlier is pointed by the next ensure. Home decides only when an
+ensure runs, so a pointer that moves is decided at the next bring-up of Home in
+a runtime worker. A loom daemon does the same in the other direction, adopting
+the inbox a profile advertises and never replacing a pointer to a different
+one.
 [The private inbox](../../features/private-inbox.md) describes the whole
 arrangement.
 
