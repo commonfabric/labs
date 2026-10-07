@@ -17,6 +17,7 @@ import {
   type ShareIntake,
   startShareIntakeOf,
 } from "../../src/ops/share-intake.ts";
+import { installCustomRoot } from "../install-custom-root.ts";
 
 const identity = await Identity.fromPassphrase("share intake owner");
 
@@ -165,8 +166,7 @@ describe("share-intake", () => {
       runtime,
     );
     await controller.synced();
-    home = (await controller.recreateDefaultPattern({ customProgram: program }))
-      .getCell();
+    home = await installCustomRoot(runtime, controller, program);
     inbox = await inboxIn(
       await runtime.createSpace({ grants: { "*": "WRITE" } }),
     );
@@ -229,7 +229,7 @@ describe("share-intake", () => {
         runtime,
       );
       await rooms.synced();
-      await rooms.recreateDefaultPattern({ customProgram: root });
+      await installCustomRoot(runtime, rooms, root);
     }
     return space;
   }
