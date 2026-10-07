@@ -434,6 +434,13 @@ come up.
   what the verb selects for. And `meet` is the lattice operation the Contextual
   Flow Control code is built on, a technical term with test files named after it,
   where a stray prose use costs a search.
+- **`social space`**, not `shared space`, for a space with more than one member
+  or participant, as [the glossary](../common/concepts/glossary.md#social-space)
+  defines it. `share` already names other things here — the share inbox where a
+  principal receives offers, share links, a user's shared profiles — and none of
+  them is about how many people a space has. As with spelling, an identifier
+  named for shared spaces, `sharedSpaceCatalog` among them, keeps its name:
+  changing it is a rename, not a word-choice fix.
 
 ## Code Design & Principles
 

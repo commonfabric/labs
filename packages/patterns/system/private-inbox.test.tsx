@@ -29,6 +29,7 @@ import PrivateInbox, {
   type PointTarget,
   type PrivateInboxHolder,
   type PrivateInboxPiece,
+  type RetainedPrivateInboxes,
 } from "./private-inbox.tsx";
 
 /** A well-formed space DID for an offer to name. */
@@ -127,19 +128,33 @@ const Seeder = pattern<
 }));
 
 /**
- * Stands in for Home's ensure step: Home's `ensurePrivateInbox` over a holder
- * and a profile list, with its pointing step.
+ * Stands in for Home's ensure step: Home's `ensurePrivateInbox` over a holder,
+ * a list of retained inboxes and a profile list, with its pointing step.
  */
 const EnsuringHome = pattern<
-  { privateInbox: Writable<PrivateInboxHolder>; profiles: PointTarget[] },
+  {
+    privateInbox: Writable<PrivateInboxHolder>;
+    retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
+    profiles: PointTarget[];
+  },
   { ensure: Stream<EnsurePrivateInboxEvent> }
->(({ privateInbox, profiles }) => ({
+>(({ privateInbox, retainedPrivateInboxes, profiles }) => ({
   ensure: ensurePrivateInbox({
     privateInbox,
+    retainedPrivateInboxes,
     profiles,
     pointProfiles: pointProfilesAtPrivateInbox({ privateInbox, profiles }),
   }),
 }));
+
+/** Whether `retained` holds exactly the inboxes `expected` holds, in order. */
+function retainsExactly(
+  retained: readonly (Cell<PrivateInboxPiece> | undefined)[] | undefined,
+  expected: readonly (Cell<PrivateInboxPiece> | undefined)[],
+): boolean {
+  return (retained ?? []).length === expected.length &&
+    expected.every((each, index) => equals(retained?.[index], each));
+}
 
 /** Records the actor's principal in `me`. */
 const introduce = handler<void, { me: Writable<string> }>((_event, { me }) => {
@@ -463,21 +478,25 @@ export default pattern(() => {
     namedAtIndex.inbox?.piece === undefined && namedAtIndex.name === "Ada"
   );
 
-  // Ensuring Home's inbox: Home adopts the inbox the host names, when the first
-  // profile that points at an inbox points at it, keeps an inbox it holds, and
-  // holds none when profiles advertise an inbox but the host names none, as
-  // when the advertised inbox failed the host's vetting, or names another
-  // (`packages/piece/test/ops/pieces-controller-spaces.test.ts`). A profile
-  // pointing at another inbox keeps its pointer, and the seed step points a
-  // new profile at the adopted inbox. Creating an inbox when no profile points
-  // at one is covered by `integration/private-inbox-multi-runtime.test.ts`.
+  // Ensuring Home's inbox. Which inbox Home should hold is the host's decision
+  // (`packages/piece/test/ops/private-inbox.test.ts`); the event names the
+  // inbox to adopt and the profile that decided it. Home adopts it only when
+  // that profile is in its list and still points at it, retaining an inbox it
+  // held, and otherwise keeps what it holds, or holds none. A profile pointing
+  // at another inbox keeps its pointer, and the seed step points a new profile
+  // at the adopted inbox. Creating an inbox when no profile points at one is
+  // covered by `integration/private-inbox-multi-runtime.test.ts`.
   const third = new Writable<PrivateInboxHolder>({});
   const holdThirdInbox = holdNewInbox({ holder: third });
+
+  // Homes holding no inbox.
   const loneUnpointed = ProfileHome({ initialName: "Lone unpointed" });
   const loneAdvertising = EarlierVintageProfile({});
   const adoptingOne = new Writable<PrivateInboxHolder>({});
+  const adoptingOneRetained = new Writable<RetainedPrivateInboxes>([]);
   const ensureAdoptingOne = EnsuringHome({
     privateInbox: adoptingOne,
+    retainedPrivateInboxes: adoptingOneRetained,
     // deno-lint-ignore no-explicit-any
     profiles: [loneUnpointed, loneAdvertising] as any,
   });
@@ -490,23 +509,29 @@ export default pattern(() => {
   const adoptingAmongOthers = new Writable<PrivateInboxHolder>({});
   const ensureAdoptingAmongOthers = EnsuringHome({
     privateInbox: adoptingAmongOthers,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    // deno-lint-ignore no-explicit-any
     profiles: [
       firstUnpointed,
       adoptedAdvertising,
       otherAdvertising,
       lastUnpointed,
-      // deno-lint-ignore no-explicit-any
     ] as any,
   });
-  const keepingAdvertising = ProfileHome({
-    initialName: "Keeping advertising",
+  // The host's order picked the second profile, as a default or the MRU list
+  // does.
+  const passedOverAdvertising = ProfileHome({
+    initialName: "Passed over advertising",
   });
-  const keepingUnpointed = ProfileHome({ initialName: "Keeping unpointed" });
-  const keeping = new Writable<PrivateInboxHolder>({});
-  const ensureKeeping = EnsuringHome({
-    privateInbox: keeping,
+  const decidingAdvertising = ProfileHome({
+    initialName: "Deciding advertising",
+  });
+  const followingDecider = new Writable<PrivateInboxHolder>({});
+  const ensureFollowingDecider = EnsuringHome({
+    privateInbox: followingDecider,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
     // deno-lint-ignore no-explicit-any
-    profiles: [keepingAdvertising, keepingUnpointed] as any,
+    profiles: [passedOverAdvertising, decidingAdvertising] as any,
   });
   const unvettedUnpointed = ProfileHome({ initialName: "Unvetted unpointed" });
   const unvettedAdvertising = ProfileHome({
@@ -515,6 +540,7 @@ export default pattern(() => {
   const unvetted = new Writable<PrivateInboxHolder>({});
   const ensureUnvetted = EnsuringHome({
     privateInbox: unvetted,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
     // deno-lint-ignore no-explicit-any
     profiles: [unvettedUnpointed, unvettedAdvertising] as any,
   });
@@ -524,8 +550,28 @@ export default pattern(() => {
   const mismatched = new Writable<PrivateInboxHolder>({});
   const ensureMismatched = EnsuringHome({
     privateInbox: mismatched,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
     // deno-lint-ignore no-explicit-any
     profiles: [mismatchedAdvertising] as any,
+  });
+  // A profile outside the Home's list, pointing at the inbox the event names.
+  const outsider = ProfileHome({ initialName: "Outsider" });
+  const outsiderListed = ProfileHome({ initialName: "Outsider listed" });
+  const namingAnOutsider = new Writable<PrivateInboxHolder>({});
+  const ensureNamingAnOutsider = EnsuringHome({
+    privateInbox: namingAnOutsider,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    // deno-lint-ignore no-explicit-any
+    profiles: [outsiderListed] as any,
+  });
+  // An event from a host that names no deciding profile.
+  const unnamedAdvertising = EarlierVintageProfile({});
+  const adoptingUnnamed = new Writable<PrivateInboxHolder>({});
+  const ensureAdoptingUnnamed = EnsuringHome({
+    privateInbox: adoptingUnnamed,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    // deno-lint-ignore no-explicit-any
+    profiles: [unnamedAdvertising] as any,
   });
   const freshAfterAdoption = ProfileHome({ initialName: "" });
   const seederAfterAdoption = Seeder({
@@ -533,33 +579,198 @@ export default pattern(() => {
     profiles: [freshAfterAdoption] as any,
     privateInbox: adoptingOne,
   });
+
+  // Homes holding Home's inbox.
+  const readoptingAdvertising = ProfileHome({
+    initialName: "Adopting again advertising",
+  });
+  const readoptingUnpointed = ProfileHome({
+    initialName: "Adopting again unpointed",
+  });
+  const readopting = new Writable<PrivateInboxHolder>({});
+  const readoptingRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureReadopting = EnsuringHome({
+    privateInbox: readopting,
+    retainedPrivateInboxes: readoptingRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [readoptingAdvertising, readoptingUnpointed] as any,
+  });
+  // Another profile still points at the inbox Home holds, ahead of the
+  // deciding one in the list.
+  const stillAdvertisingHeld = ProfileHome({
+    initialName: "Still advertising held",
+  });
+  const decidingElsewhere = EarlierVintageProfile({});
+  const readoptingOverAnother = new Writable<PrivateInboxHolder>({});
+  const readoptingOverAnotherRetained = new Writable<RetainedPrivateInboxes>(
+    [],
+  );
+  const ensureReadoptingOverAnother = EnsuringHome({
+    privateInbox: readoptingOverAnother,
+    retainedPrivateInboxes: readoptingOverAnotherRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [stillAdvertisingHeld, decidingElsewhere] as any,
+  });
+  // One whose retained list already holds the inbox it adopts, as after Home
+  // gave that inbox up and a profile then pointed at it again.
+  const returningAdvertising = EarlierVintageProfile({});
+  const returning = new Writable<PrivateInboxHolder>({});
+  const returningRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureReturning = EnsuringHome({
+    privateInbox: returning,
+    retainedPrivateInboxes: returningRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [returningAdvertising] as any,
+  });
+  const keepingUnadvertisedPointed = ProfileHome({
+    initialName: "Keeping unadvertised pointed",
+  });
+  const keepingUnadvertised = new Writable<PrivateInboxHolder>({});
+  const keepingUnadvertisedRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureKeepingUnadvertised = EnsuringHome({
+    privateInbox: keepingUnadvertised,
+    retainedPrivateInboxes: keepingUnadvertisedRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [keepingUnadvertisedPointed] as any,
+  });
+  const refusingAdvertising = ProfileHome({
+    initialName: "Refusing advertising",
+  });
+  const refusing = new Writable<PrivateInboxHolder>({});
+  const refusingRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureRefusing = EnsuringHome({
+    privateInbox: refusing,
+    retainedPrivateInboxes: refusingRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [refusingAdvertising] as any,
+  });
+  const guardedAdvertising = ProfileHome({
+    initialName: "Guarded advertising",
+  });
+  const guarded = new Writable<PrivateInboxHolder>({});
+  const guardedRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureGuarded = EnsuringHome({
+    privateInbox: guarded,
+    retainedPrivateInboxes: guardedRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [guardedAdvertising] as any,
+  });
+  const heldOutsiderListed = ProfileHome({
+    initialName: "Held outsider listed",
+  });
+  const heldNamingAnOutsider = new Writable<PrivateInboxHolder>({});
+  const heldNamingAnOutsiderRetained = new Writable<RetainedPrivateInboxes>(
+    [],
+  );
+  const ensureHeldNamingAnOutsider = EnsuringHome({
+    privateInbox: heldNamingAnOutsider,
+    retainedPrivateInboxes: heldNamingAnOutsiderRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [heldOutsiderListed] as any,
+  });
+  // One holding the link Home's holder reached the inbox through when it
+  // created it, while its profile is given the inbox's own result document, so
+  // the two links are equal only once both are resolved.
+  const aliasAdvertising = ProfileHome({ initialName: "Alias advertising" });
+  const aliasKeeping = new Writable<PrivateInboxHolder>({});
+  const aliasKeepingRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureAliasKeeping = EnsuringHome({
+    privateInbox: aliasKeeping,
+    retainedPrivateInboxes: aliasKeepingRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [aliasAdvertising] as any,
+  });
+
   const action_advertise_inboxes = action(() => {
     holdThirdInbox.send();
     const advertised = elsewhere.get().piece?.resolveAsCell();
-    loneAdvertising.setInbox.send({ inbox: advertised });
-    adoptedAdvertising.setInbox.send({ inbox: advertised });
-    keepingAdvertising.setInbox.send({ inbox: advertised });
-    unvettedAdvertising.setInbox.send({ inbox: advertised });
-    mismatchedAdvertising.setInbox.send({ inbox: advertised });
-    keeping.set({ piece: home.get().piece?.resolveAsCell() });
+    const homeInbox = home.get().piece?.resolveAsCell();
+    for (
+      const profile of [
+        loneAdvertising,
+        adoptedAdvertising,
+        passedOverAdvertising,
+        unvettedAdvertising,
+        mismatchedAdvertising,
+        outsiderListed,
+        unnamedAdvertising,
+        readoptingAdvertising,
+        decidingElsewhere,
+        returningAdvertising,
+        refusingAdvertising,
+        guardedAdvertising,
+        heldOutsiderListed,
+        outsider,
+      ]
+    ) {
+      profile.setInbox.send({ inbox: advertised });
+    }
+    stillAdvertisingHeld.setInbox.send({ inbox: homeInbox });
+    aliasAdvertising.setInbox.send({ inbox: homeInbox });
+    for (
+      const holder of [
+        readopting,
+        readoptingOverAnother,
+        returning,
+        keepingUnadvertised,
+        refusing,
+        guarded,
+        heldNamingAnOutsider,
+      ]
+    ) {
+      holder.set({ piece: homeInbox });
+    }
+    aliasKeeping.set({ piece: home.get().piece });
+    if (advertised !== undefined) returningRetained.set([advertised]);
   });
   const action_advertise_a_second_inbox = action(() => {
-    otherAdvertising.setInbox.send({
-      inbox: third.get().piece?.resolveAsCell(),
-    });
+    const another = third.get().piece?.resolveAsCell();
+    otherAdvertising.setInbox.send({ inbox: another });
+    decidingAdvertising.setInbox.send({ inbox: another });
   });
   const action_ensure_inboxes = action(() => {
     const vetted = elsewhere.get().piece?.resolveAsCell();
-    ensureAdoptingOne.ensure.send({ adopt: vetted });
-    ensureAdoptingAmongOthers.ensure.send({ adopt: vetted });
-    ensureKeeping.ensure.send({ adopt: vetted });
+    const another = third.get().piece?.resolveAsCell();
+    const homeInbox = home.get().piece?.resolveAsCell();
+    ensureAdoptingOne.ensure.send({ adopt: vetted, from: loneAdvertising });
+    ensureAdoptingAmongOthers.ensure.send({
+      adopt: vetted,
+      from: adoptedAdvertising,
+    });
+    ensureFollowingDecider.ensure.send({
+      adopt: another,
+      from: decidingAdvertising,
+    });
     ensureUnvetted.ensure.send({});
-    ensureMismatched.ensure.send({ adopt: third.get().piece?.resolveAsCell() });
+    ensureMismatched.ensure.send({
+      adopt: another,
+      from: mismatchedAdvertising,
+    });
+    ensureNamingAnOutsider.ensure.send({ adopt: vetted, from: outsider });
+    ensureAdoptingUnnamed.ensure.send({ adopt: vetted });
+    ensureReadopting.ensure.send({
+      adopt: vetted,
+      from: readoptingAdvertising,
+    });
+    ensureReadoptingOverAnother.ensure.send({
+      adopt: vetted,
+      from: decidingElsewhere,
+    });
+    ensureReturning.ensure.send({ adopt: vetted, from: returningAdvertising });
+    ensureKeepingUnadvertised.ensure.send({});
+    ensureRefusing.ensure.send({});
+    ensureGuarded.ensure.send({ adopt: another, from: guardedAdvertising });
+    ensureHeldNamingAnOutsider.ensure.send({ adopt: vetted, from: outsider });
+    ensureAliasKeeping.ensure.send({
+      adopt: homeInbox,
+      from: aliasAdvertising,
+    });
   });
   const assert_the_named_inbox_is_adopted = assert(() =>
     equals(adoptingOne.get().piece, elsewhere.get().piece) &&
     equals(loneUnpointed.inbox?.piece, elsewhere.get().piece) &&
-    equals(loneAdvertising.inbox?.piece, elsewhere.get().piece)
+    equals(loneAdvertising.inbox?.piece, elsewhere.get().piece) &&
+    adoptingOneRetained.get().length === 0
   );
   const assert_another_advertised_inbox_is_left_as_it_was = assert(() =>
     equals(adoptingAmongOthers.get().piece, elsewhere.get().piece) &&
@@ -567,10 +778,10 @@ export default pattern(() => {
     equals(lastUnpointed.inbox?.piece, elsewhere.get().piece) &&
     equals(otherAdvertising.inbox?.piece, third.get().piece)
   );
-  const assert_a_held_inbox_is_kept = assert(() =>
-    equals(keeping.get().piece, home.get().piece) &&
-    equals(keepingUnpointed.inbox?.piece, home.get().piece) &&
-    equals(keepingAdvertising.inbox?.piece, elsewhere.get().piece)
+  const assert_the_deciding_profile_is_followed_past_an_earlier_one = assert(
+    () =>
+      equals(followingDecider.get().piece, third.get().piece) &&
+      equals(passedOverAdvertising.inbox?.piece, elsewhere.get().piece),
   );
   const assert_an_unvetted_advertisement_leaves_home_without_an_inbox = assert(
     () =>
@@ -578,9 +789,58 @@ export default pattern(() => {
       unvettedUnpointed.inbox?.piece === undefined &&
       equals(unvettedAdvertising.inbox?.piece, elsewhere.get().piece),
   );
-  const assert_an_inbox_no_profile_advertises_is_not_adopted = assert(() =>
-    mismatched.get().piece === undefined &&
-    equals(mismatchedAdvertising.inbox?.piece, elsewhere.get().piece)
+  const assert_an_inbox_the_named_profile_does_not_advertise_is_not_adopted =
+    assert(() =>
+      mismatched.get().piece === undefined &&
+      equals(mismatchedAdvertising.inbox?.piece, elsewhere.get().piece)
+    );
+  const assert_an_inbox_named_by_a_profile_outside_the_list_is_not_adopted =
+    assert(() =>
+      namingAnOutsider.get().piece === undefined &&
+      heldNamingAnOutsiderRetained.get().length === 0 &&
+      equals(heldNamingAnOutsider.get().piece, home.get().piece) &&
+      equals(outsider.inbox?.piece, elsewhere.get().piece)
+    );
+  const assert_an_unnamed_profile_is_taken_as_the_first_advertising_one =
+    assert(() => equals(adoptingUnnamed.get().piece, elsewhere.get().piece));
+  const assert_a_held_inbox_is_replaced_and_retained = assert(() =>
+    equals(readopting.get().piece, elsewhere.get().piece) &&
+    retainsExactly(readoptingRetained.get(), [home.get().piece]) &&
+    equals(readoptingUnpointed.inbox?.piece, elsewhere.get().piece) &&
+    equals(readoptingAdvertising.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_a_held_inbox_another_profile_advertises_is_replaced = assert(
+    () =>
+      equals(readoptingOverAnother.get().piece, elsewhere.get().piece) &&
+      retainsExactly(readoptingOverAnotherRetained.get(), [
+        home.get().piece,
+      ]) &&
+      equals(stillAdvertisingHeld.inbox?.piece, home.get().piece),
+  );
+  const assert_an_inbox_adopted_again_leaves_the_retained_list = assert(() =>
+    equals(returning.get().piece, elsewhere.get().piece) &&
+    retainsExactly(returningRetained.get(), [home.get().piece])
+  );
+  const assert_a_held_inbox_is_kept_when_none_is_advertised = assert(() =>
+    equals(keepingUnadvertised.get().piece, home.get().piece) &&
+    keepingUnadvertisedRetained.get().length === 0 &&
+    equals(keepingUnadvertisedPointed.inbox?.piece, home.get().piece)
+  );
+  const assert_a_held_inbox_is_kept_when_the_host_names_none = assert(() =>
+    equals(refusing.get().piece, home.get().piece) &&
+    refusingRetained.get().length === 0 &&
+    equals(refusingAdvertising.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_a_held_inbox_is_kept_when_the_host_names_another = assert(() =>
+    equals(guarded.get().piece, home.get().piece) &&
+    guardedRetained.get().length === 0 &&
+    equals(guardedAdvertising.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_a_held_inbox_reached_through_another_link_is_kept = assert(
+    () =>
+      equals(aliasKeeping.get().piece, home.get().piece) &&
+      !aliasKeeping.get().piece?.equalLinks(aliasAdvertising.inbox?.piece) &&
+      aliasKeepingRetained.get().length === 0,
   );
   const action_seed_after_adoption = action(() => {
     seederAfterAdoption.seed.send({ name: "Fresh", index: 0 });
@@ -627,22 +887,62 @@ export default pattern(() => {
       { action: action_ensure_inboxes },
       { assertion: assert_the_named_inbox_is_adopted },
       { assertion: assert_another_advertised_inbox_is_left_as_it_was },
-      { assertion: assert_a_held_inbox_is_kept },
+      {
+        assertion: assert_the_deciding_profile_is_followed_past_an_earlier_one,
+      },
       {
         assertion:
           assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
       },
-      { assertion: assert_an_inbox_no_profile_advertises_is_not_adopted },
-      // Ensuring again changes nothing.
+      {
+        assertion:
+          assert_an_inbox_the_named_profile_does_not_advertise_is_not_adopted,
+      },
+      {
+        assertion:
+          assert_an_inbox_named_by_a_profile_outside_the_list_is_not_adopted,
+      },
+      {
+        assertion:
+          assert_an_unnamed_profile_is_taken_as_the_first_advertising_one,
+      },
+      { assertion: assert_a_held_inbox_is_replaced_and_retained },
+      { assertion: assert_a_held_inbox_another_profile_advertises_is_replaced },
+      { assertion: assert_an_inbox_adopted_again_leaves_the_retained_list },
+      { assertion: assert_a_held_inbox_is_kept_when_none_is_advertised },
+      { assertion: assert_a_held_inbox_is_kept_when_the_host_names_none },
+      { assertion: assert_a_held_inbox_is_kept_when_the_host_names_another },
+      { assertion: assert_a_held_inbox_reached_through_another_link_is_kept },
+      // Ensuring again changes nothing, and retains nothing more.
       { action: action_ensure_inboxes },
       { assertion: assert_the_named_inbox_is_adopted },
       { assertion: assert_another_advertised_inbox_is_left_as_it_was },
-      { assertion: assert_a_held_inbox_is_kept },
+      {
+        assertion: assert_the_deciding_profile_is_followed_past_an_earlier_one,
+      },
       {
         assertion:
           assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
       },
-      { assertion: assert_an_inbox_no_profile_advertises_is_not_adopted },
+      {
+        assertion:
+          assert_an_inbox_the_named_profile_does_not_advertise_is_not_adopted,
+      },
+      {
+        assertion:
+          assert_an_inbox_named_by_a_profile_outside_the_list_is_not_adopted,
+      },
+      {
+        assertion:
+          assert_an_unnamed_profile_is_taken_as_the_first_advertising_one,
+      },
+      { assertion: assert_a_held_inbox_is_replaced_and_retained },
+      { assertion: assert_a_held_inbox_another_profile_advertises_is_replaced },
+      { assertion: assert_an_inbox_adopted_again_leaves_the_retained_list },
+      { assertion: assert_a_held_inbox_is_kept_when_none_is_advertised },
+      { assertion: assert_a_held_inbox_is_kept_when_the_host_names_none },
+      { assertion: assert_a_held_inbox_is_kept_when_the_host_names_another },
+      { assertion: assert_a_held_inbox_reached_through_another_link_is_kept },
       { action: action_seed_after_adoption },
       { assertion: assert_a_new_profile_is_pointed_at_the_adopted_inbox },
     ],

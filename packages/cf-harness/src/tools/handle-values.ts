@@ -81,6 +81,17 @@ export const httpOriginOf = (url: string): string | undefined => {
   return parsed.origin;
 };
 
+/**
+ * Whether `url` is an http(s) URL that opens with its scheme and holds no
+ * whitespace or control character. A URL parser strips some of those
+ * characters and encodes the rest, while a browser driver is handed the
+ * string as written, so a check of the parsed URL alone can pass a string
+ * the browser reads differently. Other normalizations a parser makes, such
+ * as mapping a host name's characters, are not refused here.
+ */
+export const isHttpUrl = (url: string): boolean =>
+  /^https?:\/\/[^\s\p{Cc}]*$/iu.test(url) && httpOriginOf(url) !== undefined;
+
 /** The flag with which an operator allows a destination for a handle's value. */
 export const HANDLE_VALUE_ORIGIN_FLAG = "--handle-value-origin";
 

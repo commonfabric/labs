@@ -584,18 +584,6 @@ export class RuntimeInternals extends EventTarget {
     return this.#client.createSpace(label);
   }
 
-  async recreateSpaceRootPattern(space: DID): Promise<PieceHandle<NameSchema>> {
-    this.#check();
-    // Clear cached pattern since we're recreating it
-    this.#spaceRootPatterns.delete(space);
-    const pattern = await this.#client.recreateSpaceRootPattern(space);
-    this.#spaceRootPatterns.set(space, {
-      pattern: Promise.resolve(pattern),
-      started: true,
-    });
-    return pattern;
-  }
-
   /**
    * Get a piece's handle. By default this also STARTS the piece
    * (instantiates its pattern in the worker) — appropriate for the piece

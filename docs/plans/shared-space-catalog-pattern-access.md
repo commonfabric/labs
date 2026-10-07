@@ -135,17 +135,20 @@ failure, and `home-update-required` handling.
 ## Home replacement
 
 Ordinary source updates and automatic roll-forward repair retain the Home root
-identity. Explicit recreation, including the debugger action and CLI
-`space recreate-root` and `space set-home`, refuses an existing identity Home.
-The guard runs before stopping, unlinking, fetching, or compiling, and a second
-transactional check protects a Home installed during first-creation compilation.
-An unavailable root target is still an existing root to preserve.
+identity. Explicit recreation refuses an identity Home, absent or present,
+before stopping, unlinking, fetching, or compiling, and so does the low-level
+unlink; an unavailable root target is still a root to preserve. No user-facing
+path replaces or unlinks a Home: `cf space set-home` is retired, the shell
+debugger has no recreate action, and `cf space recreate-root`, which remains
+for spaces that are not a Home, refuses one.
 
 Changing the Home application uses an in-place source update. Preserving account
 data by default covers profiles, favorites, navigation, and the catalog
 together. A true account-data reset, if needed, requires a separately designed
-destructive contract. Low-level unlink and direct space-cell writes are not
-account recovery operations.
+destructive contract; what it would have to carry forward, and the break-glass
+procedure until then, are written in `docs/common/conventions/HOME_SPACE.md`
+("A Home that will not load"). Direct space-cell writes are not account
+recovery operations.
 
 Gideon confirmed this alpha policy on October 5, 2026: keep the Home recreation
 guard with the catalog foundation, and design destructive recovery separately.

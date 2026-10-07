@@ -51,6 +51,8 @@ export const LOCAL_JOB_HEARTBEAT_MS = 15_000;
  */
 export const LOCAL_BROWSER_RESULT_MAX_BYTES = 32 * 1024 * 1024;
 
+import type { RunnerHealth } from "./readiness.ts";
+
 /** What the API answers requests with. */
 export interface LocalJobApiOptions {
   store: LocalJobStore;
@@ -70,6 +72,9 @@ export interface LocalJobApiOptions {
 
   /** Whether the runner's Fabric lane is running, for `/health`. */
   fabricLane?: () => boolean;
+
+  /** Readiness and configuration of the serving runner. */
+  health?: () => RunnerHealth;
 
   /** The keep-alive interval of an event stream. */
   heartbeatMs?: number;
@@ -405,10 +410,13 @@ async (request: Request): Promise<Response> => {
   const { store } = options;
 
   if (request.method === "GET" && url.pathname === "/health") {
-    return json(200, {
-      ok: true,
-      lanes: { local: true, fabric: options.fabricLane?.() ?? false },
-    });
+    return json(
+      200,
+      options.health?.() ?? {
+        ok: true,
+        lanes: { local: true, fabric: options.fabricLane?.() ?? false },
+      },
+    );
   }
 
   if (parts[0] !== "jobs") {

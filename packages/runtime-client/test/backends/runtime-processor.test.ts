@@ -4027,11 +4027,16 @@ describe("runtime-processor", () => {
      * `ensurePrivateInbox` is recorded, and a throw from it is a throw from the
      * send itself. That is the one failure of the ensure the host sees: a
      * stream's `send` returns before its handler runs, so a failure inside
-     * Home's handler never reaches the host, and this stand-in has none.
+     * Home's handler never reaches the host, and this stand-in has none. Each
+     * read the inbox ensure makes of Home waits for `inboxReadable`. The share
+     * intake's subscriptions to Home are recorded, and `onSubscribe` runs as
+     * each is made, a throw from it being a throw from the subscription.
      */
     async function homeWorker(
       rows: readonly unknown[] | (() => unknown),
       onEnsurePrivateInbox: () => void = () => {},
+      inboxReadable: Promise<void> = Promise.resolve(),
+      onSubscribe: () => void = () => {},
     ) {
       const signer = await Identity.generate({ implementation: "noble" });
       const storageManager = StorageManager.emulate({ as: signer });
@@ -4046,6 +4051,8 @@ describe("runtime-processor", () => {
         path: [],
       };
       const sent: { stream: string; event: unknown }[] = [];
+      const subscribed: string[] = [];
+      const unsubscribed: string[] = [];
       const home = {
         getAsLink: () => cellRefToSigilLink(homeRef),
         key: (name: string) =>
@@ -4055,7 +4062,19 @@ describe("runtime-processor", () => {
               getRaw: () => ({ $stream: true }),
               // Home's `privateInbox` and `profiles`, as the inbox ensure
               // reads them: no inbox held, and no profile advertising one.
-              asSchema: () => ({ pull: () => Promise.resolve(undefined) }),
+              asSchema: () => ({
+                pull: async () => {
+                  await inboxReadable;
+                  return undefined;
+                },
+                sink: () => {
+                  onSubscribe();
+                  subscribed.push(name);
+                  return () => {
+                    unsubscribed.push(name);
+                  };
+                },
+              }),
               send: (event: unknown): void => {
                 sent.push({ stream: name, event });
                 if (name === "ensurePrivateInbox") onEnsurePrivateInbox();
@@ -4096,6 +4115,10 @@ describe("runtime-processor", () => {
         /** How many events were sent to `ensurePrivateInbox`. */
         privateInboxSends: () =>
           sent.filter(({ stream }) => stream === "ensurePrivateInbox").length,
+        /** The Home fields the share intake has subscribed to, in order. */
+        subscribed,
+        /** The Home fields whose subscriptions the share intake has ended. */
+        unsubscribed,
         siteTable,
         async [Symbol.asyncDispose]() {
           ensure.restore();
@@ -4219,6 +4242,7 @@ describe("runtime-processor", () => {
       await worker.processor.handleEnsureHomePatternRunning({
         type: RequestType.EnsureHomePatternRunning,
       });
+      await worker.processor.accessForTestingOnly.privateInboxEnsured;
       await worker.processor.handleEnsureHomePatternRunning({
         type: RequestType.EnsureHomePatternRunning,
       });
@@ -4226,6 +4250,7 @@ describe("runtime-processor", () => {
         type: RequestType.CreateSpace,
         label: "Fresh",
       });
+      await worker.processor.accessForTestingOnly.privateInboxEnsured;
 
       expect(worker.privateInboxSends()).toBe(1);
       expect(worker.sent).toContainEqual({
@@ -4245,16 +4270,150 @@ describe("runtime-processor", () => {
           type: RequestType.EnsureHomePatternRunning,
         });
         expect(first.cell).toBeDefined();
+        await worker.processor.accessForTestingOnly.privateInboxEnsured;
         expect(worker.privateInboxSends()).toBe(1);
+        expect(worker.processor.accessForTestingOnly.privateInboxEnsured)
+          .toBeUndefined();
 
         await worker.processor.handleEnsureHomePatternRunning({
           type: RequestType.EnsureHomePatternRunning,
         });
+        await worker.processor.accessForTestingOnly.privateInboxEnsured;
         await worker.processor.handleEnsureHomePatternRunning({
           type: RequestType.EnsureHomePatternRunning,
         });
+        await worker.processor.accessForTestingOnly.privateInboxEnsured;
         expect(worker.privateInboxSends()).toBe(2);
         expect(warn.calls.length).toBe(1);
+      } finally {
+        warn.restore();
+      }
+    });
+
+    it("opens Home while the private inbox ensure is still reading", async () => {
+      // A bring-up that waited for the ensure would never return here, since
+      // the ensure's reads wait for a release that comes only after it.
+      const readable = Promise.withResolvers<void>();
+      await using worker = await homeWorker([], () => {}, readable.promise);
+
+      const opened = await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+
+      expect(opened.cell).toBeDefined();
+      expect(worker.privateInboxSends()).toBe(0);
+      const ensured = worker.processor.accessForTestingOnly.privateInboxEnsured;
+      expect(ensured).toBeDefined();
+      readable.resolve();
+      await ensured;
+      expect(worker.privateInboxSends()).toBe(1);
+    });
+
+    it("sends no private inbox event once disposed, though the ensure's reads then return", async () => {
+      const readable = Promise.withResolvers<void>();
+      await using worker = await homeWorker([], () => {}, readable.promise);
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      const ensured = worker.processor.accessForTestingOnly.privateInboxEnsured;
+
+      await worker.processor.dispose();
+      readable.resolve();
+      await ensured;
+
+      expect(worker.privateInboxSends()).toBe(0);
+    });
+
+    it("disposes without waiting for a private inbox ensure still reading, and reports nothing when it then fails", async () => {
+      // A disposal that waited for the ensure would never return here, since
+      // the ensure's reads fail only after it.
+      const readable = Promise.withResolvers<void>();
+      await using worker = await homeWorker([], () => {}, readable.promise);
+      const warn = stub(console, "warn", () => {});
+      try {
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        const ensured = worker.processor.accessForTestingOnly
+          .privateInboxEnsured;
+
+        await worker.processor.dispose();
+        readable.reject(new Error("runtime disposed"));
+        await ensured;
+
+        expect(warn.calls.length).toBe(0);
+        expect(worker.privateInboxSends()).toBe(0);
+      } finally {
+        warn.restore();
+      }
+    });
+
+    it("starts Home's share intake once per worker, following the inbox Home holds and the ones it retains", async () => {
+      await using worker = await homeWorker([]);
+
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      const started = await worker.processor.accessForTestingOnly.shareIntake;
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+
+      expect(started).toBeDefined();
+      expect(await worker.processor.accessForTestingOnly.shareIntake).toBe(
+        started,
+      );
+      expect(worker.subscribed).toEqual([
+        "privateInbox",
+        "retainedPrivateInboxes",
+      ]);
+    });
+
+    it("stops Home's share intake when disposed", async () => {
+      await using worker = await homeWorker([]);
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      await worker.processor.accessForTestingOnly.shareIntake;
+
+      await worker.processor.dispose();
+
+      expect(worker.unsubscribed).toEqual([
+        "privateInbox",
+        "retainedPrivateInboxes",
+      ]);
+    });
+
+    it("opens Home when starting the share intake throws, and starts it on the next ensure", async () => {
+      let attempts = 0;
+      await using worker = await homeWorker(
+        [],
+        () => {},
+        Promise.resolve(),
+        () => {
+          if (attempts++ === 0) throw new Error("transient subscribe failure");
+        },
+      );
+      const warn = stub(console, "warn", () => {});
+      try {
+        const first = await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        expect(first.cell).toBeDefined();
+        expect(await worker.processor.accessForTestingOnly.shareIntake)
+          .toBeUndefined();
+        expect(worker.processor.accessForTestingOnly.shareIntake)
+          .toBeUndefined();
+
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+
+        expect(await worker.processor.accessForTestingOnly.shareIntake)
+          .toBeDefined();
+        expect(warn.calls.map(({ args }) => args[0])).toEqual([
+          "[RuntimeProcessor] Starting the share intake:",
+        ]);
       } finally {
         warn.restore();
       }

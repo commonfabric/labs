@@ -6048,29 +6048,6 @@ function isVNodeLike(value: unknown): value is VNode {
 }
 
 /**
- * Deploy a custom home pattern from a local file.
- * Automatically targets the home space (user's identity DID).
- */
-export async function setHomePattern(
-  config: Omit<SpaceConfig, "space">,
-  entry: EntryConfig,
-  deps: PieceOperationDependencies = {},
-): Promise<void> {
-  const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
-  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
-  const pieces = await (deps.loadPieces ?? loadPieces)(homeConfig);
-  const program = await (deps.getProgramFromFile ?? getProgramFromFile)(
-    pieces,
-    entry,
-  );
-  await pieces.recreateDefaultPattern({
-    customProgram: program,
-    repository: entry.repository,
-  });
-  noteWroteTo(homeConfig.space);
-}
-
-/**
  * Creates a space owned by the configured identity and returns its DID. The
  * space gets a random DID and is born granting its creator alone; it is
  * recorded in the identity's Home space list under `label`.
@@ -6085,17 +6062,4 @@ export async function createSpace(
   const space = await pieces.createSpace(label);
   noteWroteTo(homeConfig.space);
   return space;
-}
-
-/**
- * Initializes an absent Home with the system default; refuses existing Home.
- */
-export async function resetHomePattern(
-  config: Omit<SpaceConfig, "space">,
-): Promise<void> {
-  const identity = await loadIdentity(config.identity);
-  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
-  const pieces = await loadPieces(homeConfig);
-  await pieces.recreateDefaultPattern();
-  noteWroteTo(homeConfig.space);
 }

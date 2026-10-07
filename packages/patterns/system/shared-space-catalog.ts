@@ -238,11 +238,80 @@ function membershipAction(
     boundedString(value.expectedRevision, 320) && membership(value.state);
 }
 
+/**
+ * Registers an admitted space in `catalog` without changing any existing
+ * membership, staging its writes in the transaction of the handler that calls
+ * it, so a handler can register a space in the same commit as its own writes.
+ * Insert-if-absent: an entry already present for the space keeps its title,
+ * membership and revision, and an archived one stays archived. A registration
+ * naming an offer records a receipt keyed by the offer's sender and ID, beside
+ * the entry, unless one is already there. Returns `conflict` without writing
+ * anything when the space is already registered with another host or kind, or
+ * the offer's receipt names another target. Call it only from a handler,
+ * since a new entry's revision names the handler's event.
+ *
+ * @throws When `input` is not a valid registration, or `catalog` holds
+ *   something other than a valid catalog.
+ */
+export function registerSharedSpaceIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  input: SharedSpaceRegistration,
+): SharedSpaceRegistrationResult {
+  const registration = normalizeRegistration(input);
+  const stored = readSharedSpaceCatalog(catalog);
+  const { space, host, kind, title, offer } = registration;
+  const current = stored.entries[space];
+  if (current && current.host !== host) {
+    return {
+      status: "conflict",
+      reason: "host",
+    };
+  }
+  if (current && current.kind !== kind) {
+    return {
+      status: "conflict",
+      reason: "kind",
+    };
+  }
+  const key = offer && sharedSpaceOfferKey(offer.from, offer.id);
+  const receipt = key && stored.offers[key];
+  if (
+    receipt &&
+    (receipt.space !== space || receipt.host !== host ||
+      receipt.kind !== kind)
+  ) return { status: "conflict", reason: "offer" };
+  if (!current) {
+    catalog.key("entries", space).set({
+      space,
+      host,
+      kind,
+      ...(title === undefined ? {} : { title }),
+      ...(offer === undefined ? {} : { from: offer.from }),
+      since: registration.since ?? Date.now(),
+      state: registration.initialState ?? "saved",
+      revision: revisionAt(1n),
+    });
+  }
+  if (key && offer && !receipt) {
+    catalog.key("offers", key).set({
+      from: offer.from,
+      id: offer.id,
+      space,
+      host,
+      kind,
+    });
+  }
+  return { status: current ? "existing" : "registered", space };
+}
+
 // Retain every event field for validation, including linked payloads whose
 // stored schema would otherwise omit a malformed optional field.
 const eventSchema = toSchema<Record<string, any>>();
 
-/** Registers an admitted space without changing any existing membership. */
+/**
+ * Registers an admitted space without changing any existing membership, as
+ * {@link registerSharedSpaceIn} does.
+ */
 export const registerSharedSpace = handler<
   SharedSpaceRegistration,
   SharedSpaceCatalogState,
@@ -250,53 +319,7 @@ export const registerSharedSpace = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (input, { catalog }) => {
-    const registration = normalizeRegistration(input);
-    const stored = readSharedSpaceCatalog(catalog);
-    const { space, host, kind, title, offer } = registration;
-    const current = stored.entries[space];
-    if (current && current.host !== host) {
-      return {
-        status: "conflict",
-        reason: "host",
-      };
-    }
-    if (current && current.kind !== kind) {
-      return {
-        status: "conflict",
-        reason: "kind",
-      };
-    }
-    const key = offer && sharedSpaceOfferKey(offer.from, offer.id);
-    const receipt = key && stored.offers[key];
-    if (
-      receipt &&
-      (receipt.space !== space || receipt.host !== host ||
-        receipt.kind !== kind)
-    ) return { status: "conflict", reason: "offer" };
-    if (!current) {
-      catalog.key("entries", space).set({
-        space,
-        host,
-        kind,
-        ...(title === undefined ? {} : { title }),
-        ...(offer === undefined ? {} : { from: offer.from }),
-        since: registration.since ?? Date.now(),
-        state: registration.initialState ?? "saved",
-        revision: revisionAt(1n),
-      });
-    }
-    if (key && offer && !receipt) {
-      catalog.key("offers", key).set({
-        from: offer.from,
-        id: offer.id,
-        space,
-        host,
-        kind,
-      });
-    }
-    return { status: current ? "existing" : "registered", space };
-  },
+  (input, { catalog }) => registerSharedSpaceIn(catalog, input),
 );
 
 /** Applies the user's choice only to the revision they observed. */
