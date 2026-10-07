@@ -1580,6 +1580,12 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     try {
       let result: ProcessRunResult;
       try {
+        // A close() that began while the bundle was written found nothing of
+        // this call to stop yet; nothing awaits between here and the start,
+        // so one that begins after this finds it registered.
+        if (this.#closed) {
+          throw new Error("sandbox runtime closed before the call started");
+        }
         result = await this.#runner.run({
           ...this.#starting("/bin/sh", shellArgs),
           stdinText: request.stdinText,

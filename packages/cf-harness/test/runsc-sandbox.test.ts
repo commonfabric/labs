@@ -2034,6 +2034,29 @@ Deno.test("a run that throws still has its container deleted", async () => {
   );
 });
 
+Deno.test("a call that close() catches writing its bundle starts no container, with pasta's network or without", async () => {
+  for (const c of [config(), pastaConfig({ rootless: true })]) {
+    const runner = new UnderPasta();
+    const runtime = new RunscSandboxRuntime(c, runner);
+
+    // Nothing of the call is started before its bundle is written, which
+    // takes the file system, so close() begins while it is written.
+    const call = runtime.runShell({ command: "echo hi" });
+    const closing = runtime.close();
+
+    await assertRejects(
+      () => call,
+      Error,
+      "sandbox runtime closed before the call started",
+    );
+    await closing;
+    assertEquals(
+      runner.given.filter((request) => request.args.includes("run")),
+      [],
+    );
+  }
+});
+
 Deno.test("close takes down a fresh call that is still in flight", async () => {
   // A call racing the close, or one whose run was interrupted, kept running
   // and writing to the workspace after close() had returned.
