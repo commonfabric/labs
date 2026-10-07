@@ -26,6 +26,8 @@ import {
 import type { HarnessFabricSessionConfig } from "./config.ts";
 import {
   resolveSandboxRuntimeSelection,
+  type SandboxProcess,
+  sandboxProcessOf,
   type SandboxRuntimeSelection,
   type UnnamedSandboxRuntime,
 } from "./sandbox/runtime-selection.ts";
@@ -195,7 +197,7 @@ export const resolveInteractiveProvisioning = async (
   },
   cwd: string,
   env: Record<string, string | undefined>,
-  host: UnnamedSandboxRuntime & { homeDir?: string },
+  host: UnnamedSandboxRuntime & SandboxProcess,
 ): Promise<
   {
     additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
@@ -216,9 +218,9 @@ export const resolveInteractiveProvisioning = async (
     ...(host.namedBy !== undefined
       ? { namedBy: host.namedBy }
       : { platform: host.platform }),
+    ...sandboxProcessOf(host),
     flags: false,
     cwd,
-    ...(host.homeDir !== undefined ? { homeDir: host.homeDir } : {}),
   });
   return {
     ...runtime,

@@ -46,10 +46,13 @@ shared host, a tailnet with an access policy — and not behind a public address
   sandbox. On macOS that is, unless the environment names another, the native
   runtime: the direct `runsc` driver over the cfc-vm store gVisor's macOS
   installer writes, with no Docker, and the console refuses to start where that
-  store is not set up. On every other platform it is, by default, a Docker
-  container under the `runsc-cfc` runtime, and a stopped Docker daemon is a run
-  that fails on its first `bash` call. `CF_HARNESS_SANDBOX_RUNTIME` names either
-  on any platform; see [Sandbox runtime](#sandbox-runtime).
+  store is not set up. On Linux it is the direct driver too, over the store
+  gVisor's Linux installer writes under `~/.local/share/runsc-cfc`, for a
+  console running as root, and the console refuses to start where it is not root
+  or that store is not set up. On every other platform it is, by default, a
+  Docker container under the `runsc-cfc` runtime, and a stopped Docker daemon is
+  a run that fails on its first `bash` call. `CF_HARNESS_SANDBOX_RUNTIME` names
+  either on any platform; see [Sandbox runtime](#sandbox-runtime).
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.
@@ -237,14 +240,14 @@ one environment execute on the same driver. The package's
 [CURRENT_STATE](../docs/CURRENT_STATE.md#sandbox-runtimes) describes both
 drivers.
 
-| Environment                      | Selects                                                                                                                                                                                         |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; any other value refuses to start. Unset, macOS takes the native runtime from the cfc-vm store, and every other platform takes `docker`; a launch with `--instance` refuses |
-| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names; unset on macOS, `images/kitchensink` in the store `CFC_VM_HOME` names, else in the one under the home, whether `runsc` is named or the default        |
-| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`, or under the macOS default it is the store's `bin/runsc`                                                             |
-| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there, and under the macOS default the store's `policy.json` next                                       |
-| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                                                                                                                      |
-| `CFC_VM_HOME`                    | the cfc-vm store the macOS `runsc` and the macOS default use; unset, `~/Library/Application Support/cfc-vm`                                                                                     |
+| Environment                      | Selects                                                                                                                                                                                                                                                |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; any other value refuses to start. Unset, macOS takes the native runtime from the cfc-vm store, Linux from the store under `~/.local/share/runsc-cfc`, and every other platform takes `docker`; a launch with `--instance` refuses |
+| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names; unset on macOS, `images/kitchensink` in the store `CFC_VM_HOME` names, else in the one under the home, whether `runsc` is named or the default                                                               |
+| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`, or under the macOS default it is the store's `bin/runsc`                                                                                                                    |
+| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there, and under the macOS default the store's `policy.json` next                                                                                              |
+| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                                                                                                                                                                             |
+| `CFC_VM_HOME`                    | the cfc-vm store the macOS `runsc` and the macOS default use; unset, `~/Library/Application Support/cfc-vm`                                                                                                                                            |
 
 A console launched for a Loom instance takes no default at all. `console:launch`
 given `--instance`, which is how `scripts/start-local-dev.sh` launches it where
@@ -296,7 +299,7 @@ which it takes on the Docker driver only, because only that driver reads them;
 it prints the `runsc` binary, rootfs and CFC policy in their place, and so does
 the server when it binds. With no CFC policy, which only a named `runsc` can
 have, both say that every turn is refused. A console that names `docker`, or
-names no runtime off macOS, builds the Docker driver.
+names no runtime off macOS and Linux, builds the Docker driver.
 
 Both printouts say how the driver was selected. `console:launch` prints a
 `sandbox` row whose source is `CF_HARNESS_SANDBOX_RUNTIME`, inherited, or the

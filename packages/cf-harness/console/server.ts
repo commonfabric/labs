@@ -38,7 +38,8 @@
  * reads the same environment to decide whether Docker is involved at all,
  * and a flag it cannot see would leave the launch and the server describing
  * two different sandboxes. Where the environment names none, a console takes
- * its platform's default, the native runtime on macOS and Docker elsewhere,
+ * its platform's default, the native runtime on macOS and Linux and Docker
+ * elsewhere,
  * unless `host.sandboxRuntimeNamedBy` says its caller must name one, as
  * `console:launch` says for a console it launches for a Loom instance; that
  * console is refused on every platform instead.
@@ -174,6 +175,8 @@ import {
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
+  type SandboxProcess,
+  sandboxProcessOf,
   sandboxRuntimeChoiceReason,
   unnamedRuntimeMountNote,
 } from "../src/sandbox/runtime-selection.ts";
@@ -741,12 +744,13 @@ export const parseConsoleArgs = (args: readonly string[]) => {
 /**
  * What a console is told of where it runs. `platform` is the platform whose
  * default sandbox runtime applies where the environment names none, as
- * `Deno.build.os` writes it, which it is when absent. `sandboxRuntimeNamedBy`
+ * `Deno.build.os` writes it, which it is when absent, and `arch` and `uid`
+ * describe the process that default is for. `sandboxRuntimeNamedBy`
  * is set for a console that takes no such default, and names whoever started
  * it and has to name the runtime: a console launched for a Loom instance
  * serves on the runtime Loom chose for that instance, or not at all.
  */
-export interface ConsoleHost {
+export interface ConsoleHost extends SandboxProcess {
   platform?: SandboxPlatform;
   sandboxRuntimeNamedBy?: string;
 }
@@ -759,8 +763,8 @@ export interface ConsoleHost {
  * runtime.
  *
  * @throws HarnessControlError where `env` names no sandbox runtime and
- * `host` says its caller must name one; and where it names none on macOS and
- * the native runtime cannot be provided.
+ * `host` says its caller must name one; and where it names none on macOS or
+ * Linux and the native runtime cannot be provided.
  */
 export const resolveConsoleConfig = async (
   args: readonly string[],
@@ -789,6 +793,7 @@ export const resolveConsoleConfig = async (
     ...(host.sandboxRuntimeNamedBy !== undefined
       ? { namedBy: host.sandboxRuntimeNamedBy }
       : { platform: host.platform ?? Deno.build.os }),
+    ...sandboxProcessOf(host),
     flags: false,
     cwd,
   });

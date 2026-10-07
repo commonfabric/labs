@@ -85,9 +85,56 @@ const installStore = async (store: string): Promise<void> => {
 const defaultStore = (home: string): string =>
   join(home, "Library", "Application Support", "cfc-vm");
 
-/** The CFC policy the Docker path's installer puts under `home`. */
+/** The CFC policy under `home`, where gVisor's Linux installer puts it. */
 const homePolicy = (home: string): string =>
   join(home, ".local", "share", "runsc-cfc", "cfc-policy.json");
+
+/** The pieces an installed Linux store holds, as paths relative to it. */
+const LINUX_RUNSC = join("bin", "runsc");
+const LINUX_ROOTFS = join("images", "kitchensink");
+const LINUX_POLICY = "cfc-policy.json";
+
+/** Where gVisor's Linux installer puts its store under `home`. */
+const linuxStore = (home: string): string =>
+  join(home, ".local", "share", "runsc-cfc");
+
+/**
+ * Makes a Linux store under `home` holding every piece an install leaves,
+ * and returns where it is.
+ */
+const installLinuxStore = async (home: string): Promise<string> => {
+  const store = linuxStore(home);
+  await Deno.mkdir(join(store, "bin"), { recursive: true });
+  await Deno.writeTextFile(join(store, LINUX_RUNSC), "#!/bin/sh\n");
+  await Deno.chmod(join(store, LINUX_RUNSC), 0o755);
+  await Deno.mkdir(join(store, LINUX_ROOTFS), { recursive: true });
+  await Deno.writeTextFile(join(store, LINUX_POLICY), "{}\n");
+  return store;
+};
+
+/** The selection of a defaulted Linux runtime, taken whole from `store`. */
+const fromLinuxStore = (store: string): SandboxRuntimeSelection => ({
+  sandboxRuntimeKind: "runsc",
+  sandboxRootfs: join(store, LINUX_ROOTFS),
+  sandboxCfcPolicy: join(store, LINUX_POLICY),
+  sandboxRunscBinary: join(store, LINUX_RUNSC),
+  sandboxRuntimeChoice: {
+    runtime: "runsc",
+    source: "default",
+    platform: "linux",
+    nativeStore: store,
+  },
+});
+
+/** The refusal of a Linux default whose store has `problem` in its way. */
+const linuxNotSetUp = (
+  store: string,
+  problem: string,
+  docker: string,
+): string =>
+  "No sandbox runtime is named, so the default applies, which on Linux is " +
+  `the native \`runsc\` runtime, and it is not set up at \`${store}\`: ` +
+  `${problem}. Set it up there, or ${docker}`;
 
 /** One condition a native store can be in. */
 interface StoreState {
@@ -265,12 +312,22 @@ const fromStore = (store: string, policy: string): SandboxRuntimeSelection => ({
   },
 });
 
-/** The record of a runtime Linux defaulted to. */
+/**
+ * The record of a runtime FreeBSD defaulted to: Docker, as every platform
+ * with no native runtime does.
+ */
 const DEFAULTED_DOCKER = {
   runtime: "docker",
   source: "default",
-  platform: "linux",
+  platform: "freebsd",
 } as const;
+
+/**
+ * The record of a defaulted Docker's reason, on the platform `platform`,
+ * which has no native runtime.
+ */
+const dockerDefaultReason = (platform: string): string =>
+  `default on ${platform}: the native runtime is macOS and Linux only`;
 
 describe("sandbox-runtime-default", () => {
   /** A directory of the case's own, with a home directory in it. */
@@ -401,14 +458,14 @@ describe("sandbox-runtime-default", () => {
             (await resolveSandboxRuntimeSelection(
               { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: ` ${runtime}\t` },
               {},
-              { platform: "darwin", flags: false },
+              { platform: "darwin", arch: "aarch64", flags: false },
             )).sandboxRuntimeChoice,
           ).toEqual({ runtime, source: "environment" });
           expect(
             (await resolveSandboxRuntimeSelection(
               { HOME: home },
               { sandboxRuntime: `\n${runtime} ` },
-              { platform: "darwin", flags: true },
+              { platform: "darwin", arch: "aarch64", flags: true },
             )).sandboxRuntimeChoice,
           ).toEqual({ runtime, source: "flag" });
         }
@@ -423,7 +480,7 @@ describe("sandbox-runtime-default", () => {
               CF_HARNESS_SANDBOX_RUNTIME: "runsc",
             },
             {},
-            { platform: "darwin", flags: false },
+            { platform: "darwin", arch: "aarch64", flags: false },
           );
 
         // The store's `policy.json` is there, and a named `runsc` takes none.
@@ -539,8 +596,8 @@ describe("sandbox-runtime-default", () => {
       }
     });
 
-    describe("with no runtime named, off macOS", () => {
-      for (const platform of ["linux", "windows", "freebsd"] as const) {
+    describe("with no runtime named, off macOS and Linux", () => {
+      for (const platform of ["windows", "freebsd"] as const) {
         for (const location of LOCATIONS) {
           it(`returns Docker by default on ${platform}, and nothing of a store ${location.name} in any state`, async () => {
             for (const state of STORE_STATES) {
@@ -572,7 +629,7 @@ describe("sandbox-runtime-default", () => {
         };
 
         await resolveSandboxRuntimeSelection({ HOME: home }, {}, {
-          platform: "linux",
+          platform: "freebsd",
           flags: true,
           pathExists: counted(true),
           lstat: counted(await Deno.lstat(home)),
@@ -592,11 +649,372 @@ describe("sandbox-runtime-default", () => {
             },
             { sandboxRootfs: "/flag/rootfs", sandboxCfcPolicy: "/flag/p" },
             {
-              platform: "linux",
+              platform: "freebsd",
               flags: true,
             },
           ),
         ).toEqual({ sandboxRuntimeChoice: DEFAULTED_DOCKER });
+      });
+    });
+
+    describe("with no runtime named, on Linux", () => {
+      /** Selects with nothing named on Linux, as root unless `uid` says. */
+      const select = (
+        env: Record<string, string | undefined>,
+        explicit: Parameters<typeof resolveSandboxRuntimeSelection>[1] = {},
+        options: {
+          flags?: boolean;
+          uid?: () => number | null;
+          homeDir?: string;
+        } = {},
+      ) =>
+        resolveSandboxRuntimeSelection(env, explicit, {
+          platform: "linux",
+          flags: options.flags ?? true,
+          uid: options.uid ?? (() => 0),
+          ...(options.homeDir !== undefined
+            ? { homeDir: options.homeDir }
+            : {}),
+        });
+
+      /** Every condition of a Linux store the selection tells apart. */
+      const LINUX_STORE_STATES: readonly {
+        name: string;
+        arrange: (store: string) => Promise<void>;
+        problem?: (store: string) => string;
+      }[] = [{
+        name: "set up",
+        arrange: () => Promise.resolve(),
+      }, {
+        name: "absent",
+        arrange: (store) => Deno.remove(store, { recursive: true }),
+        problem: (store) =>
+          [
+            "`bin/runsc`, gVisor's `runsc`, is missing",
+            "`images/kitchensink`, the rootfs a container runs from, is " +
+            "missing",
+            `no CFC policy is at \`${join(store, LINUX_POLICY)}\` (name ` +
+            "one with `--sandbox-cfc-policy` or " +
+            "`CF_HARNESS_RUNSC_CFC_POLICY`)",
+          ].join("; "),
+      }, {
+        name: "without its `runsc`",
+        arrange: (store) => Deno.remove(join(store, LINUX_RUNSC)),
+        problem: () => "`bin/runsc`, gVisor's `runsc`, is missing",
+      }, {
+        name: "with a `runsc` that is not executable",
+        arrange: (store) => Deno.chmod(join(store, LINUX_RUNSC), 0o644),
+        problem: () =>
+          "`bin/runsc`, gVisor's `runsc`, is not an executable file",
+      }, {
+        name: "with a directory where its `runsc` goes",
+        arrange: (store) => swapKind(join(store, LINUX_RUNSC)),
+        problem: () =>
+          "`bin/runsc`, gVisor's `runsc`, is not an executable file",
+      }, {
+        name: "with a file where its `bin` directory goes",
+        arrange: async (store) => {
+          await Deno.remove(join(store, "bin"), { recursive: true });
+          await Deno.writeTextFile(join(store, "bin"), "");
+        },
+        problem: () => "`bin/runsc`, gVisor's `runsc`, is missing",
+      }, {
+        name: "without its rootfs",
+        arrange: (store) => Deno.remove(join(store, LINUX_ROOTFS)),
+        problem: () =>
+          "`images/kitchensink`, the rootfs a container runs from, is missing",
+      }, {
+        name: "with a file where its rootfs goes",
+        arrange: (store) => swapKind(join(store, LINUX_ROOTFS)),
+        problem: () =>
+          "`images/kitchensink`, the rootfs a container runs from, is not " +
+          "a directory",
+      }, {
+        name: "without a CFC policy",
+        arrange: (store) => Deno.remove(join(store, LINUX_POLICY)),
+        problem: (store) =>
+          `no CFC policy is at \`${join(store, LINUX_POLICY)}\` (name one ` +
+          "with `--sandbox-cfc-policy` or `CF_HARNESS_RUNSC_CFC_POLICY`)",
+      }];
+
+      for (const state of LINUX_STORE_STATES) {
+        const problem = state.problem;
+        if (problem === undefined) {
+          it(`returns the native runtime from a store under \`HOME\` that is ${state.name}`, async () => {
+            const store = await installLinuxStore(home);
+            await state.arrange(store);
+
+            expect(await select({ HOME: home })).toEqual(
+              fromLinuxStore(store),
+            );
+          });
+          continue;
+        }
+
+        it(`throws, naming what is in the way, for a store under \`HOME\` that is ${state.name}`, async () => {
+          const store = await installLinuxStore(home);
+          await state.arrange(store);
+
+          const refusal = await rejection(select({ HOME: home }));
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({
+            code: "invalid-request",
+            message: linuxNotSetUp(
+              store,
+              problem(store),
+              DOCKER_BY_FLAG_OR_VARIABLE,
+            ),
+          });
+        });
+      }
+
+      it("throws naming the variable alone for an entrypoint that takes no selection flag", async () => {
+        const store = linuxStore(home);
+
+        const refusal = await rejection(
+          select({ HOME: home }, {}, { flags: false }),
+        );
+
+        expect(refusal).toMatchObject({
+          message: linuxNotSetUp(
+            store,
+            [
+              "`bin/runsc`, gVisor's `runsc`, is missing",
+              "`images/kitchensink`, the rootfs a container runs from, is " +
+              "missing",
+              `no CFC policy is at \`${join(store, LINUX_POLICY)}\` (name ` +
+              "one with `CF_HARNESS_RUNSC_CFC_POLICY`)",
+            ].join("; "),
+            DOCKER_BY_VARIABLE,
+          ),
+        });
+        expect(messageOf(refusal)).not.toContain("--sandbox");
+      });
+
+      it("returns the native runtime from a store reached through symbolic links, which Linux's `runsc` reads by the paths they lead to", async () => {
+        // The whole store is a link to one elsewhere, and its rootfs a link
+        // to a directory elsewhere again.
+        const elsewhere = join(root, "elsewhere");
+        const store = await installLinuxStore(elsewhere);
+        const rootfs = join(root, "rootfs");
+        await Deno.mkdir(rootfs);
+        await Deno.remove(join(store, LINUX_ROOTFS));
+        await Deno.symlink(rootfs, join(store, LINUX_ROOTFS));
+        await Deno.mkdir(join(linuxStore(home), ".."), { recursive: true });
+        await Deno.symlink(store, linuxStore(home));
+
+        expect(await select({ HOME: home })).toEqual(
+          fromLinuxStore(linuxStore(home)),
+        );
+      });
+
+      it("throws for a process that is not root, before it looks at the store", async () => {
+        for (
+          const [uid, who] of [
+            [() => 1000, "uid 1000"],
+            [() => null, "a user it cannot tell"],
+          ] as const
+        ) {
+          const refusal = await rejection(
+            select({ HOME: home }, {}, { uid }),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({
+            code: "invalid-request",
+            message: "No sandbox runtime is named, so the default applies, " +
+              "which on Linux is the native `runsc` runtime, and the " +
+              "store's `runsc` runs containers only as root, where this " +
+              `process runs as ${who}. Run it as root, or name a \`runsc\` ` +
+              "that runs as root with `CF_HARNESS_RUNSC_BINARY`, or " +
+              DOCKER_BY_FLAG_OR_VARIABLE,
+          });
+        }
+      });
+
+      it("throws where which user the process runs as cannot be read, rather than take it for root", async () => {
+        await installLinuxStore(home);
+
+        const refusal = await rejection(
+          select({ HOME: home }, {}, {
+            uid: () => {
+              throw new Error("no sys access to uid");
+            },
+          }),
+        );
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(messageOf(refusal)).toContain(
+          "the store's `runsc` runs containers only as root, and which " +
+            "user this process runs as could not be read (Error: no sys " +
+            "access to uid). Run it as root",
+        );
+      });
+
+      it("returns the native runtime for a process that is not root where a `runsc` is named, which takes none from the store", async () => {
+        const store = await installLinuxStore(home);
+        await Deno.remove(join(store, LINUX_RUNSC));
+
+        expect(
+          await select(
+            { HOME: home, CF_HARNESS_RUNSC_BINARY: "/usr/local/bin/runsc" },
+            {},
+            { uid: () => 1000 },
+          ),
+        ).toEqual({
+          ...fromLinuxStore(store),
+          sandboxRunscBinary: "/usr/local/bin/runsc",
+        });
+      });
+
+      it("returns the rootfs and the policy named in place of the store's, and looks for neither there", async () => {
+        const store = await installLinuxStore(home);
+        await Deno.remove(join(store, LINUX_ROOTFS));
+        await Deno.remove(join(store, LINUX_POLICY));
+
+        expect(
+          await select(
+            { HOME: home },
+            { sandboxRootfs: "/named/rootfs", sandboxCfcPolicy: "/named/p" },
+          ),
+        ).toEqual({
+          ...fromLinuxStore(store),
+          sandboxRootfs: "/named/rootfs",
+          sandboxCfcPolicy: "/named/p",
+        });
+      });
+
+      it("throws for a rootfs given empty, which names none", async () => {
+        const store = await installLinuxStore(home);
+
+        expect(
+          await rejection(select({ HOME: home }, { sandboxRootfs: "" })),
+        ).toMatchObject({
+          message: "No sandbox runtime is named, so the default applies, " +
+            "which on Linux is the native `runsc` runtime, and " +
+            "`--sandbox-rootfs` is given empty, which names no rootfs, where " +
+            "that runtime runs only from one. Name a rootfs, or leave the " +
+            "flag out to run from the store's own image, or " +
+            DOCKER_BY_FLAG_OR_VARIABLE,
+        });
+        expect(await select({ HOME: home })).toEqual(fromLinuxStore(store));
+      });
+
+      it("throws for a setting of the Docker driver, whatever the store holds", async () => {
+        await installLinuxStore(home);
+
+        expect(
+          await rejection(
+            select(
+              { HOME: home, CF_HARNESS_SANDBOX_IMAGE: "image" },
+              { dockerDriverFlags: ["--cfc-result-dir"] },
+            ),
+          ),
+        ).toMatchObject({
+          message: "No sandbox runtime is named, so the default applies, " +
+            "which on Linux is the native `runsc` runtime, and " +
+            "`--cfc-result-dir` and `CF_HARNESS_SANDBOX_IMAGE` are settings " +
+            "of the Docker driver, which the native runtime does not read. " +
+            `Remove them, or ${DOCKER_BY_FLAG_OR_VARIABLE}`,
+        });
+      });
+
+      it("throws for a store that cannot be located, with no home or a home that is not absolute", async () => {
+        for (
+          const [env, problem, remedy] of [
+            [
+              {},
+              "its store cannot be located: `HOME` is not set",
+              "Set `HOME`, under which the store is",
+            ],
+            [
+              { HOME: "home" },
+              "its store cannot be located: the home `home` is not an " +
+              "absolute path",
+              "Set `HOME` to an absolute path",
+            ],
+          ] as const
+        ) {
+          const refusal = await rejection(select(env));
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({
+            message: "No sandbox runtime is named, so the default applies, " +
+              `which on Linux is the native \`runsc\` runtime, and ${problem}. ` +
+              `${remedy}, or ${DOCKER_BY_FLAG_OR_VARIABLE}`,
+          });
+        }
+      });
+
+      it("returns the store under the home an entrypoint kept aside from its environment", async () => {
+        const store = await installLinuxStore(home);
+
+        expect(await select({ HOME: undefined }, {}, { homeDir: home }))
+          .toEqual(fromLinuxStore(store));
+      });
+
+      it("maps the network named in Docker's words onto runsc's", async () => {
+        const store = await installLinuxStore(home);
+
+        for (
+          const [named, mode] of [
+            ["none", "none"],
+            ["bridge", "sandbox"],
+            ["host", "host"],
+          ] as const
+        ) {
+          expect(
+            await select({
+              HOME: home,
+              CF_HARNESS_DOCKER_NETWORK_MODE: named,
+            }),
+          ).toEqual({
+            ...fromLinuxStore(store),
+            sandboxRunscNetworkMode: mode,
+          });
+        }
+      });
+    });
+
+    describe("with no runtime named, on a Mac that is not Apple silicon", () => {
+      it("throws, whatever the store holds, saying the native runtime needs Apple silicon", async () => {
+        for (const state of STORE_STATES.slice(0, 2)) {
+          const { env } = await arrange(LOCATIONS[0], state);
+
+          for (const flags of [true, false]) {
+            const refusal = await rejection(
+              resolveSandboxRuntimeSelection(env, {}, {
+                platform: "darwin",
+                arch: "x86_64",
+                flags,
+              }),
+            );
+
+            expect(refusal).toBeInstanceOf(HarnessControlError);
+            expect(refusal).toMatchObject({
+              code: "invalid-request",
+              message: "No sandbox runtime is named, so the default applies, " +
+                "which on macOS is the native `runsc` runtime, and that " +
+                "runtime runs only on Apple silicon, where this process runs " +
+                "on `x86_64`. S" +
+                (flags ? DOCKER_BY_FLAG_OR_VARIABLE : DOCKER_BY_VARIABLE)
+                  .slice(1),
+            });
+          }
+        }
+      });
+
+      it("returns the runtime that is named, as on any Mac", async () => {
+        for (const runtime of ["docker", "runsc"] as const) {
+          expect(
+            (await resolveSandboxRuntimeSelection(
+              { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: runtime },
+              {},
+              { platform: "darwin", arch: "x86_64", flags: false },
+            )).sandboxRuntimeChoice,
+          ).toEqual({ runtime, source: "environment" });
+        }
       });
     });
 
@@ -610,6 +1028,7 @@ describe("sandbox-runtime-default", () => {
               expect(
                 await resolveSandboxRuntimeSelection(env, {}, {
                   platform: "darwin",
+                  arch: "aarch64",
                   flags: true,
                 }),
               ).toEqual(fromStore(store, join(store, POLICY)));
@@ -624,6 +1043,7 @@ describe("sandbox-runtime-default", () => {
             const refusal = await rejection(
               resolveSandboxRuntimeSelection(env, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: true,
               }),
             );
@@ -645,6 +1065,7 @@ describe("sandbox-runtime-default", () => {
         const refusal = await rejection(
           resolveSandboxRuntimeSelection({ HOME: home }, {}, {
             platform: "darwin",
+            arch: "aarch64",
             flags: false,
           }),
         );
@@ -675,6 +1096,7 @@ describe("sandbox-runtime-default", () => {
           const refusal = await rejection(
             resolveSandboxRuntimeSelection(env, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: true,
             }),
           );
@@ -702,6 +1124,7 @@ describe("sandbox-runtime-default", () => {
           const refusal = await rejection(
             resolveSandboxRuntimeSelection(env, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: false,
               cwd: root,
             }),
@@ -727,7 +1150,7 @@ describe("sandbox-runtime-default", () => {
           await resolveSandboxRuntimeSelection(
             { HOME: home, CFC_VM_HOME: "" },
             {},
-            { platform: "darwin", flags: true },
+            { platform: "darwin", arch: "aarch64", flags: true },
           ),
         ).toEqual(fromStore(store, join(store, POLICY)));
       });
@@ -739,7 +1162,7 @@ describe("sandbox-runtime-default", () => {
           resolveSandboxRuntimeSelection(
             { HOME: home, CFC_VM_HOME: named },
             {},
-            { platform: "darwin", flags: true },
+            { platform: "darwin", arch: "aarch64", flags: true },
           );
 
         // The store the variable names is the one the macOS `runsc` will use,
@@ -760,6 +1183,7 @@ describe("sandbox-runtime-default", () => {
         expect(
           await resolveSandboxRuntimeSelection({ HOME: undefined }, {}, {
             platform: "darwin",
+            arch: "aarch64",
             flags: true,
             homeDir: home,
           }),
@@ -774,7 +1198,7 @@ describe("sandbox-runtime-default", () => {
             resolveSandboxRuntimeSelection(
               { HOME: home },
               { sandboxRootfs: "" },
-              { platform: "darwin", flags: true },
+              { platform: "darwin", arch: "aarch64", flags: true },
             ),
           );
 
@@ -797,7 +1221,7 @@ describe("sandbox-runtime-default", () => {
             resolveSandboxRuntimeSelection(
               { HOME: home },
               { sandboxRootfs: "" },
-              { platform: "darwin", flags: false },
+              { platform: "darwin", arch: "aarch64", flags: false },
             ),
           );
 
@@ -819,7 +1243,7 @@ describe("sandbox-runtime-default", () => {
             await resolveSandboxRuntimeSelection(
               { HOME: home },
               { sandboxRuntime: "runsc", sandboxRootfs: "" },
-              { platform: "darwin", flags: true },
+              { platform: "darwin", arch: "aarch64", flags: true },
             ),
           ).toEqual({
             sandboxRuntimeKind: "runsc",
@@ -835,7 +1259,7 @@ describe("sandbox-runtime-default", () => {
             await resolveSandboxRuntimeSelection(
               { HOME: home, CF_HARNESS_SANDBOX_ROOTFS: "" },
               {},
-              { platform: "darwin", flags: true },
+              { platform: "darwin", arch: "aarch64", flags: true },
             ),
           ).toEqual(fromStore(store, join(store, POLICY)));
         });
@@ -859,6 +1283,7 @@ describe("sandbox-runtime-default", () => {
               io: { stdout: () => {}, stderr: (text) => stderr.push(text) },
               env: { HOME: home },
               platform: "darwin",
+              arch: "aarch64",
               cwd: root,
               registerSignalHandler: () => () => {},
               createPromptLoop: () => {
@@ -914,6 +1339,7 @@ describe("sandbox-runtime-default", () => {
             const refusal = await rejection(
               resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: true,
               }),
             );
@@ -947,6 +1373,7 @@ describe("sandbox-runtime-default", () => {
               await rejection(
                 resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                   platform: "darwin",
+                  arch: "aarch64",
                   flags: true,
                 }),
               ),
@@ -978,7 +1405,7 @@ describe("sandbox-runtime-default", () => {
                 resolveSandboxRuntimeSelection(
                   { HOME: home, CF_HARNESS_RUNSC_BINARY: "/named/runsc" },
                   {},
-                  { platform: "darwin", flags: true },
+                  { platform: "darwin", arch: "aarch64", flags: true },
                 ),
               ),
             ),
@@ -1018,6 +1445,7 @@ describe("sandbox-runtime-default", () => {
             const refusal = await rejection(
               resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: true,
               }),
             );
@@ -1046,6 +1474,7 @@ describe("sandbox-runtime-default", () => {
           const refusal = await rejection(
             resolveSandboxRuntimeSelection({ HOME: home }, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: true,
               lstat: (path) =>
                 path === join(store, "images")
@@ -1074,7 +1503,7 @@ describe("sandbox-runtime-default", () => {
           const selected = await resolveSandboxRuntimeSelection(
             { HOME: home, CF_HARNESS_SANDBOX_ROOTFS: "/named/rootfs" },
             {},
-            { platform: "darwin", flags: true },
+            { platform: "darwin", arch: "aarch64", flags: true },
           );
 
           expect(selected.sandboxRootfs).toBe("/named/rootfs");
@@ -1096,6 +1525,7 @@ describe("sandbox-runtime-default", () => {
               await rejection(
                 resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                   platform: "darwin",
+                  arch: "aarch64",
                   flags: true,
                 }),
               ),
@@ -1122,6 +1552,7 @@ describe("sandbox-runtime-default", () => {
                 await rejection(
                   resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                     platform: "darwin",
+                    arch: "aarch64",
                     flags: true,
                   }),
                 ),
@@ -1151,6 +1582,7 @@ describe("sandbox-runtime-default", () => {
                 await rejection(
                   resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                     platform: "darwin",
+                    arch: "aarch64",
                     flags: true,
                   }),
                 ),
@@ -1175,6 +1607,7 @@ describe("sandbox-runtime-default", () => {
               await rejection(
                 resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                   platform: "darwin",
+                  arch: "aarch64",
                   flags: true,
                   canExecute: (path) =>
                     Promise.resolve(path !== join(store, DAEMON)),
@@ -1200,6 +1633,7 @@ describe("sandbox-runtime-default", () => {
               await rejection(
                 resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                   platform: "darwin",
+                  arch: "aarch64",
                   flags: true,
                   canExecute: (path) =>
                     path === join(store, SHIM)
@@ -1225,6 +1659,7 @@ describe("sandbox-runtime-default", () => {
           expect(
             await resolveSandboxRuntimeSelection({ HOME: home }, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: true,
             }),
           ).toEqual(fromStore(store, join(store, POLICY)));
@@ -1238,6 +1673,7 @@ describe("sandbox-runtime-default", () => {
         const refusal = await rejection(
           resolveSandboxRuntimeSelection({ HOME: home }, {}, {
             platform: "darwin",
+            arch: "aarch64",
             flags: true,
             lstat: (path) =>
               path === join(store, CONFIG)
@@ -1264,6 +1700,7 @@ describe("sandbox-runtime-default", () => {
         const select = () =>
           resolveSandboxRuntimeSelection({ HOME: home }, {}, {
             platform: "darwin",
+            arch: "aarch64",
             flags: true,
             homeDir: kept,
           });
@@ -1312,7 +1749,7 @@ describe("sandbox-runtime-default", () => {
             const refusal = await rejection(
               resolveSandboxRuntimeSelection({ HOME: home }, {
                 dockerDriverFlags: [flag],
-              }, { platform: "darwin", flags: true }),
+              }, { platform: "darwin", arch: "aarch64", flags: true }),
             );
 
             expect(refusal).toBeInstanceOf(HarnessControlError);
@@ -1332,7 +1769,7 @@ describe("sandbox-runtime-default", () => {
               resolveSandboxRuntimeSelection(
                 { HOME: home, [variable]: "/a/value/nobody/should/see" },
                 {},
-                { platform: "darwin", flags: false },
+                { platform: "darwin", arch: "aarch64", flags: false },
               ),
             );
 
@@ -1357,6 +1794,7 @@ describe("sandbox-runtime-default", () => {
               { dockerDriverFlags: ["--sandbox-docker-runtime"] },
               {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: true,
               },
             ),
@@ -1380,7 +1818,7 @@ describe("sandbox-runtime-default", () => {
               resolveSandboxRuntimeSelection(
                 { HOME: home, CF_HARNESS_SANDBOX_IMAGE: "image:1" },
                 {},
-                { platform: "darwin", flags: false },
+                { platform: "darwin", arch: "aarch64", flags: false },
               ),
             ),
           ).toMatchObject({
@@ -1402,7 +1840,7 @@ describe("sandbox-runtime-default", () => {
                 CF_HARNESS_RUNSC_CFC_RESULT_DIR: "  ",
               },
               { dockerDriverFlags: [] },
-              { platform: "darwin", flags: true },
+              { platform: "darwin", arch: "aarch64", flags: true },
             ),
           ).toEqual(fromStore(store, join(store, POLICY)));
         });
@@ -1418,7 +1856,7 @@ describe("sandbox-runtime-default", () => {
               await resolveSandboxRuntimeSelection(
                 { ...env, CF_HARNESS_SANDBOX_RUNTIME: runtime },
                 { dockerDriverFlags: FLAGS },
-                { platform: "darwin", flags: true },
+                { platform: "darwin", arch: "aarch64", flags: true },
               ),
             ).toEqual({
               sandboxRuntimeKind: runtime,
@@ -1427,7 +1865,7 @@ describe("sandbox-runtime-default", () => {
           }
         });
 
-        it("returns Docker by default off macOS with every one of them given", async () => {
+        it("returns Docker by default off macOS and Linux with every one of them given", async () => {
           expect(
             await resolveSandboxRuntimeSelection(
               {
@@ -1436,7 +1874,7 @@ describe("sandbox-runtime-default", () => {
               },
               { dockerDriverFlags: FLAGS },
               {
-                platform: "linux",
+                platform: "freebsd",
                 flags: true,
               },
             ),
@@ -1469,7 +1907,7 @@ describe("sandbox-runtime-default", () => {
             await resolveSandboxRuntimeSelection(
               { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: "runsc" },
               {},
-              { platform: "darwin", flags: true },
+              { platform: "darwin", arch: "aarch64", flags: true },
             ),
           ).toEqual({
             sandboxRuntimeKind: "runsc",
@@ -1499,6 +1937,7 @@ describe("sandbox-runtime-default", () => {
           expect(
             await resolveSandboxRuntimeSelection({ HOME: home }, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: true,
             }),
           ).toEqual(fromStore(store, join(store, POLICY)));
@@ -1526,6 +1965,7 @@ describe("sandbox-runtime-default", () => {
           const refusal = await rejection(
             resolveSandboxRuntimeSelection({ HOME: home }, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: true,
               pathExists: failingAt(homePolicy(home)),
             }),
@@ -1549,6 +1989,7 @@ describe("sandbox-runtime-default", () => {
           const refusal = await rejection(
             resolveSandboxRuntimeSelection({ HOME: home }, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: false,
               pathExists: failingAt(join(store, POLICY)),
             }),
@@ -1600,7 +2041,12 @@ describe("sandbox-runtime-default", () => {
             const selected = await resolveSandboxRuntimeSelection(
               { HOME: home, ...env },
               explicit,
-              { platform: "darwin", flags: true, pathExists: never },
+              {
+                platform: "darwin",
+                arch: "aarch64",
+                flags: true,
+                pathExists: never,
+              },
             );
 
             expect(selected.sandboxRuntimeKind).toBe("runsc");
@@ -1621,6 +2067,7 @@ describe("sandbox-runtime-default", () => {
             const refusal = await rejection(
               resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: true,
               }),
             );
@@ -1644,6 +2091,7 @@ describe("sandbox-runtime-default", () => {
             const refusal = await rejection(
               resolveSandboxRuntimeSelection({ HOME: home }, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: true,
               }),
             );
@@ -1664,6 +2112,7 @@ describe("sandbox-runtime-default", () => {
           const refusal = await rejection(
             resolveSandboxRuntimeSelection({ HOME: home }, {}, {
               platform: "darwin",
+              arch: "aarch64",
               flags: true,
             }),
           );
@@ -1695,7 +2144,7 @@ describe("sandbox-runtime-default", () => {
             resolveSandboxRuntimeSelection(
               { HOME: home, CFC_VM_HOME: link },
               {},
-              { platform: "darwin", flags: false },
+              { platform: "darwin", arch: "aarch64", flags: false },
             ),
           );
 
@@ -1715,6 +2164,7 @@ describe("sandbox-runtime-default", () => {
             await rejection(
               resolveSandboxRuntimeSelection({ HOME: linkedHome }, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: false,
               }),
             ),
@@ -1735,6 +2185,7 @@ describe("sandbox-runtime-default", () => {
             await rejection(
               resolveSandboxRuntimeSelection({ HOME: written }, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: false,
               }),
             ),
@@ -1751,6 +2202,7 @@ describe("sandbox-runtime-default", () => {
             await rejection(
               resolveSandboxRuntimeSelection({ HOME: linkedHome }, {}, {
                 platform: "darwin",
+                arch: "aarch64",
                 flags: false,
               }),
             ),
@@ -1768,7 +2220,7 @@ describe("sandbox-runtime-default", () => {
               await resolveSandboxRuntimeSelection(
                 { HOME: home, CFC_VM_HOME: written },
                 {},
-                { platform: "darwin", flags: true },
+                { platform: "darwin", arch: "aarch64", flags: true },
               ),
             ).toEqual(fromStore(store, join(store, POLICY)));
           }
@@ -1790,7 +2242,7 @@ describe("sandbox-runtime-default", () => {
               resolveSandboxRuntimeSelection(
                 { HOME: home, CFC_VM_HOME: given },
                 {},
-                { platform: "darwin", flags: true },
+                { platform: "darwin", arch: "aarch64", flags: true },
               ),
             );
 
@@ -1821,6 +2273,7 @@ describe("sandbox-runtime-default", () => {
         ) =>
           resolveSandboxRuntimeSelection({ HOME: home, ...env }, explicit, {
             platform: "darwin",
+            arch: "aarch64",
             flags: true,
             cwd: root,
           });
@@ -1893,6 +2346,7 @@ describe("sandbox-runtime-default", () => {
         ) =>
           resolveSandboxRuntimeSelection({ HOME: home, ...env }, explicit, {
             platform: "darwin",
+            arch: "aarch64",
             flags: true,
           });
 
@@ -1987,9 +2441,40 @@ describe("sandbox-runtime-default", () => {
       );
     });
 
+    it("returns a defaulted Linux runtime with the store it runs from", () => {
+      expect(
+        describeSandboxRuntimeChoice({
+          runtime: "runsc",
+          source: "default",
+          platform: "linux",
+          nativeStore: "/root/.local/share/runsc-cfc",
+        }),
+      ).toBe(
+        "runsc (default on Linux: the native store at " +
+          "/root/.local/share/runsc-cfc)",
+      );
+    });
+
+    it("says of a store a writable mount holds which platform defaulted to it", () => {
+      expect(
+        unnamedRuntimeMountNote({
+          runtime: "runsc",
+          source: "default",
+          platform: "linux",
+          nativeStore: "/root/.local/share/runsc-cfc",
+        }),
+      ).toBe(
+        "No sandbox runtime is named, so this is the native `runsc` runtime " +
+          "that Linux defaults to, from the store at " +
+          "`/root/.local/share/runsc-cfc`: run with a workspace and mounts " +
+          "that hold none of it, or select Docker with " +
+          "`CF_HARNESS_SANDBOX_RUNTIME=docker`.",
+      );
+    });
+
     it("returns a defaulted Docker with the platform that defaulted to it", () => {
       expect(describeSandboxRuntimeChoice(DEFAULTED_DOCKER)).toBe(
-        "docker (default on linux: the native runtime is macOS only)",
+        `docker (${dockerDefaultReason("freebsd")})`,
       );
     });
   });
@@ -2148,6 +2633,8 @@ describe("sandbox-runtime-default", () => {
           io,
           env,
           platform,
+          arch: "aarch64",
+          uid: () => 0,
           ...embedded,
           cwd: root,
           registerSignalHandler: () => () => {},
@@ -2302,17 +2789,30 @@ describe("sandbox-runtime-default", () => {
       ]);
     });
 
-    it("runs on Docker with no runtime named on Linux, whatever store is there", async () => {
+    it("runs on Docker with no runtime named on FreeBSD, whatever store is there", async () => {
       await installStore(defaultStore(home));
+      await installLinuxStore(home);
 
-      const { exitCode, built, stdout } = await run("linux", { HOME: home });
+      const { exitCode, built, stdout } = await run("freebsd", { HOME: home });
 
       expect(exitCode).toBe(0);
       expect(built.map(sandboxOf)).toEqual([
         { sandboxRuntimeChoice: DEFAULTED_DOCKER },
       ]);
       expect(stdout.join("")).toContain(
-        "\nsandbox: docker (default on linux: the native runtime is macOS only)\n",
+        `\nsandbox: docker (${dockerDefaultReason("freebsd")})\n`,
+      );
+    });
+
+    it("runs on the native runtime, from the Linux store, with no runtime named on Linux", async () => {
+      const store = await installLinuxStore(home);
+
+      const { exitCode, built, stdout } = await run("linux", { HOME: home });
+
+      expect(exitCode).toBe(0);
+      expect(built.map(sandboxOf)).toEqual([fromLinuxStore(store)]);
+      expect(stdout.join("")).toContain(
+        `\nsandbox: runsc (default on Linux: the native store at ${store})\n`,
       );
     });
 
@@ -2368,6 +2868,7 @@ describe("sandbox-runtime-default", () => {
       try {
         const parsed = await parseCfHarnessCliArgs(["hello"], {
           platform: "darwin",
+          arch: "aarch64",
           cwd: root,
         });
 
@@ -2400,7 +2901,7 @@ describe("sandbox-runtime-default", () => {
       await runHarnessInteractiveChatStdioCli([], root, (options) => {
         started.push(options);
         return Promise.resolve();
-      }, { env, platform });
+      }, { env, platform, arch: "aarch64", uid: () => 0 });
       return started.map((options) => sandboxOf(options.basePromptLoopOptions));
     };
 
@@ -2447,11 +2948,20 @@ describe("sandbox-runtime-default", () => {
       });
     });
 
-    it("hands its host Docker with no runtime named on Linux, whatever store is there", async () => {
+    it("hands its host Docker with no runtime named on FreeBSD, whatever store is there", async () => {
       await installStore(defaultStore(home));
+      await installLinuxStore(home);
+
+      expect(await start("freebsd", { HOME: home })).toEqual([
+        { sandboxRuntimeChoice: DEFAULTED_DOCKER },
+      ]);
+    });
+
+    it("hands its host the native runtime, from the Linux store, with no runtime named on Linux", async () => {
+      const store = await installLinuxStore(home);
 
       expect(await start("linux", { HOME: home })).toEqual([
-        { sandboxRuntimeChoice: DEFAULTED_DOCKER },
+        fromLinuxStore(store),
       ]);
     });
 
@@ -2718,6 +3228,7 @@ describe("sandbox-runtime-default", () => {
 
       const config = await resolveConsoleConfig(ARGS, { HOME: home }, root, {
         platform: "darwin",
+        arch: "aarch64",
       });
 
       expect(sandboxOf(config)).toEqual(fromStore(store, join(store, POLICY)));
@@ -2739,11 +3250,12 @@ describe("sandbox-runtime-default", () => {
       ]);
     });
 
-    it("serves on Docker with no runtime named on Linux, whatever store is there", async () => {
+    it("serves on Docker with no runtime named on FreeBSD, whatever store is there", async () => {
       await installStore(defaultStore(home));
+      await installLinuxStore(home);
 
       const config = await resolveConsoleConfig(ARGS, { HOME: home }, root, {
-        platform: "linux",
+        platform: "freebsd",
       });
 
       expect(sandboxOf(config)).toEqual({
@@ -2751,11 +3263,33 @@ describe("sandbox-runtime-default", () => {
       });
       expect(sandboxRow(config)).toEqual([{
         value: "docker",
-        detail: "console default on linux: the native runtime is macOS only",
+        detail: `console ${dockerDefaultReason("freebsd")}`,
       }]);
       expect(consoleSandboxBanner(config)[0]).toBe(
-        "  sandbox:    docker; default on linux: the native runtime is macOS only",
+        `  sandbox:    docker; ${dockerDefaultReason("freebsd")}`,
       );
+    });
+
+    it("serves on the native runtime, from the Linux store, with no runtime named on Linux", async () => {
+      const store = await installLinuxStore(home);
+
+      const config = await resolveConsoleConfig(ARGS, { HOME: home }, root, {
+        platform: "linux",
+        uid: () => 0,
+      });
+
+      expect(sandboxOf(config)).toEqual(fromLinuxStore(store));
+      expect(sandboxRow(config)).toEqual([{
+        value: "runsc",
+        detail: `console default on Linux: the native store at ${store}`,
+      }]);
+      expect(consoleSandboxBanner(config)).toEqual([
+        "  sandbox:    runsc, the direct driver (no Docker); default on " +
+        `Linux: the native store at ${store}`,
+        `  runsc:      ${join(store, LINUX_RUNSC)}`,
+        `  rootfs:     ${join(store, LINUX_ROOTFS)}`,
+        `  policy:     ${join(store, LINUX_POLICY)}`,
+      ]);
     });
 
     it("refuses the variable of a Docker sidecar directory with no runtime named on macOS, and serves on Docker with it where Docker is named", async () => {
@@ -2766,7 +3300,10 @@ describe("sandbox-runtime-default", () => {
       };
 
       const refusal = await rejection(
-        resolveConsoleConfig(ARGS, env, root, { platform: "darwin" }),
+        resolveConsoleConfig(ARGS, env, root, {
+          platform: "darwin",
+          arch: "aarch64",
+        }),
       );
 
       expect(refusal).toBeInstanceOf(HarnessControlError);
@@ -2782,7 +3319,7 @@ describe("sandbox-runtime-default", () => {
         ARGS,
         { ...env, CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         root,
-        { platform: "darwin" },
+        { platform: "darwin", arch: "aarch64" },
       );
       expect(named.cfcResultDir).toBe("/sidecars/results");
     });
@@ -2798,7 +3335,7 @@ describe("sandbox-runtime-default", () => {
             CF_HARNESS_SANDBOX_RUNTIME: runtime,
           },
           root,
-          { platform: "darwin" },
+          { platform: "darwin", arch: "aarch64" },
         );
 
         expect(sandboxRow(config)).toEqual([{
@@ -2816,7 +3353,7 @@ describe("sandbox-runtime-default", () => {
         ARGS,
         {},
         root,
-        { platform: "linux" },
+        { platform: "freebsd" },
       );
 
       expect(consoleSandboxBanner(config)[0]).toBe("  sandbox:    docker");
@@ -2827,7 +3364,10 @@ describe("sandbox-runtime-default", () => {
       await installStore(store);
       const env = { HOME: home };
       const health = createConsoleHealth(
-        await resolveConsoleConfig(ARGS, env, root, { platform: "darwin" }),
+        await resolveConsoleConfig(ARGS, env, root, {
+          platform: "darwin",
+          arch: "aarch64",
+        }),
         undefined,
         undefined,
         env,
@@ -2892,7 +3432,7 @@ describe("sandbox-runtime-default", () => {
     it("says in its runtime row that Docker was the default", async () => {
       const health = createConsoleHealth(
         await resolveConsoleConfig(ARGS, { HOME: home }, root, {
-          platform: "linux",
+          platform: "freebsd",
         }),
         undefined,
         undefined,
@@ -2910,7 +3450,7 @@ describe("sandbox-runtime-default", () => {
         state: "ok",
         value: "runsc-cfc registered",
         detail: "docker info --format '{{json .Runtimes}}'; selected: " +
-          "docker (default on linux: the native runtime is macOS only)",
+          `docker (${dockerDefaultReason("freebsd")})`,
       });
     });
 
@@ -2969,6 +3509,7 @@ describe("sandbox-runtime-default", () => {
             sandboxOf(
               await resolveConsoleConfig(ARGS, env, root, {
                 platform: "darwin",
+                arch: "aarch64",
                 sandboxRuntimeNamedBy: "Loom",
               }),
             ),
@@ -2976,6 +3517,7 @@ describe("sandbox-runtime-default", () => {
             sandboxOf(
               await resolveConsoleConfig(ARGS, env, root, {
                 platform: "darwin",
+                arch: "aarch64",
               }),
             ),
           );
@@ -2988,6 +3530,7 @@ describe("sandbox-runtime-default", () => {
         const refusal = await rejection(
           startConsoleServer(ARGS, { HOME: home }, root, undefined, {
             platform: "darwin",
+            arch: "aarch64",
           }),
         );
 
@@ -3006,7 +3549,7 @@ describe("sandbox-runtime-default", () => {
       for (
         const [platform, where, store] of [
           ["darwin", "on macOS with a store set up", true],
-          ["linux", "on Linux with no store", false],
+          ["freebsd", "on FreeBSD with no store", false],
         ] as const
       ) {
         it(`gets past the selection to what it needs next, with no runtime named ${where}`, async () => {
@@ -3020,7 +3563,7 @@ describe("sandbox-runtime-default", () => {
               { HOME: home },
               root,
               undefined,
-              { platform },
+              { platform, arch: "aarch64" },
             ),
           ).rejects.toThrow("a fabric session is required");
         });
@@ -3101,7 +3644,7 @@ describe("sandbox-runtime-default", () => {
         ARGS,
         { HOME: home },
         launchIo,
-        { platform: "darwin" },
+        { platform: "darwin", arch: "aarch64" },
       );
 
       const fromStoreSource = `the native store at \`${store}\``;
@@ -3126,6 +3669,57 @@ describe("sandbox-runtime-default", () => {
       // sidecar directory is exported.
       expect(launchIo.dockerReads).toBe(0);
       expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBeUndefined();
+    });
+
+    it("reports the native runtime as the default, each setting beside the store it came from, on Linux", async () => {
+      const store = await installLinuxStore(home);
+      const launchIo = io();
+
+      const { plan } = await prepareConsoleLaunch(
+        ARGS,
+        { HOME: home },
+        launchIo,
+        { platform: "linux", uid: () => 0 },
+      );
+
+      const fromStoreSource = `the native store at \`${store}\``;
+      expect(sandboxRows(plan)).toEqual([{
+        name: "sandbox",
+        value: "runsc",
+        source: `harness default on Linux: the native store at ${store}`,
+      }, {
+        name: "runsc",
+        value: join(store, LINUX_RUNSC),
+        source: fromStoreSource,
+      }, {
+        name: "rootfs",
+        value: join(store, LINUX_ROOTFS),
+        source: fromStoreSource,
+      }, {
+        name: "cfc policy",
+        value: join(store, LINUX_POLICY),
+        source: fromStoreSource,
+      }]);
+      expect(launchIo.dockerReads).toBe(0);
+      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBeUndefined();
+    });
+
+    it("refuses to launch, reading nothing of Docker's, with no runtime named on Linux for a process that is not root", async () => {
+      await installLinuxStore(home);
+      const launchIo = io();
+
+      const refusal = await rejection(
+        prepareConsoleLaunch(ARGS, { HOME: home }, launchIo, {
+          platform: "linux",
+          uid: () => 1000,
+        }),
+      );
+
+      expect(refusal).toBeInstanceOf(HarnessControlError);
+      expect(messageOf(refusal)).toContain(
+        "runs containers only as root, where this process runs as uid 1000",
+      );
+      expect(launchIo.dockerReads).toBe(0);
     });
 
     describe("for a Loom instance", () => {
@@ -3221,7 +3815,7 @@ describe("sandbox-runtime-default", () => {
           INSTANCE_ARGS,
           { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: "docker" },
           launchIo,
-          { platform: "darwin" },
+          { platform: "darwin", arch: "aarch64" },
         );
 
         expect(sandboxRows(plan)).toEqual([{
@@ -3274,16 +3868,21 @@ describe("sandbox-runtime-default", () => {
             { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: "docker" },
             serve,
             instanceIo(),
-            { platform: "darwin" },
+            { platform: "darwin", arch: "aarch64" },
           );
           await launchConsole(ARGS, { HOME: home }, serve, io(), {
             platform: "darwin",
+            arch: "aarch64",
           });
         });
 
         expect(hosts).toEqual([
-          { platform: "darwin", sandboxRuntimeNamedBy: "Loom" },
-          { platform: "darwin" },
+          {
+            platform: "darwin",
+            arch: "aarch64",
+            sandboxRuntimeNamedBy: "Loom",
+          },
+          { platform: "darwin", arch: "aarch64" },
         ]);
       });
     });
@@ -3302,7 +3901,7 @@ describe("sandbox-runtime-default", () => {
           CF_HARNESS_RUNSC_BINARY: "/named/runsc",
         },
         io(),
-        { platform: "darwin" },
+        { platform: "darwin", arch: "aarch64" },
       );
 
       expect(sandboxRows(plan).slice(1)).toEqual([{
@@ -3320,7 +3919,7 @@ describe("sandbox-runtime-default", () => {
       }]);
     });
 
-    it("reports Docker as the default, and reads its runtime table, on Linux", async () => {
+    it("reports Docker as the default, and reads its runtime table, on FreeBSD", async () => {
       await installStore(defaultStore(home));
       const launchIo = io();
 
@@ -3328,13 +3927,13 @@ describe("sandbox-runtime-default", () => {
         ARGS,
         { HOME: home },
         launchIo,
-        { platform: "linux" },
+        { platform: "freebsd" },
       );
 
       expect(sandboxRows(plan)).toEqual([{
         name: "sandbox",
         value: "docker",
-        source: "harness default on linux: the native runtime is macOS only",
+        source: `harness ${dockerDefaultReason("freebsd")}`,
       }]);
       expect(launchIo.dockerReads).toBe(1);
       expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
@@ -3354,7 +3953,7 @@ describe("sandbox-runtime-default", () => {
             CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: "/sidecars/ctx",
           },
           launchIo,
-          { platform: "darwin" },
+          { platform: "darwin", arch: "aarch64" },
         ),
       );
 
@@ -3375,7 +3974,7 @@ describe("sandbox-runtime-default", () => {
           [...ARGS, "--cfc-result-dir", "/elsewhere"],
           { HOME: home },
           io(),
-          { platform: "darwin" },
+          { platform: "darwin", arch: "aarch64" },
         ),
       ).rejects.toThrow(
         "`--cfc-result-dir` names a sidecar directory of the Docker driver, " +
@@ -3416,7 +4015,7 @@ describe("sandbox-runtime-default", () => {
             return Promise.resolve();
           },
           io(),
-          { platform: "darwin" },
+          { platform: "darwin", arch: "aarch64" },
         ));
 
         expect(refusal).toBeInstanceOf(HarnessControlError);
@@ -3431,7 +4030,7 @@ describe("sandbox-runtime-default", () => {
       for (
         const [platform, where, reads] of [
           ["darwin", "on macOS with a store set up", 0],
-          ["linux", "on Linux", 1],
+          ["freebsd", "on FreeBSD", 1],
         ] as const
       ) {
         it(`serves, with no runtime named ${where}`, async () => {
@@ -3448,7 +4047,7 @@ describe("sandbox-runtime-default", () => {
                 return Promise.resolve();
               },
               launchIo,
-              { platform },
+              { platform, arch: "aarch64" },
             )
           );
 
@@ -3456,6 +4055,38 @@ describe("sandbox-runtime-default", () => {
           expect(launchIo.dockerReads).toBe(reads);
         });
       }
+    });
+  });
+
+  describe("a named `runsc` with no rootfs named, on Linux", () => {
+    it("is the rootfs of the Linux store under the home, for the direct driver's configuration", async () => {
+      const store = await installLinuxStore(home);
+      const workspace = join(root, "workspace");
+      await Deno.mkdir(workspace);
+
+      const config = resolveRunscSandboxConfig({
+        workspaceHostPath: workspace,
+        runscBinary: join(store, LINUX_RUNSC),
+        platform: "linux",
+        homeDir: home,
+      });
+
+      expect(config.rootfs).toBe(join(store, LINUX_ROOTFS));
+    });
+
+    it("is refused, saying where it is looked for, where there is no home", () => {
+      expect(thrownMessage(() =>
+        resolveRunscSandboxConfig({
+          workspaceHostPath: root,
+          runscBinary: "/bin/sh",
+          platform: "linux",
+        })
+      )).toBe(
+        "runsc sandbox needs a rootfs: pass --sandbox-rootfs or set " +
+          "CF_HARNESS_SANDBOX_ROOTFS (the default is the kitchensink image " +
+          "of the store under the home: the cfc-vm store on macOS, " +
+          "~/.local/share/runsc-cfc on Linux)",
+      );
     });
   });
 
@@ -3565,7 +4196,7 @@ describe("sandbox-runtime-default", () => {
           ],
           env,
           root,
-          { platform: "darwin" },
+          { platform: "darwin", arch: "aarch64" },
         ),
         undefined,
         undefined,
@@ -3714,6 +4345,7 @@ describe("sandbox-runtime-default", () => {
           io,
           env: { HOME: home },
           platform: "darwin",
+          arch: "aarch64",
           cwd: root,
           registerSignalHandler: () => () => {},
           createPromptLoop: () => {
@@ -3746,7 +4378,7 @@ describe("sandbox-runtime-default", () => {
           ],
           env,
           root,
-          { platform: "darwin" },
+          { platform: "darwin", arch: "aarch64" },
         ),
         undefined,
         undefined,
@@ -3782,10 +4414,10 @@ describe("sandbox-runtime-default", () => {
   describe("an entrypoint given no platform", () => {
     // Every other case in this file names its platform. These name none, so
     // each entrypoint takes the platform the suite runs on, and what a case
-    // expects is read off that same platform: a run on macOS checks that the
-    // entrypoint's own default is the native runtime, and a run anywhere else
-    // that it is Docker. An entrypoint whose platform were fixed would fail
-    // one of the two.
+    // expects is read off that same platform: a run on macOS or Linux checks
+    // that the entrypoint's own default is the native runtime, and a run
+    // anywhere else that it is Docker. An entrypoint whose platform were fixed
+    // would fail one of the two.
 
     const CONSOLE_ARGS = [
       "--fabric-identity",
@@ -3833,19 +4465,33 @@ describe("sandbox-runtime-default", () => {
     };
 
     /**
-     * On macOS, checks that `selecting` was refused for the store the home
-     * does not hold. Returns whether the suite runs on macOS, where that is
-     * the whole of what a case expects.
+     * On macOS and Linux, checks that `selecting` was refused by the native
+     * default, which the home holds no store for. On Linux the process the
+     * suite runs as decides what is in the way first (whether it is root, or
+     * can tell), so the refusal is checked for whose default it is. Returns
+     * whether the suite runs on either, where that is the whole of what a
+     * case expects.
      */
-    const refusedOnMacOS = async (
+    const refusedHere = async (
       selecting: Promise<unknown>,
     ): Promise<boolean> => {
-      if (Deno.build.os !== "darwin") return false;
+      const name = Deno.build.os === "darwin"
+        ? "macOS"
+        : Deno.build.os === "linux"
+        ? "Linux"
+        : undefined;
+      if (name === undefined) return false;
       const refusal = await rejection(selecting);
       expect(refusal).toBeInstanceOf(HarnessControlError);
       expect(messageOf(refusal)).toContain(
-        `it is not set up at \`${defaultStore(home)}\`: `,
+        "No sandbox runtime is named, so the default applies, which on " +
+          `${name} is the native \`runsc\` runtime, and `,
       );
+      if (name === "macOS") {
+        expect(messageOf(refusal)).toContain(
+          `it is not set up at \`${defaultStore(home)}\`: `,
+        );
+      }
       return true;
     };
 
@@ -3855,7 +4501,7 @@ describe("sandbox-runtime-default", () => {
         env: { HOME: home },
       });
 
-      if (await refusedOnMacOS(parsing)) return;
+      if (await refusedHere(parsing)) return;
       const parsed = await parsing;
       expect(sandboxOf("help" in parsed ? undefined : parsed)).toEqual(
         defaultedDockerHere,
@@ -3868,7 +4514,7 @@ describe("sandbox-runtime-default", () => {
         env: { HOME: home },
       });
 
-      if (await refusedOnMacOS(selecting)) return;
+      if (await refusedHere(selecting)) return;
       expect(await selecting).toEqual(defaultedDockerHere);
     });
 
@@ -3884,7 +4530,7 @@ describe("sandbox-runtime-default", () => {
         { env: { HOME: home } },
       );
 
-      if (await refusedOnMacOS(starting)) return;
+      if (await refusedHere(starting)) return;
       await starting;
       expect(
         started.map((options) => sandboxOf(options.basePromptLoopOptions)),
@@ -3898,7 +4544,7 @@ describe("sandbox-runtime-default", () => {
         root,
       );
 
-      if (await refusedOnMacOS(resolving)) return;
+      if (await refusedHere(resolving)) return;
       expect(sandboxOf(await resolving)).toEqual(defaultedDockerHere);
     });
 
@@ -3909,7 +4555,7 @@ describe("sandbox-runtime-default", () => {
         launchIo,
       );
 
-      if (await refusedOnMacOS(preparing)) return;
+      if (await refusedHere(preparing)) return;
       expect(
         (await preparing).plan.resolved.filter(({ name }) =>
           name === "sandbox"
@@ -3917,8 +4563,7 @@ describe("sandbox-runtime-default", () => {
       ).toEqual([{
         name: "sandbox",
         value: "docker",
-        source:
-          `harness default on ${Deno.build.os}: the native runtime is macOS only`,
+        source: `harness ${dockerDefaultReason(Deno.build.os)}`,
       }]);
     });
   });

@@ -156,7 +156,7 @@ CF_HARNESS_SANDBOX_RUNTIME=docker \
 ```
 
 **A console that cannot start does not take the fabric down.** It needs its
-sandbox runtime (on a Mac the native store, elsewhere Docker, unless
+sandbox runtime (on a Mac or Linux the native store, elsewhere Docker, unless
 `CF_HARNESS_SANDBOX_RUNTIME` names one) and a connected model provider, and when
 either is missing the flag reports it in the script's output and in
 `packages/cf-harness/local-dev-console.log`, and the shell and toolshed keep

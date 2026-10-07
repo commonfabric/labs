@@ -60,8 +60,10 @@ the script's output and in `packages/cf-harness/local-dev-console.log`, and the
 shell and toolshed keep running. The sandbox runtime is the one
 `CF_HARNESS_SANDBOX_RUNTIME` names, `docker` or `runsc`. With none named, a Mac
 serves on its native runtime, the cfc-vm store gVisor's macOS installer writes,
-and does not start where that store is not set up; every other platform serves
-on Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
+and does not start where that store is not set up; Linux serves on its native
+runtime too, the store gVisor's Linux installer writes under
+`~/.local/share/runsc-cfc`, and does not start where it is not root or that
+store is not set up; every other platform serves on Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
 is set the console is launched for that loom instance, and with no runtime named
 it does not start on any platform, saying that Loom must name one. `packages/cf-harness/console/README.md` covers the console itself,
 and [`../../packages/cf-harness/docs/WEAVER.md`](../../packages/cf-harness/docs/WEAVER.md)
@@ -387,10 +389,11 @@ tools. A run's workspace and artifacts go under `--work-root`, which defaults to
 
 A run's sandbox is the one the harness selects.
 `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`; with none named, a
-Mac runs each run on its native runtime, from the cfc-vm store, while every
+Mac runs each run on its native runtime, from the cfc-vm store, Linux on its
+own, from the store under `~/.local/share/runsc-cfc` and as root, while every
 other platform runs Docker. The runner derives that selection as it starts, and
-where the harness would refuse its runs, a Mac whose store is not set up among
-them, it exits with the harness's refusal before either of its lanes, the
+where the harness would refuse its runs, a Mac or a Linux host whose store is
+not set up among them, it exits with the harness's refusal before either of its lanes, the
 Fabric lane or local jobs, serves anything. On Docker, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` name the two sidecar directories
 Docker's `runsc-cfc` runtime is registered with. A run's task is bound to the

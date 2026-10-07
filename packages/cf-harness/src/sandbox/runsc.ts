@@ -143,6 +143,23 @@ export const darwinCfcVmRootfs = (
   imageKey = DARWIN_CFC_VM_IMAGE_KEY,
 ): string => joinHostPath(store, "images", imageKey);
 
+/**
+ * The store gVisor's Linux installer writes under `home`: the `runsc` binary
+ * in `bin/`, the CFC policy as `cfc-policy.json`, and each image unpacked to
+ * a rootfs directory in `images/`.
+ */
+export const linuxRunscStore = (home: string): string =>
+  joinHostPath(home, ".local", "share", "runsc-cfc");
+
+/** The image a Linux runsc store unpacks when it is installed, by its key. */
+export const LINUX_RUNSC_IMAGE_KEY = "kitchensink";
+
+/** Where the Linux runsc `store` keeps the rootfs directory of `imageKey`. */
+export const linuxRunscRootfs = (
+  store: string,
+  imageKey = LINUX_RUNSC_IMAGE_KEY,
+): string => joinHostPath(store, "images", imageKey);
+
 export type RunscNetworkMode = "none" | "sandbox" | "host";
 
 export interface RunscSandboxConfig {
@@ -210,7 +227,9 @@ export interface ResolveRunscSandboxConfigOptions {
    * The home, and the value of `CFC_VM_HOME`, that the macOS `runsc` this
    * runs finds its store by. On macOS an unnamed rootfs is the kitchen-sink
    * image of that store, as `darwinCfcVmStore()` names it from these two, so
-   * that it is in the store the shim runs from.
+   * that it is in the store the shim runs from. On Linux an unnamed rootfs is
+   * the kitchen-sink rootfs of the store under the home, as
+   * `linuxRunscStore()` names it.
    */
   homeDir?: string;
   cfcVmHome?: string;
@@ -550,11 +569,19 @@ export const resolveRunscSandboxConfig = (
       `runsc sandbox needs the cfc-vm store by its absolute path: \`${store}\` is not an absolute path (set CFC_VM_HOME to the store's absolute path)`,
     );
   }
+  const linuxHome = platform === "linux" && options.homeDir !== undefined &&
+      options.homeDir !== ""
+    ? options.homeDir
+    : undefined;
   const rootfs = options.rootfs ??
-    (store !== undefined ? darwinCfcVmRootfs(store) : undefined);
+    (store !== undefined
+      ? darwinCfcVmRootfs(store)
+      : linuxHome !== undefined
+      ? linuxRunscRootfs(linuxRunscStore(linuxHome))
+      : undefined);
   if (rootfs === undefined) {
     throw new Error(
-      `runsc sandbox needs a rootfs: pass --sandbox-rootfs or set ${RUNSC_ROOTFS_ENV} (on macOS the default is the cfc-vm kitchensink image)`,
+      `runsc sandbox needs a rootfs: pass --sandbox-rootfs or set ${RUNSC_ROOTFS_ENV} (the default is the kitchensink image of the store under the home: the cfc-vm store on macOS, ~/.local/share/runsc-cfc on Linux)`,
     );
   }
   const workspaceMountPath = requireAbsoluteSandboxPath(

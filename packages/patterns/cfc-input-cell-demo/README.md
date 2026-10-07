@@ -33,9 +33,10 @@ Hand both to a run as input cells. The names are operator-authored prose and are
 the whole of what the model is told each token stands for — the values
 themselves never enter the prompt:
 
-The sandbox is Docker, which the run names because a Mac does not run it where
-no runtime is named. Its two CFC transport directories are named explicitly: an
-enforcing run refuses to start without them rather than degrading quietly.
+The sandbox is Docker, which the run names because neither a Mac nor Linux runs
+it where no runtime is named. Its two CFC transport directories are named
+explicitly: an enforcing run refuses to start without them rather than degrading
+quietly.
 
 ```sh
 deno task --cwd packages/cf-harness run \

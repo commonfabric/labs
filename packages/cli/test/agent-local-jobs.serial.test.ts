@@ -311,6 +311,7 @@ describe("cf agent runner local jobs", () => {
         deps.selectSandboxRuntime = () =>
           selectHarnessJobSandboxRuntime({
             platform: "darwin",
+            arch: "aarch64",
             env: { HOME: home },
           });
         return home;

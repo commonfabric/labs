@@ -27,18 +27,19 @@ The runtime has four main boundaries:
 3. Most tool execution runs in a gVisor sandbox through one of two drivers: one
    drives Docker with a configurable Docker-registered runtime, normally
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
-   A run names one. Where it names none, macOS takes the direct driver and every
-   other platform takes Docker, except that the Loom local host, and a console
-   launched for a Loom instance, refuse. [Sandbox runtimes](#sandbox-runtimes)
-   describes both. The browser child is a constrained host-adjacent profile
-   whose typed `browser` tool the harness sends to a browser host attached to
-   the run, such as the Weaver, or else binds to a leased local CDP endpoint
-   itself. The optional `run_pattern` tool is a distinct trusted-host path whose
-   Fabric identity stays outside the sandbox. It runs pieces in the configured
-   space and admits input references from that space or foreign DIDs the
-   operator lists with their hosts. The agent result writer is a second such
-   path, invoked by a host caller rather than by the model, writing a run's
-   structured result into the configured space.
+   A run names one. Where it names none, macOS and Linux take the direct driver
+   and every other platform takes Docker, except that the Loom local host, and a
+   console launched for a Loom instance, refuse.
+   [Sandbox runtimes](#sandbox-runtimes) describes both. The browser child is a
+   constrained host-adjacent profile whose typed `browser` tool the harness
+   sends to a browser host attached to the run, such as the Weaver, or else
+   binds to a leased local CDP endpoint itself. The optional `run_pattern` tool
+   is a distinct trusted-host path whose Fabric identity stays outside the
+   sandbox. It runs pieces in the configured space and admits input references
+   from that space or foreign DIDs the operator lists with their hosts. The
+   agent result writer is a second such path, invoked by a host caller rather
+   than by the model, writing a run's structured result into the configured
+   space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child
@@ -108,13 +109,23 @@ from one driver to the other:
   directory `CFC_VM_HOME` names, which must be an absolute path, and otherwise
   `Library/Application Support/cfc-vm` under the home. Where the store cannot
   provide the runtime the entrypoint is refused before it runs, serves, or
-  launches anything.
-- On every other platform that default is Docker. The native runtime is the
-  macOS `runsc`, which runs in a VM only macOS has, so the platform alone
-  decides this; no other platform has a default direct driver.
+  launches anything. That VM runs on Apple silicon alone: on any other Mac
+  (`Deno.build.arch` other than `aarch64`) the default is refused before
+  anything else is looked at, saying so and how to select Docker.
+- On Linux that default is the direct driver with the **native runtime** too:
+  gVisor's own `runsc`, the unpacked kitchen-sink rootfs and the CFC policy of
+  the store gVisor's Linux installer writes at `.local/share/runsc-cfc` under
+  the home. That `runsc` runs containers only as root, so the default is
+  refused, before the store is looked for, for a process whose user id
+  (`Deno.uid()`) is not 0 or cannot be read, unless `CF_HARNESS_RUNSC_BINARY`
+  names a binary to run instead. It is refused where there is no home, or the
+  home is not an absolute path.
+- On every other platform that default is Docker. No other platform has a native
+  runtime, so the platform alone decides this; no other platform has a default
+  direct driver.
 
-The store provides the runtime when it holds each of these, and the refusal
-lists every one that is not there:
+The macOS store provides the runtime when it holds each of these, and the
+refusal lists every one that is not there:
 
 | In the store            | What has to be there | Not needed where                                                |
 | ----------------------- | -------------------- | --------------------------------------------------------------- |
@@ -140,8 +151,32 @@ while that `runsc` knows its store's pieces by their paths in the store, and
 none of gVisor's installer scripts makes a link. The policy is looked at through
 links, as a file anywhere would be.
 
-The macOS default is refused for three more things, each checked before the
-pieces above:
+The Linux store provides the runtime when it holds each of these, and the
+refusal lists every one that is not there:
+
+| Under `.local/share/runsc-cfc` | What has to be there | Not needed where                     |
+| ------------------------------ | -------------------- | ------------------------------------ |
+| `bin/runsc`                    | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one  |
+| `images/kitchensink`           | a directory          | a rootfs is named                    |
+| `cfc-policy.json`              | a file               | a policy is named, the empty one too |
+
+The driver executes `bin/runsc` and names `images/kitchensink`, the image's
+unpacked tree, as each container's rootfs. Linux's `runsc` is handed both by the
+paths their links lead to and reads nothing by its path in the store, so pieces
+are looked at through links, and the store's path is taken as given. A piece is
+otherwise read as on macOS: one that cannot be examined counts as not there,
+with the reason, and one this process cannot read or execute is refused for
+that. The store's policy is the home's default policy, so the selection looks
+for it once.
+
+The Linux default leaves the network mode to the direct driver, `sandbox` unless
+`CF_HARNESS_DOCKER_NETWORK_MODE` names one. Linux's `runsc` builds that stack in
+a network namespace of the container's own, and nothing configures that
+namespace, so the container has loopback alone: no egress, and no route to the
+host. `host` gives it the host's network.
+
+The macOS default is refused for three more things, and the Linux default for
+the first and the last, each checked before the pieces above:
 
 - **A setting of the Docker driver.** Each of `--sandbox-image`,
   `--sandbox-docker-runtime`, `--cfc-result-dir` and
@@ -337,12 +372,13 @@ Each driver describes itself, and the description is recorded in
 the selection its entrypoint derived, and a child run carries its parent's. It
 holds `runtime`, `docker` or `runsc`, and `source`, which is `flag`,
 `environment`, or `default`. A default also holds the `platform` whose default
-applied, and the native runtime macOS defaulted to holds `nativeStore`, its
-store. It is absent for an engine a caller built without a selection. The batch
-CLI prints the same account on the `sandbox` line of its operator summary, as
-`runsc (default on macOS: the native store at <store>)`,
-`docker (default on linux: the native runtime is macOS only)`, or the runtime
-followed by `(named by --sandbox-runtime)` or
+applied, and the native runtime macOS or Linux defaulted to holds `nativeStore`,
+its store. It is absent for an engine a caller built without a selection. The
+batch CLI prints the same account on the `sandbox` line of its operator summary,
+as `runsc (default on macOS: the native store at <store>)`,
+`runsc (default on Linux: the native store at <store>)`,
+`docker (default on freebsd: the native runtime is macOS and Linux only)`, or
+the runtime followed by `(named by --sandbox-runtime)` or
 `(named by CF_HARNESS_SANDBOX_RUNTIME)`.
 
 `runsc-cfc` therefore names two different things, and the field it appears in

@@ -455,7 +455,8 @@ export interface CreateHarnessEngineOptions
   /**
    * runsc runtime: the platform whose driver defaults apply, as
    * `Deno.build.os` writes it, which it is when absent. On macOS an unnamed
-   * rootfs is the kitchen-sink image of the macOS `runsc`'s store.
+   * rootfs is the kitchen-sink image of the macOS `runsc`'s store, and on
+   * Linux the kitchen-sink rootfs of the Linux store under the home.
    */
   sandboxPlatform?: SandboxPlatform;
 

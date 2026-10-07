@@ -61,14 +61,15 @@ first run does without.
 2. **Docker with the `runsc-cfc` runtime.** This walkthrough runs every
    sandboxed tool in a container under that runtime, and names it with
    `CF_HARNESS_SANDBOX_RUNTIME=docker` wherever it starts something. Naming it
-   matters on macOS. There, an entrypoint that takes a default, which is the
-   batch CLI, the interactive stdio entrypoint, the console and its launcher run
-   with no `--instance`, invokes `runsc` directly, with no Docker, from the
-   native cfc-vm store where no runtime is named, and refuses to start where
-   that store is not set up; on every other platform those entrypoints default
-   to Docker. Two entrypoints take no default on any platform and refuse to
-   start unless a runtime is named: the Loom local host, and `console:launch`
-   given `--instance`. The package README's
+   matters on macOS and Linux. There, an entrypoint that takes a default, which
+   is the batch CLI, the interactive stdio entrypoint, the console and its
+   launcher run with no `--instance`, invokes `runsc` directly, with no Docker,
+   from the native cfc-vm store where no runtime is named, and refuses to start
+   where that store is not set up; on Linux they do the same from the store
+   gVisor's Linux installer writes, as root; on every other platform those
+   entrypoints default to Docker. Two entrypoints take no default on any
+   platform and refuse to start unless a runtime is named: the Loom local host,
+   and `console:launch` given `--instance`. The package README's
    [Sandbox runtimes](README.md#sandbox-runtimes) covers the direct driver and
    the default. On macOS, follow the gVisor
    [Docker Desktop CFC setup guide](https://github.com/commonfabric/gvisor/blob/cfc_v2/g3doc/user_guide/quick_start/docker_desktop_cfc.md);

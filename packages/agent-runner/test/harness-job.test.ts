@@ -451,6 +451,7 @@ describe("runHarnessJob()", () => {
               HOME: home,
             },
             platform: "darwin",
+            arch: "aarch64",
             createPromptLoop: () => {
               looped = true;
               throw new Error("no loop is built for a refused job");
@@ -519,17 +520,33 @@ describe("selectHarnessJobSandboxRuntime()", () => {
     });
   });
 
-  it("takes Docker by default off macOS", async () => {
+  it("takes Docker by default off macOS and Linux", async () => {
     const selection = await selectHarnessJobSandboxRuntime({
-      platform: "linux",
+      platform: "freebsd",
       env: {},
     });
 
     expect(selection.sandboxRuntimeChoice).toEqual({
       runtime: "docker",
       source: "default",
-      platform: "linux",
+      platform: "freebsd",
     });
+  });
+
+  it("refuses, as every job would be refused, on Linux for a runner that is not root", async () => {
+    const refusal = await selectHarnessJobSandboxRuntime({
+      platform: "linux",
+      uid: () => 1000,
+      env: { HOME: "/home/runner" },
+    }).then(() => undefined, (error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(HarnessControlError);
+    expect(String(refusal)).toContain(
+      "the store's `runsc` runs containers only as root, where this process " +
+        "runs as uid 1000",
+    );
+    // The runner writes the job's arguments itself, so it names no flag.
+    expect(String(refusal)).not.toContain("--sandbox-runtime");
   });
 
   it("refuses, as every job would be refused, on a Mac whose native runtime is not set up", async () => {
@@ -541,6 +558,7 @@ describe("selectHarnessJobSandboxRuntime()", () => {
     try {
       const refusal = await selectHarnessJobSandboxRuntime({
         platform: "darwin",
+        arch: "aarch64",
         env: { HOME: home },
       }).then(() => undefined, (error: unknown) => error);
 

@@ -99,6 +99,8 @@ import {
   processSandboxSelectionEnv,
   recordedSandboxRuntime,
   resolveSandboxRuntimeSelection,
+  type SandboxProcess,
+  sandboxProcessOf,
   sandboxRuntimeOfOptions,
   sandboxRuntimeResumeRefusal,
   type SandboxRuntimeSelection,
@@ -390,7 +392,8 @@ export type CfHarnessCliSignalHandler = (
   signal: CfHarnessCliSignal,
 ) => void | Promise<void>;
 
-export interface RunCfHarnessCliDependencies {
+export interface RunCfHarnessCliDependencies
+  extends Omit<SandboxProcess, "homeDir"> {
   cwd?: string;
   env?: Record<string, string | undefined>;
 
@@ -423,7 +426,7 @@ export interface RunCfHarnessCliDependencies {
   pathExists?: (path: string) => Promise<boolean>;
 
   /**
-   * The home the default runsc CFC policy and the default macOS runsc store
+   * The home the default runsc CFC policy and the default runsc stores
    * are looked up under, for an embedder that clears `HOME` from `env` (the
    * Loom local host); `env.HOME` otherwise.
    */
@@ -642,12 +645,14 @@ Options:
   --sandbox-runtime <kind>      docker or runsc: run runsc directly with no Docker; the
                                 same on Linux and on macOS through the darwin runsc. Tool
                                 calls may then name a sandbox session. With no runtime
-                                named, macOS runs runsc from the native cfc-vm store
-                                (CFC_VM_HOME, or ~/Library/Application Support/cfc-vm) and
-                                refuses to start where that store is not set up; every
-                                other platform runs docker
+                                named, macOS (Apple silicon only) runs runsc from the
+                                native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
+                                Support/cfc-vm), Linux runs it as root from the store under
+                                ~/.local/share/runsc-cfc, and each refuses to start where
+                                its store is not set up; every other platform runs docker
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
-                                on Linux; on macOS the cfc-vm image marker, default
+                                on Linux, default images/kitchensink in the Linux store;
+                                on macOS the cfc-vm image marker, default
                                 images/kitchensink in the cfc-vm store)
   --sandbox-cfc-policy <path>   runsc runtime only: CFC policy file; --cfc is passed exactly
                                 when this is set (default: ~/.local/share/runsc-cfc/cfc-policy.json
@@ -731,8 +736,8 @@ Environment:
   CF_HARNESS_SANDBOX_ROOTFS     Default value for --sandbox-rootfs
   CF_HARNESS_RUNSC_CFC_POLICY   Default value for --sandbox-cfc-policy
   CF_HARNESS_RUNSC_BINARY       runsc binary for the runsc runtime (default: runsc on PATH;
-                                for a runtime macOS defaulted to, bin/runsc in the cfc-vm
-                                store)
+                                for a runtime macOS or Linux defaulted to, bin/runsc in
+                                its store)
   CFC_VM_HOME                   The macOS cfc-vm store, read by the darwin runsc and by the
                                 macOS default (default: ~/Library/Application Support/cfc-vm)
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
@@ -1403,6 +1408,8 @@ type CliSandboxSelectionDependencies = Pick<
   | "pathExists"
   | "sandboxHomeDir"
   | "platform"
+  | "arch"
+  | "uid"
   | "sandboxRuntimeNamedBy"
   | "sandboxSelectionFlags"
 >;
@@ -1421,6 +1428,7 @@ const cliSandboxRuntimeSelection = (
     ...(deps.sandboxRuntimeNamedBy !== undefined
       ? { namedBy: deps.sandboxRuntimeNamedBy }
       : { platform: deps.platform ?? Deno.build.os }),
+    ...sandboxProcessOf(deps),
     flags: deps.sandboxSelectionFlags ?? true,
     cwd,
     ...(deps.pathExists !== undefined ? { pathExists: deps.pathExists } : {}),
@@ -1460,6 +1468,8 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxHomeDir"
     | "commandJobId"
     | "platform"
+    | "arch"
+    | "uid"
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"

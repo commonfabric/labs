@@ -30,7 +30,11 @@ import {
   installCfHarnessSignalHandlers,
   resolveCfHarnessCliSystemPrompt,
 } from "../src/cli.ts";
-import { parseCfHarnessCliArgs, runCfHarnessCli } from "./support/on-linux.ts";
+import {
+  LINUX_HOME,
+  parseCfHarnessCliArgs,
+  runCfHarnessCli,
+} from "./support/on-linux.ts";
 import type { HarnessBrowserHost } from "../src/contracts/browser-host.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
@@ -75,14 +79,15 @@ const createIoBuffers = (): {
 
 /**
  * The operator summary of a run this file's `runCfHarnessCli()` made without
- * naming a sandbox runtime: Docker, by the default of Linux, the platform
- * that function runs as here.
+ * naming a sandbox runtime: the native runtime, by the default of Linux, the
+ * platform that function runs as here, from the store under its home.
  */
-const defaultedDockerSummary = (result: HarnessPromptLoopResult): string =>
+const defaultedSummary = (result: HarnessPromptLoopResult): string =>
   formatCfHarnessCliResult(result, "operator", {
-    runtime: "docker",
+    runtime: "runsc",
     source: "default",
     platform: "linux",
+    nativeStore: join(LINUX_HOME, ".local", "share", "runsc-cfc"),
   });
 
 const completedCliResult = (
@@ -1194,7 +1199,10 @@ Deno.test("parseCfHarnessCliArgs resolves sandbox docker runtime from flag and e
     ["--prompt", "hi", "--sandbox-docker-runtime", "runc"],
     {
       cwd: "/tmp/project",
-      env: { CF_HARNESS_SANDBOX_DOCKER_RUNTIME: "runsc-cfc" },
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_SANDBOX_DOCKER_RUNTIME: "runsc-cfc",
+      },
     },
   );
   if ("help" in fromFlag) {
@@ -1206,7 +1214,10 @@ Deno.test("parseCfHarnessCliArgs resolves sandbox docker runtime from flag and e
     ["--prompt", "hi"],
     {
       cwd: "/tmp/project",
-      env: { CF_HARNESS_SANDBOX_DOCKER_RUNTIME: "runc" },
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_SANDBOX_DOCKER_RUNTIME: "runc",
+      },
     },
   );
   if ("help" in fromEnv) {
@@ -1350,7 +1361,9 @@ Deno.test("parseCfHarnessCliArgs supports stream-events flag", async () => {
 
 Deno.test({
   name: "parseCfHarnessCliArgs supports skills root and skill preloads",
-  permissions: { read: true, write: true },
+  // `/bin/test` too: the Linux default asks it whether the store's `runsc`
+  // can be executed.
+  permissions: { read: true, write: true, run: ["/bin/test"] },
   async fn() {
     const workspace = await Deno.makeTempDir({
       prefix: "cf-harness-cli-skills-",
@@ -1599,7 +1612,9 @@ Deno.test("parseCfHarnessCliArgs supports allowed tools and result json path", a
 Deno.test({
   name:
     "parseCfHarnessCliArgs parses exact skill script allowlists with skills root",
-  permissions: { read: true, write: true },
+  // `/bin/test` too: the Linux default asks it whether the store's `runsc`
+  // can be executed.
+  permissions: { read: true, write: true, run: ["/bin/test"] },
   async fn() {
     const root = await Deno.makeTempDir({
       prefix: "cf-harness-cli-skill-scripts-",
@@ -2731,7 +2746,7 @@ Deno.test("runCfHarnessCli registers and disposes signal handlers around a run",
   assertEquals(disposed, true);
   assertEquals(stderr, []);
   assertEquals(stdout, [
-    defaultedDockerSummary({
+    defaultedSummary({
       model: "gpt-5.4",
       finalAssistantText: "Done.",
       transcript: [
@@ -3019,7 +3034,7 @@ Deno.test("runCfHarnessCli executes the prompt loop and prints result metadata",
   assertEquals(
     stdout,
     [
-      defaultedDockerSummary({
+      defaultedSummary({
         model: "gpt-5.4",
         finalAssistantText: "Inspection complete.",
         transcript: [
@@ -3996,7 +4011,7 @@ Deno.test("runCfHarnessCli can stream transcript events as they happen", async (
     'assistant -> tools: read_file(path="README.md")\n',
     "tool read_file: outputId=read-1\n",
     "assistant: Inspection complete.\n",
-    defaultedDockerSummary({
+    defaultedSummary({
       model: "gpt-5.4",
       finalAssistantText: "Inspection complete.",
       transcript: [
@@ -4387,7 +4402,10 @@ Deno.test("runCfHarnessCli exits nonzero when top-level structured result is inv
 Deno.test({
   name:
     "runCfHarnessCli preloads configured skills and persists skill artifacts",
-  permissions: { read: true, write: true },
+  // `/bin/test` and the environment too: the Linux default asks the one
+  // whether the store's `runsc` can be executed, and the direct driver it
+  // builds reads where its scratch directory goes from the other.
+  permissions: { read: true, write: true, run: ["/bin/test"], env: true },
   async fn() {
     const workspace = await Deno.makeTempDir({
       prefix: "cf-harness-cli-skills-",
@@ -5051,7 +5069,7 @@ Deno.test("runCfHarnessCli allows no-auth gateway mode without an API key", asyn
   assertEquals(createdOptions?.gatewayAuthMode, "none");
   assertEquals(createdOptions?.apiKey, undefined);
   assertEquals(stdout, [
-    defaultedDockerSummary({
+    defaultedSummary({
       model: "gpt-5.4",
       finalAssistantText: "No auth path.",
       transcript: [
@@ -5181,7 +5199,7 @@ Deno.test("runCfHarnessCli can resume from persisted run artifacts", async () =>
   );
   assertEquals(runTranscriptOptions?.promptSlotBinding, promptSlotBinding);
   assertEquals(stdout, [
-    defaultedDockerSummary({
+    defaultedSummary({
       model: "gpt-5.4",
       finalAssistantText: "Resumed.",
       transcript: [
@@ -5433,7 +5451,7 @@ Deno.test("parseCfHarnessCliArgs resolves fabric-mount to an absolute path", asy
 Deno.test("parseCfHarnessCliArgs supports sandbox image flag", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--sandbox-image", "registry.example/cf:deno2"],
-    { cwd: "/tmp/project", env: {} },
+    { cwd: "/tmp/project", env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" } },
   );
   if ("help" in parsed) throw new Error("expected config result");
   assertEquals(parsed.sandboxImage, "registry.example/cf:deno2");
@@ -5444,7 +5462,10 @@ Deno.test("parseCfHarnessCliArgs supports sandbox image environment default", as
     ["--prompt", "hi"],
     {
       cwd: "/tmp/project",
-      env: { CF_HARNESS_SANDBOX_IMAGE: "registry.example/cf:local" },
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_SANDBOX_IMAGE: "registry.example/cf:local",
+      },
     },
   );
   if ("help" in parsed) throw new Error("expected config result");
@@ -5456,7 +5477,10 @@ Deno.test("parseCfHarnessCliArgs prefers sandbox image flag over environment", a
     ["--prompt", "hi", "--sandbox-image", "registry.example/cf:flag"],
     {
       cwd: "/tmp/project",
-      env: { CF_HARNESS_SANDBOX_IMAGE: "registry.example/cf:env" },
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_SANDBOX_IMAGE: "registry.example/cf:env",
+      },
     },
   );
   if ("help" in parsed) throw new Error("expected config result");
@@ -5873,7 +5897,7 @@ Deno.test("runCfHarnessCli threads sandbox-image into engine sandbox config", as
     ],
     {
       io,
-      env: {},
+      env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
       createPromptLoop: (options) => {
         createdOptions = options as Record<string, unknown>;
         return {
@@ -8519,7 +8543,9 @@ Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc
   if ("help" in unset) {
     throw new Error("expected config result");
   }
-  assertEquals(unset.sandboxRuntimeKind, undefined);
+  // Linux's default, from the store under the home this file's
+  // `parseCfHarnessCliArgs()` gives it.
+  assertEquals(unset.sandboxRuntimeKind, "runsc");
   assertEquals(unset.sandboxRunscNetworkMode, undefined);
 
   await assertRejects(

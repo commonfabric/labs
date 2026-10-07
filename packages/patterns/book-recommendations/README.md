@@ -62,7 +62,7 @@ Run these commands from the repository root in a worktree. Docker must have its
 `runsc-cfc` runtime registered. The two sidecar paths must match that
 registration; the values below are the macOS setup defaults described in the
 [cf-harness README](../../cf-harness/README.md). `CF_HARNESS_SANDBOX_RUNTIME`
-names Docker, which a Mac does not run where no runtime is named. The
+names Docker, which neither a Mac nor Linux runs where no runtime is named. The
 [local server guide](../../../docs/development/LOCAL_DEV_SERVERS.md) describes
 server startup and the runner's enforcement settings.
 
