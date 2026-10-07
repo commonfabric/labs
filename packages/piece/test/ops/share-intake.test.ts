@@ -200,20 +200,32 @@ describe("share-intake", () => {
    * A space granting `grants`, owned by the owner unless `owner` says
    * otherwise, whose root is a piece running `root`, a room's by default: a
    * plain document, recording no pattern, for `"document"`, and none for
-   * `false`.
+   * `false`. For `"elsewhere"` its root pointer reaches a document in another
+   * space, and for `"inside"` a path inside a document in the space.
    */
   async function offeredSpace(
     grants: ACL,
     { owner, root = roomProgram }: {
       owner?: string;
-      root?: RuntimeProgram | "document" | false;
+      root?: RuntimeProgram | "document" | "elsewhere" | "inside" | false;
     } = {},
   ): Promise<MemorySpace> {
     const space = await runtime.createSpace({
       grants,
       ...(owner === undefined ? {} : { owner: owner as never }),
     });
-    if (root === "document") {
+    if (root === "elsewhere" || root === "inside") {
+      const holding = root === "elsewhere"
+        ? await runtime.createSpace({ grants: {} })
+        : space;
+      const piece = runtime.getCell<unknown>(holding, crypto.randomUUID());
+      await runtime.editWithRetry((tx) => {
+        piece.withTx(tx).set({ room: { name: "Room" } } as never);
+        runtime.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
+          (root === "inside" ? piece.key("room" as never) : piece) as never,
+        );
+      });
+    } else if (root === "document") {
       const piece = runtime.getCell<unknown>(space, crypto.randomUUID());
       await runtime.editWithRetry((tx) => {
         piece.withTx(tx).set({ name: "Room" } as never);
@@ -863,6 +875,30 @@ describe("share-intake", () => {
         ids: ["barrier"],
         logged: 1,
         decisions: ["space-root-wrong-kind"],
+      });
+    });
+
+    it("is not registered, and is logged, when the space's root pointer reaches into another space", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        root: "elsewhere",
+      });
+
+      expect(await refuse(offerOf(space, "rooted elsewhere"))).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decisions: ["space-root-missing"],
+      });
+    });
+
+    it("is not registered, and is logged, when the space's root pointer reaches a path inside a document", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        root: "inside",
+      });
+
+      expect(await refuse(offerOf(space, "rooted inside"))).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decisions: ["space-root-missing"],
       });
     });
 

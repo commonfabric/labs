@@ -637,16 +637,29 @@ async function declaredResultMembers(
   );
 }
 
-/** The longest `kind` an offer may carry, as the inbox cuts it. */
+/**
+ * The longest `kind` an offer may carry, as the inbox cuts it: the inbox's
+ * `OFFER_KIND_MAX_LENGTH`, in `packages/patterns/system/private-inbox.tsx`,
+ * which host code cannot import, so the two are kept in step by hand.
+ */
 const KIND_MAX_LENGTH = 32;
 
-/** The longest `id` an offer may carry, as the inbox cuts it. */
+/**
+ * The longest `id` an offer may carry, as the inbox cuts it: the inbox's
+ * `OFFER_ID_MAX_LENGTH`, kept in step as {@link KIND_MAX_LENGTH} is.
+ */
 const ID_MAX_LENGTH = 320;
 
-/** The longest `title` an offer may carry, as the inbox cuts it. */
+/**
+ * The longest `title` an offer may carry, as the inbox cuts it: the inbox's
+ * `OFFER_TITLE_MAX_LENGTH`, kept in step as {@link KIND_MAX_LENGTH} is.
+ */
 const TITLE_MAX_LENGTH = 200;
 
-/** The longest address an offer may carry, as the inbox cuts it. */
+/**
+ * The longest address an offer may carry, as the inbox cuts it: the inbox's
+ * `OFFER_ADDRESS_MAX_LENGTH`, kept in step as {@link KIND_MAX_LENGTH} is.
+ */
 const ADDRESS_MAX_LENGTH = 256;
 
 /**
