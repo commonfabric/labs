@@ -30,6 +30,7 @@ import PrivateInbox, {
   type PrivateInboxHolder,
   type PrivateInboxPiece,
   type PrivateInboxRefusalHolder,
+  REFUSAL_REASON_MAX_LENGTH,
   type RetainedPrivateInboxes,
 } from "./private-inbox.tsx";
 
@@ -863,7 +864,8 @@ export default pattern(() => {
   // a refusal only while the profile the event names is in its list and still
   // points at the refused inbox, replaces one recorded before, and clears it
   // when it adopts an inbox, when the deciding profile points at the inbox it
-  // holds, and when no profile in its list points at the refused inbox.
+  // holds, and when no profile in its list points at the refused inbox. It
+  // never records a refusal of the inbox it holds, and cuts a long code.
   // Clearing it when Home creates an inbox is covered by
   // `integration/private-inbox-multi-runtime.test.ts`.
   const REFUSED = "inbox-adoption-acl-mismatch";
@@ -949,6 +951,15 @@ export default pattern(() => {
     // deno-lint-ignore no-explicit-any
     profiles: [stillRefusedMoved, stillRefusedStaying] as any,
   });
+  const longReasonAdvertising = ProfileHome({
+    initialName: "Long reason advertising",
+  });
+  const ensureLongReason = EnsuringHome({
+    privateInbox: new Writable<PrivateInboxHolder>({}),
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    // deno-lint-ignore no-explicit-any
+    profiles: [longReasonAdvertising] as any,
+  });
   const curedAdvertising = ProfileHome({ initialName: "Cured advertising" });
   const cured = new Writable<PrivateInboxHolder>({});
   const ensureCured = EnsuringHome({
@@ -972,6 +983,7 @@ export default pattern(() => {
         abandonedAdvertising,
         stillRefusedMoved,
         stillRefusedStaying,
+        longReasonAdvertising,
       ]
     ) {
       profile.setInbox.send({ inbox: advertised });
@@ -1020,7 +1032,18 @@ export default pattern(() => {
       from: stillRefusedMoved,
       refused: { reason: REFUSED, inbox: advertised },
     });
+    ensureLongReason.ensure.send({
+      from: longReasonAdvertising,
+      refused: {
+        reason: `  ${"r".repeat(REFUSAL_REASON_MAX_LENGTH * 3)}  `,
+        inbox: advertised,
+      },
+    });
   });
+  const assert_a_long_refusal_code_is_trimmed_and_cut = assert(() =>
+    ensureLongReason.refusal.refusal?.reason ===
+      "r".repeat(REFUSAL_REASON_MAX_LENGTH)
+  );
   const assert_a_refusal_is_recorded_with_its_reason_and_inbox = assert(() => {
     const refusal = ensureRefusedNone.refusal.refusal;
     return refusal !== undefined && refusal.reason === REFUSED &&
@@ -1094,6 +1117,21 @@ export default pattern(() => {
     assert(() =>
       equals(ensureStillRefused.refusal.refusal?.inbox, elsewhere.get().piece)
     );
+  // A refusal naming the inbox Home holds, as a stale refusal that lost a race
+  // to an adoption of the same inbox, or the owner's own code, sends one.
+  const action_refuse_the_held_inbox = action(() => {
+    const homeInbox = home.get().piece?.resolveAsCell();
+    if (homeInbox === undefined) return;
+    ensureRefusedHeld.ensure.send({
+      from: refusedHeldAdvertising,
+      refused: { reason: "held-reason", inbox: homeInbox },
+    });
+  });
+  const assert_a_refusal_of_the_held_inbox_is_not_recorded = assert(() =>
+    ensureRefusedHeld.refusal.refusal === undefined &&
+    equals(refusedHeld.get().piece, home.get().piece) &&
+    equals(refusedHeldAdvertising.inbox?.piece, home.get().piece)
+  );
   const assert_a_refusal_is_cleared_when_home_adopts_an_inbox = assert(() =>
     ensureCured.refusal.refusal === undefined &&
     equals(cured.get().piece, elsewhere.get().piece)
@@ -1209,6 +1247,7 @@ export default pattern(() => {
       },
       { assertion: assert_a_refusal_naming_no_profile_is_not_recorded },
       { assertion: assert_an_event_naming_no_refusal_records_none },
+      { assertion: assert_a_long_refusal_code_is_trimmed_and_cut },
       {
         assertion:
           assert_a_refusal_and_its_inbox_are_recorded_before_the_pointers_move,
@@ -1229,6 +1268,8 @@ export default pattern(() => {
         assertion:
           assert_a_refusal_is_kept_while_another_profile_points_at_the_refused_inbox,
       },
+      { action: action_refuse_the_held_inbox },
+      { assertion: assert_a_refusal_of_the_held_inbox_is_not_recorded },
     ],
   };
 });

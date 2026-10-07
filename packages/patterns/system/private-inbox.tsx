@@ -51,6 +51,11 @@ export const OFFER_TITLE_MAX_LENGTH = 200;
  */
 export const OFFER_ADDRESS_MAX_LENGTH = 256;
 
+/**
+ * The longest refusal code Home records; a longer one is cut to this length.
+ */
+export const REFUSAL_REASON_MAX_LENGTH = 64;
+
 /** The `kind` an offer that names none is kept with. */
 export const OFFER_DEFAULT_KIND = "loom";
 
@@ -199,9 +204,11 @@ export type RetainedPrivateInboxes = Cell<PrivateInboxPiece>[];
  */
 export type PrivateInboxRefusal = {
   /**
-   * Why the host refused the inbox, by its code, such as
-   * `inbox-adoption-acl-mismatch`; `InboxAdoptionRefusal` in
-   * `packages/piece/src/ops/private-inbox.ts` lists the codes.
+   * The host's code for why it refused the inbox, as the event named it,
+   * trimmed and cut to `REFUSAL_REASON_MAX_LENGTH`. Today the host sends one
+   * of `InboxAdoptionRefusal`'s codes, from
+   * `packages/piece/src/ops/private-inbox.ts`, such as
+   * `inbox-adoption-acl-mismatch`.
    */
   reason: string;
 
@@ -454,16 +461,19 @@ export type EnsurePrivateInboxEvent = {
  * `privateInboxRefusal` holds the host's refusal of the deciding profile's
  * inbox. A refusal the event names is recorded, in place of any recorded
  * before, under the same check as an adoption: the profile the event names is
- * in Home's list and still points at the refused inbox. The record is cleared
- * when Home adopts or creates an inbox, when the profile the event names is in
- * Home's list and points at the inbox Home holds, and, on an event recording
- * no refusal, when no profile in Home's list points at the refused inbox.
+ * in Home's list and still points at the refused inbox, which is not the inbox
+ * Home holds. The record is cleared when Home adopts or creates an inbox, when
+ * the profile the event names is in Home's list and points at the inbox Home
+ * holds, and, on an event recording no refusal, when no profile in Home's list
+ * points at the refused inbox.
  *
  * The check is list membership and the profile's pointer, not order: which
  * profile decides is the host's alone. So an event the owner's own code sends,
  * naming another profile in the list, can move Home between two inboxes its
  * profiles advertise. Each move retains the inbox given up and drops the one
  * adopted from the retained list, so that list holds each inbox at most once.
+ * Such an event can likewise record a refusal of any listed profile's inbox,
+ * with any code, or clear the record.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
@@ -535,20 +545,21 @@ export const ensurePrivateInbox = handler<
   if (replaced) {
     privateInboxRefusal.set({});
   } else if (
+    deciding !== undefined && held !== undefined && equals(held, deciding)
+  ) {
+    privateInboxRefusal.set({});
+  } else if (
     refused !== undefined && deciding !== undefined &&
-    equals(refused.inbox, deciding)
+    equals(refused.inbox, deciding) &&
+    (held === undefined || !equals(held, refused.inbox))
   ) {
     privateInboxRefusal.set({
       refusal: {
-        reason: refused.reason,
+        reason: trimmedText(refused.reason, REFUSAL_REASON_MAX_LENGTH),
         inbox: refused.inbox,
         refusedAt: Date.now(),
       },
     });
-  } else if (
-    deciding !== undefined && held !== undefined && equals(held, deciding)
-  ) {
-    privateInboxRefusal.set({});
   } else {
     // A recorded refusal says the deciding profile points at the refused
     // inbox, so it ends once no profile in the list points there.
