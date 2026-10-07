@@ -287,6 +287,18 @@ describe("collection-index-label-fanout", () => {
         id: argumentId as `${string}:${string}`,
         path: [],
       });
+      // The member depends on which documents its slots name, never on the
+      // named documents themselves: a dependency on either would be dirtied
+      // by other members' writes wherever a link is an atomic value and the
+      // resolution's probe of the document reads its root.
+      const named = (["state", "index"] as const).map((slot) =>
+        argument.key(slot).resolveAsCell().getAsNormalizedFullLink().id
+      );
+      expect(
+        (member().reads as string[]).filter((read) =>
+          named.some((id) => read.includes(id))
+        ),
+      ).toEqual([]);
       await body({ runtime, space, result, argument, member });
     } finally {
       cancel?.();
