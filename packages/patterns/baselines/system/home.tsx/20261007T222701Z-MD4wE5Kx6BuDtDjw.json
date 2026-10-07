@@ -882,7 +882,14 @@
         "properties": {
           "adopt": {
             "$ref": "#/$defs/ShareInboxPiece",
-            "description": "An inbox a profile advertises, which the host has vetted for Home to\nadopt; absent when the host vetted none."
+            "description": "The inbox the deciding profile advertises, which the host has vetted for\nHome to adopt; absent when the host vetted none."
+          },
+          "from": {
+            "$ref": "#/$defs/InboxPointable",
+            "description": "The deciding profile: the first, in the order `#profile` answers in, that\npoints at an inbox. Absent from a host that names none, which Home takes\nas the first profile in its list that points at an inbox.",
+            "tags": [
+              "profile"
+            ]
           }
         },
         "type": "object"
@@ -1140,6 +1147,20 @@
           "tags",
           "userTags"
         ],
+        "type": "object"
+      },
+      "InboxPointable": {
+        "properties": {
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox"
+          },
+          "setInbox": {
+            "$ref": "#/$defs/SetProfileInboxEvent",
+            "asCell": [
+              "stream"
+            ]
+          }
+        },
         "type": "object"
       },
       "JournalEntry": {
@@ -1958,6 +1979,13 @@
         ],
         "type": "object"
       },
+      "retainedPrivateInboxes": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/ShareInboxPiece"
+        },
+        "type": "array"
+      },
       "sharedSpaceCatalog": {
         "$ref": "#/$defs/SharedSpaceCatalog"
       },
@@ -1979,6 +2007,7 @@
       "agentQueue",
       "chatManager",
       "privateInbox",
+      "retainedPrivateInboxes",
       "sharedSpaceCatalog",
       "registerSharedSpace",
       "changeSharedSpaceMembership",
