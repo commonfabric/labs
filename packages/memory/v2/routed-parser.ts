@@ -171,7 +171,6 @@ export function routedFlags(value: unknown, requireAuth = true): Uint8Array {
   if (requireAuth) {
     requireRouted(
       [
-        "modernCellRep",
         "stableExpressionResultIds",
         "connectionAuth",
         "routedAuthV1",

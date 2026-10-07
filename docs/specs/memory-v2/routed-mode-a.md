@@ -206,20 +206,28 @@ resource bounds and exact values are in the infra router README.
 `MEMORY_ROUTER_CONFIG_FILE` opts in to a strict tracked policy with version 1,
 deployment, private bind hostname/port, certificate/key paths, shared
 authoritative directory, durable epoch ledger and per-router DID/network-peer
-allowlists. Directory storage, `MEMORY_ACL_MODE=enforce` and
-`EXPERIMENTAL_MODERN_CELL_REP=true` are mandatory. `MEMORY_PUBLIC_URL` names
-the router's public origin, the same on every toolshed, which clients open
-Memory on (see the configuration reference). The policy initializes the
-Memory encoder before listening; Runtime startup reads the same required flag.
-Only owned spaces open a Memory session: explicit-ACL spaces, and a space with
-no history to its own DID. The toolshed's HTTP routes, such as blobs and
-invitations, open a space without checking ownership, so moving a space blocks
-them first (see the infra router README). Directory epoch changes fence
-protected turns and close affected contexts. Remove a router from its tracked
-allowlist and restart for immediate permanent policy withdrawal; in-process
-`revokeRouter` also persists a key tombstone. Production secrets come from
-managed credentials, and public firewall policy must block direct Memory/private
-endpoints and independently decide every toolshed HTTP route.
+allowlists. Directory storage and `MEMORY_ACL_MODE=enforce` are mandatory. The
+cell representation follows the deployment's `EXPERIMENTAL_MODERN_CELL_REP`
+setting, which every toolshed, every client and the router's `modern_cell_rep`
+must share: the router refuses a toolshed link at the other representation, and
+the toolshed's handshake refuses a client at it. Only the legacy representation
+is usable in Mode A today. The modern one is unfinished: a pattern binding a
+stored link fails ("Cannot yet handle FabricLink"), and `Runtime.dispose` resets
+the process-global flag to legacy, so a toolshed configured modern switches to
+legacy once it disposes an idle serving runtime. It is unsupported until that
+work lands. `MEMORY_PUBLIC_URL` names the router's public origin, the same on
+every toolshed, which clients open Memory on (see the configuration reference).
+The policy initializes the Memory encoder from that setting before listening;
+Runtime startup reads the same flag. Only owned spaces open a Memory session:
+explicit-ACL spaces, and a space with no history to its own DID. The toolshed's
+HTTP routes, such as blobs and invitations, open a space without checking
+ownership, so moving a space blocks them first (see the infra router README).
+Directory epoch changes fence protected turns and close affected contexts.
+Remove a router from its tracked allowlist and restart for immediate permanent
+policy withdrawal; in-process `revokeRouter` also persists a key tombstone.
+Production secrets come from managed credentials, and public firewall policy
+must block direct Memory/private endpoints and independently decide every
+toolshed HTTP route.
 
 `test/routed-router.exercise.ts` is a disposable Linux CLI driven by the Rust
 repository's CI; it uses two real SQLite toolsheds and the actual SDK. Unit

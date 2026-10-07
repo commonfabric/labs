@@ -90,15 +90,23 @@ describe("routed untrusted parsers", () => {
   it("requires negotiated routed flags and rejects unknown or tagged security records", () => {
     const flags = {
       ...getMemoryProtocolFlags(),
-      modernCellRep: true,
       connectionAuth: true,
       routedAuthV1: true,
     };
     expect(routedFlags(flags).length).toBeLessThan(2048);
+    // Either cell representation passes: client and toolshed agree on it at
+    // the toolshed's handshake, not here.
+    for (const modernCellRep of [false, true]) {
+      expect(routedFlags({ ...flags, modernCellRep }).length).toBeGreaterThan(
+        0,
+      );
+    }
     for (
       const invalid of [
         { ...flags, connectionAuth: false },
         { ...flags, routedAuthV1: false },
+        { ...flags, stableExpressionResultIds: false },
+        { ...flags, modernCellRep: "true" },
         { ...flags, arbitraryFutureAuthority: true },
         { ...flags, "/tag": true },
       ]

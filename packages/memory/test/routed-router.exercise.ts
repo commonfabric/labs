@@ -24,10 +24,13 @@ import {
 } from "../v2/routed-wire.ts";
 import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
 
-// Routed toolsheds require the modern cell encoding, and the SDK's hello
-// advertises this process's setting. Toolsheds now run as child processes, so
-// this process no longer inherits it from them.
-setModernCellRepConfig(true);
+// Mode A runs at the deployment's cell representation, which the toolsheds
+// and every client share. The exercise runs at the production setting, legacy,
+// unless ROUTER_EXERCISE_MODERN_CELL_REP=true. The SDK's hello advertises this
+// process's setting, and the toolshed children are told it.
+const modernCellRep =
+  Deno.env.get("ROUTER_EXERCISE_MODERN_CELL_REP") === "true";
+setModernCellRepConfig(modernCellRep);
 const binary = Deno.env.get("MEMORY_ROUTER_BINARY");
 if (
   binary === undefined || Deno.build.os !== "linux" ||
@@ -227,6 +230,7 @@ Deno.writeTextFileSync(
     max_workers: 32,
     max_unauthenticated: 8,
     max_per_source: 8,
+    modern_cell_rep: modernCellRep,
     development: false,
   }),
 );
@@ -250,7 +254,8 @@ class Toolshed {
   #lines: string[] = [];
   #wake?: () => void;
   constructor(readonly index: number) {}
-  async start() {
+  /** `modern` overrides the deployment's cell representation, to misconfigure it. */
+  async start(modern = modernCellRep) {
     const i = this.index;
     const config = `${root}/toolshed-${i}.json`;
     Deno.writeTextFileSync(
@@ -265,6 +270,7 @@ class Toolshed {
         router: router.did(),
         space: spaces[i],
         principals: [i === 0 ? alice.did() : bob.did()],
+        modernCellRep: modern,
       }),
     );
     this.child = new Deno.Command(Deno.execPath(), {
@@ -513,7 +519,6 @@ class Client {
   async start(
     flags = {
       ...getMemoryProtocolFlags(),
-      modernCellRep: true,
       connectionAuth: true,
       routedAuthV1: true,
     },
@@ -1433,7 +1438,6 @@ finally:
           protocol: "memory",
           flags: {
             ...getMemoryProtocolFlags(),
-            modernCellRep: true,
             stableExpressionResultIds: false,
             connectionAuth: true,
             routedAuthV1: true,
@@ -1699,7 +1703,6 @@ finally:
   clients.push(compressing);
   await compressing.start({
     ...getMemoryProtocolFlags(),
-    modernCellRep: true,
     connectionAuth: true,
     routedAuthV1: true,
     messageCompressionV1: true,
@@ -2150,6 +2153,139 @@ finally:
   await members.closed.promise;
   pass(
     "a DID with no store is opened or created only by its own key, and nobody else opens it before genesis",
+  );
+
+  // Mode A runs at the deployment's cell representation. The router answers
+  // every hello with the deployment's flags, which the SDK refuses
+  // permanently. A client that ignores them and opens a space anyway is
+  // refused by the toolshed's handshake, and the router closes its socket.
+  setModernCellRepConfig(!modernCellRep);
+  try {
+    const refused = await MemoryClient.connect({
+      transport: new WebSocketTransport(
+        new URL("wss://localhost:8443/api/storage/memory"),
+        true,
+        () => {},
+        (address) => socketFactory(address, "127.0.0.43"),
+      ),
+    }).then(async (client) => {
+      await client.close();
+      return undefined;
+    }, (error: Error) => error);
+    assert(
+      refused?.message.includes("memory flag mismatch"),
+      String(refused),
+    );
+  } finally {
+    setModernCellRepConfig(modernCellRep);
+  }
+  const otherRep = await new Client("127.0.0.40").start({
+    ...getMemoryProtocolFlags(),
+    modernCellRep: !modernCellRep,
+    connectionAuth: true,
+    routedAuthV1: true,
+  });
+  clients.push(otherRep);
+  assertEquals(
+    (otherRep.hello.flags as Record<string, unknown>).modernCellRep,
+    modernCellRep,
+  );
+  await otherRep.authenticate(alice, 60, true);
+  const otherOpen = await otherRep.request({
+    type: "session.open",
+    space: spaces[0],
+    principal: alice.did(),
+    session: {},
+  }).then((reply) => JSON.stringify(reply), (error: Error) => error);
+  assert(otherOpen instanceof Error, String(otherOpen));
+  await Promise.race([
+    otherRep.closed.promise,
+    pause(6000).then(() => {
+      throw new Error("the router kept a refused client's socket open");
+    }),
+  ]);
+  pass("a client at the other cell representation opens no session");
+
+  // A real pattern through the router, which no protocol gate exercises: the
+  // shipped profile-create pattern creates a profile in a space of its own,
+  // and a second runtime reads its name back (support/routed-profile.ts). It
+  // runs in a child process because the runtime locks its realm down with SES
+  // and resets this process's experimental flags when it is disposed.
+  {
+    const fixture = `${root}/profile.json`;
+    Deno.writeTextFileSync(
+      fixture,
+      JSON.stringify({
+        url: "https://localhost:8443",
+        ca: publicTls.cert,
+        origin: "https://stage.example",
+        sources: ["127.0.0.41", "127.0.0.42"],
+        modernCellRep,
+      }),
+    );
+    const started = Date.now();
+    const child = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        `--config=${new URL("../../../deno.jsonc", import.meta.url).pathname}`,
+        "-A",
+        new URL("./support/routed-profile.ts", import.meta.url).pathname,
+        fixture,
+      ],
+      stdout: "piped",
+      stderr: "inherit",
+    }).output();
+    const result = new TextDecoder().decode(child.stdout).split("\n")
+      .filter((line) => line.startsWith("{"))
+      .map((line) => JSON.parse(line))
+      .find((line) => "profileSpace" in line) as
+        | { home: string; profileSpace: string; name: string }
+        | undefined;
+    assert(child.success && result !== undefined, `exit ${child.code}`);
+    assertEquals(result.name, "Ada");
+    assert(result.profileSpace !== result.home);
+    assert(stored(result.home) && stored(result.profileSpace));
+    console.log(JSON.stringify({
+      profileCreationMs: Date.now() - started,
+      modernCellRep,
+    }));
+  }
+  pass(
+    "a real pattern creates a profile in a space of its own through the router, and a second runtime reads its name",
+  );
+
+  // The cell representation is a mode the router takes from its config, not
+  // a capability its toolsheds vote on. A toolshed misconfigured at the other
+  // one, even the only one that links within the startup grace, never decides
+  // what the router advertises; its spaces are refused while it stays
+  // misconfigured, and it is admitted once it runs the deployment's.
+  await toolsheds[0].stop();
+  await toolsheds[1].stop();
+  await toolsheds[1].start(!modernCellRep);
+  const restarted = restartRouter();
+  await pause(12000);
+  await toolsheds[0].start();
+  await restarted;
+  const representation = await new Client("127.0.0.44").start();
+  clients.push(representation);
+  assertEquals(
+    (representation.hello.flags as Record<string, unknown>).modernCellRep,
+    modernCellRep,
+  );
+  await representation.authenticate(bob, 60, true);
+  const misconfigured = await representation.request({
+    type: "session.open",
+    space: spaces[1],
+    principal: bob.did(),
+    session: {},
+  });
+  assert(misconfigured.ok === undefined, JSON.stringify(misconfigured));
+  representation.close();
+  await toolsheds[1].stop();
+  await toolsheds[1].start();
+  await opened("127.0.0.45", 1, 45000);
+  pass(
+    "a toolshed at the other cell representation never sets the router's flags, and is admitted once it runs the deployment's",
   );
 
   await toolsheds[0].stop();

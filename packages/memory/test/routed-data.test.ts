@@ -85,8 +85,16 @@ class FramedSocket extends EventTarget {
   }
 }
 
-async function fixture(name: string) {
-  setModernCellRepConfig(true);
+/**
+ * `modernCellRep` is the toolshed's cell representation and
+ * `clientModernCellRep` the one the routed client's hello names; they agree
+ * unless a test says otherwise.
+ */
+async function fixture(
+  name: string,
+  { modernCellRep = true, clientModernCellRep = modernCellRep } = {},
+) {
+  setModernCellRepConfig(modernCellRep);
   const root = Deno.makeTempDirSync({ prefix: `routed-data-${name}-` });
   const [space, principal, outsider, toolshed, router] = await Promise.all(
     [121, 122, 123, 124, 125].map((n) =>
@@ -136,6 +144,7 @@ async function fixture(name: string) {
   });
   const flagObject = {
     ...server.memoryProtocolFlags(),
+    modernCellRep: clientModernCellRep,
     connectionAuth: true,
     routedAuthV1: true,
   };
@@ -241,10 +250,10 @@ async function fixture(name: string) {
     return socket;
   }
   const socket = await dataSocket();
-  assertEquals(
-    decodeRoutedFrame(await socket.take(), true).body.type,
-    "hello.ok",
-  );
+  const greeted = decodeRoutedFrame(await socket.take(), true).body;
+  if (modernCellRep === clientModernCellRep) {
+    assertEquals(greeted.type, "hello.ok");
+  }
   let requestNumber = 0;
   async function request(body: Record<string, unknown>) {
     const requestId = `r${++requestNumber}`;
@@ -270,6 +279,7 @@ async function fixture(name: string) {
     server,
     host,
     socket,
+    greeted,
     link,
     context,
     flags,
@@ -365,6 +375,54 @@ Deno.test("redeemed Mode A tickets are single use; control renews and releases a
   } finally {
     await f.close();
   }
+});
+
+Deno.test("a routed toolshed serves either cell representation, and refuses a client at the other", async () => {
+  for (const modernCellRep of [false, true]) {
+    for (const clientModernCellRep of [false, true]) {
+      const f = await fixture(
+        `cell-rep-${modernCellRep}-${clientModernCellRep}`,
+        {
+          modernCellRep,
+          clientModernCellRep,
+        },
+      );
+      try {
+        if (modernCellRep === clientModernCellRep) {
+          await f.open();
+          continue;
+        }
+        // The router binds the client's own flags to the ticket, so the
+        // toolshed's handshake sees the disagreement and admits nothing after.
+        assertEquals(f.greeted.type, "response");
+        const refusal = f.greeted.error as { name: string; message: string };
+        assertEquals(refusal.name, "ProtocolError");
+        assert(refusal.message.includes("memory flag mismatch"));
+        f.socket.receive(
+          encodeRoutedFrame(
+            `fvj1:${
+              JSON.stringify({
+                type: "session.open",
+                requestId: "after-refusal",
+                space: f.space.did(),
+                principal: f.principal.did(),
+                session: {},
+              })
+            }`,
+          ),
+        );
+        const after = decodeRoutedFrame(await f.socket.take(), true).body;
+        assertEquals(after.ok, undefined);
+        assertEquals(
+          (after.error as { name: string }).name,
+          "ProtocolError",
+        );
+      } finally {
+        await f.close();
+      }
+    }
+  }
+  setModernCellRepConfig(true);
 });
 
 Deno.test("omitted views retain their quota across watch replacements and resume", async () => {

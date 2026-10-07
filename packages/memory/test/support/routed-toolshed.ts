@@ -29,11 +29,13 @@ export interface RoutedToolshedFixture {
   router: string;
   space: string;
   principals: string[];
+  /** The deployment's cell representation, which every client shares. */
+  modernCellRep: boolean;
 }
 
 /** Seeds an existing ACL-backed space, then starts the actual private protocol. */
 export async function startRoutedToolshed(config: RoutedToolshedFixture) {
-  setModernCellRepConfig(true);
+  setModernCellRepConfig(config.modernCellRep);
   const identity = await Identity.fromRaw(new Uint8Array(32).fill(config.seed));
   const store = toFileUrl(`${config.store}/`);
   Deno.mkdirSync(`${config.store}/engine-v3`, { recursive: true });
@@ -100,7 +102,9 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
     authorizeSessionOpen: verifySessionOpenAuthorization,
     authorizeConnection: verifyConnectionAuthorization,
     sessionOpenAuth: { audience: identity.did() },
-    subscriptionRefreshDelayMs: "manual",
+    // Subscriptions fan out on the server's default delay, as a deployed
+    // toolshed's do. A pattern's reads wait for that fan-out, and in this
+    // child process nothing would flush a manual one.
   });
   const epochs = new RoutedEpochStore(`${config.store}/router-epochs.jsonl`);
   const host = new RoutedMemoryHost({

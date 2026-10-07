@@ -29,14 +29,13 @@ if (
 }
 
 if (routerPolicy !== undefined) {
-  if (experimentalOptionsFromEnv(Deno.env.get).modernCellRep !== true) {
-    throw new Error(
-      "Mode A requires EXPERIMENTAL_MODERN_CELL_REP=true in tracked configuration",
-    );
-  }
-  // Runtime startup later reads the same required flag; initialize the Memory
-  // encoder before the private listener advertises its capabilities.
-  setModernCellRepConfig(true);
+  // Mode A runs at the cell representation the deployment configures, which
+  // its clients must share: a hello at the other one fails the handshake.
+  // Runtime startup later reads the same flag; initialize the Memory encoder
+  // before the private listener advertises its capabilities.
+  setModernCellRepConfig(
+    experimentalOptionsFromEnv(Deno.env.get).modernCellRep === true,
+  );
 }
 
 // Server-execution v2 (OW31, RULED 2026-08-18/19): under the flag this
