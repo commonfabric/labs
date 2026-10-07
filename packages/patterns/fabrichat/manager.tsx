@@ -20,11 +20,13 @@ import {
   equals,
   eventKey,
   handler,
+  hasError,
   type InSpaceGrants,
   isWellFormedDID,
   NAME,
   pattern,
   principalOf,
+  resultOf,
   spaceAccess,
   Stream,
   UI,
@@ -41,7 +43,6 @@ import {
   type ChatDisplay,
   type ChatIndexEntry,
   type ChatManagerNotice,
-  type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
@@ -845,10 +846,14 @@ const FabriChatManager = pattern<
   FabriChatManagerInput,
   FabriChatManagerOutput
 >((input) => {
-  const profileWish = wish<ChatProfile>({ query: "#profile" });
+  const profileWish = wish<ProfileCell>({ query: "#profile" });
+  const profile = resultOf(profileWish.result);
+  const myProfile = computed(() =>
+    hasError(profileWish.result) ? undefined : profile
+  );
   const core = FabriChatManagerCore(
     {
-      myProfile: profileWish.result,
+      myProfile,
       rooms: input.rooms,
       direct: input.direct,
       requests: input.requests,

@@ -20,6 +20,7 @@ import {
   equals,
   type FabricEpochNsec,
   handler,
+  hasError,
   NAME,
   pattern,
   type PerSession,
@@ -74,7 +75,6 @@ import {
   CHAT_START_SURFACE,
   type ChatDisplay,
   type ChatIndexEntry,
-  type ChatProfile,
   type ChatRoomAbout,
   type ChatRoomActivity,
   type ChatRoomKind,
@@ -737,7 +737,11 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     // The room itself, the link another member's manager lists it by.
     [SELF]: self,
   }) => {
-    const profileWish = wish<ChatProfile>({ query: "#profile" });
+    const profileWish = wish<ProfileCell>({ query: "#profile" });
+    const profile = resultOf(profileWish.result);
+    const myProfile = computed(() =>
+      hasError(profileWish.result) ? undefined : profile
+    );
     // The viewer's manager, which starts a direct chat with a participant,
     // and lists this room when asked to.
     const managerWish = wish<{
@@ -746,15 +750,26 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       rooms: ChatIndexEntry[];
     }>({ query: "#chatManager" });
     const manager = resultOf(managerWish.result);
-    const startsDirect = computed(() => manager !== undefined);
+    const startsDirect = computed(() =>
+      hasError(managerWish.result) ? false : manager !== undefined
+    );
+    const startDirect = computed(() =>
+      hasError(managerWish.result) ? undefined : manager.openDirect
+    );
+    const listed = computed(() =>
+      hasError(managerWish.result) ? undefined : manager.rooms
+    );
+    const accept = computed(() =>
+      hasError(managerWish.result) ? undefined : manager.accept
+    );
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a
     // value, as `FabriChatMessageRow` says.
     const setupDisplay = computed((): ChatDisplay =>
-      profileWish.result === undefined ? "block" : "none"
+      hasError(profileWish.result) ? "block" : "none"
     );
     const room = FabriChatRoomCore(
       {
-        myProfile: profileWish.result,
+        myProfile,
         about,
         messages,
         reactionLists,
@@ -763,7 +778,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         activity,
         counters,
         startsDirect,
-        startDirect: manager.openDirect,
+        startDirect,
       },
     );
 
@@ -786,8 +801,8 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         <cf-screen>
           <AddToChats
             room={self}
-            listed={manager.rooms}
-            accept={manager.accept}
+            listed={listed}
+            accept={accept}
           />
           {room[UI]}
           <div

@@ -13,6 +13,62 @@ import {
 import { transformSource } from "./utils.ts";
 
 describe("inline producer projections", () => {
+  it("prints a renamed outer suffix after a same-named nested map in both branches", async () => {
+    const output = await transformSource(
+      `
+import { pattern, Writable, Cell } from "commonfabric";
+interface Row { title: string; label: string; owner: Cell<string>; useOwner: boolean }
+export default pattern<{ rows: Writable<Row[]>; row: string }>(({ rows, row }) => {
+  const groups = rows.groupBy(row => row.useOwner ? row.owner : row.label);
+  return { checks: groups.keyEntries().map(entry => ({
+    kind: entry.kind,
+    title: entry.kind === "cell"
+      ? groups.lookup(entry.cell).map(row => row.title).join(",") + row
+      : groups.lookup(entry.value).map(row => row.title).join(",") + row,
+  })) };
+});`,
+      { types: COMMONFABRIC_TYPES, typeCheck: true },
+    );
+    const root = parseModule(output);
+    const callbacks = callsNamed(root, "lift").map((call) => call.arguments[0])
+      .filter((node): node is ts.ArrowFunction =>
+        ts.isArrowFunction(node) && ts.isBinaryExpression(node.body) &&
+        node.body.operatorToken.kind === ts.SyntaxKind.PlusToken
+      );
+    expect(callbacks).toHaveLength(2);
+    for (const callback of callbacks) {
+      const binding = callback.parameters[0].name;
+      if (!ts.isObjectBindingPattern(binding)) {
+        throw new Error("Expected capture destructuring");
+      }
+      const suffix = binding.elements.find((element) =>
+        element.propertyName && ts.isIdentifier(element.propertyName) &&
+        element.propertyName.text === "row"
+      );
+      if (!suffix || !ts.isIdentifier(suffix.name)) {
+        throw new Error("Expected a renamed outer suffix binding");
+      }
+      expect(suffix.name.text).not.toBe("row");
+      if (!ts.isBinaryExpression(callback.body)) {
+        throw new Error("Expected the joined titles and outer suffix");
+      }
+      const right = callback.body.right;
+      expect(ts.isIdentifier(right) && right.text).toBe(suffix.name.text);
+      const map = callsNamed(callback.body.left, "map")[0].arguments[0];
+      if (!ts.isArrowFunction(map)) {
+        throw new Error("Expected a nested plain map callback");
+      }
+      expect(
+        ts.isIdentifier(map.parameters[0].name) && map.parameters[0].name.text,
+      )
+        .toBe("row");
+      expect(
+        ts.isPropertyAccessExpression(map.body) &&
+          ts.isIdentifier(map.body.expression) && map.body.expression.text,
+      ).toBe("row");
+    }
+  });
+
   it("keeps native guard policies on serialized paths after capture renaming", async () => {
     const output = await transformSource(
       `

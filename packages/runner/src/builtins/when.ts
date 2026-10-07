@@ -1,27 +1,15 @@
 import { type Cell } from "../cell.ts";
-import { isUnavailable } from "@commonfabric/data-model/availability";
-import { readAvailabilityAwareCell } from "../data-unavailability.ts";
-
-import { type Action } from "../scheduler.ts";
-import { type Runtime } from "../runtime.ts";
-import { readsTruthyAtRoot } from "../schema.ts";
-import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { resolveLink } from "../link-resolution.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
-import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
-import { parseLink } from "../link-utils.ts";
 import type { RawNodeCause } from "../module.ts";
-import { ContextualFlowControl } from "../cfc.ts";
+import { type Runtime } from "../runtime.ts";
+import { type Action } from "../scheduler.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { forwardReferenceAction } from "./forward-reference.ts";
 
 /**
- * when(condition, value) - && semantics
- * Returns value if condition is truthy, otherwise returns condition (falsy value)
- *
- * An unavailable condition propagates its pending, syncing, or error marker
- * without evaluating truthiness or selecting `value`.
- *
- * Truthiness is read from the condition's root (`readsTruthyAtRoot()`), so
- * nothing below the root of a condition that is a record or an array is read.
+ * `when(condition, value)`, the `&&` of a pattern: forwards a reference to
+ * `value` when the condition is truthy, and to the condition otherwise.
+ * An unavailable condition propagates its native marker without selecting
+ * either input.
  */
 export function when(
   inputsCell: Cell<{ condition: any; value: any }>,
@@ -31,51 +19,13 @@ export function when(
   parentCell: Cell<any>,
   runtime: Runtime,
 ): Action {
-  return (tx: IExtendedStorageTransaction) => {
-    const conditionCell = inputsCell.key("condition");
-    const resultScope = resolvedCellScope(runtime, tx, conditionCell);
-    // Keyed on the output spot, never on the inputs document (see
-    // `ownedResultCause`).
-    const result = ownedCell<any>(
-      runtime,
-      tx,
-      parentCell,
-      ownedResultCause("when", cause, parentCell),
-      undefined,
-      resultScope,
-    );
-    sendResult(tx, result);
-    const resultWithLog = result.withTx(tx);
-    const condition = readAvailabilityAwareCell(tx, conditionCell, {
-      surfaceReplicaSyncing: true,
-      readValue: false,
-    });
-    if (isUnavailable(condition)) {
-      resultWithLog.setRaw(condition);
-      return;
-    }
-    const inputsWithLog = inputsCell.withTx(tx);
-
-    const truthy = readsTruthyAtRoot(
-      runtime,
-      tx,
-      conditionCell.getAsNormalizedFullLink(),
-    );
-
-    // && semantics: if truthy, return value; if falsy, return condition
-    const ref = truthy
-      ? inputsWithLog.key("value").getAsLink({ base: result })
-      : inputsWithLog.key("condition").getAsLink({ base: result });
-    const resolvedRef = resolveLink(runtime, tx, parseLink(ref, result));
-    // A stream is declared by its link's schema and holds no value, so the
-    // reference written here carries that schema along; a reader following
-    // it to the stream's document would otherwise find nothing that says
-    // what the position is.
-    const serializedRef = runtime.getCellFromLink(resolvedRef).getAsLink({
-      base: result,
-      includeSchema: ContextualFlowControl.declaresStream(resolvedRef.schema),
-    });
-
-    resultWithLog.setRawUntyped(serializedRef);
-  };
+  return forwardReferenceAction({
+    name: "when",
+    inputsCell,
+    sendResult,
+    cause,
+    parentCell,
+    runtime,
+    select: (truthy) => truthy ? "value" : "condition",
+  });
 }

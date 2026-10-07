@@ -3,7 +3,6 @@ import ts from "typescript";
 
 import {
   getIdentifierValueSymbol,
-  preserveLineage,
   unwrapOpaqueLikeType,
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
@@ -166,7 +165,7 @@ export function rewriteCaptureBindingReferences<T extends ts.Node>(
     const fresh = context.factory.createIdentifier(entry.bindingName);
     const renamed = registerCaptureTypes
       ? fresh
-      : preserveLineage(fresh, identifier);
+      : context.cfHelpers.preserveNodeSourceMap(fresh, identifier, identifier);
     if (type) context.state.typeRegistry.set(renamed, type);
     return renamed;
   };

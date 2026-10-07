@@ -14,8 +14,9 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, createCell } from "../src/cell.ts";
 import { createBuilder } from "../src/builder/factory.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -126,6 +127,67 @@ describe("raw builtin data unavailability propagation", () => {
     expect(finalRaw(result.key("ifElse"))).toBe(marker);
     expect(finalRaw(result.key("when"))).toBe(marker);
     expect(finalRaw(result.key("unless"))).toBe(marker);
+  });
+
+  it("keeps user-scoped control result stores through unavailable states and recovery", async () => {
+    const conditionBase = runtime.getCell<boolean>(
+      space,
+      "scoped unavailable condition",
+      undefined,
+      tx,
+    );
+    const condition = createCell<boolean>(runtime, {
+      ...conditionBase.getAsNormalizedFullLink(),
+      scope: "user",
+    }, tx);
+    condition.setRawUntyped(UNAVAILABLE_PENDING);
+    const Root = pattern<{ condition: boolean }>(({ condition }) => ({
+      ifElse: ifElse(condition, "yes", "no"),
+      when: when(condition, "yes"),
+      unless: unless(condition, "no"),
+    }));
+    const resultCell = runtime.getCell<any>(
+      space,
+      "scoped unavailable control results",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, Root, { condition }, resultCell);
+    await commitAndPull(result);
+    const names = ["ifElse", "when", "unless"] as const;
+    const store = (name: typeof names[number]) => {
+      const cell = result.key(name);
+      return parseLink(cell.getRaw({ lastNode: "writeRedirect" }), cell);
+    };
+    const before = names.map(store);
+    for (const link of before) {
+      expect(link?.id).toBeDefined();
+      expect(link?.scope).toBe("user");
+    }
+    for (
+      const marker of [
+        UNAVAILABLE_PENDING,
+        UNAVAILABLE_SYNCING,
+        unavailableError(new Error("scoped condition failed")),
+        unavailableMismatch("scoped condition must be boolean"),
+      ]
+    ) {
+      condition.withTx(tx).setRawUntyped(marker);
+      await commitAndPull(result);
+      for (const name of names) {
+        expect(finalRaw(result.key(name))).toBeInstanceOf(FabricUnavailable);
+        expect(finalRaw(result.key(name))).toEqual(marker);
+      }
+      condition.withTx(tx).set(true);
+      await commitAndPull(result);
+      expect(result.key("ifElse").get()).toBe("yes");
+      expect(result.key("when").get()).toBe("yes");
+      expect(result.key("unless").get()).toBe(true);
+      for (const [index, name] of names.entries()) {
+        expect(store(name)?.id).toBe(before[index]?.id);
+        expect(store(name)?.scope).toBe("user");
+      }
+    }
   });
 
   it("publishes syncing while a linked condition establishes coverage", async () => {

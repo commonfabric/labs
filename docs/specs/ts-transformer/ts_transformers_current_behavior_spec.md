@@ -1744,6 +1744,8 @@ The runtime meaning of `materializerWriteInputPaths` is specified in
 `docs/specs/scheduler-v2/README.md` §4.3 (the write-surface tiers).
 
 Synthetic expression lifts use the same symbol-scoped capture binding plan.
+Renamed identifiers retain their authored symbol and source-map location,
+without an authored text span: the printer emits the allocated binding name.
 Input schemas and availability policies use serialized property paths rather
 than renamed callback bindings. A capture that needs renaming but has no
 recoverable source binding reports `pattern-context:computation` rather than

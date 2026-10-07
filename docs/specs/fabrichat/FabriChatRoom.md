@@ -38,6 +38,13 @@ composed, as a `PerSession` value of its own, so two placements of the same room
 open in one session show the same composer state, as one conversation shown
 twice should.
 
+The viewer's profile and chat manager are optional capabilities. Their terminal
+Wish errors leave the conversation readable: an absent profile exposes setup,
+and an absent manager offers neither starting a direct chat nor adding the room
+to its list. Pending and syncing wishes remain unavailable rather than being
+treated as confirmed absence. Successful profile and stream projections retain
+their original cell identities.
+
 ## Writers
 
 Every write goes through one handler per stream:
