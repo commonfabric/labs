@@ -1907,6 +1907,19 @@ If schemas are not already present via type args:
 - a result type the checker prints no node for, and that no recovery reads, is
   carried as an `unknown` placeholder recorded as printed from it, so the
   result schema is generated from the type (§6.6)
+- a result type its author did not write declares no scope: one a pass printed
+  from the callback's inferred return type, as for `computed(() => …)`, a JSX
+  expression, or a `lift` with neither a result type argument nor a return
+  type annotation, is marked `SchemaHint.declaresNoScope`, and its schema is
+  generated with the generator's `declaresNoScope` option (the schema-generator
+  mapping spec's §10). The runtime stores a lift's result at the narrowest
+  scope its callback reads (`effectiveOutputScope` in `runner.ts`), and a type
+  inferred through `??` or a union keeps or drops a scope wrapper by how
+  TypeScript reduces it. A result type the author wrote, a lift's second type
+  argument or a callback's return type annotation, keeps the scope it names
+  (`test/scope-wrapper-alias-schema.test.ts`;
+  `packages/runner/test/lift-result-read-scope.test.ts`;
+  `packages/patterns/test/inferred-result-scope/`)
 - unresolved generic helper-definition-site type parameters degrade to
   `{ type: "unknown" }` when schemas are injected from explicit builder type
   arguments

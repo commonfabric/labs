@@ -1337,6 +1337,7 @@ export class SchemaGenerator {
       }),
       ...(typeRegistry && { typeRegistry }),
       ...(options?.widenLiterals && { widenLiterals: true }),
+      ...(options?.declaresNoScope && { declaresNoScope: true }),
       ...(options?.writerIdentityForSourceFile && {
         writerIdentityForSourceFile: options.writerIdentityForSourceFile,
       }),
@@ -1926,7 +1927,7 @@ export class SchemaGenerator {
         : undefined) ?? this.#ensureSyntheticName(type, context);
     context.inProgressNames.add(key);
     context.emittedRefs.add(key);
-    return aliasScope === undefined
+    return aliasScope === undefined || context.declaresNoScope
       ? { "$ref": `#/$defs/${key}` }
       : { "$ref": `#/$defs/${key}`, scope: aliasScope };
   }
@@ -2675,7 +2676,7 @@ export class SchemaGenerator {
       const syntheticKey = this.#ensureSyntheticName(type, context);
       context.inProgressNames.add(syntheticKey);
       context.emittedRefs.add(syntheticKey);
-      return aliasScope === undefined
+      return aliasScope === undefined || context.declaresNoScope
         ? { "$ref": `#/$defs/${syntheticKey}` }
         : { "$ref": `#/$defs/${syntheticKey}`, scope: aliasScope };
     }
@@ -2781,7 +2782,15 @@ export class SchemaGenerator {
       if (!definitions[namedKey]) {
         definitions[namedKey] = schema;
       }
-      base = { $ref: `#/$defs/${namedKey}` };
+      // A recursive scope wrapper's definition is stored without its scope,
+      // which each reference to it carries instead (`#formatType()`), the
+      // root's among them.
+      const scope = isObjectOrArray(schema) ? schema.scope : undefined;
+      const definition = definitions[namedKey];
+      base = scope !== undefined && isObjectOrArray(definition) &&
+          definition.scope === undefined
+        ? { $ref: `#/$defs/${namedKey}`, scope }
+        : { $ref: `#/$defs/${namedKey}` };
     } else {
       base = schema;
     }
