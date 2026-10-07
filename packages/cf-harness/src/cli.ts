@@ -735,8 +735,8 @@ Environment:
   CF_HARNESS_PATTERN_INDEX_PUBLISH 0 applies --no-pattern-index-publish
   CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE 1 offers successful authored
                                 patterns to search immediately (default: recorded only)
-  CF_HARNESS_SANDBOX_IMAGE      Default value for --sandbox-image
-  CF_HARNESS_SANDBOX_DOCKER_RUNTIME Default value for --sandbox-docker-runtime
+  CF_HARNESS_SANDBOX_IMAGE      Docker driver only: default value for --sandbox-image
+  CF_HARNESS_SANDBOX_DOCKER_RUNTIME Docker driver only: default value for --sandbox-docker-runtime
   CF_HARNESS_SANDBOX_RUNTIME    Default value for --sandbox-runtime (docker | runsc)
   CF_HARNESS_SANDBOX_ROOTFS     Default value for --sandbox-rootfs
   CF_HARNESS_RUNSC_CFC_POLICY   Default value for --sandbox-cfc-policy
