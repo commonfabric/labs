@@ -115,13 +115,15 @@ What works today:
 - shell-centric execution in a gVisor sandbox through one of two drivers: Docker
   with the Docker-registered `runsc-cfc` runtime, or a `runsc` binary the
   harness invokes directly. `--sandbox-runtime` names one. Where nothing does,
-  macOS runs the direct driver from its native cfc-vm store, and every other
-  platform runs Docker, except that the Loom local host, and a console launched
-  for a Loom instance, refuse where none is named; see
+  macOS runs the direct driver from its native cfc-vm store, Linux runs it from
+  the runsc-cfc store under `~/.local/share`, and every other platform runs
+  Docker, except that the Loom local host, and a console launched for a Loom
+  instance, refuse where none is named; see
   [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions on the direct driver: a long-lived container that later
   calls execute in, offered to the model only where the run's sandbox has
-  sessions and its CFC enforcement mode allows them
+  sessions (not under Linux's default `pasta` network, below) and its CFC
+  enforcement mode allows them
 - under the Docker driver, sandbox containers default to Docker
   `--network bridge` so local Loom/Fabric helper services can be reached through
   Docker Desktop's `host.docker.internal` host alias during early integration
@@ -1222,7 +1224,8 @@ named `runsc`; the store's own `policy.json` is a default of the runtime macOS
 defaults to and of no other.
 
 Under the direct driver `bash` takes an optional `session`, in a run whose CFC
-enforcement mode allows one. A call that names a session executes in a container
+enforcement mode allows one and whose network is not `pasta`'s, which Linux's
+default network is (above). A call that names a session executes in a container
 the harness keeps for the rest of the run, and a call that names none runs in a
 fresh container of its own. Sessions are refused in the enforcing CFC modes, so
 a run in one of them, `enforce-strict` by default, is offered `bash` with no

@@ -300,21 +300,22 @@ configurable on the console.
 Under `runsc` the console builds the direct driver: no Docker, and the runtime
 description reads `runsc-cfc`. `bash` takes no `session`, as on Docker: the
 console's turns run at `enforce-strict`, and no enforcing run can use a sandbox
-session. `console:launch` reads no Docker runtime table, sites no sidecar
-directory, and refuses `--cfc-result-dir` and `--cfc-invocation-context-dir`,
-which it takes on the Docker driver only, because only that driver reads them;
-it prints the `runsc` binary, rootfs and CFC policy in their place, and so does
-the server when it binds. With no CFC policy, which only a named `runsc` can
-have, both say that every turn is refused. A console that names `docker`, or
-names no runtime off macOS and Linux, builds the Docker driver.
+session, and on Linux pasta's default network offers none either.
+`console:launch` reads no Docker runtime table, sites no sidecar directory, and
+refuses `--cfc-result-dir` and `--cfc-invocation-context-dir`, which it takes on
+the Docker driver only, because only that driver reads them; it prints the
+`runsc` binary, rootfs and CFC policy in their place, and so does the server
+when it binds. With no CFC policy, which only a named `runsc` can have, both say
+that every turn is refused. A console that names `docker`, or names no runtime
+off macOS and Linux, builds the Docker driver.
 
 Both printouts say how the driver was selected. `console:launch` prints a
 `sandbox` row whose source is `CF_HARNESS_SANDBOX_RUNTIME`, inherited, or the
-harness default with its platform and, on macOS, the native store; and beside
-each of the `runsc` binary, rootfs and CFC policy, the variable that named it,
-the native store, or the harness default. The server's banner opens its sandbox
-lines with the driver followed by `named by CF_HARNESS_SANDBOX_RUNTIME` or
-`default on <platform>` and the reason.
+harness default with its platform and, on macOS and Linux, the native store (on
+Linux `~/.local/share/runsc-cfc`); and beside each of the `runsc` binary, rootfs
+and CFC policy, the variable that named it, the native store, or the harness
+default. The server's banner opens its sandbox lines with the driver followed by
+`named by CF_HARNESS_SANDBOX_RUNTIME` or `default on <platform>` and the reason.
 
 Every turn scans the skills root and records the registry on its run before the
 first model call, so `read_skill_resource` can answer and a delegated

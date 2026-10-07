@@ -335,6 +335,52 @@ Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolu
   }
 });
 
+Deno.test("resolveRunscSandboxConfig on Linux given a home keeps the runsc-cfc store under it out of every writable mount, and every writable mount out of it", async () => {
+  const home = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-linux-home-" }),
+  );
+  try {
+    const store = join(home, ".local", "share", "runsc-cfc");
+    const sibling = join(store, "images", "other");
+    await Deno.mkdir(sibling, { recursive: true });
+    const elsewhere = await Deno.realPath(
+      await Deno.makeTempDir({ prefix: "runsc-rootfs-" }),
+    );
+    try {
+      // An image this run does not use, in the store a later run defaults
+      // from.
+      const mounting = (hostPath: string, readOnly: boolean) =>
+        config({
+          rootfs: elsewhere,
+          homeDir: home,
+          additionalMounts: [{
+            kind: "host-bind",
+            name: "store-part",
+            hostPath,
+            sandboxPath: "/store-part",
+            readOnly,
+          }],
+        });
+
+      assertThrows(
+        () => mounting(sibling, false),
+        Error,
+        `the writable mount ${sibling} lies inside the runsc-cfc store ${store}: the sandbox could rewrite what Linux's runsc default runs from`,
+      );
+      assertThrows(
+        () => mounting(home, false),
+        Error,
+        `runsc-cfc store ${store} lies inside the writable mount ${home}`,
+      );
+      assertEquals(mounting(sibling, true).rootfs, elsewhere);
+    } finally {
+      await Deno.remove(elsewhere, { recursive: true });
+    }
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
 Deno.test("resolveRunscSandboxConfig refuses a writable mount inside the rootfs, and takes a read-only one", async () => {
   const rootfs = await Deno.realPath(
     await Deno.makeTempDir({ prefix: "runsc-rootfs-" }),

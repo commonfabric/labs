@@ -238,25 +238,28 @@ the first and the last, each checked before the pieces above:
   home that is not a directory, since nothing can be at such a path. A policy
   that is there is opened before it is taken, so one this process cannot read is
   refused here, by name, rather than failing inside `runsc`. Any other failure
-  to look or to open refuses the default, naming the file and the failure, so
-  that the store's own policy never stands in for one under the home that might
-  be there. A named `runsc` is refused the same way, without the way to Docker,
-  since nothing about it is a default.
+  to look or to open refuses the default, naming the file and the failure. On
+  macOS that keeps the store's own policy from ever standing in for one under
+  the home that might be there. On Linux the home's default policy is the
+  store's own, one path, which the selection looks for once. A named `runsc` is
+  refused the same way, without the way to Docker, since nothing about it is a
+  default.
 
 Each refusal is a `HarnessControlError` with the code `invalid-request`. The
 message of a refused default says that no runtime is named and the default on
-macOS is the native runtime, says what is in the way, and says how Docker is
-selected: by `--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`
-on the batch CLI, and by the variable alone on the entrypoints that take no
-selection flag. `cf agent` runs the batch CLI with an argument list it writes
-itself, so its operator can pass no flag, and it asks for the variable alone
-too, from either of its lanes. `cf agent runner` derives the selection once as
-it starts, through `selectCfHarnessCliSandboxRuntime()`, before either lane
-serves, and exits with the refusal where each of its jobs would get it. The Loom
-local host's own refusal names the flag and the variable on its batch lane and
-the variable alone on its interactive lane. Through the batch lane a refusal is
-a host failure carrying the message, and through the interactive lane a
-chat-protocol `internal_error` carrying it.
+macOS or Linux is the native runtime, says what is in the way, and says how
+Docker is selected: by `--sandbox-runtime docker` or
+`CF_HARNESS_SANDBOX_RUNTIME=docker` on the batch CLI, and by the variable alone
+on the entrypoints that take no selection flag. `cf agent` runs the batch CLI
+with an argument list it writes itself, so its operator can pass no flag, and it
+asks for the variable alone too, from either of its lanes. `cf agent runner`
+derives the selection once as it starts, through
+`selectCfHarnessCliSandboxRuntime()`, before either lane serves, and exits with
+the refusal where each of its jobs would get it. The Loom local host's own
+refusal names the flag and the variable on its batch lane and the variable alone
+on its interactive lane. Through the batch lane a refusal is a host failure
+carrying the message, and through the interactive lane a chat-protocol
+`internal_error` carrying it.
 
 `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy` are flags of
 the batch CLI, which the batch lane of the Loom local host also hands its

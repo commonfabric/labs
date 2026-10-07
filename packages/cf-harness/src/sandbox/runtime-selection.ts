@@ -848,8 +848,9 @@ const locateLinuxStore = (home: string | undefined, flags: boolean): string => {
  * on Apple silicon; on Linux, unless a `runsc` binary is named, a process
  * whose user cannot be read, or that is not root and whose host refuses it a
  * user namespace or whose kernel parameters cannot be read; on Linux, for the
- * unnamed network, no `pasta` (or, for a `runsc` that is not rootless, no
- * `unshare`) on `PATH`; a
+ * unnamed network, no `pasta` or `setpriv` on `PATH`, or for a process whose
+ * user is root, no `unshare`, and for one whose user cannot be read, that
+ * user; a
  * setting of the Docker driver is given; the store cannot be located or on
  * macOS is reached through a link; a piece the selection would take from it
  * is not there; or no CFC policy is found and none was named.

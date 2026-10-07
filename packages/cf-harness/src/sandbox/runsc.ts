@@ -179,7 +179,9 @@ export type RunscNetworkMode = "none" | "sandbox" | "host";
  * gets can name the host by a constant. No port of the container's is
  * forwarded to the host, and none of the host's into the container: the host
  * is reached at the gateway alone. Pasta's own messages go to a log file the
- * runtime names, never into a call's output.
+ * runtime names, not into a call's output, but for two warnings about user
+ * mappings that root's pasta writes to its stderr, which the call shares,
+ * whatever its flags say.
  */
 export const PASTA_ARGS: readonly string[] = [
   "--config-net",
@@ -679,9 +681,10 @@ const resolveRunscBinary = (given: string): string => {
  *
  * @throws When a setting is malformed (on macOS, a store that is not an
  * absolute path), when two sandbox roots overlap, when the scratch directory
- * lies inside a mount, when the binary, the policy, the rootfs or, on macOS,
- * the cfc-vm store lies inside a writable mount, when on macOS a writable
- * mount lies inside the store, when a writable mount lies inside the rootfs,
+ * lies inside a mount, when the binary, the policy, the rootfs or the native
+ * store (on macOS the cfc-vm store, on Linux given a home the runsc-cfc store
+ * under it) lies inside a writable mount, when a writable mount lies inside
+ * that store, when a writable mount lies inside the rootfs,
  * and when {@link canonicalHostPath} cannot tell
  * where one of those paths, or a mount, leads.
  */
@@ -901,14 +904,25 @@ export const resolveRunscSandboxConfig = (
       canonicalHostPath("CFC policy", options.cfcPolicyPath),
     );
   // The macOS `runsc` runs from its store whatever binary, rootfs and policy
-  // are named: the VM's config, image and daemon socket are there. So the
-  // store is kept out of reach both ways: not inside a writable mount, and
-  // no writable mount inside it.
-  if (store !== undefined) {
+  // are named: the VM's config, image and daemon socket are there. Linux's
+  // store under the home holds the `runsc`, the images and the policy its
+  // default runs from, an image this run does not use included, which a
+  // later run can. So the store is kept out of reach both ways: not inside a
+  // writable mount, and no writable mount inside it.
+  const nativeStore = store !== undefined
+    ? { path: store, label: "cfc-vm store", runs: "the macOS runsc" }
+    : linuxHome !== undefined
+    ? {
+      path: linuxRunscStore(linuxHome),
+      label: "runsc-cfc store",
+      runs: "Linux's runsc default",
+    }
+    : undefined;
+  if (nativeStore !== undefined) {
     const canonicalStore = trusted(
-      "cfc-vm store",
-      store,
-      canonicalHostPath("cfc-vm store", store),
+      nativeStore.label,
+      nativeStore.path,
+      canonicalHostPath(nativeStore.label, nativeStore.path),
     );
     for (const mount of hostMounts) {
       if (
@@ -916,7 +930,7 @@ export const resolveRunscSandboxConfig = (
         mount.canonical.some((root) => inside(root, [canonicalStore]))
       ) {
         throw new Error(
-          `the writable mount ${mount.hostPath} lies inside the cfc-vm store ${store}: the sandbox could rewrite what the macOS runsc runs from${unnamed}`,
+          `the writable mount ${mount.hostPath} lies inside the ${nativeStore.label} ${nativeStore.path}: the sandbox could rewrite what ${nativeStore.runs} runs from${unnamed}`,
         );
       }
     }

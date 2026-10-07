@@ -122,7 +122,14 @@ export class DenoProcessRunner implements ProcessRunner {
         controller.abort();
       }, request.timeoutMs)
       : undefined;
-    const stop = () => controller.abort();
+    // Whichever stops the process first is why it stopped: a signal that
+    // aborts disarms the timeout, so one that comes due while the process
+    // ends does not take its place.
+    const stop = () => {
+      if (timeoutTriggered) return;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
     request.signal?.addEventListener("abort", stop, { once: true });
     try {
       const child = new Deno.Command(request.command, {

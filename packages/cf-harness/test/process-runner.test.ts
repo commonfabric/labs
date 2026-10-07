@@ -1,4 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { join } from "@std/path";
 import {
   DenoProcessRunner,
   ProcessTimeoutError,
@@ -28,7 +29,10 @@ Deno.test("DenoProcessRunner surfaces a timeout as ProcessTimeoutError where the
     () =>
       runner.run({
         command: "/bin/sh",
-        args: ["-c", 'trap "exit 0" TERM; sleep 5 >/dev/null 2>&1 & wait'],
+        args: [
+          "-c",
+          "trap 'kill $!; exit 0' TERM; sleep 5 >/dev/null 2>&1 & wait",
+        ],
         timeoutMs: 100,
       }),
     ProcessTimeoutError,
@@ -73,7 +77,7 @@ Deno.test("DenoProcessRunner stops a process its signal aborts, and throws the s
     const script of [
       "exec sleep 60",
       // Answers SIGTERM by exiting 0, as pasta does.
-      'trap "exit 0" TERM; sleep 60 >/dev/null 2>&1 & wait',
+      "trap 'kill $!; exit 0' TERM; sleep 60 >/dev/null 2>&1 & wait",
     ]
   ) {
     const stop = new AbortController();
@@ -86,6 +90,34 @@ Deno.test("DenoProcessRunner stops a process its signal aborts, and throws the s
     stop.abort(new Error("closed"));
 
     await assertRejects(() => running, Error, "closed");
+  }
+});
+
+Deno.test("DenoProcessRunner throws the reason of a signal that stopped the process before its timeout came due, however long the process takes to end", async () => {
+  const runner = new DenoProcessRunner();
+  const dir = await Deno.makeTempDir();
+  const ready = join(dir, "ready");
+  try {
+    await new Deno.Command("mkfifo", { args: [ready] }).output();
+    const stop = new AbortController();
+    // Takes five seconds to answer SIGTERM, past its two-second timeout,
+    // and says through the FIFO once it will answer it so.
+    const running = runner.run({
+      command: "/bin/sh",
+      args: [
+        "-c",
+        `trap 'sleep 5; kill $!; exit 0' TERM; echo > "$0"; sleep 60 >/dev/null 2>&1 & wait`,
+        ready,
+      ],
+      timeoutMs: 2000,
+      signal: stop.signal,
+    });
+    await Deno.readTextFile(ready);
+    stop.abort(new Error("closed"));
+
+    await assertRejects(() => running, Error, "closed");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
   }
 });
 

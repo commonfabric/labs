@@ -640,8 +640,8 @@ Options:
   --cfc-enforcement-mode <mode> disabled | observe | enforce-explicit | enforce-strict
   --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (docker runtime only; required for enforce-* modes)
   --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (docker runtime only; required for enforce-* modes)
-  --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
-  --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
+  --sandbox-image <image>       Docker driver only: the image for its runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
+  --sandbox-docker-runtime <n>  Docker driver only: its Docker runtime (default: runsc-cfc)
   --sandbox-runtime <kind>      docker or runsc: run runsc directly with no Docker; the
                                 same on Linux and on macOS through the darwin runsc. Tool
                                 calls may then name a sandbox session, except under pasta's
