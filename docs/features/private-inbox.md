@@ -336,9 +336,10 @@ an offer whose `from` and `id` already key a receipt in the catalog. Any other
 offer is registered when:
 
 - its envelope is well formed: `space` and `from` are well-formed DIDs, `host`
-  and a nonempty `ownerOrigin` are each an origin, as `normalizeSpaceHost()`
-  reads one, every string fits the length `receive` cuts it to, and `sharedAt`
-  is a nonnegative integer;
+  is an origin, as `normalizeSpaceHost()` reads one, `ownerOrigin` is empty,
+  as `receive` keeps one it was not given or could not read, or else such an
+  origin, every string fits the length `receive` cuts it to, and `sharedAt` is
+  a nonnegative integer;
 - its `kind` is one the intake admits, which `ADMITTED_OFFER_KINDS` in the
   intake's module lists, each with the members a root of that kind declares:
   for `fabrichat-room`, `about`, `messages`, `sendMessage` and
@@ -373,8 +374,9 @@ sends no `since`, so Home's handler records the time it admits the entry, as the
 catalog's `since` requires, rather than the sender's `sharedAt`. The handler
 reads only Home's own catalog, never an inbox pointer, so the hazard an untyped
 pointer read carries, above, cannot reach it. Registration is insert-if-absent,
-so an offer of a space already in the catalog, archived or not, adds a receipt
-and leaves the entry as it is.
+so an offer of a space already in the catalog under the same host and kind,
+archived or not, adds a receipt and leaves the entry as it is; one under another
+host or kind is a `conflict`, which writes nothing.
 
 Each row of an inbox is decided by its whole content, so a row that names
 another offer's `from` and `id` decides nothing about that offer. A row the
@@ -388,9 +390,10 @@ bring that about. A refusal is logged once per row, as a warning under
 for a row it was sent, as for a space the catalog already holds under another
 kind, the intake logs that once too, with the reason. A failure to read what
 vetting needs, other than a refusal of access, is logged, and the row is vetted
-again when its inbox next changes. The intake removes and marks nothing, so
-every offer stays in its inbox, and another reader, such as a loom daemon, reads
-them all.
+again when its inbox next changes. So is a send to Home that throws. A catalog
+that cannot be read is taken to hold no receipts, since Home's handler refuses a
+duplicate in any case. The intake removes and marks nothing, so every offer
+stays in its inbox, and another reader, such as a loom daemon, reads them all.
 
 ## What it does not protect
 
