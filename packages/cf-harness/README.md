@@ -533,8 +533,13 @@ research, and descendant calls. Each completed model call contributes once,
 including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
-that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the
+that total usage object. The report's `model` is the requested identifier.
+`modelResponses` records the provider's returned model identifier for each
+direct call, or `null` when unavailable. `actualModels` contains the distinct
+observed identifiers; `modelAttributionComplete` is true only when every direct
+turn has one. Research and descendant attribution belongs to those runs' own
+reports. `costUsd`, when present, came from the provider; `estimatedCostUsd` is
+an estimate based on the
 [public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
 for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
 subscription quota conversion.

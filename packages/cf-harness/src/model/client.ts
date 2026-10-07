@@ -167,7 +167,14 @@ export const HARNESS_MODEL_USAGE_NUMERIC_FIELDS = [
 export interface HarnessModelTurnResult {
   assistant: HarnessAssistantTranscriptMessage;
   usage?: HarnessModelUsage;
+
+  /** Model identifier returned by the provider for this response. */
+  observedModel?: string;
 }
+
+/** Returns a nonempty provider-reported model identifier when present. */
+export const observedModelId = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value : undefined;
 
 export interface HarnessModelCatalogEntry {
   id: string;

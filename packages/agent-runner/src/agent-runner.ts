@@ -41,6 +41,15 @@ export interface AgentRunReport {
   modelTurns?: number;
   toolCalls?: number;
 
+  /** Provider-reported model identifiers for the direct loop's responses. */
+  actualModels?: string[];
+
+  /** Whether every direct turn has a provider-reported model identifier. */
+  modelAttributionComplete?: boolean;
+
+  /** Per-response attribution, independent of token usage availability. */
+  modelResponses?: { modelTurn: number; model: string | null }[];
+
   /** Operator-only reference to the run's artifact root. */
   runRef?: string;
 }

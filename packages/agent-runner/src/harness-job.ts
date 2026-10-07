@@ -175,6 +175,13 @@ const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
       }
       : {}),
     modelTurns: result.modelTurns,
+    ...(result.modelResponses !== undefined
+      ? {
+        modelResponses: result.modelResponses,
+        actualModels: result.actualModels,
+        modelAttributionComplete: result.modelAttributionComplete,
+      }
+      : {}),
     toolCalls: result.runState.toolOutputs.length,
     ...(result.runState.artifactRoot !== undefined
       ? { runRef: result.runState.artifactRoot }

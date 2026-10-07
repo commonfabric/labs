@@ -154,6 +154,7 @@ export interface OpenAIResponsesRequest {
 
 export interface OpenAIResponsesResponse {
   id?: string;
+  model?: string;
   status?: string;
   output?: readonly unknown[];
   usage?: Record<string, unknown>;
@@ -235,6 +236,7 @@ export interface OpenAIChatCompletionChoice {
 
 export interface OpenAIChatCompletionResponse {
   id?: string;
+  model?: string;
   choices: readonly OpenAIChatCompletionChoice[];
   usage?: Record<string, unknown>;
   native_model_tool_results?:

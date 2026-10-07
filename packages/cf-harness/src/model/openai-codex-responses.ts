@@ -11,12 +11,13 @@ import {
   harnessCredentialOwnersEqual,
 } from "../contracts/run-manifest.ts";
 import { HarnessControlError } from "../control-errors.ts";
-import type {
-  HarnessModelAttemptDiagnostic,
-  HarnessModelCatalogEntry,
-  HarnessModelClient,
-  HarnessModelTurnRequest,
-  HarnessModelTurnResult,
+import {
+  type HarnessModelAttemptDiagnostic,
+  type HarnessModelCatalogEntry,
+  type HarnessModelClient,
+  type HarnessModelTurnRequest,
+  type HarnessModelTurnResult,
+  observedModelId,
 } from "./client.ts";
 import {
   assertHarnessModelInputBound,
@@ -815,6 +816,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     }
     return {
       assistant,
+      observedModel: observedModelId(terminal.model),
       ...(usage !== undefined ? { usage } : {}),
     };
   }

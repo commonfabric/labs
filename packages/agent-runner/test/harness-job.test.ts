@@ -475,6 +475,25 @@ describe("runHarnessJob()", () => {
   });
 
   describe("how a job ends", () => {
+    it("retains observed model attribution in the public job report", async () => {
+      const modelResponses = [
+        { modelTurn: 1, model: "provider-served-model" },
+        { modelTurn: 2, model: null },
+      ];
+      const { result } = await runScripted(plainSpec(), async (context) => ({
+        ...await answering("Titan")(context),
+        actualModels: ["provider-served-model"],
+        modelAttributionComplete: false,
+        modelResponses,
+      }));
+      expect(result.outcome).toBe("completed");
+      expect(result.report).toMatchObject({
+        actualModels: ["provider-served-model"],
+        modelAttributionComplete: false,
+        modelResponses,
+      });
+    });
+
     it("tells the caller of each transcript event before passing it on, and gives the loop the job's signal", async () => {
       const events: string[] = [];
       const controller = new AbortController();

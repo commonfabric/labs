@@ -21,6 +21,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   createFileSystemHarnessArtifactStore,
   type HarnessArtifactStore,
+  readHarnessRunReport,
 } from "../src/artifacts.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
 import { OpenAICodexCredentialResolver } from "../src/auth/openai-codex.ts";
@@ -443,6 +444,89 @@ Deno.test("CfHarnessPromptLoop persists a fresh Codex model selection before the
     Error,
     "openai-codex run model gpt-selected does not match requested model gpt-second-selection",
   );
+});
+
+describe("CfHarnessPromptLoop model attribution", () => {
+  for (const ending of ["observed", "omitted", "failed"]) {
+    it(`persists response identity when the last turn is ${ending}`, async () => {
+      const root = await Deno.makeTempDir({ prefix: "model-attribution-" });
+      try {
+        let turns = 0;
+        const artifactStore = createFileSystemHarnessArtifactStore({
+          artifactRoot: root,
+          runId: "attributed-run",
+        });
+        const loop = new CfHarnessPromptLoop({
+          engine: new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            artifactStore,
+            runId: "attributed-run",
+            model: "requested-alias",
+            cfcEnforcementMode: "enforce-strict",
+          }),
+          modelClient: {
+            providerId: "test-provider",
+            complete() {
+              turns += 1;
+              if (turns === 1) {
+                return Promise.resolve({
+                  observedModel: "served-first",
+                  assistant: {
+                    role: "assistant",
+                    content: "",
+                    toolCalls: [{
+                      id: "call-read",
+                      type: "function",
+                      function: {
+                        name: "read_file",
+                        arguments: '{"path":"missing.txt"}',
+                      },
+                    }],
+                  },
+                });
+              }
+              if (ending === "failed") {
+                return Promise.reject(new Error("provider did not return"));
+              }
+              return Promise.resolve({
+                ...(ending === "observed"
+                  ? { observedModel: "served-last" }
+                  : {}),
+                assistant: { role: "assistant", content: "Done." },
+              });
+            },
+          },
+        });
+        const run = loop.runPrompt({ prompt: "Read the file." });
+        if (ending === "failed") {
+          await expect(run).rejects.toThrow("provider did not return");
+        } else {
+          await run;
+        }
+        const report = await readHarnessRunReport(
+          join(artifactStore.runRoot, "run-report.json"),
+        );
+        expect(turns).toBe(2);
+        expect(report.model).toBe("requested-alias");
+        expect(report.modelTurns).toBe(2);
+        expect(report.actualModels).toEqual(
+          ending === "observed"
+            ? ["served-first", "served-last"]
+            : ["served-first"],
+        );
+        expect(report.modelAttributionComplete).toBe(ending === "observed");
+        expect(report.modelResponses).toEqual([
+          { modelTurn: 1, model: "served-first" },
+          ...(ending === "failed" ? [] : [{
+            modelTurn: 2,
+            model: ending === "observed" ? "served-last" : null,
+          }]),
+        ]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+  }
 });
 
 Deno.test("CfHarnessPromptLoop executes injected model-client tool calls through the shared CFC loop", async () => {

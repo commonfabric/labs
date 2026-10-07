@@ -74,7 +74,9 @@ import { harnessCredentialOwnersEqual } from "./contracts/run-manifest.ts";
 import {
   createHarnessRunReport,
   type HarnessModelAttempt,
+  type HarnessModelResponse,
   type HarnessModelTurnUsage,
+  type HarnessRunReport,
   type HarnessRunTimelineEntryInput,
   type HarnessToolActivity,
   type HarnessToolInvocationOrigin,
@@ -383,7 +385,11 @@ export interface RunHarnessTranscriptOptions {
   ) => void | Promise<void>;
 }
 
-export interface HarnessPromptLoopResult {
+export interface HarnessPromptLoopResult extends
+  Pick<
+    HarnessRunReport,
+    "actualModels" | "modelAttributionComplete" | "modelResponses"
+  > {
   model: string;
   finalAssistantText: string;
 
@@ -3817,6 +3823,7 @@ export class CfHarnessPromptLoop {
     const maxModelTurns = options.maxModelTurns ?? this.#maxModelTurns;
     const toolActivity: HarnessToolActivity[] = [];
     const modelAttempts: HarnessModelAttempt[] = [];
+    const modelResponses: HarnessModelResponse[] = [];
     const modelUsage: HarnessModelTurnUsage[] = [];
     const allModelUsage: (HarnessModelUsage | undefined)[] = [];
     const totalUsage = () =>
@@ -3855,41 +3862,40 @@ export class CfHarnessPromptLoop {
     const persistRunReport = async (
       finalAssistantText?: string,
       taskOutcome?: HarnessTaskOutcome,
-    ): Promise<void> => {
+    ): Promise<HarnessRunReport> => {
       await this.engine.persistPolicyTrace(await buildPolicyTrace());
-      await this.engine.persistRunReport(
-        createHarnessRunReport({
-          runState: this.engine.getRunState(),
-          model,
-          ...(this.#reasoningEffort !== undefined
-            ? { reasoningEffort: this.#reasoningEffort }
-            : {}),
-          ...(this.#researchReasoningEffort !== undefined
-            ? { researchReasoningEffort: this.#researchReasoningEffort }
-            : {}),
-          ...(this.#promptCacheMode !== undefined
-            ? { promptCacheMode: this.#promptCacheMode }
-            : {}),
-          cacheAffinity: this.#cacheAffinityKey === undefined
-            ? "run"
-            : "custom",
-          modelTurns,
-          ...(finalAssistantText !== undefined ? { finalAssistantText } : {}),
-          ...(taskOutcome !== undefined ? { taskOutcome } : {}),
-          timeline: reportTimeline,
-          toolActivity,
-          modelAttempts,
-          ...(modelUsage.length > 0
-            ? {
-              modelUsage,
-              usage: sumHarnessModelUsage(
-                modelUsage.map((entry) => entry.usage),
-              ),
-            }
-            : {}),
-          totalUsage: totalUsage(),
-        }),
-      );
+      const report = createHarnessRunReport({
+        runState: this.engine.getRunState(),
+        model,
+        ...(this.#reasoningEffort !== undefined
+          ? { reasoningEffort: this.#reasoningEffort }
+          : {}),
+        ...(this.#researchReasoningEffort !== undefined
+          ? { researchReasoningEffort: this.#researchReasoningEffort }
+          : {}),
+        ...(this.#promptCacheMode !== undefined
+          ? { promptCacheMode: this.#promptCacheMode }
+          : {}),
+        cacheAffinity: this.#cacheAffinityKey === undefined ? "run" : "custom",
+        modelTurns,
+        ...(finalAssistantText !== undefined ? { finalAssistantText } : {}),
+        ...(taskOutcome !== undefined ? { taskOutcome } : {}),
+        timeline: reportTimeline,
+        toolActivity,
+        modelAttempts,
+        modelResponses,
+        ...(modelUsage.length > 0
+          ? {
+            modelUsage,
+            usage: sumHarnessModelUsage(
+              modelUsage.map((entry) => entry.usage),
+            ),
+          }
+          : {}),
+        totalUsage: totalUsage(),
+      });
+      await this.engine.persistRunReport(report);
+      return report;
     };
     const recordModelAttempt = (
       attempt: HarnessModelAttemptDiagnostic,
@@ -4071,6 +4077,10 @@ export class CfHarnessPromptLoop {
           }
           throw error;
         }
+        modelResponses.push({
+          modelTurn: modelTurns,
+          model: response.observedModel ?? null,
+        });
         if (response.usage !== undefined) {
           modelUsage.push({
             modelTurn: modelTurns,
@@ -4310,9 +4320,12 @@ export class CfHarnessPromptLoop {
         ? "budget_finalized"
         : "assistant_completed",
     );
-    await persistRunReport(finalAssistantText, taskOutcome);
+    const report = await persistRunReport(finalAssistantText, taskOutcome);
     return {
       model,
+      actualModels: report.actualModels,
+      modelAttributionComplete: report.modelAttributionComplete,
+      modelResponses: report.modelResponses,
       finalAssistantText,
       taskOutcome,
       transcript: resumableTranscript(),
