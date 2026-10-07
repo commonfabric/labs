@@ -1824,7 +1824,7 @@ export function sqliteQuery(
                 const salt = readRuntimeSecret(
                   wtx,
                   base.space,
-                  SQLITE_ROW_SALT,
+                  unusableRuntimeSecret(SQLITE_ROW_SALT),
                 );
                 if (salt === undefined) {
                   throw new Error("sqlite: the space's row salt is unreadable");

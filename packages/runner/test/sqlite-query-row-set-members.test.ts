@@ -41,6 +41,7 @@ import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "../src/cfc/observation.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { createRef } from "../src/create-ref.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -50,10 +51,7 @@ import {
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import {
-  internalVerifierRead,
-  linkResolutionProbe,
-} from "../src/storage/reactivity-log.ts";
+import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
 import { toURI } from "../src/uri-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
@@ -733,7 +731,8 @@ describe("sqlite-query-row-set-members", () => {
     const storedSalt = (): unknown => {
       const tx = runtime.edit();
       try {
-        return tx.readValueOrThrow(saltLink, { meta: internalVerifierRead });
+        // Below the transaction layer, which is where the read chokepoint is.
+        return tx.tx.read(toMemorySpaceAddress(saltLink)).ok?.value;
       } finally {
         tx.abort("salt read");
       }

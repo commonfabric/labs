@@ -8,10 +8,9 @@
  * the keyed hashes it hands to patterns (docs/specs/cfc-policy-secret.md).
  *
  * The id namespace is reserved. The transaction write chokepoint refuses every
- * unprivileged write to it, and the read chokepoint every read but the
- * runtime's own: its verifier-internal reads, which join nothing, and the one
- * ordinary read {@link readRuntimeSecretIntoFlow} makes, whose marker is
- * private to this module. No executed code holds a secret.
+ * unprivileged write to it, and the read chokepoint every read of a secret's
+ * value but this module's own, whose marker is private to it, so no executed
+ * code holds a secret.
  * `IExtendedStorageTransaction.ensureRuntimeSecret()` is the one writer: it
  * mints a random value when no trusted one is stored, hands none back, and
  * takes the runtime's in-package authorization, so executed code cannot mint
@@ -19,11 +18,11 @@
  * stored.
  *
  * A stored value is trusted only when its stored schema carries the writer
- * claim `writeAuthorizedBy: [RUNTIME_SECRET_WRITER]`, or when the transaction
- * reading it minted it. The runtime committing a write refuses a claim whose
+ * claim `writeAuthorizedBy: [RUNTIME_SECRET_WRITER]` over the confidentiality
+ * the secret is stored under, or when the transaction reading it minted it. The runtime committing a write refuses a claim whose
  * writer is not the builtin it names, and no runtime lets executed code act as
- * a builtin, so a value that code planted in the namespace, before the
- * chokepoint existed or through a runtime without it, carries no such claim.
+ * a builtin, so a value that code planted in the namespace through a runtime
+ * without the chokepoint carries no such claim.
  * `ensureRuntimeSecret()` replaces an untrusted value. A value whose stored
  * schema is named but resolves neither in the replica nor in the schema
  * registry is neither trusted nor untrusted, and reading it throws: a replica
@@ -40,22 +39,27 @@
  * clause.
  */
 
+import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import type { JSONSchema } from "./builder/types.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./cfc/observation.ts";
+import type { CfcModulePolicyMarker } from "./cfc/policy.ts";
 import { loadSchemaDocument } from "./cfc/prepare.ts";
-import type { JSONSchema, JSONValue } from "./builder/types.ts";
 import type { NormalizedFullLink } from "./link-utils.ts";
 import type { URI } from "./sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
   Metadata,
 } from "./storage/interface.ts";
-import { stableInternalVerifierRead } from "./storage/reactivity-log.ts";
+import {
+  internalVerifierRead,
+  stableInternalVerifierRead,
+} from "./storage/reactivity-log.ts";
 
 /** The reserved id namespace of runtime secrets. */
 export const RUNTIME_SECRET_ID_PREFIX = "of:runtime-secret:";
@@ -84,7 +88,7 @@ export type RuntimeSecret = {
    * The confidentiality clauses the secret is stored under, as a schema's
    * `ifc.confidentiality` declares them.
    */
-  readonly confidentiality: readonly JSONValue[];
+  readonly confidentiality: readonly CfcAtom[];
 };
 
 /**
@@ -102,7 +106,7 @@ export const unusableRuntimeSecret = (name: string): RuntimeSecret => ({
  * whose subject commit preparation binds to the space it is stored in.
  */
 export const modulePolicySecret = (
-  marker: { readonly policyDigest: string } & JSONValue,
+  marker: CfcModulePolicyMarker,
 ): RuntimeSecret => ({
   name: `policy:${marker.policyDigest}`,
   confidentiality: [marker],
@@ -136,62 +140,117 @@ export const runtimeSecretLink = (
 export const isRuntimeSecretId = (id: string): boolean =>
   id.startsWith(RUNTIME_SECRET_ID_PREFIX);
 
-const flowReadMarker: unique symbol = Symbol("runtimeSecretFlowReadMarker");
-
-/** The marker of {@link readRuntimeSecretIntoFlow}'s ordinary read. */
-const runtimeSecretFlowRead: Metadata = { [flowReadMarker]: true };
+const ownReadMarker: unique symbol = Symbol("runtimeSecretOwnReadMarker");
 
 /**
- * Returns whether `meta` marks the runtime's ordinary read of a runtime
- * secret, the one read of the namespace that joins a secret's label to the
- * reading transaction.
+ * The runtime's verifier-internal read of a secret: it joins nothing to the
+ * flow label, and schedules nothing, so no later write to a secret runs again
+ * the transaction that read it.
  */
-export const isRuntimeSecretFlowRead = (meta?: Metadata): boolean =>
-  meta?.[flowReadMarker] === true;
+const trustRead: Metadata = {
+  ...stableInternalVerifierRead,
+  [ownReadMarker]: true,
+};
 
 /**
- * Returns the runtime secret called `name` in `space`, or `undefined` when no
- * trusted one is stored: none at all, or a value whose stored schema does not
- * carry the runtime's writer claim and which this transaction did not mint.
- * The reads are verifier-internal: they stay in the transaction's conflict
- * set, so a secret minted concurrently elsewhere fails this transaction's
- * commit rather than going unseen, and they join nothing to the flow label.
- * They schedule nothing, so no later write to a secret triggers a run that
- * read it.
+ * The runtime's watch on a secret that is not yet usable: verifier-internal,
+ * so it joins nothing, and scheduled, so the transaction runs again when the
+ * secret is stored.
+ */
+const watchRead: Metadata = { ...internalVerifierRead, [ownReadMarker]: true };
+
+/**
+ * The runtime's ordinary read of a secret, which joins the secret's stored
+ * label to the reading transaction.
+ */
+const flowRead: Metadata = { [ownReadMarker]: true };
+
+/**
+ * Returns whether `meta` marks one of this module's reads of a runtime
+ * secret's value, the only reads of it the read chokepoint admits from a
+ * transaction outside a privileged write. The marker is private to this
+ * module.
+ */
+export const isRuntimeSecretOwnRead = (meta?: Metadata): boolean =>
+  meta?.[ownReadMarker] === true;
+
+/**
+ * Thrown by a read of a runtime secret whose stored metadata names a schema
+ * that resolves neither in the replica nor in the schema registry, so that
+ * whether the runtime wrote it is unknown.
+ */
+export class RuntimeSecretUnresolvedError extends Error {
+  /** Constructs an instance for the secret at `id`. */
+  constructor(id: string, options: { cause: unknown }) {
+    super(`${id}: the schema stored with it cannot be resolved`, options);
+    this.name = "RuntimeSecretUnresolvedError";
+  }
+}
+
+/**
+ * Returns the runtime secret `secret` in `space`, or `undefined` when no
+ * trusted one is stored: none at all, or a value which this transaction did
+ * not mint and whose stored schema does not carry the runtime's writer claim
+ * over the secret's own confidentiality. The reads are verifier-internal:
+ * they stay in the transaction's conflict set, so a secret minted
+ * concurrently elsewhere fails this transaction's commit rather than going
+ * unseen, they join nothing to the flow label, and they schedule nothing.
  *
- * @throws Error when the stored metadata names a schema that resolves neither
- * in the replica nor in the schema registry, whose claim is unknown.
+ * @throws RuntimeSecretUnresolvedError when whether the runtime wrote the
+ * stored value is unknown.
  */
 export const readRuntimeSecret = (
   tx: IExtendedStorageTransaction,
   space: MemorySpace,
-  name: string,
+  secret: RuntimeSecret,
 ): string | undefined => {
-  const link = runtimeSecretLink(space, name);
-  // Not a scheduling dependency either: a run another write to a secret
-  // triggered would join the secret's label through that trigger read.
-  const value = tx.readValueOrThrow(link, { meta: stableInternalVerifierRead });
+  const link = runtimeSecretLink(space, secret.name);
+  const value = tx.readValueOrThrow(link, { meta: trustRead });
   if (typeof value !== "string") return undefined;
-  return mintedIn(tx, link) || carriesWriterClaim(tx, link) ? value : undefined;
+  return mintedIn(tx, link) || carriesWriterClaim(tx, link, secret)
+    ? value
+    : undefined;
+};
+
+/**
+ * Makes the runtime secret `secret` in `space` a scheduling dependency of
+ * `tx`, without reading it into anything: `tx` runs again when the secret is
+ * written.
+ */
+export const watchRuntimeSecret = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  secret: RuntimeSecret,
+): void => {
+  tx.readValueOrThrow(runtimeSecretLink(space, secret.name), {
+    meta: watchRead,
+  });
 };
 
 /**
  * Like {@link readRuntimeSecret}, except that a trusted value is read a second
  * time with an ordinary read, so the secret's stored label joins the flow of
- * `tx` and a later change to the secret runs it again. The read the runtime
- * computes from a policy's key with, which nothing else reads.
+ * `tx` and a later change to the secret runs it again; and that where no
+ * trusted value is stored, `tx` still runs again once one is. The runtime
+ * reads a policy's key this way to compute from it.
  *
- * @throws Error when the stored metadata names a schema that cannot be
- * resolved.
+ * @throws RuntimeSecretUnresolvedError when whether the runtime wrote the
+ * stored value is unknown.
  */
 export const readRuntimeSecretIntoFlow = (
   tx: IExtendedStorageTransaction,
   space: MemorySpace,
-  name: string,
+  secret: RuntimeSecret,
 ): string | undefined => {
-  if (readRuntimeSecret(tx, space, name) === undefined) return undefined;
-  const value = tx.readValueOrThrow(runtimeSecretLink(space, name), {
-    meta: runtimeSecretFlowRead,
+  let trusted: string | undefined;
+  try {
+    trusted = readRuntimeSecret(tx, space, secret);
+  } finally {
+    if (trusted === undefined) watchRuntimeSecret(tx, space, secret);
+  }
+  if (trusted === undefined) return undefined;
+  const value = tx.readValueOrThrow(runtimeSecretLink(space, secret.name), {
+    meta: flowRead,
   });
   return typeof value === "string" ? value : undefined;
 };
@@ -207,24 +266,31 @@ const mintedIn = (
 
 /**
  * Returns whether the schema stored with the document `link` names claims it
- * for {@link RUNTIME_SECRET_WRITER} at its root. A document with no stored
+ * for {@link RUNTIME_SECRET_WRITER} at its root, over exactly the
+ * confidentiality `secret` is stored under. A document with no stored
  * metadata carries no claim.
  *
- * @throws Error when the stored metadata names a schema that cannot be
- * resolved.
+ * @throws RuntimeSecretUnresolvedError when the stored metadata names a schema
+ * that cannot be resolved.
  */
 const carriesWriterClaim = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
+  secret: RuntimeSecret,
 ): boolean => {
   const metadata = readStoredCfcMetadata(tx, link);
   if (metadata === undefined) return false;
-  const schema = ContextualFlowControl.getSchemaAtPath(
-    loadSchemaDocument(tx, link.space, metadata.schemaHash),
-    [],
-  );
-  const claim = isObjectOrArray(schema) && isObjectOrArray(schema.ifc)
-    ? schema.ifc.writeAuthorizedBy
+  let stored: JSONSchema;
+  try {
+    stored = loadSchemaDocument(tx, link.space, metadata.schemaHash);
+  } catch (error) {
+    throw new RuntimeSecretUnresolvedError(link.id, { cause: error });
+  }
+  const schema = ContextualFlowControl.getSchemaAtPath(stored, []);
+  const ifc = isObjectOrArray(schema) && isObjectOrArray(schema.ifc)
+    ? schema.ifc
     : undefined;
-  return Array.isArray(claim) && claim.includes(RUNTIME_SECRET_WRITER);
+  return Array.isArray(ifc?.writeAuthorizedBy) &&
+    ifc.writeAuthorizedBy.includes(RUNTIME_SECRET_WRITER) &&
+    deepEqual(ifc.confidentiality, secret.confidentiality);
 };

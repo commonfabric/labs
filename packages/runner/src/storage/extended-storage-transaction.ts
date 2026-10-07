@@ -119,8 +119,8 @@ import {
   type ReservedSibling,
 } from "../reserved-sibling-seam.ts";
 import {
-  isRuntimeSecretFlowRead,
   isRuntimeSecretId,
+  isRuntimeSecretOwnRead,
   readRuntimeSecret,
   RUNTIME_SECRET_WRITER,
   type RuntimeSecret,
@@ -1687,19 +1687,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /**
    * The read chokepoint of the runtime-secret namespace: no executed code
-   * reads a runtime secret, whatever link or id names it. The runtime's own
-   * reads pass: verifier-internal ones, the ordinary read
-   * `readRuntimeSecretIntoFlow()` makes, and reads inside a privileged system
-   * write. The markers of the first two are private to the runtime.
+   * reads a runtime secret's value, whatever link or id names it. The reads
+   * that pass are `runtime-secret.ts`'s own, whose marker is private to that
+   * module, and reads inside a privileged system write; a read of a document
+   * field other than the value, such as its label envelope, holds nothing
+   * secret and passes too.
    */
   #assertRuntimeSecretUnread(
-    address: Pick<IMemorySpaceAddress, "id">,
+    address: Pick<IMemorySpaceAddress, "id" | "path">,
     options: IReadOptions | undefined,
   ): void {
     if (
-      !isRuntimeSecretId(address.id) || this.#privilegedSystemWriteDepth > 0 ||
-      isInternalVerifierRead(options?.meta) ||
-      isRuntimeSecretFlowRead(options?.meta)
+      !isRuntimeSecretId(address.id) ||
+      (address.path.length > 0 && address.path[0] !== "value") ||
+      this.#privilegedSystemWriteDepth > 0 ||
+      isRuntimeSecretOwnRead(options?.meta)
     ) {
       return;
     }
@@ -2806,7 +2808,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       );
     }
     this.#assertWritable("ensureRuntimeSecret()");
-    if (readRuntimeSecret(this, space, secret.name) !== undefined) return;
+    if (readRuntimeSecret(this, space, secret) !== undefined) return;
     const link = runtimeSecretLink(space, secret.name);
     this.#runPrivilegedSystemWrite(() => {
       this.writeValueOrThrow(
@@ -3313,7 +3315,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
-    this.#assertRuntimeSecretUnread(address, readOptions);
+    for (const path of paths) {
+      this.#assertRuntimeSecretUnread({ id: address.id, path }, readOptions);
+    }
     this.#prepareRead(address);
     if (this.tx.trackReadPaths) {
       return this.tx.trackReadPaths(address, paths, readOptions);

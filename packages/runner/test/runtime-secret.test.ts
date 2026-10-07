@@ -3,21 +3,21 @@ import { expect } from "@std/expect";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   readRuntimeSecret,
   runtimeSecretLink,
+  RuntimeSecretUnresolvedError,
   unusableRuntimeSecret,
 } from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const signer = await Identity.fromPassphrase("runner-runtime-secret");
 const space = signer.did();
@@ -67,7 +67,8 @@ describe("runtime-secret", () => {
   const stored = (): unknown => {
     const tx = runtime.edit();
     try {
-      return tx.readValueOrThrow(link, { meta: internalVerifierRead });
+      // Below the transaction layer, which is where the read chokepoint is.
+      return tx.tx.read(toMemorySpaceAddress(link)).ok?.value;
     } finally {
       tx.abort("stored read");
     }
@@ -81,6 +82,29 @@ describe("runtime-secret", () => {
 
       await mint();
       expect(stored()).toBe(first);
+    });
+
+    it("trusts no value stored under another confidentiality, and writes none over it", async () => {
+      // The claim vouches for the value only over the confidentiality the
+      // secret is stored under. A stored label never weakens, so the mint
+      // cannot rewrite the value under the other one either.
+
+      await mint();
+      const minted = stored();
+      const other = { name: NAME, confidentiality: ["another-clause"] };
+      const tx = runtime.edit();
+      try {
+        expect(readRuntimeSecret(tx, space, other)).toBeUndefined();
+      } finally {
+        tx.abort("other read");
+      }
+
+      const mintTx = runtime.edit();
+      mintTx.ensureRuntimeSecret(space, other, runtimeWritePolicyAuthorization);
+      expect((await mintTx.commit().settled).error?.message).toMatch(
+        /cannot be weakened/,
+      );
+      expect(stored()).toBe(minted);
     });
 
     it("replaces a value stored with no writer claim", async () => {
@@ -108,7 +132,9 @@ describe("runtime-secret", () => {
 
       const tx = runtime.edit();
       try {
-        expect(readRuntimeSecret(tx, space, NAME)).toBe(stored());
+        expect(readRuntimeSecret(tx, space, unusableRuntimeSecret(NAME))).toBe(
+          stored(),
+        );
       } finally {
         tx.abort("runtime read");
       }
@@ -142,7 +168,7 @@ describe("runtime-secret", () => {
             ) => {
               const value = target.readOrThrow(address, options);
               return address.id === link.id && address.path.length === 1 &&
-                  address.path[0] === "cfc" && isRecord(value)
+                  address.path[0] === "cfc" && isObjectNotArray(value)
                 ? { ...value, schemaHash: unresolvable }
                 : value;
             };
@@ -152,9 +178,9 @@ describe("runtime-secret", () => {
         },
       });
       try {
-        expect(() => readRuntimeSecret(replica, space, NAME)).toThrow(
-          /schemaHash/,
-        );
+        expect(() =>
+          readRuntimeSecret(replica, space, unusableRuntimeSecret(NAME))
+        ).toThrow(RuntimeSecretUnresolvedError);
       } finally {
         tx.abort("unresolvable schema");
       }
@@ -182,8 +208,28 @@ describe("runtime-secret", () => {
         expect(() => runtime.getCellFromLink(link, undefined, tx).get())
           .toThrow(/runtime secret/);
         expect(() => tx.readValueOrThrow(link)).toThrow(/runtime secret/);
+        expect(() => tx.readValueOrThrow(link, { meta: internalVerifierRead }))
+          .toThrow(/runtime secret/);
       } finally {
         tx.abort("refused read");
+      }
+    });
+
+    it("admits a read of the label envelope", async () => {
+      await mint();
+
+      const tx = runtime.edit();
+      try {
+        expect(
+          tx.readOrThrow({
+            space,
+            id: link.id,
+            type: "application/json",
+            path: ["cfc"],
+          }),
+        ).toBeDefined();
+      } finally {
+        tx.abort("envelope read");
       }
     });
   });
