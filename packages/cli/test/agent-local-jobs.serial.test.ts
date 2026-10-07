@@ -35,12 +35,13 @@ const stubDeps = (
     env: (name) => options.env?.[name],
     loadIdentity: () => Promise.resolve({ did: () => DID }),
     selectSandboxRuntime: () => Promise.resolve(),
-    start: (config) => {
+    start: (config, _report, changed) => {
       fabric.push(config);
       if (options.fabricFails) {
         return Promise.reject(new Error("The home space holds no agent queue"));
       }
       events.push("fabric:start");
+      changed?.({ state: "up", reason: null });
       return Promise.resolve({
         stop: () => {
           events.push("fabric:stop");
@@ -248,7 +249,7 @@ describe("cf agent runner local jobs", () => {
     });
 
     it("starts local jobs before the Fabric lane, records it running, and stops both", async () => {
-      const { deps, events } = stubDeps();
+      const { deps, events, readiness } = stubDeps();
 
       await run(deps, [
         "runner",
@@ -262,11 +263,11 @@ describe("cf agent runner local jobs", () => {
       expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
         "local:start",
         "fabric:start",
-        "local:fabric=true",
         "wait",
         "fabric:stop",
         "local:stop",
       ]);
+      expect(readiness).toEqual([{ state: "up", reason: null }]);
       expect(events).toContain(
         `report:agent runner: following ${DID} on http://localhost:8100, offering describe_handle, web_fetch`,
       );
@@ -295,6 +296,36 @@ describe("cf agent runner local jobs", () => {
       ]);
       expect(readiness.every((next) => next.state === "down")).toBe(true);
       expect(readiness).not.toHaveLength(0);
+    });
+
+    it("waits for the first successful queue scan before marking Fabric up", async () => {
+      const { deps, events, readiness } = stubDeps();
+      deps.start = (_config, _report, changed) => {
+        deps.untilStopped = () => {
+          expect(events).not.toContain("local:fabric=true");
+          expect(readiness).toEqual([]);
+          changed?.({ state: "down", reason: "Initial queue scan failed" });
+          expect(readiness).toEqual([{
+            state: "down",
+            reason: "Initial queue scan failed",
+          }]);
+          changed?.({ state: "up", reason: null });
+          expect(readiness).toEqual([
+            { state: "down", reason: "Initial queue scan failed" },
+            { state: "up", reason: null },
+          ]);
+          return Promise.resolve();
+        };
+        return Promise.resolve({ stop: () => Promise.resolve() });
+      };
+      await run(deps, [
+        "runner",
+        ...LOCAL,
+        "--identity",
+        "/keys/me.key",
+        "--api-url",
+        "http://localhost:8100",
+      ]);
     });
 
     it("keeps serving local jobs when the Fabric lane does not start", async () => {

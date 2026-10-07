@@ -44,6 +44,17 @@ describe("agent-status", () => {
     const path = join(dir, "jobs.sock");
     await Deno.writeTextFile(`${path}.token`, "secret\n");
     let mode = "ok";
+    const starting = {
+      ok: true,
+      lanes: { local: false, fabric: false },
+      readiness: {
+        local: {
+          state: "starting",
+          since: "2026-10-07T00:10:14Z",
+          reason: "Initializing the local lane",
+        },
+      },
+    };
     const seen: string[] = [];
     const server = Deno.serve(
       { transport: "unix", path, onListen: () => {} },
@@ -52,8 +63,12 @@ describe("agent-status", () => {
         expect(request.headers.get("authorization")).toBe("Bearer secret");
         return mode === "ok"
           ? Response.json({ lanes: { local: true, fabric: false } })
+          : mode === "starting"
+          ? Response.json(starting, { status: 503 })
           : mode === "http"
-          ? new Response("refused", { status: 503 })
+          ? new Response("refused", { status: 401 })
+          : mode === "invalid-starting"
+          ? new Response("not JSON", { status: 503 })
           : new Response("not JSON");
       },
     );
@@ -61,11 +76,20 @@ describe("agent-status", () => {
       expect(await readRunnerHealth(path)).toEqual({
         lanes: { local: true, fabric: false },
       });
+      mode = "starting";
+      const printed: string[] = [];
+      await createAgentStatusCommand({
+        read: readRunnerHealth,
+        print: (text) => printed.push(text),
+      }).throwErrors().noExit().parse(["--local-jobs-socket", path]);
+      expect(JSON.parse(printed[0])).toEqual(starting);
       mode = "http";
-      await expect(readRunnerHealth(path)).rejects.toThrow("HTTP 503: refused");
+      await expect(readRunnerHealth(path)).rejects.toThrow("HTTP 401: refused");
       mode = "json";
       await expect(readRunnerHealth(path)).rejects.toThrow();
-      expect(seen).toEqual(["/health", "/health", "/health"]);
+      mode = "invalid-starting";
+      await expect(readRunnerHealth(path)).rejects.toThrow();
+      expect(seen).toEqual(Array(5).fill("/health"));
       await expect(readRunnerHealth(join(dir, "absent.sock"))).rejects
         .toThrow();
     } finally {

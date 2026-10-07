@@ -17,7 +17,7 @@ export async function readRunnerHealth(socketPath: string): Promise<unknown> {
       response.on("data", (chunk: string) => body += chunk);
       response.on("error", reject);
       response.on("end", () => {
-        if (response.statusCode !== 200) {
+        if (response.statusCode !== 200 && response.statusCode !== 503) {
           reject(
             new Error(
               `Runner health returned HTTP ${response.statusCode}: ${body}`,

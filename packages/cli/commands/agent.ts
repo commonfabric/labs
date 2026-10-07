@@ -533,17 +533,13 @@ export async function agentRunnerAction(
     } else {
       const config = await resolveAgentRunnerConfig(options, deps);
       try {
-        let observed: LaneTransition | undefined;
         fabric = await deps.start(
           config,
           deps.report,
           (next) => {
-            observed = next;
             local.setFabricReadiness(next);
           },
         );
-        if (observed === undefined) local.setFabricLane(true);
-        else local.setFabricReadiness(observed);
         deps.report(
           `agent runner: following ${config.home} on ${config.homeHost}, offering ${
             config.tools.join(", ")

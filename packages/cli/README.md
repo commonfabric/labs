@@ -1343,22 +1343,25 @@ ends after the job's terminal state. `GET /health` keeps `lanes.local` and
 `lanes.fabric` as booleans and adds `readiness.local` and `readiness.fabric`,
 each `{state, since, reason}`. States are `starting`, `up`, `down`, or
 `refused`; `since` is an ISO timestamp of the last state or reason change.
-`reason` is null for an up lane. Fabric starts as `starting`, `--local-only`
-leaves it `down` with that reason, and a failed start leaves it `refused` with
-the error. Observed queue scan or record-follow failures mark it `down`; a
-successful scan marks it `up`. An idle queue is healthy: this does not detect a
-subscription that silently stops delivering changes.
+`reason` is null for an up lane. Fabric remains `starting` until its first
+successful queue scan; `--local-only` leaves it `down` with that reason, and a
+failed start leaves it `refused` with the error. Observed queue scan or
+record-follow failures mark it `down`; a successful scan marks it `up`. An idle
+queue is healthy: this does not detect a subscription that silently stops
+delivering changes.
 
 Health also lists `routes` as `{method, path}` entries (`:id` is a path
 parameter), the loaded `profileFile`, the resolved SQLite `storePath`, and
 `labsCommit` captured at startup (null when no build or checkout identity is
-available). The browser stream route is a websocket upgrade. Route availability
-does not imply that every profile permits a browser host.
+available). The browser stream route serves server-sent events. Route
+availability does not imply that every profile permits a browser host.
 
 `cf agent status --local-jobs-socket /path/to/jobs.sock` reads authenticated
 health using the token beside the socket and prints the whole JSON record. It
-never submits a job or probes a browser route. HTTP, transport and parsing
-failures exit with an error.
+never submits a job or probes a browser route. During local initialization,
+authenticated health returns HTTP 503 with the readiness record, which this
+command prints. Other HTTP errors, transport and parsing failures exit with an
+error.
 
 A profile, named in the host's file, is the authority a job runs with: its
 tools, its host Loom files, its model-turn cap, the prompt-slot role its task
