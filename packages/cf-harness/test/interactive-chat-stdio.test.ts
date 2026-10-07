@@ -1746,6 +1746,7 @@ const linuxDefault = (): SandboxRuntimeSelection => {
     sandboxRootfs: join(store, "images", "kitchensink"),
     sandboxCfcPolicy: join(store, "cfc-policy.json"),
     sandboxRunscBinary: join(store, "bin", "runsc"),
+    sandboxRunscNetworkHelper: join(LINUX_HOME, "bin", "pasta"),
     sandboxRuntimeChoice: {
       runtime: "runsc",
       source: "default",

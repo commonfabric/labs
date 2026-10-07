@@ -1400,6 +1400,9 @@ const resolveConsoleRunscConfig = (
     cfcPolicyPath: options.sandboxCfcPolicy,
     networkMode: options.sandboxRunscNetworkMode,
     ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
+    ...(options.sandboxRunscNetworkHelper !== undefined
+      ? { networkHelper: options.sandboxRunscNetworkHelper }
+      : {}),
     additionalMounts: options.additionalMounts,
     ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,

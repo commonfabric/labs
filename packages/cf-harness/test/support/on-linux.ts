@@ -35,7 +35,9 @@ import { createLoomLocalCfHarnessHost as createLoomLocalCfHarnessHostOnHost } fr
 
 /**
  * A home whose store holds everything the Linux default takes from it: a
- * `runsc` that runs nothing, an empty rootfs and an empty CFC policy. Made
+ * `runsc` that runs nothing, an empty rootfs and an empty CFC policy, and a
+ * `pasta` beside it that runs nothing, which the exports find for the
+ * default's network. Made
  * once per process outside every tree a case mounts, and removed as the
  * process ends.
  */
@@ -50,6 +52,10 @@ export const LINUX_HOME: string = (() => {
   });
   Deno.mkdirSync(join(store, "images", "kitchensink"), { recursive: true });
   Deno.writeTextFileSync(join(store, "cfc-policy.json"), "{}\n");
+  Deno.mkdirSync(join(home, "bin"));
+  Deno.writeTextFileSync(join(home, "bin", "pasta"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o755,
+  });
   globalThis.addEventListener("unload", () => {
     Deno.removeSync(home, { recursive: true });
   });
@@ -60,7 +66,12 @@ export const LINUX_HOME: string = (() => {
  * The platform every export here runs as unless a case names another, and
  * the process the Linux default is for: root.
  */
-const LINUX = { platform: "linux", uid: () => 0 } as const;
+const LINUX = {
+  platform: "linux",
+  uid: () => 0,
+  which: (name: string) =>
+    name === "pasta" ? join(LINUX_HOME, "bin", "pasta") : undefined,
+} as const;
 
 /**
  * The home an export looks for the Linux store under, given the environment

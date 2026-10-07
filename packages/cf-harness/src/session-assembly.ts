@@ -111,6 +111,8 @@ export interface HarnessSessionConfig {
   sandboxRunscNetworkMode?: RunscNetworkMode;
   /** Whether the direct driver's runsc runs with `--rootless`. */
   sandboxRunscRootless?: boolean;
+  /** The `pasta` that gives the direct driver's `sandbox` network on Linux. */
+  sandboxRunscNetworkHelper?: string;
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -325,6 +327,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxRunscRootless === true
       ? { sandboxRunscRootless: true }
+      : {}),
+    ...(config.sandboxRunscNetworkHelper !== undefined
+      ? { sandboxRunscNetworkHelper: config.sandboxRunscNetworkHelper }
       : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }

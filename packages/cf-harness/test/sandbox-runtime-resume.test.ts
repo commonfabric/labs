@@ -681,6 +681,8 @@ describe("sandbox-runtime-resume", () => {
           // Where the native default can run: Apple silicon, as root.
           arch: "aarch64",
           uid: () => 0,
+          which: (name: string) =>
+            name === "pasta" ? "/usr/bin/pasta" : undefined,
           cwd: root,
           env: { HOME: join(root, "home"), ...extra.env },
           ...(extra.sandboxSelectionFlags !== undefined

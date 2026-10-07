@@ -453,6 +453,8 @@ export interface CreateHarnessEngineOptions
   sandboxRunscNetworkMode?: RunscNetworkMode;
   /** runsc runtime: whether runsc runs with `--rootless`. */
   sandboxRunscRootless?: boolean;
+  /** runsc runtime: the `pasta` that gives the `sandbox` network on Linux. */
+  sandboxRunscNetworkHelper?: string;
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -1072,6 +1074,9 @@ export class CfHarnessEngine {
         cfcPolicyPath: options.sandboxCfcPolicy,
         networkMode: options.sandboxRunscNetworkMode,
         ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
+        ...(options.sandboxRunscNetworkHelper !== undefined
+          ? { networkHelper: options.sandboxRunscNetworkHelper }
+          : {}),
         additionalMounts: options.additionalMounts,
         runId,
         ...(options.sandboxPlatform !== undefined

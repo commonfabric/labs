@@ -648,9 +648,11 @@ Options:
                                 named, macOS (Apple silicon only) runs runsc from the
                                 native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
                                 Support/cfc-vm), Linux runs it from the store under
-                                ~/.local/share/runsc-cfc for a process that is root already,
-                                and each refuses to start where its store is not set up;
-                                every other platform runs docker
+                                ~/.local/share/runsc-cfc, rootless for a process that is not
+                                root (the host must allow unprivileged user namespaces),
+                                with pasta (passt) giving it egress and the host as
+                                host.docker.internal, and each refuses to start where its
+                                store is not set up; every other platform runs docker
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
                                 on Linux, default images/kitchensink in the Linux store;
                                 on macOS the cfc-vm image marker, default
@@ -1922,6 +1924,7 @@ export const parseCfHarnessCliArgs = async (
     sandboxRunscBinary,
     sandboxRunscNetworkMode,
     sandboxRunscRootless,
+    sandboxRunscNetworkHelper,
     sandboxRuntimeChoice,
   } = await cliSandboxRuntimeSelection(
     env,
@@ -2200,6 +2203,9 @@ export const parseCfHarnessCliArgs = async (
       ? { sandboxRunscNetworkMode }
       : {}),
     ...(sandboxRunscRootless === true ? { sandboxRunscRootless } : {}),
+    ...(sandboxRunscNetworkHelper !== undefined
+      ? { sandboxRunscNetworkHelper }
+      : {}),
     sandboxRuntimeChoice,
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),

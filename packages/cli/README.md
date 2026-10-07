@@ -1266,11 +1266,11 @@ A run's sandbox, and a local job's, is the one `cf-harness` selects from the
 environment: `CF_HARNESS_SANDBOX_RUNTIME` names `docker` or `runsc`, and with
 none named a Mac with Apple silicon and Linux run on their native runtime and
 every other platform on Docker. The native runtime needs its store set up (the
-cfc-vm store on a Mac, `~/.local/share/runsc-cfc` on Linux), and on Linux a
-runner that is root or names a root-capable `runsc` with
-`CF_HARNESS_RUNSC_BINARY`; a Mac that is not Apple silicon has none. The runner
-derives that selection as it starts, before either lane serves, and exits with
-the harness's refusal where the harness would refuse its jobs.
+cfc-vm store on a Mac, `~/.local/share/runsc-cfc` on Linux), and on Linux
+`pasta` (passt) and, for a runner that is not root, a host that allows
+unprivileged user namespaces; a Mac that is not Apple silicon has none. The
+runner derives that selection as it starts, before either lane serves, and exits
+with the harness's refusal where the harness would refuse its jobs.
 
 What the Fabric lane does, in order:
 

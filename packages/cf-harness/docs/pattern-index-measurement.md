@@ -95,9 +95,10 @@ named as not taken rather than left out.
    the same tasks. How it was chosen is held to as well, because a default
    belongs to the machine rather than the command: the same console command runs
    on the native runtime on macOS and Linux, and on Docker elsewhere; where the
-   native runtime cannot run, on Linux a console that is not root and names no
-   root-capable `runsc`, it is refused rather than put on Docker. A run written
-   before runs recorded the runtime reads as not recorded.
+   native runtime cannot run, on Linux one with no `pasta` or a host that allows
+   a console that is not root no user namespace, it is refused rather than put
+   on Docker. A run written before runs recorded the runtime reads as not
+   recorded.
 
 ## Running a batch
 

@@ -49,6 +49,7 @@ import { resolveRunscSandboxConfig } from "../src/sandbox/runsc.ts";
 import {
   describeSandboxRuntimeChoice,
   processSandboxSelectionEnv,
+  procSysctlReader,
   resolveSandboxRuntimeSelection,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
@@ -112,12 +113,23 @@ const installLinuxStore = async (home: string): Promise<string> => {
   return store;
 };
 
-/** The selection of a defaulted Linux runtime, taken whole from `store`. */
+/** The `pasta` a case's Linux process finds on its `PATH`. */
+const PASTA = "/usr/bin/pasta";
+
+/** Finds `pasta`, and nothing else, as a Linux host with passt does. */
+const withPasta = (name: string): string | undefined =>
+  name === "pasta" ? PASTA : undefined;
+
+/**
+ * The selection of a defaulted Linux runtime, taken whole from `store`, with
+ * pasta giving it the default network.
+ */
 const fromLinuxStore = (store: string): SandboxRuntimeSelection => ({
   sandboxRuntimeKind: "runsc",
   sandboxRootfs: join(store, LINUX_ROOTFS),
   sandboxCfcPolicy: join(store, LINUX_POLICY),
   sandboxRunscBinary: join(store, LINUX_RUNSC),
+  sandboxRunscNetworkHelper: PASTA,
   sandboxRuntimeChoice: {
     runtime: "runsc",
     source: "default",
@@ -666,6 +678,7 @@ describe("sandbox-runtime-default", () => {
           flags?: boolean;
           uid?: () => number | null;
           readSysctl?: (name: string) => Promise<string | undefined>;
+          which?: (name: string) => string | undefined;
           homeDir?: string;
         } = {},
       ) =>
@@ -673,6 +686,7 @@ describe("sandbox-runtime-default", () => {
           platform: "linux",
           flags: options.flags ?? true,
           uid: options.uid ?? (() => 0),
+          which: options.which ?? withPasta,
           readSysctl: options.readSysctl ??
             (() => Promise.reject(new Error("no parameter is read for root"))),
           ...(options.homeDir !== undefined
@@ -1031,6 +1045,54 @@ describe("sandbox-runtime-default", () => {
           .toEqual(fromLinuxStore(store));
       });
 
+      it("throws where no `pasta` gives the default network, naming passt and the networks that need none", async () => {
+        await installLinuxStore(home);
+
+        for (const named of [undefined, "bridge"]) {
+          const refusal = await rejection(
+            select(
+              {
+                HOME: home,
+                ...(named !== undefined
+                  ? { CF_HARNESS_DOCKER_NETWORK_MODE: named }
+                  : {}),
+              },
+              {},
+              { which: () => undefined },
+            ),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({
+            message: "No sandbox runtime is named, so the default applies, " +
+              "which on Linux is the native `runsc` runtime, and its " +
+              "network, which gives a container egress and the host at " +
+              "`host.docker.internal`, is `pasta`'s, from passt, and no " +
+              "`pasta` is on `PATH`. Install passt (`sudo apt install " +
+              "passt`), or name a network with " +
+              "`CF_HARNESS_DOCKER_NETWORK_MODE=none` or " +
+              "`CF_HARNESS_DOCKER_NETWORK_MODE=host`, or " +
+              DOCKER_BY_FLAG_OR_VARIABLE,
+          });
+        }
+      });
+
+      it("returns the native runtime with no `pasta` where a network that needs none is named", async () => {
+        const store = await installLinuxStore(home);
+        const { sandboxRunscNetworkHelper: _, ...withoutPasta } =
+          fromLinuxStore(store);
+
+        for (const named of ["none", "host"] as const) {
+          expect(
+            await select(
+              { HOME: home, CF_HARNESS_DOCKER_NETWORK_MODE: named },
+              {},
+              { which: () => undefined },
+            ),
+          ).toEqual({ ...withoutPasta, sandboxRunscNetworkMode: named });
+        }
+      });
+
       it("maps the network named in Docker's words onto runsc's", async () => {
         const store = await installLinuxStore(home);
 
@@ -1041,13 +1103,16 @@ describe("sandbox-runtime-default", () => {
             ["host", "host"],
           ] as const
         ) {
+          const { sandboxRunscNetworkHelper: _, ...withoutPasta } =
+            fromLinuxStore(store);
           expect(
             await select({
               HOME: home,
               CF_HARNESS_DOCKER_NETWORK_MODE: named,
             }),
           ).toEqual({
-            ...fromLinuxStore(store),
+            // Pasta gives runsc's own network alone.
+            ...(mode === "sandbox" ? fromLinuxStore(store) : withoutPasta),
             sandboxRunscNetworkMode: mode,
           });
         }
@@ -2491,6 +2556,28 @@ describe("sandbox-runtime-default", () => {
     });
   });
 
+  describe("procSysctlReader()", () => {
+    it("reads a parameter trimmed, reads one the kernel does not have as absent, and throws for one it cannot read", async () => {
+      const sys = join(root, "sys");
+      await Deno.mkdir(join(sys, "kernel", "unreadable"), { recursive: true });
+      await Deno.writeTextFile(
+        join(sys, "kernel", "apparmor_restrict_unprivileged_userns"),
+        "1\n",
+      );
+      const read = procSysctlReader(sys);
+
+      expect(await read("kernel.apparmor_restrict_unprivileged_userns")).toBe(
+        "1",
+      );
+      expect(await read("user.max_user_namespaces")).toBeUndefined();
+      // A directory where the parameter's file goes is no parameter that
+      // could be read.
+      expect(await rejection(read("kernel.unreadable"))).toBeInstanceOf(
+        Error,
+      );
+    });
+  });
+
   describe("describeSandboxRuntimeChoice()", () => {
     it("returns the runtime with the flag or variable that named it", () => {
       expect(
@@ -2611,6 +2698,12 @@ describe("sandbox-runtime-default", () => {
     ...(options?.sandboxRunscBinary !== undefined
       ? { sandboxRunscBinary: options.sandboxRunscBinary }
       : {}),
+    ...(options?.sandboxRunscNetworkHelper !== undefined
+      ? { sandboxRunscNetworkHelper: options.sandboxRunscNetworkHelper }
+      : {}),
+    ...(options?.sandboxRunscRootless === true
+      ? { sandboxRunscRootless: true as const }
+      : {}),
     ...(options?.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: options.sandboxRuntimeChoice }
       : {}),
@@ -2712,6 +2805,7 @@ describe("sandbox-runtime-default", () => {
           platform,
           arch: "aarch64",
           uid: () => 0,
+          which: withPasta,
           ...embedded,
           cwd: root,
           registerSignalHandler: () => () => {},
@@ -2978,7 +3072,7 @@ describe("sandbox-runtime-default", () => {
       await runHarnessInteractiveChatStdioCli([], root, (options) => {
         started.push(options);
         return Promise.resolve();
-      }, { env, platform, arch: "aarch64", uid: () => 0 });
+      }, { env, platform, arch: "aarch64", uid: () => 0, which: withPasta });
       return started.map((options) => sandboxOf(options.basePromptLoopOptions));
     };
 
@@ -3353,6 +3447,7 @@ describe("sandbox-runtime-default", () => {
       const config = await resolveConsoleConfig(ARGS, { HOME: home }, root, {
         platform: "linux",
         uid: () => 0,
+        which: withPasta,
       });
 
       expect(sandboxOf(config)).toEqual(fromLinuxStore(store));
@@ -3756,7 +3851,7 @@ describe("sandbox-runtime-default", () => {
         ARGS,
         { HOME: home },
         launchIo,
-        { platform: "linux", uid: () => 0 },
+        { platform: "linux", uid: () => 0, which: withPasta },
       );
 
       const fromStoreSource = `the native store at \`${store}\``;

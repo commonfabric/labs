@@ -12,6 +12,9 @@ import {
   canonicalHostPath,
   darwinCfcVmRootfs,
   defaultDarwinCfcVmStore,
+  PASTA_ARGS,
+  PASTA_HOSTS_FILE,
+  PASTA_ROOT_ARGS,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
   RunscSandboxRuntime,
@@ -1592,6 +1595,134 @@ Deno.test("a rootless runtime runs every runsc command, control commands include
       runscArgs.map((args) => args.includes("--rootless")),
       runscArgs.map(() => rootless),
     );
+  }
+});
+
+/** The `pasta` the pasta cases configure. Nothing is there, as for RUNSC. */
+const PASTA = "/opt/passt/bin/pasta";
+
+/**
+ * A runner that hands the fake what a command run under pasta runs, and
+ * keeps every command it was given as it was given, with the spec of each
+ * container started.
+ */
+class UnderPasta implements ProcessRunner {
+  readonly fake = new FakeRunscRunner();
+  readonly given: { command: string; args: string[] }[] = [];
+  readonly specs: string[] = [];
+
+  async #unwrap<T extends { command: string; args: string[] }>(
+    request: T,
+  ): Promise<T> {
+    this.given.push({ command: request.command, args: [...request.args] });
+    if (request.command !== PASTA) return request;
+    const [command, ...args] = this.#underPasta(request.args);
+    const bundle = args[args.indexOf("--bundle") + 1];
+    this.specs.push(await Deno.readTextFile(join(bundle, "config.json")));
+    return { ...request, command, args };
+  }
+
+  async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+    return await this.fake.run(await this.#unwrap(request));
+  }
+
+  spawn(request: ProcessSpawnRequest): ProcessHandle {
+    this.given.push({ command: request.command, args: [...request.args] });
+    assertEquals(request.command, PASTA);
+    const [command, ...args] = this.#underPasta(request.args);
+    return this.fake.spawn({ ...request, command, args });
+  }
+
+  /** Checks what pasta is given, and returns the command it runs. */
+  #underPasta(args: readonly string[]): string[] {
+    const end = args.indexOf("--");
+    const own = args.slice(0, end);
+    assertEquals(own.slice(0, PASTA_ARGS.length), [...PASTA_ARGS]);
+    const rest = own.slice(PASTA_ARGS.length);
+    const log = rest.indexOf("--log-file");
+    assertMatch(rest[log + 1], /\/pasta\.log$/);
+    this.pastaFlags.push(rest.filter((_, i) => i !== log && i !== log + 1));
+    return args.slice(end + 1);
+  }
+
+  /** What pasta was given beyond its own arguments and its log file. */
+  readonly pastaFlags: string[][] = [];
+}
+
+Deno.test("under pasta, a call starts its container in pasta's namespace, on that namespace as runsc's host network, with a hosts file naming the host", async () => {
+  const runner = new UnderPasta();
+  const c = config({ networkHelper: PASTA });
+  const runtime = new RunscSandboxRuntime(c, runner);
+
+  const result = await runtime.runShell({ command: "echo hi" });
+
+  assertEquals(result.exitCode, 0);
+  const [call, ...control] = runner.given;
+  assertEquals(call.command, PASTA);
+  assert(call.args.includes("--network=host"));
+  assert(!call.args.includes("--network=sandbox"));
+  // Only what starts a container runs under pasta.
+  assert(control.length > 0);
+  assertEquals(
+    control.map((request) => request.command),
+    control.map(() => RUNSC),
+  );
+  const spec = JSON.parse(runner.specs[0]);
+  assertEquals(
+    spec.linux.namespaces.map((n: { type: string }) => n.type).sort(),
+    ["ipc", "mount", "pid", "uts"],
+  );
+  const hosts = spec.mounts.find((m: { destination: string }) =>
+    m.destination === "/etc/hosts"
+  );
+  assertEquals(hosts, {
+    destination: "/etc/hosts",
+    type: "bind",
+    source: join(c.scratchDir, "hosts"),
+    options: ["rbind", "ro"],
+  });
+  assertEquals(await Deno.readTextFile(hosts.source), PASTA_HOSTS_FILE);
+  assertMatch(PASTA_HOSTS_FILE, /^10\.0\.2\.2\thost\.docker\.internal$/m);
+});
+
+Deno.test("under pasta, root keeps root in a network namespace alone, and a user that is not root gets pasta's user namespace", async () => {
+  for (const rootless of [false, true]) {
+    const runner = new UnderPasta();
+    await new RunscSandboxRuntime(
+      config({ networkHelper: PASTA, rootless }),
+      runner,
+    ).runShell({ command: "echo hi" });
+
+    assertEquals(runner.pastaFlags, [rootless ? [] : [...PASTA_ROOT_ARGS]]);
+  }
+});
+
+Deno.test("under pasta, a session's container starts in pasta's namespace and its calls exec into it from outside", async () => {
+  const runner = new UnderPasta();
+  const runtime = new RunscSandboxRuntime(
+    config({ networkHelper: PASTA }),
+    runner,
+  );
+
+  await runtime.run({ argv: ["/bin/true"], session: "build" });
+
+  assertEquals(runner.fake.spawns.length, 1);
+  const execs = runner.given.filter((request) => request.args.includes("exec"));
+  assertEquals(execs.length, 1);
+  assertEquals(execs[0].command, "/bin/sh");
+  await runtime.close();
+});
+
+Deno.test("a network other than runsc's own takes no pasta, whatever is configured", async () => {
+  for (const networkMode of ["none", "host"] as const) {
+    const runner = new UnderPasta();
+    await new RunscSandboxRuntime(
+      config({ networkHelper: PASTA, networkMode }),
+      runner,
+    ).runShell({ command: "echo hi" });
+
+    assertEquals(runner.given[0].command, "/bin/sh");
+    assert(runner.given[0].args.includes(`--network=${networkMode}`));
   }
 });
 

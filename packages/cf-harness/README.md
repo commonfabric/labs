@@ -1021,11 +1021,15 @@ never a fallback from one driver to the other:
 - **On Linux** the run uses the direct driver with the native runtime: gVisor's
   own `runsc`, the unpacked kitchen-sink rootfs and the CFC policy of the store
   gVisor's Linux installer (`tools/cfc-rootfs/install.sh` in the gVisor fork's
-  release) writes under `~/.local/share/runsc-cfc`. That `runsc` runs containers
-  only as root, so a process that is not root is refused before the store is
-  looked at, unless `CF_HARNESS_RUNSC_BINARY` names a `runsc` to run instead;
-  the refusal names the user, and how to run as root, name a binary, or select
-  Docker. The run is refused, before anything executes, where the store cannot
+  release) writes under `~/.local/share/runsc-cfc`. For root that `runsc` runs
+  as it is. For any other user it runs rootless (`--rootless`), in a user
+  namespace of its own, which the host has to allow a process that is not root:
+  where `user.max_user_namespaces` is 0, `kernel.unprivileged_userns_clone` is
+  0, or `kernel.apparmor_restrict_unprivileged_userns` is 1 (Ubuntu 23.10 and
+  later ship that), the run is refused before the store is looked at, naming the
+  parameter and the `sysctl -w` that lifts it, or running as root. A `runsc`
+  named by `CF_HARNESS_RUNSC_BINARY` runs as it is, rootless or not as it
+  decides. The run is refused, before anything executes, where the store cannot
   provide it, as on macOS.
 - **On every other platform** the run uses Docker. No other platform has a
   native runtime, so the platform is the whole of the reason; a direct driver
@@ -1068,11 +1072,18 @@ process cannot use is refused for that, as on macOS.
 | `images/kitchensink`          | the kitchen-sink image unpacked to a directory       | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
 | `cfc-policy.json`             | the CFC policy, which is the default one of the home | a policy is named                                 |
 
-The Linux default leaves the network mode to the direct driver, whose default is
-`sandbox`: runsc's own network stack in a network namespace of the container's
-own. Nothing configures that namespace on Linux, so the container has a loopback
-interface and no other, and reaches neither the host nor the internet.
-`CF_HARNESS_DOCKER_NETWORK_MODE=host` gives it the host's network instead.
+The Linux default's network is what Docker's bridge gave: egress, and the host
+at `host.docker.internal`. `pasta`, from passt, gives it: each container starts
+inside a user and network namespace of pasta's, which runsc takes as its host
+network, so the container sees one interface of pasta's (10.0.2.15, gateway
+10.0.2.2) and none of the host's. Pasta translates its traffic to the host's
+sockets, and a connection to the gateway reaches the host's own loopback, which
+a hosts file the driver binds over `/etc/hosts` names `host.docker.internal`. No
+port is forwarded into the container, or from the container's loopback to the
+host's. Where no `pasta` is on `PATH` the default is refused, saying to install
+passt (`sudo apt install passt`) or to name a network:
+`CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
+`host` the host's own network, interfaces and all.
 
 A defaulted macOS run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
@@ -1169,9 +1180,8 @@ that works on Docker:
   policy it names, because the macOS `runsc` runs from the store. And
   `host.docker.internal` reaches only the host ports the launch forwards into
   the VM.
-- **On Linux** there is no VM, and with the default `sandbox` network the
-  container reaches neither the host nor the internet, `host.docker.internal`
-  included.
+- **On Linux** there is no VM; the default network is pasta's, above, and the
+  host is reached at `host.docker.internal` on every port its loopback serves.
 
 The two sidecar directory flags are the Docker driver's: the console's launcher,
 `console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on

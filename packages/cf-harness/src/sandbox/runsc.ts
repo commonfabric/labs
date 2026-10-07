@@ -162,6 +162,57 @@ export const linuxRunscRootfs = (
 
 export type RunscNetworkMode = "none" | "sandbox" | "host";
 
+/**
+ * How `pasta` (from passt) gives a container on Linux the `sandbox` network:
+ * a network namespace of its own, whose one interface pasta translates to
+ * the host's sockets, so the container has egress and reaches the host at
+ * the gateway address, and sees none of the host's interfaces. The
+ * addresses are fixed, slirp's, IPv4 alone, so the hosts file the container
+ * gets can name the host by a constant. No port of the container's is
+ * forwarded to the host, and none of the host's into the container: the host
+ * is reached at the gateway alone. Pasta's own messages go to a log file the
+ * runtime names, never into a call's output.
+ */
+export const PASTA_ARGS: readonly string[] = [
+  "--config-net",
+  "--quiet",
+  "-4",
+  "-a",
+  "10.0.2.15",
+  "-n",
+  "24",
+  "-g",
+  "10.0.2.2",
+  "-t",
+  "none",
+  "-u",
+  "none",
+  "-T",
+  "none",
+  "-U",
+  "none",
+];
+
+/**
+ * What pasta is given beside {@link PASTA_ARGS} for root: no user namespace
+ * of its own, and root kept rather than dropped to `nobody`, since runsc then
+ * runs as root inside it. A process that is not root has pasta make a user
+ * namespace, in which runsc's `--rootless` makes its own.
+ */
+export const PASTA_ROOT_ARGS: readonly string[] = [
+  "--netns-only",
+  "--runas",
+  "0",
+];
+
+/** The address a container under pasta reaches the host at. */
+export const PASTA_HOST_ADDRESS = "10.0.2.2";
+
+/** The hosts file a container under pasta gets, naming the host. */
+export const PASTA_HOSTS_FILE = "127.0.0.1\tlocalhost\n" +
+  "::1\tlocalhost ip6-localhost ip6-loopback\n" +
+  `${PASTA_HOST_ADDRESS}\thost.docker.internal\n`;
+
 export interface RunscSandboxConfig {
   /**
    * The runsc binary every command of the runtime executes, as the canonical
@@ -189,6 +240,13 @@ export interface RunscSandboxConfig {
    * needs it where this process is not root.
    */
   rootless: boolean;
+  /**
+   * The `pasta` binary that gives a container the `sandbox` network on
+   * Linux, as {@link PASTA_ARGS} describes; absent where runsc's own
+   * `sandbox` network is used as it is (the macOS `runsc` gives it the VM's
+   * network), and read only under that network mode.
+   */
+  networkHelper?: string;
   /**
    * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
    * when this is set.
@@ -226,6 +284,8 @@ export interface ResolveRunscSandboxConfigOptions {
   extraRunscArgs?: readonly string[];
   /** Whether runsc runs with `--rootless`; see {@link RunscSandboxConfig}. */
   rootless?: boolean;
+  /** The `pasta` binary; see {@link RunscSandboxConfig}. */
+  networkHelper?: string;
   cfcPolicyPath?: string;
   scratchDir?: string;
   runId?: string;
@@ -493,6 +553,17 @@ const findOnSearchPath = (
     }
   }
   return undefined;
+};
+
+/**
+ * Returns the canonical path of the executable file a bare `name` leads to
+ * on this process's `PATH`, or `undefined` where no entry holds one.
+ */
+export const executableOnPath = (name: string): string | undefined => {
+  const searchPath = Deno.env.get("PATH");
+  return searchPath === undefined
+    ? undefined
+    : findOnSearchPath(name, searchPath, () => Deno.cwd());
 };
 
 /**
@@ -789,6 +860,15 @@ export const resolveRunscSandboxConfig = (
     ),
     extraRunscArgs: Object.freeze([...(options.extraRunscArgs ?? [])]),
     rootless: options.rootless ?? false,
+    ...(options.networkHelper !== undefined
+      ? {
+        networkHelper: trusted(
+          "pasta binary",
+          options.networkHelper,
+          canonicalHostPath("pasta binary", options.networkHelper),
+        ),
+      }
+      : {}),
     ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
     scratchDir,
     ...(options.scratchDir === undefined
@@ -1059,7 +1139,10 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       joinHostPath(this.config.scratchDir, "state"),
       "--ignore-cgroups",
       ...(this.config.rootless ? ["--rootless"] : []),
-      `--network=${this.config.networkMode}`,
+      // Under pasta runsc takes pasta's namespace as the host's network.
+      `--network=${
+        this.#pasta() !== undefined ? "host" : this.config.networkMode
+      }`,
       "--overlay2=root:memory",
       ...(this.config.cfcPolicyPath !== undefined
         ? ["--cfc", "--cfc-policy", this.config.cfcPolicyPath]
@@ -1149,6 +1232,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         source: m.hostPath,
         options: ["rbind", m.readOnly ? "ro" : "rw"],
       })),
+      ...(this.#pasta() !== undefined
+        ? [{
+          destination: "/etc/hosts",
+          type: "bind",
+          source: this.#hostsFile(),
+          options: ["rbind", "ro"],
+        }]
+        : []),
     ];
     const env = {
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -1178,7 +1269,9 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         // container its loopback alone.
         namespaces: [
           { type: "pid" },
-          ...(this.config.networkMode === "host" ? [] : [{ type: "network" }]),
+          ...(this.config.networkMode === "host" || this.#pasta() !== undefined
+            ? []
+            : [{ type: "network" }]),
           { type: "ipc" },
           { type: "uts" },
           { type: "mount" },
@@ -1234,7 +1327,48 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     const dir = joinHostPath(this.config.scratchDir, "bundles", id);
     await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
     await Deno.writeTextFile(joinHostPath(dir, "config.json"), specText);
+    if (this.#pasta() !== undefined) {
+      await Deno.writeTextFile(this.#hostsFile(), PASTA_HOSTS_FILE, {
+        mode: 0o644,
+      });
+    }
     return dir;
+  }
+
+  /** The `pasta` a container runs under: under the `sandbox` network alone. */
+  #pasta(): string | undefined {
+    return this.config.networkMode === "sandbox"
+      ? this.config.networkHelper
+      : undefined;
+  }
+
+  /** The hosts file a container under pasta gets, in the scratch directory. */
+  #hostsFile(): string {
+    return joinHostPath(this.config.scratchDir, "hosts");
+  }
+
+  /**
+   * The command that starts a container: `command` with `args`, under pasta
+   * where the container gets pasta's network. A command that only reaches a
+   * running container (`exec`, and the control commands) runs as it is.
+   */
+  #starting(
+    command: string,
+    args: readonly string[],
+  ): { command: string; args: string[] } {
+    const pasta = this.#pasta();
+    return pasta === undefined ? { command, args: [...args] } : {
+      command: pasta,
+      args: [
+        ...PASTA_ARGS,
+        ...(this.config.rootless ? [] : PASTA_ROOT_ARGS),
+        "--log-file",
+        joinHostPath(this.config.scratchDir, "pasta.log"),
+        "--",
+        command,
+        ...args,
+      ],
+    };
   }
 
   /**
@@ -1299,8 +1433,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       let result: ProcessRunResult;
       try {
         result = await this.#runner.run({
-          command: "/bin/sh",
-          args: shellArgs,
+          ...this.#starting("/bin/sh", shellArgs),
           stdinText: request.stdinText,
           timeoutMs: request.timeoutMs,
         });
@@ -1440,14 +1573,13 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         );
       }
       const handle = spawn.call(this.#runner, {
-        command: this.config.runscBinary,
-        args: [
+        ...this.#starting(this.config.runscBinary, [
           ...this.#globalArgs(),
           "run",
           "--bundle",
           state.bundleDir,
           state.containerId,
-        ],
+        ]),
         stdin: "held",
       });
       state.handle = handle;

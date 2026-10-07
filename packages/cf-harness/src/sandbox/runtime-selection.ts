@@ -35,6 +35,7 @@ import {
   DARWIN_CFC_VM_IMAGE_KEY,
   darwinCfcVmRootfs,
   darwinCfcVmStore,
+  executableOnPath,
   LINUX_RUNSC_IMAGE_KEY,
   linuxRunscRootfs,
   linuxRunscStore,
@@ -70,6 +71,12 @@ export interface SandboxRuntimeSelection {
    * that is not root. Absent otherwise.
    */
   sandboxRunscRootless?: true;
+
+  /**
+   * The `pasta` that gives a container of the Linux default its `sandbox`
+   * network. Absent otherwise.
+   */
+  sandboxRunscNetworkHelper?: string;
 
   /** How the runtime was selected, which the run records beside it. */
   sandboxRuntimeChoice: SandboxRuntimeChoice;
@@ -273,6 +280,13 @@ export interface SandboxProcess {
   readSysctl?: (name: string) => Promise<string | undefined>;
 
   /**
+   * Returns the executable a bare `name` leads to on `PATH`, or `undefined`
+   * where none does; this process's `PATH` is searched when absent. A Linux
+   * default looks for `pasta` with it.
+   */
+  which?: (name: string) => string | undefined;
+
+  /**
    * The home the default CFC policy and the default stores are looked up
    * under. An entrypoint that clears `HOME` from the environment it hands on
    * (the Loom local host does) names the real one here; otherwise `env.HOME`
@@ -288,6 +302,7 @@ export const sandboxProcessOf = (process: SandboxProcess): SandboxProcess => ({
   ...(process.readSysctl !== undefined
     ? { readSysctl: process.readSysctl }
     : {}),
+  ...(process.which !== undefined ? { which: process.which } : {}),
   ...(process.homeDir !== undefined ? { homeDir: process.homeDir } : {}),
 });
 
@@ -579,20 +594,21 @@ const readNativeStorePiece = async (
 };
 
 /**
- * Reads the Linux kernel parameter `name` from `/proc/sys`, trimmed, or
- * `undefined` where the kernel has no such parameter.
- *
- * @throws The error of any other failure to read it.
+ * Returns a reader of Linux kernel parameters under `root`, `/proc/sys` by
+ * default, which reads the parameter `name` as `sysctl` names it, trimmed,
+ * or `undefined` where the kernel has no such parameter. The reader throws
+ * the error of any other failure to read one.
  */
-const readProcSysctl = async (name: string): Promise<string | undefined> => {
-  try {
-    return (await Deno.readTextFile(`/proc/sys/${name.replaceAll(".", "/")}`))
-      .trim();
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return undefined;
-    throw error;
-  }
-};
+export const procSysctlReader =
+  (root = "/proc/sys") => async (name: string): Promise<string | undefined> => {
+    try {
+      return (await Deno.readTextFile(`${root}/${name.replaceAll(".", "/")}`))
+        .trim();
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return undefined;
+      throw error;
+    }
+  };
 
 /**
  * The kernel parameters that keep a process that is not root from making a
@@ -930,7 +946,7 @@ export const resolveSandboxRuntimeSelection = async (
         // namespace of its own, which the host has to allow.
         rootless = true;
         const blocked = await userNamespacesBlocked(
-          options.readSysctl ?? readProcSysctl,
+          options.readSysctl ?? procSysctlReader(),
         );
         if (blocked !== undefined) {
           throw nativeDefaultRefusal(
@@ -1109,6 +1125,27 @@ export const resolveSandboxRuntimeSelection = async (
       : rawNetwork === "bridge"
       ? "sandbox"
       : undefined;
+  // Linux's runsc gives a container of its own `sandbox` network loopback
+  // alone; pasta is what gives it egress and the host, as Docker's bridge did.
+  let networkHelper: string | undefined;
+  if (
+    nativePlatform === "linux" &&
+    (sandboxRunscNetworkMode === undefined ||
+      sandboxRunscNetworkMode === "sandbox")
+  ) {
+    networkHelper = (options.which ?? executableOnPath)("pasta");
+    if (networkHelper === undefined) {
+      throw nativeDefaultRefusal(
+        nativePlatform,
+        "its network, which gives a container egress and the host at " +
+          "`host.docker.internal`, is `pasta`'s, from passt, and no `pasta` " +
+          "is on `PATH`",
+        "Install passt (`sudo apt install passt`), or name a network with " +
+          `\`${SANDBOX_NETWORK_MODE_ENV}=none\` or \`${SANDBOX_NETWORK_MODE_ENV}=host\``,
+        options.flags,
+      );
+    }
+  }
   return {
     sandboxRuntimeKind: "runsc",
     ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
@@ -1118,6 +1155,9 @@ export const resolveSandboxRuntimeSelection = async (
       ? { sandboxRunscNetworkMode }
       : {}),
     ...(rootless ? { sandboxRunscRootless: true as const } : {}),
+    ...(networkHelper !== undefined
+      ? { sandboxRunscNetworkHelper: networkHelper }
+      : {}),
     sandboxRuntimeChoice: nativePlatform !== undefined &&
         nativeStore !== undefined
       ? {

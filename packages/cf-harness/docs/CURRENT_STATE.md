@@ -115,12 +115,18 @@ from one driver to the other:
 - On Linux that default is the direct driver with the **native runtime** too:
   gVisor's own `runsc`, the unpacked kitchen-sink rootfs and the CFC policy of
   the store gVisor's Linux installer writes at `.local/share/runsc-cfc` under
-  the home. That `runsc` runs containers only as root, so the default is
-  refused, before the store is looked for, for a process whose user id
-  (`Deno.uid()`) is not 0 or cannot be read, unless `CF_HARNESS_RUNSC_BINARY`
-  names a binary to run instead; that binary is then the one that has to run
-  containers as root, through `sudo` or a root helper, since nothing here checks
-  it. It is refused where there is no home, or the home is not an absolute path.
+  the home. For a process whose user id (`Deno.uid()`) is 0 that `runsc` runs as
+  it is; for any other it runs with `--rootless`, in a user namespace of its
+  own, which the selection first checks the host allows: it reads
+  `user.max_user_namespaces`, `kernel.unprivileged_userns_clone` and
+  `kernel.apparmor_restrict_unprivileged_userns` from `/proc/sys`, and refuses
+  the default, before the store is looked for, where one is 0, 0 or 1, naming it
+  and the `sysctl -w` that lifts it, or running as root. A parameter the kernel
+  lacks keeps nothing from it; one that cannot be read refuses the default, and
+  so does a user id that cannot be read. A binary named by
+  `CF_HARNESS_RUNSC_BINARY` is run as it is, without `--rootless` and without
+  the check. It is refused where there is no home, or the home is not an
+  absolute path.
 - Each refusal of a default says it is the default of its platform, `macOS` or
   `Linux`, what is in the way, and how Docker is selected.
 - On every other platform that default is Docker. No other platform has a native
@@ -172,11 +178,18 @@ with the reason, and one this process cannot read or execute is refused for
 that. The store's policy is the home's default policy, so the selection looks
 for it once.
 
-The Linux default leaves the network mode to the direct driver, `sandbox` unless
-`CF_HARNESS_DOCKER_NETWORK_MODE` names one. Linux's `runsc` builds that stack in
-a network namespace of the container's own, and nothing configures that
-namespace, so the container has loopback alone: no egress, and no route to the
-host. `host` gives it the host's network.
+The Linux default's `sandbox` network, unless `CF_HARNESS_DOCKER_NETWORK_MODE`
+names another, is `pasta`'s, from passt, found on `PATH` as the selection runs;
+with none there the default is refused, naming passt and the two networks that
+need none. The driver starts each container, a session's included, inside
+`pasta --config-net -a 10.0.2.15 -n 24 -g 10.0.2.2` with every port forward off,
+runs runsc there with `--network=host` and a bundle with no network namespace of
+its own, and binds a hosts file over `/etc/hosts` that names the gateway, which
+pasta maps to the host's loopback, `host.docker.internal`. The container has
+egress and the host, and sees none of the host's interfaces. `exec` and the
+control commands reach a running container from outside pasta. `none` gives the
+container loopback alone, and `host` the host's own network, with no network
+namespace of its own either.
 
 The macOS default is refused for three more things, and the Linux default for
 the first and the last, each checked before the pieces above:
@@ -315,12 +328,12 @@ The settings below describe the direct driver and are read only when it is
 selected, by name or by the macOS or Linux default. A setting that is named
 means the same under all three; what an unnamed one falls to differs:
 
-| Setting        | Batch CLI flag         | Environment                      | Unnamed, for a named `runsc`                                                                                                                                                                                              | Unnamed, for the macOS default                                                                                       | Unnamed, for the Linux default                                                                                                                       |
-| -------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the store `CFC_VM_HOME` names, else in the one under the home. On Linux, `images/kitchensink` in the Linux store under the home, where there is a home; with none the run is refused. | `images/kitchensink` in the store.                                                                                   | `images/kitchensink` in the store.                                                                                                                   |
-| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                                                                                                                                    | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. | `cfc-policy.json` in the store, which is that file, where it exists; otherwise the default is refused.                                               |
-| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it.                                                                                                              | `bin/runsc` in the store.                                                                                            | `bin/runsc` in the store, for a process that is root; otherwise the default is refused. A binary named instead has to run containers as root itself. |
-| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                                                                                                                | `sandbox`.                                                                                                           | `sandbox`, which on Linux is loopback alone.                                                                                                         |
+| Setting        | Batch CLI flag         | Environment                      | Unnamed, for a named `runsc`                                                                                                                                                                                              | Unnamed, for the macOS default                                                                                       | Unnamed, for the Linux default                                                                                         |
+| -------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the store `CFC_VM_HOME` names, else in the one under the home. On Linux, `images/kitchensink` in the Linux store under the home, where there is a home; with none the run is refused. | `images/kitchensink` in the store.                                                                                   | `images/kitchensink` in the store.                                                                                     |
+| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                                                                                                                                    | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. | `cfc-policy.json` in the store, which is that file, where it exists; otherwise the default is refused.                 |
+| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it.                                                                                                              | `bin/runsc` in the store.                                                                                            | `bin/runsc` in the store, with `--rootless` for a process that is not root, where the host allows it a user namespace. |
+| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                                                                                                                | `sandbox`.                                                                                                           | `sandbox`, which pasta gives: egress and `host.docker.internal`.                                                       |
 
 The macOS default requires a policy because a run enforces CFC unless told
 otherwise, and an enforcing run with none is refused as it starts. The selection
