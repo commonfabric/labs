@@ -283,8 +283,10 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   (e.g. "700px", "50rem"). Default: undefined
  * @attr {number} tabSize - Tab size (spaces shown for a tab, default: 2)
  * @attr {boolean} tabIndent - Indent on Tab key (default: true)
- * @attr {"light"|"dark"} theme - Editor theme mode; "dark" enables oneDark.
- *   Otherwise the editor follows the nearest `<cf-theme>`'s color scheme.
+ * @attr {"light"|"dark"} theme - "dark" paints the editor with oneDark's own
+ *   palette. "light", the default, paints it with the `--cf-theme-*` tokens and
+ *   follows the nearest `<cf-theme>`'s color scheme, light or dark; wrap the
+ *   editor in its own `<cf-theme>` to give it a different scheme from the page.
  * @attr {"code"|"prose"} mode - Editor mode; "prose" enables markdown prose editing.
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
