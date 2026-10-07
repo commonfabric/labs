@@ -59,8 +59,9 @@ ambient process environment select the id.
 | `list_commands` | `loom command list --json`                                       |
 | `run_command`   | `loom command run <id> --args-json - --json [--loom] [--expect]` |
 
-`list_commands`, and the first `run_command` of a run, read the listing;
-`run_command` runs the CLI once for each call it sends.
+`list_commands`, and the first `run_command` of a run, read the listing. Each
+call `run_command` sends to the host, a lone call or one call of a batch, is one
+`loom command run` process; a call refused before it is sent starts none.
 
 ## The run's catalog
 

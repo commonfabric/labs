@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-10-06\
-Revision: `698601e13c`
+Last verified: 2026-10-07\
+Revision: `84dad4e7a9`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
