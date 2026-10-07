@@ -342,9 +342,9 @@ offer is registered when:
 - its `kind` is one the intake admits, which `ADMITTED_OFFER_KINDS` in the
   intake's module lists, each with the members a root of that kind declares:
   for `fabrichat-room`, `about`, `messages`, `sendMessage` and
-  `recentActivity`, the members of a room's `ChatRoomOutput` that its
-  contract fixes (`docs/specs/fabrichat/ChatRoomOutput.md`). An offer of any
-  other kind is refused, and stays in the inbox for a reader that knows it;
+  `recentActivity`, members of `ChatRoomOutput` as
+  `docs/specs/fabrichat/ChatRoomOutput.md` defines it. An offer of any other
+  kind is refused, and stays in the inbox for a reader that knows it;
 - its `host` is the origin of the host the intake runs against, the one whose
   memory it can read, with both normalized as `normalizeSpaceHost()` normalizes
   a host, so a default port or a trailing slash makes no difference;
@@ -354,9 +354,18 @@ offer is registered when:
 - the owner can open `space` and holds `WRITE` or `OWNER` there, through an
   entry of its own or the grant to every principal;
 - `space` has a root, its space cell linking a piece in `space` itself, as
-  `inSpace()` makes one with `root: true`; and the root's pattern declares, in
-  its result schema, every member its kind lists. The intake reads the pattern
-  the root records, and its schema, without running the root.
+  `inSpace()` makes one with `root: true`; and the result schema stored on the
+  root's document declares every member its kind lists.
+
+The kind check classifies a root by the result schema stored on its document,
+which whoever created the root wrote, so it is the sender's claim and no more;
+the intake loads and runs none of the root's code to read it. A consumer of the
+catalog reads the live root when it opens the space.
+
+The intake admits a `fabrichat-room` offer only when the room is its space's
+root. FabriChat's specification and its manager do not make a room its space's
+root yet, so until they do, every room they offer is refused as
+`space-root-missing`, and stays in the inbox.
 
 The intake sends Home's `registerSharedSpace` the offer's `space`, its `host` as
 normalized, its `kind`, its `title` unless it is empty, and `{ from, id }`. It
@@ -367,13 +376,21 @@ pointer read carries, above, cannot reach it. Registration is insert-if-absent,
 so an offer of a space already in the catalog, archived or not, adds a receipt
 and leaves the entry as it is.
 
-A refused offer is logged once, as a warning under `piece.share-intake`, with
-its reason. Each runtime worker decides each offer once: one it sent or
-refused is not vetted again until another worker starts. A failure to read
-what vetting needs, other than a refusal of access, is logged, and the offer is
-vetted again when an inbox next changes. The intake removes and marks nothing,
-so every offer stays in its inbox, and another reader, such as a loom daemon,
-reads them all.
+Each row of an inbox is decided by its whole content, so a row that names
+another offer's `from` and `id` decides nothing about that offer. A row the
+intake sent, skipped for its receipt, or refused for something in the row itself
+(its envelope, its `kind` or its `host`) is decided for the life of the runtime
+worker. A row refused for the state of its space (the access list, or the root)
+is vetted again the next time the offers of its inbox change; a change to the
+space alone, such as a grant to the sender or a root placed later, does not
+bring that about. A refusal is logged once per row, as a warning under
+`piece.share-intake`, with its reason. When Home's handler returns a `conflict`
+for a row it was sent, as for a space the catalog already holds under another
+kind, the intake logs that once too, with the reason. A failure to read what
+vetting needs, other than a refusal of access, is logged, and the row is vetted
+again when its inbox next changes. The intake removes and marks nothing, so
+every offer stays in its inbox, and another reader, such as a loom daemon, reads
+them all.
 
 ## What it does not protect
 
