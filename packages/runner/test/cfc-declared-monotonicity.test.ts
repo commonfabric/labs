@@ -134,6 +134,19 @@ const SCHEMA_EMPTY_INTEGRITY = {
   required: ["out"],
 } as const satisfies JSONSchema;
 
+// A position holding only its producer's input join, as the node factories
+// write it for a module whose writes the runtime measures.
+const SCHEMA_INPUT_JOIN = {
+  type: "object",
+  properties: {
+    out: {
+      type: "string",
+      ifc: { confidentiality: [CLAUSE_A], inputConfidentiality: [CLAUSE_A] },
+    },
+  },
+  required: ["out"],
+} as const satisfies JSONSchema;
+
 type PersistedEntry = {
   path: string[];
   origin?: string;
@@ -1252,6 +1265,87 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         expect(entry?.label.integrity).toEqual([ATOM_X]);
       } finally {
         await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+      }
+    });
+  });
+
+  describe("a producer's input join (§8.12.8)", () => {
+    it("declares nothing for it where flow labels persist", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({
+        storageManager,
+        cfcFlowLabels: "persist",
+        cfcDeclaredMonotonicity: "enforce",
+      });
+      try {
+        const write = await commitWrite(
+          runtime,
+          "dm-input-join-persist",
+          SCHEMA_INPUT_JOIN,
+          { out: "v1" },
+        );
+        expect(write.error).toBeUndefined();
+        expect(
+          declaredEntryAt(
+            persistedEntriesFor(storageManager, write.docId),
+            ["out"],
+          ),
+        ).toBeUndefined();
+      } finally {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+      }
+    });
+
+    it("keeps the floor a runtime not persisting flow labels declared, without a violation", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const observing = makeRuntime({
+        storageManager,
+        cfcFlowLabels: "observe",
+        cfcDeclaredMonotonicity: "enforce",
+      });
+      const persisting = makeRuntime({
+        storageManager,
+        cfcFlowLabels: "persist",
+        cfcDeclaredMonotonicity: "enforce",
+      });
+      try {
+        const first = await commitWrite(
+          observing,
+          "dm-input-join-mixed",
+          SCHEMA_INPUT_JOIN,
+          { out: "v1" },
+        );
+        expect(first.error).toBeUndefined();
+        expect(
+          declaredEntryAt(
+            persistedEntriesFor(storageManager, first.docId),
+            ["out"],
+          )?.label.confidentiality,
+        ).toEqual([CLAUSE_A]);
+
+        const second = await commitWrite(
+          persisting,
+          "dm-input-join-mixed",
+          SCHEMA_INPUT_JOIN,
+          { out: "v2" },
+        );
+        expect(second.error).toBeUndefined();
+        expect(
+          second.diagnostics.filter((note) =>
+            note.includes("declared-monotonicity")
+          ),
+        ).toEqual([]);
+        expect(
+          declaredEntryAt(
+            persistedEntriesFor(storageManager, second.docId),
+            ["out"],
+          )?.label.confidentiality,
+        ).toEqual([CLAUSE_A]);
+      } finally {
+        await observing.dispose({ closeStorage: false });
+        await persisting.dispose({ closeStorage: false });
         await storageManager.close();
       }
     });

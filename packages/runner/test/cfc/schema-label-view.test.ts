@@ -3,8 +3,7 @@
  * them a runtime persisting flow labels mints as store policy. A clause only
  * a producer's input join put in a schema (`ifc.inputConfidentiality`) stands
  * in for the measurement of what the producer writes, so where that
- * measurement persists the clause is left to it, unless the schema declares
- * the clause itself at the entry's path or above it.
+ * measurement persists, a position holding nothing else is left to it.
  */
 
 import { expect } from "@std/expect";
@@ -52,25 +51,44 @@ describe("schema-label-view", () => {
   describe("persistedSchemaEntryLabel()", () => {
     const joined: JSONSchema = {
       type: "string",
-      ifc: {
-        confidentiality: ["x", "y"],
-        inputConfidentiality: ["x"],
-        integrity: ["z"],
-      },
+      ifc: { confidentiality: ["x", "y"], inputConfidentiality: ["x", "y"] },
     };
 
-    it("leaves an input join's clauses out where what the producer writes is measured", () => {
-      expect(persistedAt(joined, [], true)).toEqual({
-        confidentiality: ["y"],
-        integrity: ["z"],
-      });
+    it("leaves out a position that holds only an input join, where what the producer writes is measured", () => {
+      expect(persistedAt(joined, [], true)).toEqual({});
     });
 
-    it("keeps an input join's clauses where nothing measures what the producer writes", () => {
+    it("keeps an input join where nothing measures what the producer writes", () => {
       expect(persistedAt(joined, [], false).confidentiality).toEqual([
         "x",
         "y",
       ]);
+    });
+
+    it("keeps the whole label of a position that declares a clause of its own", () => {
+      const schema: JSONSchema = {
+        type: "string",
+        ifc: { confidentiality: ["x", "y"], inputConfidentiality: ["x"] },
+      };
+      expect(persistedAt(schema, [], true).confidentiality).toEqual([
+        "x",
+        "y",
+      ]);
+    });
+
+    it("keeps the whole label of a position that declares integrity", () => {
+      const schema: JSONSchema = {
+        type: "string",
+        ifc: {
+          confidentiality: ["x"],
+          inputConfidentiality: ["x"],
+          integrity: ["z"],
+        },
+      };
+      expect(persistedAt(schema, [], true)).toEqual({
+        confidentiality: ["x"],
+        integrity: ["z"],
+      });
     });
 
     it("keeps a clause an ancestor declares, which the entry would otherwise replace", () => {
@@ -85,6 +103,25 @@ describe("schema-label-view", () => {
         },
       };
       expect(persistedAt(schema, ["a"], true).confidentiality).toEqual(["x"]);
+    });
+
+    it("keeps a clause an ancestor declares in another order of its alternatives", () => {
+      const schema: JSONSchema = {
+        type: "object",
+        ifc: { confidentiality: [{ anyOf: ["a", "b"] }] },
+        properties: {
+          a: {
+            type: "string",
+            ifc: {
+              confidentiality: [{ anyOf: ["b", "a"] }],
+              inputConfidentiality: [{ anyOf: ["b", "a"] }],
+            },
+          },
+        },
+      };
+      expect(persistedAt(schema, ["a"], true).confidentiality).toEqual([
+        { anyOf: ["b", "a"] },
+      ]);
     });
 
     it("keeps a clause a declaration at the same path declares", () => {
@@ -106,7 +143,7 @@ describe("schema-label-view", () => {
         .toEqual(["x"]);
     });
 
-    it("leaves out a clause only a descendant declares", () => {
+    it("leaves out a position whose clause only a descendant declares", () => {
       // A descendant's declaration labels the descendant, which its own entry
       // persists; it says nothing about the rest of the value.
       const schema: JSONSchema = {

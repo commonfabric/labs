@@ -6,6 +6,8 @@ import {
   isSubschema,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { ContextualFlowControl } from "../cfc.ts";
+import { type CfcConfClause, normalizeClause } from "./clause.ts";
+import { isPrefix } from "./path-prefix-index.ts";
 import {
   cfcSchemaResolvedRoot,
   resolveCfcSchemaRefRoot,
@@ -175,53 +177,62 @@ const declaredObservationClass = (
     : undefined;
 };
 
-/** Whether a declaration at `above` covers one at `path`. */
-const coversDeclaration = (
-  above: readonly string[],
-  path: readonly string[],
-): boolean =>
-  above.length <= path.length &&
-  above.every((segment, index) =>
-    segment === path[index] || segment === "*" || path[index] === "*"
+/** Whether `clauses` holds `clause`, each compared in its normal form. */
+const holdsClause = (clauses: readonly unknown[], clause: unknown): boolean => {
+  const normal = normalizeClause(clause as CfcConfClause);
+  return clauses.some((other) =>
+    deepEqual(normalizeClause(other as CfcConfClause), normal)
   );
+};
 
-/** The clauses of `entry` its schema declares, not an input join. */
-const declaredConfidentiality = (entry: CfcSchemaEntry): readonly unknown[] => {
-  const inputs = entry.inputConfidentiality ?? [];
-  return (entry.label.confidentiality ?? []).filter((atom) =>
-    !inputs.some((input) => deepEqual(input, atom))
+/**
+ * Whether `entry`, one of a schema's `entries`, holds nothing but its
+ * producer's input join (`ifc.inputConfidentiality`), so that where the
+ * runtime persists the measured label of what that producer writes
+ * (`measured`) the declared component takes nothing from it: the measurement,
+ * with whatever exchange rules released at the producer's observations (spec
+ * §5.3), labels the value instead. Such an entry is no authored declaration,
+ * so the store at its path is one §8.12.5 lets the runtime tighten to cover
+ * what is written there.
+ *
+ * An entry that declares anything of its own — integrity, or a clause outside
+ * the input join — keeps the whole of its label, as does one whose input join
+ * holds a clause an entry at its path or above it declares: within the
+ * declared component a more specific entry replaces its ancestors at every
+ * read beneath it.
+ */
+export const leftToMeasurement = (
+  entry: CfcSchemaEntry,
+  entries: readonly CfcSchemaEntry[],
+  measured: boolean,
+): boolean => {
+  const inputs = entry.inputConfidentiality;
+  if (!measured || inputs === undefined || inputs.length === 0) return false;
+  if ((entry.label.integrity?.length ?? 0) > 0) return false;
+  const own = entry.label.confidentiality ?? [];
+  if (!own.every((clause) => holdsClause(inputs, clause))) return false;
+  return !entries.some((other) =>
+    isPrefix(other.path, entry.path) &&
+    (other.label.confidentiality ?? []).some((clause) =>
+      !holdsClause(other.inputConfidentiality ?? [], clause) &&
+      holdsClause(own, clause)
+    )
   );
 };
 
 /**
  * The label `entry`, one of a schema's `entries`, persists as declared store
- * policy. Where the runtime persists the measured label of what a module
- * writes (`measured`), the clauses only that module's input join put in the
- * schema stand in for the measurement and are left out: the derived
- * component labels the value instead, with whatever exchange rules released
- * at the module's observations (spec §5.3). A clause the schema declares at
- * the entry's path or above it stays, since within the declared component a
- * more specific entry replaces its ancestors at every read beneath it.
- * Elsewhere the label is the schema's whole.
+ * policy: nothing when it is {@link leftToMeasurement}, and otherwise the
+ * whole of its label.
  */
 export const persistedSchemaEntryLabel = (
   entry: CfcSchemaEntry,
   entries: readonly CfcSchemaEntry[],
   measured: boolean,
 ): IFCLabel => {
-  const inputs = entry.inputConfidentiality;
-  if (!measured || inputs === undefined || inputs.length === 0) {
-    return entry.label;
-  }
-  const declaredAbove = entries
-    .filter((other) => coversDeclaration(other.path, entry.path))
-    .flatMap(declaredConfidentiality);
-  const kept = (entry.label.confidentiality ?? []).filter((atom) =>
-    !inputs.some((input) => deepEqual(input, atom)) ||
-    declaredAbove.some((declared) => deepEqual(declared, atom))
-  );
-  const { confidentiality: _all, ...rest } = entry.label;
-  return kept.length > 0 ? { ...rest, confidentiality: kept } : rest;
+  if (!leftToMeasurement(entry, entries, measured)) return entry.label;
+  const { confidentiality: _joined, ...rest } = entry.label;
+  return rest;
 };
 
 /** Return the label view declared by a schema. */

@@ -62,6 +62,11 @@ const seed = handler<Secret, { secret: Writable<Sealed<Secret>> }>(
   },
 );
 
+/** Echoes what it is given: a sub-pattern whose input is a reference. */
+const Echo = pattern<{ given: string }>(({ given }) => ({
+  echoed: computed(() => "E:" + given),
+}));
+
 interface Input {
   secret: Writable<Default<Sealed<Secret>, { a: ""; b: "" }>>;
 }
@@ -73,8 +78,14 @@ export default pattern<Input>(({ secret }) => {
   const byHandComputed = computed(() => "H:" + (byHand.rows?.[0]?.text ?? ""));
   const mixed = computed(() => card.match + "|" + (secret.get()?.b ?? ""));
   const mapped = card.rows.map((row) => ({ shown: row.text }));
+  const sealed = computed(() => "S:" + (secret.get()?.a ?? ""));
+  const sealedEcho = Echo({ given: sealed });
+  const releasedEcho = Echo({ given: card.match });
   return {
     card,
+    sealed,
+    sealedEcho: sealedEcho.echoed,
+    releasedEcho: releasedEcho.echoed,
     viaComputed,
     byHandComputed,
     mixed,
@@ -115,6 +126,9 @@ export default pattern<Rooms>(
       byHandComputed: card.byHandComputed,
       mixed: card.mixed,
       mapped: card.mapped,
+      sealed: card.sealed,
+      sealedEcho: card.sealedEcho,
+      releasedEcho: card.releasedEcho,
       roomCard,
       roomComputed,
       roomByHand,
@@ -156,6 +170,9 @@ type Piece = {
   byHandComputed: string;
   mixed: string;
   mapped: { shown: string }[];
+  sealed: string;
+  sealedEcho: string;
+  releasedEcho: string;
   roomCard: string;
   roomComputed: string;
   roomByHand: string;
@@ -343,7 +360,33 @@ describe("value-intrinsic exchange carry", () => {
     );
   });
 
+  it("drops the released clause from a sub-pattern's output over the released value", async () => {
+    await runPiece(RELEASED, "released-echo", {}, async (run) => {
+      await run.send("seed", { a: "alpha", b: "beta" });
+      expect((await run.read()).releasedEcho).toBe("E:M:alpha");
+      const entries = run.entriesAt("releasedEcho");
+      expect(entries.length).toBeGreaterThan(0);
+      expect(policyClausesOf(entries)).toEqual([]);
+    });
+  });
+
   describe("what does not carry", () => {
+    it("writes a value no rule releases through a sub-pattern, with its clause", async () => {
+      // Binding the computed into a sub-pattern makes its document one the
+      // write-side fit check measures, and the module's input join at its
+      // path is no declaration the write must fit.
+      await runPiece(RELEASED, "sealed-echo", {}, async (run) => {
+        await run.send("seed", { a: "alpha", b: "beta" });
+        const piece = await run.read();
+        expect(piece.sealed).toBe("S:alpha");
+        expect(piece.sealedEcho).toBe("E:S:alpha");
+        expect(policyClausesOf(run.entriesAt("sealed")).length)
+          .toBeGreaterThan(0);
+        expect(policyClausesOf(run.entriesAt("sealedEcho")).length)
+          .toBeGreaterThan(0);
+      });
+    });
+
     it("keeps the clause on a value derived from an input no rule releases", async () => {
       await runPiece(RELEASED, "by-hand", {}, async (run) => {
         await run.send("seed", { a: "alpha", b: "beta" });

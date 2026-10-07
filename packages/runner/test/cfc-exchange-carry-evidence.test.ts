@@ -311,7 +311,7 @@ describe("value-intrinsic exchange evidence", () => {
       const diagnostics = await derive(runtime, "card", "out");
       expect(confidentialityOf(stampsOf(runtime, "out"))).toContainEqual(ROOM);
       expect(
-        diagnostics.some((note) => note.includes("kept the read label")),
+        diagnostics.some((note) => note.includes("ran out of fuel")),
       ).toBe(true);
     });
   });
@@ -325,9 +325,111 @@ describe("value-intrinsic exchange evidence", () => {
       expect(confidentialityOf(stampsOf(runtime, "out"))).toContainEqual(ROOM);
       expect(
         diagnostics.some((note) =>
-          note.includes("value-intrinsic exchange would carry")
+          note.includes("value-intrinsic exchange would leave 0 of 1")
         ),
       ).toBe(true);
     }, "observe");
+  });
+
+  it("records why it kept the label when a module policy does not resolve", async () => {
+    // A policy reference to a manifest this space never installed, which the
+    // destination's own manifest check also refuses to store, so the case
+    // reads what prepare recorded rather than what a commit stored.
+    const UNINSTALLED = {
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module",
+      subject: space,
+      moduleIdentity: "module:uninstalled",
+      symbol: "rules",
+      policyDigest: "uninstalled-digest",
+    };
+    await withRuntime([], async (runtime) => {
+      await seedLabeled(runtime, "card", { text: "sealed" }, [{
+        path: [],
+        origin: "derived",
+        observes: "value",
+        label: {
+          confidentiality: [UNINSTALLED],
+          integrity: [transformedBy(PROJECT)],
+        },
+      }]);
+      const tx = runtime.edit();
+      try {
+        setCfcImplementationIdentity(tx, READER);
+        const value = runtime.getCell(space, "card", undefined, tx).getRaw();
+        runtime.getCell(space, "out", undefined, tx).setRaw(
+          { copied: JSON.stringify(value) } as never,
+        );
+        tx.prepareCfc();
+        expect(
+          tx.getCfcState().diagnostics.some((note) =>
+            note.includes("value-intrinsic exchange kept the label read") &&
+            note.includes("module policy")
+          ),
+        ).toBe(true);
+      } finally {
+        tx.abort();
+      }
+    });
+  });
+
+  describe("a reference copying a stored label", () => {
+    /** Writes a reference to `input` into `output`; returns the diagnostics. */
+    const link = async (
+      runtime: Runtime,
+      input: string,
+      output: string,
+    ): Promise<readonly string[]> => {
+      const tx = runtime.edit();
+      setCfcImplementationIdentity(tx, READER);
+      const source = runtime.getCell(space, input, undefined, tx);
+      runtime.getCell(space, output, undefined, tx).set(source as never);
+      tx.prepareCfc();
+      const diagnostics = [...tx.getCfcState().diagnostics];
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return diagnostics;
+    };
+
+    /** The output's link-carried entries. */
+    const linkEntriesOf = (runtime: Runtime, cause: string) => {
+      const tx = runtime.edit();
+      try {
+        const at = runtime.getCell(space, cause, undefined, tx)
+          .getAsNormalizedFullLink();
+        return (readStoredCfcMetadata(tx, at)?.labelMap.entries ?? [])
+          .filter((entry) => entry.origin === "link");
+      } finally {
+        tx.abort();
+      }
+    };
+
+    it("copies the clause the source's own stamp releases as released", async () => {
+      await withRuntime(RELEASE, async (runtime) => {
+        await seedLabeled(runtime, "card", { text: "released" }, [
+          stamp([], PROJECT),
+        ]);
+        await link(runtime, "card", "out");
+        const entries = linkEntriesOf(runtime, "out");
+        expect(entries.length).toBeGreaterThan(0);
+        expect(confidentialityOf(entries)).toEqual([]);
+      });
+    });
+
+    it("copies the clause as read, and says what enforce would copy, when policy evaluation only observes", async () => {
+      await withRuntime(RELEASE, async (runtime) => {
+        await seedLabeled(runtime, "card", { text: "released" }, [
+          stamp([], PROJECT),
+        ]);
+        const diagnostics = await link(runtime, "card", "out");
+        expect(confidentialityOf(linkEntriesOf(runtime, "out")))
+          .toContainEqual(ROOM);
+        expect(
+          diagnostics.some((note) =>
+            note.includes("would leave 0 of 1") &&
+            note.includes("on a reference copied from")
+          ),
+        ).toBe(true);
+      }, "observe");
+    });
   });
 });
