@@ -92,7 +92,10 @@ class FramedSocket extends EventTarget {
  */
 async function fixture(
   name: string,
-  { modernCellRep = true, clientModernCellRep = modernCellRep } = {},
+  {
+    modernCellRep = true,
+    clientModernCellRep = modernCellRep,
+  }: { modernCellRep?: boolean; clientModernCellRep?: boolean } = {},
 ) {
   setModernCellRepConfig(modernCellRep);
   const root = Deno.makeTempDirSync({ prefix: `routed-data-${name}-` });
@@ -423,6 +426,93 @@ Deno.test("a routed toolshed serves either cell representation, and refuses a cl
     }
   }
   setModernCellRepConfig(true);
+});
+
+Deno.test("a routed connection is not sent session/admissible when a grant admits a refused principal", async () => {
+  const f = await fixture("admission-notice");
+  try {
+    // Both peers advertise the capability, so only the routed connection
+    // keeps the server from recording the refusal.
+    assertEquals(f.server.memoryProtocolFlags().admissionNotice, true);
+    const session = await f.open();
+    const admit = (proof: Uint8Array) =>
+      new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(proof).bytes;
+    assertEquals(
+      (await f.control(6, admit(await f.proof(f.outsider)))).status,
+      0,
+    );
+    assert(
+      (await f.request({
+        type: "session.open",
+        space: f.space.did(),
+        principal: f.outsider.did(),
+        session: {},
+      })).error !== undefined,
+    );
+    const frames: Record<string, unknown>[] = [];
+    const until = async (requestId: string) => {
+      while (true) {
+        const message = decodeRoutedFrame(await f.socket.take(), true).body;
+        frames.push(message);
+        if (message.requestId === requestId) return message;
+      }
+    };
+    f.socket.receive(
+      encodeRoutedFrame(`fvj1:${
+        JSON.stringify({
+          type: "transact",
+          requestId: "grant",
+          space: f.space.did(),
+          sessionId: session.sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:${f.space.did()}`,
+              value: {
+                value: {
+                  [f.principal.did()]: "OWNER",
+                  [f.outsider.did()]: "READ",
+                },
+              },
+            }],
+          },
+        })
+      }`),
+    );
+    const granted = await until("grant");
+    assert(granted.ok !== undefined, JSON.stringify(granted));
+    // A later request's response follows anything the grant sent.
+    f.socket.receive(
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "memory.compression",
+            requestId: "after",
+            enabled: false,
+          })
+        }`,
+      ),
+    );
+    await until("after");
+    assertEquals(
+      frames.filter((frame) => frame.type === "session/admissible"),
+      [],
+    );
+    // The grant took effect: the outsider now opens through ordinary
+    // admission, which is how a routed client learns of it.
+    assert(
+      (await f.request({
+        type: "session.open",
+        space: f.space.did(),
+        principal: f.outsider.did(),
+        session: {},
+      })).ok !== undefined,
+    );
+  } finally {
+    await f.close();
+  }
 });
 
 Deno.test("omitted views retain their quota across watch replacements and resume", async () => {

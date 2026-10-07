@@ -221,12 +221,15 @@ The policy initializes the Memory encoder from that setting before listening;
 Runtime startup reads the same flag. Only owned spaces open a Memory session:
 explicit-ACL spaces, and a space with no history to its own DID. The toolshed's
 HTTP routes, such as blobs and invitations, open a space without checking
-ownership, so moving a space blocks them first (see the infra router README).
-Directory epoch changes fence protected turns and close affected contexts.
-Remove a router from its tracked allowlist and restart for immediate permanent
-policy withdrawal; in-process `revokeRouter` also persists a key tombstone.
-Production secrets come from managed credentials, and public firewall policy
-must block direct Memory/private endpoints and independently decide every
+ownership, so moving a space blocks them first (see the infra router README). A
+routed connection is never sent `session/admissible` (see [the
+protocol](04-protocol.md)): the toolshed records no refusal on it, so a routed
+client refused for want of `READ` learns of a later grant only by opening the
+session again. Directory epoch changes fence protected turns and close affected
+contexts. Remove a router from its tracked allowlist and restart for immediate
+permanent policy withdrawal; in-process `revokeRouter` also persists a key
+tombstone. Production secrets come from managed credentials, and public firewall
+policy must block direct Memory/private endpoints and independently decide every
 toolshed HTTP route.
 
 `test/routed-router.exercise.ts` is a disposable Linux CLI driven by the Rust
