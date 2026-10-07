@@ -1085,11 +1085,12 @@ own `/proc` in the mount namespace it runs in. Pasta starts what it runs in a
 PID namespace of its own, so a session's container started under it would record
 pids its later calls could not find: under pasta's network no sandbox session is
 offered, and the `bash` tool takes no `session`. No port is forwarded into the
-container, or from the container's loopback to the host's. Where no `pasta` is
-on `PATH` the default is refused, saying to install passt
-(`sudo apt install passt`) or to name a network:
-`CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
-`host` the host's own network, interfaces and all.
+container, or from the container's loopback to the host's. A user id, or a
+kernel parameter, that cannot be read refuses the default rather than being
+guessed at. Where no `pasta` is on `PATH`, or for root no `unshare`, the default
+is refused, saying to install passt (`sudo apt install passt`) or to name a
+network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback
+alone, and `host` the host's own network, interfaces and all.
 
 A defaulted macOS run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and

@@ -94,10 +94,13 @@ named as not taken rather than left out.
    run on the native runtime and a run on Docker are different experiments with
    the same tasks. How it was chosen is held to as well, because a default
    belongs to the machine rather than the command: the same console command runs
-   on the native runtime on macOS and Linux, and on Docker elsewhere; where the
-   native runtime cannot run, on Linux one with no `pasta` or a host that allows
-   a console that is not root no user namespace, it is refused rather than put
-   on Docker. A run written before runs recorded the runtime reads as not
+   on the native runtime on an Apple-silicon Mac and on Linux, and on Docker
+   elsewhere. Where that default cannot run it is refused rather than put on
+   Docker: on any other Mac; where its store is not set up; and on Linux, where
+   a console that is not root and names no `runsc` of its own gets no user
+   namespace, and where its default network finds no `pasta` (or, for root, no
+   `unshare`). A named runtime, and a named `none` or `host` network, take none
+   of those. A run written before runs recorded the runtime reads as not
    recorded.
 
 ## Running a batch

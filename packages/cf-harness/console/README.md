@@ -49,12 +49,15 @@ shared host, a tailnet with an access policy — and not behind a public address
   store is not set up, and on a Mac that is not Apple silicon at all. On Linux
   it is the direct driver too, over the store gVisor's Linux installer writes
   under `~/.local/share/runsc-cfc`, run rootless for a console that is not root,
-  with `pasta` (passt) giving it egress and the host; the console refuses to
-  start where the host allows a user that is not root no user namespace, where
-  no `pasta` is on `PATH` and no network is named, and where a piece of that
-  store that no setting replaces is missing. On every other platform it is, by
-  default, a Docker container under the `runsc-cfc` runtime, and a stopped
-  Docker daemon is a run that fails on its first `bash` call.
+  with `pasta` (passt) giving its default network egress and the host; the
+  console refuses to start where the host allows a user that is not root no user
+  namespace (unless `CF_HARNESS_RUNSC_BINARY` names a `runsc`, which runs as it
+  is), where the default network (unnamed, or `bridge`) finds no `pasta` on
+  `PATH`, or, for a console run as root, no `unshare`, and where a piece of that
+  store that no setting replaces is missing. Naming
+  `CF_HARNESS_DOCKER_NETWORK_MODE=none` or `host` needs neither. On every other
+  platform it is, by default, a Docker container under the `runsc-cfc` runtime,
+  and a stopped Docker daemon is a run that fails on its first `bash` call.
   `CF_HARNESS_SANDBOX_RUNTIME` names either on any platform; see
   [Sandbox runtime](#sandbox-runtime).
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI

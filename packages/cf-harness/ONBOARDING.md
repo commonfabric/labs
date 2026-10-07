@@ -197,7 +197,7 @@ the toolshed's CFC posture to match what this checkout documents.
 | `CF_HARNESS_FABRIC_API_URL`                   | The toolshed API URL from above.                                                               |
 | `CF_HARNESS_FABRIC_IDENTITY`                  | The absolute path to the keyfile from prerequisite 3.                                          |
 | `CF_HARNESS_FABRIC_SPACE`                     | A space name. A new name is fine; a `did:key` is refused.                                      |
-| `CF_HARNESS_SANDBOX_RUNTIME`                  | `docker`, the driver this walkthrough follows; macOS does not default to it.                   |
+| `CF_HARNESS_SANDBOX_RUNTIME`                  | `docker`, the driver this walkthrough follows; neither macOS nor Linux defaults to it.         |
 | `CF_HARNESS_RUNSC_CFC_RESULT_DIR`             | The host side of `--cfc-result-dir` from prerequisite 2.                                       |
 | `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` | The host side of `--cfc-invocation-context-dir` from prerequisite 2.                           |
 | `MEMORY_DIR`                                  | The toolshed's store directory from above, as a plain path.                                    |

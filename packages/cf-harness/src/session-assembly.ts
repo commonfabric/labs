@@ -97,12 +97,13 @@ export interface HarnessSessionConfig {
 
   /**
    * The sandbox runtime the run's engine builds: `runsc` is the direct
-   * driver, with no Docker and sessions honoured, and `docker` is the Docker
-   * driver. Absent, the engine builds the Docker driver on every platform;
-   * no platform default is applied here. An entrypoint applies its
-   * platform's default when it derives the selection, before it builds this
-   * configuration, and sets `runsc` for the native runtime macOS defaults
-   * to; `sandboxRuntimeChoice` records how the runtime was selected.
+   * driver, with no Docker and sessions honoured except under pasta's
+   * network, and `docker` is the Docker driver. Absent, the engine builds the
+   * Docker driver on every platform; no platform default is applied here. An
+   * entrypoint applies its platform's default when it derives the selection,
+   * before it builds this configuration, and sets `runsc` for the native
+   * runtime macOS and Linux default to; `sandboxRuntimeChoice` records how
+   * the runtime was selected.
    */
   sandboxRuntimeKind?: SandboxRuntimeKind;
   sandboxRootfs?: string;

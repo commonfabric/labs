@@ -1749,6 +1749,19 @@ Deno.test("under pasta as root, a call is refused, starting nothing, where no un
   );
 });
 
+Deno.test("under pasta, closing the runtime takes its scratch directory down, hosts file and pasta's log included", async () => {
+  const runner = new UnderPasta();
+  const c = config({ networkHelper: PASTA, rootless: true });
+  const runtime = new RunscSandboxRuntime(c, runner);
+  await runtime.runShell({ command: "echo hi" });
+  // pasta writes its log beside the hosts file; the fake runs no pasta.
+  await Deno.writeTextFile(join(c.scratchDir, "pasta.log"), "");
+
+  await runtime.close();
+
+  await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
+});
+
 Deno.test("under pasta, no session is offered, and one asked for is refused, starting nothing", async () => {
   const runner = new UnderPasta();
   const runtime = new RunscSandboxRuntime(

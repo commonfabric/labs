@@ -1878,7 +1878,13 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       ).catch(() => undefined);
     }
     // The scratch tree is this run's; take it down when nothing is left in
-    // it (non-recursive on purpose: anything still there is evidence).
+    // it (non-recursive on purpose: anything still there is evidence). The
+    // hosts file and pasta's log are the runtime's own, not evidence.
+    for (const file of ["hosts", "pasta.log"]) {
+      await Deno.remove(joinHostPath(this.config.scratchDir, file)).catch(() =>
+        undefined
+      );
+    }
     for (const sub of ["calls", "bundles", "state"]) {
       await Deno.remove(joinHostPath(this.config.scratchDir, sub)).catch(() =>
         undefined

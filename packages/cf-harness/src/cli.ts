@@ -644,7 +644,8 @@ Options:
   --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
   --sandbox-runtime <kind>      docker or runsc: run runsc directly with no Docker; the
                                 same on Linux and on macOS through the darwin runsc. Tool
-                                calls may then name a sandbox session. With no runtime
+                                calls may then name a sandbox session, except under pasta's
+                                network (the Linux default's). With no runtime
                                 named, macOS (Apple silicon only) runs runsc from the
                                 native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
                                 Support/cfc-vm), Linux runs it from the store under
@@ -716,8 +717,9 @@ Environment:
   CF_HARNESS_HOME               Local cf-harness credential/config directory
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge, which on the
-                                runsc runtime is runsc's own network stack, reported
-                                as sandbox)
+                                runsc runtime is reported as sandbox: runsc's own
+                                network stack, and under the Linux default pasta's,
+                                with egress and the host as host.docker.internal)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_LOOM_COMMANDS_CONFIG Default host command broker configuration file

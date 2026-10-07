@@ -129,12 +129,15 @@ printout's `sandbox` row says which and why:
   any other Mac is refused outright. Linux runs the native runtime too, the
   direct driver over the store gVisor's Linux installer writes under
   `~/.local/share/runsc-cfc`, rootless for a console that is not root, with
-  `pasta` (passt) for its network. The launch is refused where the host allows a
-  user that is not root no user namespace, naming the `sysctl` to change, where
-  no `pasta` is on `PATH`, and where that store is not set up, naming what it
-  lacks. Every other platform runs Docker. Nothing falls back from one to the
-  other: to put a Mac's or a Linux host's console on Docker, set
-  `CF_HARNESS_SANDBOX_RUNTIME=docker` in the environment the fabric starts from.
+  `pasta` (passt) for its default network. The launch is refused where the host
+  allows a user that is not root no user namespace, naming the `sysctl` to
+  change (a `runsc` named by `CF_HARNESS_RUNSC_BINARY` runs as it is and skips
+  that), where the default network finds no `pasta` on `PATH` or, for root, no
+  `unshare` (a named `none` or `host` network needs neither), and where that
+  store is not set up, naming what it lacks. Every other platform runs Docker.
+  Nothing falls back from one to the other: to put a Mac's or a Linux host's
+  console on Docker, set `CF_HARNESS_SANDBOX_RUNTIME=docker` in the environment
+  the fabric starts from.
 
 A console on the direct driver needs no sidecar directory and reads no Docker
 registration; the printout names its `runsc` binary, rootfs and CFC policy
@@ -163,14 +166,15 @@ CF_HARNESS_SANDBOX_RUNTIME=docker \
 
 **A console that cannot start does not take the fabric down.** It needs its
 sandbox runtime (on a Mac or Linux the native store, which on Linux needs
-`pasta` and, for a user that is not root, unprivileged user namespaces,
-elsewhere Docker, unless `CF_HARNESS_SANDBOX_RUNTIME` names one) and a connected
-model provider, and when either is missing the flag reports it in the script's
-output and in `packages/cf-harness/local-dev-console.log`, and the shell and
-toolshed keep running. A Mac or a Linux host whose native store is not set up is
-one such case: the log holds the refusal, with the store, what it lacks, and the
-variable that selects Docker. That is the shape to expect: the pair is the
-fabric, and the console is a surface on it.
+`pasta` for its default network, `unshare` too for root, and unprivileged user
+namespaces for a user that is not root, elsewhere Docker, unless
+`CF_HARNESS_SANDBOX_RUNTIME` names one) and a connected model provider, and when
+either is missing the flag reports it in the script's output and in
+`packages/cf-harness/local-dev-console.log`, and the shell and toolshed keep
+running. A Mac or a Linux host whose native store is not set up is one such
+case: the log holds the refusal, with the store, what it lacks, and the variable
+that selects Docker. That is the shape to expect: the pair is the fabric, and
+the console is a surface on it.
 
 **One console per state directory.** The launcher names a directory per instance
 and port, so two consoles started this way keep separate runs, sessions and

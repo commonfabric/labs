@@ -380,7 +380,7 @@ Each driver describes itself, and the description is recorded in
 | Field                                     | Docker driver                                           | Direct driver                                  |
 | ----------------------------------------- | ------------------------------------------------------- | ---------------------------------------------- |
 | `kind`                                    | `docker-runsc-cfc`                                      | `runsc-cfc`                                    |
-| `sessions`                                | absent                                                  | `true`                                         |
+| `sessions`                                | absent                                                  | `true`, and `false` under pasta's network      |
 | `cfc.runtimeRequested`                    | `true`                                                  | `true` exactly when a CFC policy is configured |
 | `cfc.runtimeName`                         | the Docker runtime's name, normally `runsc-cfc`         | absent                                         |
 | `cfc.image`                               | the Docker image                                        | the rootfs path                                |
@@ -437,9 +437,9 @@ CFC enforcement mode. Before each model request the prompt loop reads the
 sandbox's description and the run's mode, and offers the descriptor that fits
 them:
 
-- where the description reports `sessions`, which is the direct driver, and the
-  mode allows a session, which is `disabled` or `observe`, `bash` takes an
-  optional `session` argument;
+- where the description reports `sessions`, which is the direct driver on any
+  network but pasta's, and the mode allows a session, which is `disabled` or
+  `observe`, `bash` takes an optional `session` argument;
 - otherwise `bash` takes `command`, `cwd`, and `timeoutMs` and no `session`: the
   Docker driver in every mode, and the direct driver in the enforcing modes,
   which refuse every session. `enforce-strict`, the default, is one of them, so
