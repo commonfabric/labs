@@ -486,99 +486,32 @@ Mike's call, after S4.
    is bound, and every topic stores the number the namespace holds for it
    (audited 2026-09-28). The source push that makes the board's topics publish
    those numbers ran on 2026-10-06, topics first and the board after them;
-   [the rollout record](../history/topics-number-rollout-2026-10-06.md) has how it ran and what it checked.
+   [the rollout record](../history/topics-number-rollout-2026-10-06.md) has how
+   it ran and what it checked.
 
-   The backfill is rehearsed on a clone per
-   `../development/space-clone-rehearsal.md`; the deployed vintage includes
-   #6827 before the backfill runs. The decision items 1-3 could not make for it
-   is made by the 2026-09-17 entry above: a topic stores its own number, and
-   `backfillNames` asks each topic filed before the namespace to store the one
-   the namespace holds for it, so no per-topic `cf piece link` remains in the
-   sequence. Both rehearsals ran the link-bind shape — the first of 2026-09-05,
-   recorded at
-   `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`, and
-   its rerun below — so what they measured of the numbering step itself no
-   longer describes it; what they measured of the two source legs does, and
-   those legs are unchanged. The procedure that ran, and which of its steps
-   have a clone run behind them, is recorded at
-   `docs/history/skills/topics/references/namespace-backfill.md`.
+   Both halves of this item are done, and the procedures they ran are records
+   rather than steps to repeat. The numbering backfill's rehearsals are at
+   `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md` and
+   `../history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`,
+   the procedure that ran at
+   `docs/history/skills/topics/references/namespace-backfill.md`, and the board
+   check behind its contract decisions in the
+   [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md).
+   The source push is in
+   [the rollout record](../history/topics-number-rollout-2026-10-06.md). A later
+   update to the deployed topics follows
+   `skills/topics/references/pattern-updates.md` and
+   `../development/space-clone-rehearsal.md`, which govern every Topics source
+   change.
 
-   **What the rehearsals measured.** The step is rehearsed
-   twice; the second run, after the positional-link fix, is recorded at
-   `../history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`
-   and measured what the first could not. On a clone holding three topics, the
-   forced board deploy verified `removed 0`, moved the board's argument
-   document by one key (`names: {}`), and left those topics' titles and bodies
-   intact; the mention-index transition cost eleven commits and one written key
-   per topic. Three topics is not 125, and the record says which of its figures
-   scale and which are counts of that run.
-
-   The sequence that makes running it routine rather than a one-way door:
-
-   1. Check the deployed board with `setsrc --check` before writing to it.
-      #6969, that check exhausting the heap against the deployed board, was
-      closed by #7178. The
-      [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md)
-      ran the patched check over a local snapshot of the board taken August
-      31, where it accepted the retrieved board source; production was not
-      contacted.
-   2. Deploy the board leg, which is refused over topics filed before the
-      namespace and needs `--dangerously-allow-incompatible-schema` until a
-      general mechanism for adding a property to existing data exists.
-   3. Update each topic to a pattern that declares the `shortName` input and
-      the `recordName` verb, then run `backfillNames` until its `pending` list
-      comes back empty. An empty `pending` says every listed topic publishes
-      the number the namespace holds for it, and an empty `assigned` says the
-      namespace holds every listed topic; the step reads a topic's published
-      `shortName` to tell a stored number from none. The
-      operator procedure has the whole of it. Every topic takes the source
-      update BEFORE the step runs: a send to a path holding no stream is an
-      ordinary write, so the step's event lands as data in an un-updated
-      topic's result. Run the source updates from a host: laptop runs died 4-6
-      minutes in during the 2026-08-28 migration.
-   4. Verify by reading both the board's index and the member addresses. In
-      the rerun the fixed board's index agreed with its members at all three
-      reads; the two reads that disagreed were on the instrument board
-      carrying the walk #6987 replaced, and no run there attributed the
-      staleness to a mechanism. So the rerun establishes no divergence for the
-      code this graft deploys, and no cause for the one it saw. Reading both
-      is what would show a divergence if one appeared, and costs a command.
-
-   **The board leg of the deploy needs
-   `--dangerously-allow-incompatible-schema`.** `setsrc --check` refuses it over
-   a board holding topics filed before the namespace, because the typed
-   `topics.0.shortName` demand constrains an unconstrained producer. An open
-   producer contract permits any value at an undeclared
-   property. A new string demand narrows that contract even when optional:
-   absence is allowed, but a present non-string value is not. An optional
-   `unknown` demand adds no value restriction and is compatible. The retained
-   link proof uses producer-owned durable metadata; a schema carried by the
-   alias is not a producer guarantee. The
-   [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md)
-   replays the August 31 snapshot and separates this refusal, which stands,
-   from the two false ones the checker no longer raises. The flag is held
-   behind explicit team authorization by
-   `skills/topics/references/pattern-updates.md`, so this step
-   carries a decision it did not carry before. What the forced deploy leaves
-   behind is measured, in the 2026-09-06 rerun below.
-
-   **Why the gates said otherwise.** `deno task pattern-compat` and
-   `deno task pattern-vintage` are both clean and neither can see this: the
-   first judges a pattern's declared contract against the contracts it has
-   declared before, the second replays the pattern's own stored documents, and
-   neither examines the schema recorded on a link into a SIBLING piece — which
-   is the check that fires. A gate passing is not the claim; the claim is what
-   the gate examines, and the only instrument that examines this one is
-   `setsrc --check` against the deployment itself.
-
-   The board moves FIRST, which is what clears the topic leg's own
-   `mentionable[].shortName` refusal; the topic leg then needs the flag once
-   itself, for the mention universe narrowing to a readable handle
-   (`../history/topics-mentionable-readonly-break.md`), and is proven on every
-   update after that one. The deploy also needs
-   `--root` at or above `packages/patterns`, because the board imports the
-   naming library from a sibling directory and the default program root is the
-   entry's own.
+   **What the gates cannot see.** `deno task pattern-compat` and
+   `deno task pattern-vintage` can both be clean over an update that
+   `setsrc --check` refuses: the first judges a pattern's declared contract
+   against the contracts it has declared before, the second replays the
+   pattern's own stored documents, and neither examines the schema recorded on
+   a link into a SIBLING piece. The only instrument that examines that is
+   `setsrc --check` against the deployment itself, so a Topics update runs it
+   before writing.
 5. `skills/topics/references/naming.md` describes `top/42` addressing.
 
 ### S5 — Deferred, not scheduled
