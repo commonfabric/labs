@@ -35,6 +35,7 @@ export interface ForwardReferenceOptions {
   /** The cell the node runs under, which the result cell is owned by. */
   parentCell: Cell<any>;
 
+  /** The runtime the node runs in, which resolves links and mints cells. */
   runtime: Runtime;
 
   /** The input the action forwards, given the condition's truthiness. */

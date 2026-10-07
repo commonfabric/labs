@@ -297,8 +297,8 @@ than what the list first said, the item says what it does now and why.
       around. Under this design it works only because the stored alias link
       carries the stamp.
 - [x] `when` and `unless` carry the stamp on the link they write when the
-      selected branch declares a stream, as `ifElse` does (each asks for
-      `includeSchema` off `declaresStream(resolvedRef.schema)`). One test per
+      selected branch declares a stream, as `ifElse` does (the action the
+      three share asks for `includeSchema` unconditionally). One test per
       builtin, over a sub-pattern's stream and the pattern's own
       (`stream-declaration.test.ts`), pins it by what the stamp is for: with
       nothing stored at the position, the selected field reads as a stream
