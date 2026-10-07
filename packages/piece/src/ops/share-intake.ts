@@ -20,7 +20,6 @@ import {
   readResultSchemaMeta,
   type Runtime,
   sendEvent,
-  SpaceHostValidationError,
 } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
@@ -224,12 +223,18 @@ export class ShareIntake {
 
   /**
    * What the instance last decided about each row naming `from` and `id`, for
-   * a test to tell one refusal from another.
+   * a test to tell one refusal from another, and how many inboxes it follows.
    */
   get accessForTestingOnly(): {
     decisionsFor(from: string, id: string): OfferDecision[];
+    readonly followedInboxes: number;
   } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
     return {
+      get followedInboxes() {
+        return outerThis.#inboxes.size;
+      },
       decisionsFor: (from, id) =>
         [...this.#latest.values()]
           .filter((each) => each.from === from && each.id === id)
@@ -686,11 +691,12 @@ function boundedString(
  * fragment or credentials.
  */
 function originOf(value: string): string | undefined {
+  // Throwing is how `normalizeSpaceHost()` refuses a value, and the refusal is
+  // the answer here.
   try {
     return normalizeSpaceHost(value).origin;
-  } catch (error) {
-    if (error instanceof SpaceHostValidationError) return undefined;
-    throw error;
+  } catch {
+    return undefined;
   }
 }
 

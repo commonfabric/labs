@@ -302,6 +302,31 @@ describe("share-intake", () => {
       ?.["offer-refused"]?.warn ?? 0;
   }
 
+  /** How many failed scans of Home's inboxes the intake has logged. */
+  function scanFailuresLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["scan-failed"]?.warn ?? 0;
+  }
+
+  /** How many failures to read what vetting needs the intake has logged. */
+  function vettingFailuresLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["vetting-failed"]?.warn ?? 0;
+  }
+
+  /** What Home's stand-in has recorded of the registrations it was sent. */
+  async function registeredNow(): Promise<Row[]> {
+    return (await home.key("registered" as never).asSchema(registeredSchema)
+      .pull() ?? []) as Row[];
+  }
+
+  /** Sets Home's `field` to `value`. */
+  async function setHome(field: string, value: unknown): Promise<void> {
+    await runtime.editWithRetry((tx) =>
+      home.withTx(tx).key(field as never).set(value as never)
+    );
+  }
+
   /** How many conflicts from Home's handler the intake has logged. */
   function conflictsLogged(): number {
     return getLoggerCountsBreakdown()["piece.share-intake"]
@@ -866,7 +891,287 @@ describe("share-intake", () => {
     });
   });
 
+  describe("reading Home", () => {
+    it("logs a failed scan, and takes up its inboxes when Home's holders next change", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let failures = 1;
+      // Home, but for a first read of its held inbox that fails.
+      const failing = {
+        key: (name: string) =>
+          name !== "privateInbox" ? home.key(name as never) : {
+            asSchema: (schema: unknown) => {
+              const cell = home.key(name as never).asSchema(schema as never);
+              return {
+                sink: (callback: () => void) => cell.sink(callback),
+                pull: () =>
+                  failures-- > 0
+                    ? Promise.reject(new Error("read failed"))
+                    : cell.pull(),
+              };
+            },
+          },
+      };
+      const before = scanFailuresLogged();
+      const intake = startShareIntakeOf(
+        runtime,
+        failing as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await deliver([offerOf(space, "after a failed scan")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(scanFailuresLogged() - before).toBe(1);
+      await setHome("retainedPrivateInboxes", []);
+
+      expect(
+        registeredIds(await registeredThrough("after a failed scan")),
+      ).toEqual(["after a failed scan"]);
+    });
+
+    it("follows the inbox Home holds when what it retains is not a list", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await setHome("retainedPrivateInboxes", "not a list");
+      start();
+      await deliver([offerOf(space, "beside a bad list")]);
+
+      expect(
+        registeredIds(await registeredThrough("beside a bad list")),
+      ).toEqual(["beside a bad list"]);
+    });
+
+    it("registers an offer when Home's catalog holds no record of receipts", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await setHome("sharedSpaceCatalog", { entries: {} });
+      start();
+      await deliver([offerOf(space, "no receipts")]);
+
+      expect(registeredIds(await registeredThrough("no receipts"))).toEqual([
+        "no receipts",
+      ]);
+    });
+
+    it("stops taking up an inbox Home no longer holds or retains", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const adopted = await inboxIn(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+      );
+      const started = start();
+      await deliver([offerOf(space, "in the first")]);
+      await registeredThrough("in the first");
+      await setHome("privateInbox", { piece: adopted });
+      await runtime.idle();
+      await started.idle();
+      expect(started.accessForTestingOnly.followedInboxes).toBe(1);
+      // Delivered to the inbox given up, ahead of one to the inbox now held,
+      // which the intake would decide after it were it still followed.
+      await deliver([offerOf(space, "in the one given up")]);
+      await deliver([offerOf(space, "in the one held")], adopted);
+
+      expect(registeredIds(await registeredThrough("in the one held")))
+        .toEqual(["in the first", "in the one held"]);
+    });
+  });
+
+  describe("vetting that fails", () => {
+    it("logs the failure, and vets the offer again when its inbox next changes, when reading its space's access list fails", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const original = ACLManager.prototype.getStored;
+      let failures = 1;
+      using _flaky = stub(
+        ACLManager.prototype,
+        "getStored",
+        function (this: ACLManager) {
+          return failures-- > 0
+            ? Promise.reject(new Error("connection lost"))
+            : original.call(this);
+        },
+      );
+      const intake = start();
+      const before = vettingFailuresLogged();
+      await deliver([offerOf(space, "read again")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(vettingFailuresLogged() - before).toBe(1);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "read again"))
+        .toEqual([]);
+      await deliver([offerOf(space, "after the failed read")]);
+
+      expect(
+        registeredIds(await registeredThrough("after the failed read")),
+      ).toEqual(["read again", "after the failed read"]);
+    });
+
+    it("refuses the offer when reading its space's access list fails for want of access", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let failures = 1;
+      const original = ACLManager.prototype.getStored;
+      using _refusing = stub(
+        ACLManager.prototype,
+        "getStored",
+        function (this: ACLManager) {
+          return failures-- > 0
+            ? Promise.reject(new Error("access refused"))
+            : original.call(this);
+        },
+      );
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (each) => each === space ? new Error("access refused") : undefined,
+      );
+      const intake = start();
+      await deliver([offerOf(space, "refused on read")]);
+      await runtime.idle();
+      await intake.idle();
+
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, "refused on read"),
+      ).toEqual(["recipient-access-refused"]);
+    });
+  });
+
+  describe("PiecesController.startShareIntake()", () => {
+    it("starts an intake over the identity's Home", async () => {
+      const started = await controller.startShareIntake();
+      after = () => started?.stop();
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await deliver([offerOf(space, "through the controller")]);
+
+      expect(started).toBeDefined();
+      expect(
+        registeredIds(await registeredThrough("through the controller")),
+      ).toEqual(["through the controller"]);
+    });
+
+    it("throws for a controller over a space other than the identity's Home", async () => {
+      const elsewhere = new PiecesController(
+        createSession({
+          identity,
+          spaceDid: await runtime.createSpace({ grants: {} }),
+        }),
+        runtime,
+      );
+
+      await expect(elsewhere.startShareIntake()).rejects.toThrow(
+        "Only a controller over the identity's Home space",
+      );
+    });
+  });
+
   describe("stopping", () => {
+    it("subscribes to nothing when its signal has already aborted", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const abort = new AbortController();
+      abort.abort();
+      let subscriptions = 0;
+      // Home, counting the subscriptions made to it.
+      const counting = {
+        key: (name: string) => {
+          const field = home.key(name as never);
+          return {
+            getRaw: () => field.getRaw(),
+            asSchema: (schema: unknown) => {
+              const cell = field.asSchema(schema as never);
+              return {
+                pull: () => cell.pull(),
+                sink: (callback: () => void) => {
+                  subscriptions++;
+                  return cell.sink(callback);
+                },
+              };
+            },
+          };
+        },
+      };
+      const started = startShareIntakeOf(
+        runtime,
+        counting as never,
+        identity.did(),
+        abort.signal,
+      );
+      if (started === undefined) throw new Error("Home has no stream");
+      await deliver([offerOf(space, "never followed")]);
+      await runtime.idle();
+      await started.idle();
+
+      expect(subscriptions).toBe(0);
+      expect(await registeredNow()).toEqual([]);
+    });
+
+    it("decides nothing more once stopped while vetting", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const original = ACLManager.prototype.getStored;
+      using _stopping = stub(
+        ACLManager.prototype,
+        "getStored",
+        function (this: ACLManager) {
+          intake?.stop();
+          return original.call(this);
+        },
+      );
+      const started = start();
+      await deliver([
+        offerOf(space, "vetted as it stopped"),
+        offerOf(space, "after it stopped"),
+      ]);
+      await runtime.idle();
+      await started.idle();
+
+      expect(await registeredNow()).toEqual([]);
+      expect(
+        started.accessForTestingOnly.decisionsFor(
+          sender,
+          "vetted as it stopped",
+        ),
+      ).toEqual([]);
+    });
+
+    it("logs no failure when vetting fails once it has stopped", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      using _stopping = stub(ACLManager.prototype, "getStored", () => {
+        intake?.stop();
+        return Promise.reject(new Error("read after stopping"));
+      });
+      const before = vettingFailuresLogged();
+      const started = start();
+      await deliver([offerOf(space, "failed as it stopped")]);
+      await runtime.idle();
+      await started.idle();
+
+      expect(vettingFailuresLogged()).toBe(before);
+      expect(await registeredNow()).toEqual([]);
+    });
+
+    it("decides nothing once stopped while reading the inboxes Home holds", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await deliver([offerOf(space, "never read")]);
+      let started: ShareIntake | undefined;
+      // Home, but for a read of what it retains that stops the intake.
+      const stopping = {
+        key: (name: string) =>
+          name !== "retainedPrivateInboxes" ? home.key(name as never) : {
+            asSchema: (schema: unknown) => {
+              const cell = home.key(name as never).asSchema(schema as never);
+              return {
+                sink: (callback: () => void) => cell.sink(callback),
+                pull: () => {
+                  started?.stop();
+                  return cell.pull();
+                },
+              };
+            },
+          },
+      };
+      started = startShareIntakeOf(runtime, stopping as never, identity.did());
+      if (started === undefined) throw new Error("Home has no stream");
+      await runtime.idle();
+      await started.idle();
+
+      expect(await registeredNow()).toEqual([]);
+    });
+
     it("sends nothing for an offer arriving once its signal has aborted", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       const abort = new AbortController();
