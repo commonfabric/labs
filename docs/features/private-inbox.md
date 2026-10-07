@@ -173,9 +173,10 @@ a later change to that pointer does not move Home's inbox.
 The inbox lives in a field of Home's root, as the shared-space catalog does,
 so replacing Home's root would replace it: a new root holds no inbox, and its
 first ensure gives it one by the rules above, from whatever profile list the
-new root holds. The supported commands refuse to replace an existing Home
-root, as `PiecesController.recreateDefaultPattern()` in `packages/piece`
-does, and update its source in place, which keeps both.
+new root holds. Nothing replaces an identity Home's root:
+`PiecesController.recreateDefaultPattern()` in `packages/piece` refuses one,
+absent or present, and a Home's source is changed in place, which keeps both
+(`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern").
 
 ## The access its space grants
 
