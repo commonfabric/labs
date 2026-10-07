@@ -270,9 +270,9 @@ export interface SandboxProcess {
 
   /**
    * Reads the user id the process runs as; `Deno.uid` when absent. A Linux
-   * default needs root, since the store's `runsc` runs containers only as
-   * root. It throws where the id cannot be read, which the default refuses
-   * on.
+   * default runs the store's `runsc` as it is for root and with `--rootless`
+   * for any other user. It throws where the id cannot be read, which the
+   * default refuses on.
    */
   uid?: () => number | null;
 

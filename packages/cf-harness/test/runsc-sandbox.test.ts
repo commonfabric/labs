@@ -1725,12 +1725,9 @@ Deno.test("under pasta, a call starts its container in pasta's namespace, on tha
   assertEquals(call.command, UNSHARE);
   assert(call.args.includes("--network=host"));
   assert(!call.args.includes("--network=sandbox"));
-  // Only what starts a container runs under pasta.
-  assert(control.length > 0);
-  assertEquals(
-    control.map((request) => request.command),
-    control.map(() => RUNSC),
-  );
+  // No control command follows it from out here: the container's state
+  // records pids of pasta's PID namespace, which out here are others'.
+  assertEquals(control, []);
   const spec = JSON.parse(runner.specs[0]);
   assertEquals(
     spec.linux.namespaces.map((n: { type: string }) => n.type).sort(),

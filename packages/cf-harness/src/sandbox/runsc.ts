@@ -656,7 +656,8 @@ const resolveRunscBinary = (given: string): string => {
  * absolute path), when two sandbox roots overlap, when the scratch directory
  * lies inside a mount, when the binary, the policy, the rootfs or, on macOS,
  * the cfc-vm store lies inside a writable mount, when on macOS a writable
- * mount lies inside the store, and when {@link canonicalHostPath} cannot tell
+ * mount lies inside the store, when a writable mount lies inside the rootfs,
+ * and when {@link canonicalHostPath} cannot tell
  * where one of those paths, or a mount, leads.
  */
 export const resolveRunscSandboxConfig = (
@@ -1378,9 +1379,11 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
     await Deno.writeTextFile(joinHostPath(dir, "config.json"), specText);
     if (this.#pasta() !== undefined) {
-      await Deno.writeTextFile(this.#hostsFile(), PASTA_HOSTS_FILE, {
-        mode: 0o644,
-      });
+      // Written aside and renamed into place, so a container that binds the
+      // file as it is rewritten never finds it empty.
+      const aside = `${this.#hostsFile()}.${crypto.randomUUID()}`;
+      await Deno.writeTextFile(aside, PASTA_HOSTS_FILE, { mode: 0o644 });
+      await Deno.rename(aside, this.#hostsFile());
     }
     return dir;
   }
@@ -1499,7 +1502,10 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       } finally {
         // A timed-out or killed run leaves the container registered; make
         // sure the sandbox is gone before the bundle it was started from.
-        await this.#destroyContainer(callId);
+        // Not under pasta: the state of a container started there records
+        // pids of pasta's PID namespace, and a control command run out here
+        // would signal whatever process of this one has that pid.
+        if (this.#pasta() === undefined) await this.#destroyContainer(callId);
         this.#liveCalls.delete(callId);
       }
       const commandResult: SandboxCommandResult = {
@@ -1889,7 +1895,8 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       await this.#dropSession(state);
     }
     for (const callId of [...this.#liveCalls]) {
-      await this.#destroyContainer(callId);
+      // Not under pasta, for the reason `#runOnce` gives.
+      if (this.#pasta() === undefined) await this.#destroyContainer(callId);
       await Deno.remove(
         joinHostPath(this.config.scratchDir, "bundles", callId),
         { recursive: true },
