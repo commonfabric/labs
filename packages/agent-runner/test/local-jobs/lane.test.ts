@@ -458,6 +458,52 @@ describe("local-jobs/lane", () => {
       ).not.toHaveProperty("action");
     });
 
+    it("reports each executed call of a batch a child ran with the child's context", () => {
+      const call = {
+        role: "assistant" as const,
+        content: "",
+        toolCalls: [{
+          id: "call-0",
+          type: "function" as const,
+          function: {
+            name: "run_command",
+            arguments: JSON.stringify({
+              calls: [
+                { command: "loom.compose", args: {} },
+                { command: "loom.inspect", args: {} },
+                { command: "people.find", args: {} },
+              ],
+            }),
+          },
+        }],
+      };
+      const child = {
+        parentToolCallId: "delegate-1",
+        childRunId: "job-browse.subagent.1",
+        profile: "default",
+        depth: 1,
+      };
+
+      expect(localJobEventsOf({
+        ...event(
+          answer({
+            status: "batch",
+            results: [
+              { status: "executed", outcome: { ok: true, id: "loom.compose" } },
+              { status: "unknown_command", command: "loom.inspect" },
+              { status: "executed", outcome: { ok: true } },
+            ],
+            truncated: false,
+          }),
+          [call],
+        ),
+        subagent: { ...browserChild, profile: "default" as const },
+      })).toEqual([
+        { kind: "command", body: { command: "loom.compose", ok: true, child } },
+        { kind: "command", body: { command: "people.find", ok: true, child } },
+      ]);
+    });
+
     it("names a command by the call's arguments when the answer names none, and none when neither does", () => {
       const executed = { status: "executed", outcome: { ok: true } };
       const unreadable = {
