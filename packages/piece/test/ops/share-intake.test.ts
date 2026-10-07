@@ -4,6 +4,7 @@ import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
 import {
+  ACLManager,
   type Cell,
   type MemorySpace,
   Runtime,
@@ -52,11 +53,21 @@ type Registration = {
   offer?: { from: string; id: string };
 };
 
+type Result =
+  | { status: "registered"; space: string }
+  | { status: "conflict"; reason: string };
+
+// Returns a conflict for a registration titled \`Conflicting\`, as Home's own
+// handler does for a space already registered under another kind.
 const registerSharedSpace = handler<
   Registration,
-  { registered: Writable<Registration[]> }
+  { registered: Writable<Registration[]> },
+  Result
 >((event, { registered }) => {
   registered.push(event);
+  return event.title === "Conflicting"
+    ? { status: "conflict", reason: "kind" }
+    : { status: "registered", space: event.space };
 });
 
 export default pattern(() => {
@@ -287,6 +298,12 @@ describe("share-intake", () => {
       ?.["offer-refused"]?.warn ?? 0;
   }
 
+  /** How many conflicts from Home's handler the intake has logged. */
+  function conflictsLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["registration-conflict"]?.warn ?? 0;
+  }
+
   /**
    * Delivers `refused`, then an offer that passes, and waits for the second to
    * be registered, which happens only after the first is decided, since the
@@ -299,6 +316,52 @@ describe("share-intake", () => {
   }
 
   describe("startShareIntakeOf()", () => {
+    it("throws, ending the subscription it made, when its second subscription to Home fails", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let ended = false;
+      // Home, but for a second subscription that fails, and a first whose end
+      // is recorded.
+      const failing = {
+        key: (name: string) => {
+          if (name === "registerSharedSpace") return home.key(name as never);
+          if (name !== "privateInbox") {
+            return {
+              asSchema: () => ({
+                sink: () => {
+                  throw new Error("second subscription fails");
+                },
+              }),
+            };
+          }
+          return {
+            asSchema: (schema: unknown) => {
+              const cell = home.key(name as never).asSchema(schema as never);
+              return {
+                pull: () => cell.pull(),
+                sink: (callback: () => void) => {
+                  const cancel = cell.sink(callback);
+                  return () => {
+                    ended = true;
+                    cancel();
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+
+      expect(() =>
+        startShareIntakeOf(runtime, failing as never, identity.did())
+      ).toThrow("second subscription fails");
+      expect(ended).toBe(true);
+      await deliver([offerOf(space, "orphaned")]);
+      await runtime.idle();
+      expect(
+        await home.key("registered" as never).asSchema(registeredSchema).pull(),
+      ).toEqual([]);
+    });
+
     it("returns `undefined` for a Home without a `registerSharedSpace` stream", () => {
       // The inbox document stands in for a Home holding no such stream.
       expect(startShareIntakeOf(runtime, inbox, identity.did()))
@@ -405,6 +468,81 @@ describe("share-intake", () => {
       ]);
     });
 
+    it("is registered by the result schema stored on its root, without loading the root's pattern", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      using loads = stub(
+        runtime.patternManager,
+        "loadPatternByIdentity",
+        () => {
+          throw new Error("vetting loaded the root's pattern");
+        },
+      );
+      start();
+      await deliver([offerOf(space, "unloaded")]);
+
+      expect(registeredIds(await registeredThrough("unloaded"))).toEqual([
+        "unloaded",
+      ]);
+      expect(loads.calls.length).toBe(0);
+    });
+
+    it("is registered though a malformed row ahead of it names its sender and `id`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      start();
+      await deliver([
+        { kind: "fabrichat-room", id: "victim", from: sender, space: "nope" },
+        offerOf(space, "victim"),
+      ]);
+
+      expect(registeredIds(await registeredThrough("victim"))).toEqual([
+        "victim",
+      ]);
+    });
+
+    it("is registered though a row ahead of it, refused for its space, names its sender and `id`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const elsewhere = await offeredSpace({ [someoneElse]: "WRITE" });
+      start();
+      await deliver([
+        offerOf(elsewhere, "victim of a refusal"),
+        offerOf(space, "victim of a refusal"),
+      ]);
+
+      expect(
+        registeredIds(await registeredThrough("victim of a refusal")),
+      ).toEqual(["victim of a refusal"]);
+    });
+
+    it("is registered when its inbox next changes after its space comes to grant its sender", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const other = await offeredSpace({ [sender]: "WRITE" });
+      const intake = start();
+      await deliver([offerOf(space, "granted later")]);
+      await deliver([offerOf(other, "first barrier")]);
+      await registeredThrough("first barrier");
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "granted later"))
+        .toEqual(["sender-not-member"]);
+
+      await new ACLManager(runtime, space).set(sender, "WRITE");
+      await deliver([offerOf(other, "second barrier")]);
+
+      expect(
+        registeredIds(await registeredThrough("granted later")),
+      ).toContain("granted later");
+    });
+
+    it("is logged once as a conflict when Home's handler returns one", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const intake = start();
+      const before = conflictsLogged();
+      await deliver([offerOf(space, "conflicting", { title: "Conflicting" })]);
+      await registeredThrough("conflicting");
+      await runtime.idle();
+      await intake.idle();
+
+      expect(conflictsLogged() - before).toBe(1);
+    });
+
     it("is sent once, though the inbox changes again after it", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       start();
@@ -455,11 +593,8 @@ describe("share-intake", () => {
 
       expect(registeredIds(registered)).toEqual(["barrier"]);
       expect(refusalsLogged()).toBe(before);
-      expect(
-        intake.accessForTestingOnly.decided.get(
-          JSON.stringify([sender, "received"]),
-        ),
-      ).toBe("received");
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "received"))
+        .toEqual(["received"]);
     });
   });
 
@@ -479,8 +614,9 @@ describe("share-intake", () => {
       return {
         ids: registeredIds(registered),
         logged: refusalsLogged() - before,
-        decision: intake.accessForTestingOnly.decided.get(
-          JSON.stringify([refused.from, refused.id]),
+        decisions: intake.accessForTestingOnly.decisionsFor(
+          refused.from as string,
+          refused.id as string,
         ),
       };
     }
@@ -492,7 +628,7 @@ describe("share-intake", () => {
         .toEqual({
           ids: ["barrier"],
           logged: 1,
-          decision: "offer-malformed",
+          decisions: ["offer-malformed"],
         });
     });
 
@@ -504,7 +640,7 @@ describe("share-intake", () => {
       ).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "offer-malformed",
+        decisions: ["offer-malformed"],
       });
     });
 
@@ -518,7 +654,7 @@ describe("share-intake", () => {
       ).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "offer-malformed",
+        decisions: ["offer-malformed"],
       });
     });
 
@@ -530,7 +666,7 @@ describe("share-intake", () => {
       ).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "offer-malformed",
+        decisions: ["offer-malformed"],
       });
     });
 
@@ -544,7 +680,7 @@ describe("share-intake", () => {
       ).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "offer-foreign-host",
+        decisions: ["offer-foreign-host"],
       });
     });
 
@@ -554,7 +690,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "everyone"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "sender-not-member",
+        decisions: ["sender-not-member"],
       });
     });
 
@@ -564,7 +700,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "reader"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "sender-not-member",
+        decisions: ["sender-not-member"],
       });
     });
 
@@ -574,7 +710,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "absent"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "sender-not-member",
+        decisions: ["sender-not-member"],
       });
     });
 
@@ -586,7 +722,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "ungranted"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "recipient-access-refused",
+        decisions: ["recipient-access-refused"],
       });
     });
 
@@ -601,7 +737,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "refused"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "recipient-access-refused",
+        decisions: ["recipient-access-refused"],
       });
     });
 
@@ -613,7 +749,7 @@ describe("share-intake", () => {
       ).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "offer-kind-unknown",
+        decisions: ["offer-kind-unknown"],
       });
     });
 
@@ -625,11 +761,11 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "almost"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "space-root-wrong-kind",
+        decisions: ["space-root-wrong-kind"],
       });
     });
 
-    it("is not registered, and is logged, when the space's root records no pattern", async () => {
+    it("is not registered, and is logged, when the space's root stores no result schema", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" }, {
         root: "document",
       });
@@ -637,7 +773,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "patternless"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "space-root-wrong-kind",
+        decisions: ["space-root-wrong-kind"],
       });
     });
 
@@ -647,7 +783,7 @@ describe("share-intake", () => {
       expect(await refuse(offerOf(space, "rootless"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decision: "space-root-missing",
+        decisions: ["space-root-missing"],
       });
     });
 

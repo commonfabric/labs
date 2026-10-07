@@ -2,8 +2,8 @@
  * The host's share intake: it follows the offers in the private inboxes Home
  * holds and retains, vets each one as the owner, and registers each offer that
  * passes in Home's shared-space catalog through Home's `registerSharedSpace`
- * stream. Vetting reads the offered space's access list and root, in that
- * space, and the root's declared result, which a Home handler cannot do;
+ * stream. Vetting reads the offered space's access list and root, and the
+ * result schema stored on the root's document, which a Home handler cannot do;
  * `docs/features/private-inbox.md` describes the whole arrangement.
  */
 
@@ -14,10 +14,12 @@ import {
   ACLManager,
   type Cancel,
   type Cell,
-  getPatternIdentityRef,
   isCell,
+  type NormalizedFullLink,
   normalizeSpaceHost,
+  readResultSchemaMeta,
   type Runtime,
+  sendEvent,
   SpaceHostValidationError,
 } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -140,15 +142,22 @@ export function startShareIntakeOf(
  *   list, a grant to every principal (`"*"`) not counting;
  * - the identity can open the space, holding `WRITE` or `OWNER` there, its own
  *   or every principal's;
- * - the space has a root, and the root's pattern declares in its result
- *   schema every member {@link ADMITTED_OFFER_KINDS} lists for the kind,
- *   which is read without running the root.
+ * - the space has a root, and the result schema stored on the root's document
+ *   declares every member {@link ADMITTED_OFFER_KINDS} lists for the kind. That
+ *   schema is what the root's creator wrote, so it classifies the root by its
+ *   creator's claim; no code of the root's is loaded or run to read it.
  *
- * A refused offer is logged once, under `piece.share-intake`, with its reason.
- * Each offer is decided once per instance: an offer refused, or sent, is not
- * vetted again, though a failure to read what vetting needs, other than a
- * refusal of access, leaves it to be vetted when an inbox next changes.
- * Nothing consumes an offer or deletes it.
+ * Each row of an inbox is decided by its whole content, so a row naming
+ * another offer's sender and `id` decides nothing about that offer. A row
+ * that is sent, skipped for its receipt, or refused for something in the row
+ * itself (its envelope, its `kind` or its `host`) is decided for the life of
+ * the instance. A row refused for the state of its space (an access list or a
+ * root) is vetted again the next time its inbox's offers change; a change to
+ * the space alone does not bring that about. A refusal is logged once per
+ * row, under `piece.share-intake`, with its reason, and so is a `conflict`
+ * Home's handler returns for a row it was sent. A failure to read what
+ * vetting needs, other than a refusal of access, leaves the row to be vetted
+ * when its inbox next changes. Nothing consumes an offer or deletes it.
  *
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
@@ -162,15 +171,22 @@ export class ShareIntake {
   #host: string;
   #holders: Cancel[] = [];
   #inboxes = new Map<string, Cancel>();
-  #decided = new Map<string, OfferDecision>();
-  #dirty = false;
+  #current = new Map<string, Cell<unknown>>();
+  #settled = new Map<string, OfferDecision>();
+  #latest = new Map<string, RowDecision>();
+  #logged = new Set<string>();
+  #holdersChanged = false;
+  #changedInboxes = new Set<string>();
   #draining = false;
   #drained: Promise<void> = Promise.resolve();
+  #reports = new Set<Promise<void>>();
   #stopped = false;
 
   /**
    * Constructs an instance following `home`'s inboxes on `runtime`, as
    * `identity`, until {@link stop} is called or `signal` aborts.
+   *
+   * @throws When subscribing to Home fails, having stopped what it started.
    */
   constructor(
     runtime: Runtime,
@@ -188,33 +204,46 @@ export class ShareIntake {
       this.#stopped = true;
       return;
     }
-    // Each subscription is kept as it is made, so that `signal` ends the
-    // first even when making the second throws.
+    // A sink publishes the value it starts from at once, so the first one has
+    // started a scan by the time the second is made. A failure to make the
+    // second stops that scan with the rest.
     const poke = () => this.#poke();
-    this.#holders.push(
-      home.key("privateInbox").asSchema(pointerSchema).sink(poke),
-    );
-    this.#holders.push(
-      home.key("retainedPrivateInboxes").asSchema(retainedSchema).sink(poke),
-    );
+    try {
+      this.#holders.push(
+        home.key("privateInbox").asSchema(pointerSchema).sink(poke),
+      );
+      this.#holders.push(
+        home.key("retainedPrivateInboxes").asSchema(retainedSchema).sink(poke),
+      );
+    } catch (error) {
+      this.stop();
+      throw error;
+    }
   }
 
   /**
-   * What the instance has decided about each offer, by the offer's receipt
-   * key, which a test reads to tell one refusal from another.
+   * What the instance last decided about each row naming `from` and `id`, for
+   * a test to tell one refusal from another.
    */
   get accessForTestingOnly(): {
-    readonly decided: ReadonlyMap<string, OfferDecision>;
+    decisionsFor(from: string, id: string): OfferDecision[];
   } {
-    return { decided: this.#decided };
+    return {
+      decisionsFor: (from, id) =>
+        [...this.#latest.values()]
+          .filter((each) => each.from === from && each.id === id)
+          .map((each) => each.decision),
+    };
   }
 
   /**
    * Resolves once every change the instance has been told of so far has been
-   * taken up: each offer then in an inbox decided or left for the next change.
+   * taken up: each offer then in an inbox decided or left for the next change,
+   * and each receipt of a registration whose handling has committed read.
    */
-  idle(): Promise<void> {
-    return this.#drained;
+  async idle(): Promise<void> {
+    await this.#drained;
+    await Promise.all(this.#reports);
   }
 
   /** Stops following the inboxes; an offer being vetted is not sent. */
@@ -233,12 +262,14 @@ export class ShareIntake {
   }
 
   /**
-   * Notes that something the intake follows changed, and takes it up once the
-   * scan under way, if any, is done. Changes arriving during a scan are taken
-   * up by one more scan.
+   * Notes that the offers of the inbox at `address` changed, or, with no
+   * address, that which inboxes Home holds and retains may have, and takes it
+   * up once the scan under way, if any, is done. Changes arriving during a
+   * scan are taken up by one more.
    */
-  #poke(): void {
-    this.#dirty = true;
+  #poke(address?: string): void {
+    if (address === undefined) this.#holdersChanged = true;
+    else this.#changedInboxes.add(address);
     if (this.#draining) return;
     this.#draining = true;
     this.#drained = this.#drain();
@@ -247,10 +278,16 @@ export class ShareIntake {
   /** Helper for {@link #poke}, which scans until nothing has changed since. */
   async #drain(): Promise<void> {
     try {
-      while (this.#dirty && !this.#halted) {
-        this.#dirty = false;
+      while (
+        (this.#holdersChanged || this.#changedInboxes.size > 0) &&
+        !this.#halted
+      ) {
+        const holdersChanged = this.#holdersChanged;
+        const changed = [...this.#changedInboxes];
+        this.#holdersChanged = false;
+        this.#changedInboxes.clear();
         try {
-          await this.#scan();
+          await this.#scan(holdersChanged, changed);
         } catch (error) {
           if (this.#halted) return;
           logger.warn("scan-failed", () => [
@@ -265,15 +302,24 @@ export class ShareIntake {
   }
 
   /**
-   * Subscribes to each inbox Home holds or retains, and decides each offer in
-   * them not yet decided.
+   * Follows the inboxes Home holds and retains, when `holdersChanged`, and
+   * decides each row not yet decided in the inboxes at `changed`. An inbox
+   * newly followed reports its offers through its own subscription.
    */
-  async #scan(): Promise<void> {
-    const inboxes = await this.#currentInboxes();
-    if (this.#halted) return;
-    this.#follow(inboxes);
+  async #scan(holdersChanged: boolean, changed: string[]): Promise<void> {
+    if (holdersChanged) {
+      const inboxes = await this.#currentInboxes();
+      if (this.#halted) return;
+      this.#current = inboxes;
+      this.#follow(inboxes);
+    }
+    const inboxes = changed.flatMap((address) => {
+      const inbox = this.#current.get(address);
+      return inbox === undefined ? [] : [inbox];
+    });
+    if (inboxes.length === 0) return;
     const receipts = await this.#receipts();
-    for (const inbox of inboxes.values()) {
+    for (const inbox of inboxes) {
       const offers = await inbox.key("offers").asSchema(offersSchema).pull();
       for (const raw of Array.isArray(offers) ? offers : []) {
         if (this.#halted) return;
@@ -319,7 +365,9 @@ export class ShareIntake {
       if (this.#inboxes.has(address)) continue;
       this.#inboxes.set(
         address,
-        inbox.key("offers").asSchema(offersSchema).sink(() => this.#poke()),
+        inbox.key("offers").asSchema(offersSchema).sink(() =>
+          this.#poke(address)
+        ),
       );
     }
   }
@@ -340,10 +388,11 @@ export class ShareIntake {
   /** Decides `raw`, a row of an inbox's offers, unless it is decided already. */
   async #consider(raw: unknown, receipts: Set<string>): Promise<void> {
     if (!isObjectNotArray(raw) || raw.kind === LOOM_OFFER_KIND) return;
-    const key = JSON.stringify([raw.from ?? null, raw.id ?? null]);
-    if (this.#decided.has(key)) return;
-    if (receipts.has(key)) {
-      this.#decided.set(key, "received");
+    const row = rowKey(raw);
+    if (this.#settled.has(row)) return;
+    const receipt = JSON.stringify([raw.from ?? null, raw.id ?? null]);
+    if (receipts.has(receipt)) {
+      this.#decide(row, raw, "received");
       return;
     }
     const offer = wellFormedOffer(raw);
@@ -353,29 +402,91 @@ export class ShareIntake {
         ? "offer-malformed"
         : await this.#refusalOf(offer);
     } catch (error) {
+      if (this.#halted) return;
       logger.warn("vetting-failed", () => [
-        `Vetting the offer ${key}:`,
+        `Vetting the offer ${receipt}:`,
         error,
       ]);
       return;
     }
     if (this.#halted) return;
-    this.#decided.set(key, refusal ?? "sent");
     if (refusal !== undefined || offer === undefined) {
-      logger.warn("offer-refused", () => [
-        `Not registering the offer ${key} (${refusal}) of`,
-        raw.space,
-        "at",
-        raw.host,
-      ]);
+      this.#decide(row, raw, refusal ?? "offer-malformed");
+      this.#logOnce(row, () => {
+        logger.warn("offer-refused", () => [
+          `Not registering the offer ${receipt} (${refusal}) of`,
+          raw.space,
+          "at",
+          raw.host,
+        ]);
+      });
       return;
     }
-    await this.#home.key("registerSharedSpace").send({
-      space: offer.space,
-      host: offer.host,
-      kind: offer.kind,
-      ...(offer.title === "" ? {} : { title: offer.title }),
-      offer: { from: offer.from, id: offer.id },
+    this.#decide(row, raw, "sent");
+    sendEvent(
+      this.#home.key("registerSharedSpace"),
+      {
+        space: offer.space,
+        host: offer.host,
+        kind: offer.kind,
+        ...(offer.title === "" ? {} : { title: offer.title }),
+        offer: { from: offer.from, id: offer.id },
+      },
+      (tx) => {
+        const link = tx.handlingReceiptLink;
+        if (link === undefined) return;
+        const report = this.#reportConflict(row, receipt, link);
+        this.#reports.add(report);
+        void report.finally(() => this.#reports.delete(report));
+      },
+    );
+  }
+
+  /**
+   * Records `decision` for the row keyed `row`, and settles it for the life
+   * of the instance unless it is a refusal for the state of the row's space.
+   */
+  #decide(
+    row: string,
+    raw: Record<string, unknown>,
+    decision: OfferDecision,
+  ): void {
+    this.#latest.set(row, { from: raw.from, id: raw.id, decision });
+    if (!STATE_REFUSALS.has(decision)) this.#settled.set(row, decision);
+  }
+
+  /** Calls `log` the first time it is asked to for the row keyed `row`. */
+  #logOnce(row: string, log: () => void): void {
+    if (this.#logged.has(row)) return;
+    this.#logged.add(row);
+    log();
+  }
+
+  /**
+   * Logs, once for the row keyed `row`, a `conflict` that Home's handler
+   * returned in the receipt at `link`. A receipt that cannot be read is left
+   * unreported, since the handling it describes has committed either way.
+   */
+  async #reportConflict(
+    row: string,
+    receipt: string,
+    link: NormalizedFullLink,
+  ): Promise<void> {
+    let result: unknown;
+    try {
+      result = await this.#runtime.getCellFromLink(link).pull();
+    } catch {
+      return;
+    }
+    if (
+      this.#halted || !isObjectNotArray(result) ||
+      result.status !== "conflict"
+    ) return;
+    const reason = result.reason;
+    this.#logOnce(`conflict:${row}`, () => {
+      logger.warn("registration-conflict", () => [
+        `Home's catalog refused the offer ${receipt} (${reason})`,
+      ]);
     });
   }
 
@@ -417,7 +528,7 @@ export class ShareIntake {
       !isCell(root) || root.space !== offer.space ||
       root.getAsNormalizedFullLink().path.length !== 0
     ) return "space-root-missing";
-    const declared = await declaredResultMembers(runtime, root);
+    const declared = await declaredResultMembers(root);
     if (!members.every((member) => declared.has(member))) {
       return "space-root-wrong-kind";
     }
@@ -425,27 +536,52 @@ export class ShareIntake {
   }
 }
 
+/** What an instance last decided about one row, and the offer it names. */
+interface RowDecision {
+  /** The row's `from`, as stored. */
+  from: unknown;
+
+  /** The row's `id`, as stored. */
+  id: unknown;
+
+  /** What was decided. */
+  decision: OfferDecision;
+}
+
 /**
- * The members `root`'s pattern declares in its result schema, read from the
- * pattern the root records without running it, or none when the root records
- * no pattern that can be loaded, or its result schema names no members.
+ * The refusals that turn on the state of an offer's space rather than on the
+ * row itself, which a row is vetted for again when its inbox changes.
+ */
+const STATE_REFUSALS: ReadonlySet<OfferDecision> = new Set([
+  "sender-not-member",
+  "recipient-access-refused",
+  "space-root-missing",
+  "space-root-wrong-kind",
+]);
+
+/**
+ * The key a row is decided by: its whole content, with its fields in a fixed
+ * order, so two rows differing in any field are decided apart.
+ */
+function rowKey(raw: Record<string, unknown>): string {
+  return JSON.stringify(
+    Object.keys(raw).sort().map((field) => [field, raw[field]]),
+  );
+}
+
+/**
+ * The members the result schema stored on `root`'s document declares, or
+ * none when it stores none or names none. The schema is read from the
+ * document itself, so no code of the root's is loaded or run. A schema stored
+ * as a reference whose documents have not arrived declares none.
  */
 async function declaredResultMembers(
-  runtime: Runtime,
   root: Cell<unknown>,
 ): Promise<Set<string>> {
-  // Loads the root's document, and with it the pattern it records, and none
+  // Loads the root's document, and with it the schema stored on it, and none
   // of its result.
   await root.asSchema({ type: "object", properties: {} }).pull();
-  const ref = getPatternIdentityRef(root);
-  if (ref === undefined) return new Set();
-  const pattern = await runtime.patternManager.loadPatternByIdentity(
-    ref.identity,
-    ref.symbol,
-    root.space,
-    { repairCache: false },
-  );
-  const schema = pattern?.resultSchema;
+  const schema = readResultSchemaMeta(root);
   return new Set(
     isObjectNotArray(schema) && isObjectNotArray(schema.properties)
       ? Object.keys(schema.properties)
