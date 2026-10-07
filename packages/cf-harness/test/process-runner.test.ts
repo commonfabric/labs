@@ -19,6 +19,23 @@ Deno.test("DenoProcessRunner surfaces killed timeout exits as ProcessTimeoutErro
   );
 });
 
+Deno.test("DenoProcessRunner surfaces a timeout as ProcessTimeoutError where the process stopped exits 0", async () => {
+  const runner = new DenoProcessRunner();
+
+  // A shell that answers SIGTERM by exiting 0, as pasta does; what it waits
+  // on writes nowhere, so its output ends with the shell.
+  await assertRejects(
+    () =>
+      runner.run({
+        command: "/bin/sh",
+        args: ["-c", 'trap "exit 0" TERM; sleep 5 >/dev/null 2>&1 & wait'],
+        timeoutMs: 100,
+      }),
+    ProcessTimeoutError,
+    "process timed out after 100ms",
+  );
+});
+
 Deno.test({
   name: "DenoProcessRunner clears inherited env when requested",
   permissions: { env: true, run: true },
@@ -49,22 +66,27 @@ Deno.test({
   },
 });
 
-Deno.test("DenoProcessRunner stops a process its signal aborts, which ends with the status it ends with, not as a timeout", async () => {
+Deno.test("DenoProcessRunner stops a process its signal aborts, and throws the signal's reason once it has ended, whatever status it ends with", async () => {
   const runner = new DenoProcessRunner();
-  const stop = new AbortController();
 
-  // Left alone it would run for a minute.
-  const running = runner.run({
-    command: "/bin/sh",
-    args: ["-c", "exec sleep 60"],
-    signal: stop.signal,
-  });
-  // Nothing to wait on but the abort: a SIGTERM ends `sleep` whenever it
-  // lands, before or after `exec`.
-  stop.abort();
-  const result = await running;
+  for (
+    const script of [
+      "exec sleep 60",
+      // Answers SIGTERM by exiting 0, as pasta does.
+      'trap "exit 0" TERM; sleep 60 >/dev/null 2>&1 & wait',
+    ]
+  ) {
+    const stop = new AbortController();
+    // Left alone it would run for a minute.
+    const running = runner.run({
+      command: "/bin/sh",
+      args: ["-c", script],
+      signal: stop.signal,
+    });
+    stop.abort(new Error("closed"));
 
-  assertEquals(result.exitCode, 143);
+    await assertRejects(() => running, Error, "closed");
+  }
 });
 
 Deno.test("DenoProcessRunner refuses, running nothing, a run whose signal has already aborted", async () => {

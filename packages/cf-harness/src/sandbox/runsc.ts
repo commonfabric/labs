@@ -1998,7 +1998,11 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     // A call under pasta is stopped through pasta, and its container ends
     // with it; its bundle goes once it has.
     const pastaCalls = [...this.#pastaCalls.values()];
-    for (const call of pastaCalls) call.stop.abort();
+    for (const call of pastaCalls) {
+      call.stop.abort(
+        new Error("the sandbox runtime closed while the call was running"),
+      );
+    }
     await Promise.all(pastaCalls.map((call) => call.ended));
     for (const callId of [...this.#liveCalls]) {
       // Not under pasta, for the reason `#runOnce` gives.

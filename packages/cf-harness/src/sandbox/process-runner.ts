@@ -8,9 +8,9 @@ export interface ProcessRunRequest {
   timeoutMs?: number;
   /**
    * Stops the process with SIGTERM when it aborts, as a timeout does; the
-   * run then ends as the process does, with the status it ends with, and
-   * not with a timeout. A run whose signal has already aborted throws its
-   * reason, starting nothing.
+   * run then throws the signal's reason once the process has ended, and not
+   * a timeout, whatever status the process ends with. A run whose signal has
+   * already aborted throws its reason, starting nothing.
    */
   signal?: AbortSignal;
 }
@@ -155,12 +155,16 @@ export class DenoProcessRunner implements ProcessRunner {
         writeInput(),
       ]);
 
-      if (timeoutTriggered && status.code !== 0) {
+      // Whatever status the process ends with: one that answers SIGTERM by
+      // exiting 0 (pasta does, once the kernel has killed what it ran) was
+      // still stopped.
+      if (timeoutTriggered) {
         throw new ProcessTimeoutError(
           [request.command, ...request.args].join(" "),
           request.timeoutMs ?? 0,
         );
       }
+      request.signal?.throwIfAborted();
 
       return {
         stdout,

@@ -1856,37 +1856,43 @@ Deno.test("under pasta, closing the runtime stops a call in flight through pasta
   const inFlight = new Promise<void>((resolve) => (running = resolve));
   // Pasta ending is slow next to all a close does: many reads of the file
   // system go by before the state its `runsc run` left is there.
-  const ending = async (root: string): Promise<ProcessRunResult> => {
+  const ending = async (root: string): Promise<void> => {
     for (let read = 0; read < 50; read += 1) await Deno.stat(c.scratchDir);
     await Deno.mkdir(root, { recursive: true });
     await Deno.writeTextFile(join(root, "container.state"), "{}");
-    return { stdout: "", stderr: "", exitCode: 143 };
   };
   // The fake pasta runs until it is stopped, as a call that never ends would,
   // and ends as a SIGTERM ends pasta, with what its `runsc run` left in the
-  // call's root, which `close()` must wait to see taken down.
+  // call's root, which `close()` must wait to see taken down; the run then
+  // throws why it was stopped, as the process runner's does.
   runner.fake.run = (request) => {
     running();
-    return new Promise((resolve, reject) => {
+    return new Promise<ProcessRunResult>((_, reject) => {
       request.signal?.addEventListener("abort", () => {
-        ending(rootOf(request.args)).then(resolve, reject);
+        ending(rootOf(request.args))
+          .then(() => request.signal?.throwIfAborted())
+          .catch(reject);
       });
     });
   };
 
-  let ended = false;
-  const call = runtime.runShell({ command: "sleep 600" }).finally(() => {
-    ended = true;
-  });
+  // What the call ended with, kept as it ends, since it ends inside close().
+  let ended: unknown = undefined;
+  runtime.runShell({ command: "sleep 600" }).then(
+    (result) => (ended = result),
+    (error: unknown) => (ended = error),
+  );
   await inFlight;
   await runtime.close();
 
-  assertEquals(ended, true);
-
+  assert(ended instanceof Error, "the call ended before close() returned");
+  assertEquals(
+    ended.message,
+    "the sandbox runtime closed while the call was running",
+  );
   assertEquals(runner.started.map((request) => request.signal?.aborted), [
     true,
   ]);
-  assertEquals((await call).exitCode, 143);
   await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
 });
 
