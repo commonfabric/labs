@@ -2244,8 +2244,10 @@ export class PiecesController<T = unknown> {
    * controller must be over the identity's Home space.
    *
    * Resolves once the event is sent, which is before Home's handler runs, so
-   * it rejects only when Home cannot be brought up, or vetting or the send
-   * itself throws; a failure inside the handler is not reported here.
+   * it rejects only when Home cannot be brought up, when reading Home's or its
+   * profiles' pointers or loading the inbox documents they name fails, or when
+   * vetting or the send itself throws; a failure inside the handler is not
+   * reported here.
    */
   async ensurePrivateInbox(): Promise<void> {
     this.#assertHomeSpace("ensure a private inbox");
