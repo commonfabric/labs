@@ -1061,16 +1061,22 @@ const handlers: Record<
   },
 
   /**
-   * Answers what the share intakes `startShareIntake` started have decided
-   * about the offer whose receipt key is `key`, or `null` when none has.
+   * Answers what the share intakes `startShareIntake` started last decided
+   * about each row naming `from` and `id`, once each has taken up the changes
+   * it was told of.
    */
-  async shareIntakeDecision({ key }) {
+  async shareIntakeDecisions({ from, id }) {
+    const decisions: string[] = [];
     for (const intake of shareIntakes) {
       await intake.idle();
-      const decision = intake.accessForTestingOnly.decided.get(key as string);
-      if (decision !== undefined) return { decision };
+      for (
+        const decision of intake.accessForTestingOnly.decisionsFor(
+          from as string,
+          id as string,
+        )
+      ) decisions.push(decision);
     }
-    return { decision: null };
+    return { decisions };
   },
 
   /** Reads an explicit held address with the same stored-label gate as any Cell. */

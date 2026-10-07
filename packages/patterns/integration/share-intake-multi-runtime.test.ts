@@ -66,14 +66,15 @@ describe("share intake across runtimes", () => {
     ((await sender.read(["offered"])) as { id: string; space: string }[] ?? [])
       .find((each) => each.id === id)?.space;
 
-  /** What the owner's host decided about an offer from `from`, keyed `id`. */
-  const decision = async (
+  /** What the owner's host last decided about rows from `from`, keyed `id`. */
+  const decisions = async (
     from: MultiRuntimeSession,
     id: string,
-  ): Promise<string | null> =>
-    ((await owner.client().call("shareIntakeDecision", {
-      key: receiptKey(from, id),
-    })) as { decision: string | null }).decision;
+  ): Promise<string[]> =>
+    ((await owner.client().call("shareIntakeDecisions", {
+      from: from.identity.did(),
+      id,
+    })) as { decisions: string[] }).decisions;
 
   /** Whether the owner's inbox holds an offer from `from`, keyed `id`. */
   const delivered = async (
@@ -192,7 +193,7 @@ describe("share intake across runtimes", () => {
 
     expect((await catalog())?.offers[receiptKey(stranger, "forged")])
       .toBeUndefined();
-    expect(await decision(stranger, "forged")).toBe("sender-not-member");
+    expect(await decisions(stranger, "forged")).toEqual(["sender-not-member"]);
     expect(await refusalsLogged()).toBe(before + 1);
   });
 
@@ -212,7 +213,7 @@ describe("share intake across runtimes", () => {
 
     expect((await catalog())?.offers[receiptKey(sender, "unrooted")])
       .toBeUndefined();
-    expect(await decision(sender, "unrooted")).toBe("space-root-missing");
+    expect(await decisions(sender, "unrooted")).toEqual(["space-root-missing"]);
     expect(await refusalsLogged()).toBe(before + 1);
   });
 
