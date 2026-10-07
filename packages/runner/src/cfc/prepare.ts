@@ -940,7 +940,10 @@ const noExchangeFailures = (): ExchangeFailures => ({
  * states and no write withdraws; a `link` entry copies what its target
  * carried when the reference was written; an `external-ingest` mark is not
  * checked against the value it names. Their confidentiality still binds the
- * location, but a value-intrinsic guard reads none of their integrity.
+ * location, but a value-intrinsic guard reads none of their integrity. A
+ * runtime-minted `*` template counts at the children it covers, unlike in the
+ * input-witness summary (`asWitnessEvidence`): `carriedStampLabel` withdraws
+ * its writer's stamp as soon as another writer touches the container.
  */
 const bindsCurrentValueEvidence = (entry: LabelMapEntry): boolean =>
   entry.origin === "derived" || entry.origin === "structure" ||

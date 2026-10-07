@@ -1131,6 +1131,9 @@ describe("CFC exchange-rule evaluation (B4)", () => {
           { type: CFC_ATOM_TYPE.HasRole, role: "reader" },
           { type: CFC_ATOM_TYPE.BoundaryContext },
           { type: CFC_ATOM_TYPE.PromptSlotBound },
+          // Value-bound in the registry through a digest this runtime does
+          // not check against the value a path holds.
+          { type: CFC_ATOM_TYPE.ExternalIngest },
           { type: CFC_ATOM_TYPE.PolicyCertified },
           { type: "https://commonfabric.org/cfc/atom/UIIntent" },
           {

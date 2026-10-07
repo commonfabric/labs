@@ -67,11 +67,18 @@ const Echo = pattern<{ given: string }>(({ given }) => ({
   echoed: computed(() => "E:" + given),
 }));
 
+const narrow = handler<void, { widen: Writable<boolean> }>(
+  (_, { widen }) => {
+    widen.set(false);
+  },
+);
+
 interface Input {
   secret: Writable<Default<Sealed<Secret>, { a: ""; b: "" }>>;
+  widen: Writable<Default<boolean, true>>;
 }
 
-export default pattern<Input>(({ secret }) => {
+export default pattern<Input>(({ secret, widen }) => {
   const card = project(secret);
   const byHand = projectByHand(secret);
   const viaComputed = computed(() => "C:" + (card.rows?.[0]?.text ?? ""));
@@ -79,11 +86,16 @@ export default pattern<Input>(({ secret }) => {
   const mixed = computed(() => card.match + "|" + (secret.get()?.b ?? ""));
   const mapped = card.rows.map((row) => ({ shown: row.text }));
   const sealed = computed(() => "S:" + (secret.get()?.a ?? ""));
+  const sometimes = computed(() =>
+    widen.get() ? card.match + "|" + (secret.get()?.b ?? "") : card.match
+  );
   const sealedEcho = Echo({ given: sealed });
   const releasedEcho = Echo({ given: card.match });
   return {
     card,
     sealed,
+    sometimes,
+    narrow: narrow({ widen }),
     sealedEcho: sealedEcho.echoed,
     releasedEcho: releasedEcho.echoed,
     viaComputed,
@@ -127,6 +139,8 @@ export default pattern<Rooms>(
       mixed: card.mixed,
       mapped: card.mapped,
       sealed: card.sealed,
+      sometimes: card.sometimes,
+      narrow: card.narrow,
       sealedEcho: card.sealedEcho,
       releasedEcho: card.releasedEcho,
       roomCard,
@@ -171,6 +185,7 @@ type Piece = {
   mixed: string;
   mapped: { shown: string }[];
   sealed: string;
+  sometimes: string;
   sealedEcho: string;
   releasedEcho: string;
   roomCard: string;
@@ -408,6 +423,30 @@ describe("value-intrinsic exchange carry", () => {
           entry.origin === "derived"
         );
         expect(policyClausesOf(derived).length).toBeGreaterThan(0);
+      });
+    });
+
+    it("keeps the clause on a value first written while it read a sealed input no rule releases", async () => {
+      // The value's existence was decided under that read, and the entry
+      // recording it is frozen at creation (§8.12.8). The release's evidence,
+      // the producer's own stamp, sits on the producer's output rather than
+      // here, so nothing at this location discharges it, however released
+      // the values written later are.
+      await runPiece(RELEASED, "sometimes", {}, async (run) => {
+        await run.send("seed", { a: "alpha", b: "beta" });
+        await run.send("narrow");
+        expect((await run.read()).sometimes).toBe("M:alpha");
+        const entries = run.entriesAt("sometimes");
+        const values = entries.filter((entry) =>
+          entry.origin === "derived" && entry.observes === "value"
+        );
+        expect(values.length).toBeGreaterThan(0);
+        expect(policyClausesOf(values)).toEqual([]);
+        expect(
+          policyClausesOf(
+            entries.filter((entry) => entry.observes === "shape"),
+          ).length,
+        ).toBeGreaterThan(0);
       });
     });
 

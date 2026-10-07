@@ -70,22 +70,25 @@ const ATOM_URI = "https://commonfabric.org/cfc/atom/";
 
 // The spec §15 registry's class, as a value-intrinsic exchange guard reads it
 // (`matchesOnlyValueBoundClaims`), for the families `CLASS_BY_TYPE` classes
-// differently or does not list. The two tables differ for five families. The
-// registry has `TransformedBy`, `Builtin`, `ExternalIngest` and
-// `UserSurfaceInput` value-bound, each a claim about how the exact current
+// differently or does not list. The registry has `TransformedBy`, `Builtin`
+// and `UserSurfaceInput` value-bound, each a claim about how the exact current
 // value was produced, where `CLASS_BY_TYPE` has them provenance; and it has
 // `PromptSlotBound` provenance, where `CLASS_BY_TYPE` has it value-bound.
 // `CLASS_BY_TYPE` decides the hereditary meet and which integrity a
-// projection scopes onto its output, and whether `TransformedBy` stays
-// provenance there is an open question to the specification. The other
-// provenance families below are evidence of an event, an environment or an
-// access rather than claims about a value, and `CLASS_BY_TYPE` does not list
-// them.
+// projection scopes onto its output, and still has `TransformedBy` as
+// provenance there, which the registry does not. The registry has
+// `ExternalIngest` value-bound too, through the digest of the value it
+// marks, but this runtime does not check that digest against the value a
+// path holds, so it reads the mark as provenance here as `CLASS_BY_TYPE`
+// does: a rule guarded on it releases at the boundary that evaluates it and
+// never carries. The other provenance families below are evidence of an
+// event, an environment or an access rather than claims about a value, and
+// `CLASS_BY_TYPE` does not list them.
 const GUARD_CLASS_BY_TYPE = new Map<string, PropagationClass>([
   [CFC_ATOM_TYPE.TransformedBy, "value-bound"],
   [CFC_ATOM_TYPE.Builtin, "value-bound"],
-  [CFC_ATOM_TYPE.ExternalIngest, "value-bound"],
   [CFC_ATOM_TYPE.UserSurfaceInput, "value-bound"],
+  [CFC_ATOM_TYPE.ExternalIngest, "provenance"],
   [CFC_ATOM_TYPE.PromptSlotBound, "provenance"],
   ...[
     "AddMemberIntent",

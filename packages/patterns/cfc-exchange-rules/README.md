@@ -25,8 +25,11 @@ integrity bound to the value it releases, is value-intrinsic, and its release
 carries onto what is computed from the released value: a `computed()` over it, a
 `.map()` over a list in it, and a store a handler copies it into each carry the
 released label. A value that also reads a sealed input keeps that input's
-clause. A rule scoped to a sink or guarded on a grant releases only at the
-boundary it was evaluated for, and nothing derived carries it.
+clause, and so does a value whose first write read one: the record of when it
+came to exist is frozen at its creation, and the evidence the rule needs sits on
+the released value, not on what was derived from it. A rule scoped to a sink or
+guarded on a grant releases only at the boundary it was evaluated for, and
+nothing derived carries it.
 
 `custody-answer-room.tsx` is a room whose members seal their stances into the
 policy's custody through the host's `cf-custody-seal`, and whose policy releases

@@ -283,6 +283,20 @@ join. It does rest on that join being complete: what the module's code learns
 outside the transaction's reads, which the sandbox exists to prevent, is
 labeled by nothing.
 
+Two things keep a derived value sealed where a release would otherwise reach
+it. A value's existence entry is frozen at its creation (§8.12.8), and a value
+read consumes it, so a value first written while it read an input no rule had
+released keeps that clause however released its later values are: the
+evidence a value-intrinsic rule needs sits on the released value, not on the
+value derived from it. And a store the writer-fit route tightens to cover an
+unreleased write keeps the clause it declared, which no later write narrows
+(§8.12.1). The opposite edge is open: where an existence entry and a value
+stamp resolve at one location, their clauses join, so the stamp's evidence
+discharges the existence entry's share too, as the render gate's evaluation of
+the effective label already does. Whether value-bound evidence may discharge
+an existence clause, which records the creating write rather than the value,
+is a question §5.3 and §8.12.8 leave to the specification.
+
 `ifc.confidentiality` keeps the whole join, so whatever reads the schema itself
 still sees it. A schema merge keeps a clause declared when either side declares
 it, and a declared entry already stored at a position the walk leaves to the
