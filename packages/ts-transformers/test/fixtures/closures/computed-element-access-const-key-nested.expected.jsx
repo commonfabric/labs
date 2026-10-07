@@ -118,7 +118,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 // FIXTURE: computed-element-access-const-key-nested
 // Verifies: literal-typed element keys compose into one static path in each position they can take
 //   offers[KEY][INNER].space → catalog.offers.k.j.space; offers[KEY] with no member after it → catalog.offers.k
-//   two captures each read through offers[KEY] are both kept, as is a capture typed as a Record
+//   two captures each read through offers[KEY] are both kept; a typed capture shrinks to offers, dropping the unread meta
 // Context: Every lift has two captures, so a dropped read would shrink one out
 export default pattern(() => {
     const catalog = new Writable<Record<string, any>>({ offers: {} }, {
@@ -135,9 +135,10 @@ export default pattern(() => {
         offers: Record<string, {
             space: string;
         }>;
-    }>({
-        offers: {},
-    }, {
+        meta: {
+            x: number;
+        };
+    }>({ offers: {}, meta: { x: 1 } }, {
         type: "object",
         properties: {
             offers: {
@@ -152,9 +153,18 @@ export default pattern(() => {
                     },
                     required: ["space"]
                 }
+            },
+            meta: {
+                type: "object",
+                properties: {
+                    x: {
+                        type: "number"
+                    }
+                },
+                required: ["x"]
             }
         },
-        required: ["offers"]
+        required: ["offers", "meta"]
     } as const satisfies __cfHelpers.JSONSchema).for("typed", true);
     const n = new Writable<number>(0, {
         type: "number"

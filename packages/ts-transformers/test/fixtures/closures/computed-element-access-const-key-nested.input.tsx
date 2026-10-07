@@ -6,14 +6,15 @@ const INNER = "j";
 // FIXTURE: computed-element-access-const-key-nested
 // Verifies: literal-typed element keys compose into one static path in each position they can take
 //   offers[KEY][INNER].space → catalog.offers.k.j.space; offers[KEY] with no member after it → catalog.offers.k
-//   two captures each read through offers[KEY] are both kept, as is a capture typed as a Record
+//   two captures each read through offers[KEY] are both kept; a typed capture shrinks to offers, dropping the unread meta
 // Context: Every lift has two captures, so a dropped read would shrink one out
 export default pattern(() => {
   const catalog = new Writable<Record<string, any>>({ offers: {} });
   const other = new Writable<Record<string, any>>({ offers: {} });
-  const typed = new Writable<{ offers: Record<string, { space: string }> }>({
-    offers: {},
-  });
+  const typed = new Writable<{
+    offers: Record<string, { space: string }>;
+    meta: { x: number };
+  }>({ offers: {}, meta: { x: 1 } });
   const n = new Writable<number>(0);
 
   const nestedKeys = computed(() =>

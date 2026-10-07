@@ -138,10 +138,55 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
+const __cfLift_6 = __cfHelpers.lift<{
+    n: __cfHelpers.ReadonlyCell<number>;
+    typed: __cfHelpers.ReadonlyCell<{ offers: Record<string, { space: string; }>; meta: { x: number; }; }>;
+}, boolean>(({ n, typed }) => n.get() === 1 && typed.get().offers[ANY_KEY]?.space === "room", {
+    type: "object",
+    properties: {
+        n: {
+            type: "number",
+            asCell: ["readonly"]
+        },
+        typed: {
+            type: "object",
+            properties: {
+                offers: {
+                    type: "object",
+                    properties: {},
+                    additionalProperties: {
+                        type: "object",
+                        properties: {
+                            space: {
+                                type: "string"
+                            }
+                        },
+                        required: ["space"]
+                    }
+                },
+                meta: {
+                    type: "object",
+                    properties: {
+                        x: {
+                            type: "number"
+                        }
+                    },
+                    required: ["x"]
+                }
+            },
+            required: ["offers", "meta"],
+            asCell: ["readonly"]
+        }
+    },
+    required: ["n", "typed"]
+} as const satisfies __cfHelpers.JSONSchema, {
+    type: "boolean"
+} as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-element-access-dynamic-key
 // Verifies: an element access whose key can name any member leaves its `.get()` chain unresolved, so the receiver is read in full
 //   catalog.get().offers[key.get()].space, offers[ANY_KEY], offers[String(KEY)], and offers[k] in a map callback each record a full read of catalog
 //   items.get()[idx.get()] directly on the `.get()` result reads items in full the same way
+//   a typed capture read through offers[ANY_KEY] keeps its unread meta, since the whole cell is read
 // Context: Every lift has at least two captures, so a dropped read would shrink one out
 export default pattern(() => {
     const catalog = new Writable<Record<string, any>>({ offers: {} }, {
@@ -170,6 +215,41 @@ export default pattern(() => {
             type: "string"
         }
     } as const satisfies __cfHelpers.JSONSchema).for("keys", true);
+    const typed = new Writable<{
+        offers: Record<string, {
+            space: string;
+        }>;
+        meta: {
+            x: number;
+        };
+    }>({ offers: {}, meta: { x: 1 } }, {
+        type: "object",
+        properties: {
+            offers: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                    type: "object",
+                    properties: {
+                        space: {
+                            type: "string"
+                        }
+                    },
+                    required: ["space"]
+                }
+            },
+            meta: {
+                type: "object",
+                properties: {
+                    x: {
+                        type: "number"
+                    }
+                },
+                required: ["x"]
+            }
+        },
+        required: ["offers", "meta"]
+    } as const satisfies __cfHelpers.JSONSchema).for("typed", true);
     const captureKey = __cfLift_1({
         n: n,
         catalog: catalog,
@@ -193,7 +273,18 @@ export default pattern(() => {
         items: items,
         idx: idx
     }).for("indexOnGetResult", true);
-    return { captureKey, stringTypedKey, callKey, callbackParameterKey, indexOnGetResult };
+    const typedAnyKey = __cfLift_6({
+        n: n,
+        typed: typed
+    }).for("typedAnyKey", true);
+    return {
+        captureKey,
+        stringTypedKey,
+        callKey,
+        callbackParameterKey,
+        indexOnGetResult,
+        typedAnyKey,
+    };
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
@@ -212,9 +303,12 @@ export default pattern(() => {
         },
         indexOnGetResult: {
             type: "number"
+        },
+        typedAnyKey: {
+            type: "boolean"
         }
     },
-    required: ["captureKey", "stringTypedKey", "callKey", "callbackParameterKey", "indexOnGetResult"]
+    required: ["captureKey", "stringTypedKey", "callKey", "callbackParameterKey", "indexOnGetResult", "typedAnyKey"]
 } as const satisfies __cfHelpers.JSONSchema);
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
@@ -224,5 +318,6 @@ __cfReg({
     __cfLift_2,
     __cfLift_3,
     __cfLift_4,
-    __cfLift_5
+    __cfLift_5,
+    __cfLift_6
 });

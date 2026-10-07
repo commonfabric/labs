@@ -7,6 +7,7 @@ const ANY_KEY: string = "k";
 // Verifies: an element access whose key can name any member leaves its `.get()` chain unresolved, so the receiver is read in full
 //   catalog.get().offers[key.get()].space, offers[ANY_KEY], offers[String(KEY)], and offers[k] in a map callback each record a full read of catalog
 //   items.get()[idx.get()] directly on the `.get()` result reads items in full the same way
+//   a typed capture read through offers[ANY_KEY] keeps its unread meta, since the whole cell is read
 // Context: Every lift has at least two captures, so a dropped read would shrink one out
 export default pattern(() => {
   const catalog = new Writable<Record<string, any>>({ offers: {} });
@@ -15,6 +16,10 @@ export default pattern(() => {
   const items = new Writable<number[]>([]);
   const idx = new Writable<number>(0);
   const keys = new Writable<string[]>(["k"]);
+  const typed = new Writable<{
+    offers: Record<string, { space: string }>;
+    meta: { x: number };
+  }>({ offers: {}, meta: { x: 1 } });
 
   const captureKey = computed(() =>
     n.get() === 1 && catalog.get().offers[key.get()].space === "room"
@@ -29,6 +34,16 @@ export default pattern(() => {
     keys.get().map((k) => n.get() === 1 && catalog.get().offers[k].space)
   );
   const indexOnGetResult = computed(() => n.get() + items.get()[idx.get()]!);
+  const typedAnyKey = computed(() =>
+    n.get() === 1 && typed.get().offers[ANY_KEY]?.space === "room"
+  );
 
-  return { captureKey, stringTypedKey, callKey, callbackParameterKey, indexOnGetResult };
+  return {
+    captureKey,
+    stringTypedKey,
+    callKey,
+    callbackParameterKey,
+    indexOnGetResult,
+    typedAnyKey,
+  };
 });
