@@ -152,6 +152,9 @@ function createCollectionIndexInstance(
   const confirmed = new Set<string>();
   const pending = new Set<string>();
   let requiredConfirmations = new Set<string>();
+  // The members a resume finds are the ones whose documents the server holds;
+  // a member a later reconcile adds is new, and its setup waits on nothing.
+  let resuming = !!awaitSync;
   addCancel(() => {
     active = false;
     releaseRemovedElements(runtime, runs, new Set());
@@ -281,6 +284,52 @@ function createCollectionIndexInstance(
       });
       const occurrences = listElementKeys(elements);
       const neededOccurrences = new Set(occurrences.values());
+      /** One member per occurrence, created here and set up below. */
+      const members = [...occurrences].map(([position, occurrence]) => {
+        const key = JSON.stringify([
+          scope,
+          mode,
+          occurrence,
+          cellIdentityKey(extracted[position]).linkKey,
+        ]);
+        needed.add(key);
+        let entry = runs.get(key);
+        if (!entry) {
+          const child = scopedCell(
+            runtime,
+            tx,
+            runtime.getCell(
+              parent.space,
+              { collectionIndexMember: index, key },
+              undefined,
+              tx,
+            ),
+            scope,
+          ).withTx();
+          entry = { resultCell: child, lastIndex: position, needsSetup: true };
+          runs.set(key, entry);
+          rollback.created(key, entry);
+          entry.needsSetup = true;
+        }
+        return { position, occurrence, entry };
+      });
+      // A resumed index finds its members' result documents on the server,
+      // written by earlier sessions, and the resume pre-sync reaches none of
+      // them: the index publishes its buckets' elements, never its members.
+      // Setup staged against an unsynced replica reads each at sequence zero,
+      // the commit is rejected as a stale read, and every member's first
+      // commit falls with it. Confirm the documents the setup below writes,
+      // as the inputs above are confirmed.
+      if (
+        resuming &&
+        !isConfirmed([
+          ...enumerations.map(({ entry }) => entry.resultCell),
+          ...members.filter(({ entry }) => entry.needsSetup).map(({ entry }) =>
+            entry.resultCell
+          ),
+        ])
+      ) return;
+      resuming = false;
       const neededAssignments = new Set(
         [...neededOccurrences].map(hashStringOf),
       );
@@ -365,32 +414,7 @@ function createCollectionIndexInstance(
           setup,
         );
       }
-      for (const [position, occurrence] of occurrences) {
-        const key = JSON.stringify([
-          scope,
-          mode,
-          occurrence,
-          cellIdentityKey(extracted[position]).linkKey,
-        ]);
-        needed.add(key);
-        let entry = runs.get(key);
-        if (!entry) {
-          const child = scopedCell(
-            runtime,
-            tx,
-            runtime.getCell(
-              parent.space,
-              { collectionIndexMember: index, key },
-              undefined,
-              tx,
-            ),
-            scope,
-          ).withTx();
-          entry = { resultCell: child, lastIndex: position, needsSetup: true };
-          runs.set(key, entry);
-          rollback.created(key, entry);
-          entry.needsSetup = true;
-        }
+      for (const { position, occurrence, entry } of members) {
         if (entry.needsSetup) {
           runtime.runner.run(
             tx,
