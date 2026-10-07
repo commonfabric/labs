@@ -21,6 +21,7 @@ import {
 } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { accessRefused } from "./space-access.ts";
 
 const logger = getLogger("piece.private-inbox");
 
@@ -293,14 +294,6 @@ async function refusalOf(
   if (!Array.isArray(offers)) return "inbox-offers-invalid";
   if (!isStream(receive)) return "inbox-receive-missing";
   return undefined;
-}
-
-/** Whether this runtime has been refused access to `space`. */
-function accessRefused(runtime: Runtime, space: DID): boolean {
-  return Boolean(
-    runtime.storageManager.spaceAccessError?.(space) ??
-      runtime.storageManager.authorizationError?.(space),
-  );
 }
 
 /** The value stored where `cell` leads, following the links on the way. */

@@ -25,6 +25,7 @@ import {
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { inboxPieceLinkSchema } from "./private-inbox.ts";
+import { accessRefused } from "./space-access.ts";
 
 const logger = getLogger("piece.share-intake");
 
@@ -654,12 +655,4 @@ function originOf(value: string): string | undefined {
 /** Whether an access-list grant lets its holder write. */
 function isWriter(grant: unknown): boolean {
   return grant === "WRITE" || grant === "OWNER";
-}
-
-/** Whether this runtime has been refused access to `space`. */
-function accessRefused(runtime: Runtime, space: DID): boolean {
-  return Boolean(
-    runtime.storageManager.spaceAccessError?.(space) ??
-      runtime.storageManager.authorizationError?.(space),
-  );
 }
