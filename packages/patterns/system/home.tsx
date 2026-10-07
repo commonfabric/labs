@@ -26,12 +26,15 @@ import {
   changeSharedSpaceMembership,
   readSharedSpaceCatalog,
   registerSharedSpace,
+  removeSharedSpace,
   type SharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
+  type SharedSpaceRemoval,
+  type SharedSpaceRemovalResult,
 } from "./shared-space-catalog.ts";
 import {
   type CreateProfileEvent,
@@ -138,6 +141,10 @@ export type HomeOutput = {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
+  // Takes back an entry an application registered, when no offer receipt names
+  // it and it is still at the revision the remover observed. Home renders no
+  // control for it: archive is the person's way to drop a shared space.
+  removeSharedSpace: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
   createProfile: Stream<CreateProfileEvent>;
   // Gives Home the private inbox the deciding profile advertises: it adopts the
   // one the host vetted and names, with that profile, when the profile is in
@@ -516,6 +523,7 @@ const Home = pattern(
       // Exported handlers
       registerSharedSpace: registerSharedSpace({ catalog }),
       changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
+      removeSharedSpace: removeSharedSpace({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),
