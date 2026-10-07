@@ -40,13 +40,14 @@ export type InboxAdoptionRefusal =
  * profile advertising any; `none-advertised` when Home holds none and no
  * profile advertises one; `adopt` when the deciding profile's inbox passed
  * vetting; `refused` when it failed, for `reason`. `profile` is the deciding
- * profile. `abandoned` is an ensure stopped before its send, which sent
- * nothing, and `unavailable` one over a Home without the stream.
+ * profile, which `held` names only when that profile advertises the held
+ * inbox. `abandoned` is an ensure stopped before its send, which sent nothing,
+ * and `unavailable` one over a Home without the stream.
  */
 export type PrivateInboxEnsure =
   | { outcome: "unavailable" }
   | { outcome: "abandoned" }
-  | { outcome: "held" }
+  | { outcome: "held"; profile?: Cell<unknown> }
   | { outcome: "none-advertised" }
   | { outcome: "adopt"; inbox: Cell<unknown>; profile: Cell<unknown> }
   | {
@@ -91,8 +92,12 @@ const pointerSchema = {
  * when the inbox passes every check and Home holds none, or holds another; it
  * names none otherwise. Given none, Home creates an inbox only when it holds
  * none and no profile advertises one, so an inbox that fails a check is
- * neither adopted nor replaced; that refusal is logged as a warning. A Home
- * without the stream is left as it is.
+ * neither adopted nor replaced. The event names that refusal instead, with its
+ * reason, the refused inbox and the deciding profile, for Home to record, and
+ * the refusal is logged as a warning too. When the deciding profile advertises
+ * the inbox Home holds, the event names that profile and nothing else, which
+ * Home takes as the end of a refusal it recorded. A Home without the stream is
+ * left as it is.
  *
  * Resolves once the event is sent, which is before Home's handler runs.
  * Rejects, sending nothing, when a profile ordered ahead of the deciding one
@@ -119,12 +124,27 @@ export async function ensurePrivateInboxOf(
       found.inbox.getAsNormalizedFullLink(),
     ]);
   }
-  await ensure.send(
-    found.outcome === "adopt"
-      ? { adopt: found.inbox, from: found.profile }
-      : {},
-  );
+  await ensure.send(ensureEventOf(found));
   return found;
+}
+
+/** The event {@link ensurePrivateInboxOf} sends Home for what it `found`. */
+function ensureEventOf(
+  found: Exclude<PrivateInboxEnsure, { outcome: "unavailable" | "abandoned" }>,
+): Record<string, unknown> {
+  switch (found.outcome) {
+    case "adopt":
+      return { adopt: found.inbox, from: found.profile };
+    case "refused":
+      return {
+        from: found.profile,
+        refused: { reason: found.reason, inbox: found.inbox },
+      };
+    case "held":
+      return found.profile === undefined ? {} : { from: found.profile };
+    case "none-advertised":
+      return {};
+  }
 }
 
 /**
@@ -138,7 +158,9 @@ async function vetAdvertisedInbox(
   runtime: Runtime,
   home: Cell<unknown>,
   identity: DID,
-): Promise<Exclude<PrivateInboxEnsure, { outcome: "unavailable" }>> {
+): Promise<
+  Exclude<PrivateInboxEnsure, { outcome: "unavailable" | "abandoned" }>
+> {
   const held = await storedPointer(home.key("privateInbox"));
   const deciding = await decidingProfile(runtime, home);
   if (deciding === undefined) {
@@ -146,7 +168,7 @@ async function vetAdvertisedInbox(
   }
   const { profile, piece } = deciding;
   if (held !== undefined && await isSameDocument(piece, held)) {
-    return { outcome: "held" };
+    return { outcome: "held", profile };
   }
   const inbox = piece.resolveAsCell();
   const reason = await refusalOf(runtime, inbox, {

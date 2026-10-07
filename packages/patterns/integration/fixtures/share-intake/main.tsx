@@ -33,6 +33,7 @@ import {
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
   type PrivateInboxOutput,
+  type PrivateInboxRefusalHolder,
   type RetainedPrivateInboxes,
 } from "../../../system/private-inbox.tsx";
 import {
@@ -254,6 +255,9 @@ export default pattern<MainInput, MainOutput>((
   const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
     "retainedPrivateInboxes",
   );
+  const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
+    "privateInboxRefusal",
+  );
   const catalog = new Writable<SharedSpaceCatalogStorage>({
     entries: {},
     offers: {},
@@ -271,6 +275,7 @@ export default pattern<MainInput, MainOutput>((
     ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
       retainedPrivateInboxes,
+      privateInboxRefusal,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
       pointProfiles: pointProfilesAtPrivateInbox({
