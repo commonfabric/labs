@@ -24,6 +24,10 @@ import {
   readHarnessTaskOutcome,
 } from "../src/contracts/task-outcome.ts";
 import { readHarnessRunState } from "../src/artifacts.ts";
+import {
+  type ConsoleDisplayFit,
+  publicConsoleDisplay,
+} from "./display-ceiling.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import {
   assertValidHarnessHandleTable,
@@ -77,7 +81,8 @@ export type ConsoleTurnResult = HarnessTaskOutcome & {
 
   /**
    * What each return referent `finalText` names stands for, by token, for
-   * showing to the owner beside the text. Absent when it names none.
+   * showing to the owner beside the text: each one whose label fits the
+   * console's display ceiling. Absent when it names none, or none that fits.
    */
   revealed?: Readonly<Record<string, string>>;
 
@@ -131,6 +136,12 @@ export interface ReadConsoleTurnResultOptions {
 
   /** Durable turn timestamps; absent when only legacy run artifacts are held. */
   timing?: Pick<HarnessChatTurnStatus, "startedAt" | "endedAt">;
+
+  /**
+   * Which values the console may show its owner beside the answer; absent,
+   * only those whose label names no one.
+   */
+  display?: ConsoleDisplayFit;
 }
 
 /** Characters the artifact store admits in one run directory name. */
@@ -275,6 +286,7 @@ const readRunHandleTable = async (
 const readTurnRunArtifacts = async (
   artifactRoot: string,
   turnId: string,
+  display: ConsoleDisplayFit,
 ): Promise<TurnRunArtifacts | undefined> => {
   if (
     !SAFE_RUN_ID.test(turnId) || turnId === "." || turnId === ".."
@@ -333,9 +345,11 @@ const readTurnRunArtifacts = async (
       transcript: transcriptValue,
       currentTranscriptIndexes,
       finalText: reportValue.finalAssistantText,
-      revealed: handleTable === undefined
-        ? {}
-        : returnReferentValues(reportValue.finalAssistantText, handleTable),
+      revealed: handleTable === undefined ? {} : returnReferentValues(
+        reportValue.finalAssistantText,
+        handleTable,
+        display,
+      ),
       taskOutcome,
       usage: readHarnessModelUsage(
         "totalUsage" in reportValue
@@ -387,6 +401,7 @@ export const readConsoleTurnResult = async (
   const artifacts = await readTurnRunArtifacts(
     options.artifactRoot,
     options.turnId,
+    options.display ?? publicConsoleDisplay,
   );
   if (artifacts === undefined) {
     return undefined;

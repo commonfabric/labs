@@ -54,11 +54,12 @@ never merge its numbers into a discovery batch's.
 
 ## What a comparable run is
 
-Six things have to match for two batches to be compared, and a batch report
+Seven things have to match for two batches to be compared, and a batch report
 records every one of them: the tasks verbatim, the index readings either side,
 the model, the CFC posture the sessions ran under, the skills tree the runs
-scanned, and what the fabric server reported it was running. A reading that
-could not be taken is named as not taken rather than left out.
+scanned, what the fabric server reported it was running, and the sandbox runtime
+the runs ran on, with how it was chosen. A reading that could not be taken is
+named as not taken rather than left out.
 
 1. **The tasks, worded identically.** The standing suite is
    [`scripts/pattern-index-suite.json`](../scripts/pattern-index-suite.json).
@@ -87,6 +88,14 @@ could not be taken is named as not taken rather than left out.
 5. **The model.** `--model` or `CF_HARNESS_MODEL`.
 6. **The fabric server the console talks to.** Read from its `/api/meta` and
    recorded whole; see [below](#the-server-the-runs-ran-against).
+7. **The sandbox runtime, and how it was chosen.** Read from each root run's own
+   `run-state.json`: the runtime it executed on, and whether that was named, by
+   a flag or the environment, or was the default of the platform it ran on. A
+   run on the native runtime and a run on Docker are different experiments with
+   the same tasks. How it was chosen is held to as well, because a default
+   belongs to the machine rather than the command: the same console command runs
+   on Docker on Linux and on the native runtime on macOS. A run written before
+   runs recorded the runtime reads as not recorded.
 
 ## Running a batch
 
@@ -102,8 +111,8 @@ deno task console
 ```
 
 [The console README](../console/README.md) covers the rest of its prerequisites
-— a local toolshed, a running Docker daemon, a connected model provider, and a
-space named by name rather than by `did:key`.
+— a local toolshed, a sandbox runtime, a connected model provider, and a space
+named by name rather than by `did:key`.
 
 Then, in another shell, run the suite:
 
@@ -130,6 +139,19 @@ measures such a server; a commit that cannot be checked remains a non-fatal
 `--cell-spec=<file>` states what this experiment requires of the console, and
 refuses the whole batch before the first task when the console is something
 else. See [The cell spec](#the-cell-spec).
+
+`--compare-with=<report.json>` holds the batch against an earlier batch's
+record. The report then says, line by line, whether the console's configuration
+— the model, the CFC enforcement, the skills root and the sandbox runtime —
+reads the same in both, and calls the batch not comparable with the earlier one
+where any line differs. A line one batch recorded and the other did not is a
+difference, and a line neither recorded is named apart, since nothing shows the
+two agree on it. A record written before batches recorded the sandbox runtime is
+read like any other, and reads as not recorded on that line, so it is not
+comparable with a batch that records one. The comparison covers those lines
+alone: the tasks, the index readings and the fabric server are for the reader to
+hold against the earlier record. The record is read before the console is asked
+anything, and one that is not a batch report stops the command there.
 
 The runner asks `/api/health` first, which is what distinguishes a console from
 nothing listening. Before reading the index or starting a paid model turn, it

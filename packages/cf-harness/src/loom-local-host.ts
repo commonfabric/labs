@@ -326,6 +326,8 @@ export interface CreateLoomLocalCfHarnessHostOptions {
   cliDependencies?: Omit<
     RunCfHarnessCliDependencies,
     | "env"
+    | "platform"
+    | "sandboxRuntimeNamedBy"
     | "loomLocalHostBinding"
     | "credentialStore"
     | "providerSettingsStore"
@@ -341,6 +343,14 @@ export interface LoomLocalCfHarnessHost {
   runInteractive(args?: readonly string[]): Promise<void>;
 }
 
+/**
+ * Who names the sandbox runtime of every run this host starts. The host takes
+ * no platform default: Loom selects a runtime for each instance, so a run
+ * that reaches here naming none is one Loom did not select for, and is
+ * refused on every platform instead of landing on whichever default applies.
+ */
+const SANDBOX_RUNTIME_NAMED_BY = "Loom";
+
 /** Creates the fixed-owner execution boundary used by local single-user Loom. */
 export const createLoomLocalCfHarnessHost = async (
   options: CreateLoomLocalCfHarnessHostOptions,
@@ -349,9 +359,9 @@ export const createLoomLocalCfHarnessHost = async (
   const identity = await homeIdentity(harnessHome);
   const processEnv = { ...(options.env ?? Deno.env.toObject()) };
   // HOME is cleared from what this host hands on (below), but the runsc
-  // runtime's default CFC policy is a machine-level install under the real
-  // one. Kept aside so both lanes find it, as the stdio and batch
-  // entrypoints do from their own environment.
+  // runtime's default CFC policy and the default macOS runsc store are
+  // machine-level installs under the real one. Kept aside so both lanes find
+  // them, as the stdio and batch entrypoints do from their own environment.
   const hostHome = nonEmpty(processEnv.HOME);
   if (nonEmpty(processEnv.CF_HARNESS_MODEL_PROVIDER) !== undefined) {
     throw new HarnessControlError(
@@ -549,6 +559,7 @@ export const createLoomLocalCfHarnessHost = async (
           : {}),
         env: cliEnv(resolved.binding.modelProvider),
         ...(hostHome !== undefined ? { sandboxHomeDir: hostHome } : {}),
+        sandboxRuntimeNamedBy: SANDBOX_RUNTIME_NAMED_BY,
         loomLocalHostBinding: resolved.binding,
         credentialStore,
         ...(resolved.resolver !== undefined
@@ -582,7 +593,10 @@ export const createLoomLocalCfHarnessHost = async (
         // path hands its CLI, so both lanes of one Loom instance execute in
         // the sandbox the instance selected.
         processEnv,
-        hostHome !== undefined ? { homeDir: hostHome } : {},
+        {
+          namedBy: SANDBOX_RUNTIME_NAMED_BY,
+          ...(hostHome !== undefined ? { homeDir: hostHome } : {}),
+        },
       );
       const provider = await configuredProvider();
       const binding: LoomLocalHostBinding = {
@@ -673,14 +687,18 @@ const defaultHostIo = (): CfHarnessCliIO => ({
 });
 
 /**
- * A startup blocker as the chat protocol states it. Only the provider codes
- * and `internal-error` reach here: this answers a failure raised before the
- * host was serving, while `invalid-request` and `operation-canceled` belong to
- * the batch and control paths, which answer on stderr instead. The provider
- * codes carry across by name, so the remaining branch totals the mapping
- * rather than choosing between codes. A malformed chat request is a separate
- * matter and has the protocol's own `invalid_request`, raised where the
- * request is read.
+ * A startup blocker as the chat protocol states it. This answers a failure
+ * raised before the host was serving: a provider code, `internal-error`, or
+ * an `invalid-request` raised that early, which is a sandbox runtime the host
+ * could not settle on: none named, where this host takes no default, or a
+ * named `runsc` whose default CFC policy could not be examined. The provider
+ * codes carry across by name, and
+ * everything else is `internal_error` with its message, so the remaining
+ * branch totals the mapping rather than choosing between codes. Any other
+ * `invalid-request`, and `operation-canceled`, belong to the batch and
+ * control paths, which answer on stderr instead. A malformed chat request is
+ * a separate matter and has the protocol's own `invalid_request`, raised
+ * where the request is read.
  *
  * `retryable` carries HTTP's `Retry-After` sense: it is set only where waiting
  * is known to help, so a provider that is unreachable now and may answer later

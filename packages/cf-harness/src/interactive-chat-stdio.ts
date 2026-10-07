@@ -36,6 +36,7 @@ import {
   resolveHarnessFabricSessionConfig,
 } from "./fabric-session-options.ts";
 import { resolveInteractiveProvisioning } from "./host-mounts.ts";
+import type { SandboxPlatform } from "./sandbox/types.ts";
 import { BUILTIN_TOOLS } from "./tools/registry.ts";
 import {
   createHarnessInteractiveChatService,
@@ -145,6 +146,12 @@ Options:
   --help                              Print this help text to stderr
 
 Environment:
+  CF_HARNESS_SANDBOX_RUNTIME           docker | runsc. Unset, macOS runs runsc from the
+                                       native cfc-vm store (CFC_VM_HOME, or
+                                       ~/Library/Application Support/cfc-vm) and refuses to
+                                       start where it is not set up; every other platform
+                                       runs docker. The local Loom host refuses to start
+                                       with it unset
   CF_HARNESS_LOOM_AUTHORING_CONFIG     Default host authoring configuration file
   CF_HARNESS_FABRIC_API_URL            Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY           Default value for --fabric-identity
@@ -825,10 +832,20 @@ export const runHarnessInteractiveChatStdioCli = async (
   run: (
     options: RunHarnessInteractiveChatStdioOptions,
   ) => Promise<void> = runHarnessInteractiveChatStdio,
+  /**
+   * Seam for tests: the environment the entrypoint reads, and the platform
+   * whose default sandbox runtime applies where that environment names none.
+   * Each is the process's own when absent.
+   */
+  host: {
+    env?: Record<string, string | undefined>;
+    platform?: SandboxPlatform;
+  } = {},
 ): Promise<void> => {
+  const env = host.env ?? Deno.env.toObject();
   const options = parseHarnessInteractiveChatStdioCliOptions(
     args,
-    Deno.env.toObject(),
+    env,
     cwd ?? Deno.cwd(),
   );
   if (options.help) {
@@ -842,7 +859,8 @@ export const runHarnessInteractiveChatStdioCli = async (
   const provisioning = await resolveInteractiveProvisioning(
     options,
     cwd ?? Deno.cwd(),
-    Deno.env.toObject(),
+    env,
+    { platform: host.platform ?? Deno.build.os },
   );
   await run({
     ...(options.sessionDbPath !== undefined
@@ -851,9 +869,7 @@ export const runHarnessInteractiveChatStdioCli = async (
     ...(options.maxInMemoryEvents !== undefined
       ? { maxInMemoryEvents: options.maxInMemoryEvents }
       : {}),
-    ...(Object.keys(provisioning).length > 0
-      ? { basePromptLoopOptions: provisioning }
-      : {}),
+    basePromptLoopOptions: provisioning,
   });
 };
 

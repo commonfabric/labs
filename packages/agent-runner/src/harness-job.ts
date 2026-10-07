@@ -20,6 +20,7 @@ import {
   type CfHarnessStructuredResultValidation,
   runCfHarnessCli,
   type RunCfHarnessCliDependencies,
+  selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
@@ -239,6 +240,25 @@ const argvOf = (
 ];
 
 /**
+ * What every job is started with that decides its sandbox runtime. The
+ * argument list is written here, so whoever runs a job selects the runtime
+ * through the environment and never by a flag.
+ */
+const SANDBOX_SELECTION = { sandboxSelectionFlags: false };
+
+/**
+ * Derives the sandbox runtime the harness would give a job run with
+ * `harnessDeps`, without starting one. A runner calls this as it starts, so
+ * that a selection the harness would refuse every job for refuses the runner
+ * instead.
+ *
+ * @throws HarnessControlError where the harness would refuse the job.
+ */
+export const selectHarnessJobSandboxRuntime = (
+  harnessDeps: RunCfHarnessCliDependencies = {},
+) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
+
+/**
  * Runs one job. It ends `completed` with the value the model submitted and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
  * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`
@@ -276,6 +296,7 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
+    ...SANDBOX_SELECTION,
     ...(spec.commandJobId !== undefined
       ? { commandJobId: spec.commandJobId }
       : {}),

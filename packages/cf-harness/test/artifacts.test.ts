@@ -240,6 +240,7 @@ Deno.test({
         createdAt: "2026-04-15T21:00:00.000Z",
         updatedAt: "2026-04-15T21:00:05.000Z",
         cfcEnforcementMode: "observe",
+        sandboxRuntime: "docker",
         modelProvider: "openai-compatible-gateway",
         modelAuthSource: "api-key",
         cfcInvocationContexts: [{
