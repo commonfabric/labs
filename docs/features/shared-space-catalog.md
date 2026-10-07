@@ -59,6 +59,14 @@ entry with its stale collection. A legacy binding may supply
 omitted `initialState` means saved. This hint never overrides an existing Home
 entry.
 
+The whole of what `registerSharedSpace` does is `registerSharedSpaceIn()`,
+exported beside it, which takes the catalog's writable cell and a registration
+and stages its writes in the transaction of the handler that calls it. A
+Home-space handler holding the catalog cell calls it to register a space in the
+same commit as its own writes, as a room's creator can register the room it
+creates; it returns the outcome the handler would. A new entry's revision names
+the calling handler's event, so only a handler can call it.
+
 New entries record `since`, the recipient's admission time in epoch
 milliseconds. Registration records it when admitting the entry; a migration may
 supply a historical value. It is a handler-clock display hint, not a revision,
@@ -190,10 +198,13 @@ use the same offer ID independently. Receipts remain when an entry is archived,
 and a new receipt never restores an archived entry.
 
 The receiving application validates the sender, recipient access, and target
-before calling registration. A receipt is evidence of that application action,
-not server-attested sender authentication. The catalog stores no invitation
-bearer, identity key, profile inbox pointer, or delivery endpoint. Adopting an
-inbox or changing its ACL is a separate operation.
+before calling registration. The host's share intake is that application for
+offers in Home's private inboxes; [the private
+inbox](private-inbox.md#the-share-intake) says what it checks. A receipt is
+evidence of that application action, not server-attested sender authentication.
+The catalog stores no invitation bearer, identity key, profile inbox pointer, or
+delivery endpoint. Adopting an inbox or changing its ACL is a separate
+operation.
 
 ## Repair and retention
 

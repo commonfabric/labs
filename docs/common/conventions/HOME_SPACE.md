@@ -153,7 +153,10 @@ or while no profile points at an inbox. Otherwise the host vets the inbox that
 profile points at, such as a loom daemon's, as a loom daemon vets one; Home
 adopts it if it passes, and moves an inbox it held to
 `defaultPattern.retainedPrivateInboxes`, a list kept so that what senders
-delivered there stays readable. No intake reads offers from that list yet. Home
+delivered there stays readable. The host's share intake follows the offers in
+the inbox Home holds and in each one it retains, vets each as the user, and
+registers each one that passes in Home's shared-space catalog through Home's
+`registerSharedSpace` stream; it leaves every offer in its inbox. Home
 creates an inbox from `packages/patterns/system/private-inbox.tsx` only when it
 holds none and no profile points at one. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home

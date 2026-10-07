@@ -3,10 +3,10 @@
 Every identity has one private inbox: a piece, in a space of its own, where
 other principals deliver offers to the identity, such as a chat room to join.
 Its offers are labeled readable by the owner alone. Anyone can append to it,
-through its `receive` stream, which keeps an offer only when the offer names
-the principal sending it as its sender. This document says where the inbox
-lives, how Home comes to hold it, what access its space grants, what `receive`
-accepts, and the limits on what it keeps private.
+through its `receive` stream, which keeps an offer only when the offer names the
+principal sending it as its sender. This document says where the inbox lives,
+how Home comes to hold it, what access its space grants, what `receive` accepts,
+how the host admits what it receives, and the limits on what it keeps private.
 
 The pattern is `packages/patterns/system/private-inbox.tsx`.
 
@@ -112,9 +112,9 @@ rule, by `packages/piece/test/ops/private-inbox.test.ts`.
 `retainedPrivateInboxes` holds a link to each inbox Home gave up, in the order
 it gave them up, and never the one it holds: adopting an inbox the list holds,
 as when a profile is pointed back at it, takes it out. It is there so that the
-offers senders delivered to an earlier inbox stay readable, by the intake that
-reads Home's offers; no intake reads offers from it yet. Like `privateInbox`,
-nothing clears it.
+offers senders delivered to an earlier inbox stay readable, and the share
+intake reads them, as "The share intake" says. Like `privateInbox`, nothing
+clears it.
 
 Home adopts again only when an ensure runs, which is at a runtime worker's first
 bring-up of Home, and again at the worker's next bring-up of Home if that ensure
@@ -310,8 +310,60 @@ A row's `from` is the sender's claim, not a fact the inbox vouches for.
 `receive` binds only an honest runtime, and any principal may write `offers`
 without it, naming any `from`. So a reader checks `from` itself before
 trusting a row. A loom reader checks that `from` holds its own `WRITE` or
-`OWNER` entry on the offered `space`, and the intake that reads this inbox is
-to check the same.
+`OWNER` entry on the offered `space`, and the share intake checks the same.
+
+## The share intake
+
+The host reads the owner's offers and registers the ones it admits in Home's
+shared-space catalog, which
+[`shared-space-catalog.md`](shared-space-catalog.md) describes. The intake is
+`ShareIntake` in `packages/piece/src/ops/share-intake.ts`, which
+`PiecesController.startShareIntake()` starts over the identity's Home, and
+`RuntimeProcessor` starts it beside the ensure, the first time a runtime
+worker brings up Home. Home opens without waiting for it; a failure to start
+it is logged, and the worker's next bring-up of Home starts it again. It runs
+until the processor is disposed. A Home pattern without a `registerSharedSpace`
+stream is left alone.
+
+It subscribes to Home's `privateInbox` and `retainedPrivateInboxes`, and to
+the `offers` of every inbox they name, so an inbox Home comes to hold or
+retain, and an offer arriving in any of them, is taken up as it lands, with no
+restart. It reads the pointers through `inboxPieceLinkSchema`, as the ensure
+does.
+
+An offer of `kind` `loom` is skipped, since a loom daemon admits those; so is
+an offer whose `from` and `id` already key a receipt in the catalog. Any other
+offer is registered when:
+
+- its envelope is well formed: `space` and `from` are well-formed DIDs, `host`
+  and a nonempty `ownerOrigin` are each written as their own origin, every
+  string fits the length `receive` cuts it to, and `sharedAt` is a
+  nonnegative integer;
+- its `host` is the origin of the host the intake runs against, the one whose
+  memory it can read;
+- `from` holds a `WRITE` or `OWNER` entry of its own in the access list of
+  `space`; a grant to every principal, `"*"`, does not count, since any
+  principal holds that;
+- the owner can open `space` and holds `WRITE` or `OWNER` there, through an
+  entry of its own or the grant to every principal;
+- `space` has a root: its space cell links a piece in `space` itself.
+
+The intake sends Home's `registerSharedSpace` the offer's `space`, `host`,
+`kind`, its `title` unless it is empty, and `{ from, id }`. It sends no `since`,
+so Home's handler records the time it admits the entry, as the catalog's `since`
+requires, rather than the sender's `sharedAt`. The handler reads only Home's own
+catalog, never an inbox pointer, so the hazard an untyped pointer read carries,
+above, cannot reach it. Registration is insert-if-absent, so an offer of a space
+already in the catalog, archived or not, adds a receipt and leaves the entry as
+it is.
+
+A refused offer is logged once, as a warning under `piece.share-intake`, with
+its reason. Each runtime worker decides each offer once: one it sent or
+refused is not vetted again until another worker starts. A failure to read
+what vetting needs, other than a refusal of access, is logged, and the offer is
+vetted again when an inbox next changes. The intake removes and marks nothing,
+so every offer stays in its inbox, and another reader, such as a loom daemon,
+reads them all.
 
 ## What it does not protect
 
