@@ -152,8 +152,11 @@ function createCollectionIndexInstance(
   const confirmed = new Set<string>();
   const pending = new Set<string>();
   let requiredConfirmations = new Set<string>();
-  // The members a resume finds are the ones whose documents the server holds;
-  // a member a later reconcile adds is new, and its setup waits on nothing.
+  // The occurrences a resume finds are the ones whose members' documents the
+  // server holds, and the ones its setup must wait for. A member a later
+  // reconcile adds is new, and its setup waits on nothing, even while the
+  // resume's own confirmations are still outstanding.
+  let resumedOccurrences: ReadonlySet<string> | undefined;
   let resuming = !!awaitSync;
   addCancel(() => {
     active = false;
@@ -320,16 +323,21 @@ function createCollectionIndexInstance(
       // the commit is rejected as a stale read, and every member's first
       // commit falls with it. Confirm the documents the setup below writes,
       // as the inputs above are confirmed.
-      if (
-        resuming &&
-        !isConfirmed([
-          ...enumerations.map(({ entry }) => entry.resultCell),
-          ...members.filter(({ entry }) => entry.needsSetup).map(({ entry }) =>
-            entry.resultCell
-          ),
-        ])
-      ) return;
-      resuming = false;
+      if (resuming) {
+        resumedOccurrences ??= new Set(occurrences.values());
+        const found = resumedOccurrences;
+        if (
+          !isConfirmed([
+            ...enumerations.map(({ entry }) => entry.resultCell),
+            ...members
+              .filter(({ entry, occurrence }) =>
+                entry.needsSetup && found.has(occurrence)
+              )
+              .map(({ entry }) => entry.resultCell),
+          ])
+        ) return;
+        resuming = false;
+      }
       const neededAssignments = new Set(
         [...neededOccurrences].map(hashStringOf),
       );
