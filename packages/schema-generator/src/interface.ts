@@ -7,6 +7,8 @@ import type {
 import { type Mutable } from "@commonfabric/utils/types";
 import type { ExpansionBudget } from "./typescript/expanding-recursion.ts";
 
+import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
+
 /**
  * JSON Schema object type - mutable version of the Common Fabric JSONSchema interface
  */
@@ -205,6 +207,13 @@ export interface GenerationContext {
    * the generator keeps for every name it gives one.
    */
   nameAnonymousDefinition: () => string;
+
+  /**
+   * Each value an intersection the checker gives `any` settled to that met a
+   * definition still being generated, checked once generation is done
+   * (`assertAnyValuesKeptLabels()`).
+   */
+  anyValuesBesideUnwritten: AnyValueBesideUnwritten[];
 
   // Stack state (push/pop during recursion)
 

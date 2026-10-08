@@ -22,6 +22,7 @@ async function memberOf(code: string) {
     emittedRefs: new Set(),
     mergedIntersectionNames: new Map(),
     nameAnonymousDefinition: () => "AnonymousType_1",
+    anyValuesBesideUnwritten: [],
     definitionStack: new Set(),
     expandingPath: [],
     expansionBudget: { readingsInside: 0 },
