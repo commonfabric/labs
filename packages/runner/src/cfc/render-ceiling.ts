@@ -19,6 +19,10 @@ import {
   isExactModulePolicyRef,
   type PolicySnapshot,
 } from "./policy.ts";
+import {
+  type ListMembershipProvider,
+  listMembersInConfidentiality,
+} from "./list-membership.ts";
 import type { RenderModulePolicyResolver } from "./policy-resolver.ts";
 import type { SpaceMembershipProvider } from "./space-membership.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
@@ -59,12 +63,16 @@ const renderDisplayBoundary = (): readonly CfcAtom[] => [
 ];
 
 /**
- * The standard render exchange rule set (spec §4.3.3 SpaceReaderAccess, scoped
- * to the display boundary). `Space($s)` confidentiality plus a verified
- * `HasRole($p, $s, reader)` membership fact — under a display boundary — adds
- * a `User($p)` alternative, so a display audience holding that role fits the
- * `User(actingUser)` ceiling. `PersonalSpace(actingUser)` needs no rule: the
- * §8.10.6 ceiling admits it by exact match (the acting user is its owner).
+ * The standard render exchange rule set, scoped to the display boundary:
+ * - `SpaceReaderAccess` (spec §4.3.3): `Space($s)` confidentiality plus a
+ *   verified `HasRole($p, $s, reader)` membership fact adds a `User($p)`
+ *   alternative, so a display audience holding that role fits the
+ *   `User(actingUser)` ceiling;
+ * - `ListMemberAccess` (spec §4.9.5): `Members($l, …)` plus a minted
+ *   `ListedIn($p, $l)` fact adds `User($p)` the same way, for a list.
+ *
+ * `PersonalSpace(actingUser)` needs no rule: the §8.10.6 ceiling admits it by
+ * exact match (the acting user is its owner).
  */
 export const STANDARD_RENDER_EXCHANGE_RULES: readonly ExchangeRule[] = [{
   id: "space-reader-access-display",
@@ -85,7 +93,32 @@ export const STANDARD_RENDER_EXCHANGE_RULES: readonly ExchangeRule[] = [{
   post: {
     addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: { var: "$p" } }],
   },
+}, {
+  id: "list-member-access-display",
+  appliesTo: { type: CFC_ATOM_TYPE.Members, list: { var: "$l" } },
+  preCondition: {
+    integrity: [{
+      type: CFC_ATOM_TYPE.ListedIn,
+      principal: { var: "$p" },
+      list: { var: "$l" },
+    }],
+    boundary: [{
+      type: CFC_ATOM_TYPE.BoundaryContext,
+      key: "sinkClass",
+      value: RENDER_DISPLAY_SINK_CLASS,
+    }],
+  },
+  post: {
+    addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: { var: "$p" } }],
+  },
 }];
+
+/**
+ * How many of a label's lists one render evaluation resolves, taken in label
+ * order (spec §4.9.5 lets the bound exist). A list beyond it resolves
+ * nothing, so its `Members` alternative stays in force.
+ */
+export const RENDER_LIST_CANDIDATE_LIMIT = 32;
 
 /** Built once — the standard render rules are static deployment-independent. */
 const STANDARD_RENDER_SNAPSHOT: PolicySnapshot = buildCfcPolicySnapshot([{
@@ -139,6 +172,16 @@ export type RenderConfidentialityResolverConfig = {
    * blocked.
    */
   readonly membershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The spec §4.9.5 list lookup: consulted for each list
+   * `listMembersInConfidentiality` names for the label being rendered, up to
+   * {@link RENDER_LIST_CANDIDATE_LIMIT}. Where it finds the acting principal
+   * listed, the resolver mints `ListedIn(actingPrincipal, list)`. Absent, or
+   * a list that lists nobody, mints nothing, and the `Members` alternative
+   * stays outside the ceiling.
+   */
+  readonly listMembershipProvider?: ListMembershipProvider;
 
   /**
    * Grant lookup for `policyState`-guarded render rules (§8.12.7 route 2a).
@@ -253,6 +296,22 @@ export type RenderConfidentialityResolver = (
   label: RenderLabelInput,
 ) => readonly CfcConfClause[];
 
+/**
+ * `ListedIn(principal, list)` facts for the lists a label names on which the
+ * acting principal is listed.
+ */
+const mintListedInFacts = (
+  actingPrincipal: string | undefined,
+  provider: ListMembershipProvider | undefined,
+  confidentiality: readonly CfcConfClause[],
+): readonly CfcAtom[] => {
+  if (actingPrincipal === undefined || provider === undefined) return [];
+  return listMembersInConfidentiality(confidentiality)
+    .slice(0, RENDER_LIST_CANDIDATE_LIMIT)
+    .filter((list) => provider.listed(list))
+    .map((list) => cfcAtom.listedIn(actingPrincipal, list));
+};
+
 /** `HasRole(principal, space, reader)` facts for a principal's reader spaces. */
 const mintReaderRoleFacts = (
   actingPrincipal: string | undefined,
@@ -300,7 +359,14 @@ export const createRenderConfidentialityResolver = (
       },
       STANDARD_RENDER_SNAPSHOT,
       {
-        integrity: mintReaderRoleFacts(actingPrincipal, [...memberSpaces]),
+        integrity: [
+          ...mintReaderRoleFacts(actingPrincipal, [...memberSpaces]),
+          ...mintListedInFacts(
+            actingPrincipal,
+            config.listMembershipProvider,
+            label.confidentiality,
+          ),
+        ],
         boundary,
         trustResolver,
         actingPrincipal,
