@@ -1,0 +1,483 @@
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { Identity } from "@commonfabric/identity";
+
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import type { LabelMapEntry } from "../src/cfc/types.ts";
+import type { RuntimeProgram } from "../src/harness/types.ts";
+import type { NormalizedFullLink } from "../src/link-types.ts";
+import { parseLink } from "../src/link-utils.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
+
+const signer = await Identity.fromPassphrase("runner-cfc-exchange-carry");
+const space = signer.did();
+
+// A module policy whose one rule drops its clause for what `project`, a
+// function of the same module, computed: a value-intrinsic rule (spec §5.3),
+// with no sink, no path and no grant guard. `card` is the released value;
+// `viaComputed` and `mapped` derive from it alone, and `mixed` reads the
+// sealed input beside it.
+const CARD = `/// <cts-enable />
+import { exchangeRule, exchangeRules, type PolicyOf, THIS_POLICY } from "commonfabric/cfc";
+import { type Confidential, computed, Default, handler, lift, pattern, Writable } from "commonfabric";
+
+export const releaseCard = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: {
+    integrity: [{
+      type: "https://commonfabric.org/cfc/atom/TransformedBy",
+      identity: {
+        kind: "verified",
+        moduleIdentity: THIS_POLICY.moduleIdentity,
+        symbol: "project",
+      },
+    }],
+  },
+  post: { dropClause: true },
+});
+export const cardRules = exchangeRules([releaseCard]);
+
+export interface Secret { a: string; b: string }
+export type Sealed<T> = Confidential<T, readonly [PolicyOf<typeof cardRules>]>;
+export interface Row { text: string }
+export interface Card { match: string; rows: Row[] }
+
+const toCard = (s: Secret | undefined): Card => ({
+  match: "M:" + (s?.a ?? ""),
+  rows: [{ text: "R0:" + (s?.a ?? "") }, { text: "R1:" + (s?.b ?? "") }],
+});
+
+/** The released computation. */
+export const project = lift((s: Secret | undefined): Card => toCard(s));
+
+/** The same computation under a name no rule releases. */
+export const projectByHand = lift((s: Secret | undefined): Card => toCard(s));
+
+const seed = handler<Secret, { secret: Writable<Sealed<Secret>> }>(
+  (event, { secret }) => {
+    secret.set(event as Sealed<Secret>);
+  },
+);
+
+/** Echoes what it is given: a sub-pattern whose input is a reference. */
+const Echo = pattern<{ given: string }>(({ given }) => ({
+  echoed: computed(() => "E:" + given),
+}));
+
+const narrow = handler<void, { widen: Writable<boolean> }>(
+  (_, { widen }) => {
+    widen.set(false);
+  },
+);
+
+interface Input {
+  secret: Writable<Default<Sealed<Secret>, { a: ""; b: "" }>>;
+  widen: Writable<Default<boolean, true>>;
+}
+
+export default pattern<Input>(({ secret, widen }) => {
+  const card = project(secret);
+  const byHand = projectByHand(secret);
+  const viaComputed = computed(() => "C:" + (card.rows?.[0]?.text ?? ""));
+  const byHandComputed = computed(() => "H:" + (byHand.rows?.[0]?.text ?? ""));
+  const mixed = computed(() => card.match + "|" + (secret.get()?.b ?? ""));
+  const mapped = card.rows.map((row) => ({ shown: row.text }));
+  const sealed = computed(() => "S:" + (secret.get()?.a ?? ""));
+  const sometimes = computed(() =>
+    widen.get() ? card.match + "|" + (secret.get()?.b ?? "") : card.match
+  );
+  const sealedEcho = Echo({ given: sealed });
+  const releasedEcho = Echo({ given: card.match });
+  return {
+    card,
+    sealed,
+    sometimes,
+    narrow: narrow({ widen }),
+    sealedEcho: sealedEcho.echoed,
+    releasedEcho: releasedEcho.echoed,
+    viaComputed,
+    byHandComputed,
+    mixed,
+    mapped,
+    seed: seed({ secret }),
+  };
+});
+`;
+
+// The public stores sit beside the card rather than inside it, as in the
+// other compiled CFC cases: each admits only public values, so a publish into
+// one succeeds only when every clause it consumed was released.
+const MAIN = `/// <cts-enable />
+import { Default, handler, type MaxConfidentiality, pattern, Writable } from "commonfabric";
+import Card from "./card.tsx";
+
+type Public = MaxConfidentiality<string, readonly []>;
+
+const publish = handler<void, { from: string; to: Writable<Public> }>(
+  (_, { from, to }) => {
+    to.set(("P:" + from) as Public);
+  },
+);
+
+interface Rooms {
+  roomCard: Writable<Default<Public, "unset">>;
+  roomComputed: Writable<Default<Public, "unset">>;
+  roomByHand: Writable<Default<Public, "unset">>;
+  roomMixed: Writable<Default<Public, "unset">>;
+}
+
+export default pattern<Rooms>(
+  ({ roomCard, roomComputed, roomByHand, roomMixed }) => {
+    const card = Card({} as any);
+    return {
+      card: card.card,
+      viaComputed: card.viaComputed,
+      byHandComputed: card.byHandComputed,
+      mixed: card.mixed,
+      mapped: card.mapped,
+      sealed: card.sealed,
+      sometimes: card.sometimes,
+      narrow: card.narrow,
+      sealedEcho: card.sealedEcho,
+      releasedEcho: card.releasedEcho,
+      roomCard,
+      roomComputed,
+      roomByHand,
+      roomMixed,
+      seed: card.seed,
+      publishCard: publish({ from: card.card.rows[0].text, to: roomCard }),
+      publishComputed: publish({ from: card.viaComputed, to: roomComputed }),
+      publishByHand: publish({ from: card.byHandComputed, to: roomByHand }),
+      publishMixed: publish({ from: card.mixed, to: roomMixed }),
+    };
+  },
+);
+`;
+
+const program = (card: string): RuntimeProgram => ({
+  main: "/main.tsx",
+  files: [
+    { name: "/main.tsx", contents: MAIN },
+    { name: "/card.tsx", contents: card },
+  ],
+});
+
+const RELEASED = program(CARD);
+
+// The rule with a grant guard beside its integrity guard: grant-guarded
+// (spec §5.3), so its result stays at the access it was evaluated for.
+const GRANT_GUARDED = (() => {
+  const post = "  post: { dropClause: true },\n});";
+  if (!CARD.includes(post)) throw new Error("CARD no longer ends its rule");
+  return program(CARD.replace(
+    post,
+    '  guard: { policyState: [{ kind: "approved" }] },\n' + post,
+  ));
+})();
+
+type Piece = {
+  card: { match: string; rows: { text: string }[] };
+  viaComputed: string;
+  byHandComputed: string;
+  mixed: string;
+  mapped: { shown: string }[];
+  sealed: string;
+  sometimes: string;
+  sealedEcho: string;
+  releasedEcho: string;
+  roomCard: string;
+  roomComputed: string;
+  roomByHand: string;
+  roomMixed: string;
+};
+
+type Run = {
+  send: (stream: string, event?: unknown) => Promise<void>;
+  read: () => Promise<Piece>;
+  entriesAt: (...keys: string[]) => readonly LabelMapEntry[];
+  entriesAlong: (...keys: string[]) => readonly LabelMapEntry[];
+};
+
+const overlaps = (left: readonly string[], right: readonly string[]) =>
+  left.every((segment, index) =>
+    index >= right.length || segment === right[index] || segment === "*" ||
+    right[index] === "*"
+  );
+
+const runPiece = async (
+  source: RuntimeProgram,
+  cause: string,
+  options: { cfcPolicyEvaluation?: "off" | "observe" | "enforce" },
+  body: (run: Run) => Promise<void>,
+): Promise<void> => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+    cfcEnforcementMode: "enforce-strict",
+    cfcFlowLabels: "persist",
+    ...options,
+  });
+  try {
+    const tx = runtime.edit();
+    const pattern = await runtime.patternManager.compilePattern(source, {
+      space,
+      tx,
+    });
+    const result = runtime.getCell<Piece>(space, cause, undefined, tx);
+    runtime.run(tx, pattern, {}, result);
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await result.pull();
+    await runtime.idle();
+
+    // A refused publish leaves its room at its default, which is what the
+    // cases read, so a commit error is not itself a failure here.
+    const send = async (stream: string, event?: unknown) => {
+      const sendTx = runtime.edit();
+      // deno-lint-ignore no-explicit-any
+      (result.withTx(sendTx) as any).key(stream).send(event);
+      await sendTx.commit().settled;
+      await runtime.idle();
+      await result.pull();
+    };
+    const read = async () => {
+      await runtime.idle();
+      return (await result.pull()) as Piece;
+    };
+    const entriesAt = (...keys: string[]) => {
+      const readTx = runtime.edit();
+      try {
+        // deno-lint-ignore no-explicit-any
+        let cell: any = result;
+        for (const key of keys) cell = cell.key(key);
+        const link = cell.withTx(readTx).resolveAsCell()
+          .getAsNormalizedFullLink();
+        return readStoredCfcMetadata(readTx, link)?.labelMap.entries ?? [];
+      } finally {
+        readTx.abort();
+      }
+    };
+    // Every entry a reader of the location reads on its way to the value:
+    // those overlapping it in the piece's own document, and in each
+    // document a reference at it leads to in turn.
+    const entriesAlong = (...keys: string[]) => {
+      const readTx = runtime.edit();
+      try {
+        const found: LabelMapEntry[] = [];
+        const visited = new Set<string>();
+        let at: NormalizedFullLink | undefined = result.withTx(readTx)
+          .getAsNormalizedFullLink();
+        at = { ...at, path: [...at.path, ...keys] };
+        while (at !== undefined && !visited.has(at.id)) {
+          visited.add(at.id);
+          const path = at.path;
+          for (
+            const entry of readStoredCfcMetadata(readTx, at)?.labelMap
+              .entries ?? []
+          ) {
+            if (overlaps(entry.path, path)) found.push(entry);
+          }
+          at = parseLink(
+            runtime.getCellFromLink(at, undefined, readTx).getRaw(),
+            at,
+          ) as NormalizedFullLink | undefined;
+        }
+        return found;
+      } finally {
+        readTx.abort();
+      }
+    };
+    await body({ send, read, entriesAt, entriesAlong });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+};
+
+const isPolicyAtom = (atom: unknown): boolean =>
+  (atom as { type?: unknown })?.type === CFC_ATOM_TYPE.Policy;
+
+const policyClausesOf = (entries: readonly LabelMapEntry[]): unknown[] =>
+  entries.flatMap((entry) =>
+    (entry.label.confidentiality ?? []).filter(isPolicyAtom)
+  );
+
+const transformedByOf = (entries: readonly LabelMapEntry[]) =>
+  entries.flatMap((entry) =>
+    (entry.label.integrity ?? []).filter((atom) =>
+      (atom as { type?: unknown }).type === CFC_ATOM_TYPE.TransformedBy
+    ) as {
+      identity?: { symbol?: string };
+      inputWitness?: { identity?: { symbol?: string } };
+    }[]
+  );
+
+describe("value-intrinsic exchange carry", () => {
+  it("drops the released clause from a computed over the released value", async () => {
+    await runPiece(
+      RELEASED,
+      "computed",
+      {},
+      async ({ send, read, entriesAt }) => {
+        await send("seed", { a: "alpha", b: "beta" });
+        expect((await read()).viaComputed).toBe("C:R0:alpha");
+        const entries = entriesAt("viaComputed");
+        expect(entries.length).toBeGreaterThan(0);
+        expect(policyClausesOf(entries)).toEqual([]);
+      },
+    );
+  });
+
+  it("admits a publish of the computed into a public store", async () => {
+    await runPiece(RELEASED, "publish-computed", {}, async (run) => {
+      await run.send("seed", { a: "alpha", b: "beta" });
+      await run.send("publishComputed");
+      expect((await run.read()).roomComputed).toBe("P:C:R0:alpha");
+    });
+  });
+
+  it("persists the released label on a public store a handler copies the released value into", async () => {
+    await runPiece(RELEASED, "publish-card", {}, async (run) => {
+      await run.send("seed", { a: "alpha", b: "beta" });
+      await run.send("publishCard");
+      expect((await run.read()).roomCard).toBe("P:R0:alpha");
+      const entries = run.entriesAt("roomCard").filter((entry) =>
+        entry.origin === "derived" && entry.path.join("/") === "roomCard"
+      );
+      expect(
+        transformedByOf(entries).some((atom) =>
+          atom.identity?.symbol === "publish"
+        ),
+      ).toBe(true);
+      expect(policyClausesOf(entries)).toEqual([]);
+    });
+  });
+
+  it("drops the released clause from the elements and container of a map over the released value", async () => {
+    await runPiece(
+      RELEASED,
+      "mapped",
+      {},
+      async ({ send, read, entriesAt, entriesAlong }) => {
+        await send("seed", { a: "alpha", b: "beta" });
+        expect((await read()).mapped).toEqual([
+          { shown: "R0:alpha" },
+          { shown: "R1:beta" },
+        ]);
+        expect(policyClausesOf(entriesAt("mapped"))).toEqual([]);
+        expect(policyClausesOf(entriesAt("mapped", "0"))).toEqual([]);
+        expect(policyClausesOf(entriesAlong("mapped"))).toEqual([]);
+      },
+    );
+  });
+
+  it("drops the released clause from a sub-pattern's output over the released value", async () => {
+    await runPiece(RELEASED, "released-echo", {}, async (run) => {
+      await run.send("seed", { a: "alpha", b: "beta" });
+      expect((await run.read()).releasedEcho).toBe("E:M:alpha");
+      const entries = run.entriesAt("releasedEcho");
+      expect(entries.length).toBeGreaterThan(0);
+      expect(policyClausesOf(entries)).toEqual([]);
+    });
+  });
+
+  describe("what does not carry", () => {
+    it("writes a value no rule releases through a sub-pattern, with its clause", async () => {
+      // Binding the computed into a sub-pattern makes its document one the
+      // write-side fit check measures, and the module's input join at its
+      // path is no declaration the write must fit.
+      await runPiece(RELEASED, "sealed-echo", {}, async (run) => {
+        await run.send("seed", { a: "alpha", b: "beta" });
+        const piece = await run.read();
+        expect(piece.sealed).toBe("S:alpha");
+        expect(piece.sealedEcho).toBe("E:S:alpha");
+        expect(policyClausesOf(run.entriesAt("sealed")).length)
+          .toBeGreaterThan(0);
+        expect(policyClausesOf(run.entriesAt("sealedEcho")).length)
+          .toBeGreaterThan(0);
+      });
+    });
+
+    it("keeps the clause on a value derived from an input no rule releases", async () => {
+      await runPiece(RELEASED, "by-hand", {}, async (run) => {
+        await run.send("seed", { a: "alpha", b: "beta" });
+        await run.send("publishByHand");
+        expect((await run.read()).roomByHand).toBe("unset");
+        expect(policyClausesOf(run.entriesAt("byHandComputed")).length)
+          .toBeGreaterThan(0);
+      });
+    });
+
+    it("keeps the clause a derived value takes from a sealed input it reads beside the released one", async () => {
+      await runPiece(RELEASED, "mixed", {}, async (run) => {
+        await run.send("seed", { a: "alpha", b: "beta" });
+        await run.send("publishMixed");
+        const piece = await run.read();
+        expect(piece.mixed).toBe("M:alpha|beta");
+        expect(piece.roomMixed).toBe("unset");
+        const derived = run.entriesAt("mixed").filter((entry) =>
+          entry.origin === "derived"
+        );
+        expect(policyClausesOf(derived).length).toBeGreaterThan(0);
+      });
+    });
+
+    it("keeps the clause on a value first written while it read a sealed input no rule releases", async () => {
+      // The value's existence was decided under that read, and the entry
+      // recording it is frozen at creation (§8.12.8). The release's evidence,
+      // the producer's own stamp, sits on the producer's output rather than
+      // here, so nothing at this location discharges it, however released
+      // the values written later are.
+      await runPiece(RELEASED, "sometimes", {}, async (run) => {
+        await run.send("seed", { a: "alpha", b: "beta" });
+        await run.send("narrow");
+        expect((await run.read()).sometimes).toBe("M:alpha");
+        const entries = run.entriesAt("sometimes");
+        const values = entries.filter((entry) =>
+          entry.origin === "derived" && entry.observes === "value"
+        );
+        expect(values.length).toBeGreaterThan(0);
+        expect(policyClausesOf(values)).toEqual([]);
+        expect(
+          policyClausesOf(
+            entries.filter((entry) => entry.observes === "shape"),
+          ).length,
+        ).toBeGreaterThan(0);
+      });
+    });
+
+    it("keeps the clause when the rule is grant-guarded", async () => {
+      await runPiece(GRANT_GUARDED, "grant", {}, async (run) => {
+        await run.send("seed", { a: "alpha", b: "beta" });
+        await run.send("publishComputed");
+        expect((await run.read()).roomComputed).toBe("unset");
+        expect(policyClausesOf(run.entriesAt("viaComputed")).length)
+          .toBeGreaterThan(0);
+      });
+    });
+
+    it("keeps the clause when policy evaluation only observes", async () => {
+      // Also the companion of the map case above: the locations it finds
+      // free of the clause hold it here, so that case is not passing over
+      // locations nothing labels.
+      await runPiece(
+        RELEASED,
+        "observe",
+        { cfcPolicyEvaluation: "observe" },
+        async ({ send, entriesAt, entriesAlong }) => {
+          await send("seed", { a: "alpha", b: "beta" });
+          expect(policyClausesOf(entriesAt("viaComputed")).length)
+            .toBeGreaterThan(0);
+          expect(policyClausesOf(entriesAt("mapped", "0")).length)
+            .toBeGreaterThan(0);
+          expect(policyClausesOf(entriesAlong("mapped")).length)
+            .toBeGreaterThan(0);
+        },
+      );
+    });
+  });
+});

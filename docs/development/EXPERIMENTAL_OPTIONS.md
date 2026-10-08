@@ -1096,8 +1096,16 @@ the per-epic implementation notes).
   labels to a fixpoint and emits diagnostics while still deciding on the
   un-rewritten label; `enforce` decides on the rewritten label and fails closed
   when the evaluation runs out of fuel. The dial governs the commit and sink
-  gates; the display boundary evaluates whenever `cfcRenderCeiling` is on, as
-  its own switch.
+  gates, and the carry of value-intrinsic exchange onto derived values (spec
+  §5.3). The flow label a transformation writes is persisted only under
+  `cfcFlowLabels: persist`; there, `enforce` persists the label the exchange
+  leaves at each observed location and `observe` persists the raw label beside
+  a diagnostic saying what would change. A reference write copies its
+  source's label whatever the flow dial, as exchanged under `enforce` and raw
+  under `observe`. Either way an evaluation that runs out of fuel or cannot
+  resolve a policy keeps the raw label, and `off` evaluates nothing. The
+  display boundary evaluates whenever `cfcRenderCeiling` is on, as its own
+  switch.
 - **Current default and planned end state.** `enforce` by default, which is
   where the dial rests.
 - **Status on 2026-09-17.** Implemented and rolled out.

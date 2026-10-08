@@ -12,6 +12,9 @@
  * production caller hands the walk a cell minted for the node being wired, so
  * the case reaches the throw through the helper directly, and what it pins is
  * that a label the walk cannot attach stops its caller.
+ *
+ * The walk also names the clauses a measured module's outputs take only from
+ * its inputs (`cfc/input-join.ts`), and the first cases pin which those are.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -75,6 +78,65 @@ describe("node-utils", () => {
   }
 
   describe("applyInputIfcToOutput", () => {
+    it("names the inputs' join as an input join on a measured module's output", () => {
+      withinHandler(() => {
+        const input = new Cell("classified", {
+          type: "string",
+          ifc: { confidentiality: ["secret"] },
+        });
+        const target = new Cell("out", { type: "string" });
+
+        applyInputIfcToOutput({ input }, { target }, { measured: true });
+
+        // deno-lint-ignore no-explicit-any
+        expect((target as any).schema?.ifc).toEqual({
+          confidentiality: ["secret"],
+          inputConfidentiality: ["secret"],
+        });
+      });
+    });
+
+    it("names no input join on an output whose schema declares the clause below its root", () => {
+      // `joinSchema` hoists the nested declaration into the root's label, so
+      // the root holds the clause as a declaration too.
+      withinHandler(() => {
+        const input = new Cell("classified", {
+          type: "string",
+          ifc: { confidentiality: ["secret"] },
+        });
+        const target = new Cell("out", {
+          type: "object",
+          properties: {
+            note: { type: "string", ifc: { confidentiality: ["secret"] } },
+          },
+        });
+
+        applyInputIfcToOutput({ input }, { target }, { measured: true });
+
+        // deno-lint-ignore no-explicit-any
+        const ifc = (target as any).schema?.ifc;
+        expect(ifc?.confidentiality).toEqual(["secret"]);
+        expect(ifc?.inputConfidentiality).toBeUndefined();
+      });
+    });
+
+    it("names no input join on the output of a module whose writes are not measured", () => {
+      withinHandler(() => {
+        const input = new Cell("classified", {
+          type: "string",
+          ifc: { confidentiality: ["secret"] },
+        });
+        const target = new Cell("out", { type: "string" });
+
+        applyInputIfcToOutput({ input }, { target });
+
+        // deno-lint-ignore no-explicit-any
+        expect((target as any).schema?.ifc).toEqual({
+          confidentiality: ["secret"],
+        });
+      });
+    });
+
     it("labels an output cell sitting beside a `FabricBytes`", () => {
       withinHandler(() => {
         // The discriminating shape. A special object alone would only show

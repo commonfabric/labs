@@ -250,18 +250,58 @@ rather than declared. And under
 component on each value write target; at `observe` it only reaches a
 diagnostic, and at `off` nothing derives it.
 
-No module is excused that input join. A module labeling its outputs below the
-join of its inputs makes §8.9.1's flow-precision claim, which that section
-holds to trust in the executing implementation for `flow-taint-precision` under
-the acting user, and a graph is assembled before there is one. What the join
-states is not §8.9.2's measurement: the build transaction reads nothing, so
-§8.9.2 applied there yields the empty label, which is the argument the next
-paragraph makes for a pattern's own root. It is a static over-approximation of
-what any future attempt could consume, and it is the floor rather than a first
-guess — it mints a `declared` entry, and a path's effective label is the join of
-all its components, so the `derived` component above adds to it and never
-narrows it. A label narrower than the join is therefore available only through
-§8.9.1's trust gate, and nothing in the runtime evaluates that concept.
+What the input join states is not §8.9.2's measurement: the build transaction
+reads nothing, so §8.9.2 applied there yields the empty label, which is the
+argument the paragraphs below make for a pattern's own root. It is a static
+over-approximation of what any attempt could consume, and where nothing
+measures what a module writes it is the floor: it mints a `declared` entry, and
+a path's effective label is the join of all its components, so a `derived`
+component adds to it and never narrows it. That holds under `cfcFlowLabels`
+`observe` and `off`, and for a built-in that writes after a fetch or a model
+call, in a later transaction than the one that read its inputs.
+
+Where the runtime measures what a module writes, the join stands in for that
+measurement instead. Under `cfcFlowLabels: "persist"`, a JavaScript action, and
+a built-in in `REPLAYABLE_BUILTIN_REFS`
+(`packages/runner/src/builder/builtin-replayability.ts`), read and write in one
+attempt, and the `derived` component on what that attempt writes is §8.9.2's
+conservative label: the join of every observation in its journal, trigger reads
+included. CFC §5.3 evaluates value-intrinsic exchange rules at those
+observations and carries their result onto the derived value, and a declared
+clause that no evidence discharges would undo that carry. So for those modules
+the builders also name the join `ifc.inputConfidentiality` (`measuresOutputs`
+in `node-utils.ts`, `packages/runner/src/cfc/input-join.ts`). A schema
+position holding nothing but that join is no authored declaration: prepare
+mints no `declared` entry there (`leftToMeasurement` in
+`packages/runner/src/cfc/schema-label-view.ts`), and the store there is one
+§8.12.5 lets the runtime tighten, which the writer-fit route below does with
+whatever a write carries that nothing released. A position that declares
+anything of its own keeps its whole label, the join included. Leaving the
+join to the measurement is not §8.9.1's flow-precision claim, which is a label
+narrower than the attempt's conservative join; the derived component is that
+join. It does rest on that join being complete: what the module's code learns
+outside the transaction's reads, which the sandbox exists to prevent, is
+labeled by nothing.
+
+Two things keep a derived value sealed where a release would otherwise reach
+it. A value's existence entry is frozen at its creation (§8.12.8), and a value
+read consumes it, so a value first written while it read an input no rule had
+released keeps that clause however released its later values are: the
+evidence a value-intrinsic rule needs sits on the released value, not on the
+value derived from it. And a store the writer-fit route tightens to cover an
+unreleased write keeps the clause it declared, which no later write narrows
+(§8.12.1). The opposite edge is open: where an existence entry and a value
+stamp resolve at one location, their clauses join, so the stamp's evidence
+discharges the existence entry's share too, as the render gate's evaluation of
+the effective label already does. Whether value-bound evidence may discharge
+an existence clause, which records the creating write rather than the value,
+is a question §5.3 and §8.12.8 leave to the specification.
+
+`ifc.confidentiality` keeps the whole join, so whatever reads the schema itself
+still sees it. A schema merge keeps a clause declared when either side declares
+it, and a declared entry already stored at a position the walk leaves to the
+measurement carries forward, so a document stored before the join was named,
+or written by a runtime not persisting flow labels, keeps its floor.
 
 The two build-time mechanisms differ in what each ranges over.
 `applyArgumentIfcToResult` runs once per module factory, joining the schema
@@ -294,16 +334,16 @@ label back in rather than replacing it. Four do: `mapWithPattern`,
 `filterWithPattern` and `flatMapWithPattern` stamp a result-container schema
 onto the cell their node factory has just labeled, and a named aggregate stamps
 a scalar one. `schemaCarryingLinkIfc` in `packages/runner/src/cell.ts` carries
-the label onto what they write. CFC §8.5.4.3 requires it: a decomposed
-collection operation's coordinator taints its own structural writes —
-container, membership, order, length — with what its journal consumed. §8.9.2's
-propagation takes the output container's confidentiality from the source
-container's, through `lengthPreserved` for a map and
-`propagateCollectionConstraint` for the two that change length. The label lands
-at the container root, which is the conservative shape rather than the
-pointwise one: `joinSchema` flattens a source's member-level atoms in with its
-container-level ones, so what §8.5.6.1 keeps apart as member and structural
-confidentiality arrives together.
+the label onto what they write, the named input join with it. CFC §8.5.4.3
+requires it: a decomposed collection operation's coordinator taints its own
+structural writes — container, membership, order, length — with what its
+journal consumed. §8.9.2's propagation takes the output container's
+confidentiality from the source container's, through `lengthPreserved` for a
+map and `propagateCollectionConstraint` for the two that change length. The
+label lands at the container root, which is the conservative shape rather than
+the pointwise one: `joinSchema` flattens a source's member-level atoms in with
+its container-level ones, so what §8.5.6.1 keeps apart as member and
+structural confidentiality arrives together.
 `packages/runner/test/list-result-schema.test.ts` measures a labeled source and
 an unlabeled one. An aggregate reduces without per-value attribution, so
 §8.17.1 gives its scalar the join of its contributors — a count and a sum are

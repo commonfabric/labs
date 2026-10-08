@@ -78,3 +78,72 @@ export const atomPropagationClass = (atom: unknown): PropagationClass => {
   // represents-principal) have no registered class — fail-safe.
   return "value-bound";
 };
+
+const ATOM_URI = "https://commonfabric.org/cfc/atom/";
+
+// The spec §15 registry's class, as a value-intrinsic exchange guard reads it
+// (`matchesOnlyValueBoundClaims`), for the families `CLASS_BY_TYPE` classes
+// differently or does not list. The registry has `TransformedBy`, `Builtin`
+// and `UserSurfaceInput` value-bound, each a claim about how the exact current
+// value was produced, where `CLASS_BY_TYPE` has them provenance; and it has
+// `PromptSlotBound` provenance, where `CLASS_BY_TYPE` has it value-bound.
+// `CLASS_BY_TYPE` decides the hereditary meet and which integrity a
+// projection scopes onto its output, and still has `TransformedBy` as
+// provenance there, which the registry does not. The registry has
+// `ExternalIngest` value-bound too, through the digest of the value it
+// marks, but this runtime does not check that digest against the value a
+// path holds, so it reads the mark as provenance here as `CLASS_BY_TYPE`
+// does: a rule guarded on it releases at the boundary that evaluates it and
+// never carries. The other provenance families below are evidence of an
+// event, an environment or an access rather than claims about a value, and
+// `CLASS_BY_TYPE` does not list them.
+const GUARD_CLASS_BY_TYPE = new Map<string, PropagationClass>([
+  [CFC_ATOM_TYPE.TransformedBy, "value-bound"],
+  [CFC_ATOM_TYPE.Builtin, "value-bound"],
+  [CFC_ATOM_TYPE.UserSurfaceInput, "value-bound"],
+  [CFC_ATOM_TYPE.ExternalIngest, "provenance"],
+  [CFC_ATOM_TYPE.PromptSlotBound, "provenance"],
+  ...[
+    "AddMemberIntent",
+    "Attestation",
+    "AudienceRepresents",
+    "AudioTrigger",
+    "CaveatWarningRendered",
+    "ClientAppAttested",
+    "DeviceTier",
+    "GestureProvenance",
+    "PromptInfluenceVerified",
+    "RuntimeImage",
+    "RuntimeObservationLimited",
+    "RuntimeObservationProfile",
+    "RuntimeProfile",
+    "RuntimeProvider",
+    "RuntimeTEE",
+    "SinkContentDisclaimerAttached",
+    "TrustedProvider",
+    "UIIntent",
+    "UserAcknowledgedCaveat",
+  ].map((name): [string, PropagationClass] => [
+    `${ATOM_URI}${name}`,
+    "provenance",
+  ]),
+]);
+
+/**
+ * Whether every atom `pattern` can match is a claim bound to the exact current
+ * value it labels: a record naming a concrete family the spec §15 registry
+ * classes value-bound, an unregistered family included (§15.1.1's default).
+ * `IntegritySummary` is value-bound only for a `surviving-content` basis, so a
+ * pattern on it qualifies only when it names that basis. An exchange rule
+ * guarded only by such patterns is value-intrinsic (§5.3).
+ */
+export const matchesOnlyValueBoundClaims = (pattern: unknown): boolean => {
+  if (!isObjectOrArray(pattern) || Array.isArray(pattern)) return false;
+  const type = pattern.type;
+  if (typeof type !== "string") return false;
+  if (type === `${ATOM_URI}IntegritySummary`) {
+    return pattern.basis === "surviving-content";
+  }
+  return (GUARD_CLASS_BY_TYPE.get(type) ?? CLASS_BY_TYPE.get(type) ??
+    "value-bound") === "value-bound";
+};

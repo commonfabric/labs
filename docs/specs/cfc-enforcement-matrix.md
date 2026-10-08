@@ -18,7 +18,7 @@ subsumes another. Their current homes and defaults:
 | `cfcFlowLabels` | `off` · `observe` · `persist` | `persist` | whether the per-tx **flow join is derived and persisted** as `derived` label components (S16) |
 | `cfcWriteFloor` | `off` · `observe` · `enforce` | `enforce` | whether the **write-side `requiredIntegrity` floor** (SC-18, Epic D3) is checked against the written value's integrity |
 | `cfcTriggerReadGating` | `false` · `true` | `true` | whether the **§8.9.2 trigger reads** — the addresses whose invalidating writes scheduled this run — join the enforcement consumed sets: the sink-request ceiling and the `requiredIntegrity` input gate (SC-3 / H5; [runtime.ts](../../packages/runner/src/runtime.ts) `cfcTriggerReadGating`, [types.ts](../../packages/runner/src/cfc/types.ts) `CfcTriggerReadGating`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`) |
-| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `enforce` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. ([runtime.ts](../../packages/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `evaluateGatedConfidentiality`) |
+| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `enforce` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. Under `cfcFlowLabels: persist` it also decides whether value-intrinsic rules (§5.3) carry onto the labels of derived values and reference copies: `enforce` persists the exchanged label, `observe` the raw one beside a diagnostic, and a failed evaluation keeps the raw label. ([runtime.ts](../../packages/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `evaluateGatedConfidentiality`, `deriveFlowJoin` and `derivePersistedLinkLabel`) |
 
 They are orthogonal because they gate different things: the **enforcement mode**
 decides what happens to a recorded reason (ignore / diagnose / reject); the
@@ -132,7 +132,13 @@ adds:
    same consumed labels the sink-request and input gates already fit, only
    rewritten first — so it may advance on its own schedule. It is only
    *useful* once `cfcPolicyRecords` are configured (an empty policy set makes
-   evaluation a no-op at every setting).
+   evaluation a no-op at every setting). Under `cfcFlowLabels: persist` the
+   dial also decides what a derived value's label persists: at `enforce`, the
+   result of value-intrinsic rules at each location a transformation observed
+   carries onto the label of what it writes (§5.3), at `observe` the raw label
+   persists beside a diagnostic, and at `off` nothing is evaluated. A carried
+   label is never wider than the raw one, so this too only loosens, and
+   exhaustion there keeps the raw label rather than recording a reason.
 
 Everything else is free: a deployment may sit at any enforcement level with
 flow `off` (the floor and the explicit gate need no derived labels), and may

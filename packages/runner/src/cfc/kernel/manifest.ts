@@ -291,7 +291,10 @@ export const MANIFEST: readonly ManifestRow[] = [
     ],
     note: "runs the selected module policies' rules to a fixpoint under " +
       "`DEFAULT_EXCHANGE_FUEL`, returning the original label flagged " +
-      "`exhausted` when fuel runs out",
+      "`exhausted` when fuel runs out; the flow join and reference copies " +
+      "run it over value-intrinsic rules alone (`admitsRule`), and under " +
+      "the `enforce` policy-evaluation dial persist the result on what is " +
+      "derived (§5.3), the flow join only where flow labels persist",
   },
   {
     file: BOUNDARIES,
@@ -428,9 +431,12 @@ export const MANIFEST: readonly ManifestRow[] = [
       { file: PREPARE, symbol: "deriveFlowJoin" },
       { file: PREPARE, symbol: "derivePersistedLabel" },
     ],
-    note: "one per-transaction join is stamped on every written path as a " +
+    note: "one per-transaction join, carrying value-intrinsic exchange at " +
+      "each observed location (§5.3), is stamped on every written path as a " +
       "derived entry; declared, exact-copy and projection labels are " +
-      "derived per path, and the other annotations are refused",
+      "derived per path, a schema position holding only a measured " +
+      "module's input join mints no declared entry where flow labels " +
+      "persist, and the other annotations are refused",
   },
   {
     file: PROPAGATION,
@@ -459,10 +465,12 @@ export const MANIFEST: readonly ManifestRow[] = [
       { file: PREPARE, symbol: "deriveFlowJoin" },
       { file: "cfc/input-witness.ts", symbol: "mintTransformedBy" },
       { file: "cfc/atom-classes.ts", symbol: "atomPropagationClass" },
+      { file: "cfc/exchange-eval.ts", symbol: "isValueIntrinsicExchangeRule" },
     ],
-    note: "the confidentiality union, the hereditary meet by propagation " +
-      "class, and a `TransformedBy` summary atom carrying an input witness " +
-      "in place of the pseudocode's `inputs` array",
+    note: "the confidentiality union with value-intrinsic exchange carried " +
+      "(§5.3), the hereditary meet by propagation class, and a " +
+      "`TransformedBy` summary atom carrying an input witness in place of " +
+      "the pseudocode's `inputs` array",
   },
   {
     file: LABELS,

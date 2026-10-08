@@ -43,7 +43,10 @@ When the flow stage attributes a transaction to an identity, it mints:
 - one `TransformedBy{identity, inputWitness: W}` for each retained witness `W`.
 
 A witness `W` is retained when every confidential input location the
-transaction consumed carried it. It is a conservative summary in the sense
+transaction consumed carried it. A location counts as confidential by the label
+it was read with, before value-intrinsic exchange (§5.3) carries a release onto
+what the transaction derives, so a released input constrains the witness as it
+did before its release. It is a conservative summary in the sense
 §8.9.3 permits: it states a universal fact about the inputs and nothing about
 any single one. Each witness-bearing atom is a complete claim on its own —
 "`identity` wrote this, and every confidential input it read carried `W`" — so
@@ -300,8 +303,9 @@ Moving a rule to the witnessed form is the rule author's change.
 Each of these refuses an honest release rather than admitting a crafted one:
 
 - **An unattributed input.** `TransformedBy` is minted only when every write in
-  the transaction came from one identity and the transaction's join is
-  nonempty. A value written by a transaction that read nothing labeled carries
+  the transaction came from one identity and the join of what the transaction
+  read is nonempty, as it is when value-intrinsic exchange (§5.3) released
+  every clause of it. A value written by a transaction that read nothing labeled carries
   no `TransformedBy`, so a transformation over it retains no witness. An
   endorsed writer whose inputs should be witnessed reads something labeled,
   so its writes are attributed. For the first member of a list whose clause is

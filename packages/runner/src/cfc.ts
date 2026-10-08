@@ -20,6 +20,11 @@ import type {
 } from "./builder/types.ts";
 import { BranchListWalk, REACHED_AGAIN } from "./cfc/branch-list-walk.ts";
 import type { CfcConfClause } from "./cfc/clause.ts";
+import {
+  confidentialitySources,
+  ifcConfidentialitySources,
+  withInputJoin,
+} from "./cfc/input-join.ts";
 import { uniqueCfcAtoms } from "./cfc/observation.ts";
 import {
   cfcSchemaIsFalse,
@@ -454,10 +459,16 @@ export class ContextualFlowControl {
     return ContextualFlowControl.uniqueAtoms(joined);
   }
 
-  /** Returns a copy of the schema with joined confidentiality atoms. */
+  /**
+   * Returns a copy of the schema with joined confidentiality atoms. With
+   * `measured`, the atoms are the input join of a module whose writes the
+   * runtime measures, and those the schema does not declare itself are also
+   * named in `ifc.inputConfidentiality` (`cfc/input-join.ts`).
+   */
   static schemaWithLub(
     schema: JSONSchema,
     confidentiality: readonly CfcConfClause[],
+    options: { measured?: boolean } = {},
   ): JSONSchema {
     const joined = new Set<unknown>(confidentiality);
     if (isObjectOrArray(schema) && schema.ifc !== undefined) {
@@ -470,14 +481,13 @@ export class ContextualFlowControl {
     // We don't really support "not" schemas, but it's the only good way we
     // have to attach ifc to a `false` schema.
     const schemaObj = ContextualFlowControl.toSchemaObj(schema);
-    const restrictedSchema = {
+    return {
       ...schemaObj,
-      ifc: {
-        ...schemaObj.ifc,
-        confidentiality: ContextualFlowControl.lub(joined),
-      },
+      ifc: withInputJoin(schemaObj.ifc, ContextualFlowControl.lub(joined), [
+        confidentialitySources(confidentiality, options.measured === true),
+        ifcConfidentialitySources(schemaObj.ifc),
+      ]),
     };
-    return restrictedSchema;
   }
 
   /**
@@ -689,6 +699,16 @@ export class ContextualFlowControl {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
       : new Set<unknown>();
+    // Where each level's clauses came from (`cfc/input-join.ts`): a clause
+    // some level of the path declares stays declared below it. The caller's
+    // extra clauses count as declared.
+    const sources = [
+      confidentialitySources(extraConfidentiality ?? [], false),
+    ];
+    const joinIfc = (ifc: JSONSchemaObj["ifc"] | undefined) => {
+      ContextualFlowControl.addIfcAtoms(joined, ifc?.confidentiality);
+      sources.push(ifcConfidentialitySources(ifc));
+    };
     let cursor = schema;
     // Whether the path descended through a wildcard: a true schema is what
     // every child below it narrows to, markers and all, but its `default`
@@ -790,10 +810,7 @@ export class ContextualFlowControl {
         break;
       } else if (cursor.type === "object") {
         if (cursor.ifc !== undefined) {
-          ContextualFlowControl.addIfcAtoms(
-            joined,
-            cursor.ifc.confidentiality,
-          );
+          joinIfc(cursor.ifc);
         }
         if (cursor.properties && Object.hasOwn(cursor.properties, part)) {
           const cursorObj = cursor.properties as Record<string, JSONSchema>;
@@ -802,10 +819,7 @@ export class ContextualFlowControl {
             break;
           } else {
             if (cursor.ifc !== undefined) {
-              ContextualFlowControl.addIfcAtoms(
-                joined,
-                cursor.ifc.confidentiality,
-              );
+              joinIfc(cursor.ifc);
             }
           }
         } else if (cursor.additionalProperties !== undefined) {
@@ -842,7 +856,7 @@ export class ContextualFlowControl {
       }
     }
     if (isObjectOrArray(cursor) && cursor.ifc !== undefined) {
-      ContextualFlowControl.addIfcAtoms(joined, cursor.ifc.confidentiality);
+      joinIfc(cursor.ifc);
     }
     if (typeof cursor === "boolean") {
       if (!cursor) {
@@ -855,7 +869,7 @@ export class ContextualFlowControl {
     // If we've encountered any confidentiality atoms while walking down the
     // schema, we need to add them to the returned object.
     const ifc = (joined.size !== 0)
-      ? { ...cursor.ifc, confidentiality: ContextualFlowControl.lub(joined) }
+      ? withInputJoin(cursor.ifc, ContextualFlowControl.lub(joined), sources)
       : cursor.ifc;
     const selectedDefs = selectReferencedCfcSchemaDefs(cursor, defs);
     const result = { ...cursor, ...(ifc && { ifc }) } as Record<

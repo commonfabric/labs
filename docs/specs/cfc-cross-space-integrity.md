@@ -62,8 +62,11 @@ the sink/egress boundary under `cfcPolicyEvaluation: "enforce"`. A rule's `post`
 either `addAlternatives` (widen a confidentiality clause — e.g. add
 `User($recipient)` so a specific reader may observe) or `dropClause` (release the
 clause entirely), gated by a `preCondition` over `confidentiality` / `integrity`
-/ `boundary` / `policyState` evidence. The rewrite is never persisted (spec
-§8.12.7 route 1).
+/ `boundary` / `policyState` evidence. The rewrite never changes the store it
+was evaluated on (spec §8.12.7 route 1). A value a transformation derives is a
+new value, and its label carries the result of value-intrinsic rules (§5.3) —
+those with no sink, path or grant scope, guarded only by integrity bound to the
+value observed — and of no others.
 
 Two properties matter for "copy retains integrity while declassifying":
 

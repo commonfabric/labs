@@ -5,6 +5,8 @@ import {
   isSubschema,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { ContextualFlowControl } from "../cfc.ts";
+import { holdsClause, ifcConfidentialitySources } from "./input-join.ts";
+import { isPrefix } from "./path-prefix-index.ts";
 import {
   cfcSchemaResolvedRoot,
   resolveCfcSchemaRefRoot,
@@ -16,6 +18,13 @@ import type { IFCLabel, LabelObservationClass } from "./types.ts";
 export interface CfcSchemaEntry {
   readonly path: readonly string[];
   readonly label: IFCLabel;
+
+  /**
+   * The clauses of `label` only the producing module's input join put there
+   * (`ifc.inputConfidentiality`); see {@link persistedSchemaEntryLabel}.
+   */
+  readonly inputConfidentiality?: readonly unknown[];
+
   readonly schema: JSONSchema;
 
   /** The schema document that resolves local references inside `.schema`. */
@@ -77,6 +86,8 @@ export const cfcSchemaEntries = (
     )
     : schemaRoot;
   if (isObjectOrArray(resolved.ifc)) {
+    const inputConfidentiality = ifcConfidentialitySources(resolved.ifc)
+      .inputJoin;
     entries.push({
       path,
       label: {
@@ -87,6 +98,7 @@ export const cfcSchemaEntries = (
           ? [...resolved.ifc.confidentiality]
           : undefined,
       },
+      ...(inputConfidentiality.length > 0 ? { inputConfidentiality } : {}),
       schema: resolved,
       root: childRoot,
       ...(conditional ? { conditional: true as const } : {}),
@@ -158,6 +170,56 @@ const declaredObservationClass = (
       observes === "enumerate" || observes === "followRef"
     ? observes
     : undefined;
+};
+
+/**
+ * Whether `entry`, one of a schema's `entries`, holds nothing but its
+ * producer's input join (`ifc.inputConfidentiality`), so that where the
+ * runtime persists the measured label of what that producer writes
+ * (`measured`) the declared component takes nothing from it: the measurement,
+ * with whatever exchange rules released at the producer's observations (spec
+ * §5.3), labels the value instead. Such an entry is no authored declaration,
+ * so the store at its path is one §8.12.5 lets the runtime tighten to cover
+ * what is written there.
+ *
+ * An entry that declares anything of its own — integrity, or a clause outside
+ * the input join — keeps the whole of its label, as does one whose input join
+ * holds a clause an entry at its path or above it declares: within the
+ * declared component a more specific entry replaces its ancestors at every
+ * read beneath it.
+ */
+export const leftToMeasurement = (
+  entry: CfcSchemaEntry,
+  entries: readonly CfcSchemaEntry[],
+  measured: boolean,
+): boolean => {
+  const inputs = entry.inputConfidentiality;
+  if (!measured || inputs === undefined || inputs.length === 0) return false;
+  if ((entry.label.integrity?.length ?? 0) > 0) return false;
+  const own = entry.label.confidentiality ?? [];
+  if (!own.every((clause) => holdsClause(inputs, clause))) return false;
+  return !entries.some((other) =>
+    isPrefix(other.path, entry.path) &&
+    (other.label.confidentiality ?? []).some((clause) =>
+      !holdsClause(other.inputConfidentiality ?? [], clause) &&
+      holdsClause(own, clause)
+    )
+  );
+};
+
+/**
+ * The label `entry`, one of a schema's `entries`, persists as declared store
+ * policy: nothing when it is {@link leftToMeasurement}, and otherwise the
+ * whole of its label.
+ */
+export const persistedSchemaEntryLabel = (
+  entry: CfcSchemaEntry,
+  entries: readonly CfcSchemaEntry[],
+  measured: boolean,
+): IFCLabel => {
+  if (!leftToMeasurement(entry, entries, measured)) return entry.label;
+  const { confidentiality: _joined, ...rest } = entry.label;
+  return rest;
 };
 
 /** Return the label view declared by a schema. */

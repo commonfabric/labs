@@ -6,6 +6,9 @@ scope for this epic"). Spec ground: `08-12-store-label-monotonicity.md`
 §8.12.7's three sanctioned widening routes, worked example §13.4.3, merged
 §4.9.3 (ACL point query), `06-events-and-intents.md` §6.5. Grounded in the
 shipped Epic B evaluator (`cfc/exchange-eval.ts`, `cfc/policy.ts`).
+Value-intrinsic exchange (§5.3), whose result reaches the labels of values
+derived from the released one rather than rewriting a store, is outside this
+design; `cfc-render-boundary-composition.md` describes it.
 Written 2026-07-09 at owner request._
 
 ## 1. The spec names one route; its example is a different one

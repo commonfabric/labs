@@ -48,6 +48,9 @@ const WISH_DEBOUNCE_MS = 50;
  * fail strict). When adding a builtin here, record it there: in
  * `REPLAYABLE_BUILTIN_REFS` if replaying the node deterministically
  * reproduces its writes, otherwise in the documented non-replayable list.
+ * Membership there also decides whether CFC leaves the confidentiality the
+ * node factory joins onto the builtin's outputs to the label it measures on
+ * the writes, which the registry's own comment states.
  */
 export function registerBuiltins(runtime: Runtime) {
   const moduleRegistry = runtime.moduleRegistry;

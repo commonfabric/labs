@@ -212,7 +212,8 @@ requires the stage to be reported and never over-claimed.
 
 **Stage.** The runtime is at the third stage with the deviations below:
 `deriveFlowJoinImpl` in `cfc/prepare.ts` computes the confidentiality union,
-the hereditary meet by propagation class (`atomPropagationClass` in
+each observation's clauses as value-intrinsic exchange (§5.3) leaves them at
+the `enforce` policy-evaluation dial, the hereditary meet by propagation class (`atomPropagationClass` in
 `cfc/atom-classes.ts`, under which `PolicyCertified` is hereditary), and
 appends a `TransformedBy` atom from `mintTransformedBy` in
 `cfc/input-witness.ts`. `followRef` observations contribute confidentiality
@@ -221,10 +222,23 @@ statement.
 
 **Deviations, with direction.**
 
-- The mint is omitted when the writing identity is ambiguous or the join is
-  empty: an under-claim of integrity, the fail-safe direction, stated in
+- The mint is omitted when the writing identity is ambiguous or the join of
+  what the transaction read is empty; a join that value-intrinsic exchange
+  emptied (§5.3) is still minted, so the derived value names the identity
+  that derived it. The omission is an under-claim of integrity, the fail-safe
+  direction, stated in
   [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md)
   under "What fails closed".
+- §5.3 records the integrity that satisfied a value-intrinsic rule as a
+  witness on the derived value's `TransformedBy`. The runtime retains it only
+  where the input-witness summary does: when the guard is in the
+  `TransformedBy` family and every confidential location the transformation
+  read carried it. A guard of any other family satisfies the rule and leaves no
+  witness. Retaining every satisfying atom would let a module policy whose rule
+  names an atom launder that atom onto values it never described, so the
+  runtime under-records instead. That is an under-claim of integrity, the
+  fail-safe direction, and the specification does not yet say how the
+  recording avoids the laundering.
 - The atom carries an input-witness summary in place of the pseudocode's
   `inputs` array, the conservative summary §8.9.3 permits; `SC-43` in
   [`cfc-spec-changes.md`](cfc-spec-changes.md) is the open ruling.
@@ -259,7 +273,8 @@ dials; `CFC_DIAL_LADDERS` there holds each ladder, and `resolveCfcDials`
 refuses a value off its ladder. The strict rung's one additional refusal, the
 writer-fit misfit, is in `prepareBoundaryCommit` in `cfc/prepare.ts`; trigger
 gating is `triggerReadSources` and policy evaluation
-`evaluateGatedConfidentiality` in the same file.
+`evaluateGatedConfidentiality` in the same file, with value-intrinsic exchange
+in `deriveFlowJoin` and `derivePersistedLinkLabel`.
 [`cfc-enforcement-matrix.md`](cfc-enforcement-matrix.md) §1 to §4 describe the
 dials.
 

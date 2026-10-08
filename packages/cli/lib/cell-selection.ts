@@ -1672,6 +1672,10 @@ const SELECTION_IFC_KEYS: {
   // that label is consumed by.
   confidentiality: "carried",
   observes: "carried",
+  // Which clauses of that label the source's producer joined in from its
+  // inputs. It describes that producer rather than the selection, so the
+  // selection's copy declares the whole label.
+  inputConfidentiality: "dropped",
   // Atoms the runner adds to the integrity of what a write to the position
   // stores (`derivePersistedLabel()` in the runner's `cfc/prepare.ts`).
   integrity: "dropped",

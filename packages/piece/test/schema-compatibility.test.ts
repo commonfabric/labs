@@ -412,6 +412,42 @@ describe("piece schema compatibility", () => {
     ).not.toThrow();
   });
 
+  // Which clauses of a label a module's input join put there decides whether
+  // the runtime mints them as store policy, not what the label is, so naming
+  // them differently is no contract change while the clauses stay the same.
+  const joinedResult = (inputConfidentiality?: string[]): JSONSchema => ({
+    type: "object",
+    properties: {
+      shown: {
+        type: "string",
+        ifc: {
+          confidentiality: ["sealed"],
+          ...(inputConfidentiality === undefined
+            ? {}
+            : { inputConfidentiality }),
+        },
+      },
+    },
+  });
+
+  it("accepts a result whose clause becomes named as an input join", () => {
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        pattern({ type: "object" }, joinedResult()),
+        pattern({ type: "object" }, joinedResult(["sealed"])),
+      )
+    ).not.toThrow();
+  });
+
+  it("accepts a result whose clause stops being named as an input join", () => {
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        pattern({ type: "object" }, joinedResult(["sealed"])),
+        pattern({ type: "object" }, joinedResult()),
+      )
+    ).not.toThrow();
+  });
+
   it("compares a writeAuthorizedBy claim carrying no writer identity whole", () => {
     // Normalization reaches inside `__ctWriterIdentityOf`. A claim without one
     // has nothing volatile to remove, so two such claims compare equal.
