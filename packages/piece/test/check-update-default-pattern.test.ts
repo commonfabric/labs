@@ -1935,12 +1935,19 @@ describe("opening a space root", () => {
       );
     });
     expect(error).toBeUndefined();
+    const manifestOf = (cell: unknown) =>
+      (cell as { getMetaRaw: (key: string) => unknown }).getMetaRaw(
+        "internal",
+      );
+    const manifest = manifestOf(root);
 
     await controller.ensureDefaultPattern();
     await runtime.idle();
 
     const after = (await controller.getDefaultPattern(false))!;
     expect(getPatternIdentityRef(after)?.identity).toBe(handlerRef.identity);
+    // The repair added the stream `bump` registers on.
+    expect(manifestOf(after)).not.toEqual(manifest);
     (after.key("bump") as unknown as { send: (e: unknown) => void }).send({});
     await runtime.idle();
     await (after as unknown as { pull: () => Promise<unknown> }).pull();
