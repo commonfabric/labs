@@ -1906,6 +1906,48 @@ describe("opening a space root", () => {
     expect(afterEvent.key("count").get()).toBe(1);
   });
 
+  it("ensure repairs a root with no setup marker whose manifest misses a handler's stream", async () => {
+    // A root that records no origin is not re-staged before its start, and a
+    // stored setup naming no pattern is not refused as stale, so its start is
+    // what repairs a manifest that misses one of its pattern's cells.
+    await setup();
+    const root = await installCustomRoot(runtime, controller, {
+      main: "/custom-root.tsx",
+      files: [{ name: "/custom-root.tsx", contents: SOURCE_V1 }],
+    });
+    await controller.stopPiece(root);
+    const handlerPattern = await runtime.patternManager.compilePattern({
+      main: "/custom-root.tsx",
+      files: [{ name: "/custom-root.tsx", contents: SOURCE_V3_HANDLER }],
+    }, { space: controller.getSpace() });
+    const handlerRef = runtime.patternManager.getArtifactEntryRef(
+      handlerPattern,
+    )!;
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw("patternIdentity", {
+        identity: handlerRef.identity,
+        symbol: handlerRef.symbol,
+      }, rawMetaWriteAuthorization);
+      root.withTx(tx).setMetaRaw(
+        "patternSetupIdentity",
+        undefined,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+
+    await controller.ensureDefaultPattern();
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(handlerRef.identity);
+    (after.key("bump") as unknown as { send: (e: unknown) => void }).send({});
+    await runtime.idle();
+    await (after as unknown as { pull: () => Promise<unknown> }).pull();
+    const afterEvent = (await controller.getDefaultPattern(false))!;
+    expect(afterEvent.key("count").get()).toBe(1);
+  });
+
   it("swaps in a pattern whose argument adds an owner-protected defaulted field", async () => {
     await setupHome();
     expect(runtime.cfcEnforcementMode).not.toBe("disabled");

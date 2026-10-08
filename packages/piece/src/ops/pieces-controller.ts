@@ -57,7 +57,6 @@ import {
   PatternSetupPostCommitError,
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
-  type RunnerStartOptions,
   Runtime,
   runtimePresets,
   RuntimeProgram,
@@ -1759,12 +1758,11 @@ export class PiecesController<T = unknown> {
    * {@link getPieceCell}; a `Cell` argument already carries one.
    * In view-scoped mode this synchronizes the name and opaque UI tip; the
    * retained root watch demands server execution, while mounted renderers
-   * own local graph registration. `options` passes to `Runtime.start()`.
+   * own local graph registration.
    */
   async startPiece<T = unknown>(
     pieceOrId: string | Cell<T>,
     scope?: CellScope,
-    options?: RunnerStartOptions,
   ): Promise<void> {
     const piece = typeof pieceOrId === "string"
       ? await timePiecePhase(
@@ -1782,7 +1780,7 @@ export class PiecesController<T = unknown> {
     }
     await timePiecePhase(
       "startPiece.runtime.start",
-      () => this.runtime.start(piece, options),
+      () => this.runtime.start(piece),
     );
     await timePiecePhase(
       "startPiece.result.pull",
@@ -2480,10 +2478,7 @@ export class PiecesController<T = unknown> {
       if (staleSetup !== undefined) throw new Error(staleSetup);
       await timePiecePhase(
         "ensureDefaultPattern.startPiece",
-        // A start that fails is the repair below's to take up, so the start
-        // leaves the root's stored setup as it is.
-        () =>
-          this.startPiece(rootToStart, undefined, { callerRepairsSetup: true }),
+        () => this.startPiece(rootToStart),
       );
     } catch (startError) {
       // Cold-start setup repair. Two paths move patternIdentity WITHOUT

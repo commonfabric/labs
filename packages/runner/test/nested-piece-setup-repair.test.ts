@@ -56,11 +56,9 @@ describe("nested-piece-setup-repair", () => {
   // marker names V1 and the manifest lacks the stream V3's `bump` registers
   // on. `Runner.#startCore()` reads exactly that state and re-runs the pinned
   // pattern's OWN setup before instantiating — the same repair the home ROOT
-  // gets in startEnsuredDefaultPattern, here for every start whose caller
-  // repairs nothing of its own. The repair moves no durable identity pointer;
-  // it replays the pattern the pointer already names. A caller with a repair
-  // of its own, as the PieceController is for the root it opens, says so with
-  // `callerRepairsSetup`, and the start leaves the piece's setup as stored.
+  // gets in startEnsuredDefaultPattern, here for every start, a space's root
+  // included. The repair moves no durable identity pointer; it replays the
+  // pattern the pointer already names.
 
   let storageManager: ReturnType<typeof StorageManager.emulate>;
 
@@ -251,23 +249,6 @@ describe("nested-piece-setup-repair", () => {
       expect(manifestOf(cell)).not.toEqual(manifest);
       expect(await bumpAndCount(cell)).toBe(1);
       await rt.storageManager.synced();
-    } finally {
-      await rt.dispose();
-    }
-  });
-
-  it("leaves the manifest as stored for a caller that repairs the setup itself", async () => {
-    const rt = newRuntime();
-    try {
-      const { cell } = await nestedPieceSetUpForV1(rt);
-      const manifest = manifestOf(cell);
-
-      expect(await rt.start(cell, { callerRepairsSetup: true })).toBe(true);
-      await cell.pull();
-      await rt.storageManager.synced();
-
-      // The repair would have added the stream `bump` registers on.
-      expect(manifestOf(cell)).toEqual(manifest);
     } finally {
       await rt.dispose();
     }

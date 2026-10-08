@@ -404,13 +404,11 @@ type StartAttempt = {
   readonly generationsByDoc: Map<string, number>;
   readonly preResolutionStopKeys: Set<string>;
 
-  /**
-   * Parent demand and synchronization context for a retained child, and what
-   * the caller of `start()` asked of the start.
-   */
-  readonly options?:
-    & Pick<RunnerRunOptions, "parentPieceRootId" | "awaitSyncBeforeInitialRun">
-    & RunnerStartOptions;
+  /** Parent demand and synchronization context for a retained child. */
+  readonly options?: Pick<
+    RunnerRunOptions,
+    "parentPieceRootId" | "awaitSyncBeforeInitialRun"
+  >;
 
   // The result this attempt resolved to, which a link start only learns by
   // following the link.
@@ -1721,20 +1719,6 @@ export type RunnerRunOptions = {
   // mark for this run's transaction and withdraws none the transaction
   // carries, so such a run takes a transaction of its own.
   attributeInitialization?: boolean;
-};
-
-/** Options for `Runner.start()`. */
-export type RunnerStartOptions = {
-  /**
-   * Whether the caller repairs the piece's stored setup itself when the start
-   * fails. A start resumes a stored piece without running its setup, and
-   * repairs one whose stored setup does not cover its pattern by running that
-   * setup again before instantiating it. With this set, it leaves the stored
-   * setup as it is, for a caller whose own repair can do more than run the
-   * same setup again. A call that joins a start already in flight for the
-   * same piece runs under that start's options, not its own.
-   */
-  callerRepairsSetup?: boolean;
 };
 
 // The relaxed copy of a handler's argument schema, built once per schema
@@ -4036,10 +4020,7 @@ export class Runner {
    * they run separate resolutions and converge at the registration guard
    * before instantiation.
    */
-  start<T = any>(
-    resultCell: Cell<T>,
-    options?: RunnerStartOptions,
-  ): Promise<boolean> {
+  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
     const startKey = this.#getDocKey(resultCell);
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     if (
@@ -4048,7 +4029,6 @@ export class Runner {
       return inFlight.settled;
     }
     const attempt: StartAttempt = {
-      options,
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
@@ -4474,8 +4454,6 @@ export class Runner {
       awaitSyncBeforeInitialRun?: boolean;
       // See RunnerRunOptions.parentPieceRootId.
       parentPieceRootId?: string;
-      // See RunnerStartOptions.callerRepairsSetup.
-      callerRepairsSetup?: boolean;
     } = {},
   ): Cancel {
     const {
@@ -5428,13 +5406,9 @@ export class Runner {
     // materialized — a handler's stream among them — have no manifest entry
     // and no result projection reaching them, and nothing about the stored
     // doc changes on its own. A fresh run() would materialize them, and this
-    // repair does the same for every start whose caller repairs nothing of
-    // its own: a piece that is its space's root, as a profile is, reaches
-    // here from the start walk as readily as a nested one. A caller that does
-    // repair the setup itself says so (`callerRepairsSetup`), as
-    // startEnsuredDefaultPattern does for the root it opens, and the start
-    // then leaves the stored setup to that caller's richer repair, which can
-    // roll the root forward where running the same setup again cannot.
+    // repair does the same for every piece, whatever starts it: a space's root
+    // is repaired as a nested piece is, a profile that is its space's root
+    // among them.
     //
     // The trigger is that stored state and nothing else: a setup-completion
     // marker that does not name this version, and a manifest missing one of
@@ -5470,8 +5444,7 @@ export class Runner {
             ref,
             this.#sessionPatternPointer(resultCell),
           ) !== "matches" &&
-        !this.#storedManifestCovers(resultCell, pattern) &&
-        options.callerRepairsSetup !== true
+        !this.#storedManifestCovers(resultCell, pattern)
       ) {
         setupRepair = {
           pattern,

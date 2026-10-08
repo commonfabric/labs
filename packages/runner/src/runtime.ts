@@ -145,7 +145,6 @@ import {
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
-  type RunnerStartOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -4650,11 +4649,8 @@ export class Runtime {
     );
   }
 
-  start<T = any>(
-    resultCell: Cell<T>,
-    options?: RunnerStartOptions,
-  ): Promise<boolean> {
-    return this.runner.start(resultCell, options);
+  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
+    return this.runner.start(resultCell);
   }
 
   /**
