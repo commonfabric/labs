@@ -257,8 +257,8 @@ It holds the user's index of chat rooms: `rooms`, every room they belong to and
 haven't forgotten; `direct`, the direct room shared with each counterpart, by
 principal; `requests`, the outcome of each request but a report that a notice
 was delivered, which records none; and `outgoingNotices`, the notices its
-requests produced for a client to deliver. It creates each room in
-a space of its own. Everything it holds is private to the user, as the home
+requests produced for a client to deliver. It creates each room as the root
+of a space of its own. Everything it holds is private to the user, as the home
 space is.
 
 Home holds it but renders it nowhere of its own: a page shows it at its path

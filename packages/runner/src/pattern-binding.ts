@@ -53,7 +53,12 @@ import {
   sigilLinkAddressOnly,
 } from "./link-utils.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { isCellScope, narrowerScopeCap, scopeRank } from "./scope.ts";
+import {
+  CELL_SCOPES,
+  isCellScope,
+  narrowerScopeCap,
+  scopeRank,
+} from "./scope.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
   internalVerifierRead,
@@ -241,6 +246,51 @@ const descriptorForPartialCauseAlias = (
 };
 
 /**
+ * The scopes a stored chain of links at `ref` already places this output
+ * through: each link followed, from `ref`, to `ref`'s own address at a
+ * narrower scope, in the order followed. Empty when `ref` holds no such link.
+ *
+ * A broad output location that holds a link to its own narrower-scoped
+ * instance was written by a computation whose reads narrowed. A later run
+ * whose reads did not narrow that far, in this process or another, still
+ * writes behind the chain rather than over any link of it: the links are
+ * what every reader of the broad location follows to its own instance, and
+ * replacing one with a plain value, or with a hop past an intermediate
+ * instance, would make the next reader whose reads narrow put it back, with
+ * no run ever converging. The probe's reads are an internal write-placement
+ * decision, kept out of scheduling and CFC taint; each link it accepts as a
+ * hop is then read once more as the steering read, so the slot's label
+ * reaches the write.
+ */
+function storedOutputChain(
+  tx: IExtendedStorageTransaction,
+  ref: NormalizedFullLink,
+): CellScope[] {
+  const chain: CellScope[] = [];
+  let at = ref;
+  for (let hops = 0; hops < CELL_SCOPES.length; hops++) {
+    const stored = tx.readValueOrThrow(at, {
+      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    });
+    const link = isCellLink(stored) ? parseLink(stored, at) : undefined;
+    if (
+      link === undefined || link.id !== ref.id || link.space !== ref.space ||
+      !deepEqual(link.path, ref.path) ||
+      scopeRank(link.scope) <= scopeRank(at.scope)
+    ) {
+      return chain;
+    }
+    // A link accepted as a hop steers the write, so the slot is read again
+    // without the exclusion and its own label gates what the write carries
+    // behind it (cfc-write-destination-reads.md, the steering read).
+    tx.readValueOrThrow(at, { meta: ignoreReadForScheduling });
+    chain.push(link.scope);
+    at = { ...ref, scope: link.scope };
+  }
+  return chain;
+}
+
+/**
  * Sends a value to a binding. If the binding is an array or object, it'll
  * traverse the binding and the value in parallel accordingly. If the binding is
  * an alias, it will follow all aliases and send the value to the last aliased
@@ -349,7 +399,57 @@ function sendValueToBindingInner<T>(
       "writeRedirect",
       { preserveOverwrite: true },
     );
+    const chain = storedOutputChain(tx, ref);
+    const stored = chain.at(-1);
     const outputScope = options.narrowestReadScope;
+    if (
+      stored !== undefined &&
+      (outputScope === undefined ||
+        scopeRank(stored) >= scopeRank(outputScope))
+    ) {
+      // The chain of links already in place reaches an instance at least
+      // as narrow as this run's reads did. The result lands there, and the
+      // links of the chain stay where they point: the broad slot's hop, and
+      // any intermediate hop another principal follows, are what every
+      // reader uses to reach an instance of its own. The one addition is
+      // below: a chain one hop deep gains the via-user hop under server
+      // execution.
+      const storedRef = { ...ref, scope: stored };
+      const valueLink = isCellLink(value) ? parseLink(value, ref) : undefined;
+      if (
+        valueLink === undefined ||
+        !areNormalizedLinksSame(valueLink, storedRef)
+      ) {
+        diffAndUpdate(
+          cellRuntime(cell),
+          tx,
+          storedRef,
+          value,
+          { cell: cell.getAsNormalizedFullLink(), binding },
+          { meta: ignoreReadForScheduling, schemaRole: "output" },
+        );
+      }
+      // A chain written one hop deep, space straight to session, gains the
+      // via-user hop scopes.md §2 requires of every chain under server
+      // execution: the user instance redirects to the session instance, and
+      // the broad slot redirects to the user instance. The session instance
+      // and what reaches it are unchanged.
+      if (
+        getServerExecutionConfig() && stored === "session" &&
+        ref.scope === "space" && !chain.includes("user")
+      ) {
+        const userRef = { ...ref, scope: "user" as const };
+        tx.writeValueOrThrow(
+          userRef,
+          createSigilLinkFromParsedLink(storedRef, { base: userRef }),
+        );
+        tx.writeValueOrThrow(
+          bindingLink,
+          createSigilLinkFromParsedLink(userRef, { base: bindingLink }),
+        );
+      }
+      return;
+    }
     if (
       outputScope !== undefined &&
       scopeRank(outputScope) > scopeRank(ref.scope)
