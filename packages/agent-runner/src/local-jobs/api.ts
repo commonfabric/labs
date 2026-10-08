@@ -8,9 +8,12 @@
  * - `GET /health` — the lane is serving.
  * - `POST /jobs` — enqueue `{caller, profile, idempotencyKey, task,
  *   instructions?, context?, resultSchema, tools?, maxModelTurns?,
- *   browserHost?}`;
+ *   browserHost?, continues?}`;
  *   answers `201` with the new job, or `200` with the one the key already
- *   names for the same request.
+ *   names for the same request. `continues` names an ended job of the same
+ *   caller and profile whose history the new job runs with: a job no such
+ *   caller and profile hold answers `404` (`not_found`), and one that has not
+ *   ended answers `409` (`parent_running`).
  * - `GET /jobs?limit=n` — the newest jobs, newest first.
  * - `GET /jobs/<id>` — one job.
  * - `POST /jobs/<id>/cancel` — ask a job to stop.
@@ -24,6 +27,7 @@
  * - `POST /jobs/<id>/browser/result` — `{id, result}`, the host's answer to
  *   one operation.
  *
+ * A job, wherever it is answered, carries `continues` when it continues one.
  * A refusal is `{ok: false, code, error}` with a 4xx status.
  */
 
@@ -117,6 +121,7 @@ const enqueueRequestOf = (
     tools,
     maxModelTurns,
     browserHost,
+    continues,
   } = value as Record<string, unknown>;
   const name = (field: unknown) =>
     typeof field === "string" && field.length > 0 &&
@@ -152,6 +157,9 @@ const enqueueRequestOf = (
   if (browserHost !== undefined && !isObjectNotArray(browserHost)) {
     return { error: "`browserHost` must be an object." };
   }
+  if (continues !== undefined && !name(continues)) {
+    return { error: "`continues` must be a job id." };
+  }
   return {
     caller: caller as string,
     profile: profile as string,
@@ -166,6 +174,7 @@ const enqueueRequestOf = (
       ...(browserHost !== undefined
         ? { browserHost: browserHost as Record<string, unknown> }
         : {}),
+      ...(continues !== undefined ? { continues: continues as string } : {}),
     },
   };
 };
@@ -455,6 +464,25 @@ async (request: Request): Promise<Response> => {
       const narrowed = narrowLocalJobProfile(profile, read.request);
       if ("refusal" in narrowed) {
         return refuse(400, "beyond_profile", narrowed.refusal);
+      }
+      const { continues } = read.request;
+      if (continues !== undefined) {
+        const parent = store.get(continues);
+        // Another caller's or profile's job is answered as no job at all,
+        // so a request learns nothing of a lane it does not run in.
+        if (
+          parent === undefined || parent.caller !== read.caller ||
+          parent.profile !== read.profile
+        ) {
+          return refuse(404, "not_found", `No job \`${continues}\`.`);
+        }
+        if (!LOCAL_JOB_TERMINAL_STATES.has(parent.state)) {
+          return refuse(
+            409,
+            "parent_running",
+            `Job \`${continues}\` has not ended; a job continues one that has.`,
+          );
+        }
       }
       const enqueued = store.enqueue(
         read.caller,

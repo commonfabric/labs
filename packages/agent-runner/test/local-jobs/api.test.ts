@@ -39,6 +39,7 @@ const apiWith = (
     fabricLane?: () => boolean;
     heartbeatMs?: number;
     browserHost?: (id: string) => LocalJobBrowserHost | undefined;
+    profiles?: Map<string, LocalJobProfile>;
   } = {},
 ) => {
   const store = LocalJobStore.open(":memory:");
@@ -184,6 +185,8 @@ describe("local-jobs/api", () => {
       ["tools that are not names", { ...BODY, tools: [1] }],
       ["a turn count below one", { ...BODY, maxModelTurns: 0 }],
       ["a fractional turn count", { ...BODY, maxModelTurns: 1.5 }],
+      ["a continued job that is not an id", { ...BODY, continues: 1 }],
+      ["an empty continued job", { ...BODY, continues: "" }],
     ];
     for (const [what, body] of invalid) {
       it(`returns 400 for ${what}`, async () => {
@@ -208,6 +211,165 @@ describe("local-jobs/api", () => {
         task: "t",
         resultSchema: true,
       });
+    });
+  });
+
+  describe("POST /jobs continuing a job", () => {
+    /**
+     * Helper for tests, which builds the API with a second profile and adds
+     * one job, ended `completed` unless `state` says otherwise.
+     */
+    const withParent = async (
+      state: "completed" | "queued" | "running" = "completed",
+    ) => {
+      const api = apiWith({
+        profiles: new Map([["ask", ASK], ["other", ASK]]),
+      });
+      const { job } = await (await api.post("/jobs", BODY)).json();
+      if (state !== "queued") api.store.claimNext();
+      if (state === "completed") {
+        api.store.finish(job.id, {
+          state: "completed",
+          result: { answer: "Saturn" },
+        });
+      }
+      return { ...api, parent: job.id as string };
+    };
+
+    /** A reply's body, continuing `parent`. */
+    const reply = (parent: string) => ({
+      ...BODY,
+      idempotencyKey: "weaver-ask:2",
+      task: "And its largest moon?",
+      continues: parent,
+    });
+
+    it("returns 201 with a job that names the one it continues, and 200 with it again for the same request", async () => {
+      const { post, parent, kicked } = await withParent();
+
+      const first = await post("/jobs", reply(parent));
+      const again = await post("/jobs", reply(parent));
+
+      expect(first.status).toBe(201);
+      const { job } = await first.json();
+      expect(job).toMatchObject({
+        continues: parent,
+        state: "queued",
+        request: { task: "And its largest moon?", continues: parent },
+      });
+      expect(again.status).toBe(200);
+      expect((await again.json()).job.id).toBe(job.id);
+      expect(kicked).toEqual(["kick", "kick"]);
+    });
+
+    it("returns 409 for a key resent continuing another job", async () => {
+      const { post, parent, store } = await withParent();
+      await post("/jobs", reply(parent));
+      const other = (await (await post("/jobs", {
+        ...BODY,
+        idempotencyKey: "weaver-ask:3",
+      })).json()).job.id;
+      // The reply is queued ahead of it.
+      store.claimNext();
+      store.claimNext();
+      store.finish(other, { state: "failed", errorCode: "PROVIDER_FAILURE" });
+
+      const response = await post("/jobs", reply(other));
+
+      expect(response.status).toBe(409);
+      expect((await response.json()).code).toBe("idempotency_conflict");
+    });
+
+    it("returns 404, adding nothing, for a job no caller holds", async () => {
+      const { post, store } = await withParent();
+
+      const response = await post("/jobs", reply("job-missing"));
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({
+        ok: false,
+        code: "not_found",
+        error: "No job `job-missing`.",
+      });
+      expect(store.list(10)).toHaveLength(1);
+    });
+
+    it("returns 404, as for no job, for another caller's or another profile's job", async () => {
+      const { post, parent, store } = await withParent();
+
+      const caller = await post("/jobs", {
+        ...reply(parent),
+        caller: "moments",
+      });
+      const profile = await post("/jobs", {
+        ...reply(parent),
+        profile: "other",
+      });
+
+      for (const response of [caller, profile]) {
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({
+          ok: false,
+          code: "not_found",
+          error: `No job \`${parent}\`.`,
+        });
+      }
+      expect(store.list(10)).toHaveLength(1);
+    });
+
+    it("returns 409, adding nothing, for a job that is queued or running", async () => {
+      for (const state of ["queued", "running"] as const) {
+        const { post, parent, store } = await withParent(state);
+
+        const response = await post("/jobs", reply(parent));
+
+        expect(response.status).toBe(409);
+        expect((await response.json()).code).toBe("parent_running");
+        expect(store.list(10)).toHaveLength(1);
+      }
+    });
+
+    it("accepts a job that ended any way", async () => {
+      const { post, store } = apiWith();
+      const ended = [];
+      for (const ending of ["failed", "cancelled", "interrupted"] as const) {
+        const { job } = await (await post("/jobs", {
+          ...BODY,
+          idempotencyKey: `weaver-ask:${ending}`,
+        })).json();
+        store.claimNext();
+        store.finish(job.id, {
+          state: ending,
+          errorCode: "PROVIDER_FAILURE",
+        });
+        ended.push(job.id);
+      }
+
+      for (const [index, parent] of ended.entries()) {
+        const response = await post("/jobs", {
+          ...reply(parent),
+          idempotencyKey: `weaver-reply:${index}`,
+        });
+        expect(response.status).toBe(201);
+      }
+    });
+
+    it("carries what a job continues in the one-job and list answers, and nothing for one that continues none", async () => {
+      const { post, call, parent } = await withParent();
+      const { job } = await (await post("/jobs", reply(parent))).json();
+
+      const one = (await (await call(`/jobs/${job.id}`)).json()).job;
+      const first = (await (await call(`/jobs/${parent}`)).json()).job;
+      const list = (await (await call("/jobs")).json()).jobs;
+
+      expect(one.continues).toBe(parent);
+      expect(first).not.toHaveProperty("continues");
+      expect(
+        list.map((entry: { id: string; continues?: string }) => [
+          entry.id,
+          entry.continues,
+        ]),
+      ).toEqual([[job.id, parent], [parent, undefined]]);
     });
   });
 
