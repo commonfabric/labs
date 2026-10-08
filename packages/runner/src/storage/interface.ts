@@ -3482,9 +3482,11 @@ export type PullError =
 /** A serving runtime's refusal of a scoped read of a space other than its home
  * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
  * scope and the runtime's serving posture decide it, never transport or session
- * state, so the same read from the same runtime is refused every time. A served
- * event whose required load meets it terminalizes at once instead of spending
- * the delivery-failure budget (events.md §5). */
+ * state, so the same read from the same runtime is refused every time. So it is
+ * no load in flight: the storage manager registers no pending load for it, and
+ * a served event whose declared inputs reach the document dispatches with it
+ * unread (events.md §5). Where it does reach a load failure, it is permanent
+ * evidence rather than a retryable `connection` failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
 }

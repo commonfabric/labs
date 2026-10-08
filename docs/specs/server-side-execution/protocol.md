@@ -506,10 +506,10 @@ whose lease it does not hold — the shape that would silently resolve
 `user:<serviceDID>`. Cross-space serving therefore reads foreign
 SPACE-scope state freely (§2b's free-read row) and foreign SCOPED
 state not at all; lifting that refusal is exactly the grant
-resolution above, never a lease-trust widening. Refusal (i) is typed
-as permanent for served delivery: a served event whose required load
-meets it terminalizes at once (events.md §5). Remote attestation
-stays anticipated future work.
+resolution above, never a lease-trust widening. Refusal (i) is no load
+for served delivery to wait on: a served event whose declared inputs
+reach such a document dispatches with it unread, and reads it as absent
+(events.md §5). Remote attestation stays anticipated future work.
 
 **Run identity for a derivation (S1).** A derivation runs PER
 DEMANDED INSTANCE and the DEMAND supplies the identity — a

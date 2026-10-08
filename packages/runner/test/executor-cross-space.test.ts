@@ -2096,6 +2096,48 @@ describe("Phase 5 cross-space serving", () => {
     }
   });
 
+  it("a serving manager registers no pending load for a foreign scoped read its provider refuses, so nothing parks on the refusal", async () => {
+    // A served event's preflight parks on the closure documents with a load
+    // in flight. A refused read returns no data however long it is waited
+    // for, so a park on one would decide the event by whether the refusal
+    // had landed yet. Each load registers before the first `await` of the
+    // call making it, so the ledger read right after the calls holds exactly
+    // the loads that registered.
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    try {
+      const identity = { principal: aliceSigner.did() };
+      const loads = [
+        manager.syncInstance({
+          space: foreignSpace,
+          id: "of:x-pending-scoped" as never,
+          scope: "user",
+        }, identity),
+        manager.syncInstance({
+          space: foreignSpace,
+          id: "of:x-pending-plain" as never,
+        }, identity),
+        manager.syncInstance({
+          space: homeSpace,
+          id: "of:x-pending-home-scoped" as never,
+          scope: "user",
+        }, identity),
+      ];
+      const pending = manager.pendingLoadAddresses().map((address) =>
+        `${address.space} ${address.id}`
+      );
+      await Promise.all(loads);
+
+      expect(pending).not.toContain(`${foreignSpace} of:x-pending-scoped`);
+      expect(pending).toContain(`${foreignSpace} of:x-pending-plain`);
+      expect(pending).toContain(`${homeSpace} of:x-pending-home-scoped`);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("passes foreign scoped cell handles through served events without reading their targets", async () => {
     clientManager = SharedServerStorageManager.connectTo(server, {
       as: aliceSigner,
@@ -2256,6 +2298,9 @@ export default pattern<
     // The sibling of the pass-through test above, with one difference: the
     // handle's declared schema has a shape, so the dependency preflight
     // follows the link into the target. The handler body never reads it.
+    // The serving runtime refuses every foreign scoped read, and a refused
+    // read is no load in flight, so the preflight has nothing to park on and
+    // the event runs, as the pass-through event does.
     const compiled = await clientRuntime.patternManager.compilePattern({
       main: "/main.tsx",
       files: [{
@@ -2312,16 +2357,11 @@ export default pattern<
           entry.consequenced || entry.deliveryDeferral !== undefined
         ),
     );
-    // The serving runtime refuses every foreign scoped read, so the load can
-    // never succeed here. Either the event runs or its failure is recorded
-    // as permanent; a deferral without permanent evidence waits out the whole
-    // delivery-failure budget, and holds the space's later events with it.
+    // A deferral would wait out the whole delivery-failure budget, and hold
+    // the space's later events with it.
     const [first] = entries();
-    expect(
-      first.consequenced === true ||
-        first.deliveryDeferral?.permanentEvidence === true,
-      `entry: ${JSON.stringify(first.deliveryDeferral)}`,
-    ).toBe(true);
+    expect(first.deliveryDeferral).toBeUndefined();
+    expect(first.consequenced).toBe(true);
 
     const later = clientRuntime.getCell(homeSpace, "declared-local-reference");
     result.key("add").send({ piece: later });
@@ -2332,19 +2372,16 @@ export default pattern<
         entries().length === 2 &&
         entries().every((entry) => entry.consequenced),
     );
-    expect(entries()[0]).toMatchObject({
-      status: "needs-attention",
-      attention: {
-        phase: "dispatch-load",
-        failureClass: "protocol",
-        code: "permanent-delivery-failure",
-      },
-    });
+    expect(entries()[0].status).toBeUndefined();
     const stored = readDoc(engine, {
       id: argument.getAsNormalizedFullLink().id,
     })?.value as { links: unknown[] };
-    expect(stored.links).toHaveLength(1);
+    expect(stored.links).toHaveLength(2);
     expect(parseLink(stored.links[0])).toMatchObject({
+      id: target.getAsNormalizedFullLink().id,
+      space: foreignSpace,
+    });
+    expect(parseLink(stored.links[1])).toMatchObject({
       id: later.getAsNormalizedFullLink().id,
     });
   });

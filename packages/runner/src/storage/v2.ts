@@ -1882,8 +1882,7 @@ export class StorageManager implements IStorageManager {
         // Phase 5's producer-side foreign-scoped-read refusal: only a
         // serving manager sets a home space, and only its FOREIGN
         // providers refuse (see Options.servingHomeSpace).
-        refuseForeignScopedReads: this.#servingHomeSpace !== undefined &&
-          this.#servingHomeSpace !== space,
+        refuseForeignScopedReads: this.#refusesForeignScopedReadsIn(space),
         storeReadThrough: () => this.#storeReadThroughs.get(space),
         routeState,
         createSession: this.#sessionFactory.supportsAclBootstrap === true
@@ -2443,11 +2442,24 @@ export class StorageManager implements IStorageManager {
   }
 
   /**
+   * Whether this manager's provider for `space` refuses scoped reads: a
+   * serving manager reads no foreign space's scoped instances (see
+   * `Options.servingHomeSpace`).
+   */
+  #refusesForeignScopedReadsIn(space: MemorySpace): boolean {
+    return this.#servingHomeSpace !== undefined &&
+      this.#servingHomeSpace !== space;
+  }
+
+  /**
    * Registers one pending load of `address` and returns its release step,
    * which takes the load's failure if it had one. The release that brings
    * the key's count back to zero settles the key's waiters and, when no
    * failure was recorded, reports the recovery epoch to
-   * `loadRecoveryObserver`.
+   * `loadRecoveryObserver`. A scoped read of a space whose provider refuses
+   * such reads registers nothing, and its release does nothing: the read
+   * returns no data however long it is waited for, so it is not a load in
+   * flight, and nothing parks on it.
    */
   #registerPendingLoad(
     address: {
@@ -2461,6 +2473,12 @@ export class StorageManager implements IStorageManager {
       scopeKey?: ScopeKey;
     },
   ): (failure?: unknown) => void {
+    if (
+      normalizeCellScope(address.scope) !== "space" &&
+      this.#refusesForeignScopedReadsIn(address.space)
+    ) {
+      return () => {};
+    }
     const key = entityKey(address, this.scopeKeyIdentity());
     let entry = this.#pendingLoads.get(key);
     if (entry === undefined) {
@@ -5729,9 +5747,11 @@ export class SpaceReplica
     // persistently attempted one foreign scoped read. Refusing the
     // OFFENDING caller's pull keeps the refusal action-scoped, the
     // arc's standing refusal convention. The refusal is typed rather than
-    // a `ConnectionError`: it can never heal in this runtime, so a served
-    // event whose required load meets it terminalizes at once
-    // (`toReplicaLoadFailureError`).
+    // a `ConnectionError`: it can never heal in this runtime. For the same
+    // reason the manager registers no pending load for such a read
+    // (`#registerPendingLoad()`), so a served event's preflight never parks
+    // on one: the event dispatches with the document unread, whenever the
+    // refusal lands relative to the preflight.
     if (this.#refuseForeignScopedReads) {
       for (const [address] of normalizedEntries) {
         const scope = normalizeCellScope(address.scope) ?? "space";
