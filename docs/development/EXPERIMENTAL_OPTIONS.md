@@ -783,7 +783,12 @@ holds the measurements and the conditions for revisiting.
   advertises `connectionAuth` independently of this flag. Direct toolshed
   advertises it under the flag. A client with the flag on against a server
   that does not advertise `connectionAuth` still shares the connection,
-  and signs each `session.open` on it, one at a time.
+  and signs each `session.open` on it, one at a time. One runner does not
+  follow the flag: the toolshed's own in-process runtime always dials
+  dedicated connections to `MEMORY_URL` (`createToolshedRuntime` in
+  `packages/toolshed/runtime-options.ts`), because under Mode A that address
+  routes by the space in it; the posture the toolshed publishes still
+  carries the flag.
 - **Current default and planned end state.** Off by default. A deployment
   that routes a memory connection to a toolshed by the space its address
   names cannot serve a connection that carries several spaces, so the flag
@@ -811,8 +816,11 @@ holds the measurements and the conditions for revisiting.
   and `env.test.ts`, `packages/toolshed/routes/shell/shell.test.ts` and
   `packages/runner/test/deployment-meta.test.ts`.
 - **Path to removal.** Turn the default on once every deployment serves
-  shared connections; then remove the env mapping, the runtime option and its
-  authority entry, the shell define and its `SHELL_FLAG_SOURCES` entry,
+  shared connections, and point every toolshed's `MEMORY_URL` at its router
+  (infra#244) so the toolshed's own runtime no longer needs the
+  connection-per-space path; then remove the env mapping, the runtime option
+  and its authority entry, the shell define and its `SHELL_FLAG_SOURCES`
+  entry, the toolshed's override in `createToolshedRuntime`,
   `RemoteSessionFactory`'s connection-per-space path, and the `?space=`
   address parameter.
 

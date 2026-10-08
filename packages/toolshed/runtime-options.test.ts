@@ -1,4 +1,5 @@
 import { assertEquals, assertStrictEquals } from "@std/assert";
+import { spy } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import type { Runtime, RuntimeOptions } from "@commonfabric/runner";
@@ -158,6 +159,52 @@ Deno.test("createToolshedRuntime publishes the posture it resolved", async () =>
     assertEquals(
       posture?.serverExecution,
       SERVER_EXECUTION_DEFAULT_ENABLED,
+    );
+  } finally {
+    await runtime?.dispose();
+    await storageManager.close();
+    publishExperimentalPosture(null);
+    publishCfcPosture(null);
+  }
+});
+
+Deno.test("createToolshedRuntime declares dedicated connections for its own storage manager", async () => {
+  // Under routed Mode A MEMORY_URL routes by the space in the address, so the
+  // toolshed's own storage manager dials dedicated connections whatever the
+  // deployment's flag says (runtime-options.ts), while the posture it
+  // publishes still carries the flag for the clients that open Memory on the
+  // router. The manager keeps the choice private, so observe what the
+  // construction path declares on it.
+
+  const signer = await Identity.fromPassphrase(
+    "runtime-options-own-memory-test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  using declared = spy(storageManager, "setSharedMemoryConnection");
+  publishExperimentalPosture(null);
+  let runtime: Runtime | undefined;
+  try {
+    runtime = createToolshedRuntime(
+      {
+        MEMORY_URL: "http://memory.test:8000/",
+        API_URL: "http://api.test:9000/",
+        OTEL_ENABLED: false,
+        OTEL_SERVICE_NAME: "toolshed-test",
+        ENV: "test",
+      },
+      storageManager,
+      (name) =>
+        name === "EXPERIMENTAL_SHARED_MEMORY_CONNECTION" ? "true" : undefined,
+    );
+    // The Runtime resolved the deployment's flag and `/api/meta` publishes it
+    // unchanged.
+    assertEquals(runtime.experimental.sharedMemoryConnection, true);
+    assertEquals(experimentalPosture()?.sharedMemoryConnection, true);
+    // The Runtime declared that flag on the manager; the toolshed then
+    // declared dedicated connections for its own sessions, before any opened.
+    assertEquals(
+      declared.calls.map((call) => call.args[0]),
+      [true, false],
     );
   } finally {
     await runtime?.dispose();

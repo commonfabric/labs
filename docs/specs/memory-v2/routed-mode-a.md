@@ -75,16 +75,36 @@ router out in this order:
    define of the same name unset, and the same binary serves a deployment
    that routes by space with sharing off. A shell tab opened before the
    restart keeps the value its page carried until it reloads.
-5. Stop the app host forwarding `/api/storage/memory` to the toolsheds, and
-   close the toolsheds' public direct Memory listeners (see the infra router
-   README), once the app host's access log has shown no WebSocket upgrade on
-   `/api/storage/memory` for seven days. Until then some clients still open
-   Memory on the API host: `cf` binaries and connector hosts built before the
-   memory URL existed, CDN shell copies built before it, shell tabs opened
-   before step 2, and any client that could not read `/api/meta` when it
-   started, which logs a `[deployment-meta]` warning naming the API host. A
-   client that only signs direct session opens cannot use the router at all,
-   so it is one of these until it is updated.
+
+   The toolshed's own runtime (webhooks, ingest, pattern lifecycle, OAuth
+   token cells) does not follow the flag: it opens Memory on `MEMORY_URL`, a
+   route that sends `?space=<DID>` to the toolshed owning the space, and a
+   shared connection names no space, lands on whichever toolshed the route
+   defaults to, and is refused for every space that toolshed does not own.
+   So its storage manager always dials dedicated connections
+   (`createToolshedRuntime` in `packages/toolshed/runtime-options.ts`), and
+   the toolsheds installed in step 1 must include that behavior; the flag
+   they publish on `/api/meta` is unchanged.
+5. Close public ingress to `/api/storage/memory`: stop the app host
+   forwarding it to the toolsheds, and close the toolsheds' public direct
+   Memory listeners (see the infra router README), once the app host's access
+   log has shown no WebSocket upgrade on `/api/storage/memory` for seven
+   days. Until then some clients still open Memory on the API host: `cf`
+   binaries and connector hosts built before the memory URL existed, CDN
+   shell copies built before it, shell tabs opened before step 2, and any
+   client that could not read `/api/meta` when it started, which logs a
+   `[deployment-meta]` warning naming the API host. A client that only signs
+   direct session opens cannot use the router at all, so it is one of these
+   until it is updated.
+
+   The toolsheds' own runtimes still open Memory on `MEMORY_URL` (step 4),
+   so this step keeps a loopback-only route to the direct listeners,
+   reachable from the toolshed host alone, that sends `?space=<DID>` to the
+   toolshed owning the space; the direct listener shares the toolshed's main
+   HTTP port, so it is closed per route, not per port. Pointing `MEMORY_URL`
+   at the router instead, which makes the toolsheds routed clients of it and
+   lets the direct route close completely, is the longer-term shape
+   (infra#244).
 
 Each dedicated socket consumes its own isolated worker and source-admission
 slot. A retriable reopen denial holds only its session, which retries on the
@@ -284,7 +304,10 @@ contexts. Remove a router from its tracked allowlist and restart for immediate
 permanent policy withdrawal; in-process `revokeRouter` also persists a key
 tombstone. Production secrets come from managed credentials, and public firewall
 policy must block direct Memory/private endpoints and independently decide every
-toolshed HTTP route.
+toolshed HTTP route. `MEMORY_URL`, which the toolshed's own runtime opens
+Memory on, names a route that sends each space to the toolshed owning it, and
+the toolshed reaches it with dedicated connections whatever the deployment's
+sharing flag says (rollout steps 4 and 5).
 
 `test/routed-router.exercise.ts` is a disposable Linux CLI driven by the Rust
 repository's CI; it uses two real SQLite toolsheds and the actual SDK. Unit

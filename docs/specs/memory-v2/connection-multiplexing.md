@@ -19,7 +19,9 @@ for one space, each with the principal its own open was authorized as.
 
 What ties a connection to a space is the runner. `RemoteSessionFactory`
 (`packages/runner/src/storage/v2-remote-session.ts`) works one of two ways,
-chosen by the `sharedMemoryConnection` flag:
+chosen by the `sharedMemoryConnection` flag (the toolshed's own runtime is the
+exception: it always dials one connection per space, see [routed Mode
+A](routed-mode-a.md) step 4):
 
 - **One connection per space**, the default. Each space gets a
   `WebSocketTransport` and a `Client` of its own, dialed at an address that
