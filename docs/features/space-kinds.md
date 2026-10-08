@@ -66,12 +66,13 @@ kind.
 ## Reading one
 
 `Runtime.spaceKind(space)` returns the kind `space` declares, or `undefined`
-when it declares none. The memory server reports the kind in the result of
-every `session.open` it admits, so whoever can open the space can read it.
-Under the `enforce` access-control mode, that is whoever the space's access
-list admits, with any level of access, and a principal the list admits to
-nothing learns nothing. The `observe` and `off` modes admit more opens, and
-report the kind to each of them.
+when it declares none. Once a space has history, the memory server reports
+its kind in the result of every `session.open` of it that the server admits,
+so whoever can open the space can read it. Under the `enforce` access-control
+mode, that is whoever the space's access list admits, with any level of
+access, and a principal the list admits to nothing learns nothing. The
+`observe` and `off` modes admit more opens, and report the kind to each of
+them.
 
 A session that opens a space with no history yet is told nothing of the kind,
 and is not told when the genesis commit lands. `Runtime.spaceKind()` reads the

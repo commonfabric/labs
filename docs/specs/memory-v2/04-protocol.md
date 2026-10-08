@@ -1296,11 +1296,11 @@ thing that writes one. A create action generates a fresh key pair from random
 data, opens one session authenticated as that key through the same route every
 later session for the DID takes, and commits the genesis document against a
 confirmed absent ACL: the creator as OWNER, together with any grants the
-creator chose (`StorageManager.createSpace(acl, genesis?)`, reached as
-`Runtime.createSpace()`). The key is used for nothing else, and is dropped once
-the commit is confirmed. The creator is the concrete owner, and can later grant
-access to other principals or to `"*"`. Opening a DID that has no history
-writes nothing: it is not a space, and stays that way.
+creator chose (`StorageManager.createSpace(acl, { root?, spaceKind? })`,
+reached as `Runtime.createSpace()`). The key is used for nothing else, and is
+dropped once the commit is confirmed. The creator is the concrete owner, and
+can later grant access to other principals or to `"*"`. Opening a DID that has
+no history writes nothing: it is not a space, and stays that way.
 
 The genesis commit may also declare the space's kind, in the commit's
 `spaceKind` field: a string of lowercase words joined by hyphens, at most 32

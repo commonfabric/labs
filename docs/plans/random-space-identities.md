@@ -16,7 +16,8 @@ either.
 
 Creating a space and opening a space are separate operations.
 
-- **Creating a space.** `StorageManager.createSpace(acl, genesis?)`
+- **Creating a space.**
+  `StorageManager.createSpace(acl, { root?, spaceKind? })`
   ([`packages/runner/src/storage/v2.ts`](../../packages/runner/src/storage/v2.ts))
   generates a key pair from the platform random source, opens one session as
   that key through the same route every later session for the DID takes, and
