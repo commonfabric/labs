@@ -982,7 +982,13 @@ alias names, as the intersection `PerUser<T> & PerUser<T>`, is read by it:
 nothing beside it, as `PerUser<unknown>` resolves to once the checker drops
 `unknown` from its intersection, is the wrapper around `unknown`:
 `{ type: "unknown", scope: "user" }`, as a node naming the wrapper reads it.
-The payload of a wrapper
+`PerUser<{}>` resolves to the same type, as `PerUser<NonNullable<unknown>>`
+does, so read by its type alone, as a record's values are, it is the wrapper
+around `unknown` too, which a read takes for a reference
+(`docs/specs/json_schema.md`, "Non-standard `type` values"); a node naming it,
+written in place or as an alias's declaration, reads `{}` as any `{}` is read:
+`{ type: "object", properties: {}, scope: "user" }`. The scope is the same
+either way. The payload of a wrapper
 read by its brand is its branded members with the brand taken off, each
 alternative a member intersected with the brand read as that member
 (`scopePayloadType`, `GenerationContext.scopeBrandRead`). A payload the
