@@ -111,6 +111,7 @@ describe("startLocalJobs()", () => {
         method: "POST",
         path: "/jobs/:id/browser/result",
       });
+      expect(health.features).toEqual(["continues"]);
       const again = (await call("/health")).body;
       expect(again.readiness).toEqual(health.readiness);
       running.setFabricLane(true);

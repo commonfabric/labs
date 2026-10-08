@@ -5,7 +5,9 @@
  * and every request carries that token as a bearer — so a caller that can
  * name a profile is one the host let in. The routes:
  *
- * - `GET /health` — the lane is serving.
+ * - `GET /health` — the lane is serving; the service's answer also lists
+ *   its routes and its `features`, the request fields a caller must not
+ *   assume from the routes alone (`continues`).
  * - `POST /jobs` — enqueue `{caller, profile, idempotencyKey, task,
  *   instructions?, context?, resultSchema, tools?, maxModelTurns?,
  *   browserHost?, continues?}`;
