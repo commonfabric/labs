@@ -213,11 +213,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
   that narrowing it needs, and the items waiting on platform work.
 - [`compact-space`](compact-space.md) designs the operator tool that shrinks
   one space's revision history after a write storm: materialize a `set` at
-  every selected head, keep every head's address, drop the rows behind it and
-  the commits nothing references, and write the result out with
-  `VACUUM INTO`. Options for what compaction means and what each breaks, the
-  flags, the safety and rollback recipe for Estuary, and the server change
-  that keeps a future storm from degrading the space it hits.
+  every selected head under one `system` compaction commit, keep every head's
+  address, drop the rows behind it, hollow the payloads of commits nothing
+  references outside a retained window while keeping every commit's identity,
+  and write the result out with `VACUUM INTO`. Options for what compaction
+  means and what each breaks, the flags, the safety and rollback recipe for
+  Estuary, and the server change that goes first because it keeps a future
+  storm from degrading the space it hits.
 - [`cf space clone` rehearsal](space-clone-rehearsal.md) records the design for
   rehearsal-grade copies of populated spaces. The tooling has shipped (`cf
   space`, `cf inspect churn`); the operating procedure lives in
