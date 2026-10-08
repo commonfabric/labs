@@ -45,11 +45,11 @@ export default pattern(() => {
     hasText(findNodeByProp(home[UI], "value", "self"), "Self")
   );
   // The chat manager is held in a field of its own, starts with no rooms, and
-  // has no tab of its own.
+  // is shown in a tab of its own.
   const assert_chat_manager_starts_empty = assert(() =>
     home.chatManager.rooms.length === 0 &&
     home.chatManager.outgoingNotices.length === 0 &&
-    findNodeByProp(home[UI], "value", "chats") === undefined
+    hasText(findNodeByProp(home[UI], "value", "chats"), "Chats")
   );
   const action_register_runner = action(() => {
     home.agentQueue.setAgentRunner.send({
