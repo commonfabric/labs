@@ -613,7 +613,11 @@ relocated into the wave's commit step:
   A space created for a run whose home commit never landed is
   remembered by the process that created it and reused on replay there;
   one abandoned by a process that stopped is unreferenced and inert —
-  one access-control document nobody can reach.
+  one access-control document nobody can reach. Only the serving runtime
+  creates a space for a name. A client resolves a name only through its
+  record, so its speculative run of a provisioning handler whose record
+  does not exist yet withdraws rather than creating a space of its own
+  (speculation.md §2).
   Provisioning handlers MUST therefore be deterministic given
   payload + cells — no clock, no randomness (events.md §3); replay
   convergence depends on it. A transformer lint can trail.

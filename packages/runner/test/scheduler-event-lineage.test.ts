@@ -23,7 +23,10 @@ import {
   useCancelGroup,
   useDeferredCancelOwnership,
 } from "../src/cancel.ts";
-import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
+import {
+  InSpaceTargetUnresolved,
+  RetryImmediately,
+} from "../src/scheduler/retry-immediately.ts";
 
 const secondSigner = await Identity.fromPassphrase(
   "scheduler event lineage second space",
@@ -229,7 +232,8 @@ describe("scheduler event lineage", () => {
    * function sending one follow-up under that attempt's transaction, to a
    * stream in `followUpSpace`, the origin's own space by default. The
    * origin event is sent with `retries`, after `beforeSend` runs, and the run
-   * is over once `settled` resolves, or by default once the origin has run as
+   * is over once `settled` resolves (it is handed the count of attempts so
+   * far), or by default once the origin has run as
    * often as `retries` allows a `RetryImmediately` origin to. Returns how many
    * attempts ran, the follow-up payloads delivered, and the warnings
    * reporting a dropped event.
@@ -244,7 +248,7 @@ describe("scheduler event lineage", () => {
       retries?: boolean;
       followUpSpace?: typeof space;
       beforeSend?: () => void;
-      settled?: () => Promise<void>;
+      settled?: (attempts: () => number) => Promise<void>;
     } = {},
   ): Promise<{
     originAttempts: number;
@@ -330,7 +334,7 @@ describe("scheduler event lineage", () => {
         retries,
       );
       if (settled !== undefined) {
-        await settled();
+        await settled(() => originAttempts);
       } else {
         await waitForSchedulerCondition(
           runtime,
@@ -711,6 +715,30 @@ describe("scheduler event lineage", () => {
       );
 
       expect(result.originAttempts).toBe(2);
+      expect(result.delivered).toEqual([]);
+      expect(result.dropWarnings).toEqual([]);
+    });
+
+    it("runs an attempt withdrawn for an unresolved in-space name once, and drops its follow-up without a warning", async () => {
+      // The serving runtime's run of the event creates the space and sends
+      // its own follow-ups, so a client's echo does not run again.
+      const result = await runOrigin(
+        "lineage withdrawn echo",
+        (attempt, sendFollowUp) => {
+          sendFollowUp(attempt);
+          throw new InSpaceTargetUnresolved(["unrecorded"]);
+        },
+        {
+          settled: (attempts) =>
+            waitForSchedulerCondition(
+              runtime,
+              () => attempts() >= 1,
+              "origin did not run",
+            ),
+        },
+      );
+
+      expect(result.originAttempts).toBe(1);
       expect(result.delivered).toEqual([]);
       expect(result.dropWarnings).toEqual([]);
     });

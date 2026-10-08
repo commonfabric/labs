@@ -26,7 +26,7 @@ import {
   type ServerRunInfo,
   spaceCellSchema,
 } from "../src/runtime.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import type {
   DID,
   IExtendedStorageTransaction,
@@ -425,13 +425,15 @@ describe("Phase 5 cross-space serving", () => {
       // A run acting for nobody asked for that space, and is not given it.
       expect(resolvedSync(serving, "ow31-granted-probe")).toBeUndefined();
 
-      // A CLIENT runtime supplies no owner: the space it creates is owned
-      // by its own user.
+      // A CLIENT runtime with server execution off supplies no owner: the
+      // space it creates is owned by its own user. With server execution on
+      // a client creates no space; a test below covers that.
       const client = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: SharedServerStorageManager.connectTo(server, {
           as: aliceSigner,
         }),
+        experimental: { serverExecution: false },
       });
       try {
         const clientDid = await client.resolveInSpaceName(
@@ -2384,6 +2386,76 @@ export default pattern<
     expect(parseLink(stored.links[1])).toMatchObject({
       id: later.getAsNormalizedFullLink().id,
     });
+  });
+
+  it("a client creates no space for a served handler's unrecorded `inSpace(name)`, and its sender's callback settles done once the served handling consequenced", async () => {
+    // The client's speculative echo of the handler finds no record for the
+    // name. It creates no space of its own and withdraws; the serving run
+    // creates the space its record names. The sender's callback reads the
+    // served outcome, not the withdrawn echo's aborted transaction.
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    let clientCreatedSpaces = 0;
+    const createSpace = clientManager.createSpace.bind(clientManager);
+    clientManager.createSpace = (...args) => {
+      clientCreatedSpaces++;
+      return createSpace(...args);
+    };
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, pattern, type Stream, type Writable } from "commonfabric";
+const Room = pattern<{ title: string }, { title: string }>(
+  ({ title }) => ({ title }),
+);
+export default pattern<
+  { rooms: Writable<unknown[]> },
+  { create: Stream<{ title: string }> }
+>(({ rooms }) => ({
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace("lobby")({ title }));
+  }),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+      homeSpace,
+      "in-space-echo-argument",
+    );
+    const result = clientRuntime.getCell<{ create: unknown }>(
+      homeSpace,
+      "in-space-echo-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ rooms: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+
+    const acked = Promise.withResolvers<IExtendedStorageTransaction>();
+    sendEvent(result.key("create"), { title: "lobby" }, acked.resolve);
+    const ackTx = await acked.promise;
+
+    expect(ackTx.status().status).toBe("done");
+    expect(ackTx.handlingReceiptLink).toBeDefined();
+    const engine = await server.engineForSpace(homeSpace);
+    const rooms = (readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+    expect(rooms).toHaveLength(1);
+    expect(parseLink(rooms[0])!.space).not.toBe(homeSpace);
+    expect(clientCreatedSpaces).toBe(0);
   });
 
   it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {

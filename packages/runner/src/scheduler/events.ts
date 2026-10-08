@@ -59,7 +59,10 @@ import { mintEventId } from "./event-identity.ts";
 import { planEventInvalidDependencyScheduling } from "./execution.ts";
 import type { OriginStatus } from "./lineage.ts";
 import type { NodeRegistry } from "./node-record.ts";
-import { RetryImmediately } from "./retry-immediately.ts";
+import {
+  InSpaceTargetUnresolved,
+  RetryImmediately,
+} from "./retry-immediately.ts";
 import {
   hasAnnotatedWrites,
   trustedEventWriteCandidatesFromTransaction,
@@ -2005,6 +2008,20 @@ export async function dispatchQueuedEvent(state: {
         if (tx.status().status === "ready") tx.abort(unavailable);
         releaseLocalReadBasis(tx);
         runFinalCommitCallback();
+        return;
+      }
+      // The handler named an inSpace("name") target that this runtime leaves
+      // unresolved: it creates no space for a name, as a client running
+      // under server execution does not. The run is the speculative echo of
+      // the serving runtime's, which creates the space, so the echo
+      // withdraws instead of running again, and the serving run's
+      // consequence replaces it. The follow-ups it sent drop quietly: the
+      // serving run sends its own.
+      if (error instanceof InSpaceTargetUnresolved) {
+        state.noteLineageRerun(tx);
+        if (tx.status().status === "ready") tx.abort(error);
+        runFinalCommitCallback();
+        tx.abandonStagedWork(eventAbandonError("speculative run withdrawn"));
         return;
       }
       // A RetryImmediately signal means the handler referenced an inSpace("name")

@@ -289,7 +289,11 @@ ambient-state one.
   client-written ones; a flag-ON client's diverted echo publishes that
   same address on its transaction, and the durable-ack coupling settles
   the sender's callback only after the handling consequenced — the
-  receipt is durable before the address is ever dereferenced. A sender
+  receipt is durable before the address is ever dereferenced. The
+  callback reads that outcome rather than the echo's: where the echo's
+  own transaction failed — an echo that withdrew (speculation.md §2), or
+  one whose commit was refused — the transaction it is handed reports
+  done once the handling consequenced. A sender
   that needs only its own act on the record takes the send's
   `onAppended` hook, which settles when the append is durable and
   carries the delivery outcome; the commit callback keeps the coupling

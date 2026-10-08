@@ -658,6 +658,28 @@ const errorStatusTxView = (
   }) as IExtendedStorageTransaction;
 };
 
+/** A done-status VIEW of a transaction, the success counterpart of
+ * `errorStatusTxView()`: everything passes through except `status()`, which
+ * reports the transaction done. Handed to a caller whose event the server
+ * handled when the speculative echo's own transaction failed — an echo that
+ * withdrew, or one its commit refused — so the caller reads the
+ * authoritative outcome rather than the echo's. */
+const doneStatusTxView = (
+  tx: IExtendedStorageTransaction,
+): IExtendedStorageTransaction => {
+  const status = () => ({
+    status: "done" as const,
+    journal: tx.status().journal,
+  });
+  return new Proxy(tx, {
+    get(target, prop, receiver) {
+      if (prop === "status") return status;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as IExtendedStorageTransaction;
+};
+
 export function markRuntimeInjectedEventKeys(
   keys: readonly string[],
 ): readonly string[] {
@@ -2241,9 +2263,10 @@ export class CellImpl<T extends FabricValue>
           // acknowledgment. The callback now settles from the APPEND
           // outcome + the intent's authoritative CONSEQUENCE: refusal,
           // a server-side handler error, or the dropped-event notice
-          // present an error-status view of the tx; only a delivered
-          // append whose handling consequenced (or a bare teardown,
-          // reported as such) passes the tx through untouched.
+          // present an error-status view of the tx. A delivered append
+          // whose handling consequenced passes the tx through, as a
+          // done-status view where the echo's own transaction failed; a
+          // bare teardown passes it through untouched.
           const onAppended = sendOptions?.onAppended;
           if (onCommit !== undefined || onAppended !== undefined) {
             const callerOnCommit = onCommit;
@@ -2275,7 +2298,12 @@ export class CellImpl<T extends FabricValue>
                   ));
                   return;
                 }
-                callerOnCommit(echoTx);
+                callerOnCommit(
+                  consequence.kind === "consequenced" &&
+                    echoTx.status().status === "error"
+                    ? doneStatusTxView(echoTx)
+                    : echoTx,
+                );
               });
             };
           }

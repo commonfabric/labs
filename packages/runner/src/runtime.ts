@@ -156,6 +156,7 @@ import {
   resolveCommitBackpressure,
 } from "./scheduler/backpressure.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
+import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   getContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
@@ -4485,8 +4486,13 @@ export class Runtime {
    * same request.
    *
    * The calling space's allocation record decides when it exists. Otherwise
-   * this creates a space owned by `options.owner` with `options.grants`, whose
-   * DID the next run making the same request records. With `options.root`,
+   * a runtime that creates spaces for names creates one owned by
+   * `options.owner` with `options.grants`, whose DID the next run making the
+   * same request records. Under server execution only the serving runtime
+   * creates them: the run a client makes of the same handler is a
+   * speculative echo of the serving runtime's, and a space it created would
+   * be one no record ever names, so a client leaves a name with no record
+   * unresolved, and throws {@link InSpaceTargetUnresolved}. With `options.root`,
    * the space's genesis commit reserves its root at
    * {@link IN_SPACE_ROOT_CAUSE}, for the run that records it to place there,
    * and with `options.spaceKind` it declares the space's kind. A record
@@ -4527,6 +4533,9 @@ export class Runtime {
           );
         }
         return recorded;
+      }
+      if (this.experimental.serverExecution === true && !this.servingPosture) {
+        throw new InSpaceTargetUnresolved([name]);
       }
       const { root, ...access } = options;
       const created = this.#inSpaceCreated.get(creationKey) ??
