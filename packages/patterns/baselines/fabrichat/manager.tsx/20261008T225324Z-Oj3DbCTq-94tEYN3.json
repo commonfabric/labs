@@ -117,8 +117,15 @@
           },
           {
             "properties": {
+              "code": {
+                "description": "Which refusal it is, for a client to act on, where a client has one to\ntake; absent for the others.",
+                "enum": [
+                  "space-own-chat"
+                ],
+                "type": "string"
+              },
               "reason": {
-                "description": "Why.",
+                "description": "Why, for a person to read.",
                 "type": "string"
               },
               "status": {
@@ -438,8 +445,15 @@
           },
           {
             "properties": {
+              "code": {
+                "description": "Which refusal it is, for a client to act on, where a client has one to\ntake; absent for the others.",
+                "enum": [
+                  "space-own-chat"
+                ],
+                "type": "string"
+              },
               "reason": {
-                "description": "Why.",
+                "description": "Why, for a person to read.",
                 "type": "string"
               },
               "status": {

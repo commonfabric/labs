@@ -710,8 +710,15 @@
           },
           {
             "properties": {
+              "code": {
+                "description": "Which refusal it is, for a client to act on, where a client has one to\ntake; absent for the others.",
+                "enum": [
+                  "space-own-chat"
+                ],
+                "type": "string"
+              },
               "reason": {
-                "description": "Why.",
+                "description": "Why, for a person to read.",
                 "type": "string"
               },
               "status": {
@@ -1688,6 +1695,21 @@
         ],
         "type": "object"
       },
+      "SharedSpaceRemoval": {
+        "properties": {
+          "expectedRevision": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
       "SpaceEntry": {
         "properties": {
           "did": {
@@ -2006,6 +2028,12 @@
         },
         "type": "object"
       },
+      "removeSharedSpace": {
+        "$ref": "#/$defs/SharedSpaceRemoval",
+        "asCell": [
+          "stream"
+        ]
+      },
       "removeSpace": {
         "asCell": [
           "stream"
@@ -2071,6 +2099,7 @@
       "sharedSpaceCatalog",
       "registerSharedSpace",
       "changeSharedSpaceMembership",
+      "removeSharedSpace",
       "createProfile",
       "ensurePrivateInbox",
       "addFavorite",

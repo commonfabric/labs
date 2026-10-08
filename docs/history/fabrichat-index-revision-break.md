@@ -2,7 +2,7 @@
 status: historical
 created: 2026-10-08
 archived: 2026-10-08
-reason: "Record of the deliberate contract break taken when a FabriChat manager's index entry gained `revision`, as the manager came to list the rooms Home's shared-space catalog keeps."
+reason: "Record of the deliberate contract break taken when a FabriChat manager's index entry gained `revision`, and a refused request outcome `code`, as the manager came to list the rooms Home's shared-space catalog keeps."
 ---
 
 # FabriChat: the manager lists the rooms the catalog keeps
@@ -12,17 +12,19 @@ catalog, Home's: each saved `fabrichat-room` entry whose space's root is a room.
 The manager keeps no list of its own. Forgetting a room archives its catalog
 entry, at the revision the list the request came from showed, so a request to
 forget names that revision, and each listed entry, a `ChatIndexEntry`, carries
-it as `revision`.
+it as `revision`. A refusal a client can act on also carries a stable `code`
+beside its prose reason: so far `space-own-chat`, for `accept` naming a social
+space's own chat, which the catalog doesn't list as a room.
 
 ## What the gate reports
 
 The manager's `requests` argument holds each request's outcome, and a `done`
 outcome holds the index entry it produced. The recorded entry left its extra
-fields open, so a stored outcome's entry admitted a `revision` of any type. The
-candidate types it as a string, which `deno task pattern-compat` reports as
-`argument.requests.*` no longer accepting what it did, against the manager's
-recorded baselines. No stored outcome holds a `revision`: nothing wrote one
-before this change.
+fields open, so a stored outcome's entry admitted a `revision` of any type, and
+a stored refused outcome a `code` of any type. The candidate types both, which
+`deno task pattern-compat` reports as `argument.requests.*` no longer
+accepting what it did, against the manager's recorded baselines. No stored
+outcome holds either: nothing wrote one before this change.
 
 The manager's argument also no longer has `rooms`, its own list, which the gate
 does not report, since an argument the candidate drops is one it doesn't read.
@@ -30,7 +32,7 @@ does not report, since an argument the candidate drops is one it doesn't read.
 ## What happens to what exists
 
 - **Stored request outcomes.** Each still reads as it did. None holds a
-  `revision`, so the typed field admits every one.
+  `revision` or a `code`, so the typed fields admit every one.
 - **A manager's own list of rooms.** It is no longer read. A room listed only
   there, and not in the catalog, is not listed any more. Every room a manager
   created or accepted since it began registering rooms in the catalog is in

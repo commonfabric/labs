@@ -24,7 +24,7 @@ interface ChatManagerOutput {
     string,
     | { status: "pending" }
     | { status: "done"; entry?: ChatIndexEntry }
-    | { status: "refused"; reason: string }
+    | { status: "refused"; reason: string; code?: "space-own-chat" }
   >;
 
   /** Notices this user's requests have produced that no one has delivered. */
@@ -122,11 +122,12 @@ in it needs to be `PerUser` or `PerSession`.
   conversation with that person is always the same room.
 - **`requests`** records each request's outcome under the `requestId` its caller
   chose: `pending`, then `done` or `refused`. `done` carries the entry, except
-  for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason.
-  An implementation MAY discard a `done` or `refused` outcome after a retention
-  period it documents. A request sent again after that starts afresh: an
-  `openDirect` still finds the existing room, but a `createGroup` creates
-  another.
+  for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason,
+  prose for a person, and a refusal a client can act on carries a `code` as
+  well, which stays the same whatever the reason says. An implementation MAY
+  discard a `done` or `refused` outcome after a retention period it documents. A
+  request sent again after that starts afresh: an `openDirect` still finds the
+  existing room, but a `createGroup` creates another.
 - **`outgoingNotices`** holds each notice this user's requests have produced,
   until a client reports it delivered.
 
@@ -266,7 +267,9 @@ Records a room this user has been admitted to.
 
 A social space's own chat is created with its space and not by a manager, so
 it has no `about.record`, and the catalog lists rooms by their own spaces, so
-`accept` refuses one: its space is the social space it belongs to.
+`accept` refuses one, with the code `space-own-chat`: its space is the social
+space it belongs to. Listing a space's own chat among a user's chats is a
+possible later direction, which this contract doesn't promise.
 
 ### `forget(requestId: string, room: Cell<ChatRoomOutput>, revision: string)`
 

@@ -111,6 +111,15 @@ const reasonOf = (
     : outcome?.status ?? "none";
 };
 
+/** The code of the refusal recorded under `id`, or `none` for any other. */
+const codeOf = (
+  requests: Writable<Record<string, ChatRequestOutcome>>,
+  id: string,
+): string => {
+  const outcome = requests.get()?.[id];
+  return outcome?.status === "refused" ? outcome.code ?? "none" : "none";
+};
+
 /** What a room says of its messages through the link a manager lists. */
 const linkedCount = (room: ChatIndexEntry["room"] | undefined): string => {
   const messages = room?.get()?.messages;
@@ -606,6 +615,7 @@ export default pattern(() => {
         assertion: assert(() =>
           reasonOf(acceptRequests, "a-own") ===
             "The room is a social space's own chat, which isn't listed among chats." &&
+          codeOf(acceptRequests, "a-own") === "space-own-chat" &&
           entriesOf(acceptCatalog).length === 2
         ),
       },

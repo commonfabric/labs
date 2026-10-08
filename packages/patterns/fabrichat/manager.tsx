@@ -805,6 +805,7 @@ const performManagerAct = (
       status: "refused",
       reason:
         "The room is a social space's own chat, which isn't listed among chats.",
+      code: "space-own-chat",
     });
     return;
   }
