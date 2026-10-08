@@ -200,8 +200,9 @@ constituents behind it, so a nested or named intersection is reopened when
 an enclosing one reduces it (`(string & Brand) & number` is nothing); and a
 union whose arms fold to one schema — `void | OpaqueCell<any>`, or two
 branded primitives with the same fallback — keeps every arm, so an
-intersection reading the survivor still distributes over them (an arm
-accepting nothing is no arm, and is neither counted nor kept). Schemas with
+intersection reading the survivor still distributes over them, and the
+labels the survivor states are that union's (an arm accepting nothing is no
+arm, and is neither counted nor kept). Schemas with
 recorded union or intersection constituents are deduplicated by identity:
 equal fallback schemas can hide disjoint source types, so separate folded
 unions remain separate constraints in an enclosing intersection.
@@ -969,7 +970,8 @@ Default paths of §7:
 - An intersection of arrays is an array of the values every one of them
   holds: its `items` are the schema of the intersection's number index, the
   intersection of the element types, so `unknown[] & readonly string[]` is
-  `string[]`'s schema. Tested: intersection-formatter.test.ts.
+  `string[]`'s schema. Its constituents' JSDoc documents it as it documents
+  a merged object (below). Tested: intersection-formatter.test.ts.
 - Unsupported shapes — non-object constituent, constituent with an index
   signature, or a checker error — produce a **permissive fallback, not a
   throw**: `{ type: "object", additionalProperties: true, $comment:

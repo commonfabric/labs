@@ -939,10 +939,23 @@ function labeledArms(
   if (!isObjectOrArray(stated) || !Array.isArray(stated.anyOf)) {
     return [{ schema: stated, labels: [] }];
   }
-  const arms = stated.anyOf as MutableJSONSchema[];
-  const own: PartLabels[] = isObjectOrArray(stated.ifc)
+  return armsOfUnion(stated, stated.anyOf as MutableJSONSchema[], context);
+}
+
+/**
+ * `arms`, the arms of `union`, each read as `labeledArms()` reads it, with
+ * the labels `union` itself states (`LabeledArm`). The arms are the union's
+ * `anyOf`, or, where its arms folded to one schema, those its origin keeps
+ * (`schemaOrigins`), whose labels it states on the survivor.
+ */
+function armsOfUnion(
+  union: MutableJSONSchemaObj,
+  arms: readonly MutableJSONSchema[],
+  context: GenerationContext,
+): LabeledArm[] {
+  const own: PartLabels[] = isObjectOrArray(union.ifc)
     ? [{
-      labels: stated.ifc as Record<string, unknown>,
+      labels: union.ifc as Record<string, unknown>,
       members: unionMembersOf(arms, context),
     }]
     : [];
@@ -1211,8 +1224,8 @@ function intersectionOf(
       const origin = isObjectOrArray(resolved)
         ? context.schemaOrigins?.get(resolved)
         : undefined;
-      return origin?.kind === "union"
-        ? origin.parts().flatMap((part) => labeledArms(part, context))
+      return isObjectOrArray(resolved) && origin?.kind === "union"
+        ? armsOfUnion(resolved, origin.parts(), context)
         : labeledArms(constituent, context);
     });
   if (arms.length < values.length) {
@@ -1479,7 +1492,8 @@ type PartProperty = {
  * Where some declaration requires the property, an optional one admits
  * `undefined` as well, as its `?` does. A result that is one declaration's
  * schema with its keywords set aside stands as that declaration's schema.
- * Declarations in different scopes are refused (`propertyScopesError()`).
+ * Declarations in different scopes, each read with the keywords beside its
+ * reference (`withBesideKeywords()`), are refused (`propertyScopesError()`).
  */
 function sharedPropertyOf(
   key: string,
@@ -1489,7 +1503,7 @@ function sharedPropertyOf(
   const schemas = declared.map(({ schema }) => schema);
   const scopes = new Set(
     schemas.flatMap((schema) => {
-      const scope = declaredScopeOf(resolveLocalRef(schema, context));
+      const scope = declaredScopeOf(withBesideKeywords(schema, context));
       return scope ? [scope] : [];
     }),
   );

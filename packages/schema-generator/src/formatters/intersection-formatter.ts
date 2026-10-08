@@ -49,6 +49,16 @@ type PropertyDeclaration = {
   readonly schema: MutableJSONSchema;
 };
 
+/**
+ * The JSDoc an intersection's constituents carry: the first doc of each that
+ * has one, the names of those, and the names of the rest.
+ */
+type ConstituentDocs = {
+  readonly docTexts: string[];
+  readonly documentedSources: string[];
+  readonly missingSources: string[];
+};
+
 /** The keywords a declaration's JSDoc writes into its property's schema. */
 const DOC_KEYWORDS = ["description", "tags", "deprecated"] as const;
 
@@ -202,14 +212,18 @@ export class IntersectionFormatter implements TypeFormatter {
     // An intersection of arrays is an array of the values each of them holds,
     // whose type the checker gives as the intersection's number index: the
     // intersection of their element types.
+    // Its constituents' JSDoc is documented as a merged object's.
     if (partsToProcess.every((part) => checker.isArrayType(part))) {
-      return {
-        type: "array",
-        items: this.#schemaGenerator.formatChildType(
-          checker.getIndexTypeOfType(type, ts.IndexKind.Number)!,
-          context,
-        ),
-      };
+      return this.#applyIntersectionDocs({
+        schema: {
+          type: "array",
+          items: this.#schemaGenerator.formatChildType(
+            checker.getIndexTypeOfType(type, ts.IndexKind.Number)!,
+            context,
+          ),
+        },
+        ...this.#constituentDocs(partsToProcess, checker),
+      });
     }
 
     const failureReason = this.#validateIntersectionParts(
@@ -311,28 +325,11 @@ export class IntersectionFormatter implements TypeFormatter {
     parts: readonly ts.Type[],
     intersection: ts.Type,
     context: GenerationContext,
-  ): {
-    schema: MutableJSONSchemaObj;
-    docTexts: string[];
-    documentedSources: string[];
-    missingSources: string[];
-  } {
+  ): { schema: MutableJSONSchemaObj } & ConstituentDocs {
     const declarations = new Map<string, PropertyDeclaration[]>();
     const requiredSet = new Set<string>();
 
-    const docTexts: string[] = [];
-    const documentedSources: string[] = [];
-    const missingSources: string[] = [];
-
     for (const part of parts) {
-      const docInfo = extractDocFromType(part, context.typeChecker);
-      if (docInfo.firstDoc) {
-        docTexts.push(docInfo.firstDoc);
-        documentedSources.push(docInfo.typeName);
-      } else {
-        missingSources.push(docInfo.typeName);
-      }
-
       const schema = this.#schemaGenerator.formatChildType(part, context);
       const objSchema = this.#resolveObjectSchema(schema, context);
       if (!objSchema) continue;
@@ -368,7 +365,32 @@ export class IntersectionFormatter implements TypeFormatter {
       result.required = Array.from(requiredSet);
     }
 
-    return { schema: result, docTexts, documentedSources, missingSources };
+    return {
+      schema: result,
+      ...this.#constituentDocs(parts, context.typeChecker),
+    };
+  }
+
+  /** The JSDoc `parts`, an intersection's constituents, carry. */
+  #constituentDocs(
+    parts: readonly ts.Type[],
+    checker: ts.TypeChecker,
+  ): ConstituentDocs {
+    const docs: ConstituentDocs = {
+      docTexts: [],
+      documentedSources: [],
+      missingSources: [],
+    };
+    for (const part of parts) {
+      const docInfo = extractDocFromType(part, checker);
+      if (docInfo.firstDoc) {
+        docs.docTexts.push(docInfo.firstDoc);
+        docs.documentedSources.push(docInfo.typeName);
+      } else {
+        docs.missingSources.push(docInfo.typeName);
+      }
+    }
+    return docs;
   }
 
   /**
@@ -460,12 +482,7 @@ export class IntersectionFormatter implements TypeFormatter {
   }
 
   #applyIntersectionDocs(
-    data: {
-      schema: MutableJSONSchemaObj;
-      docTexts: string[];
-      documentedSources: string[];
-      missingSources: string[];
-    },
+    data: { schema: MutableJSONSchemaObj } & ConstituentDocs,
   ): MutableJSONSchemaObj {
     const { schema, docTexts, documentedSources, missingSources } = data;
     if (!isObjectOrArray(schema)) return schema;

@@ -143,6 +143,26 @@ describe("IntersectionFormatter", () => {
         items: { type: "string" },
       });
     });
+
+    it("returns an array documented by its constituents' JSDoc", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `/** The tags. #taglist */
+        type Tags = string[];
+        /** Other words. */
+        type Words = unknown[];
+        type Result = Tags & Words;`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "array",
+        items: { type: "string" },
+        description: "The tags. #taglist\n\nOther words.",
+        tags: ["taglist"],
+        $comment:
+          "Docs inherited from intersection constituents. Sources: Tags, Words.",
+      });
+    });
   });
 
   describe("unsupported intersections", () => {
