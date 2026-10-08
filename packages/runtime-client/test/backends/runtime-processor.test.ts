@@ -4473,6 +4473,7 @@ describe("runtime-processor", () => {
           },
         };
         const processor = buildProcessor({
+          runtime: { storageManager: {} },
           cc,
           space: "did:key:test-space",
         });

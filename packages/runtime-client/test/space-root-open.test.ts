@@ -15,7 +15,11 @@ import type { ACL } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
-import { resolveEntryIdentity, Runtime } from "@commonfabric/runner";
+import {
+  ACLManager,
+  resolveEntryIdentity,
+  Runtime,
+} from "@commonfabric/runner";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { RuntimeProcessor } from "@/backends/mod.ts";
@@ -148,6 +152,25 @@ async function rootlessSpace(grants: ACL = { "*": "WRITE" }) {
     visitor: visitorParty.client,
     fetched,
 
+    /**
+     * Removes the visitor's entry from the space's access list, and resolves
+     * once the visitor's storage has heard that it lost the space.
+     */
+    revokeVisitor: async () => {
+      const lost = Promise.withResolvers<void>();
+      const cancel = visitorParty.storage.subscribeSpaceAccessLoss(
+        (lostSpace) => {
+          if (lostSpace === space) lost.resolve();
+        },
+      );
+      try {
+        await new ACLManager(ownerParty.runtime, space).remove(visitor.did());
+        await lost.promise;
+      } finally {
+        cancel();
+      }
+    },
+
     /** The space cell, as the memory server holds it. */
     storedSpaceCell: async () => {
       for (const { runtime, storage } of parties) {
@@ -202,6 +225,21 @@ describe("space-root-open", () => {
       const opened = await room.visitor.getSpaceRootPattern(room.space);
 
       expect(opened?.id()).toBe(created?.id());
+    });
+  });
+
+  describe("a visitor whose access is revoked", () => {
+    it("is refused a root it was handed before, whatever `start` is", async () => {
+      await using room = await rootlessSpace({ [visitor.did()]: "READ" });
+      await room.owner.getSpaceRootPattern(room.space);
+      expect(await room.visitor.getSpaceRootPattern(room.space)).toBeDefined();
+
+      await room.revokeVisitor();
+
+      for (const start of [false, true]) {
+        await expect(room.visitor.getSpaceRootPattern(room.space, { start }))
+          .rejects.toThrow("memory session revoked: unauthorized");
+      }
     });
   });
 

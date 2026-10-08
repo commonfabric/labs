@@ -2930,7 +2930,7 @@ export class RuntimeProcessor {
    * someone else's space.
    *
    * @throws The server's refusal when this runtime's identity may not read
-   *   the space, which reads as a space with no root.
+   *   the space, whether or not a root is still held from before.
    */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
@@ -2944,13 +2944,15 @@ export class RuntimeProcessor {
         reconcile: true,
         start: false,
       });
-      if (stored) return { piece: createPieceRef(stored) };
+      // Checked whatever the lookup found, since a root this runtime read
+      // before losing the space is still in its replica.
       this.#throwIfAccessRefused(request.space);
-      return {};
+      return stored ? { piece: createPieceRef(stored) } : {};
     }
-    if ((await cc.getDefaultPattern(false)) === undefined) {
-      this.#throwIfAccessRefused(request.space);
-      if (!(await this.#ownsSpace(request.space))) return {};
+    const existing = await cc.getDefaultPattern(false);
+    this.#throwIfAccessRefused(request.space);
+    if (existing === undefined && !(await this.#ownsSpace(request.space))) {
+      return {};
     }
     const piece = await cc.ensureDefaultPattern();
     return {
@@ -2961,8 +2963,11 @@ export class RuntimeProcessor {
   /**
    * Whether this runtime's identity owns `space`: the space is its Home, or
    * the space's access list makes it an `OWNER`. A Home is its user's
-   * whatever its access list holds, since the list is written when the Home
-   * is first mounted.
+   * whatever its access list holds, since the Home's DID is the identity
+   * itself: its list is written when the Home is first mounted, and a Home
+   * populated before access lists existed has none. Only the identity's own
+   * runtime asks with that DID, so the shortcut creates a root in no one
+   * else's space.
    */
   async #ownsSpace(space: DID): Promise<boolean> {
     const principal = this.#runtime.userIdentityDID;

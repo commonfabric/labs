@@ -179,8 +179,8 @@ export class XBodyView extends BaseView {
 
   /**
    * Whether the space home was opened and the space has no root to show, which
-   * is the case for a space its owner has not yet opened, when someone else
-   * opens it.
+   * is the case for a space whose owner has not yet set it up, when someone
+   * else opens it.
    */
   @property({ type: Boolean })
   accessor spaceHasNoRoot = false;
@@ -276,8 +276,8 @@ export class XBodyView extends BaseView {
 
   /**
    * What stands where a space's root would be when the space has none: a
-   * statement saying so. Only the space's owner creates its root, by opening
-   * the space.
+   * statement saying so. Only an owner of the space creates its root, by
+   * opening the space or by putting a piece in it.
    */
   #renderSpaceHasNoRoot() {
     return html`
@@ -285,7 +285,7 @@ export class XBodyView extends BaseView {
         <cf-alert status="info">
           <h2 slot="title">Nothing is in this space yet</h2>
           <span slot="description">
-            This space has no content until its owner opens it.
+            This space has no content until its owner sets it up.
           </span>
         </cf-alert>
       </div>
