@@ -501,19 +501,38 @@ export class PiecesController<T = unknown> {
    * Refuses to replace an identity Home's root: a Home that already holds one
    * is changed only in place, as {@link #refuseHomeRoot} says. Linking the
    * first root of a Home that holds none is what first open does.
+   *
+   * With `options.replacing`, the link is made only while the space's root is
+   * still the one a caller inspected: the cell given, or none at all when it
+   * is `null`, compared by the link the space cell stores. The check is read
+   * in the linking transaction, so a root another writer links meanwhile
+   * fails the call rather than being replaced.
+   *
    * @param defaultPatternCell - The cell representing the default pattern
+   * @throws Error when `options.replacing` no longer names the space's root.
    */
   async linkDefaultPattern(
     defaultPatternCell: Cell<any>,
+    options: { replacing?: Cell<unknown> | null } = {},
   ): Promise<void> {
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
+      const slot = spaceCellWithTx.key("defaultPattern");
+      if (options.replacing !== undefined) {
+        const current = slot.get() as Cell<unknown> | undefined;
+        const unchanged = options.replacing === null
+          ? slot.getRaw() === undefined
+          : current !== undefined && current.equalLinks(options.replacing);
+        if (!unchanged) {
+          throw new Error("The space's root changed since it was inspected");
+        }
+      }
       // Read in the transaction, as the stored pointer: a retry reruns this
       // against fresh state, and a target that cannot load is still a root.
-      if (spaceCellWithTx.key("defaultPattern").getRaw() !== undefined) {
+      if (slot.getRaw() !== undefined) {
         this.#refuseHomeRoot("replace");
       }
-      spaceCellWithTx.key("defaultPattern").set(defaultPatternCell.withTx(tx));
+      slot.set(defaultPatternCell.withTx(tx));
     });
     if (error) {
       throw new Error(

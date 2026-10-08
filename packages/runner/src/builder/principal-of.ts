@@ -5,12 +5,14 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
-import { resolveLink } from "../link-resolution.ts";
 import {
   exactPrincipalAttestations,
   PRINCIPAL_CLAIM_KINDS,
   type PrincipalClaimKind,
 } from "../cfc/represents-principal.ts";
+import { resolveLink } from "../link-resolution.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
 import { cellOfTarget } from "./space-access.ts";
 
@@ -170,6 +172,25 @@ function attestedPrincipals(
     : cell.resolveAsCell().getAsNormalizedFullLink();
   // The default read policy journals the read as a dependency, so a label
   // change runs the calling computation again.
+  return attestedPrincipalsAt(tx, link, claimKind);
+}
+
+/**
+ * Returns every principal the stored label at `link` attests with a claim of
+ * `kind`, read through `tx` as `principalsOf()` reads a cell's: `[]` when it
+ * attests none, and `undefined` when a claim there is in any form but the one
+ * a runtime mints. `link` names the document whose label is read; nothing is
+ * followed from it. This is the read a host makes of a document it holds no
+ * frame for.
+ *
+ * @throws If the label cannot be read, including one stored in a form this
+ *   build cannot interpret (`StoredCfcMetadataError`).
+ */
+export function attestedPrincipalsAt(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  kind: PrincipalClaimKind,
+): DID[] | undefined {
   const metadata = readStoredCfcMetadata(tx, {
     space: link.space,
     id: link.id,
@@ -177,6 +198,6 @@ function attestedPrincipals(
   });
   return exactPrincipalAttestations(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
-    claimKind,
+    kind,
   );
 }
