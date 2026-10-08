@@ -31,8 +31,6 @@ type State = {
   presentation: Writable<Presentation>;
 };
 
-type RemovalState = State & { chatRoom: ChatRoomCell };
-
 /** Return occurrences whose target differs from the complete piece link. */
 function withoutPiece(
   list: readonly Writable<Panel>[],
@@ -44,40 +42,10 @@ function withoutPiece(
   });
 }
 
-/** Whether `list` holds a piece panel showing the room `chatRoom` names. */
-function holdsRoom(
-  list: readonly Writable<Panel>[],
-  chatRoom: ChatRoomCell,
-): boolean {
-  const room = chatRoom.get().room;
-  if (room === undefined) return false;
-  return list.some((panel) => {
-    const value = panel.get();
-    return value.kind === "piece" && room.equals(value.piece);
-  });
-}
-
-/**
- * Helper for the removal handlers, which clears `chatRoom` when a removal took
- * the last piece panel showing the room it names. A room that was never a
- * panel stays named.
- */
-function forgetRemovedRoom(
-  list: readonly Writable<Panel>[],
-  next: readonly Writable<Panel>[],
-  chatRoom: ChatRoomCell,
-): void {
-  if (holdsRoom(list, chatRoom) && !holdsRoom(next, chatRoom)) {
-    chatRoom.set({});
-  }
-}
-
-const removePiece = handler<{ piece: Writable<unknown> }, RemovalState>(
-  ({ piece }, { panels, presentation, chatRoom }) => {
-    const list = panels.get();
-    const next = withoutPiece(list, piece);
+const removePiece = handler<{ piece: Writable<unknown> }, State>(
+  ({ piece }, { panels, presentation }) => {
+    const next = withoutPiece(panels.get(), piece);
     panels.set(next);
-    forgetRemovedRoom(list, next, chatRoom);
     const current = presentation.get();
     presentation.set({
       stagedPanels: current.stagedPanels.filter((panel) =>
@@ -91,12 +59,10 @@ const removePiece = handler<{ piece: Writable<unknown> }, RemovalState>(
   },
 );
 
-const removePanel = handler<{ panel: Writable<Panel> }, RemovalState>(
-  ({ panel }, { panels, presentation, chatRoom }) => {
+const removePanel = handler<{ panel: Writable<Panel> }, State>(
+  ({ panel }, { panels, presentation }) => {
     const list = panels.get();
-    const next = list.filter((existing) => !existing.equals(panel));
-    panels.set(next);
-    forgetRemovedRoom(list, next, chatRoom);
+    panels.set(list.filter((existing) => !existing.equals(panel)));
     const current = presentation.get();
     presentation.set({
       stagedPanels: current.stagedPanels.filter((existing) =>
@@ -150,8 +116,11 @@ const setPresentation = handler<Presentation, State>(
 
 /**
  * Names `room` as the Loom's chat room, or clears it when the event names
- * none. The room must live in the Loom's own space, so that its members, the
- * principals its space's access list admits, are the Loom's.
+ * none; no other handler of the root changes it. The room must live in the
+ * Loom's own space, so that its members, the principals its space's access
+ * list admits, are the Loom's. The designation is independent of the panels:
+ * it persists while no panel shows the room, and a reader that needs to know
+ * whether one does looks for the room among the piece panels.
  *
  * @throws When `room` lives in another space.
  */
@@ -290,9 +259,8 @@ export default pattern<LoomInput, LoomOutput>(
     const roster = computed(() => participantEntries(participants));
     const room = computed(() => chatRoom.get().room);
     const state = { panels, presentation };
-    const removal = { panels, presentation, chatRoom };
     const viewerState = new Writable.perSession<ViewerState>({});
-    const remove = removePanel(removal);
+    const remove = removePanel(state);
     const move = movePanel(state);
     const duplicate = admitPanel({ panels, mode: "duplicate" });
     const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
@@ -393,7 +361,7 @@ export default pattern<LoomInput, LoomOutput>(
       pieceRegistry,
       viewerState,
       addPiece: admitPanel({ panels, mode: "piece" }),
-      removePiece: removePiece(removal),
+      removePiece: removePiece(state),
       addPanel: admitPanel({ panels, mode: "panel" }),
       removePanel: remove,
       movePanel: move,

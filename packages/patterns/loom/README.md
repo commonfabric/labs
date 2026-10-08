@@ -160,11 +160,15 @@ admits, so a room in the Loom's space has the Loom's members. The participants
 it shows are the profiles its space's default pattern lists, which in the Loom's
 space is this root's `participants`, a set of claims as described above, plus
 any author of its messages that list leaves out. Whoever may change the Loom's
-panels may change `chatRoom`: the space's access list decides both.
-`removePanel` and `removePiece` clear it when they remove the last piece panel
-showing the room; a room that is not a panel stays named. The input holds the
-link in a record, `{ room? }`, because a handler's cell for a field holding a
-link writes through it, so replacing the link there would write into the room.
+panels may change `chatRoom`: the space's access list decides both. Of the
+root's handlers, only `setChatRoom` changes it. The designation is a fact about
+the Loom, not about its layout, so it persists through every panel change:
+removing the room's panels leaves it named, and adding one back changes nothing.
+A reader that needs to know whether the room is shown looks for a piece panel
+whose piece `equals()` the room. A deleted room stays named until `setChatRoom`
+clears it, as any link does. The input holds the link in a record, `{ room? }`,
+because a handler's cell for a field holding a link writes through it, so
+replacing the link there would write into the room.
 
 Run and attach all eight tests when deploying or updating source:
 
