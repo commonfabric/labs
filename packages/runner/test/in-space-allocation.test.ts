@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
+import { readSpaceKind } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { type Cell } from "../src/cell.ts";
@@ -242,7 +243,7 @@ describe("in-space allocation", () => {
     const resolvedSync = (grants?: ACL) => {
       const tx = runtime.edit();
       try {
-        return runtime.resolveInSpaceNameSync(home, "raced", tx, grants);
+        return runtime.resolveInSpaceNameSync(home, "raced", tx, { grants });
       } finally {
         tx.abort();
       }
@@ -257,10 +258,12 @@ describe("in-space allocation", () => {
       grants: readable,
     });
     const tx = runtime.edit();
-    expect(runtime.resolveInSpaceNameSync(home, "aborted", tx, readable))
-      .toBe(open);
-    expect(runtime.resolveInSpaceNameSync(home, "aborted", tx, readable))
-      .toBe(open);
+    expect(
+      runtime.resolveInSpaceNameSync(home, "aborted", tx, { grants: readable }),
+    ).toBe(open);
+    expect(
+      runtime.resolveInSpaceNameSync(home, "aborted", tx, { grants: readable }),
+    ).toBe(open);
     tx.abort();
 
     const later = runtime.edit();
@@ -378,6 +381,112 @@ describe("in-space allocation", () => {
     expect(await aclOf(space)).toEqual({
       [member]: "OWNER",
       [signer.did()]: "OWNER",
+    });
+  });
+
+  describe("a declared space kind", () => {
+    /** The kind the genesis receipt of `space` declares, as the server reads it. */
+    const sealedKindOf = async (space: string) =>
+      readSpaceKind(await server.engineForSpace(space));
+
+    it("declares the kind the call names in the genesis of the space it creates, with `root` and without", async () => {
+      const root = await spawnRoot((Child, value) => [
+        value === "room"
+          ? Child.inSpace("room", { spaceKind: "fabrichat-room" })({ value })
+          : value === "notebook"
+          ? Child.inSpace(undefined, { root: true, spaceKind: "notebook" })({
+            value,
+          })
+          : Child.inSpace("plain")({ value }),
+      ]);
+      await root.send("room");
+      await root.send("notebook");
+      await root.send("plain");
+
+      const [room, notebook, plain] = await root.spaces();
+      expect(await sealedKindOf(room)).toBe("fabrichat-room");
+      expect(await sealedKindOf(notebook)).toBe("notebook");
+      expect(await sealedKindOf(plain)).toBeUndefined();
+      const reader = openRuntime();
+      expect(await reader.spaceKind(room as MemorySpace)).toBe(
+        "fabrichat-room",
+      );
+      expect(await reader.spaceKind(notebook as MemorySpace)).toBe("notebook");
+      expect(await reader.spaceKind(plain as MemorySpace)).toBeUndefined();
+    });
+
+    it("creates a space for each kind requested for an unrecorded name, and returns each request its own", async () => {
+      const [room, plain, again, notebook] = await Promise.all([
+        runtime.resolveInSpaceName(home, "kinded", {
+          spaceKind: "fabrichat-room",
+        }),
+        runtime.resolveInSpaceName(home, "kinded"),
+        runtime.resolveInSpaceName(home, "kinded", {
+          spaceKind: "fabrichat-room",
+        }),
+        runtime.resolveInSpaceName(home, "kinded", { spaceKind: "notebook" }),
+      ]);
+
+      expect(again).toBe(room);
+      expect(new Set([room, plain, notebook]).size).toBe(3);
+      expect(await sealedKindOf(room)).toBe("fabrichat-room");
+      expect(await sealedKindOf(plain)).toBeUndefined();
+      expect(await sealedKindOf(notebook)).toBe("notebook");
+      const resolvedSync = (spaceKind?: string) => {
+        const tx = runtime.edit();
+        try {
+          return runtime.resolveInSpaceNameSync(home, "kinded", tx, {
+            ...(spaceKind === undefined ? {} : { spaceKind }),
+          });
+        } finally {
+          tx.abort();
+        }
+      };
+      expect(resolvedSync("fabrichat-room")).toBe(room);
+      expect(resolvedSync()).toBe(plain);
+      expect(resolvedSync("notebook")).toBe(notebook);
+    });
+
+    it("returns the space a name's record names, whatever kind a later request names", async () => {
+      const space = await runtime.resolveInSpaceName(home, "unkinded");
+      await writeRecord(home, "unkinded", space);
+
+      expect(
+        await runtime.resolveInSpaceName(home, "unkinded", {
+          spaceKind: "fabrichat-room",
+        }),
+      ).toBe(space);
+      expect(await sealedKindOf(space)).toBeUndefined();
+    });
+
+    it("throws for a kind with a space named by its DID or by a cell", () => {
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+      const cell = runtime.getCell(home, "in-space kind target");
+
+      for (const target of [home, cell]) {
+        expect(() => Child.inSpace(target, { spaceKind: "notebook" })).toThrow(
+          "declares the kind only of a space it creates",
+        );
+        expect(() => Child.inSpace(target)).not.toThrow();
+      }
+    });
+
+    it("throws for a kind that is not lowercase words joined by hyphens, whatever the caller's type says", () => {
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+
+      for (
+        const spaceKind of ["Notebook", "", "fabrichat room", "k".repeat(33)]
+      ) {
+        expect(() => Child.inSpace("room", { spaceKind })).toThrow(
+          "declares a space kind of lowercase words joined by hyphens",
+        );
+      }
+      expect(() => Child.inSpace("room", { spaceKind: 7 as unknown as string }))
+        .toThrow("declares a space kind of lowercase words joined by hyphens");
+      expect(() => Child.inSpace("room", { spaceKind: "fabrichat-room" })).not
+        .toThrow();
     });
   });
 

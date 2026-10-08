@@ -1,6 +1,9 @@
 import { expect } from "@std/expect";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
-import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
+import {
+  readGenesisRoot,
+  readSpaceKind,
+} from "@commonfabric/memory/v2/genesis-root";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -507,9 +510,11 @@ Deno.test("createSpace reserves a custom root in the genesis commit, typed links
   });
   try {
     const space = await manager.createSpace({ [user.did()]: "OWNER" }, {
-      source: "system:loom/main.tsx",
-      cause: "root-link",
-      argument: { target: link },
+      root: {
+        source: "system:loom/main.tsx",
+        cause: "root-link",
+        argument: { target: link },
+      },
     });
     const stored = readGenesisRoot(await server.engineForSpace(space));
     assert(stored?.argument?.target instanceof FabricLink);
@@ -538,7 +543,7 @@ Deno.test("a mount that declares a root intent must match the space's reserved r
   try {
     const space = await manager.createSpace(
       { [user.did()]: "OWNER" },
-      genesisRoot,
+      { root: genesisRoot },
     );
     for (const intent of [undefined, genesisRoot]) {
       const opened = await factory.create(space, user, {
@@ -590,8 +595,7 @@ Deno.test("createSpace refuses a root on a host that does not advertise reservat
     await assertRejects(
       () =>
         manager.createSpace({ [user.did()]: "OWNER" }, {
-          source: "system:loom/main.tsx",
-          cause: "unsupported-root",
+          root: { source: "system:loom/main.tsx", cause: "unsupported-root" },
         }),
       Error,
       "Host does not support genesis root reservations",
@@ -601,6 +605,107 @@ Deno.test("createSpace refuses a root on a host that does not advertise reservat
     expect(selectDocHead(engine, { id: `of:${space}`, scopeKey: "space" }))
       .toBe(0);
     expect(readGenesisRoot(engine)).toBeUndefined();
+  } finally {
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("createSpace declares a kind in the genesis commit, which spaceKind() reads back as a member and reads as absent from a space declaring none", async () => {
+  const user = await Identity.fromPassphrase("space kind manager");
+  const member = await Identity.fromPassphrase("space kind member");
+  const server = createServer("space-kind-genesis");
+  const factory = new RecordingLoopbackSessionFactory(server);
+  const manager = TestStorageManager.overServer({ as: user }, factory);
+  const reader = TestStorageManager.overServer(
+    { as: member },
+    new RecordingLoopbackSessionFactory(server),
+  );
+  try {
+    const acl = { [user.did()]: "OWNER", [member.did()]: "READ" } as const;
+    const kinded = await manager.createSpace(acl, {
+      spaceKind: "fabrichat-room",
+    });
+    const plain = await manager.createSpace(acl);
+    assertEquals(
+      readSpaceKind(await server.engineForSpace(kinded)),
+      "fabrichat-room",
+    );
+    assertEquals(factory.sessions[0].requested.spaceKind, "fabrichat-room");
+    assertEquals(await reader.spaceKind(kinded), "fabrichat-room");
+    assertEquals(await manager.spaceKind(kinded), "fabrichat-room");
+    assertEquals(await reader.spaceKind(plain), undefined);
+  } finally {
+    await reader.close();
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("spaceKind() throws for a space whose access list admits the reader to nothing", async () => {
+  const user = await Identity.fromPassphrase("space kind refusing owner");
+  const stranger = await Identity.fromPassphrase("space kind stranger");
+  const server = createServer("space-kind-refused");
+  const manager = TestStorageManager.overServer(
+    { as: user },
+    new RecordingLoopbackSessionFactory(server),
+  );
+  const reader = TestStorageManager.overServer(
+    { as: stranger },
+    new RecordingLoopbackSessionFactory(server),
+  );
+  try {
+    const space = await manager.createSpace({ [user.did()]: "OWNER" }, {
+      spaceKind: "fabrichat-room",
+    });
+    const error = await assertRejects(() => reader.spaceKind(space));
+    assertEquals((error as Error).name, "AuthorizationError");
+    expect((error as Error).message).toContain("lacks READ");
+  } finally {
+    await reader.close();
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("createSpace refuses a kind on a host that does not advertise space kinds, and writes nothing; spaceKind() throws there", async () => {
+  const user = await Identity.fromPassphrase("unsupported space kind manager");
+  const server = createServer("unsupported-space-kind");
+  class UnadvertisedKindFactory extends RecordingLoopbackSessionFactory {
+    override async create(
+      space: MemorySpace,
+      signer?: Signer,
+      requested: MemoryV2Client.MountOptions = {},
+    ) {
+      const opened = await super.create(space, signer, requested);
+      Object.defineProperty(opened.client, "serverFlags", {
+        value: { ...opened.client.serverFlags, spaceKind: false },
+      });
+      return opened;
+    }
+  }
+  const factory = new UnadvertisedKindFactory(server);
+  const manager = TestStorageManager.overServer({ as: user }, factory);
+  try {
+    await assertRejects(
+      () =>
+        manager.createSpace({ [user.did()]: "OWNER" }, {
+          spaceKind: "fabrichat-room",
+        }),
+      Error,
+      "Host does not support declared space kinds",
+    );
+    const [refused] = factory.sessions.map((entry) => entry.space);
+    const engine = await server.engineForSpace(refused);
+    expect(selectDocHead(engine, { id: `of:${refused}`, scopeKey: "space" }))
+      .toBe(0);
+    expect(readSpaceKind(engine)).toBeUndefined();
+    const plain = await manager.createSpace({ [user.did()]: "OWNER" });
+    await assertRejects(
+      () => manager.spaceKind(plain),
+      Error,
+      "does not report a space's declared kind",
+    );
   } finally {
     await manager.close();
     await server.close();

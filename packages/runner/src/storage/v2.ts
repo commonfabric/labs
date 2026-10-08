@@ -1613,30 +1613,41 @@ export class StorageManager implements IStorageManager {
    * The space's key pair is generated here from random data. It opens one
    * session, as the space, through the same route every later session for
    * the DID takes, and signs one commit: `acl` as the space's access-control
-   * document, and `root` as its reserved root pattern when one is given. The
-   * commit reads the document at sequence zero, so it lands only on a space
-   * with no history. The memory client resubmits the identical commit after a
-   * lost connection until the server confirms or refuses it. The key is held
-   * by nothing but this call, and is dropped when the call returns.
+   * document, `genesis.root` as its reserved root pattern when one is given,
+   * and `genesis.spaceKind` as its declared kind when one is given. The
+   * session declares the same root and kind, which the server holds the
+   * commit to. The commit reads the document at sequence zero, so it lands
+   * only on a space with no history. The memory client resubmits the
+   * identical commit after a lost connection until the server confirms or
+   * refuses it. The key is held by nothing but this call, and is dropped when
+   * the call returns.
    */
-  async createSpace(acl: ACL, root?: GenesisRoot): Promise<MemorySpace> {
+  async createSpace(
+    acl: ACL,
+    genesis: { root?: GenesisRoot; spaceKind?: string } = {},
+  ): Promise<MemorySpace> {
+    const { root, spaceKind } = genesis;
+    const declarations = {
+      ...(root === undefined ? {} : { genesisRoot: root }),
+      ...(spaceKind === undefined ? {} : { spaceKind }),
+    };
     const key = await Identity.generate();
     const space = key.did() as MemorySpace;
     const aclId = aclDocId(space);
     const { client, session } = await this.#sessionFactory.create(
       space,
       key,
-      {
-        sessionId: crypto.randomUUID(),
-        ...(root === undefined ? {} : { genesisRoot: root }),
-      },
+      { sessionId: crypto.randomUUID(), ...declarations },
     );
     try {
       if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
         throw new Error("Host does not support genesis root reservations");
       }
+      if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
+        throw new Error("Host does not support declared space kinds");
+      }
       await session.transact({
-        ...(root === undefined ? {} : { genesisRoot: root }),
+        ...declarations,
         localSeq: 1,
         reads: {
           confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
@@ -1808,7 +1819,17 @@ export class StorageManager implements IStorageManager {
       0;
   }
 
+  /** @inheritDoc */
+  async spaceKind(space: MemorySpace): Promise<string | undefined> {
+    return await this.#openProvider(space).spaceKind();
+  }
+
   open(space: MemorySpace): IStorageProvider {
+    return this.#openProvider(space);
+  }
+
+  /** Helper for {@link open}, which returns the provider it opens. */
+  #openProvider(space: MemorySpace): Provider {
     // A manager reused after close() starts a new session; retention
     // follows it.
     this.#schemaRegistryLease ??= acquireSchemaRegistryLease();
@@ -3268,6 +3289,11 @@ class Provider
         throw error;
       },
     );
+  }
+
+  /** See `SpaceReplica.spaceKind()`. */
+  spaceKind(): Promise<string | undefined> {
+    return this.#followReplacement((replica) => replica.spaceKind());
   }
 
   operationCodecs(): Promise<readonly string[]> {
@@ -4782,6 +4808,22 @@ export class SpaceReplica
   ): Promise<OperationFieldSnapshot> {
     const { session } = await this.#activeSessionHandle();
     return (await session.queryOperationField(query)).field;
+  }
+
+  /**
+   * The kind the space declares in its genesis commit, as the memory server
+   * reported it when this replica's session opened, or `undefined` when it
+   * declares none.
+   *
+   * @throws If the session cannot be opened, or if the memory server does not
+   *   advertise `spaceKind`.
+   */
+  async spaceKind(): Promise<string | undefined> {
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.spaceKind !== true) {
+      throw new Error("memory server does not report a space's declared kind");
+    }
+    return session.spaceKind;
   }
 
   async operationCodecs(): Promise<readonly string[]> {
