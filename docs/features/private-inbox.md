@@ -252,14 +252,14 @@ codes in `packages/piece/src/ops/private-inbox.ts`, such as
 `refusedAt`, when Home first recorded this refusal, of this inbox for this
 reason, by the handler's clock, which reads to the second. Home stores the code
 as given rather than checking it against the host's list, so a newer host's code
-needs no change to Home. The codes are not loom's one for one:
-`inbox-profile-space` is the host's alone, loom's `profile-inbox-malformed` has
-no counterpart here, and the host checks the access list before `offers` and
-`receive` where loom checks them after, so an inbox that fails more than one
-check can be given one code here and another by `loom doctor`. With no
-`refusal`, there is no refusal to report. It is there so that the owner, and
-what acts for them, can learn that shares may not reach them: senders deliver to
-the inbox the profile advertises, which Home does not read.
+needs no change to Home. The host's refusal codes don't map one for one onto
+loom's: `inbox-profile-space` is the host's alone, loom has a code for a
+malformed pointer that the host doesn't, and the host checks the access list
+before `offers` and `receive` where loom checks them after, so an inbox failing
+more than one check can get different codes from each. With no `refusal`, there
+is no refusal to report. It is there so that the owner, and what acts for them,
+can learn that shares may not reach them: senders deliver to the inbox the
+profile advertises, which Home does not read.
 
 Home's handler records the refusal an event names, in place of a different one
 recorded before, under the check it makes of an adoption: the profile the event
