@@ -327,6 +327,15 @@ describe("profileSpaceRoot()", () => {
     expect(await rootIdOf(unlisted.space)).toBe(await profileIdOf(unlisted));
   });
 
+  it("reports a space file of the snapshot it cannot read", async () => {
+    const damaged = "did:key:z6MkDamagedSpaceInTheSnapshotAAAAAAAAAAAAAAAA";
+    await Deno.writeTextFile(`${snapshotDir}/${damaged}.sqlite`, "damaged");
+    const plan = await profileSpaceRoot(config(), { load });
+    const row = plan.rows.find((r) => r.named.space === damaged);
+    expect(row?.status).toBe("unreadable");
+    expect(plan.summary.unreadable).toBe(1);
+  });
+
   it("returns one row for a profile named twice", async () => {
     const cell = `//${unrooted.space}/${unrooted.id}`;
     const plan = await profileSpaceRoot(config({ cells: [cell, cell] }), {

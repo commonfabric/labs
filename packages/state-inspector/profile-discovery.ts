@@ -10,7 +10,7 @@ import {
   isFabricPlainObject,
 } from "@commonfabric/data-model";
 
-import { openSpace } from "./db.ts";
+import { openSpace, tableNames } from "./db.ts";
 import type { DiscoveredSpace } from "./discover.ts";
 import { homeProfileLinks } from "./grouping.ts";
 import { candidatesMatching, reconstructDocument } from "./reconstruct.ts";
@@ -36,10 +36,23 @@ export interface UnlistedProfile {
   id: string;
 }
 
-/** Every profile a snapshot of spaces names, sorted by space then id. */
+/** A space file the snapshot holds that could not be read. */
+export interface UnreadableSpace {
+  /** The space the file is named for. */
+  space: string;
+
+  /** What went wrong reading it. */
+  reason: string;
+}
+
+/**
+ * Every profile a snapshot of spaces names, sorted by space then id, and every
+ * space file in it that could not be read, which may hold profiles too.
+ */
 export interface ProfileDiscovery {
   listed: ListedProfile[];
   unlisted: UnlistedProfile[];
+  unreadable: UnreadableSpace[];
 }
 
 /**
@@ -58,8 +71,11 @@ function isProfileResultValue(value: FabricValue): boolean {
  * `listed` holds each link a Home's `profiles` list stores. `unlisted` holds
  * each profile-shaped piece in a space no listed link names, which a
  * snapshot can hold when the Home listing it is absent from the snapshot or
- * no longer lists it. A file that is not a readable memory database is
- * skipped, whether or not it opens as SQLite.
+ * no longer lists it. A SQLite database holding no memory space's tables is
+ * not a space, and is skipped. A space file that does not open, or whose
+ * reading fails, is reported in `unreadable`, and nothing read from it before
+ * the failure is reported; a single document in a space that does not decode
+ * is skipped, and the rest of the space is read.
  */
 export function discoverProfiles(
   discovered: readonly DiscoveredSpace[],
@@ -69,11 +85,19 @@ export function discoverProfiles(
   const scope = "space";
   const listed: ListedProfile[] = [];
   const shaped: UnlistedProfile[] = [];
+  const unreadable: UnreadableSpace[] = [];
+  const reasonOf = (error: unknown) =>
+    error instanceof Error ? error.message : String(error);
   for (const d of discovered) {
     let space;
     try {
       space = openSpace(d.path);
-    } catch {
+    } catch (error) {
+      unreadable.push({ space: d.did, reason: reasonOf(error) });
+      continue;
+    }
+    if (!isMemorySpace(space.db)) {
+      space.close();
       continue;
     }
     const spaceListed: ListedProfile[] = [];
@@ -101,9 +125,8 @@ export function discoverProfiles(
           spaceShaped.push({ space: d.did, id });
         }
       }
-    } catch {
-      // A file that opens as SQLite but holds no memory space is skipped
-      // whole, so nothing half-read from it is reported.
+    } catch (error) {
+      unreadable.push({ space: d.did, reason: reasonOf(error) });
       continue;
     } finally {
       space.close();
@@ -119,5 +142,14 @@ export function discoverProfiles(
   return {
     listed: listed.sort(order),
     unlisted: shaped.filter((p) => !listedSpaces.has(p.space)).sort(order),
+    unreadable: unreadable.sort((a, b) =>
+      a.space < b.space ? -1 : a.space > b.space ? 1 : 0
+    ),
   };
+}
+
+/** Whether `db` holds the tables every memory space database has. */
+function isMemorySpace(db: Parameters<typeof tableNames>[0]): boolean {
+  const tables = tableNames(db);
+  return tables.includes("commit") && tables.includes("revision");
 }

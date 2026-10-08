@@ -38,11 +38,14 @@ export interface ProfileSpaceRootConfig extends Omit<SpaceConfig, "space"> {
   expectedInspection?: string;
 }
 
-/** One profile's row of the report. */
+/**
+ * One profile's row of the report, or, as `unreadable`, one space of the
+ * snapshot that could not be read, which names no profile.
+ */
 export type ProfileSpaceRootRow =
   & {
-    /** The space and id the profile was named by. */
-    named: { space: string; id: string };
+    /** The space and id the profile was named by; a space alone if unreadable. */
+    named: { space: string; id?: string };
 
     /** The Home listing it, when one in the snapshot does. */
     home?: string;
@@ -50,7 +53,7 @@ export type ProfileSpaceRootRow =
   & (
     | ProfileSpaceRootInspection
     | {
-      status: "unlisted" | "failed";
+      status: "unlisted" | "unreadable" | "failed";
       action: "none";
       reason: string;
     }
@@ -68,7 +71,10 @@ export interface ProfileSpaceRootReport {
 
   /** How many rows have each status. */
   summary: Partial<
-    Record<ProfileSpaceRootStatus | "unlisted" | "failed", number>
+    Record<
+      ProfileSpaceRootStatus | "unlisted" | "unreadable" | "failed",
+      number
+    >
   >;
 }
 
@@ -102,7 +108,8 @@ function namedTarget(cell: string): Target {
 /**
  * Inspects every profile the snapshot's Homes list, or the profiles
  * `config.cells` names, and returns a row for each, plus a row for each
- * profile-shaped piece no Home lists, which is skipped. With
+ * profile-shaped piece no Home lists, which is skipped, and one for each
+ * space file of the snapshot that could not be read. With
  * `config.expectedInspection`, it inspects again first, and applies the plan
  * only when the run's receipt is the one given, profile by profile; a
  * profile whose own receipt has changed by the time its turn comes, or whose
@@ -124,7 +131,7 @@ export async function profileSpaceRoot(
   if (discovered.length === 0) {
     throw new Error(`No space databases under ${config.snapshot}`);
   }
-  const { listed, unlisted } = discoverProfiles(discovered);
+  const { listed, unlisted, unreadable } = discoverProfiles(discovered);
   const homeOf = new Map(listed.map((p) => [`${p.space} ${p.id}`, p.home]));
   // One target per profile address, however many times a Home's list or the
   // command line names it.
@@ -142,14 +149,24 @@ export async function profileSpaceRoot(
         }),
     ).values(),
   ];
-  const skipped: ProfileSpaceRootRow[] = config.cells === undefined
-    ? unlisted.map((p) => ({
-      named: { space: p.space, id: p.id },
-      status: "unlisted" as const,
+  // A space the snapshot holds that could not be read may hold profiles no
+  // other row names, so it is reported whatever the run targets.
+  const skipped: ProfileSpaceRootRow[] = [
+    ...(config.cells === undefined
+      ? unlisted.map((p) => ({
+        named: { space: p.space, id: p.id },
+        status: "unlisted" as const,
+        action: "none" as const,
+        reason: "no Home in the snapshot lists it; name it to repair it",
+      }))
+      : []),
+    ...unreadable.map((u) => ({
+      named: { space: u.space },
+      status: "unreadable" as const,
       action: "none" as const,
-      reason: "no Home in the snapshot lists it; name it to repair it",
-    }))
-    : [];
+      reason: u.reason,
+    })),
+  ];
 
   /** Runs `step` over each target, each over a connection to its space. */
   const each = async (
