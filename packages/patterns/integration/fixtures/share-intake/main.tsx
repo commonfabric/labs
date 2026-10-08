@@ -220,6 +220,7 @@ export interface MainOutput {
   [UI]: VNode;
   privateInbox: PrivateInboxHolder;
   retainedPrivateInboxes: RetainedPrivateInboxes;
+  privateInboxRefusal: PrivateInboxRefusalHolder;
   profiles: ProfileHomeOutput[];
   offered: OfferedSpace[];
   sharedSpaceCatalog: SharedSpaceCatalog;
@@ -267,6 +268,7 @@ export default pattern<MainInput, MainOutput>((
     [UI]: <div>share intake fixture</div>,
     privateInbox,
     retainedPrivateInboxes,
+    privateInboxRefusal,
     profiles,
     offered,
     sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),

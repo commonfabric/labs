@@ -89,15 +89,15 @@ const pointerSchema = {
  * (`orderProfileCandidates()`), that points at an inbox.
  *
  * The event names the deciding profile's inbox to adopt, and that profile,
- * when the inbox passes every check and Home holds none, or holds another; it
- * names none otherwise. Given none, Home creates an inbox only when it holds
- * none and no profile advertises one, so an inbox that fails a check is
- * neither adopted nor replaced. The event names that refusal instead, with its
+ * when the inbox passes every check and Home holds none, or holds another.
+ * When the inbox fails a check, the event names the refusal instead, with its
  * reason, the refused inbox and the deciding profile, for Home to record, and
- * the refusal is logged as a warning too. When the deciding profile advertises
- * the inbox Home holds, the event names that profile and nothing else, which
- * Home takes as the end of a refusal it recorded. A Home without the stream is
- * left as it is.
+ * the refusal is logged as a warning too; Home neither adopts nor replaces
+ * that inbox. When the deciding profile advertises the inbox Home holds, the
+ * event names that profile and nothing else, which Home takes as the end of a
+ * refusal it recorded. When no profile advertises an inbox, the event names
+ * nothing, and Home creates an inbox only if it holds none. A Home without the
+ * stream is left as it is.
  *
  * Resolves once the event is sent, which is before Home's handler runs.
  * Rejects, sending nothing, when a profile ordered ahead of the deciding one

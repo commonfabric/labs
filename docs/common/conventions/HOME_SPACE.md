@@ -169,15 +169,17 @@ the host's reason code, a link to the refused inbox, and when Home recorded it.
 Each ensure, which is to say the next bring-up of Home in a runtime worker,
 clears it when Home adopts or creates an inbox, when the deciding profile points
 at the inbox Home holds, or when no profile points at the refused inbox any
-longer; nothing clears it in between. It is read from Home's root like any other
-field of Home, the root being the link the `#default` wish answers with, as
-"Custom Home Pattern" below says. A profile created once Home holds the inbox is
-pointed at it as it is created; one created earlier is pointed by the next
-ensure. Home decides only when an ensure runs, so a pointer that moves is
-decided at the first bring-up of Home in the next runtime worker to start, once
-the current worker's ensure has succeeded. A loom daemon does the same in the
-other direction, adopting the inbox a profile advertises and never replacing a
-pointer to a different one. [The private inbox](../../features/private-inbox.md)
+longer. Nothing else clears it automatically in between, though the owner's own
+code can also clear it, or record a refusal, by sending Home's
+`ensurePrivateInbox` stream. It is read from Home's root like any other field of
+Home, the root being the link the `#default` wish answers with, as "Custom Home
+Pattern" below says. A profile created once Home holds the inbox is pointed at
+it as it is created; one created earlier is pointed by the next ensure. Home
+decides only when an ensure runs, so a pointer that moves is decided at the
+first bring-up of Home in the next runtime worker to start, once the current
+worker's ensure has succeeded. A loom daemon does the same in the other
+direction, adopting the inbox a profile advertises and never replacing a pointer
+to a different one. [The private inbox](../../features/private-inbox.md)
 describes the whole arrangement.
 
 ## Spaces
