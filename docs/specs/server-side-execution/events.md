@@ -769,7 +769,10 @@ choice.
 
 ## 7. What the client loses, explicitly
 
-Under the flag, the client handler path commits **only the event**. The
+Under the flag, the client handler path commits **only the event**: the
+append, together with whatever schema documents its payload's links
+reference that the stream's space does not hold
+(`docs/specs/content-addressed-schemas.md`, the write-side guarantee). The
 handler's writes apply to the speculation overlay, never to a storage
 transaction. The client's handler-write commit path was DELETED with
 Phase 3 (D-v2-1): the overlay destination diverts event-handler runs

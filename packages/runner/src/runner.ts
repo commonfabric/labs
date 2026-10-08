@@ -1248,10 +1248,16 @@ export const SEALING_SOURCE_UPDATE_REFUSAL =
 
 /**
  * The cause of the root `PatternFactory.inSpace(..., { root: true })` places
- * in the space it creates. The space's genesis commit reserves the address it
- * derives there, so the root's address is fixed before the run that places it.
+ * in `space`, the space it creates. The space's genesis commit reserves the
+ * address it derives there, so the root's address is fixed before the run that
+ * places it. The cause names `space`, so the roots of two such spaces are two
+ * entities, and a pattern keying a record by the entity a root names, as one
+ * keys a person's record by their profile, keeps one person's record apart
+ * from another's.
  */
-export const IN_SPACE_ROOT_CAUSE = "in-space-root";
+export function inSpaceRootCause(space: MemorySpace): string {
+  return `in-space-root:${space}`;
+}
 
 /**
  * Reports work which failed after storage accepted a pattern setup.
@@ -4143,6 +4149,42 @@ export class Runner {
   }
 
   /**
+   * True when `resultCell` is its space's default/root pattern — the piece the
+   * PieceController's own cold-start repair (startEnsuredDefaultPattern) owns,
+   * including its roll-forward-to-official backstop and clear-error contract.
+   * The runner's initial-start setup repair must DEFER to the controller for
+   * the root and heal only the nested pieces the controller never sees (a
+   * profile mounted via a #wish, say). Profiles are plain `inSpace` pieces and
+   * are never a space's `defaultPattern` (only the controller sets that), so
+   * they are correctly not excluded. Called only on the rare repair path, so
+   * the space-cell read costs nothing on a healthy start. A read failure
+   * returns false: better to attempt the idempotent, fail-closed repair than
+   * to leave a piece bricked because a lookup raced.
+   */
+  #isSpaceDefaultPattern(resultCell: Cell<unknown>): boolean {
+    try {
+      const defaultPatternCell = this.#runtime
+        .getSpaceCell(resultCell.space)
+        .key("defaultPattern")
+        .get() as Cell<unknown> | undefined;
+      if (defaultPatternCell === undefined) return false;
+      const a = resultCell.getAsNormalizedFullLink();
+      const b = defaultPatternCell.getAsNormalizedFullLink();
+      // Full document identity: space + scope + id. `scope` (space/user/session)
+      // is part of the address — a user- or session-scoped nested cell can share
+      // an entity id with the space-scoped root, so omitting scope would
+      // misclassify it as the root and silently suppress its heal. `path` is
+      // intentionally not compared: doStart normalizes a subpath input to its
+      // root before `#startCore()`, so resultCell is always a root cell here.
+      return a.space === b.space &&
+        (a.scope ?? "space") === (b.scope ?? "space") &&
+        a.id === b.id;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Whether the internal-cell manifest stored on `resultCell` names every
    * derived internal cell of `pattern`. `false` says no setup for this pattern
    * ran over this document, which is what the cold-start repair in
@@ -5405,10 +5447,9 @@ export class Runner {
     // setup for it: the internal cells the new version's setup would have
     // materialized — a handler's stream among them — have no manifest entry
     // and no result projection reaching them, and nothing about the stored
-    // doc changes on its own. A fresh run() would materialize them, and this
-    // repair does the same for every piece, whatever starts it: a space's root
-    // is repaired as a nested piece is, a profile that is its space's root
-    // among them.
+    // doc changes on its own. A fresh run() would materialize them; this is
+    // the same repair the home ROOT gets in startEnsuredDefaultPattern,
+    // reachable here for the nested pieces that never pass through it.
     //
     // The trigger is that stored state and nothing else: a setup-completion
     // marker that does not name this version, and a manifest missing one of
@@ -5444,7 +5485,10 @@ export class Runner {
             ref,
             this.#sessionPatternPointer(resultCell),
           ) !== "matches" &&
-        !this.#storedManifestCovers(resultCell, pattern)
+        !this.#storedManifestCovers(resultCell, pattern) &&
+        // The root/default pattern is the PieceController's to repair (it has
+        // the richer roll-forward + clear-error path); defer to it there.
+        !this.#isSpaceDefaultPattern(resultCell)
       ) {
         setupRepair = {
           pattern,
@@ -12689,7 +12733,7 @@ export class Runner {
       targetSpace,
       // A space's root sits where its genesis reservation says, which the
       // reservation fixed before this output existed.
-      module.targetSpaceRoot ? IN_SPACE_ROOT_CAUSE : {
+      module.targetSpaceRoot ? inSpaceRootCause(targetSpace) : {
         resultFor: {
           space: outputRedirect.space,
           id: outputRedirect.id,

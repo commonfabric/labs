@@ -14,7 +14,7 @@ import {
   ACLManager,
   type Cancel,
   type Cell,
-  IN_SPACE_ROOT_CAUSE,
+  inSpaceRootCause,
   isCell,
   type NormalizedFullLink,
   normalizeSpaceHost,
@@ -142,8 +142,8 @@ export function startShareIntakeOf(
  *   declared, so it classifies the space by its creator's claim;
  * - the space has a root, and the root is the document at the address the
  *   space's genesis commit reserves for an `inSpace(..., { root: true })`
- *   root, `IN_SPACE_ROOT_CAUSE`'s, so that a root a member with `WRITE` has
- *   linked in place of that one is refused.
+ *   root, the address `inSpaceRootCause()` derives in the space, so that a
+ *   root a member with `WRITE` has linked in place of that one is refused.
  *
  * No code of the space's is loaded or run to vet an offer.
  *
@@ -576,7 +576,11 @@ export class ShareIntake {
       !isCell(root) || root.space !== offer.space ||
       root.getAsNormalizedFullLink().path.length !== 0
     ) return "space-root-missing";
-    if (!root.equalLinks(runtime.getCell(offer.space, IN_SPACE_ROOT_CAUSE))) {
+    if (
+      !root.equalLinks(
+        runtime.getCell(offer.space, inSpaceRootCause(offer.space)),
+      )
+    ) {
       return "space-root-misplaced";
     }
     return undefined;

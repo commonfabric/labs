@@ -61,7 +61,7 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
 import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
-import { IN_SPACE_ROOT_CAUSE } from "../src/runner.ts";
+import { inSpaceRootCause } from "../src/runner.ts";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import { parseLink } from "../src/link-utils.ts";
 import {
@@ -2428,11 +2428,13 @@ export default pattern<
       const roomSpace = parseLink(rooms()[0])!.space! as MemorySpace;
       expect(roomSpace).not.toBe(homeSpace);
       expect(readGenesisRoot(await server.engineForSpace(roomSpace))).toEqual({
-        cause: IN_SPACE_ROOT_CAUSE,
+        cause: inSpaceRootCause(roomSpace),
       });
       const root = await resolveSpaceRootPattern(clientRuntime, roomSpace);
       expect(
-        root?.equals(clientRuntime.getCell(roomSpace, IN_SPACE_ROOT_CAUSE)),
+        root?.equals(
+          clientRuntime.getCell(roomSpace, inSpaceRootCause(roomSpace)),
+        ),
       ).toBe(true);
       expect(
         await root!.key("title").asSchema({ type: "string" }).pull(),

@@ -72,7 +72,6 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { getLogger } from "@commonfabric/utils/logger";
 import { maxOf, minOf } from "@commonfabric/utils/math";
@@ -112,6 +111,11 @@ import {
   collectExternalSchemaRefHashes,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
+import {
+  deliverSchemaDocumentClosure,
+  linkSchemaRefHashes,
+} from "../schema-doc-delivery.ts";
 import {
   acquireSchemaRegistryLease,
   lookupSchemaDocument,
@@ -1624,10 +1628,10 @@ export class StorageManager implements IStorageManager {
    * The space's key pair is generated here from random data. It opens one
    * session, as the space, through the same route every later session for
    * the DID takes, and signs one commit: `acl` as the space's access-control
-   * document, `genesis.root` as its reserved root pattern when one is given,
-   * and `genesis.spaceKind` as its declared kind when one is given. The
-   * session declares the same root and kind, which the server holds the
-   * commit to. The commit reads the document at sequence zero, so it lands
+   * document, `genesis.root` as its reserved root pattern when one is given
+   * (computed from the space's DID when it is a function), and
+   * `genesis.spaceKind` as its declared kind when one is given. The session
+   * declares the same root and kind, which the server holds the commit to. The commit reads the document at sequence zero, so it lands
    * only on a space with no history. The memory client resubmits the
    * identical commit after a lost connection until the server confirms or
    * refuses it. The key is held by nothing but this call, and is dropped when
@@ -1635,15 +1639,21 @@ export class StorageManager implements IStorageManager {
    */
   async createSpace(
     acl: ACL,
-    genesis: { root?: GenesisRoot; spaceKind?: string } = {},
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    } = {},
   ): Promise<MemorySpace> {
-    const { root, spaceKind } = genesis;
+    const key = await Identity.generate();
+    const space = key.did() as MemorySpace;
+    const { spaceKind } = genesis;
+    const root = typeof genesis.root === "function"
+      ? genesis.root(space)
+      : genesis.root;
     const declarations = {
       ...(root === undefined ? {} : { genesisRoot: root }),
       ...(spaceKind === undefined ? {} : { spaceKind }),
     };
-    const key = await Identity.generate();
-    const space = key.did() as MemorySpace;
     const aclId = aclDocId(space);
     const { client, session } = await this.#sessionFactory.create(
       space,
@@ -5354,11 +5364,51 @@ export class SpaceReplica
    * resolves as delivered (`EventAppendDuplicateError` — events.md §5's
    * duplicate-submission rule). The returned promise settles with the
    * delivery outcome; rendering never waits on it (the echo is local).
+   * The append carries the schema documents its payload's links reference
+   * and this space does not hold, as a transaction writing those links
+   * would (`#withPayloadSchemaDocuments`).
    */
   enqueueEventAppend(
     append: Omit<QueuedEventAppend, "clientSeq"> & { clientSeq?: number },
   ): Promise<EventAppendOutcome> {
-    return this.#ensureEventAppendQueue().enqueue(append);
+    return this.#ensureEventAppendQueue().enqueue(
+      this.#withPayloadSchemaDocuments(append),
+    );
+  }
+
+  /**
+   * Helper for `enqueueEventAppend()`, which returns `append` carrying the
+   * closure of schema documents behind its payload's link schemas, from the
+   * realm registry, less what this replica has confirmed the server holds.
+   * Gated on `contentAddressedSchemas` as a transaction's link scan is: only
+   * that writer stamps a link schema as a reference. Taken at enqueue, while
+   * the registry is certain to hold what the sender's links name; a document
+   * the server comes to hold meanwhile is installed as a no-op.
+   */
+  #withPayloadSchemaDocuments<T extends Pick<QueuedEventAppend, "payload">>(
+    append: T,
+  ): T {
+    if (!getContentAddressedSchemasConfig() || append.payload === undefined) {
+      return append;
+    }
+    const schemaDocuments: Record<string, JSONSchema> = {};
+    const { missing } = deliverSchemaDocumentClosure(
+      linkSchemaRefHashes(append.payload),
+      (hash) => this.isContentAddressedDocPersisted(hash),
+      (hash, schema) => {
+        schemaDocuments[hash] = schema;
+      },
+    );
+    for (const hash of missing.keys()) {
+      logger.warn("event-append-schema-doc-missing", () => [
+        "An event payload's link names a schema document the registry " +
+        "cannot supply:",
+        `cid:${hash}`,
+      ]);
+    }
+    return Object.keys(schemaDocuments).length === 0
+      ? append
+      : { ...append, schemaDocuments };
   }
 
   async resolveEventAttention(
@@ -8050,14 +8100,9 @@ export class SpaceReplica
       // Link positions — the `schema` metadata member was embedded above.
       // An `$alias`-shaped record in an arriving document is plain data,
       // never a delivery obligation.
-      mapLinkSchemas(doc as FabricValue, (schema) => {
-        for (
-          const hash of collectExternalSchemaRefHashes(schema as JSONSchema)
-        ) {
-          embed(hash, id);
-        }
-        return schema;
-      });
+      for (const hash of linkSchemaRefHashes(doc as FabricValue)) {
+        embed(hash, id);
+      }
     }
     for (const [id, document] of registered) {
       for (const dep of collectExternalSchemaRefHashes(document)) {
@@ -9484,14 +9529,9 @@ export class SpaceReplica
           }
         }
       } else {
-        mapLinkSchemas(upsert.doc as FabricValue, (schema) => {
-          for (
-            const hash of collectExternalSchemaRefHashes(schema as JSONSchema)
-          ) {
-            hashes.add(hash);
-          }
-          return schema;
-        });
+        for (const hash of linkSchemaRefHashes(upsert.doc as FabricValue)) {
+          hashes.add(hash);
+        }
       }
       return hashes;
     };
