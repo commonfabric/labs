@@ -17,6 +17,7 @@ import {
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
+import type { CfcConfClause } from "../src/cfc/clause.ts";
 import type { CfcPolicyRecordInput } from "../src/cfc/policy.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
@@ -128,7 +129,7 @@ const SINK = "fetchJson";
 const withRuntime = async (
   mode: CfcReleaseGateIntegrityMode,
   body: (runtime: Runtime) => Promise<void>,
-  policyRecords: CfcPolicyRecordInput[] = RELEASE_RULE,
+  policyRecords: readonly CfcPolicyRecordInput[] = RELEASE_RULE,
 ): Promise<void> => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -188,7 +189,7 @@ const seedLabeled = (
   runtime: Runtime,
   cause: string,
   value: FabricValue,
-  label: { confidentiality: unknown[]; integrity?: CfcAtom[] },
+  label: { confidentiality: CfcConfClause[]; integrity?: CfcAtom[] },
 ): Promise<void> => seedEntries(runtime, cause, value, [{ path: [], label }]);
 
 /** A room-confidential document holding one member's sealed note. */
@@ -542,6 +543,7 @@ describe("release-gate integrity", () => {
           const result = publish(runtime, "shared");
           expect(result.reasons).toEqual([]);
           expect(result.published).toBe('{"a":"1","b":"alice-secret"}');
+          expect(divergences(result)).toEqual([]);
         });
       });
 
@@ -798,7 +800,7 @@ describe("release-gate integrity", () => {
         });
       });
 
-      it("fails a floor `off` fails, whatever a location the read consumed is exempt as", async () => {
+      it("fails a floor that `off` fails when a consumed location reads as provenance plumbing", async () => {
         // The read's own label carries no `Vouched`, so the pooled floor
         // fails. Its one labeled location carries a template's integrity
         // beside a link's `Origin`, which the join must not take for
@@ -918,6 +920,42 @@ describe("release-gate integrity", () => {
             refusedAtSink(send(runtime, [["ballot", []], ["ballot", []]])),
           ).toBe(false);
         });
+      });
+    });
+  });
+
+  describe("the dial", () => {
+    it("throws when a transaction pinned at `enforce` is weakened", async () => {
+      await withRuntime("enforce", (runtime) => {
+        const tx = runtime.edit();
+        expect(() => tx.setCfcReleaseGateIntegrityMode("observe")).toThrow(
+          "cannot be weakened",
+        );
+        expect(() => tx.setCfcReleaseGateIntegrityMode("off")).toThrow(
+          "cannot be weakened",
+        );
+        tx.setCfcReleaseGateIntegrityMode("enforce");
+        expect(tx.getCfcState().releaseGateIntegrityMode).toBe("enforce");
+        tx.abort();
+        return Promise.resolve();
+      });
+    });
+
+    it("invalidates a prepared transaction when its rung changes", async () => {
+      await withRuntime("observe", async (runtime) => {
+        await seedBallot(runtime);
+        const tx = runtime.edit();
+        runtime.getCell(space, "ballot", undefined, tx).getRaw();
+        runtime.getCell(space, "ballot-store", PUBLIC_STORE_SCHEMA, tx).set({
+          out: "1",
+        });
+        tx.prepareCfc();
+        expect(tx.getCfcState().prepare.status).toBe("prepared");
+        tx.setCfcReleaseGateIntegrityMode("observe");
+        expect(tx.getCfcState().prepare.status).toBe("prepared");
+        tx.setCfcReleaseGateIntegrityMode("enforce");
+        expect(tx.getCfcState().prepare.status).toBe("invalidated");
+        tx.abort();
       });
     });
   });

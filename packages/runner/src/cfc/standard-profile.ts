@@ -266,10 +266,12 @@ export const MATERIAL_RISK_DISCHARGE_POLICY: readonly CfcPolicyRecordInput[] = [
 
 /**
  * The deployment standard profile: tier upgrades, value-screened discharge,
- * and the source-and-sink-bound influence discharge. Every rule here is safe
- * against tx-wide integrity aggregation, so it may run at real boundaries
- * under `cfcPolicyEvaluation`. Material-risk discharge is deliberately absent
- * (it lives in `MATERIAL_RISK_DISCHARGE_POLICY`, sanitizer-only).
+ * and the source-and-sink-bound influence discharge, run at real boundaries
+ * under `cfcPolicyEvaluation`. Its source binding keeps one source's evidence
+ * off another source's caveat, not one value's off another value's from the
+ * same source; the module doc says what keeps those apart. Material-risk
+ * discharge is deliberately absent (it lives in
+ * `MATERIAL_RISK_DISCHARGE_POLICY`, sanitizer-only).
  */
 export const STANDARD_PROMPT_CAVEAT_POLICY: readonly CfcPolicyRecordInput[] = [{
   id: "cfc:standard-prompt-caveat-profile",

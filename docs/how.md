@@ -506,7 +506,11 @@ mints move to a derived component, and the default sink ceiling is
 empty, so the harness is ahead of the core here. The render ceiling is
 on by default but a browser profile can opt out of it, and that boundary
 is held by the label and contract layer rather than by DOM
-sanitization, which has an open gap.
+sanitization, which has an open gap. The commit, sink and display gates
+match a rule's integrity guard against everything an access consumed,
+pooled, so one value's evidence can release another value's clause; the
+per-access join that would stop it sits at `observe`
+(`cfcReleaseGateIntegrity`), since it also refuses honest releases.
 `docs/development/EXPERIMENTAL_OPTIONS.md` carries every dial, its
 status, and where it is headed.
 

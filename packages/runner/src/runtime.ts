@@ -3929,7 +3929,11 @@ export class Runtime {
           confidentiality: [...consumed.confidentiality],
           integrity: [...consumed.integrity],
         },
-        locations: consumed.locations(),
+        // The release gates' per-access join reads these; at `off` nothing
+        // does, so the receipt carries none.
+        ...(finalPreparedState.releaseGateIntegrityMode === "off"
+          ? {}
+          : { locations: consumed.locations() }),
         labeledSpaces: [...(flow.labeledSpaces ?? [])],
         sources: consumed.sources.map((entry) => ({
           atom: entry.atom,

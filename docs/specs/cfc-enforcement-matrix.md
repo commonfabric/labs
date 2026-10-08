@@ -132,7 +132,11 @@ adds:
    same consumed labels the sink-request and input gates already fit, only
    rewritten first — so it may advance on its own schedule. It is only
    *useful* once `cfcPolicyRecords` are configured (an empty policy set makes
-   evaluation a no-op at every setting).
+   evaluation a no-op at every setting). Sound here is about the ordering
+   only: which integrity a rule is matched against is
+   `cfcReleaseGateIntegrity`'s, and below its `enforce` rung that integrity is
+   pooled across everything an access consumed, an under-taint the
+   conformance statement records.
 
 Everything else is free: a deployment may sit at any enforcement level with
 flow `off` (the floor and the explicit gate need no derived labels), and may

@@ -46,6 +46,7 @@ pooled floor failed, that a stamp vouched for atoms `carriedStampLabel` never
 withdraws, and that a cell's stored label at the display cannot be joined over
 its label view. After those were fixed the `enforce` run was taken again, with
 the same result: no failure in either suite.
+
 The pattern suite's zero is real (a hook in every `cf test` child recorded
 other diagnostics), and it is also narrow: every release the suite makes reads
 an endorsed value through a schema traversal, one shallow read per node, so no

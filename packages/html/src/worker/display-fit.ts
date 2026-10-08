@@ -74,8 +74,8 @@ export type DisplayFitSources = {
    * and when absent, it is everything those reads consumed, pooled; at
    * `enforce`, the per-access join of the integrity at the confidential
    * locations they consumed. `observe` fits as `off` does, and where
-   * {@link noteReleaseGateDivergence} is given, reports to it each label the
-   * join would refuse. A cell's stored label is fitted pooled at every rung.
+   * `noteReleaseGateDivergence` is given, reports to it each label the join
+   * would refuse. A cell's stored label is fitted pooled at every rung.
    */
   readonly releaseGateIntegrity?: CfcReleaseGateIntegrityMode;
 

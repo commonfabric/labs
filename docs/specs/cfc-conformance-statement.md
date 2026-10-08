@@ -286,7 +286,9 @@ dials.
   value's evidence releases another value's clause. §5.3 evaluates rules per
   access over the label it consumes, and §8.12.8 and §8.10.1.1 make that
   label's integrity the class-aware join: under-taint. The `enforce` rung
-  decides on that join (`accessIntegrity` in `cfc/access-integrity.ts`); what
+  decides on that join (`accessIntegrity` in `cfc/access-integrity.ts`),
+  except for a cell's stored label at the display, which `cellLabelRefusal`
+  fits pooled at every rung, so that under-taint survives `enforce`; what
   holds the default at `observe` is
   [`../plans/cfc-release-gate-integrity.md`](../plans/cfc-release-gate-integrity.md).
 - Nothing refuses `enforce-strict` with `cfcFlowLabels` below `persist`, a

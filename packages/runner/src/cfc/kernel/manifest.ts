@@ -227,10 +227,14 @@ export const MANIFEST: readonly ManifestRow[] = [
         file: "cfc/observation.ts",
         symbol: "joinCfcObservedConfidentiality",
       },
+      { file: "cfc/access-integrity.ts", symbol: "accessIntegrity" },
     ],
     note: "each concatenates and deduplicates confidentiality clauses; the " +
-      "integrity side is a plain union in `prepare.ts` and the class-aware " +
-      "meet exists only inside `deriveFlowJoin`",
+      "integrity side is a plain union in `prepare.ts`, the class-aware " +
+      "meet of hereditary atoms is inside `deriveFlowJoin`, and " +
+      "`accessIntegrity` joins the release gates' integrity class-aware but " +
+      "keeps a `TransformedBy` one stamp supplies at every location and " +
+      "leaves out locations with no confidentiality",
   },
   {
     file: CORE,

@@ -6950,11 +6950,6 @@ const verifyInputRequirements = (
     provenance.clockLessReads = clockLessReads;
   }
 
-  // Resolving one read's label joins every entry of that document's stored
-  // label map that bears on the read path, so the whole set costs the
-  // transaction's read count times those maps' sizes. Only a schema entry
-  // declaring `requiredIntegrity` or `maxConfidentiality` reads the result,
-  // so the set is assembled on first ask and kept for the rest of the call.
   // One path index per document's label map, built for the per-access join
   // the first time it resolves a read of that document.
   const labelIndexes = new Map<CfcMetadata, ConsumedLabelIndex>();
@@ -6966,6 +6961,12 @@ const verifyInputRequirements = (
     }
     return index;
   };
+
+  // Resolving one read's label joins every entry of that document's stored
+  // label map that bears on the read path, so the whole set costs the
+  // transaction's read count times those maps' sizes. Only a schema entry
+  // declaring `requiredIntegrity` or `maxConfidentiality` reads the result,
+  // so the set is assembled on first ask and kept for the rest of the call.
   const buildGatedReads = () => {
     const gatedReads = currentReads.flatMap((read, index) => {
       const path = gatePaths[index];
@@ -7275,8 +7276,7 @@ const verifyInputRequirements = (
       if (gateMode === "observe" && perAccess !== pooled) {
         tx.noteCfcDiagnostic(
           `release-gate-integrity(observe): the per-access join would ` +
-            `${perAccess ? "pass" : "fail"} requiredIntegrity at ` +
-            `/${entry.path.join("/")}`,
+            `fail requiredIntegrity at /${entry.path.join("/")}`,
         );
       }
       const ok = gateMode === "enforce" ? perAccess : pooled;
@@ -10179,6 +10179,10 @@ export const describeSinkReleaseRefusal = (
  * Claims registered by a consuming resolution are staged into receipt
  * writes at the end of `prepareBoundaryCommit` (the same pass), so
  * consumption commits atomically with the release.
+ *
+ * `grants`, when given, records what the transaction's grant resolver
+ * returns into its log, or, with `replay`, answers from that log alone and
+ * resolves nothing itself (`GrantLog`).
  */
 const evaluateGatedConfidentiality = (
   tx: IExtendedStorageTransaction,
@@ -10258,9 +10262,12 @@ const evaluateGatedConfidentiality = (
  * consumed, and `fits` decides a rewritten label against the site's ceiling.
  * It evaluates in the grant context `consumption` names, the one the decision
  * was made in, answering each grant lookup from `grantLog`, what the
- * decision's own lookups returned: it reads, records and stages nothing. A
- * grant only the join would have consulted resolves nothing here, so such a
- * release can be reported that a grant would have admitted.
+ * decision's own lookups returned, so it reads, records and stages no grant
+ * the decision did not. A grant only the join would have consulted resolves
+ * nothing here, so such a release can be reported that a grant would have
+ * admitted. Module policies resolve as the decision's do: a location's
+ * references are among the access's, and a manifest consulted twice is
+ * recorded once.
  *
  * The diagnostic also says whether each confidential location, evaluated on
  * its own integrity, would be admitted: a release that holds that way rests

@@ -123,7 +123,8 @@ the join; `prepare.ts` resolves what an access consumed into locations.
   rescue one value's evidence vouching for another. Its evaluations answer
   grant lookups from the decision's own, so `observe` reads, records and
   stages nothing the decision did not. At the display it computes the join
-  only for a host that listens.
+  only for a host that listens, and no shipped host does, so display
+  divergences are unmeasured.
 
 ## Related leaks the gates do not close
 
@@ -185,6 +186,11 @@ gates. Each is a separate change; none is fixed here.
       `observe`, and no failure at `enforce`, but honest shapes neither suite
       exercises (a pushed list, a `lift`'s object at a sink) are refused at
       `enforce` and admitted per location.
+- [ ] Before any gate's `enforce` lands as more than an opt-in rung: file the
+      ruling below, and mark the deciding sites (`accessIntegrity` and the
+      floor's per-location witness in `verifyInputRequirements`) with
+      `SPEC-PENDING` naming it, as the correspondence procedure requires of gap
+      code.
 - [ ] Decide with labs#8531's owner whether its carry lands first, or this
       lands first at `enforce` and accepts the refusals. The carry rescues a
       value derived from an endorsed output, never a direct read of it, so

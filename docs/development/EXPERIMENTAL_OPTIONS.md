@@ -21,7 +21,7 @@ in the same change.
 flags](#appendix-a-removed-and-never-shipped-flags) rather than deleting the
 > record, so the history stays discoverable.
 
-**Last reviewed:** 2026-09-29. Each flag's section carries the date its status
+**Last reviewed:** 2026-10-08. Each flag's section carries the date its status
 was last checked against the code.
 
 ## Summary table
@@ -899,8 +899,8 @@ deployment that wants a confidentiality gate on sqlite reads declares a
 ceiling for the sink, which the seam then applies.
 The bundle names no enforcement mode, so a runtime taking it keeps the core's
 `enforce-strict` pin, and it leaves `cfcDecomposedEnvelopes`,
-`cfcContentAddressedLabels`, `cfcTrustConfig` and
-`cfcPrefixProvenanceStats` alone. What it adds over the core pins is the
+`cfcContentAddressedLabels`, `cfcTrustConfig`, `cfcPrefixProvenanceStats`
+and `cfcReleaseGateIntegrity` alone. What it adds over the core pins is the
 deployment configuration — the standard prompt-caveat policy records and the
 per-sink confidentiality ceilings — plus `cfcDeclaredMonotonicity` at
 `enforce`. It is opt-in per runtime, never a fleet
