@@ -2,7 +2,9 @@
  * Stands in for Home around the host's share intake: it holds the owner's
  * private inbox, profiles and shared-space catalog, with Home's own catalog
  * handlers, and gives a sender handlers of its own that create a space and
- * offer it to the owner through the inbox the owner's profile points at.
+ * offer it to the owner through the inbox the owner's profile points at. It
+ * also holds a FabriChat manager, with a profile of its own, from which a
+ * sender creates a real room to offer.
  * Fixture for `share-intake-multi-runtime.test.ts`.
  */
 
@@ -23,6 +25,15 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import {
+  FabriChatManagerCore,
+  type FabriChatManagerInput,
+  type ManagerStreamEvent,
+} from "../../../fabrichat/manager.tsx";
+import {
+  type ChatProfile,
+  type ChatRequestOutcome,
+} from "../../../fabrichat/schemas.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home.tsx";
@@ -223,7 +234,8 @@ const offerAgain = handler<
   sendToPointedInbox(profiles, envelopeOf(event.id, event.space, event.title));
 });
 
-export interface MainInput {
+/** What the stand-in stores, the FabriChat manager's records among it. */
+export interface MainInput extends FabriChatManagerInput {
   privateInbox: Writable<Default<PrivateInboxHolder, Record<never, never>>>;
   profiles: Writable<Default<ProfileHomeOutput[], []>>;
   offered: Writable<Default<OfferedSpace[], []>>;
@@ -262,10 +274,27 @@ export interface MainOutput {
 
   /** Offers a space to the owner again, under another key. */
   offerAgain: Stream<OfferAgainRequest>;
+
+  /**
+   * Creates a group room from the stand-in's FabriChat manager, which a
+   * sender offers to the owner with `offerAgain`.
+   */
+  createChatGroup: Stream<ManagerStreamEvent>;
+
+  /** The outcome of each of the FabriChat manager's requests. */
+  chatRequests: Record<string, ChatRequestOutcome>;
 }
 
 export default pattern<MainInput, MainOutput>((
-  { privateInbox, profiles, offered },
+  {
+    privateInbox,
+    profiles,
+    offered,
+    rooms,
+    direct,
+    requests,
+    outgoingNotices,
+  },
 ) => {
   const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
     "retainedPrivateInboxes",
@@ -273,6 +302,13 @@ export default pattern<MainInput, MainOutput>((
   const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
     "privateInboxRefusal",
   );
+  const chats = FabriChatManagerCore({
+    myProfile: Writable.of<ChatProfile>({ name: "Sender" }),
+    rooms,
+    direct,
+    requests,
+    outgoingNotices,
+  });
   const catalog = new Writable<SharedSpaceCatalogStorage>({
     entries: {},
     offers: {},
@@ -305,5 +341,7 @@ export default pattern<MainInput, MainOutput>((
       offerRoom: offerRoom({ profiles, offered }),
     }),
     offerAgain: offerAgain({ profiles }),
+    createChatGroup: chats.createGroup,
+    chatRequests: chats.requests,
   };
 });
