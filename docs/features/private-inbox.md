@@ -454,7 +454,9 @@ catalog reads the live root when it opens the space.
 
 FabriChat's manager creates each room as its space's root, at that reserved
 address, in a space that declares itself a `fabrichat-room`, so an offer of a
-room it created passes both checks.
+room it creates passes both checks while the space's root stays at that
+address. A room in a space created without a kind is refused, as above,
+however it was made.
 
 Each refusal has a reason of its own, which its log entry names. A final one
 decides its row for good, and any other leaves the row to be vetted again, as
