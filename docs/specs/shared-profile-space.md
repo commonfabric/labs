@@ -139,7 +139,10 @@ Profile creation uses the **anonymous** `PatternFactory.inSpace()` (CT-1650):
 
 ```ts
 // Shown inside a pattern body.
-const profile = ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
+const profile = ProfileHome.inSpace(undefined, {
+  grants: { "*": "WRITE" },
+  root: true,
+})({
   initialName: name,
 });
 ```
@@ -158,11 +161,13 @@ per-session state at the least — so a space granting READ alone refuses the
 visit. The space's access list therefore protects nothing in a profile. The
 owner integrity on the profile's data fields does ([Authorization](#authorization)),
 and the profile's view state is per session, so a visitor's writes reach
-neither. The profile is not its space's root when created, since the space's
-genesis reserves none; an operator's repair, `cf profile repair-root`, links an
-existing profile there as the space cell's `defaultPattern`, so a host holding
-only the space's DID reaches it. The display name is independent of the space
-identity: it flows to
+neither. `root: true` makes the profile the space's root: the space's genesis
+commit reserves the root's address, and the commit placing the profile links it
+there as the space cell's `defaultPattern`, so a host holding only the space's
+DID reaches the profile. A profile space whose genesis reserved no root has no
+profile as its root until an operator's repair, `cf profile repair-root`,
+links its profile there, and is reached only through a link to its profile
+until then. The display name is independent of the space identity: it flows to
 `initialName`, which the profile shows until a name is stored in the profile's
 `name` cell, and into that cell itself at creation. The cell is initialized
 statically so it keeps its identity — and the name saved in it — across

@@ -11,9 +11,16 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
+import { popFrame, pushFrame } from "../src/builder/pattern.ts";
+import { principalOf } from "../src/builder/principal-of.ts";
+import { getEntityId } from "../src/create-ref.ts";
+import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
+import type { NormalizedFullLink } from "../src/link-utils.ts";
+import { inSpaceRootCause } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import { TestStorageManager } from "./memory-v2-test-utils.ts";
@@ -112,6 +119,85 @@ describe("profile-space-access", () => {
       await readerRuntime.dispose();
       await visitorRuntime.dispose();
       await disposeOwner();
+    }
+  });
+
+  it("gives two users' profiles different entities", async () => {
+    // A pattern keys a per-person record by the entity its profile names, as
+    // the lunch poll keys a vote, so two people's profiles must not name one.
+    const ownerRuntime = runtimeAs(owner);
+    const visitorRuntime = runtimeAs(visitor);
+    try {
+      const entityOf = async (link: NormalizedFullLink) => {
+        const listed = ownerRuntime.getCellFromLink(link);
+        await listed.sync();
+        return getEntityId(listed.resolveAsCell());
+      };
+      const ownerEntity = await entityOf(
+        await createProfileThroughHome(ownerRuntime, "Ada"),
+      );
+      const visitorEntity = await entityOf(
+        await createProfileThroughHome(visitorRuntime, "Grace"),
+      );
+      expect(ownerEntity).toBeDefined();
+      expect(visitorEntity).toBeDefined();
+      expect(visitorEntity).not.toEqual(ownerEntity);
+    } finally {
+      await visitorRuntime.dispose();
+      await ownerRuntime.dispose();
+    }
+  });
+
+  it("makes the profile its space's root, which a visitor's runtime finds from the space's DID alone", async () => {
+    const ownerRuntime = runtimeAs(owner);
+    const visitorRuntime = runtimeAs(visitor);
+    try {
+      const profileLink = await createProfileThroughHome(ownerRuntime, "Ada");
+      const profileSpace = profileLink.space as MemorySpace;
+
+      // The link in Home's list names the profile through a slot that links
+      // on to it, and a host holding that link resolves it there.
+      const listed = visitorRuntime.getCellFromLink(profileLink);
+      await listed.sync();
+      const profile = listed.resolveAsCell().getAsNormalizedFullLink();
+
+      // What the visitor holds here is the space's DID and nothing else. The
+      // space's genesis commit reserved the root's address, and the space
+      // cell links the profile, at that address, as the root.
+      const root = await resolveSpaceRootPattern(visitorRuntime, profileSpace);
+      expect(root?.getAsNormalizedFullLink()).toMatchObject({
+        space: profileSpace,
+        id: profile.id,
+        path: [],
+      });
+      expect(profile.id).toBe(
+        visitorRuntime.getCell(profileSpace, inSpaceRootCause(profileSpace))
+          .getAsNormalizedFullLink().id,
+      );
+      expect(
+        readGenesisRoot(await server.engineForSpace(profileSpace)),
+      ).toEqual({ cause: inSpaceRootCause(profileSpace) });
+
+      // The profile reached that way still says whom it represents, which is
+      // what a host checks before taking it for its owner's.
+      await root!.sync();
+      const tx = visitorRuntime.edit();
+      const frame = pushFrame({
+        runtime: visitorRuntime,
+        tx,
+        space: visitor.did(),
+        frameKind: "handler",
+        inHandler: true,
+      });
+      try {
+        expect(principalOf(root, "represents-principal")).toBe(owner.did());
+      } finally {
+        popFrame(frame);
+        tx.abort();
+      }
+    } finally {
+      await visitorRuntime.dispose();
+      await ownerRuntime.dispose();
     }
   });
 });
