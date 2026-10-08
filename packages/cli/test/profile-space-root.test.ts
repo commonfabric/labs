@@ -137,14 +137,16 @@ describe("profileSpaceRoot()", () => {
     snapshotDir = await Deno.makeTempDir({ prefix: "repair-root-snapshot-" });
     serve();
     unrooted = await createProfileThroughHome(runtimeAs(unrootedOwner), "U", {
-      root: false,
+      shape: "not-root",
     });
     planted = await createProfileThroughHome(runtimeAs(plantedOwner), "P", {
-      root: false,
+      shape: "not-root",
     });
-    rooted = await createProfileThroughHome(runtimeAs(rootedOwner), "R");
+    rooted = await createProfileThroughHome(runtimeAs(rootedOwner), "R", {
+      shape: "root",
+    });
     unlisted = await createProfileThroughHome(runtimeAs(unlistedOwner), "N", {
-      root: false,
+      shape: "not-root",
     });
 
     // The planted profile's space gets the root an open of it would have

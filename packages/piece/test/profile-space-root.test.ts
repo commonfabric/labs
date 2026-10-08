@@ -78,7 +78,7 @@ describe("profile-space-root", () => {
    */
   const legacyProfile = async () => {
     const listed = await createProfileThroughHome(runtimeAs(owner), "Ada", {
-      root: false,
+      shape: "not-root",
     });
     const controller = new PiecesController(
       { as: admin, space: listed.space as MemorySpace },

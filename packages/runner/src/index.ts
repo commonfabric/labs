@@ -241,7 +241,7 @@ export {
   getPieceReconciliation,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
-  IN_SPACE_ROOT_CAUSE,
+  inSpaceRootCause,
   isStoredArgumentSchemaRefusal,
   mergeSchemaDefaults,
   patternIdentityKey,

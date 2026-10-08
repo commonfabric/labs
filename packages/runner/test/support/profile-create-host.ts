@@ -1,10 +1,9 @@
 /**
  * Creates profiles the way Home does, through the real `profile-create.tsx`,
  * for tests that need a profile in a space of its own, on a memory server that
- * enforces access-control lists. A test can also create a profile the way
- * one was made before profiles were their space's root, in a space whose
- * genesis reserved no root, without depending on how `profile-create.tsx`
- * makes a root.
+ * enforces access-control lists. A test can instead create a profile of a
+ * shape it names, its space's root or not, without depending on what the
+ * create pattern currently does about roots.
  */
 
 import { fromFileUrl } from "@std/path";
@@ -67,7 +66,7 @@ const read = (name: string) => Deno.readTextFileSync(sysDir + name);
 
 /**
  * A host that owns a Home-like `profiles` list and embeds the real create
- * pattern, which makes each profile its space's root.
+ * pattern.
  */
 const CREATE_HOST = [
   "import ProfileCreate from './profile-create.tsx';",
@@ -82,11 +81,12 @@ const CREATE_HOST = [
 ].join("\n");
 
 /**
- * A host with the same list and stream that creates each profile the way
- * profiles were made before they were their space's root: an anonymous
- * `inSpace()` granting every principal `WRITE`, with no root.
+ * A host with the same list and stream that creates each profile with an
+ * anonymous `inSpace()` granting every principal `WRITE`, passing `ROOT_OPTION`
+ * in its place: nothing, for a profile that is not its space's root, or
+ * `root: true` for one that is.
  */
-const EARLIER_SHAPE_HOST = [
+const SHAPED_HOST = [
   "import { handler, pattern, Writable } from 'commonfabric';",
   "import ProfileHome, { type ProfileHomeOutput } from './profile-home.tsx';",
   "",
@@ -95,7 +95,7 @@ const EARLIER_SHAPE_HOST = [
   "  { profiles: Writable<ProfileHomeOutput[]> }",
   ">((event, { profiles }) => {",
   "  profiles.push(",
-  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WRITE' } })({",
+  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WRITE' }ROOT_OPTION })({",
   "      initialName: event.name,",
   "    }) as ProfileHomeOutput,",
   "  );",
@@ -107,12 +107,19 @@ const EARLIER_SHAPE_HOST = [
   "});",
 ].join("\n");
 
-/** The host program: the real create pattern, or with `root: false` the earlier shape. */
-function hostProgram(root: boolean): RuntimeProgram {
+/** How a profile is created: by the real create pattern, or in a shape named. */
+export type ProfileShape = "create" | "root" | "not-root";
+
+/** The host program that creates a profile of `shape`. */
+function hostProgram(shape: ProfileShape): RuntimeProgram {
+  const main = shape === "create" ? CREATE_HOST : SHAPED_HOST.replace(
+    "ROOT_OPTION",
+    shape === "root" ? ", root: true" : "",
+  );
   return {
     main: "/main.tsx",
     files: [
-      { name: "/main.tsx", contents: root ? CREATE_HOST : EARLIER_SHAPE_HOST },
+      { name: "/main.tsx", contents: main },
       { name: "/profile-create.tsx", contents: read("profile-create.tsx") },
       { name: "/profile-home.tsx", contents: read("profile-home.tsx") },
     ],
@@ -146,9 +153,10 @@ function createEvent(name: string): { name: string } {
 /**
  * Creates a profile named `name` through the create pattern, run by `runtime`
  * in its user's home space, and returns the link the host's list holds, which
- * names the slot that links on to the profile. With `root: false` the profile
- * is created the way profiles were before they were their space's root, so
- * its space's genesis reserves no root.
+ * names the slot that links on to the profile. `shape` says how: `create`,
+ * the default, through the real create pattern; `root`, as its space's root,
+ * reserved in the space's genesis; `not-root`, in a space whose genesis
+ * reserves no root.
  * The host's root lives at `hostCause` in the home space.
  *
  * @throws Error when a commit fails or the list does not end up holding
@@ -157,12 +165,12 @@ function createEvent(name: string): { name: string } {
 export async function createProfileThroughHome(
   runtime: Runtime,
   name: string,
-  options: { root?: boolean; hostCause?: string } = {},
+  options: { shape?: ProfileShape; hostCause?: string } = {},
 ): Promise<NormalizedFullLink> {
   const space = runtime.userIdentityDID as MemorySpace;
   const setupTx = runtime.edit();
   const host = await runtime.patternManager.compilePattern(
-    hostProgram(options.root ?? true),
+    hostProgram(options.shape ?? "create"),
     { space, tx: setupTx },
   );
   const result = runtime.run(

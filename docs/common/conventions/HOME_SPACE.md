@@ -88,7 +88,7 @@ The home default pattern stores them as a list, plus a chosen default and a
 most-recently-used (MRU) ordering:
 
 - `homeSpaceCell.defaultPattern.profiles` — the list of profile links (each a
-  cross-space link to a `profile-home.tsx` piece in its own space).
+  cross-space link to a `profile-home.tsx` default pattern in its own space).
 - `homeSpaceCell.defaultPattern.defaultProfile` — a slot holding, under
   `profile`, the link to the profile `#profile` resolves to in headless mode and
   that the picker selects by default; no `profile` while none is chosen. The
@@ -117,25 +117,19 @@ is appended to `profiles`. The home Profile tab renders the **profile picker**
 (`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
 the default, and stamp MRU. There is no `profileName` mirror field anymore.
 
-The create passes `root: true`, so the profile is its space's root: the space's
-genesis commit reserves the root's address, the space cell's `defaultPattern`
-links the profile there, and a host holding only the profile space's DID
-reaches the profile as it reaches any space's root.
-
-A profile space whose genesis reserved no root, which is every profile space
-created before the create passed `root: true`, gets its profile as its root
-from an operator's repair, `cf profile repair-root` (the
-[CLI README](../../../packages/cli/README.md) describes running it): the
-space cell's `defaultPattern` links the existing profile, replacing a root an
-open of the space created and nothing was added to, and leaving any other root
-alone. Such a profile is not at the reserved address, since a genesis commit
-cannot gain a reservation afterward, and it is a root like any other in a space
-that grants every principal `WRITE`: anyone can link something else there. A
-host that finds a person's profile from the space's DID therefore takes the
-root only when it is a piece in that space, rather than a path into one, and
-its label says it represents the person the host expects. Until the repair
-reaches it, such a profile is reached only through a link to it, such as the
-one in `profiles`.
+A profile's space reserves no root in its genesis commit, so a profile is not
+its space's root when it is created, and is reached through a link to it, such
+as the one in `profiles`. An operator's repair, `cf profile repair-root` (the
+[CLI README](../../../packages/cli/README.md) describes running it), makes an
+existing profile its space's root: the space cell's `defaultPattern` links the
+profile, replacing a root an open of the space created and nothing was added
+to, and leaving any other root alone. A host holding only the profile space's
+DID then reaches the profile as it reaches any space's root. That root is a
+root like any other in a space that grants every principal `WRITE`, so anyone
+can link something else there. A host that finds a person's profile from the
+space's DID therefore takes the root only when it is a piece in that space,
+rather than a path into one, and its label says it represents the person the
+host expects.
 
 `profiles`/`defaultProfile`/`mru` are CFC-protected profile-link data, created
 through the trusted profile-create / picker surfaces. Untrusted writes are

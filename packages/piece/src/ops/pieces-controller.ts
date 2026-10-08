@@ -40,7 +40,7 @@ import {
   getPatternSource,
   getPieceSourceSnapshot,
   idStringForEntityAddress,
-  IN_SPACE_ROOT_CAUSE,
+  inSpaceRootCause,
   isCell,
   isLink,
   isStoredArgumentSchemaRefusal,
@@ -716,7 +716,7 @@ export class PiecesController<T = unknown> {
    */
   #isInSpaceRoot(root: Cell<NameSchema>): boolean {
     return root.equalLinks(
-      this.runtime.getCell(this.#space, IN_SPACE_ROOT_CAUSE),
+      this.runtime.getCell(this.#space, inSpaceRootCause(this.#space)),
     );
   }
 
