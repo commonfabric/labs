@@ -103,6 +103,69 @@ describe("output-binding-scoped-link", () => {
     });
   });
 
+  /**
+   * An output location whose broad instance links to its user instance,
+   * whose user instance links to its session instance, which holds `stored`.
+   */
+  const chainedOutput = (stored: unknown) => {
+    const output = runtime.getCell<unknown>(
+      space,
+      `chain-${seq}`,
+      undefined,
+      tx,
+    );
+    const broad = output.getAsNormalizedFullLink();
+    const user = createCell<unknown>(runtime, { ...broad, scope: "user" }, tx);
+    const session = createCell<unknown>(
+      runtime,
+      { ...broad, scope: "session" },
+      tx,
+    );
+    session.set(stored);
+    user.setRaw(
+      createSigilLinkFromParsedLink(session.getAsNormalizedFullLink(), {
+        base: user.getAsNormalizedFullLink(),
+      }),
+    );
+    output.setRaw(
+      createSigilLinkFromParsedLink(user.getAsNormalizedFullLink(), {
+        base: broad,
+      }),
+    );
+    const binding = createSigilLinkFromParsedLink(broad, {
+      overwrite: "redirect",
+    });
+    const result = runtime.getCell<unknown>(
+      space,
+      `result-${seq}`,
+      undefined,
+      tx,
+    );
+    return { output, user, session, binding, result };
+  };
+
+  it("keeps every hop of a stored chain when the run's reads narrowed to its middle", () => {
+    const { output, user, session, binding, result } = chainedOutput(1);
+
+    sendValueToBinding(tx, result, undefined, binding, 2, {
+      narrowestReadScope: "user",
+    });
+
+    expect(session.get()).toBe(2);
+    expect(parseLink(output.getRaw(), output)).toMatchObject({ scope: "user" });
+    expect(parseLink(user.getRaw(), user)).toMatchObject({ scope: "session" });
+  });
+
+  it("keeps every hop of a stored chain when the run's reads did not narrow", () => {
+    const { output, user, session, binding, result } = chainedOutput(1);
+
+    sendValueToBinding(tx, result, undefined, binding, 3, {});
+
+    expect(session.get()).toBe(3);
+    expect(parseLink(output.getRaw(), output)).toMatchObject({ scope: "user" });
+    expect(parseLink(user.getRaw(), user)).toMatchObject({ scope: "session" });
+  });
+
   it("writes a broad output over a plain stored value", () => {
     const output = runtime.getCell<unknown>(
       space,

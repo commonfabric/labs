@@ -106,6 +106,50 @@ describe("declared-scope-read-ratchet", () => {
     expect(tx.getNarrowestReadScope()).toBe("user");
   });
 
+  /** A holder whose `flag` is a handle declared at `scope`, with a default. */
+  const handleHolderSchema = (scope: CellScope) =>
+    ({
+      type: "object",
+      properties: {
+        flag: {
+          type: "boolean",
+          default: false,
+          asCell: [{ kind: "cell", scope }],
+        },
+      },
+    }) as const satisfies JSONSchema;
+
+  for (const scope of ["session", "user"] as const) {
+    it(`narrows to a declared ${scope} scope when a whole-object read builds a handle over the link`, () => {
+      const target = runtime.getCell(
+        space,
+        `handle-${scope}-${seq}`,
+        undefined,
+        tx,
+      );
+      target.setRaw(true);
+      const link = target.getAsNormalizedFullLink();
+      const holder = runtime.getCell<{ flag: Cell<boolean> }>(
+        space,
+        `handle-holder-${scope}-${seq}`,
+        handleHolderSchema(scope),
+        tx,
+      );
+      holder.setRaw({
+        flag: linkRefFrom<CellLinkRefPayload>({
+          id: link.id,
+          space: link.space,
+          scope: "space",
+          path: [],
+        }),
+      } as never);
+
+      tx.resetNarrowestReadScope();
+      expect(holder.get().flag.get()).toBe(true);
+      expect(tx.getNarrowestReadScope()).toBe(scope);
+    });
+  }
+
   it("keeps the read scope where a position is declared at the link's own scope", () => {
     const target = runtime.getCell(space, `broad-${seq}`, undefined, tx);
     const holder = holderLinkingTo(target, "space");

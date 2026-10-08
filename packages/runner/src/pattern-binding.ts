@@ -252,12 +252,13 @@ const descriptorForPartialCauseAlias = (
  *
  * A broad output location that holds a link to its own narrower-scoped
  * instance was written by a computation whose reads narrowed. A later run
- * whose reads did not narrow, in this process or another, still writes
- * behind that link rather than over it: the link is what every reader of the
- * broad location follows to its own instance, and replacing it with one
- * reader's plain value would make the next reader whose reads narrow put it
- * back, with no run ever converging. The reads here are an internal
- * write-placement decision: kept out of scheduling and CFC taint.
+ * whose reads did not narrow that far, in this process or another, still
+ * writes behind the chain rather than over any link of it: the links are
+ * what every reader of the broad location follows to its own instance, and
+ * replacing one with a plain value, or with a hop past an intermediate
+ * instance, would make the next reader whose reads narrow put it back, with
+ * no run ever converging. The reads here are an internal write-placement
+ * decision: kept out of scheduling and CFC taint.
  */
 function storedOutputScope(
   tx: IExtendedStorageTransaction,
@@ -281,16 +282,6 @@ function storedOutputScope(
     at = { ...ref, scope: link.scope };
   }
   return scope;
-}
-
-/** The narrower of two optional scopes; `undefined` when both are. */
-function narrowerOutputScope(
-  a: CellScope | undefined,
-  b: CellScope | undefined,
-): CellScope | undefined {
-  if (a === undefined) return b;
-  if (b === undefined) return a;
-  return scopeRank(a) >= scopeRank(b) ? a : b;
 }
 
 /**
@@ -402,10 +393,35 @@ function sendValueToBindingInner<T>(
       "writeRedirect",
       { preserveOverwrite: true },
     );
-    const outputScope = narrowerOutputScope(
-      options.narrowestReadScope,
-      storedOutputScope(tx, ref),
-    );
+    const stored = storedOutputScope(tx, ref);
+    const outputScope = options.narrowestReadScope;
+    if (
+      stored !== undefined &&
+      (outputScope === undefined ||
+        scopeRank(stored) >= scopeRank(outputScope))
+    ) {
+      // The chain of links already in place reaches an instance at least
+      // as narrow as this run's reads did. The result lands there, and every
+      // link of the chain stays as it is: the broad slot's hop, and any
+      // intermediate hop another principal follows, are what every reader
+      // uses to reach an instance of its own.
+      const storedRef = { ...ref, scope: stored };
+      const valueLink = isCellLink(value) ? parseLink(value, ref) : undefined;
+      if (
+        valueLink === undefined ||
+        !areNormalizedLinksSame(valueLink, storedRef)
+      ) {
+        diffAndUpdate(
+          cellRuntime(cell),
+          tx,
+          storedRef,
+          value,
+          { cell: cell.getAsNormalizedFullLink(), binding },
+          { meta: ignoreReadForScheduling, schemaRole: "output" },
+        );
+      }
+      return;
+    }
     if (
       outputScope !== undefined &&
       scopeRank(outputScope) > scopeRank(ref.scope)

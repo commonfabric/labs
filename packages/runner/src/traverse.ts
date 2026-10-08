@@ -2698,6 +2698,26 @@ const schemaScopeForSelector = (selector?: SchemaPathSelector) =>
 const schemaFollowScopeCap = (schema: unknown): SchemaScope | undefined =>
   ContextualFlowControl.getSchemaScopeCap(schema as JSONSchema | undefined);
 
+const _schemaScopeCapCache = new WeakMap<object, SchemaScope | undefined>();
+
+/**
+ * {@link schemaFollowScopeCap}, memoized by schema identity. Handle
+ * construction asks it of every element read as a handle, and the elements
+ * of one array share one declaration, so the reference resolution behind the
+ * answer runs once per declaration rather than once per element.
+ */
+function schemaFollowScopeCapMemoized(
+  schema: JSONSchema | undefined,
+): SchemaScope | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  if (_schemaScopeCapCache.has(schema)) {
+    return _schemaScopeCapCache.get(schema);
+  }
+  const cap = schemaFollowScopeCap(schema);
+  _schemaScopeCapCache.set(schema, cap);
+  return cap;
+}
+
 /**
  * The key `TraversalContext.missingLinkTargetDocs` holds a document under: its
  * space, its scope and its id, since one id names a different document in
@@ -6392,6 +6412,13 @@ function getNextCellLink(
         ? combined
         : schemaForSpaceCrossing(tx, doc.address.space, combined),
     };
+    // A handle built over a link is that link followed from the position
+    // the handle is declared at, as much as a value read through it is.
+    noteDeclaredReadScope(
+      tx,
+      schemaFollowScopeCapMemoized(schema),
+      lastLink.scope,
+    );
     noteLinkCrossing(context, doc.address, target);
     return target;
   }
