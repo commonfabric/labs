@@ -276,7 +276,8 @@ Detection is provenance-first:
    because the binding can be reassigned. A call through a `const` binding of
    a `lift(...)` call classifies as the builder `lift`; lift-applied is
    reserved for a call whose callee is the `lift(...)` call itself
-   (`test/ast/call-kind.test.ts`)
+   (`test/ast/call-kind.test.ts`; fixture
+   `closures/computed-mutable-lift-binding`)
 3. synthetic helper support for `__cfHelpers.*` nodes introduced by earlier
    passes
 

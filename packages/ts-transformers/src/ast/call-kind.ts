@@ -615,8 +615,8 @@ export function getLiftAppliedInputAndCallback(
   // call's callee as a CallExpression (the inner `lift(...)` factory). That is
   // the only way detectCallKind produces kind:"lift-applied" — see its
   // recognition in resolveExpressionKind (requires ts.isCallExpression(target)).
-  // A call through a binding of a `lift()` call is the builder `lift` instead,
-  // per liftFactoryBindingKind(), because its callee is the binding.
+  // resolveSymbolKind() does not carry it across a binding, whose call has the
+  // binding as its callee.
   // Lift is function-first, so the callback is inner argument zero even after
   // schema injection or scheduler options; the applied input is outer arg zero.
   // detectCallKind's lift-applied result proves this structural invariant.
@@ -2201,16 +2201,18 @@ function resolveSymbolKind(
         seen,
       );
       if (!nested) continue;
-      const kind = nested.kind === "lift-applied"
-        ? liftFactoryBindingKind(nested)
-        : nested;
+      // `resolveExpressionKind()` reads the initializer as a callee, so
+      // `lift-applied` here describes a call whose callee is the initializer.
+      // A call through this binding has the binding as its callee, so that
+      // kind never carries across it.
+      if (nested.kind === "lift-applied") continue;
       if (
-        kind.kind === "builder" &&
+        nested.kind === "builder" &&
         !isConstVariableDeclaration(declaration)
       ) {
         continue;
       }
-      return kind;
+      return nested;
     }
   }
 
@@ -2227,22 +2229,6 @@ function resolveSymbolKind(
   }
 
   return undefined;
-}
-
-/**
- * The kind of a call through a binding whose initializer classifies as
- * `lift-applied`. `resolveExpressionKind()` reads that initializer as a
- * callee, and `lift-applied` claims the callee _is_ the inner `lift()` call,
- * which holds for the initializer but not for a call whose callee is the
- * binding. Such a call applies the lift factory the binding holds, which is
- * the builder kind `lift` the builder resolver reports for a `const` binding.
- */
-function liftFactoryBindingKind(
-  liftApplied: Extract<CallKind, { kind: "lift-applied" }>,
-): Extract<CallKind, { kind: "builder" }> {
-  return liftApplied.symbol
-    ? { kind: "builder", symbol: liftApplied.symbol, builderName: "lift" }
-    : { kind: "builder", builderName: "lift" };
 }
 
 function createNamedCallKind(

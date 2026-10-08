@@ -125,7 +125,8 @@ function findFirstArrowFunction(sourceFile: ts.SourceFile): ts.ArrowFunction {
 
 /**
  * A program holding a call through a `const` binding of a `lift()` call
- * (`viaConst`) and one through a `let` binding of the same (`viaLet`).
+ * (`viaConst`), one through a `let` binding of the same (`viaLet`), and one
+ * through a `let` binding of an applied `lift()` call (`viaLetApplied`).
  */
 function createLiftBindingProgram() {
   return createProgram(`
@@ -134,8 +135,11 @@ function createLiftBindingProgram() {
     const constBound = lift((value: number) => value + 1);
     let letBound = lift((value: number) => value + 1);
 
+    let appliedBound = lift((value: number) => () => value)(1);
+
     const viaConst = constBound(1);
     const viaLet = letBound(1);
+    const viaLetApplied = appliedBound();
   `);
 }
 
@@ -214,6 +218,17 @@ describe("call-kind", () => {
       expect(
         detectCallKind(findCallInitializer(sourceFile, "viaLet"), checker)
           ?.kind,
+      ).toBeUndefined();
+    });
+
+    it("returns `undefined` for a call through a `let` binding of an applied `lift()` call", () => {
+      const { sourceFile, checker } = createLiftBindingProgram();
+
+      expect(
+        detectCallKind(
+          findCallInitializer(sourceFile, "viaLetApplied"),
+          checker,
+        )?.kind,
       ).toBeUndefined();
     });
   });
@@ -497,6 +512,17 @@ describe("call-kind", () => {
       expect(
         getLiftAppliedInputAndCallback(
           findCallInitializer(sourceFile, "viaLet"),
+          checker,
+        ),
+      ).toBeUndefined();
+    });
+
+    it("returns `undefined` for a call through a `let` binding of an applied `lift()` call", () => {
+      const { sourceFile, checker } = createLiftBindingProgram();
+
+      expect(
+        getLiftAppliedInputAndCallback(
+          findCallInitializer(sourceFile, "viaLetApplied"),
           checker,
         ),
       ).toBeUndefined();
