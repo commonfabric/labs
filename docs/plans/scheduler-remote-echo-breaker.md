@@ -238,7 +238,7 @@ rising order of plumbing:
    ships this.
 2. **A scheduler stat** — `scheduler.getEchoBreakerStats()` returns
    `{ active, trips, cyclesObserved }`: the pairs whose backoff is in force
-   right now, the pairs that have tripped, and the echo steps counted. `active`
+   right now, the cumulative trip count, and the echo steps counted. `active`
    counts deadlines rather than tripped pairs, so a loop that ended without a
    convergence step stops counting once its last backoff runs out. The
    prototype ships this.

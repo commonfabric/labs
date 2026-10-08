@@ -3474,7 +3474,7 @@ export class Scheduler {
   /**
    * The remote-echo breaker's visible counts
    * (docs/plans/scheduler-remote-echo-breaker.md §3): pairs whose backoff is in
-   * force now, pairs that have tripped, and echo cycles counted. All zero
+   * force now, the cumulative trip count, and echo cycles counted. All zero
    * unless the `remoteEchoBreaker` flag is on.
    */
   getEchoBreakerStats(): EchoBreakerStats {

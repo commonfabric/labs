@@ -45,7 +45,10 @@ export interface EchoBreakerStats {
   /** Pairs whose backoff is in force right now. */
   readonly active: number;
 
-  /** Pairs that have entered the tripped state since construction. */
+  /**
+   * Trips since construction. A pair that clears and later trips again
+   * counts again; renewals of a trip in force do not count.
+   */
   readonly trips: number;
 
   /** Echo cycles counted since construction, renewals included. */
