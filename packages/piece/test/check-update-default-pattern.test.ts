@@ -2061,6 +2061,10 @@ describe("opening a space root", () => {
     expect(getPatternIdentityRef(after)?.identity).toBe(handlerRef.identity);
     // The repair added the stream `bump` registers on.
     expect(manifestOf(after)).not.toEqual(manifest);
+    // It validated no stored argument, so it records no setup: the marker
+    // still names no pattern. The controller's re-stage, which does validate
+    // the argument, is decided by that marker and not by the manifest.
+    expect(getPatternSetupIdentityRef(after)).toBeUndefined();
     (after.key("bump") as unknown as { send: (e: unknown) => void }).send({});
     await runtime.idle();
     await (after as unknown as { pull: () => Promise<unknown> }).pull();
