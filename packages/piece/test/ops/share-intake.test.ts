@@ -6,6 +6,7 @@ import type { ACL } from "@commonfabric/memory/acl";
 import {
   ACLManager,
   type Cell,
+  inSpaceRootCause,
   type MemorySpace,
   Runtime,
   type RuntimeProgram,
@@ -89,10 +90,7 @@ export default pattern(() => {
   }],
 };
 
-/**
- * A root whose result declares the members a `fabrichat-room` root declares,
- * and no more.
- */
+/** A stand-in for a room, which an offered space's root runs. */
 const roomProgram: RuntimeProgram = {
   main: "/room.tsx",
   files: [{
@@ -116,22 +114,6 @@ export default pattern(() => {
     sendMessage: sendMessage({ messages }),
   };
 });`,
-  }],
-};
-
-/** A root declaring all but one of the members a room's root declares. */
-const almostRoomProgram: RuntimeProgram = {
-  main: "/almost.tsx",
-  files: [{
-    name: "/almost.tsx",
-    contents: `
-import { pattern, Writable } from "commonfabric";
-
-export default pattern(() => ({
-  about: { kind: "group" },
-  messages: new Writable<string[]>([]).for("messages"),
-  recentActivity: new Writable<string[]>([]).for("recentActivity"),
-}));`,
   }],
 };
 
@@ -198,21 +180,27 @@ describe("share-intake", () => {
 
   /**
    * A space granting `grants`, owned by the owner unless `owner` says
-   * otherwise, whose root is a piece running `root`, a room's by default: a
-   * plain document, recording no pattern, for `"document"`, and none for
-   * `false`. For `"elsewhere"` its root pointer reaches a document in another
-   * space, and for `"inside"` a path inside a document in the space.
+   * otherwise, whose genesis commit reserves its root at
+   * the address `inSpaceRootCause()` derives there and declares `spaceKind`, `fabrichat-room`
+   * by default, or no kind for `null`. Its root is a room placed at the
+   * reserved address, a room placed elsewhere in the space for `"misplaced"`,
+   * and none for `false`. For `"elsewhere"` its root pointer reaches a
+   * document in another space, and for `"inside"` a path inside a document in
+   * the space.
    */
   async function offeredSpace(
     grants: ACL,
-    { owner, root = roomProgram }: {
+    { owner, root = "reserved", spaceKind = "fabrichat-room" }: {
       owner?: string;
-      root?: RuntimeProgram | "document" | "elsewhere" | "inside" | false;
+      root?: "reserved" | "misplaced" | "elsewhere" | "inside" | false;
+      spaceKind?: string | null;
     } = {},
   ): Promise<MemorySpace> {
     const space = await runtime.createSpace({
       grants,
       ...(owner === undefined ? {} : { owner: owner as never }),
+      root: (created) => ({ cause: inSpaceRootCause(created) }),
+      ...(spaceKind === null ? {} : { spaceKind }),
     });
     if (root === "elsewhere" || root === "inside") {
       const holding = root === "elsewhere"
@@ -225,25 +213,33 @@ describe("share-intake", () => {
           (root === "inside" ? piece.key("room" as never) : piece) as never,
         );
       });
-    } else if (root === "document") {
-      const piece = runtime.getCell<unknown>(space, crypto.randomUUID());
-      await runtime.editWithRetry((tx) => {
-        piece.withTx(tx).set({ name: "Room" } as never);
-        runtime.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
-          piece as never,
-        );
-      });
     } else if (root !== false) {
-      // Disposing a controller disposes the runtime, which `afterEach` does
-      // through the Home space's controller.
-      const rooms = new PiecesController(
-        createSession({ identity, spaceDid: space }),
-        runtime,
-      );
-      await rooms.synced();
-      await installCustomRoot(runtime, rooms, root);
+      await placeRoom(space, root === "reserved");
     }
     return space;
+  }
+
+  /**
+   * Places a room in `space` and links it as the space's root, at the address
+   * the space's genesis reserves when `reserved`, and at a fresh one when not.
+   */
+  async function placeRoom(
+    space: MemorySpace,
+    reserved: boolean,
+  ): Promise<void> {
+    // Disposing a controller disposes the runtime, which `afterEach` does
+    // through the Home space's controller.
+    const rooms = new PiecesController(
+      createSession({ identity, spaceDid: space }),
+      runtime,
+    );
+    await rooms.synced();
+    await installCustomRoot(
+      runtime,
+      rooms,
+      roomProgram,
+      reserved ? { cause: inSpaceRootCause(space) } : {},
+    );
   }
 
   /** An offer of `space` from the sender, with `fields` replacing its own. */
@@ -509,7 +505,7 @@ describe("share-intake", () => {
       ]);
     });
 
-    it("is registered by the result schema stored on its root, without loading the root's pattern", async () => {
+    it("is registered without loading its root's pattern", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       using loads = stub(
         runtime.patternManager,
@@ -554,6 +550,26 @@ describe("share-intake", () => {
       ).toEqual(["victim of a refusal"]);
     });
 
+    it("is registered when its inbox next changes after its space's root is linked back at the reserved address", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        root: "misplaced",
+      });
+      const other = await offeredSpace({ [sender]: "WRITE" });
+      const intake = start();
+      await deliver([offerOf(space, "linked back")]);
+      await deliver([offerOf(other, "first barrier")]);
+      await registeredThrough("first barrier");
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "linked back"))
+        .toEqual(["space-root-misplaced"]);
+
+      await placeRoom(space, true);
+      await deliver([offerOf(other, "second barrier")]);
+
+      expect(registeredIds(await registeredThrough("linked back"))).toContain(
+        "linked back",
+      );
+    });
+
     it("is registered when its inbox next changes after its space comes to grant its sender", async () => {
       const space = await offeredSpace({ [someoneElse]: "WRITE" });
       const other = await offeredSpace({ [sender]: "WRITE" });
@@ -582,6 +598,52 @@ describe("share-intake", () => {
       await intake.idle();
 
       expect(conflictsLogged() - before).toBe(1);
+    });
+
+    it("is left unreported, and `idle()` resolves, when reading the receipt of Home's handling fails", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let receiptReads = 0;
+      const asked = Promise.withResolvers<void>();
+      const failure = Promise.withResolvers<never>();
+      // The runtime, but for a read by link of anything in Home's space, which
+      // is where Home's handler writes the receipt of each handling. That read
+      // fails once `failure` is rejected.
+      const unreadable = new Proxy(runtime, {
+        get(target, name) {
+          if (name === "getCellFromLink") {
+            return (link: { space?: string }, ...rest: never[]) => {
+              if (link.space !== home.space) {
+                return target.getCellFromLink(link as never, ...rest);
+              }
+              receiptReads++;
+              asked.resolve();
+              return { pull: () => failure.promise };
+            };
+          }
+          const value = Reflect.get(target, name, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const intake = startShareIntakeOf(
+        unreadable as never,
+        home,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      const before = conflictsLogged();
+      await deliver([offerOf(space, "unread", { title: "Conflicting" })]);
+      await asked.promise;
+      // Waited on from before the read fails, so that a failure the intake let
+      // through would reject the wait.
+      const settled = intake.idle();
+      failure.reject(new Error("receipt unreadable"));
+      await settled;
+
+      expect(receiptReads).toBe(1);
+      expect(conflictsLogged() - before).toBe(0);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "unread"))
+        .toEqual(["sent"]);
     });
 
     it("is registered when its inbox next changes after sending it to Home failed", async () => {
@@ -854,27 +916,39 @@ describe("share-intake", () => {
       });
     });
 
-    it("is not registered, and is logged, when the space's root declares fewer members than its kind's", async () => {
+    it("is not registered, and is logged, when its space declares another kind", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" }, {
-        root: almostRoomProgram,
+        spaceKind: "photo-album",
       });
 
-      expect(await refuse(offerOf(space, "almost"))).toEqual({
+      expect(await refuse(offerOf(space, "album"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decisions: ["space-root-wrong-kind"],
+        decisions: ["space-kind-mismatch"],
       });
     });
 
-    it("is not registered, and is logged, when the space's root stores no result schema", async () => {
+    it("is not registered, and is logged, when its space declares no kind", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" }, {
-        root: "document",
+        spaceKind: null,
       });
 
-      expect(await refuse(offerOf(space, "patternless"))).toEqual({
+      expect(await refuse(offerOf(space, "unkinded"))).toEqual({
         ids: ["barrier"],
         logged: 1,
-        decisions: ["space-root-wrong-kind"],
+        decisions: ["space-kind-undeclared"],
+      });
+    });
+
+    it("is not registered, and is logged, when the space's root is not at the address its genesis reserves", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        root: "misplaced",
+      });
+
+      expect(await refuse(offerOf(space, "misplaced"))).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decisions: ["space-root-misplaced"],
       });
     });
 
@@ -911,6 +985,36 @@ describe("share-intake", () => {
         decisions: ["space-root-missing"],
       });
     });
+
+    for (
+      const [declared, spaceKind, refusal] of [
+        ["another kind", "photo-album", "space-kind-mismatch"],
+        ["no kind", null, "space-kind-undeclared"],
+      ] as const
+    ) {
+      it(`is not vetted again when the inbox changes after it, when its space declares ${declared}`, async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+        const refused = await offeredSpace({ [sender]: "WRITE" }, {
+          spaceKind,
+        });
+        const original = runtime.spaceKind.bind(runtime);
+        const reads: string[] = [];
+        using _counting = stub(runtime, "spaceKind", (each) => {
+          reads.push(each);
+          return original(each);
+        });
+        const intake = start();
+        await deliver([offerOf(refused, "decided")]);
+        await deliver([offerOf(space, "first barrier")]);
+        await registeredThrough("first barrier");
+        await deliver([offerOf(space, "second barrier")]);
+        await registeredThrough("second barrier");
+
+        expect(reads.filter((each) => each === refused)).toEqual([refused]);
+        expect(intake.accessForTestingOnly.decisionsFor(sender, "decided"))
+          .toEqual([refusal]);
+      });
+    }
 
     it("is logged once, though the inbox changes again after it", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
@@ -1037,6 +1141,33 @@ describe("share-intake", () => {
       expect(
         registeredIds(await registeredThrough("after the failed read")),
       ).toEqual(["read again", "after the failed read"]);
+    });
+
+    it("logs the failure, and vets the offer again when its inbox next changes, when the host cannot tell its space's kind", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const original = runtime.spaceKind.bind(runtime);
+      let failures = 1;
+      using _unknowing = stub(
+        runtime,
+        "spaceKind",
+        (each) =>
+          failures-- > 0
+            ? Promise.reject(new Error("kind unknown"))
+            : original(each),
+      );
+      const intake = start();
+      const before = vettingFailuresLogged();
+      await deliver([offerOf(space, "kind unknown")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(vettingFailuresLogged() - before).toBe(1);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "kind unknown"))
+        .toEqual([]);
+      await deliver([offerOf(space, "after the unknown kind")]);
+
+      expect(
+        registeredIds(await registeredThrough("after the unknown kind")),
+      ).toEqual(["kind unknown", "after the unknown kind"]);
     });
 
     it("refuses the offer when reading its space's access list fails for want of access", async () => {

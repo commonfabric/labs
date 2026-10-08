@@ -19,6 +19,7 @@ import {
   FabricEpochNsec,
   isWellFormedDID,
 } from "commonfabric";
+import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
 // Reviewed surfaces
@@ -139,6 +140,25 @@ export interface ChatProfile {
 
 /** A live link to a person's profile. */
 export type ProfileCell = Cell<ChatProfile>;
+
+/**
+ * The part of a person's profile a manager reads: what a room reads, and
+ * where to offer the person a room. Only a manager reads the inbox pointer,
+ * so the inbox's shape is part of no room's contract.
+ */
+export interface ChatManagerProfile extends ChatProfile {
+  /**
+   * Where the person's offers are delivered, as the profile types its pointer:
+   * a link naming nothing of the inbox but its name. An inbox labels its
+   * offers confidential to its owner, and a run reading the pointer as a link
+   * to more of the inbox, or untyped, takes that label on, which then refuses
+   * its sends.
+   */
+  inbox?: ProfileInbox;
+}
+
+/** A live link to a person's profile, as a manager reads it. */
+export type ManagerProfileCell = Cell<ChatManagerProfile>;
 
 //
 // Room records
@@ -444,6 +464,13 @@ export type ChatRequestOutcome =
     /** Why. */
     reason: string;
   };
+
+/**
+ * The `kind` of a room's own space, as the space declares it, and as an offer
+ * of the room to a member's share inbox and a user's shared-space catalog name
+ * it.
+ */
+export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
 
 /** A notice a manager's request produced, for a client to deliver. */
 export interface ChatManagerNotice {

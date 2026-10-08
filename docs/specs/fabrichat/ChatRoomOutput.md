@@ -15,8 +15,11 @@ interface ChatRoomOutput {
   /** What the room recorded recently, in `seq` order. */
   recentActivity: ChatRoomActivity[];
 
-  /** The space's participants, plus any author it doesn't list. */
+  /** The room's participants, plus any author it doesn't list. */
   participants: Cell<ChatProfile>[];
+
+  /** Adds a profile to those who joined the room, once. */
+  addParticipant: Stream<{ profile: Cell<ChatProfile> }>;
 
   /** The highest `seq` dropped from `recentActivity` for age; 0 for none. */
   recentActivityExpiredThrough: number;
@@ -63,9 +66,16 @@ A room is the chat of a social space (see [social
 spaces](README.md#social-spaces)): a piece in that space, and a space has at
 most one. A conversation the user starts, direct or group, gets a space of its
 own, which the user's chat manager ([`ChatManagerOutput`](ChatManagerOutput.md))
-creates with the room as its chat, and never a placement, an adapter, or a
-container. An existing social space's chat is created in it by whatever sets the
-space up. Either way the space's default pattern, not the room, is its root.
+creates with the room as its root, and never a placement, an adapter, or a
+container. Such a room is a social space in its own right: opening its space
+shows the room, and the room lists the space's participants itself. The room
+is at the address the space's genesis reserves for a root, and the space
+declares itself a `fabrichat-room`
+([space kinds](../../features/space-kinds.md)), which is how a host vetting an
+offer of the room tells what the space is. An existing social space's chat is
+created in it by whatever sets the space up, and that space's root stays its
+own. Either way, a room can also be shown in any other social space, through a
+placement and an adapter, and there the other space's root stays the root.
 
 When the manager creates a space for a conversation, the creator and each
 other member hold OWNER. Its access list MUST NOT contain the `"*"`
@@ -89,9 +99,13 @@ A room keeps no membership of its own. Who is in its space, and with what
 access, is the space's business: its access list changes through the space's
 own tools, such as the CLI's `cf acl`, and, for a room in a space of its own,
 through the room's [`addMember`](#addmembertarget--value-string-), from
-which any OWNER admits someone else as OWNER. Its default pattern lists its
-participants' profiles, claims each member contributes by joining the space
-(`participants`, through `wish({ query: "#default" })`). The two can disagree:
+which any OWNER admits someone else as OWNER. Its root lists its
+participants' profiles, claims each member contributes by joining the space: a
+room in a space of its own is that root, and keeps them itself, each added
+through [`addParticipant`](#addparticipantprofile-cellchatprofile); a room in
+an existing social space reads them from that space's root
+(`wish({ query: "#default" })`), then lists those who joined the room itself.
+The two can disagree:
 a member who has never joined has no entry, and an entry whose principal has
 lost access stays until it's cleaned up. A consumer MUST NOT treat an entry as
 proof of access.
@@ -122,8 +136,8 @@ space.
 - The room stores no names or avatars. Messages and reactions link people's
   profiles ([`ChatProfile`](ChatProfile.md)) and copy nothing from them.
 - **`participants`** are links to profiles, compared with `equals()`: the
-  profiles the space's default pattern lists, plus any author it doesn't. They
-  are not proof of access.
+  profiles its space's root lists, as [membership](#membership) says, plus any
+  author none of them is, each once. They are not proof of access.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, and `latest`, the newest messages of
   the main conversation, which every member can read, a READ member included. It
@@ -486,18 +500,35 @@ repeated or delayed event can't undo what the person meant.
 - `target.value: string` — The chat address of the person to admit: a
   principal's DID, as the room's add control holds it.
 
-Admits someone to a room's space. Unlike the streams above, it is part of the
-room's own rendering, not of `[VIEWS]`: only that rendering's add control can
-send it.
+Admits someone to a room's space. Unlike the streams above, it is on the room's
+output but not in `[VIEWS]`.
 
-- **Admitted:** as a trusted DOM gesture on `ChatAddMemberSurface`, from an
-  OWNER of the room's space, for a room in a space of its own. A host's
-  reviewed action that is not a DOM gesture is refused.
+- **Admitted:** as a trusted gesture on `ChatAddMemberSurface`, from the room's
+  rendered add control or from a client's own control through the sanctioned
+  issuing path (see [`clients.md`](clients.md#the-sanctioned-issuing-path)),
+  from an OWNER of the room's space, for a room in a space of its own.
 - **Effect:** grants the principal OWNER on the room's space, so they too may
   add others. Granting someone the OWNER they already hold changes nothing.
 - **Refused:** an address that is not a principal's DID, a sender without
   OWNER, a room that shares an existing space, and anything the space's access
   list refuses. The rendering tells the session what came of its add.
+
+### `addParticipant(profile: Cell<ChatProfile>)`
+
+- `profile: Cell<ChatProfile>` — A person's profile, as the live cell in its
+  own space.
+
+Adds a profile to those who joined the room: for a room in a space of its own,
+the participants it keeps for its space. Unlike the streams in the table, it
+takes no `requestId`: a profile already listed is not added again, so a repeat
+changes nothing. Like them, and unlike `addMember`, it is in `[VIEWS]`. Any
+participant may add any profile, so an entry is a claim. A member's chat
+manager adds its user when it creates or accepts the room.
+
+- **Admitted:** without a reviewed gesture.
+- **Effect:** adds the profile to the room's participants, unless it is listed
+  already. The profile's document must carry a label, as a profile does; one
+  that carries none is refused.
 
 ## Renderings
 

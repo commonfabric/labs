@@ -2,8 +2,8 @@
  * The host's share intake: it follows the offers in the private inboxes Home
  * holds and retains, vets each one as the owner, and registers each offer that
  * passes in Home's shared-space catalog through Home's `registerSharedSpace`
- * stream. Vetting reads the offered space's access list and root, and the
- * result schema stored on the root's document, which a Home handler cannot do;
+ * stream. Vetting reads the offered space's access list, the kind it declares,
+ * and its root, which a Home handler cannot do;
  * `docs/features/private-inbox.md` describes the whole arrangement.
  */
 
@@ -14,10 +14,10 @@ import {
   ACLManager,
   type Cancel,
   type Cell,
+  inSpaceRootCause,
   isCell,
   type NormalizedFullLink,
   normalizeSpaceHost,
-  readResultSchemaMeta,
   type Runtime,
   sendEvent,
 } from "@commonfabric/runner";
@@ -32,26 +32,19 @@ const logger = getLogger("piece.share-intake");
 export const LOOM_OFFER_KIND = "loom";
 
 /**
- * The kinds of offer the intake admits, each with the members a root of that
- * kind declares in its result schema. An offer of a kind not here is refused
- * and left in its inbox, and one whose space's root declares fewer members is
- * refused as not of its kind. The members are the ones a kind's contract
- * fixes, and that no other kind's root is expected to declare all of.
+ * The kinds of offer the intake admits, each a kind of space, as
+ * `docs/features/space-kinds.md` lists them. An offer of a kind not here is
+ * refused and left in its inbox, and so is one whose space declares another
+ * kind, or none. Each is a kind whose space's root is the one
+ * `inSpace(..., { root: true })` places, at the address the space's genesis
+ * commit reserves for it.
  *
- * - `fabrichat-room`, a FabriChat room, whose root's result is a
- *   `ChatRoomOutput` (`docs/specs/fabrichat/ChatRoomOutput.md`): `about`,
- *   `messages`, `sendMessage` and `recentActivity`.
+ * - `fabrichat-room`, a standalone FabriChat room's own space, whose root is
+ *   the room.
  */
-export const ADMITTED_OFFER_KINDS: Readonly<
-  Record<string, readonly string[]>
-> = Object.freeze({
-  "fabrichat-room": Object.freeze([
-    "about",
-    "messages",
-    "sendMessage",
-    "recentActivity",
-  ]),
-});
+export const ADMITTED_SPACE_KINDS: ReadonlySet<string> = new Set([
+  "fabrichat-room",
+]);
 
 /** Why an offer is not registered. */
 export type OfferRefusal =
@@ -60,8 +53,10 @@ export type OfferRefusal =
   | "offer-foreign-host"
   | "sender-not-member"
   | "recipient-access-refused"
+  | "space-kind-undeclared"
+  | "space-kind-mismatch"
   | "space-root-missing"
-  | "space-root-wrong-kind";
+  | "space-root-misplaced";
 
 /**
  * What an instance decided about an offer: `sent` to Home's
@@ -135,29 +130,36 @@ export function startShareIntakeOf(
  *   `host` and a nonempty `ownerOrigin` are each an origin, as
  *   `normalizeSpaceHost()` reads one, and every string fits the bounds the
  *   inbox cuts to;
- * - its `kind` is one of {@link ADMITTED_OFFER_KINDS};
+ * - its `kind` is one of {@link ADMITTED_SPACE_KINDS};
  * - its `host` is this runtime's own, compared as `normalizeSpaceHost()`
  *   normalizes both, since that is the host whose memory this one reads;
  * - `from` holds a `WRITE` or `OWNER` entry of its own in the space's access
  *   list, a grant to every principal (`"*"`) not counting;
  * - the identity can open the space, holding `WRITE` or `OWNER` there, its own
  *   or every principal's;
- * - the space has a root, and the result schema stored on the root's document
- *   declares every member {@link ADMITTED_OFFER_KINDS} lists for the kind. That
- *   schema is what the root's creator wrote, so it classifies the root by its
- *   creator's claim; no code of the root's is loaded or run to read it.
+ * - the space declares `kind` as its own kind, as `Runtime.spaceKind()` reads
+ *   it from the space's genesis commit. That kind is what the space's creator
+ *   declared, so it classifies the space by its creator's claim;
+ * - the space has a root, and the root is the document at the address the
+ *   space's genesis commit reserves for an `inSpace(..., { root: true })`
+ *   root, the address `inSpaceRootCause()` derives in the space, so that a
+ *   root a member with `WRITE` has linked in place of that one is refused.
+ *
+ * No code of the space's is loaded or run to vet an offer.
  *
  * Each row of an inbox is decided by its whole content, so a row naming
  * another offer's sender and `id` decides nothing about that offer. A row
  * that is sent, skipped for its receipt, or refused for something in the row
- * itself (its envelope, its `kind` or its `host`) is decided for the life of
- * the instance. A row refused for the state of its space (an access list or a
- * root) is vetted again the next time its inbox's offers change; a change to
- * the space alone does not bring that about. A refusal is logged once per
- * row, under `piece.share-intake`, with its reason, and so is a `conflict`
- * Home's handler returns for a row it was sent. A failure to read what
- * vetting needs, other than a refusal of access, leaves the row to be vetted
- * when its inbox next changes. Nothing consumes an offer or deletes it.
+ * itself (its envelope, its `kind` or its `host`) or for the kind its space
+ * declares, which never changes, is decided for the life of the instance. A
+ * row refused for the state of its space (an access list or a root) is vetted
+ * again the next time its inbox's offers change; a change to the space alone
+ * does not bring that about. A refusal is logged once per row, under
+ * `piece.share-intake`, with its reason, and so is a `conflict` Home's handler
+ * returns for a row it was sent. A failure to read what vetting needs, other
+ * than a refusal of access, leaves the row to be vetted when its inbox next
+ * changes; so does a space whose kind the host cannot tell. Nothing consumes
+ * an offer or deletes it.
  *
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
@@ -534,13 +536,10 @@ export class ShareIntake {
    * {@link ShareIntake} lists the checks.
    *
    * @throws When reading the space's access list or root fails other than by
-   *   a refusal of access.
+   *   a refusal of access, or when the host cannot tell the space's kind.
    */
   async #refusalOf(offer: VettableOffer): Promise<OfferRefusal | undefined> {
-    const members = Object.hasOwn(ADMITTED_OFFER_KINDS, offer.kind)
-      ? ADMITTED_OFFER_KINDS[offer.kind]
-      : undefined;
-    if (members === undefined) return "offer-kind-unknown";
+    if (!ADMITTED_SPACE_KINDS.has(offer.kind)) return "offer-kind-unknown";
     if (offer.host !== this.#host) return "offer-foreign-host";
     const runtime = this.#runtime;
     let stored;
@@ -563,6 +562,12 @@ export class ShareIntake {
     if (!isWriter(acl?.[this.#identity] ?? acl?.["*"])) {
       return "recipient-access-refused";
     }
+    // An access list naming a concrete owner was written by the space's
+    // genesis commit or after it, so the kind read here is the one the space
+    // keeps.
+    const kind = await runtime.spaceKind(offer.space);
+    if (kind === undefined) return "space-kind-undeclared";
+    if (kind !== offer.kind) return "space-kind-mismatch";
     // When the pointer reaches no document of the space, this read returns
     // the space cell's own `defaultPattern` key, so the path check is what
     // refuses a pointer into another space. The space check covers a read that
@@ -571,9 +576,12 @@ export class ShareIntake {
       !isCell(root) || root.space !== offer.space ||
       root.getAsNormalizedFullLink().path.length !== 0
     ) return "space-root-missing";
-    const declared = await declaredResultMembers(root);
-    if (!members.every((member) => declared.has(member))) {
-      return "space-root-wrong-kind";
+    if (
+      !root.equalLinks(
+        runtime.getCell(offer.space, inSpaceRootCause(offer.space)),
+      )
+    ) {
+      return "space-root-misplaced";
     }
     return undefined;
   }
@@ -592,14 +600,15 @@ interface RowDecision {
 }
 
 /**
- * The refusals that turn on the state of an offer's space rather than on the
- * row itself, which a row is vetted for again when its inbox changes.
+ * The refusals that turn on state of an offer's space that can change, rather
+ * than on the row itself or on the kind its space declares, which a row is
+ * vetted for again when its inbox changes.
  */
 const STATE_REFUSALS: ReadonlySet<OfferDecision> = new Set([
   "sender-not-member",
   "recipient-access-refused",
   "space-root-missing",
-  "space-root-wrong-kind",
+  "space-root-misplaced",
 ]);
 
 /**
@@ -618,26 +627,6 @@ function offerIdentity(from: unknown, id: unknown): string {
 function rowKey(raw: Record<string, unknown>): string {
   return JSON.stringify(
     Object.keys(raw).sort().map((field) => [field, raw[field]]),
-  );
-}
-
-/**
- * The members the result schema stored on `root`'s document declares, or
- * none when it stores none or names none. The schema is read from the
- * document itself, so no code of the root's is loaded or run. A schema stored
- * as a reference whose documents have not arrived declares none.
- */
-async function declaredResultMembers(
-  root: Cell<unknown>,
-): Promise<Set<string>> {
-  // Loads the root's document, and with it the schema stored on it, and none
-  // of its result.
-  await root.asSchema({ type: "object", properties: {} }).pull();
-  const schema = readResultSchemaMeta(root);
-  return new Set(
-    isObjectNotArray(schema) && isObjectNotArray(schema.properties)
-      ? Object.keys(schema.properties)
-      : [],
   );
 }
 

@@ -291,9 +291,9 @@ Each is bounded and mostly independent. Several are fail-safe today.
   keys reject list*, so a spec-conformant author is **rejected**, not honored.
   Reconcile the spelling and honor §8.7.3 boundary-verified transformer-minted
   semantics. (audit 3.6.)
-- **`propagationClass` registry drift.** Working hand-maintained 12-atom map with a
-  fail-safe `value-bound` default, but it diverges from §15 (`PromptSlotBound`
-  classed value-bound vs spec provenance; `IntegritySummary` absent). Code-generate
+- **`propagationClass` registry drift.** Working hand-maintained atom map with a
+  fail-safe `value-bound` default, but it diverges from §15 (`IntegritySummary`
+  absent). Code-generate
   the map from a shared registry, or add a parity test that fails when §15 gains a
   hereditary family absent from `CLASS_BY_TYPE`. (SC-10/15/17.)
 - **`classification: string[]` shorthand not lowered.** No `classificationToAtoms`

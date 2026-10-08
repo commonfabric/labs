@@ -102,7 +102,13 @@ that contract, before code in this repository relies on it.
 
 | Kind | The space |
 | --- | --- |
-| `fabrichat-room` | A standalone FabriChat room's own space, a chat-only social space whose root is the room ([FabriChat](../specs/fabrichat/README.md)) |
+| `fabrichat-room` | A standalone FabriChat room's own space, a chat-only social space whose root is the room, at the address the space's genesis commit reserves for a root `inSpace(..., { root: true })` places ([FabriChat](../specs/fabrichat/README.md)) |
+
+Home's share intake reads the kind: it admits an offer of a `fabrichat-room`
+space only when the space declares that kind, and refuses an offer of a space
+declaring another kind or none, for good, since the kind never changes. A host
+that cannot tell the kind leaves the offer to be vetted again;
+[the private inbox](private-inbox.md#the-share-intake) describes the intake.
 
 A container that hosts a chat among other things declares its own kind, not
 `fabrichat-room`. A kind says what a space is; it is not a list of what the
@@ -115,7 +121,9 @@ change it. The memory server checks its form and who made it, never whether
 the space is what it says: a creator can declare `fabrichat-room` for a space
 whose root is no chat room at all. A reader that needs more than the claim
 checks the rest itself: for a `fabrichat-room` space, at least that the root
-the space links is a piece of the space itself.
+the space links is a piece of the space itself, at the address the space's
+genesis commit reserves for it, since a member with `WRITE` can link another
+document as the root. The share intake checks both.
 
 ## On the wire
 

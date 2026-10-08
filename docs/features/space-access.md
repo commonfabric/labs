@@ -67,6 +67,22 @@ document, so its own read scope is `user` as well and its value lands in a
 per-user instance too. That holds on a client, and on a serving runtime, where
 two principals demanding the same derived value each get their own.
 
+## Another principal's level
+
+`spaceAccessOf(target, principal)` returns `principal`'s level, where
+`spaceAccess(target)` returns the caller's own, read from the same access list
+the same way. It is a function of its own because the two answers differ in
+kind: the caller's own depends on who is asking, and narrows a computation to
+a per-user value; another principal's does not. A
+handler that must know whether the principal a label names still belongs to
+the space asks this: the Loom root lets an OWNER remove a panel whose attested
+adder the list grants nothing. The answer does not depend on who is asking, so
+a call in a computation leaves the computation's read scope as it was, and the
+memory server's refusal of this runtime's session, which says something only
+about the caller's own principal, does not enter into it: the list alone
+decides, and `undefined` means it has not arrived. A `principal` that is not a
+well-formed DID throws; `*` is not a principal.
+
 ## `"none"` and `undefined`
 
 | Answer | When |

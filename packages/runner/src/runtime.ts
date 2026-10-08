@@ -141,7 +141,7 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "./reader-schema-precedence-config.ts";
 import {
-  IN_SPACE_ROOT_CAUSE,
+  inSpaceRootCause,
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
@@ -1047,8 +1047,8 @@ export interface InSpaceCreationRequest {
   grants?: ACL;
 
   /**
-   * Whether the genesis commit reserves the root at
-   * {@link IN_SPACE_ROOT_CAUSE}.
+   * Whether the genesis commit reserves the root at the address
+   * {@link inSpaceRootCause} derives in the created space.
    */
   root?: boolean;
 
@@ -4320,8 +4320,9 @@ export class Runtime {
    * `owner` defaults to the identity this runtime acts as. A serving runtime
    * acts as a service, and a space it creates on a user's behalf must be
    * owned by that user, so a serving runtime requires `owner`. `root`
-   * reserves the space's root pattern in the same commit, and `spaceKind`
-   * declares the space's kind there; see `IStorageManager.createSpace`.
+   * reserves the space's root pattern in the same commit, either as given or
+   * as derived from the new space's DID, and `spaceKind` declares the space's
+   * kind there; see `IStorageManager.createSpace`.
    *
    * @throws If the storage manager cannot create spaces, if the memory server
    *   refuses the genesis commit, or if a serving runtime supplies no owner.
@@ -4330,7 +4331,7 @@ export class Runtime {
     options: {
       owner?: DID;
       grants?: ACL;
-      root?: GenesisRoot;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
       spaceKind?: string;
     } = {},
   ): Promise<MemorySpace> {
@@ -4496,12 +4497,13 @@ export class Runtime {
    * creates them: the run a client makes of the same handler is a
    * speculative echo of the serving runtime's, and a space it created would
    * be one no record ever names, so a client leaves a name with no record
-   * unresolved, and throws {@link InSpaceTargetUnresolved}. With `options.root`,
-   * the space's genesis commit reserves its root at
-   * {@link IN_SPACE_ROOT_CAUSE}, for the run that records it to place there,
-   * and with `options.spaceKind` it declares the space's kind. A record
-   * naming an existing space is the answer whatever the request, so a space
-   * created before a request named a kind keeps the kind it was created
+   * unresolved, and throws {@link InSpaceTargetUnresolved}. With
+   * `options.root`, the space's genesis commit reserves its root at the
+   * address {@link inSpaceRootCause} derives there, for the run that records
+   * it to place there, and with `options.spaceKind` it declares the space's
+   * kind. A record naming an existing space is the answer whatever the
+   * request, so a space created before a request named a kind keeps the kind
+   * it was created
    * with.
    * A record naming a DID that has no history is reported rather than
    * replaced: the record is immutable, and replacing the space it names would
@@ -4547,7 +4549,9 @@ export class Runtime {
       const created = this.#inSpaceCreated.get(creationKey) ??
         await this.createSpace({
           ...access,
-          ...(root ? { root: { cause: IN_SPACE_ROOT_CAUSE } } : {}),
+          ...(root
+            ? { root: (created) => ({ cause: inSpaceRootCause(created) }) }
+            : {}),
         });
       this.#inSpaceCreated.set(creationKey, created);
       return created;

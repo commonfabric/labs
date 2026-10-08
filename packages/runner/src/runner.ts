@@ -1251,10 +1251,16 @@ export const SEALING_SOURCE_UPDATE_REFUSAL =
 
 /**
  * The cause of the root `PatternFactory.inSpace(..., { root: true })` places
- * in the space it creates. The space's genesis commit reserves the address it
- * derives there, so the root's address is fixed before the run that places it.
+ * in `space`, the space it creates. The space's genesis commit reserves the
+ * address it derives there, so the root's address is fixed before the run that
+ * places it. The cause names `space`, so the roots of two such spaces are two
+ * entities, and a pattern keying a record by the entity a root names, as one
+ * keys a person's record by their profile, keeps one person's record apart
+ * from another's.
  */
-export const IN_SPACE_ROOT_CAUSE = "in-space-root";
+export function inSpaceRootCause(space: MemorySpace): string {
+  return `in-space-root:${space}`;
+}
 
 /**
  * Reports work which failed after storage accepted a pattern setup.
@@ -12766,7 +12772,7 @@ export class Runner {
       targetSpace,
       // A space's root sits where its genesis reservation says, which the
       // reservation fixed before this output existed.
-      module.targetSpaceRoot ? IN_SPACE_ROOT_CAUSE : {
+      module.targetSpaceRoot ? inSpaceRootCause(targetSpace) : {
         resultFor: {
           space: outputRedirect.space,
           id: outputRedirect.id,

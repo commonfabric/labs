@@ -423,12 +423,10 @@ offer is registered when:
   as `receive` keeps one it was not given or could not read, or else such an
   origin, every string fits the length `receive` cuts it to, and `sharedAt` is
   a nonnegative integer;
-- its `kind` is one the intake admits, which `ADMITTED_OFFER_KINDS` in the
-  intake's module lists, each with the members a root of that kind declares:
-  for `fabrichat-room`, `about`, `messages`, `sendMessage` and
-  `recentActivity`, members of `ChatRoomOutput` as
-  `docs/specs/fabrichat/ChatRoomOutput.md` defines it. An offer of any other
-  kind is refused, and stays in the inbox for a reader that knows it;
+- its `kind` is one the intake admits, which `ADMITTED_SPACE_KINDS` in the
+  intake's module lists: `fabrichat-room`, a kind of space as
+  [`space-kinds.md`](space-kinds.md) lists it. An offer of any other kind is
+  refused, and stays in the inbox for a reader that knows it;
 - its `host` is the origin of the host the intake runs against, the one whose
   memory it can read, with both normalized as `normalizeSpaceHost()` normalizes
   a host, so a default port or a trailing slash makes no difference;
@@ -437,19 +435,44 @@ offer is registered when:
   principal holds that;
 - the owner can open `space` and holds `WRITE` or `OWNER` there, through an
   entry of its own or the grant to every principal;
-- `space` has a root, its space cell linking a piece in `space` itself, as
-  `inSpace()` makes one with `root: true`; and the result schema stored on the
-  root's document declares every member its kind lists.
+- `space` declares the offer's `kind` as its own, in its genesis commit, as
+  `Runtime.spaceKind()` reads it;
+- `space` has a root, its space cell linking a piece in `space` itself, and
+  that piece is at the address the space's genesis commit reserves for a root
+  `inSpace()` makes with `root: true`: the address `inSpaceRootCause(space)`
+  derives in `space`.
 
-The kind check classifies a root by the result schema stored on its document,
-which whoever created the root wrote, so it is the sender's claim and no more;
-the intake loads and runs none of the root's code to read it. A consumer of the
+The kind check reads the kind the space's creator declared, which nobody can
+change afterward, so it is the creator's claim and no more; the intake loads
+and runs none of the space's code to read it. A space created without a kind
+never has one, so an offer of it is refused, whatever its root. The root check
+is what a `fabrichat-room` space's contract asks of a reader beyond the claim,
+as "What a kind does not vouch for" in [`space-kinds.md`](space-kinds.md)
+says: a member with `WRITE` can link another document as the space's root,
+and the intake refuses an offer of the space while it does. A consumer of the
 catalog reads the live root when it opens the space.
 
-The intake admits a `fabrichat-room` offer only when the room is its space's
-root. FabriChat's specification and its manager do not make a room its space's
-root yet, so until they do, every room they offer is refused as
-`space-root-missing`, and stays in the inbox.
+FabriChat's manager creates each room as its space's root, at that reserved
+address, in a space that declares itself a `fabrichat-room`, so an offer of a
+room it creates passes both checks while the space's root stays at that
+address. A room in a space created without a kind is refused, as above,
+however it was made.
+
+Each refusal has a reason of its own, which its log entry names. A final one
+decides its row for good, and any other leaves the row to be vetted again, as
+the paragraph below on deciding rows says:
+
+| Reason | The offer | Final |
+| --- | --- | --- |
+| `offer-malformed` | has an envelope that is not well formed | yes |
+| `offer-kind-unknown` | is of a `kind` the intake does not admit | yes |
+| `offer-foreign-host` | names another host | yes |
+| `sender-not-member` | names a `from` holding no `WRITE` or `OWNER` entry of its own | no |
+| `recipient-access-refused` | names a space the owner cannot open, or holds no `WRITE` or `OWNER` in | no |
+| `space-kind-undeclared` | names a space declaring no kind | yes |
+| `space-kind-mismatch` | names a space declaring another kind | yes |
+| `space-root-missing` | names a space whose root is no piece of the space | no |
+| `space-root-misplaced` | names a space whose root is not at the address its genesis reserves | no |
 
 The intake sends Home's `registerSharedSpace` the offer's `space`, its `host` as
 normalized, its `kind`, its `title` unless it is empty, and `{ from, id }`. It
@@ -464,19 +487,22 @@ host or kind is a `conflict`, which writes nothing.
 Each row of an inbox is decided by its whole content, so a row that names
 another offer's `from` and `id` decides nothing about that offer. A row the
 intake sent, skipped for its receipt, or refused for something in the row itself
-(its envelope, its `kind` or its `host`) is decided for the life of the runtime
-worker. A row refused for the state of its space (the access list, or the root)
-is vetted again the next time the offers of its inbox change; a change to the
-space alone, such as a grant to the sender or a root placed later, does not
-bring that about. A refusal is logged once per row, as a warning under
+(its envelope, its `kind` or its `host`) or for the kind its space declares,
+which never changes, is decided for the life of the runtime worker. A row
+refused for the state of its space (the access list, or the root) is vetted
+again the next time the offers of its inbox change; a change to the space alone,
+such as a grant to the sender or a root linked back at its reserved address,
+does not bring that about. A refusal is logged once per row, as a warning under
 `piece.share-intake`, with its reason. When Home's handler returns a `conflict`
 for a row it was sent, as for a space the catalog already holds under another
 kind, the intake logs that once too, with the reason. A failure to read what
 vetting needs, other than a refusal of access, is logged, and the row is vetted
-again when its inbox next changes. So is a send to Home that throws. A catalog
-that cannot be read is taken to hold no receipts, since Home's handler refuses a
-duplicate in any case. The intake removes and marks nothing, so every offer
-stays in its inbox, and another reader, such as a loom daemon, reads them all.
+again when its inbox next changes. So is a space whose kind the host cannot
+tell, as when it does not report kinds, and a send to Home that throws. A
+catalog that cannot be read is taken to hold no receipts, since Home's handler
+refuses a duplicate in any case. The intake removes and marks nothing, so every
+offer stays in its inbox, and another reader, such as a loom daemon, reads them
+all.
 
 ## What it does not protect
 

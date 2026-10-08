@@ -379,19 +379,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * for nothing else, and is never stored, returned, or logged.
    *
    * `acl` must name a concrete OWNER, and must grant this manager's signer at
-   * least READ if this manager will open the space. `genesis.root` requires a
-   * host that supports root reservations; its complete source, cause,
+   * least READ if this manager will open the space. `genesis.root` is the
+   * reservation itself, or a function computing it from the new space's DID,
+   * which nothing knows before the key is generated. It requires a host that
+   * advertises the `genesisRoot` server flag; its complete source, cause,
    * arguments, and attached source roots are snapshotted in the genesis
    * receipt, and a later mount that declares a root intent must match it.
-   * `genesis.spaceKind` requires a host that advertises `spaceKind`, and is
-   * sealed the same way (`docs/features/space-kinds.md`).
+   * `genesis.spaceKind` requires a host that advertises the `spaceKind` server
+   * flag, and is sealed the same way (`docs/features/space-kinds.md`).
    *
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
   createSpace?(
     acl: ACL,
-    genesis?: { root?: GenesisRoot; spaceKind?: string },
+    genesis?: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
   ): Promise<MemorySpace>;
 
   /**
@@ -2135,6 +2140,16 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   getNarrowestReadScope(): CellScope;
   resetNarrowestReadScope(scope?: CellScope): void;
+
+  /**
+   * Narrows the transaction's read scope to `scope` when it is narrower than
+   * what the reads so far established. A read records the scope of the
+   * address it lands on by itself; this is for a read that learns a narrower
+   * scope from a declaration rather than from an address, such as a followed
+   * link whose target position is declared narrower than the link's own
+   * scope.
+   */
+  noteReadScope(scope: CellScope): void;
 
   /**
    * Turn lazy materialization on (or off) for this transaction.
