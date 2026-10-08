@@ -1253,11 +1253,12 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }));
   }
 
-  /** Global runsc flags: what every subcommand of this runtime is run with. */
   /**
-   * The global flags of every runsc command. `callId` names the call a
-   * container is started for under pasta, which keeps its state in a root of
-   * its own, {@link RunscSandboxRuntime.#stateRoot}.
+   * The global flags of every runsc command of this runtime: its state root,
+   * `--rootless` where it runs rootless, and the network, which under pasta
+   * is `host`, pasta's namespace. `callId` names the call a container is
+   * started for under pasta, which keeps its state in a root of its own,
+   * {@link RunscSandboxRuntime.#stateRoot}.
    */
   #globalArgs(callId?: string): string[] {
     return [

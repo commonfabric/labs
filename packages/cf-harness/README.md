@@ -1032,9 +1032,11 @@ never a fallback from one driver to the other:
   0, or `kernel.apparmor_restrict_unprivileged_userns` is 1 (Ubuntu 23.10 and
   later ship that), the run is refused before the store is looked at, naming the
   parameter and the `sysctl -w` that lifts it, or running as root. A `runsc`
-  named by `CF_HARNESS_RUNSC_BINARY` runs as it is, rootless or not as it
-  decides. The run is refused, before anything executes, where the store cannot
-  provide it, as on macOS.
+  named by `CF_HARNESS_RUNSC_BINARY` runs as it is, without `--rootless`; a
+  process that is not root still needs the same user namespaces for pasta's
+  network, and is checked and refused the same way, unless it names a `none` or
+  `host` network. The run is refused, before anything executes, where the store
+  cannot provide it, as on macOS.
 - **On every other platform** the run uses Docker. No other platform has a
   native runtime, so the platform is the whole of the reason; a direct driver
   there is always one that was named.
@@ -1070,36 +1072,40 @@ to and reads nothing by its path in the store, so a piece reached through a
 symbolic link is taken where it leads. A piece that is there but that this
 process cannot use is refused for that, as on macOS.
 
-| In `~/.local/share/runsc-cfc` | What it is                                           | Required unless                                   |
-| ----------------------------- | ---------------------------------------------------- | ------------------------------------------------- |
-| `bin/runsc`                   | gVisor's `runsc`, an executable file                 | `CF_HARNESS_RUNSC_BINARY` names a binary          |
-| `images/kitchensink`          | the kitchen-sink image unpacked to a directory       | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
-| `cfc-policy.json`             | the CFC policy, which is the default one of the home | a policy is named                                 |
+| In `~/.local/share/runsc-cfc` | What it is                                                            | Required unless                                   |
+| ----------------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
+| `bin/runsc`                   | gVisor's `runsc`, an executable file                                  | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `images/kitchensink`          | the kitchen-sink image unpacked to a directory                        | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `cfc-policy.json`             | the CFC policy, which is the default one of the home, looked for once | a policy is named                                 |
 
-The Linux default's network is what Docker's bridge gave: egress, and the host
-at `host.docker.internal`. `pasta`, from passt, gives it: each container starts
-inside a network namespace of pasta's (and, for a user that is not root, a user
-namespace of pasta's too), which runsc takes as its host network, so the
-container sees one interface of pasta's (10.0.2.15, gateway 10.0.2.2) and none
-of the host's. Pasta translates its traffic to the host's sockets, and a
-connection to the gateway reaches the host's own loopback, which a hosts file
-the driver binds over `/etc/hosts` names `host.docker.internal`. For root, pasta
-makes no user namespace and keeps root, and runs in a mount namespace of its own
-that `unshare` (util-linux) makes, since it then mounts its own `/proc` in the
-mount namespace it runs in. Pasta starts what it runs in a PID namespace of its
-own, so a session's container started under it would record pids its later calls
-could not find: under pasta's network no sandbox session is offered, and the
-`bash` tool takes no `session`. Pasta also clears the parent-death signal of
-what it runs, so the driver runs it through `setpriv --pdeathsig KILL`
-(util-linux): a call that times out, or is in flight when the runtime closes,
-stops its pasta, and its container dies with pasta's namespace. No port is
-forwarded into the container, or from the container's loopback to the host's. A
-user id, or a kernel parameter, that cannot be read refuses the default rather
-than being guessed at. Where no `pasta` is on `PATH`, no `setpriv`, or for root
-no `unshare`, the default is refused, saying to install passt
-(`sudo apt install passt`) or util-linux, or to name a network:
-`CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
-`host` the host's own network, interfaces and all.
+The direct driver's `sandbox` network is the VM's on macOS. On Linux, under the
+default, it is what Docker's bridge gave: egress, and the host at
+`host.docker.internal`; without a `pasta` (a `runsc` configured by hand, with no
+helper) runsc's own `sandbox` network is loopback alone. `pasta`, from passt,
+gives it: each container starts inside a network namespace of pasta's (and, for
+a user that is not root, a user namespace of pasta's too), which runsc takes as
+its host network, so the container sees one interface of pasta's (10.0.2.15,
+gateway 10.0.2.2) and none of the host's. Pasta translates its traffic to the
+host's sockets, and a connection to the gateway reaches the host's own loopback,
+which a hosts file the driver binds over `/etc/hosts` names
+`host.docker.internal`. For root, pasta makes no user namespace and keeps root,
+and runs in a mount namespace of its own that `unshare` (util-linux) makes,
+since it then mounts its own `/proc` in the mount namespace it runs in. Pasta
+starts what it runs in a PID namespace of its own, so a session's container
+started under it would record pids its later calls could not find: under pasta's
+network no sandbox session is offered, and the `bash` tool takes no `session`.
+Pasta also clears the parent-death signal of what it runs, so the driver runs it
+through `setpriv --pdeathsig KILL` (util-linux): a call that times out, or is in
+flight when the runtime closes, stops its pasta, and its container dies with
+pasta's namespace. No port is forwarded into the container, or from the
+container's loopback to the host's. A user id, or a kernel parameter, that
+cannot be read refuses the default rather than being guessed at. Where no
+`pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the default is
+refused, saying to install passt (`sudo apt install passt`) or util-linux, or to
+name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container
+loopback alone, and `host` the host's own network, interfaces and all. Those two
+need none of `pasta`, `setpriv` or `unshare`; a process that is not root still
+needs user namespaces for the store's rootless `runsc`, as above.
 
 A defaulted macOS run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
@@ -1187,7 +1193,10 @@ that works on Docker:
 
 - **On either platform**, a workspace or a writable host mount that holds the
   `runsc` binary, the rootfs or the policy is refused, since the sandbox could
-  rewrite them. On Linux those are the store's own pieces under
+  rewrite them, and so is a writable mount inside the rootfs. On Linux, given a
+  home, the whole `runsc-cfc` store under it is held both ways, unused sibling
+  images included: it may not lie inside a writable mount, and no writable mount
+  may lie inside it. On Linux those are the store's own pieces under
   `~/.local/share/runsc-cfc`, so a run whose workspace is the home directory
   names Docker or another workspace; the refusal says that the runtime was the
   default and how Docker is selected.

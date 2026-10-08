@@ -653,11 +653,13 @@ Options:
                                 root (the host must allow unprivileged user namespaces),
                                 with pasta (passt) giving it egress and the host as
                                 host.docker.internal; that network needs pasta and setpriv
-                                on PATH, unshare too for root, and user namespaces for a
-                                process that is not root (a refusal names the sysctl -w
-                                to run), and CF_HARNESS_DOCKER_NETWORK_MODE=none or host
-                                needs none of them. Each refuses to start where its store
-                                is not set up; every other platform runs docker
+                                on PATH, and unshare too for root, which
+                                CF_HARNESS_DOCKER_NETWORK_MODE=none or host does not need;
+                                a process that is not root needs user namespaces whatever
+                                the network, for the rootless store runsc (and for pasta
+                                with a named runsc), and a refusal names the sysctl -w to
+                                run. Each refuses to start where its store is not set up;
+                                every other platform runs docker
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
                                 on Linux, default images/kitchensink in the Linux store;
                                 on macOS the cfc-vm image marker, default
@@ -721,9 +723,10 @@ Environment:
   CF_HARNESS_HOME               Local cf-harness credential/config directory
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge, which on the
-                                runsc runtime is reported as sandbox: runsc's own
-                                network stack, and under the Linux default pasta's,
-                                with egress and the host as host.docker.internal)
+                                runsc runtime is reported as sandbox: on macOS the VM's
+                                network; on Linux under the default pasta's, with egress
+                                and the host as host.docker.internal; on Linux with no
+                                pasta configured, loopback alone)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_LOOM_COMMANDS_CONFIG Default host command broker configuration file

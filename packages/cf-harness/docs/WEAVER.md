@@ -130,15 +130,19 @@ printout's `sandbox` row says which and why:
   direct driver over the store gVisor's Linux installer writes under
   `~/.local/share/runsc-cfc`, rootless for a console that is not root, with
   `pasta` (passt) for its default network. The launch is refused where the host
-  allows a user that is not root no user namespace, naming the `sysctl` to
-  change (a `runsc` named by `CF_HARNESS_RUNSC_BINARY` runs as it is, but
-  pasta's default network still needs one for a user that is not root; a named
-  `none` or `host` network needs none), where the default network finds no
-  `pasta` or `setpriv` on `PATH` or, for root, no `unshare` (a named `none` or
-  `host` network needs neither), and where that store is not set up, naming what
-  it lacks. Every other platform runs Docker. Nothing falls back from one to the
-  other: to put a Mac's or a Linux host's console on Docker, set
-  `CF_HARNESS_SANDBOX_RUNTIME=docker` in the environment the fabric starts from.
+  gives a user that is not root no unprivileged user namespace
+  (`user.max_user_namespaces` 0, `kernel.unprivileged_userns_clone` 0 or
+  `kernel.apparmor_restrict_unprivileged_userns` 1), naming the
+  `sudo sysctl -w <parameter>=<value>` that allows them, or running as root: the
+  store's rootless `runsc` needs one whatever the network, and pasta's network
+  needs one even for a `runsc` named by `CF_HARNESS_RUNSC_BINARY`, which runs as
+  it is. It is refused where the default network finds no `pasta` or `setpriv`
+  on `PATH` or, for root, no `unshare`, naming passt or util-linux to install (a
+  named `none` or `host` network needs none of the three), and where that store
+  is not set up, naming what it lacks. Every other platform runs Docker. Nothing
+  falls back from one to the other: to put a Mac's or a Linux host's console on
+  Docker, set `CF_HARNESS_SANDBOX_RUNTIME=docker` in the environment the fabric
+  starts from.
 
 A console on the direct driver needs no sidecar directory and reads no Docker
 registration; the printout names its `runsc` binary, rootfs and CFC policy

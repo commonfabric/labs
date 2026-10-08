@@ -156,10 +156,15 @@ Environment:
                                        Support/cfc-vm), Linux runs it from the store
                                        under ~/.local/share/runsc-cfc, rootless for a
                                        process that is not root (the host must allow
-                                       unprivileged user namespaces), with pasta
-                                       (passt) giving it egress and the host, and each
-                                       refuses to start where its store is not set up;
-                                       every other platform runs docker. The local Loom
+                                       unprivileged user namespaces; a refusal names
+                                       the sysctl -w to run), with pasta (passt)
+                                       giving it egress and the host. That network
+                                       needs pasta and setpriv on PATH, and unshare
+                                       too for root, which
+                                       CF_HARNESS_DOCKER_NETWORK_MODE=none or host
+                                       does not need. Each refuses to start where its
+                                       store is not set up; every other platform runs
+                                       docker. The local Loom
                                        host refuses to start with it unset
   CF_HARNESS_LOOM_AUTHORING_CONFIG     Default host authoring configuration file
   CF_HARNESS_FABRIC_API_URL            Default value for --fabric-api-url

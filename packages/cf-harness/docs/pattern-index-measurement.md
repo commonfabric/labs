@@ -97,11 +97,16 @@ named as not taken rather than left out.
    on the native runtime on an Apple-silicon Mac and on Linux, and on Docker on
    every platform but macOS and Linux. Where that default cannot run it is
    refused rather than put on Docker: on any other Mac; where its store is not
-   set up; and on Linux, where a console that is not root and names no `runsc`
-   of its own gets no user namespace, and where its default network finds no
-   `pasta` or `setpriv` (or, for root, no `unshare`). A named runtime, and a
-   named `none` or `host` network, take none of those. A run written before runs
-   recorded the runtime reads as not recorded.
+   set up; and on Linux, where a console that is not root gets no unprivileged
+   user namespace (`user.max_user_namespaces` 0,
+   `kernel.unprivileged_userns_clone` 0 or
+   `kernel.apparmor_restrict_unprivileged_userns` 1; the refusal names the
+   `sudo sysctl -w` that allows them), which the store's rootless `runsc` needs
+   whatever the network and pasta needs even for a `runsc` named by
+   `CF_HARNESS_RUNSC_BINARY`, and where its default network finds no `pasta` or
+   `setpriv` (or, for root, no `unshare`), which a named `none` or `host`
+   network does not need. A named runtime takes no default, and none of those. A
+   run written before runs recorded the runtime reads as not recorded.
 
 ## Running a batch
 

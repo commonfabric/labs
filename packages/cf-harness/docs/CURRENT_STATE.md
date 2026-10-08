@@ -185,10 +185,12 @@ for it once.
 
 The Linux default's `sandbox` network, unless `CF_HARNESS_DOCKER_NETWORK_MODE`
 names another, is `pasta`'s, from passt, found on `PATH` as the selection runs;
-with none there the default is refused, naming passt and the two networks that
-need none. The driver starts each container inside
-`pasta --config-net --quiet -4 -a 10.0.2.15 -n 24 -g 10.0.2.2` with every port
-forward off (`-t none -u none -T none -U none`) and its log in
+with none there the default is refused, naming passt and the two networks,
+`none` and `host`, that need none of `pasta`, `setpriv` or `unshare`. Those two
+do not lift the user-namespace check above: a process that is not root runs the
+store's `runsc` rootless whatever the network. The driver starts each container
+inside `pasta --config-net --quiet -4 -a 10.0.2.15 -n 24 -g 10.0.2.2` with every
+port forward off (`-t none -u none -T none -U none`) and its log in
 `--log-file <scratch>/pasta.log` (for root with `--netns-only --runas 0`, inside
 `unshare --mount --propagation private`, since pasta then mounts its own `/proc`
 in the mount namespace it runs in, and refused where no `unshare` is on `PATH`;
@@ -426,10 +428,13 @@ the runtime followed by `(named by --sandbox-runtime)` or
 says which. As a `kind` it is the direct driver. As a `cfc.runtimeName` it is
 the Docker-registered runtime, and the `kind` beside it is `docker-runsc-cfc`.
 
-`sandbox` is a network mode only the direct driver reports. It is `runsc`'s own
-network stack, the direct driver's default and the counterpart of Docker's
-`bridge`. `CF_HARNESS_DOCKER_NETWORK_MODE` is shared by both drivers and is
-written in Docker's vocabulary, which maps onto the direct driver's as follows:
+`sandbox` is a network mode only the direct driver reports, the direct driver's
+default and the counterpart of Docker's `bridge`. On macOS it is the VM's
+network. On Linux under the default it is `pasta`'s network namespace, taken as
+runsc's host network, with egress and the host at `host.docker.internal`; with
+no `pasta` configured it is runsc's own network stack, loopback alone.
+`CF_HARNESS_DOCKER_NETWORK_MODE` is shared by both drivers and is written in
+Docker's vocabulary, which maps onto the direct driver's as follows:
 
 | `CF_HARNESS_DOCKER_NETWORK_MODE` | Docker driver | Direct driver |
 | -------------------------------- | ------------- | ------------- |

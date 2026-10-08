@@ -39,7 +39,13 @@
  * and a flag it cannot see would leave the launch and the server describing
  * two different sandboxes. Where the environment names none, a console takes
  * its platform's default, the native runtime on macOS (Apple silicon alone:
- * any other Mac is refused) and Linux and Docker elsewhere,
+ * any other Mac is refused) and Linux and Docker elsewhere. On Linux the
+ * default network needs `pasta` and `setpriv` (and for root `unshare`), which
+ * a `none` or `host` network does not, and a console that is not root needs
+ * unprivileged user namespaces whatever the network
+ * (`user.max_user_namespaces`, `kernel.unprivileged_userns_clone`,
+ * `kernel.apparmor_restrict_unprivileged_userns`; a refusal names the
+ * `sysctl -w`),
  * unless `host.sandboxRuntimeNamedBy` says its caller must name one, as
  * `console:launch` says for a console it launches for a Loom instance; that
  * console is refused on every platform instead.

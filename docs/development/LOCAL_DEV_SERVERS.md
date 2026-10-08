@@ -58,16 +58,21 @@ sandbox runtime and a connected model provider, and when it cannot start —
 either of those missing, its port taken, a value underivable — it says so in
 the script's output and in `packages/cf-harness/local-dev-console.log`, and the
 shell and toolshed keep running. The sandbox runtime is the one
-`CF_HARNESS_SANDBOX_RUNTIME` names, `docker` or `runsc`. With none named, a Mac
+`CF_HARNESS_SANDBOX_RUNTIME` names, `docker` or `runsc`. With none named (unset,
+or white space alone), a Mac
 with Apple silicon serves on its native runtime, the cfc-vm store gVisor's macOS
 installer writes, and does not start where that store is not set up, and any
 other Mac does not start at all; Linux serves on its native runtime too, the
 store gVisor's Linux installer writes under `~/.local/share/runsc-cfc`, and does
 not start where that store is not set up, where its default network finds no
-`pasta` (passt) or `setpriv` on `PATH` or, for a root console, no `unshare`, or where the
-console is not root, names no `runsc` with `CF_HARNESS_RUNSC_BINARY`, and the
-host allows it no user namespace to run the store's `runsc` rootless; every other platform serves on
-Docker. Each refusal says how to select Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
+`pasta` (passt) or `setpriv` on `PATH` or, for a root console, no `unshare`
+(`CF_HARNESS_DOCKER_NETWORK_MODE=none` or `host` needs none of the three), or
+where the console is not root and the host gives it no unprivileged user
+namespace (`user.max_user_namespaces` 0, `kernel.unprivileged_userns_clone` 0
+or `kernel.apparmor_restrict_unprivileged_userns` 1), which the store's
+rootless `runsc` needs whatever the network and pasta needs even with a `runsc`
+named by `CF_HARNESS_RUNSC_BINARY`; that refusal names the `sudo sysctl -w`
+that allows them. Every other platform serves on Docker. Each refusal says how to select Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
 is set the console is launched for that loom instance, and with no runtime named
 it does not start on any platform, saying that Loom must name one. `packages/cf-harness/console/README.md` covers the console itself,
 and [`../../packages/cf-harness/docs/WEAVER.md`](../../packages/cf-harness/docs/WEAVER.md)
