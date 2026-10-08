@@ -144,8 +144,9 @@ export class SpeculationLineage {
    * Notes that the scheduler runs `origin`'s work again once `origin` fails,
    * so the follow-up events its failure drops are logged at debug rather than
    * as warnings. Called before the settle callback that does the dropping:
-   * ahead of an abort to run again, and from the origin's verdict ahead of a
-   * stale-basis retry. {@link runsAgain} reports the note afterwards, for a
+   * ahead of an abort to run again, and from the origin's settled outcome
+   * ahead of a stale-basis retry. {@link runsAgain} reports the note
+   * afterwards, for a
    * follow-up that dispatched before its origin failed.
    */
   noteRerun(origin: IExtendedStorageTransaction): void {

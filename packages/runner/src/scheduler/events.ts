@@ -25,6 +25,7 @@ import {
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
+import { commitPromiseRejectionOf } from "../storage/extended-storage-transaction.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
@@ -1623,20 +1624,31 @@ export async function dispatchQueuedEvent(state: {
   state.eventQueue.shift();
 
   const tx = state.runtime.edit();
-  // The attempt's commit outcome is classified once, when its verdict lands.
-  // Verdict callbacks run before every commit callback, so a run of the event
+  // The attempt's commit outcome is classified once, when it settles, by a
+  // commit callback registered before the handler runs. Commit callbacks run
+  // in the order they were added, and the lineage adds its settle callback
+  // only when the handler sends its first follow-up, so a run of the event
   // that is coming — a stale-basis rejection backing off to run the handler
-  // again — is noted on the lineage before the lineage's own settle callback
-  // drops the follow-ups this attempt sent: the re-run sends its own.
-  let verdictDisposition: CommitDisposition | undefined;
-  tx.addVerdictCallback((_tx, result) => {
+  // again — is noted on the lineage before that callback drops the
+  // follow-ups this attempt sent: the re-run sends its own. A commit
+  // callback sees the outcome the commit settled with, which a verdict
+  // callback does not always see. A commit whose promise rejected hands its
+  // callbacks an error holding the rejection, and the classification here
+  // reads the rejection itself, as the commit handler below does.
+  let settledDisposition:
+    | { readonly error: unknown; readonly disposition: CommitDisposition }
+    | undefined;
+  tx.addCommitCallback((_tx, result) => {
     if (result.error === undefined) return;
+    const rejected = commitPromiseRejectionOf(result.error);
     const disposition = classifyCommitDisposition(
-      result.error,
+      rejected === undefined
+        ? result.error
+        : normalizeEventCommitRejection(rejected.reason),
       queuedEvent,
       state.backpressure,
     );
-    verdictDisposition = disposition;
+    settledDisposition = { error: result.error, disposition };
     if (disposition.kind === "backoff") state.noteLineageRerun(tx);
   });
   let viewHandler = presyncedImplementation ?? handler;
@@ -2318,11 +2330,13 @@ export async function dispatchQueuedEvent(state: {
         // intent must converge or fail loudly: a stale-basis rejection backs off
         // and retries within a bounded window rather than being dropped; a
         // permanent or non-stale-basis rejection is not retried; an unconverged
-        // write surfaces a terminal error. A rejection the verdict already
-        // classified keeps that classification, which the lineage acted on.
+        // write surfaces a terminal error. The rejection the attempt's commit
+        // callbacks saw keeps the classification the lineage acted on; a
+        // settlement reporting another error, as one a commit promise
+        // rejected with, is classified as it reports it.
         const disposition =
-          error !== undefined && verdictDisposition !== undefined
-            ? verdictDisposition
+          error !== undefined && settledDisposition?.error === error
+            ? settledDisposition.disposition
             : classifyCommitDisposition(
               error,
               queuedEvent,
