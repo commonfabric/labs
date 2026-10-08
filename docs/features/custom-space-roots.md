@@ -55,10 +55,13 @@ replacing their root under this operation.
 
 `inSpace(name, { root: true })` makes the pattern's result the root of the
 space the call creates. The space's genesis commit carries a reservation naming
-the cause `in-space-root` and no source. The run that instantiates the result
-places it at that cause's address in the new space, rather than at the address
-derived from its parent's output, and links `defaultPattern` to it in the same
-commit, when nothing is linked there yet. A re-run of the same call finds the
+no source and a cause that names the space, `in-space-root:` followed by the
+space's DID. The run that instantiates the result places it at that cause's
+address in the new space, rather than at the address derived from its parent's
+output, and links `defaultPattern` to it in the same commit, when nothing is
+linked there yet. Because the cause names the space, the roots of two such
+spaces are two entities, so a pattern that keys a record by the entity a root
+names, as one keys a person's record by their profile, keeps them apart. A re-run of the same call finds the
 same address, so it neither places a second root nor moves the link.
 
 Between the genesis commit and the creating run's commit the space holds only

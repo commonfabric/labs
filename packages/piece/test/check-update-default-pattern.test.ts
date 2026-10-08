@@ -6,7 +6,7 @@ import {
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceSourceRevisions,
-  IN_SPACE_ROOT_CAUSE,
+  inSpaceRootCause,
   parseLink,
   resolveEntryIdentity,
   resolveSystemPatternSource,
@@ -1105,10 +1105,10 @@ describe("opening a space root", () => {
       const root = await installCustomRoot(runtime, controller, {
         main: "/in-space-root.tsx",
         files: [{ name: "/in-space-root.tsx", contents }],
-      }, { cause: IN_SPACE_ROOT_CAUSE });
+      }, { cause: inSpaceRootCause(controller.getSpace()) });
       expect(root.equalLinks(runtime.getCell(
         controller.getSpace(),
-        IN_SPACE_ROOT_CAUSE,
+        inSpaceRootCause(controller.getSpace()),
       ))).toBe(true);
       expect(getPatternSource(root)).toBeUndefined();
       return root;
