@@ -53,9 +53,15 @@ import {
  * The root Type passed in carries full symbol info; walking the Type tree
  * and TypeNode tree in parallel propagates that info to every nested ref.
  *
- * Also handles the `import("commonfabric").X<...>` `ImportTypeNode` form
- * (TS emits this when no in-scope alias exists). This case is syntactically
- * unambiguous and is rewritten without needing the paired Type.
+ * Also handles the `ImportTypeNode` form TS emits when no in-scope alias
+ * exists. A specifier of `"commonfabric"` names the module outright, so that
+ * form is rewritten without needing the paired Type. The printer writes it
+ * only while the program declares `"commonfabric"` as an ambient module, as
+ * the `commonfabric/schema` types do; otherwise it names the declarations' file
+ * by a path relative to the file it prints for
+ * (`import("../commonfabric").X<...>`), a spelling a module of the program's
+ * own could share, so that form is rewritten only when its paired Type is the
+ * commonfabric export it names.
  *
  * The original TypeNode is preserved when no rewrite is needed; only
  * subtrees that change are rebuilt via `factory.create*`.
@@ -82,6 +88,14 @@ export function qualifyCommonFabricTypeRefs(
       factory.createIdentifier("__cfHelpers"),
       factory.createIdentifier(leafName),
     );
+
+  // The name an import type's qualifier ends in: `Cell` for
+  // `import("commonfabric").Cell<T>`.
+  const importTypeLeafName = (node: ts.ImportTypeNode): string | undefined => {
+    const qualifier = node.qualifier;
+    if (!qualifier) return undefined;
+    return ts.isIdentifier(qualifier) ? qualifier.text : qualifier.right.text;
+  };
 
   const isCommonFabricSymbol = (sym: ts.Symbol | undefined): boolean => {
     if (!sym) return false;
@@ -121,7 +135,7 @@ export function qualifyCommonFabricTypeRefs(
   // a bare member ref `X` is paired with the constituent whose CF export name
   // is `X`. Returns undefined when there's no constituent info or no match —
   // in which case the member is walked with no paired Type (safe: it can only
-  // be rewritten via the syntactic Import-form branch, never misattributed).
+  // be rewritten through a `"commonfabric"` specifier, never misattributed).
   const pairedConstituentForMember = (
     member: ts.TypeNode,
     unionOrIntersectionType: ts.Type | undefined,
@@ -131,12 +145,15 @@ export function qualifyCommonFabricTypeRefs(
       (unionOrIntersectionType as ts.UnionOrIntersectionType).types;
     if (!constituents) return undefined;
 
-    // Only bare identifier refs can be name-matched (the case the printer
-    // emits for in-scope/aliasable commonfabric types inside unions).
-    if (!ts.isTypeReferenceNode(member) || !ts.isIdentifier(member.typeName)) {
-      return undefined;
-    }
-    const memberName = member.typeName.text;
+    // Bare identifier refs and import types can be name-matched (the forms
+    // the printer emits for commonfabric types inside unions).
+    const memberName =
+      ts.isTypeReferenceNode(member) && ts.isIdentifier(member.typeName)
+        ? member.typeName.text
+        : ts.isImportTypeNode(member) && !member.isTypeOf
+        ? importTypeLeafName(member)
+        : undefined;
+    if (memberName === undefined) return undefined;
     // Require an UNAMBIGUOUS match. If two constituents share a commonfabric
     // export name but differ in their type arguments (e.g. `Cell<A> | Cell<B>`,
     // both printed as bare `Cell<...>`), name-matching alone can't tell which
@@ -198,25 +215,24 @@ export function qualifyCommonFabricTypeRefs(
 
   // The walker takes a TypeNode and the Type it represents, and returns a
   // (possibly-rewritten) TypeNode. The Type may be undefined when the
-  // paired info isn't available — in that case nested ImportType
-  // recognition still works (it's purely syntactic), but bare-identifier
-  // commonfabric-ref detection is skipped (no false-positive risk).
+  // paired info isn't available — in that case an import type with a
+  // `"commonfabric"` specifier is still recognized (by its spelling), but
+  // every other commonfabric-ref detection is skipped (no false-positive risk).
   const walk = (
     node: ts.TypeNode,
     pairedType: ts.Type | undefined,
   ): ts.TypeNode => {
-    // `import("commonfabric").X<...>` → `__cfHelpers.X<...>` (syntactic).
+    // `import("commonfabric").X<...>`, or `import("../commonfabric").X<...>`
+    // paired with the commonfabric export `X` → `__cfHelpers.X<...>`.
     if (ts.isImportTypeNode(node) && !node.isTypeOf) {
       const arg = node.argument;
+      const leafName = importTypeLeafName(node);
       if (
-        ts.isLiteralTypeNode(arg) &&
-        ts.isStringLiteral(arg.literal) &&
-        arg.literal.text === "commonfabric" &&
-        node.qualifier
+        leafName !== undefined &&
+        ((ts.isLiteralTypeNode(arg) && ts.isStringLiteral(arg.literal) &&
+          arg.literal.text === "commonfabric") ||
+          commonFabricExportName(pairedType) === leafName)
       ) {
-        const leafName = ts.isIdentifier(node.qualifier)
-          ? node.qualifier.text
-          : node.qualifier.right.text;
         const visitedTypeArgs = node.typeArguments
           ? factory.createNodeArray(
             node.typeArguments.map((arg, i) =>
@@ -315,8 +331,8 @@ export function qualifyCommonFabricTypeRefs(
     // constituent whose commonfabric export name equals the ref's identifier.
     // This is order-independent and only ever supplies a paired Type that
     // would make the member rewrite to that same name — a non-CF member finds
-    // no match and passes through unchanged. The Import-form (ImportTypeNode)
-    // members are still handled syntactically without needing a paired Type.
+    // no match and passes through unchanged. An import-type member is matched
+    // by the name its qualifier ends in, the same way.
     if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
       const rewritten = node.types.map((t) =>
         walk(t, pairedConstituentForMember(t, pairedType))

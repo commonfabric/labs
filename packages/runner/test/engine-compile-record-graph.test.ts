@@ -8,6 +8,7 @@ import {
   signer,
   StorageManager,
 } from "./engine-test-support.ts";
+import type { Module, Pattern } from "../src/builder/types.ts";
 import type { RuntimeProgram } from "./engine-test-support.ts";
 describe("Engine.compileToRecordGraph()", () => {
   let runtime: Runtime;
@@ -323,5 +324,58 @@ describe("Engine.compileToRecordGraph()", () => {
     expect(() => main?.default()).toThrow(
       "ambient clock",
     );
+  });
+
+  it("narrows a cell a computed captures to the members the computed reads", async () => {
+    // The program does not import `commonfabric/schema`, as most patterns do
+    // not, so the compile names a commonfabric type the transformer prints by
+    // a relative path (`import("./commonfabric").Cell<T>`) rather than by
+    // `"commonfabric"`, and the lift's input is still shrunk to the read.
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            "import { computed, pattern, Writable } from 'commonfabric';",
+            "export default pattern(() => {",
+            "  const tally = new Writable<{ count: number; unread?: string }>(",
+            "    { count: 1 },",
+            "  );",
+            "  const step = new Writable<number>(1);",
+            "  const next = computed(() => tally.get().count + step.get());",
+            "  return { next };",
+            "});",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
+      program,
+    );
+    const { main } = engine.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+
+    const argumentSchemas = (main?.default as Pattern).nodes.map((node) =>
+      (node.module as Module).argumentSchema
+    );
+    expect(argumentSchemas).toContainEqual({
+      type: "object",
+      properties: {
+        tally: {
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
+          asCell: ["readonly"],
+        },
+        step: { type: "number", asCell: ["readonly"] },
+      },
+      required: ["tally", "step"],
+    });
   });
 });

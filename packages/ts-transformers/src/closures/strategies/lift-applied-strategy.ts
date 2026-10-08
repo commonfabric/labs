@@ -514,12 +514,13 @@ export function transformLiftAppliedCall(
 
   if (callback.type) {
     // Explicit return type annotation. This may be a synthesized annotation
-    // attached upstream (pos < 0) that still carries raw
-    // `import("commonfabric").X` refs, so normalize it to `__cfHelpers.X`
-    // before it flows into the emitted lift type argument. The normalizer's
-    // ImportTypeNode branch is purely syntactic, so it works without a paired
-    // Type; pass the registered Type when available so it both qualifies nested
-    // bare refs and carries the registry association onto the rewritten node.
+    // attached upstream (pos < 0) that still carries raw import-type refs to
+    // commonfabric, so normalize it to `__cfHelpers.X` before it flows into
+    // the emitted lift type argument. Without a paired Type the normalizer
+    // rewrites only an import type whose specifier is `"commonfabric"`; pass
+    // the registered Type when available so it also qualifies nested bare
+    // refs and import types written with a relative path, and carries the
+    // registry association onto the rewritten node.
     resultTypeNode = qualifyCommonFabricTypeRefs(
       callback.type,
       state.typeRegistry.get(callback.type),

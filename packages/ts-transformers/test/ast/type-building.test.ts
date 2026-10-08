@@ -11,6 +11,7 @@ import { parseModule } from "../transformed-ast.ts";
 import {
   buildCaptureTypeElements,
   cloneTypeNodeDeepForEmission,
+  qualifyCommonFabricTypeRefs,
 } from "../../src/ast/type-building.ts";
 import { CrossStageState, TransformationContext } from "../../src/core/mod.ts";
 import {
@@ -267,3 +268,165 @@ function findFirstNodeInner<T extends ts.Node>(
   });
   return found;
 }
+
+//
+// Qualifying commonfabric type references
+//
+// The js-compiler loads the commonfabric declarations as a root file, under
+// `noResolve`, so the printer names a commonfabric type it cannot reach in
+// scope by a path relative to the file it prints for
+// (`import("../../commonfabric").Cell<T>`), a spelling a module of the
+// program's own can share. The paired Type, not the spelling, decides whether
+// such an import type is rewritten to `__cfHelpers.X`.
+//
+
+const COMMONFABRIC_DECLARATIONS = [
+  "export interface Cell<T> { get(): T; }",
+  "export declare function cell<T>(value: T): Cell<T>;",
+].join("\n");
+
+const MINIMAL_LIB = [
+  "interface Array<T> {}",
+  "interface Boolean {}",
+  "interface CallableFunction {}",
+  "interface Function {}",
+  "interface IArguments {}",
+  "interface NewableFunction {}",
+  "interface Number {}",
+  "interface Object {}",
+  "interface RegExp {}",
+  "interface String {}",
+].join("\n");
+
+/**
+ * The type of `probe`, exported by `source` compiled at `/app/main/main.ts`
+ * beside `files`, in a program shaped as the js-compiler shapes one: the
+ * commonfabric declarations at `commonfabric.d.ts` as a root, under
+ * `noResolve`. Returns that type, the node the checker prints for it, the
+ * checker, and a function printing a node from the source's file.
+ */
+function printProbeType(
+  source: string,
+  files: Record<string, string> = {},
+) {
+  const contents: Record<string, string> = {
+    "lib.d.ts": MINIMAL_LIB,
+    "commonfabric.d.ts": COMMONFABRIC_DECLARATIONS,
+    "/app/main/main.ts": source,
+    ...files,
+  };
+  const host: ts.CompilerHost = {
+    getSourceFile: (name, languageVersion) =>
+      contents[name] === undefined
+        ? undefined
+        : ts.createSourceFile(name, contents[name], languageVersion, true),
+    writeFile: () => {},
+    getCurrentDirectory: () => "/",
+    getDirectories: () => [],
+    fileExists: (name) => contents[name] !== undefined,
+    readFile: (name) => contents[name],
+    getCanonicalFileName: (name) => name,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+    getDefaultLibFileName: () => "lib.d.ts",
+    resolveModuleNameLiterals: (literals, containingFile) =>
+      literals.map((literal) => {
+        if (literal.text === "commonfabric") {
+          return {
+            resolvedModule: {
+              resolvedFileName: "commonfabric.d.ts",
+              extension: ts.Extension.Dts,
+              isExternalLibraryImport: true,
+            },
+          };
+        }
+        const resolvedFileName = `${
+          new URL(literal.text, `file://${containingFile}`).pathname
+        }.ts`;
+        return contents[resolvedFileName] !== undefined
+          ? {
+            resolvedModule: { resolvedFileName, extension: ts.Extension.Ts },
+          }
+          : { resolvedModule: undefined };
+      }),
+  };
+  const program = ts.createProgram(
+    Object.keys(contents).filter((name) => name !== "lib.d.ts"),
+    { noResolve: true, strict: true },
+    host,
+  );
+  const checker = program.getTypeChecker();
+  const sourceFile = program.getSourceFile("/app/main/main.ts")!;
+  const probe = sourceFile.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => statement.declarationList.declarations)
+    .find((declaration) =>
+      ts.isIdentifier(declaration.name) && declaration.name.text === "probe"
+    )!;
+  const type = checker.getTypeAtLocation(probe.name);
+  const node = checker.typeToTypeNode(
+    type,
+    sourceFile,
+    ts.NodeBuilderFlags.NoTruncation,
+  )!;
+  const printer = ts.createPrinter({ removeComments: true });
+  const print = (printed: ts.TypeNode) =>
+    printer.printNode(ts.EmitHint.Unspecified, printed, sourceFile);
+  return { type, node, checker, print };
+}
+
+Deno.test("qualifyCommonFabricTypeRefs rewrites an import type a relative path names when its type is the commonfabric export", () => {
+  const { type, node, checker, print } = printProbeType(
+    'import { cell } from "commonfabric";\nexport const probe = cell({ a: 1 });',
+  );
+  assertEquals(
+    print(node),
+    'import("../../commonfabric").Cell<{ a: number; }>',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+  });
+
+  assertEquals(print(qualified), "__cfHelpers.Cell<{ a: number; }>");
+});
+
+Deno.test("qualifyCommonFabricTypeRefs rewrites an import-type member of a union by the constituent it names", () => {
+  const { type, node, checker, print } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? cell({ a: 1 }) : undefined;",
+    ].join("\n"),
+  );
+  assertEquals(
+    print(node),
+    'import("../../commonfabric").Cell<{ a: number; }> | undefined',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+  });
+
+  assertEquals(
+    print(qualified),
+    "__cfHelpers.Cell<{ a: number; }> | undefined",
+  );
+});
+
+Deno.test("qualifyCommonFabricTypeRefs leaves an import type naming a module of the program's own called commonfabric", () => {
+  const { type, node, checker, print } = printProbeType(
+    'import { cell } from "../commonfabric";\nexport const probe = cell({ a: 1 });',
+    { "/app/commonfabric.ts": COMMONFABRIC_DECLARATIONS },
+  );
+  assertEquals(print(node), 'import("../commonfabric").Cell<{ a: number; }>');
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+  });
+
+  assertStrictEquals(qualified, node);
+});

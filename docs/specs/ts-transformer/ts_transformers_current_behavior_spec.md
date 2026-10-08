@@ -1824,6 +1824,21 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
   which can differ from the arguments of its underlying reference type.
+- a printed commonfabric type is qualified through `__cfHelpers` whatever the
+  printer calls its module. The printer writes `import("commonfabric").X` only
+  while the program declares `"commonfabric"` as an ambient module, as the
+  `commonfabric/schema` types do. The js-compiler loads the commonfabric
+  declarations as a root file under `noResolve`, so for a program that does
+  not import `commonfabric/schema` the printer names the module by a path
+  relative to the file it prints for (`import("../commonfabric").X`), a
+  spelling a module of the program's own can share. Such an import type is
+  qualified when the type it is paired with is the commonfabric export it names
+  (`qualifyCommonFabricTypeRefs()`, `src/ast/type-building.ts`). A cell type
+  left unqualified is not recognized as a cell, and a lift's input then keeps
+  the whole captured cell rather than the paths its body reads. The fixture
+  harness compiles under the same `noResolve`, loading the `commonfabric/schema`
+  types only for a fixture that imports them (`test/utils.ts`), so a golden
+  shows what the js-compiler emits.
 
 ### 10.2 `pattern(...)`
 
