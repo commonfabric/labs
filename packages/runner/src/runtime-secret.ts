@@ -47,6 +47,7 @@ import type { NormalizedFullLink } from "./link-utils.ts";
 import type { URI } from "./sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   Metadata,
 } from "./storage/interface.ts";
 import { internalVerifierRead } from "./storage/reactivity-log.ts";
@@ -91,18 +92,42 @@ export const runtimeSecretLink = (
 export const isRuntimeSecretId = (id: string): boolean =>
   id.startsWith(RUNTIME_SECRET_ID_PREFIX);
 
+/**
+ * Returns whether a read of `address` reads a runtime secret's value: the
+ * whole document, or a path inside its value. A read of another field, such
+ * as the label envelope, holds nothing secret.
+ */
+export const readsRuntimeSecretValue = (
+  address: Pick<IMemorySpaceAddress, "id" | "path">,
+): boolean =>
+  isRuntimeSecretId(address.id) &&
+  (address.path.length === 0 || address.path[0] === "value");
+
 const ownReadMarker: unique symbol = Symbol("runtimeSecretOwnReadMarker");
 
+/**
+ * What this module's reads carry under their marker. The read chokepoint
+ * compares it by identity, so metadata that answers every lookup, such as a
+ * proxy a caller hands a cell read, cannot pass for one of these reads; a
+ * copy of the metadata, such as the merge with a transaction's ambient read
+ * metadata, keeps it.
+ */
+const ownReadToken: unique symbol = Symbol("runtimeSecretOwnReadToken");
+
 /** This module's read of a secret's value: verifier-internal, and marked. */
-const ownRead: Metadata = { ...internalVerifierRead, [ownReadMarker]: true };
+const ownRead: Metadata = {
+  ...internalVerifierRead,
+  [ownReadMarker]: ownReadToken,
+};
 
 /**
  * Returns whether `meta` marks this module's read of a runtime secret's
  * value, the only read of it the read chokepoint admits from a transaction
- * outside a privileged write. The marker is private to this module.
+ * outside a privileged write. The marker and its token are private to this
+ * module.
  */
 export const isRuntimeSecretOwnRead = (meta?: Metadata): boolean =>
-  meta?.[ownReadMarker] === true;
+  meta?.[ownReadMarker] === ownReadToken;
 
 /**
  * Thrown by a read of a runtime secret whose stored metadata names a schema
@@ -135,8 +160,11 @@ export const readRuntimeSecret = (
 ): string | undefined => {
   const link = runtimeSecretLink(space, name);
   const value = tx.readValueOrThrow(link, { meta: ownRead });
-  if (typeof value !== "string") return undefined;
-  return mintedIn(tx, link) || carriesWriterClaim(tx, link) ? value : undefined;
+  // The writer is settled before the value's type: a stored value whose
+  // writer is unknown makes the read throw whatever the value is, so the
+  // mint never replaces it.
+  const trusted = mintedIn(tx, link) || carriesWriterClaim(tx, link);
+  return trusted && typeof value === "string" ? value : undefined;
 };
 
 /** Returns whether `tx` wrote the document `link` names. */

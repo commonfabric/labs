@@ -118,6 +118,7 @@ import {
   isRuntimeSecretId,
   isRuntimeSecretOwnRead,
   readRuntimeSecret,
+  readsRuntimeSecretValue,
   RUNTIME_SECRET_SCHEMA,
   RUNTIME_SECRET_WRITER,
   runtimeSecretLink,
@@ -1700,8 +1701,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options: IReadOptions | undefined,
   ): void {
     if (
-      !isRuntimeSecretId(address.id) ||
-      (address.path.length > 0 && address.path[0] !== "value") ||
+      !readsRuntimeSecretValue(address) ||
       this.#privilegedSystemWriteDepth > 0 ||
       isRuntimeSecretOwnRead(options?.meta)
     ) {
