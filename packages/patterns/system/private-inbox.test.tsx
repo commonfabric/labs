@@ -51,6 +51,14 @@ function offerWithId(
   return offers.find((each) => each?.id === id);
 }
 
+/**
+ * A time no later than the start of this test's refusals: when the inbox
+ * received the first offer, which the test sends before any refusal.
+ */
+function refusalsStartedBy(offers: readonly (Offer | undefined)[]): number {
+  return offerWithId(offers, "loom-shaped")?.receivedAt ?? Infinity;
+}
+
 /** An inbox's result, as the link a holder keeps. */
 function linkOf(inbox: unknown): Cell<PrivateInboxPiece>;
 function linkOf(inbox: unknown): unknown {
@@ -157,6 +165,27 @@ const EnsuringHome = pattern<
     refusal,
   };
 });
+
+/**
+ * Like {@link EnsuringHome}, except that the refusal holder is given, so that
+ * a test can put a refusal in it first.
+ */
+const SeededEnsuringHome = pattern<
+  {
+    privateInbox: Writable<PrivateInboxHolder>;
+    privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
+    profiles: PointTarget[];
+  },
+  { ensure: Stream<EnsurePrivateInboxEvent> }
+>(({ privateInbox, privateInboxRefusal, profiles }) => ({
+  ensure: ensurePrivateInbox({
+    privateInbox,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    privateInboxRefusal,
+    profiles,
+    pointProfiles: pointProfilesAtPrivateInbox({ privateInbox, profiles }),
+  }),
+}));
 
 /** Whether `retained` holds exactly the inboxes `expected` holds, in order. */
 function retainsExactly(
@@ -969,6 +998,64 @@ export default pattern(() => {
     profiles: [curedAdvertising] as any,
   });
 
+  // A Home whose refused profile moves to a third inbox, and is then named by
+  // a refusal it no longer advertises.
+  const movedAwayAdvertising = ProfileHome({
+    initialName: "Moved away advertising",
+  });
+  const movedAway = new Writable<PrivateInboxHolder>({});
+  const ensureMovedAway = EnsuringHome({
+    privateInbox: movedAway,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    // deno-lint-ignore no-explicit-any
+    profiles: [movedAwayAdvertising] as any,
+  });
+  // A Home whose first advertising profile points at another inbox, ahead of
+  // the one still pointing at the refused inbox.
+  const secondFirst = ProfileHome({ initialName: "Second first" });
+  const secondRefused = ProfileHome({ initialName: "Second refused" });
+  const secondAdvertiser = new Writable<PrivateInboxHolder>({});
+  const ensureSecondAdvertiser = EnsuringHome({
+    privateInbox: secondAdvertiser,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    // deno-lint-ignore no-explicit-any
+    profiles: [secondFirst, secondRefused] as any,
+  });
+  // A Home whose deciding profile, pointing at the held inbox, is not its
+  // first advertising profile, which still points at the refused inbox.
+  const heldLaterRefused = ProfileHome({ initialName: "Held later refused" });
+  const heldLaterDeciding = ProfileHome({
+    initialName: "Held later deciding",
+  });
+  const heldLater = new Writable<PrivateInboxHolder>({});
+  const ensureHeldLater = EnsuringHome({
+    privateInbox: heldLater,
+    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
+    // deno-lint-ignore no-explicit-any
+    profiles: [heldLaterRefused, heldLaterDeciding] as any,
+  });
+  // Homes holding a refusal recorded at a known time: one of the inbox their
+  // profile advertises, and one of another inbox.
+  const EARLIER = 1_000;
+  const keptAdvertising = ProfileHome({ initialName: "Kept advertising" });
+  const keptRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const ensureKept = SeededEnsuringHome({
+    privateInbox: new Writable<PrivateInboxHolder>({}),
+    privateInboxRefusal: keptRefusal,
+    // deno-lint-ignore no-explicit-any
+    profiles: [keptAdvertising] as any,
+  });
+  const otherInboxAdvertising = ProfileHome({
+    initialName: "Other inbox advertising",
+  });
+  const otherInboxRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const ensureOtherInbox = SeededEnsuringHome({
+    privateInbox: new Writable<PrivateInboxHolder>({}),
+    privateInboxRefusal: otherInboxRefusal,
+    // deno-lint-ignore no-explicit-any
+    profiles: [otherInboxAdvertising] as any,
+  });
+
   const action_advertise_refused_inboxes = action(() => {
     const advertised = elsewhere.get().piece?.resolveAsCell();
     for (
@@ -984,14 +1071,33 @@ export default pattern(() => {
         stillRefusedMoved,
         stillRefusedStaying,
         longReasonAdvertising,
+        movedAwayAdvertising,
+        secondRefused,
+        heldLaterRefused,
+        keptAdvertising,
+        otherInboxAdvertising,
       ]
     ) {
       profile.setInbox.send({ inbox: advertised });
     }
     const homeInbox = home.get().piece?.resolveAsCell();
+    const another = third.get().piece?.resolveAsCell();
+    secondFirst.setInbox.send({ inbox: another });
+    heldLaterDeciding.setInbox.send({ inbox: homeInbox });
     refusedHeld.set({ piece: homeInbox });
     abandoned.set({ piece: homeInbox });
     stillRefused.set({ piece: homeInbox });
+    movedAway.set({ piece: homeInbox });
+    secondAdvertiser.set({ piece: homeInbox });
+    heldLater.set({ piece: homeInbox });
+    if (advertised !== undefined && another !== undefined) {
+      keptRefusal.set({
+        refusal: { reason: REFUSED, inbox: advertised, refusedAt: EARLIER },
+      });
+      otherInboxRefusal.set({
+        refusal: { reason: REFUSED, inbox: another, refusedAt: EARLIER },
+      });
+    }
   });
   const action_send_refusals = action(() => {
     const advertised = elsewhere.get().piece?.resolveAsCell();
@@ -1032,6 +1138,20 @@ export default pattern(() => {
       from: stillRefusedMoved,
       refused: { reason: REFUSED, inbox: advertised },
     });
+    for (
+      const [home, profile] of [
+        [ensureMovedAway, movedAwayAdvertising],
+        [ensureSecondAdvertiser, secondRefused],
+        [ensureHeldLater, heldLaterRefused],
+        [ensureKept, keptAdvertising],
+        [ensureOtherInbox, otherInboxAdvertising],
+      ] as const
+    ) {
+      home.ensure.send({
+        from: profile,
+        refused: { reason: REFUSED, inbox: advertised },
+      });
+    }
     ensureLongReason.ensure.send({
       from: longReasonAdvertising,
       refused: {
@@ -1048,7 +1168,8 @@ export default pattern(() => {
     const refusal = ensureRefusedNone.refusal.refusal;
     return refusal !== undefined && refusal.reason === REFUSED &&
       equals(refusal.inbox, elsewhere.get().piece) &&
-      typeof refusal.refusedAt === "number" && refusal.refusedAt > 0 &&
+      typeof refusal.refusedAt === "number" &&
+      refusal.refusedAt >= refusalsStartedBy(inbox.offers) &&
       refusedNone.get().piece === undefined &&
       refusedNoneUnpointed.inbox?.piece === undefined;
   });
@@ -1065,6 +1186,15 @@ export default pattern(() => {
   const assert_a_refusal_naming_no_profile_is_not_recorded = assert(() =>
     ensureUnnamedRefusal.refusal.refusal === undefined
   );
+  const assert_a_repeat_of_the_recorded_refusal_keeps_its_time = assert(() =>
+    keptRefusal.get().refusal?.refusedAt === EARLIER &&
+    keptRefusal.get().refusal?.reason === REFUSED
+  );
+  const assert_a_refusal_of_another_inbox_takes_a_new_time = assert(() =>
+    equals(otherInboxRefusal.get().refusal?.inbox, elsewhere.get().piece) &&
+    (otherInboxRefusal.get().refusal?.refusedAt ?? 0) >=
+      refusalsStartedBy(inbox.offers)
+  );
   const assert_an_event_naming_no_refusal_records_none = assert(() =>
     ensureRefusing.refusal.refusal === undefined &&
     ensureUnvetted.refusal.refusal === undefined
@@ -1079,6 +1209,9 @@ export default pattern(() => {
     });
     abandonedAdvertising.setInbox.send({});
     stillRefusedMoved.setInbox.send({});
+    movedAwayAdvertising.setInbox.send({
+      inbox: third.get().piece?.resolveAsCell(),
+    });
   });
   const action_send_after_the_refusals = action(() => {
     const advertised = elsewhere.get().piece?.resolveAsCell();
@@ -1092,6 +1225,19 @@ export default pattern(() => {
     ensureCured.ensure.send({ adopt: advertised, from: curedAdvertising });
     ensureAbandoned.ensure.send({});
     ensureStillRefused.ensure.send({ from: stillRefusedStaying });
+    if (advertised === undefined) return;
+    // A refusal naming a profile that no longer advertises the refused inbox,
+    // as a stale event does.
+    ensureMovedAway.ensure.send({
+      from: movedAwayAdvertising,
+      refused: { reason: REFUSED, inbox: advertised },
+    });
+    ensureSecondAdvertiser.ensure.send({});
+    ensureHeldLater.ensure.send({ from: heldLaterDeciding });
+    ensureKept.ensure.send({
+      from: keptAdvertising,
+      refused: { reason: REFUSED_AGAIN, inbox: advertised },
+    });
   });
   const assert_a_repeated_refusal_replaces_the_one_recorded = assert(() =>
     ensureRepeated.refusal.refusal?.reason === REFUSED_AGAIN &&
@@ -1131,6 +1277,28 @@ export default pattern(() => {
     ensureRefusedHeld.refusal.refusal === undefined &&
     equals(refusedHeld.get().piece, home.get().piece) &&
     equals(refusedHeldAdvertising.inbox?.piece, home.get().piece)
+  );
+  const assert_a_stale_refusal_clears_one_no_profile_points_at = assert(() =>
+    ensureMovedAway.refusal.refusal === undefined &&
+    equals(movedAwayAdvertising.inbox?.piece, third.get().piece)
+  );
+  const assert_a_refusal_a_later_profile_still_points_at_is_kept = assert(() =>
+    equals(
+      ensureSecondAdvertiser.refusal.refusal?.inbox,
+      elsewhere.get().piece,
+    ) &&
+    equals(secondFirst.inbox?.piece, third.get().piece)
+  );
+  const assert_a_refusal_is_cleared_when_a_later_deciding_profile_points_at_the_held_inbox =
+    assert(() =>
+      ensureHeldLater.refusal.refusal === undefined &&
+      equals(heldLaterRefused.inbox?.piece, elsewhere.get().piece)
+    );
+  const assert_a_new_reason_for_the_recorded_inbox_takes_a_new_time = assert(
+    () =>
+      keptRefusal.get().refusal?.reason === REFUSED_AGAIN &&
+      (keptRefusal.get().refusal?.refusedAt ?? 0) >=
+        refusalsStartedBy(inbox.offers),
   );
   const assert_a_refusal_is_cleared_when_home_adopts_an_inbox = assert(() =>
     ensureCured.refusal.refusal === undefined &&
@@ -1248,6 +1416,8 @@ export default pattern(() => {
       { assertion: assert_a_refusal_naming_no_profile_is_not_recorded },
       { assertion: assert_an_event_naming_no_refusal_records_none },
       { assertion: assert_a_long_refusal_code_is_trimmed_and_cut },
+      { assertion: assert_a_repeat_of_the_recorded_refusal_keeps_its_time },
+      { assertion: assert_a_refusal_of_another_inbox_takes_a_new_time },
       {
         assertion:
           assert_a_refusal_and_its_inbox_are_recorded_before_the_pointers_move,
@@ -1267,6 +1437,17 @@ export default pattern(() => {
       {
         assertion:
           assert_a_refusal_is_kept_while_another_profile_points_at_the_refused_inbox,
+      },
+      { assertion: assert_a_stale_refusal_clears_one_no_profile_points_at },
+      {
+        assertion: assert_a_refusal_a_later_profile_still_points_at_is_kept,
+      },
+      {
+        assertion:
+          assert_a_refusal_is_cleared_when_a_later_deciding_profile_points_at_the_held_inbox,
+      },
+      {
+        assertion: assert_a_new_reason_for_the_recorded_inbox_takes_a_new_time,
       },
       { action: action_refuse_the_held_inbox },
       { assertion: assert_a_refusal_of_the_held_inbox_is_not_recorded },

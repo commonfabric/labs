@@ -216,8 +216,8 @@ export type PrivateInboxRefusal = {
   inbox: Cell<PrivateInboxPiece>;
 
   /**
-   * When Home recorded the refusal, in milliseconds since the epoch. A
-   * handler's clock reads to the second.
+   * When Home first recorded this refusal, of this inbox for this reason, in
+   * milliseconds since the epoch. A handler's clock reads to the second.
    */
   refusedAt: number;
 };
@@ -459,13 +459,14 @@ export type EnsurePrivateInboxEvent = {
  * Running it again creates, re-points and retains nothing.
  *
  * `privateInboxRefusal` holds the host's refusal of the deciding profile's
- * inbox. A refusal the event names is recorded, in place of any recorded
- * before, under the same check as an adoption: the profile the event names is
- * in Home's list and still points at the refused inbox, which is not the inbox
- * Home holds. The record is cleared when Home adopts or creates an inbox, when
- * the profile the event names is in Home's list and points at the inbox Home
- * holds, and, on an event recording no refusal, when no profile in Home's list
- * points at the refused inbox.
+ * inbox. A refusal the event names is recorded, in place of a different one
+ * recorded before, under the same check as an adoption: the profile the event
+ * names is in Home's list and still points at the refused inbox, which is not
+ * the inbox Home holds. The record is cleared when Home adopts or creates an
+ * inbox, when the profile the event names is in Home's list and points at the
+ * inbox Home holds, and, on an event recording no refusal, when no profile in
+ * Home's list points at the refused inbox. A repeat of the recorded refusal, of
+ * the same inbox for the same reason, keeps the time it was first recorded.
  *
  * The check is list membership and the profile's pointer, not order: which
  * profile decides is the host's alone. So an event the owner's own code sends,
@@ -549,13 +550,18 @@ export const ensurePrivateInbox = handler<
     equals(refused.inbox, deciding) &&
     (held === undefined || !equals(held, refused.inbox))
   ) {
-    privateInboxRefusal.set({
-      refusal: {
-        reason: trimmedText(refused.reason, REFUSAL_REASON_MAX_LENGTH),
-        inbox: refused.inbox,
-        refusedAt: Date.now(),
-      },
-    });
+    const reason = trimmedText(refused.reason, REFUSAL_REASON_MAX_LENGTH);
+    const recorded = privateInboxRefusal.get()?.refusal;
+    // The same refusal again keeps the time it was first recorded, and
+    // writes nothing.
+    if (
+      recorded === undefined || recorded.reason !== reason ||
+      !equals(recorded.inbox, refused.inbox)
+    ) {
+      privateInboxRefusal.set({
+        refusal: { reason, inbox: refused.inbox, refusedAt: Date.now() },
+      });
+    }
   } else if (
     deciding !== undefined && held !== undefined && equals(held, deciding)
   ) {
