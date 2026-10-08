@@ -110,8 +110,11 @@ gesture on the reviewed surface its policy names:
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 | add a member | room's rendering | `addMember` | `ChatAddMemberSurface` |
 
-For now a client offers adding a member only by rendering the room's own `[UI]`
-(see [the sanctioned issuing path](#the-sanctioned-issuing-path)).
+A client that draws natively sends `addMember` through
+[the sanctioned issuing path](#the-sanctioned-issuing-path) on
+`ChatAddMemberSurface`, as it sends the acts above. It finds the stream on the
+room's output rather than in `[VIEWS]` (see
+[`ChatRoomOutput`](ChatRoomOutput.md#addmembertarget--value-string-)).
 
 A client sends to the room's own streams, never through a placement or an
 adapter.
@@ -208,11 +211,9 @@ nothing, and pattern code can reach neither path.
 
 A native reviewed act counts wherever a trusted gesture does ([host
 embedding](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures),
-§11), but the runtime doesn't honor that yet for a change to a space's access
-list. Adding a member is such a change: `addMember` admits someone with
-`grantSpaceAccess()`, which refuses a native reviewed act today. So until it
-admits one, a client offers the add control only by rendering the room's
-`[UI]`.
+§11), a change to a space's access list included. So adding a member works the
+same way: `addMember` admits someone with `grantSpaceAccess()`, which admits a
+native reviewed act as it admits a gesture on the room's rendered add control.
 
 ## Delivering notices
 

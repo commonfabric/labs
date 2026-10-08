@@ -16,10 +16,15 @@ import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
-import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
+import type { Cell } from "../src/cell.ts";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "../src/cfc/ui-contract.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { LoopbackStorageManager } from "../src/executor/loopback-storage.ts";
 import { stageSpaceAccessChanges } from "../src/executor/wave.ts";
+import { bindNativeUiControl } from "../src/native-ui.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -121,6 +126,17 @@ function gesture<T extends Record<string, unknown>>(payload: T): T {
   markRendererTrustedEvent(event);
   return event;
 }
+
+/** The native control a host draws for the surface `gesture()` names. */
+const MEMBERS_CONTROL = { surface: "MembersSurface", action: "ChangeAccess" };
+
+/** Sends `event` on `stream`, as a plain send does. */
+const plainSend = (stream: Cell<unknown>, event: Record<string, unknown>) =>
+  stream.send(event);
+
+/** Sends `event` on `stream` from a native control bound to `MEMBERS_CONTROL`. */
+const nativeSend = (stream: Cell<unknown>, event: Record<string, unknown>) =>
+  bindNativeUiControl(stream, MEMBERS_CONTROL)(event);
 
 /** Every entry of every stream sidecar `engine` holds. */
 const allEntriesIn = (
@@ -340,18 +356,19 @@ describe("executor-space-access-change", () => {
       };
 
       /**
-       * Sends `event` on the stream `key` of `result` from `client`, and
-       * resolves with the entry of `event`'s `kind` on that stream once every
-       * entry of that kind is consequenced.
+       * Sends `event` on the stream `key` of `result` from `client`, through
+       * `send`, and resolves with the entry of `event`'s `kind` on that stream
+       * once every entry of that kind is consequenced.
        */
       const sendAndSettle = async (
         client: Runtime,
         result: ReturnType<Runtime["getCell"]>,
         key: string,
         event: Record<string, unknown> & { kind: string },
+        send = plainSend,
       ) => {
         const engine = await server.engineForSpace(room);
-        result.key(key).send(event);
+        send(result.key(key), event);
         await client.idle();
         await client.storageManager.synced();
         await awaitAdmitted(server, () => {
@@ -549,6 +566,101 @@ describe("executor-space-access-change", () => {
         } finally {
           cancelProbe();
         }
+      });
+
+      describe("from a native host's reviewed control", () => {
+        it("commits a grant as the actor's own delegated commit of the list", async () => {
+          const { client, result, engine } = await standUpRoom();
+          startHost();
+
+          const entry = await sendAndSettle(
+            client,
+            result,
+            "grant",
+            {
+              kind: "native-grant",
+              principal: carolSigner.did(),
+              level: "OWNER",
+            },
+            nativeSend,
+          );
+
+          expect(entry.error).toBeUndefined();
+          expect(Engine.read(engine, { id: aclId })?.value).toEqual({
+            ...genesisAcl,
+            [carolSigner.did()]: "OWNER",
+          });
+          expect(
+            aclCommitsIn(engine).map(({ seq: _seq, ...commit }) => commit),
+          ).toEqual([{
+            class: "authored",
+            actingPrincipal: aliceSigner.did(),
+            capabilityRef: `event-consequence:${entry.eventId}`,
+          }]);
+          expect(notesIn(engine, result)).toEqual([
+            `granted ${carolSigner.did()}`,
+          ]);
+        });
+
+        it("commits a revoke of an entry", async () => {
+          const { client, result, engine } = await standUpRoom();
+          startHost();
+
+          const entry = await sendAndSettle(
+            client,
+            result,
+            "revoke",
+            { kind: "native-revoke", principal: bobSigner.did() },
+            nativeSend,
+          );
+
+          expect(entry.error).toBeUndefined();
+          expect(Engine.read(engine, { id: aclId })?.value).toEqual({
+            [aliceSigner.did()]: "OWNER",
+          });
+        });
+
+        it("fails a `WRITE` member's grant on its entry, committing nothing of that run", async () => {
+          const { result, roomFor, engine } = await standUpRoom();
+          startHost();
+          const bobClient = newClient(bobSigner);
+
+          const entry = await sendAndSettle(
+            bobClient,
+            await roomFor(bobClient),
+            "grant",
+            {
+              kind: "native-takeover",
+              principal: carolSigner.did(),
+              level: "OWNER",
+            },
+            nativeSend,
+          );
+
+          expect(entry.error).toContain(
+            `which ${bobSigner.did()} does not hold`,
+          );
+          expect(Engine.read(engine, { id: aclId })?.value).toEqual(genesisAcl);
+          expect(aclCommitsIn(engine)).toEqual([]);
+          expect(notesIn(engine, result)).toEqual([]);
+        });
+
+        it("fails a grant for an event carrying a control's provenance without the mark the control sends", async () => {
+          const { client, result, engine } = await standUpRoom();
+          startHost();
+
+          const entry = await sendAndSettle(client, result, "grant", {
+            kind: "native-forged",
+            principal: carolSigner.did(),
+            provenance: reviewedActionProvenance("native", MEMBERS_CONTROL),
+          });
+
+          expect(entry.error).toContain(
+            "requires the handler's event to be a trusted gesture",
+          );
+          expect(Engine.read(engine, { id: aclId })?.value).toEqual(genesisAcl);
+          expect(aclCommitsIn(engine)).toEqual([]);
+        });
       });
 
       it("commits no change to the list from a client's echo of a gesture's grant", async () => {

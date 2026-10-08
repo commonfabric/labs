@@ -430,6 +430,13 @@ const inviteBaker = handler<
 - `principalsOf(target, kind)` returns every principal the label attests: `[]`
   for none, several for a contested one. Read it where a value nobody attests
   is fine but one someone else attests is not.
+- A field that links a document has its own label, separate from the linked
+  document's. `principalOf(field, kind, { label: "written" })` reads the
+  field's claim of `kind`, such as who wrote the link, while the default reads
+  the linked document's claim of `kind`.
+- `spaceAccessOf(target, principal)` returns another principal's level, so a
+  handler can tell whether the principal a label names is still a member.
+  It narrows no computation to per-user scope, as `spaceAccess(target)` does.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 
@@ -723,17 +730,15 @@ const addMember = handler<
 ```
 
 Both calls work only in a handler whose event is a trusted gesture, a person's
-action on a rendered surface; anywhere else, or for an event without one, they
-throw. A reviewed action from a control a native host draws itself is not one
-yet, though it is to count as one
-([host embedding, §11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)).
-The person who sent the event must hold `OWNER` in the space, which may not be
-their own Home space, and `principal` must be a DID other than theirs, the
-space's own, and `"*"`. A change that would leave the space with no concrete
-`OWNER` is refused. Every refusal throws. A throw the handler lets
-escape drops its whole transaction, so its other writes are dropped too; the
-call throws before staging anything, so a handler that catches the throw has
-changed nothing for that call.
+action on a rendered surface or on a native host's reviewed control
+([host embedding, §11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures));
+anywhere else, or for an event without one, they throw. The person who sent the
+event must hold `OWNER` in the space, which may not be their own Home space,
+and `principal` must be a DID other than theirs, the space's own, and `"*"`. A
+change that would leave the space with no concrete `OWNER` is refused. Every
+refusal throws. A throw the handler lets escape drops its whole transaction, so
+its other writes are dropped too; the call throws before staging anything, so a
+handler that catches the throw has changed nothing for that call.
 
 Granting a level someone already holds, or revoking an entry that is not
 there, does nothing, so a handler that runs again for the same event is safe.

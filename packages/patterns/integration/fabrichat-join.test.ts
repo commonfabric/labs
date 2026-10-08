@@ -5,11 +5,12 @@
  * The second person creates a profile and reads their chat address off their
  * manager. The first creates a profile, starts a direct chat with that address,
  * sees the room listed in their manager, and follows the link their notice
- * shows to the room's page. The second opens that page, adds the room to their
- * chats, and sends a message, which the first sees on the room's page; the
- * second's manager then lists the room too. Last, the first opens their manager
- * again, creates a group from the group controls of that new page, and starts
- * another chat, whose row's link opens the new room.
+ * shows to the room's page. The second opens that page and adds the room to
+ * their chats, after which each sees the other among the room's participants,
+ * before either has written. The second sends a message, which the first sees
+ * on the room's page; the second's manager then lists the room too. Last, the
+ * first opens their manager again, creates a group from the group controls of
+ * that new page, and starts another chat, whose row's link opens the new room.
  */
 
 import type { DID } from "@commonfabric/identity";
@@ -101,6 +102,13 @@ describe("fabrichat-join", () => {
     await waitForSettledText(second, "#fabrichat-messages", EMPTY_ROOM_TEXT);
     await clickButtonWithExactText(second, "Add to my chats");
     await waitForUnrendered(second, "#fabrichat-add-to-chats");
+
+    // Each person is among the room's participants before either has written:
+    // the first joined it by creating it, and the second by adding it. A page
+    // shows its own viewer's badge whatever the room lists, so each checks for
+    // the other.
+    await waitForSettledText(second, "cf-profile-badge", "Ada Lovelace");
+    await waitForSettledText(first, "cf-profile-badge", "Grace Hopper");
 
     // Both people are now looking at the room. What each runtime does while
     // nothing more happens says whether their views of it fight.
