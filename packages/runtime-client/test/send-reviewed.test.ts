@@ -149,6 +149,9 @@ const expectThrownRefusal = (
   reason: string,
 ): Promise<void> => {
   const refused = expect(handling).rejects;
+  // TODO(danfuzz): Assert `reason` in the worker too, once the runtime
+  // processor's `#sendCellEvent()` rejects with an aborted run's `reason`
+  // rather than with the transaction's own message.
   return serverExecution ? refused.toThrow(reason) : refused.toThrow();
 };
 
