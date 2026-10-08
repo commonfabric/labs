@@ -246,9 +246,9 @@ const descriptorForPartialCauseAlias = (
 };
 
 /**
- * The scope a stored scoped link at `ref` already places this output at: the
- * narrowest scope reached by following, from `ref`, links to `ref`'s own
- * address at a narrower scope. `undefined` when `ref` holds no such link.
+ * The scopes a stored chain of links at `ref` already places this output
+ * through: each link followed, from `ref`, to `ref`'s own address at a
+ * narrower scope, in the order followed. Empty when `ref` holds no such link.
  *
  * A broad output location that holds a link to its own narrower-scoped
  * instance was written by a computation whose reads narrowed. A later run
@@ -260,11 +260,11 @@ const descriptorForPartialCauseAlias = (
  * no run ever converging. The reads here are an internal write-placement
  * decision: kept out of scheduling and CFC taint.
  */
-function storedOutputScope(
+function storedOutputChain(
   tx: IExtendedStorageTransaction,
   ref: NormalizedFullLink,
-): CellScope | undefined {
-  let scope: CellScope | undefined;
+): CellScope[] {
+  const chain: CellScope[] = [];
   let at = ref;
   for (let hops = 0; hops < CELL_SCOPES.length; hops++) {
     const stored = tx.readValueOrThrow(at, {
@@ -276,12 +276,12 @@ function storedOutputScope(
       !deepEqual(link.path, ref.path) ||
       scopeRank(link.scope) <= scopeRank(at.scope)
     ) {
-      return scope;
+      return chain;
     }
-    scope = link.scope;
+    chain.push(link.scope);
     at = { ...ref, scope: link.scope };
   }
-  return scope;
+  return chain;
 }
 
 /**
@@ -393,7 +393,8 @@ function sendValueToBindingInner<T>(
       "writeRedirect",
       { preserveOverwrite: true },
     );
-    const stored = storedOutputScope(tx, ref);
+    const chain = storedOutputChain(tx, ref);
+    const stored = chain.at(-1);
     const outputScope = options.narrowestReadScope;
     if (
       stored !== undefined &&
@@ -418,6 +419,25 @@ function sendValueToBindingInner<T>(
           value,
           { cell: cell.getAsNormalizedFullLink(), binding },
           { meta: ignoreReadForScheduling, schemaRole: "output" },
+        );
+      }
+      // A chain written one hop deep, space straight to session, gains the
+      // via-user hop scopes.md §2 requires of every chain under server
+      // execution: the user instance redirects to the session instance, and
+      // the broad slot redirects to the user instance. The session instance
+      // and what reaches it are unchanged.
+      if (
+        getServerExecutionConfig() && stored === "session" &&
+        ref.scope === "space" && !chain.includes("user")
+      ) {
+        const userRef = { ...ref, scope: "user" as const };
+        tx.writeValueOrThrow(
+          userRef,
+          createSigilLinkFromParsedLink(storedRef, { base: userRef }),
+        );
+        tx.writeValueOrThrow(
+          bindingLink,
+          createSigilLinkFromParsedLink(userRef, { base: bindingLink }),
         );
       }
       return;

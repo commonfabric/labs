@@ -27,6 +27,7 @@ import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schem
 import {
   collectExternalSchemaRefHashes,
   containsExternalSchemaRef,
+  isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import type { MemorySpace, Result, Unit } from "@commonfabric/memory/interface";
 import {
@@ -2704,7 +2705,10 @@ const _schemaScopeCapCache = new WeakMap<object, SchemaScope | undefined>();
  * {@link schemaFollowScopeCap}, memoized by schema identity. Handle
  * construction asks it of every element read as a handle, and the elements
  * of one array share one declaration, so the reference resolution behind the
- * answer runs once per declaration rather than once per element.
+ * answer runs once per declaration rather than once per element. A schema
+ * whose root is a content-addressed reference is answered from the closure
+ * the registry holds at the time, which may not hold it yet, so that answer
+ * is never kept.
  */
 function schemaFollowScopeCapMemoized(
   schema: JSONSchema | undefined,
@@ -2714,7 +2718,10 @@ function schemaFollowScopeCapMemoized(
     return _schemaScopeCapCache.get(schema);
   }
   const cap = schemaFollowScopeCap(schema);
-  _schemaScopeCapCache.set(schema, cap);
+  const ref = (schema as { $ref?: unknown }).$ref;
+  if (!(typeof ref === "string" && isExternalSchemaRef(ref))) {
+    _schemaScopeCapCache.set(schema, cap);
+  }
   return cap;
 }
 

@@ -11,6 +11,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  resetServerExecutionConfig,
+  setServerExecutionConfig,
+} from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createCell } from "../src/cell.ts";
@@ -36,6 +40,7 @@ describe("output-binding-scoped-link", () => {
   });
 
   afterEach(async () => {
+    resetServerExecutionConfig();
     await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
@@ -162,6 +167,40 @@ describe("output-binding-scoped-link", () => {
     sendValueToBinding(tx, result, undefined, binding, 3, {});
 
     expect(session.get()).toBe(3);
+    expect(parseLink(output.getRaw(), output)).toMatchObject({ scope: "user" });
+    expect(parseLink(user.getRaw(), user)).toMatchObject({ scope: "session" });
+  });
+
+  it("adds the via-user hop to a one-hop stored chain under server execution", () => {
+    setServerExecutionConfig(true);
+    const { output, session, binding, result } = scopedOutput(1);
+    const broad = output.getAsNormalizedFullLink();
+
+    sendValueToBinding(tx, result, undefined, binding, 2, {});
+
+    expect(session.get()).toBe(2);
+    expect(parseLink(output.getRaw(), output)).toMatchObject({
+      id: broad.id,
+      scope: "user",
+    });
+    const user = runtime.getCellFromLink(
+      { ...broad, scope: "user" },
+      undefined,
+      tx,
+    );
+    expect(parseLink(user.getRaw(), user)).toMatchObject({
+      id: broad.id,
+      scope: "session",
+    });
+  });
+
+  it("keeps a full stored chain under server execution", () => {
+    setServerExecutionConfig(true);
+    const { output, user, session, binding, result } = chainedOutput(1);
+
+    sendValueToBinding(tx, result, undefined, binding, 2, {});
+
+    expect(session.get()).toBe(2);
     expect(parseLink(output.getRaw(), output)).toMatchObject({ scope: "user" });
     expect(parseLink(user.getRaw(), user)).toMatchObject({ scope: "session" });
   });
