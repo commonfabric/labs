@@ -605,6 +605,54 @@ describe("SchemaGenerator", () => {
         { ...objectX, asCell: [{ kind: "cell", scope: "user" }] },
       ],
       [
+        "joins the labels a labeled definition and the reference to it state",
+        `
+          type Secret = Confidential<{ x: string }, readonly ["inner"]>;
+          type M1 = { a: Confidential<Secret, readonly ["outer"]> };
+          type M2 = { a: { y: number } };
+        `,
+        propertyA({
+          type: "object",
+          properties: {
+            x: {
+              type: "string",
+              ifc: { confidentiality: ["inner", "outer"] },
+            },
+            y: { type: "number" },
+          },
+          required: ["x", "y"],
+        }),
+      ],
+      [
+        "writes the merge of two recursive definitions as a definition its recursion refers to",
+        `
+          interface A { next?: A; x: string }
+          interface B { next?: B; y: number }
+          type M1 = A;
+          type M2 = B;
+        `,
+        {
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/AnonymousType_1" },
+            x: { type: "string" },
+            y: { type: "number" },
+          },
+          required: ["x", "y"],
+          $defs: {
+            AnonymousType_1: {
+              type: "object",
+              properties: {
+                next: { $ref: "#/$defs/AnonymousType_1" },
+                x: { type: "string" },
+                y: { type: "number" },
+              },
+              required: ["x", "y"],
+            },
+          },
+        },
+      ],
+      [
         "returns the cell a cell constituent declares beside an object",
         `type M1 = Cell<unknown>; type M2 = { y: number };`,
         { type: "unknown", asCell: ["cell"] },

@@ -20,6 +20,8 @@ async function memberOf(code: string) {
     typeChecker: checker,
     definitions: {},
     emittedRefs: new Set(),
+    mergedIntersectionNames: new Map(),
+    nameAnonymousDefinition: () => "AnonymousType_1",
     definitionStack: new Set(),
     expandingPath: [],
     expansionBudget: { readingsInside: 0 },
