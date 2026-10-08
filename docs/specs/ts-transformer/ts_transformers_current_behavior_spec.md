@@ -899,7 +899,9 @@ the others have no value there, so they contribute nothing undeclared, and
 destructuring or a parameter default is an alternative to the value it
 destructures, and an optional member of an object spread is an alternative to
 what the literal held under that key before it, which a required member
-replaces.
+replaces. A part an object holds under a key the trace cannot name, a computed
+key or a spread value's index signature, is an alternative under every name
+read from it.
 
 A binding's traced positions are those of its initializer, so they hold only
 while nothing writes to it. A binding with no type written that is reassigned,
@@ -910,8 +912,8 @@ assignment, a `for…of` or `for…in` loop onto it, `++` or `--` — declares
 nothing, and a write through a binding initialized with another, or with a
 path through one, counts against that other binding too. A `delete` only takes
 a part away, which leaves nothing undeclared, so it is not a write. A binding
-whose type is written keeps its declared positions, since every write must
-satisfy that type.
+whose type is written, in a local's or a callback parameter's annotation, keeps
+the positions that type declares, since every write must satisfy it.
 
 ### 6.7 Lowerable Expression-Site Categories
 

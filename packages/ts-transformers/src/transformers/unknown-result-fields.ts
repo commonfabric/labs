@@ -123,13 +123,17 @@ function alternatives(
 }
 
 /**
- * The declared positions below `key` of a value with `positions`. A part the
- * value does not have contributes nothing, so it is declared.
+ * The declared positions below `key` of a value with `positions`. A part held
+ * under a key the trace could not name may be the one under `key`, so it is
+ * an alternative there. A part the value does not have contributes nothing,
+ * so it is declared.
  */
 function below(positions: DeclaredPositions, key: string): DeclaredPositions {
-  return typeof positions === "boolean"
-    ? positions
-    : positions.get(key) ?? true;
+  if (typeof positions === "boolean") return positions;
+  const named = positions.get(key);
+  const unnamed = key === ANY_KEY ? undefined : positions.get(ANY_KEY);
+  if (named === undefined) return unnamed ?? true;
+  return unnamed === undefined ? named : alternatives(named, unnamed);
 }
 
 /** Whether every position of a value with `positions` is declared. */
@@ -382,7 +386,9 @@ function symbolPositions(
   const { checker } = scope;
   const resolved = resolveAlias(symbol, checker);
   const bound = scope.bindings.get(resolved);
-  if (bound !== undefined) return scope.written.has(resolved) ? false : bound;
+  // A written binding is read from its declaration below, where only a type
+  // written out still declares what it holds.
+  if (bound !== undefined && !scope.written.has(resolved)) return bound;
   const declaration = resolved.valueDeclaration ?? resolved.declarations?.[0];
   if (!declaration) return false;
   if (ts.isVariableDeclaration(declaration)) {

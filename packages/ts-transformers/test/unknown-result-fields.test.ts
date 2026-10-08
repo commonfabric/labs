@@ -505,6 +505,17 @@ export default pattern(() => ({
       ]]);
     });
 
+    it("reports a written callback parameter only when its type is not written", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+interface Note { ref: unknown }
+export default pattern<{ notes: Note[] }>(({ notes }) => ({
+  typed: computed(() => notes.map((n: Note) => { n.ref = op(); return n; })),
+  untyped: computed(() => notes.map((n) => { n.ref = op(); return n; })),
+}));`),
+      ).toEqual([["untyped[].ref"]]);
+    });
+
     it("reports nothing for a declared value a `delete` takes a part from", async () => {
       expect(
         await reportedPaths(
@@ -565,6 +576,21 @@ export default pattern<{ k: "a" | "b" }>(({ k }) => ({
   }),
 }));`),
       ).toEqual([["result.other", "result.dynamic"]]);
+    });
+
+    it("reports a member read by name that a value may hold under a key the trace cannot name", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref: unknown } { return { ref: 1 }; }
+export default pattern<{ k: string }>(({ k }) => ({
+  result: computed(() => {
+    const bag = { [k]: op() };
+    const spread = { ...Object.fromEntries([["a", op()]]) };
+    const shadowed = { a: note().ref, [k]: op() };
+    return { named: bag.foo, spread: spread.a, shadowed: shadowed.a };
+  }),
+}));`),
+      ).toEqual([["result.named", "result.spread", "result.shadowed"]]);
     });
 
     it("reports an arm of `when()` or `unless()` that is undeclared", async () => {
