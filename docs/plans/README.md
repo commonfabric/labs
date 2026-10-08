@@ -28,6 +28,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
+- [Per-input witnesses for an endorsed computation](cfc-per-input-witnesses.md)
+  lets an exchange rule require a different provenance for each argument of the
+  code it endorses: a lift argument's `RequiresIntegrity` checked against the
+  reads made through that argument, and each verified requirement recorded on
+  the output for the rule to name, with the record form routed through a specs
+  ruling first.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
