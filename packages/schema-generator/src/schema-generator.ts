@@ -79,7 +79,11 @@ import {
   type TypeWithInternals,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
-import { unionFoldedFrom, withOriginOf } from "./schema-origins.ts";
+import {
+  unionFoldedFrom,
+  withOriginOf,
+  withOriginsNumbered,
+} from "./schema-origins.ts";
 import {
   reportUnreadCfcRecursion,
   reportUnreadTypes,
@@ -1313,11 +1317,13 @@ function mergeParts(
 ): MutableJSONSchema {
   // A merge met again inside itself, as the members of recursive definitions
   // meet, is the same merge: it is written as a definition, and each meeting
-  // as a reference to it, as the type path writes a recursive type.
+  // as a reference to it, as the type path writes a recursive type. Its parts
+  // are compared with the origins recorded in them, since equal schemas can
+  // come from different types.
   const names = context.mergedIntersectionNames;
   const key = `merge|${
     hashStringOf([
-      parts.map((part) => [part, context.schemaOrigins?.get(part)?.kind ?? ""]),
+      parts.map((part) => withOriginsNumbered(part, context)),
       carried.map(({ labels, members }) => [labels, members]),
     ] as FabricValue)
   }`;
@@ -1856,6 +1862,7 @@ export class SchemaGenerator {
       definitions: {},
       emittedRefs: new Set(),
       schemaOrigins: new WeakMap(),
+      originNumbers: new Map(),
       mergedIntersectionNames: new Map(),
       nameAnonymousDefinition: () =>
         `AnonymousType_${++this.#anonymousNameCounter}`,

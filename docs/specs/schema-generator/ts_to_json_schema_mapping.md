@@ -189,8 +189,11 @@ definition's, through a chain of references, except its labels, which join
 the definition's. A merge met again inside itself, as the members of two
 recursive definitions meet, is written where it starts and as a definition
 named as the type path names a recursive type (`AnonymousType_N`), and each
-meeting inside it is a reference to that definition. Where a schema alone no longer
-says what its type was, the generation context records where it came from
+meeting inside it is a reference to that definition; merges are told apart
+by their schemas together with the origins recorded in them (below), so
+equal schemas that came from different types are different merges. Where a
+schema alone no longer says what its type was, the generation context
+records where it came from
 (`schemaOrigins`): `void` lowers to the opaque marker `OpaqueCell<any>` also
 lowers to, and reduces as `undefined` does beside another primitive
 (`undefined & void` is `undefined`, `string & void` nothing), while the

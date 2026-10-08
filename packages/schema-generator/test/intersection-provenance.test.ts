@@ -695,6 +695,45 @@ describe("SchemaGenerator", () => {
       });
     }
 
+    it("keeps apart recursive merges of equal schemas from different types", async () => {
+      // `A`'s and `C`'s schemas are equal, as both branded primitives fall
+      // back to one schema, so the merge of `C` with `B` met inside the merge
+      // of `A` with `B` is a merge of its own, in which `v` is nothing. The
+      // node path writes each merge where it starts, which the type path
+      // writes as a reference.
+
+      const { byNode } = await schemasOfBothPaths(`
+        type A = { v: string & { a: 1 }; next?: A; other?: C };
+        type C = { v: number & { b: 2 }; next?: A; other?: C };
+        type B = { v: string; next?: B; other?: B };
+        type M1 = A;
+        type M2 = B;
+      `);
+      const mergedWithC: JSONSchema = {
+        type: "object",
+        properties: {
+          v: false,
+          next: { $ref: "#/$defs/AnonymousType_1" },
+          other: { $ref: "#/$defs/AnonymousType_2" },
+        },
+        required: ["v"],
+      };
+      const mergedWithA: JSONSchema = {
+        type: "object",
+        properties: {
+          v: UNSUPPORTED_NON_OBJECT,
+          next: { $ref: "#/$defs/AnonymousType_1" },
+          other: mergedWithC,
+        },
+        required: ["v"],
+      };
+
+      expect(byNode()).toEqual({
+        ...mergedWithA as object,
+        $defs: { AnonymousType_1: mergedWithA, AnonymousType_2: mergedWithC },
+      });
+    });
+
     it("throws for a property two declarations put in different scopes", async () => {
       const { byType, byNode } = await schemasOfBothPaths(`
         type M1 = { a: PerUser<string> };

@@ -160,6 +160,13 @@ export interface GenerationContext {
   >;
 
   /**
+   * A number for each record of `schemaOrigins` that a merge's key has met,
+   * so equal schemas that came from different types key different merges
+   * (`withOriginsNumbered()`).
+   */
+  originNumbers?: Map<object, number>;
+
+  /**
    * The name of each intersection the node path met again inside itself while
    * merging it, by the key `mergeParts()` gives the merge: the merge is
    * written as a definition of that name, and each meeting as a reference.
