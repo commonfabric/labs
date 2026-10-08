@@ -1631,11 +1631,18 @@ export class StorageManager implements IStorageManager {
    * document, `genesis.root` as its reserved root pattern when one is given
    * (computed from the space's DID when it is a function), and
    * `genesis.spaceKind` as its declared kind when one is given. The session
-   * declares the same root and kind, which the server holds the commit to. The commit reads the document at sequence zero, so it lands
-   * only on a space with no history. The memory client resubmits the
-   * identical commit after a lost connection until the server confirms or
-   * refuses it. The key is held by nothing but this call, and is dropped when
-   * the call returns.
+   * declares the same root and kind, which the server holds the commit to.
+   * The commit reads the document at sequence zero, so it lands only on a
+   * space with no history. The memory client resubmits the identical commit
+   * after a lost connection until the server confirms or refuses it. The key
+   * is held by nothing but this call, and is dropped when the call returns;
+   * on a shared connection its authentication is released too, since a router
+   * counts each principal a connection holds against the connection.
+   *
+   * Under Mode A the ACL this commit writes need not name the space's own
+   * key, so the server revokes the creating session once the commit lands,
+   * and the `session.close` that follows is answered with a denial for a
+   * session that no longer exists. That denial is expected and ignored.
    */
   async createSpace(
     acl: ACL,
@@ -1677,7 +1684,19 @@ export class StorageManager implements IStorageManager {
         operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
       });
     } finally {
-      await client.close();
+      try {
+        await client.close();
+      } finally {
+        // Best effort: the space exists once its genesis commits. If the
+        // release fails, the key keeps one of the shared connection's
+        // principal places until the connection ends.
+        await client.releasePrincipal?.(space).catch((error) =>
+          logger.warn("create-space-release", () => [
+            `space ${space}: releasing its key failed:`,
+            error,
+          ])
+        );
+      }
     }
     return space;
   }

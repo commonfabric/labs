@@ -351,6 +351,22 @@ export type WatchMutationResult = {
 
 const RECONNECT_BASE_DELAY_MS = 25;
 const RECONNECT_MAX_DELAY_MS = 30_000;
+/**
+ * The least a routed `connection.auth` refused for now waits before it is
+ * sent again: a router refuses one when its source's authentications pass
+ * their rate, which refills over seconds, not milliseconds.
+ */
+const ROUTED_RETRY_FLOOR_MS = 1_000;
+/**
+ * How long a refused statement's challenge must still last when it is sent
+ * again, by this clock: a router refuses a statement whose challenge has
+ * expired by its own clock, which may run a little ahead.
+ */
+const ROUTED_RESEND_MARGIN_S = 5;
+/** How often one refused statement is sent again before a new challenge. */
+const ROUTED_RESENDS = 3;
+/** Marks an error a router's refusal of a routed authentication. */
+const ROUTED_AUTH_REFUSAL: unique symbol = Symbol("routed auth refusal");
 const RECONNECT_JITTER_RATIO = 0.2;
 
 const reconnectDelayMs = (attempt: number): number => {
@@ -420,6 +436,39 @@ const runWithAbortSignal = async <T>(
   }
 };
 
+/** Sessions a reconnect restores at once; the rest wait for a free slot. */
+export const RESTORE_CONCURRENCY = 128;
+
+/**
+ * Runs `run` on every item, at most `limit` at a time, and settles once all
+ * have settled, in item order, as `Promise.allSettled` does.
+ */
+export async function settleBounded<T>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<unknown>,
+): Promise<PromiseSettledResult<unknown>[]> {
+  const results: PromiseSettledResult<unknown>[] = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = {
+          status: "fulfilled",
+          value: await run(items[index]),
+        };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, lane),
+  );
+  return results;
+}
+
 export class Client {
   #pending = new Map<string, PromiseWithResolvers<unknown>>();
   #spaces = new Set<SpaceSession>();
@@ -448,6 +497,17 @@ export class Client {
    * challenge it asks for.
    */
   #challengeSigners = new Set<string>();
+  /**
+   * Statements a router refused for now, by principal, with the challenge
+   * they answer and when they were refused; see `#authenticate`.
+   */
+  #refusedStatements = new Map<string, {
+    context: SessionOpenAuthContext;
+    signed: ConnectionAuth;
+    expiresAt: number;
+    at: number;
+    resends: number;
+  }>();
 
   /**
    * Settles once every signed `session.open` issued so far has been
@@ -719,6 +779,7 @@ export class Client {
   async release(did: string): Promise<void> {
     this.#cancelRenewal(did);
     this.#routedSigners.delete(did);
+    this.#refusedStatements.delete(did);
     if (!this.#authenticated.delete(did)) return;
     await this.request({
       type: "connection.release",
@@ -971,44 +1032,90 @@ export class Client {
     const held = this.sessionOpenAuthContext();
     // The server refuses a challenge that has expired, and one this key has
     // already signed, so either case takes a challenge of its own. The
-    // expiry is read by this clock, which may lag the server's: a refusal
-    // the server marks retriable is answered once with a challenge asked
-    // for outright.
-    const needsChallenge = routedChallenge !== undefined || freshChallenge ||
-      this.#challengeSigners.has(principal.did) ||
-      held.challenge.expiresAt <= Math.floor(Date.now() / 1000);
-    if (!needsChallenge) {
+    // expiry is read by this clock, which may lag the server's: a direct
+    // server's refusal marked retriable is answered once with a challenge
+    // asked for outright.
+    // A statement a router refused for now was refused before its
+    // challenge was spent, so a pushed challenge aside, it is sent again
+    // while that challenge lasts, a second or more after the refusal,
+    // rather than asking for one challenge after another.
+    const refused = routedChallenge === undefined &&
+        held.deployment !== undefined
+      ? this.#refusedStatements.get(principal.did)
+      : undefined;
+    // Sent again only if its challenge still has the margin left once the
+    // wait after the refusal is over.
+    const lasts = (r: NonNullable<typeof refused>) =>
+      r.expiresAt * 1000 - Math.max(Date.now(), r.at + ROUTED_RETRY_FLOOR_MS) >=
+        ROUTED_RESEND_MARGIN_S * 1000;
+    let resend = refused !== undefined && refused.resends < ROUTED_RESENDS &&
+      lasts(refused);
+    const needsChallenge = !resend && (routedChallenge !== undefined ||
+      freshChallenge || this.#challengeSigners.has(principal.did) ||
+      held.challenge.expiresAt <= Math.floor(Date.now() / 1000));
+    if (!needsChallenge && !resend) {
       this.#challengeSigners.add(principal.did);
     }
     const authenticated = (async () => {
-      const context = needsChallenge
-        ? {
-          audience: held.audience,
-          ...(held.deployment === undefined
-            ? {}
-            : { deployment: held.deployment }),
-          challenge: routedChallenge ??
-            (await this.request<ConnectionChallengeResult>({
-              type: "connection.challenge",
-              requestId: this.#nextRequestId(),
-            }, { whileConnected })).challenge,
-        }
-        : held;
-      const signed = await principal.authorizeConnection(context);
-      // A drop while the key signed leaves the signature over a challenge
-      // of the connection that is gone; `hello` has emptied the map, so the
-      // next caller starts over on the new connection.
+      let context: SessionOpenAuthContext;
+      let signed: ConnectionAuth;
+      if (resend) {
+        const wait = refused!.at + ROUTED_RETRY_FLOOR_MS - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        // The wait may have taken longer than asked; the challenge is
+        // checked again before the statement goes.
+        resend = lasts(refused!);
+      }
+      if (resend) {
+        ({ context, signed } = refused!);
+      } else {
+        context = needsChallenge || refused !== undefined
+          ? {
+            audience: held.audience,
+            ...(held.deployment === undefined
+              ? {}
+              : { deployment: held.deployment }),
+            challenge: routedChallenge ??
+              (await this.request<ConnectionChallengeResult>({
+                type: "connection.challenge",
+                requestId: this.#nextRequestId(),
+              }, { whileConnected })).challenge,
+          }
+          : held;
+        signed = await principal.authorizeConnection(context);
+      }
+      // A drop while the key signed, or while a refused statement waited,
+      // leaves the signature over a challenge of the connection that is
+      // gone; `hello` has emptied the map, so the next caller starts over on
+      // the new connection.
       if (this.#staleSince(epoch)) {
         if (whileConnected) throw connectionLostWhileRestoring();
         throw STALE_AUTHENTICATION;
       }
-      const result = await this.request<ConnectionAuthResult>({
-        type: "connection.auth",
-        requestId: this.#nextRequestId(),
-        ...signed,
-      }, { whileConnected });
-      this.#scheduleRenewal(principal, epoch, result.expiresAt);
-      return result.principal;
+      try {
+        const result = await this.request<ConnectionAuthResult>({
+          type: "connection.auth",
+          requestId: this.#nextRequestId(),
+          ...signed,
+        }, { whileConnected });
+        this.#refusedStatements.delete(principal.did);
+        this.#scheduleRenewal(principal, epoch, result.expiresAt);
+        return result.principal;
+      } catch (error) {
+        if (
+          context.deployment !== undefined &&
+          isRetriableAuthorizationError(error) && !this.#staleSince(epoch)
+        ) {
+          this.#refusedStatements.set(principal.did, {
+            context,
+            signed,
+            expiresAt: context.challenge.expiresAt,
+            at: Date.now(),
+            resends: resend ? refused!.resends + 1 : 0,
+          });
+        } else this.#refusedStatements.delete(principal.did);
+        throw error;
+      }
     })();
     this.#authenticated.set(principal.did, authenticated);
     try {
@@ -1018,9 +1125,19 @@ export class Client {
         this.#authenticated.delete(principal.did);
       }
       if (error === STALE_AUTHENTICATION) return STALE;
+      // A router's refusal for now, of the statement or of a challenge for
+      // it, passes over seconds: a held restore waits a second or more after
+      // it, as a renewal does; see `#holdRestore`.
       if (
-        !needsChallenge && isRetriableAuthorizationError(error) &&
-        !this.#staleSince(epoch)
+        held.deployment !== undefined && isRetriableAuthorizationError(error)
+      ) {
+        (error as { [ROUTED_AUTH_REFUSAL]?: true })[ROUTED_AUTH_REFUSAL] = true;
+      }
+      // A router's refusal for now is answered by sending the statement
+      // again later, not by a new challenge now.
+      if (
+        !needsChallenge && held.deployment === undefined &&
+        isRetriableAuthorizationError(error) && !this.#staleSince(epoch)
       ) {
         return await this.#authenticate(principal, whileConnected, true);
       }
@@ -1040,10 +1157,18 @@ export class Client {
     principal: SessionPrincipal,
     epoch: number,
     expiresAt: number,
+    attempt = 0,
   ): void {
     this.#cancelRenewal(principal.did);
     const leaseMs = expiresAt * 1000 - Date.now();
-    const delay = Math.max(0, leaseMs - Math.min(120_000, leaseMs / 2));
+    // A router's refusal for now passes over seconds; a direct server's
+    // retries at the reconnect backoff.
+    const floor = this.#sessionOpenAuthContext?.deployment === undefined
+      ? 0
+      : ROUTED_RETRY_FLOOR_MS;
+    const delay = attempt > 0
+      ? Math.max(floor, reconnectDelayMs(attempt - 1))
+      : Math.max(0, leaseMs - Math.min(120_000, leaseMs / 2));
     const timer = setTimeout(() => {
       this.#renewals.delete(principal.did);
       if (this.#closed || !this.#connected || epoch !== this.#connectionEpoch) {
@@ -1051,6 +1176,13 @@ export class Client {
       }
       this.#authenticated.delete(principal.did);
       void this.#authenticate(principal, false, true).catch((error) => {
+        // A renewal refused for now is tried again after a backoff, so the
+        // grant does not lapse and leave the principal's opens to a final
+        // denial.
+        if (isRetriableAuthorizationError(error)) {
+          this.#scheduleRenewal(principal, epoch, expiresAt, attempt + 1);
+          return;
+        }
         if (!isPermanentAuthorizationError(error)) return;
         for (const session of [...this.#spaces]) {
           if (session.principal === principal.did) {
@@ -1121,6 +1253,7 @@ export class Client {
     this.#transport.setRoutedMessagesEnabled?.(false);
     this.#cancelRenewals();
     this.#challengeSigners.clear();
+    this.#refusedStatements.clear();
     // Signed opens waiting on the old connection's chain settle on their
     // own, as stale, and the restores that follow this handshake must not
     // wait behind them.
@@ -1286,7 +1419,22 @@ export class Client {
         this.#authenticated.delete(principal.did);
         this.#cancelRenewal(principal.did);
         void this.#authenticate(principal, false, true, context.challenge)
-          .catch((error) => this.#rejectPending(error));
+          .catch((error) => {
+            // Refused for now: the router has refused the opens waiting for
+            // this signature for now too, and they are retried. Refused for
+            // good: only the sessions mounted as this key end, as when a
+            // renewal is. Neither touches the connection's other requests.
+            if (isRetriableAuthorizationError(error)) return;
+            if (isPermanentAuthorizationError(error)) {
+              for (const session of [...this.#spaces]) {
+                if (session.principal === principal.did) {
+                  session.handleConnectionFailure(error);
+                }
+              }
+              return;
+            }
+            this.#rejectPending(error);
+          });
       } catch (error) {
         this.#rejectPending(
           error instanceof Error ? error : protocolError(String(error)),
@@ -1413,11 +1561,15 @@ export class Client {
           }
           try {
             await this.#hello();
-            // Every session restores at once. A failure is thrown only after
+            // Sessions restore RESTORE_CONCURRENCY at a time, so a connection
+            // holding hundreds of them does not send them all at once and
+            // meet a router's in-flight limit. A failure is thrown only after
             // all of them have settled, so a retry starts from a connection
             // nothing is still using.
-            const restored = await Promise.allSettled(
-              [...this.#spaces].map((session) => session.restore()),
+            const restored = await settleBounded(
+              [...this.#spaces],
+              RESTORE_CONCURRENCY,
+              (session) => session.restore(),
             );
             for (const outcome of restored) {
               if (outcome.status === "rejected") throw outcome.reason;
@@ -2540,7 +2692,11 @@ export class SpaceSession {
       // retriable denial is an anti-replay race only a new connection's
       // challenge heals, so it still propagates.
       if (this.#holdsRestore(error)) {
-        this.#holdRestore();
+        this.#holdRestore(
+          (error as { [ROUTED_AUTH_REFUSAL]?: true })[ROUTED_AUTH_REFUSAL]
+            ? ROUTED_RETRY_FLOOR_MS
+            : 0,
+        );
         return;
       }
       // A route cancelled during this restore ends the hold, as the abort
@@ -2569,7 +2725,7 @@ export class SpaceSession {
    * reconnect backoff. A drop in the meantime cancels the retry, and the
    * client's reconnect restores the session instead.
    */
-  #holdRestore(): void {
+  #holdRestore(floorMs = 0): void {
     // After a denial in the watch phase the reopen has already made this
     // session ready. Only this keeps `restore()`'s `finally` from replaying
     // its commits, and `transact()` from sending new ones, before the
@@ -2586,7 +2742,8 @@ export class SpaceSession {
     // Closing the session or dropping the connection cancels this retry,
     // and `restore()` cancels it as it starts. `restore()` also does nothing
     // for a closed session and fails while disconnected, so the retry
-    // checks neither.
+    // checks neither. A router's refusal of the key's authentication passes
+    // over seconds, so a retry after one waits a second or more.
     const timer = setTimeout(() => {
       void this.restore().catch((error) => {
         // A closed session needs no connection, and a cancelled route is
@@ -2600,7 +2757,7 @@ export class SpaceSession {
           );
         }
       });
-    }, reconnectDelayMs(this.#heldRestores++));
+    }, Math.max(floorMs, reconnectDelayMs(this.#heldRestores++)));
     // A route cancelled while the session waits ends the wait.
     const abort = () => this.#endHold();
     signal?.addEventListener("abort", abort, { once: true });

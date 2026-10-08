@@ -1,5 +1,5 @@
 /** SDK protocol failures use a synthetic transport; authority is tested separately. */
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
@@ -289,6 +289,573 @@ Deno.test("a permanent automatic renewal denial terminates only its mounted prin
   } finally {
     await client.close();
     time.restore();
+  }
+});
+
+Deno.test("an automatic renewal refused for now sends the same statement again a second or more later", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  let auths = 0, challenges = 0;
+  const sent: { at: number; statement: unknown }[] = [];
+  const p = peer(frame(hello()), (body, push) => {
+    if (body.type === "connection.challenge") {
+      challenges++;
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: { challenge: challenge() },
+      });
+    } else if (body.type === "connection.auth") {
+      // The first renewal is refused for now at the router's rate, and so
+      // is its first retry; the second is admitted.
+      auths++;
+      sent.push({ at: Date.now(), statement: body.statement });
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ...(auths === 2 || auths === 3
+          ? {
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+              retriable: true,
+            },
+          }
+          : {
+            ok: {
+              principal: identity.did(),
+              expiresAt: Math.floor(Date.now() / 1000) + 4,
+            },
+          }),
+      });
+    } else if (body.type === "session.open") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          sessionId: "sdk-session",
+          sessionToken: "sdk-token",
+          serverSeq: 0,
+        },
+      });
+    } else push({ type: "response", requestId: body.requestId, ok: {} });
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(identity.did(), {}, principal());
+    // The renewal at two seconds asks for one challenge; refused before the
+    // router spent it, the same statement is sent again, a second or more
+    // after each refusal, until it is admitted.
+    for (let i = 0; i < 400 && auths < 4; i++) await time.tickAsync(25);
+    assertEquals(auths, 4);
+    assertEquals(challenges, 1);
+    assertEquals(sent[2].statement, sent[1].statement);
+    assertEquals(sent[3].statement, sent[1].statement);
+    assert(sent[2].at - sent[1].at >= 1000, `${sent[2].at - sent[1].at} ms`);
+    assert(sent[3].at - sent[2].at >= 1000, `${sent[3].at - sent[2].at} ms`);
+    // Admitted, it is not kept: the next renewal signs a new challenge.
+    for (let i = 0; i < 400 && auths < 5; i++) await time.tickAsync(25);
+    assertEquals(challenges, 2);
+    assert(sent[4].statement !== sent[3].statement);
+    assertEquals(session.closeError, undefined);
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a ten-minute lease is renewed two minutes ahead of each expiry, over several leases", async () => {
+  setModernCellRepConfig(true);
+  const start = Date.UTC(2026, 9, 1);
+  const time = new FakeTime(start);
+  const renewedAt: number[] = [];
+  const p = peer(frame(hello()), (body, push) => {
+    if (body.type === "connection.challenge") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: { challenge: challenge() },
+      });
+    } else if (body.type === "connection.auth") {
+      renewedAt.push((Date.now() - start) / 1000);
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          principal: identity.did(),
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          sessionId: "sdk-session",
+          sessionToken: "sdk-token",
+          serverSeq: 0,
+        },
+      });
+    } else push({ type: "response", requestId: body.requestId, ok: {} });
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(identity.did(), {}, principal());
+    for (let i = 0; i < 2000 && renewedAt.length < 5; i++) {
+      await time.tickAsync(1000);
+    }
+    // Each grant of 600 s is renewed at 480 s, before it lapses.
+    assertEquals(renewedAt.length, 5);
+    for (let i = 1; i < renewedAt.length; i++) {
+      const gap = renewedAt[i] - renewedAt[i - 1];
+      assert(gap >= 479 && gap <= 481, `renewal ${i} came after ${gap} s`);
+    }
+    assertEquals(session.closeError, undefined);
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+/**
+ * A peer that admits the mount's `connection.auth` and refuses the rest for
+ * now, answering challenges that last `challengeLife` seconds; it records
+ * when each challenge and statement came.
+ */
+function refusingPeer(challengeLife = 60) {
+  const log: { type: string; at: number; statement?: unknown }[] = [];
+  let auths = 0;
+  const p = peer(frame(hello()), (body, push) => {
+    if (body.type === "connection.challenge") {
+      log.push({ type: "challenge", at: Date.now() });
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          challenge: {
+            value: "11".repeat(32),
+            expiresAt: Math.floor(Date.now() / 1000) + challengeLife,
+          },
+        },
+      });
+    } else if (body.type === "connection.auth") {
+      log.push({ type: "auth", at: Date.now(), statement: body.statement });
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ...(++auths === 1
+          ? {
+            ok: {
+              principal: identity.did(),
+              expiresAt: Math.floor(Date.now() / 1000) + 4,
+            },
+          }
+          : {
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+              retriable: true,
+            },
+          }),
+      });
+    } else push({ type: "response", requestId: body.requestId, ok: {} });
+  });
+  return { p, log };
+}
+
+Deno.test("a renewal refused for now waits a second, and takes a new challenge when its own is nearly gone", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // Challenges last four seconds, under the five a resend needs left.
+  const { p, log } = refusingPeer(4);
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(identity.did(), {}, principal());
+    for (
+      let i = 0;
+      i < 400 && log.filter((e) => e.type === "challenge").length < 2;
+      i++
+    ) await time.tickAsync(25);
+    const [, refusal] = log.filter((e) => e.type === "auth");
+    const second = log.filter((e) => e.type === "challenge")[1];
+    assert(second.at - refusal.at >= 1000, `${second.at - refusal.at} ms`);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+const elsewhere = (await Identity.fromRaw(new Uint8Array(32).fill(153))).did();
+
+/** A router that refuses every `connection.auth` for now, its hello's
+ * challenge lasting `helloLife` seconds. */
+function refusingFromTheStart(helloLife: number) {
+  const log: { type: string; at: number; statement?: unknown }[] = [];
+  const seconds = () => Math.floor(Date.now() / 1000);
+  const p = peer(
+    frame(hello({
+      ...metadata(),
+      challenge: { value: "11".repeat(32), expiresAt: seconds() + helloLife },
+    })),
+    (body, push) => {
+      if (body.type === "connection.challenge") {
+        log.push({ type: "challenge", at: Date.now() });
+        push({
+          type: "response",
+          requestId: body.requestId,
+          ok: {
+            challenge: { value: "22".repeat(32), expiresAt: seconds() + 60 },
+          },
+        });
+      } else if (body.type === "connection.auth") {
+        log.push({ type: "auth", at: Date.now(), statement: body.statement });
+        push({
+          type: "response",
+          requestId: body.requestId,
+          error: {
+            name: "AuthorizationError",
+            message: "Routed memory request denied",
+            retriable: true,
+          },
+        });
+      } else push({ type: "response", requestId: body.requestId, ok: {} });
+    },
+  );
+  return { p, log };
+}
+
+/** Mounts two spaces as one key, the second as the first's statement is
+ * refused, and returns once that refusal is in the log. */
+async function mountTwice(
+  client: Awaited<ReturnType<typeof connect>>,
+  log: { type: string }[],
+  time: FakeTime,
+) {
+  void client.mount(identity.did(), {}, principal()).catch(() => {});
+  for (let i = 0; i < 20 && log.length < 1; i++) await time.tickAsync(0);
+  void client.mount(elsewhere, {}, principal()).catch(() => {});
+  await time.tickAsync(0);
+}
+
+Deno.test("a second mount right after a refusal for now sends the refused statement a second later", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log } = refusingFromTheStart(60);
+  const client = await connect({ transport: p.transport });
+  try {
+    await mountTwice(client, log, time);
+    for (
+      let i = 0;
+      i < 400 && log.filter((e) => e.type === "auth").length < 2;
+      i++
+    ) await time.tickAsync(25);
+    const [refused, again] = log.filter((e) => e.type === "auth");
+    assertEquals(again.statement, refused.statement);
+    assert(again.at - refused.at >= 1000, `${again.at - refused.at} ms`);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a refused statement whose challenge will not last takes a new challenge at once", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // Four seconds, under the five a resend needs left.
+  const { p, log } = refusingFromTheStart(4);
+  const client = await connect({ transport: p.transport });
+  try {
+    await mountTwice(client, log, time);
+    for (
+      let i = 0;
+      i < 400 && !log.some((e) => e.type === "challenge");
+      i++
+    ) await time.tickAsync(25);
+    const refused = log.find((e) => e.type === "auth")!;
+    const challenge = log.find((e) => e.type === "challenge")!;
+    assert(challenge.at - refused.at < 1000, `${challenge.at - refused.at} ms`);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a refused statement whose wait ran late takes a new challenge instead", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // Seven seconds: six left once the second's wait is over, under five
+  // once that wait has run two seconds late.
+  const { p, log } = refusingFromTheStart(7);
+  const client = await connect({ transport: p.transport });
+  try {
+    await mountTwice(client, log, time);
+    // The wait's timer fires within this tick, but what follows it runs
+    // only after the whole tick, three seconds on.
+    time.tick(3000);
+    for (
+      let i = 0;
+      i < 40 && log.filter((e) => e.type === "auth").length < 2;
+      i++
+    ) await time.tickAsync(0);
+    const [refused, next] = log.filter((e) => e.type === "auth");
+    assert(next.statement !== refused.statement);
+    assert(log.some((e) => e.type === "challenge"));
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a refused statement is sent again at most three times, then signed anew", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log } = refusingPeer();
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(identity.did(), {}, principal());
+    for (
+      let i = 0;
+      i < 4000 && log.filter((e) => e.type === "challenge").length < 2;
+      i++
+    ) await time.tickAsync(25);
+    const challenges = log.filter((e) => e.type === "challenge");
+    assertEquals(challenges.length, 2);
+    const between = log.filter((e) =>
+      e.type === "auth" && e.at >= challenges[0].at && e.at < challenges[1].at
+    );
+    // The refused statement, then the same statement three more times.
+    assertEquals(between.length, 4);
+    assert(between.every((e) => e.statement === between[0].statement));
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a direct server's renewal refused for now is retried at the reconnect backoff", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const auths: number[] = [];
+  const p = peer(
+    frame(hello({ audience: identity.did(), challenge: challenge() }, {
+      ...flags(),
+      routedAuthV1: false,
+    })),
+    (body, push) => {
+      if (body.type === "connection.challenge") {
+        push({
+          type: "response",
+          requestId: body.requestId,
+          ok: { challenge: challenge() },
+        });
+      } else if (body.type === "connection.auth") {
+        auths.push(Date.now());
+        push({
+          type: "response",
+          requestId: body.requestId,
+          ...(auths.length === 1
+            ? {
+              ok: {
+                principal: identity.did(),
+                expiresAt: Math.floor(Date.now() / 1000) + 4,
+              },
+            }
+            : {
+              error: {
+                name: "AuthorizationError",
+                message: "Memory request denied",
+                retriable: true,
+              },
+            }),
+        });
+      } else push({ type: "response", requestId: body.requestId, ok: {} });
+    },
+  );
+  const direct: SessionPrincipal = {
+    did: identity.did(),
+    authorizeSessionOpen: () => {
+      throw new Error("Direct session uses connection authority");
+    },
+    authorizeConnection: () =>
+      Promise.resolve({ statement: "direct" } as never),
+  };
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(identity.did(), {}, direct);
+    for (let i = 0; i < 400 && auths.length < 3; i++) await time.tickAsync(25);
+    // The second a router's refusal waits does not apply.
+    assert(auths[2] - auths[1] < 1000, `${auths[2] - auths[1]} ms`);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a released key's refused statement is not sent again", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log } = refusingPeer();
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(identity.did(), {}, principal());
+    for (
+      let i = 0;
+      i < 400 && log.filter((e) => e.type === "auth").length < 2;
+      i++
+    ) await time.tickAsync(25);
+    await client.release(identity.did());
+    void client.mount(identity.did(), {}, principal()).catch(() => {});
+    for (
+      let i = 0;
+      i < 400 && log.filter((e) => e.type === "auth").length < 3;
+      i++
+    ) await time.tickAsync(25);
+    // Signed anew for a challenge of its own rather than sent again.
+    assertEquals(log.filter((e) => e.type === "challenge").length, 2);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a pushed challenge's signature refused for good ends only that key's sessions", async () => {
+  setModernCellRepConfig(true);
+  let refuse = false;
+  let pushed = false;
+  const p = peer(frame(hello()), (body, push) => {
+    if (body.type === "connection.auth") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ...(refuse
+          ? {
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+            },
+          }
+          : {
+            ok: {
+              principal: identity.did(),
+              expiresAt: Math.floor(Date.now() / 1000) + 600,
+            },
+          }),
+      });
+    } else if (body.type === "session.open") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          sessionId: "sdk-session",
+          sessionToken: "sdk-token",
+          serverSeq: 0,
+        },
+      });
+    } else if (body.requestId === "commit-in-flight") {
+      refuse = true;
+      pushed = true;
+      push({
+        type: "connection/challenge",
+        principal: identity.did(),
+        challenge: challenge(),
+      });
+    }
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(identity.did(), {}, principal());
+    let settled = false;
+    const inFlight = client.request({
+      type: "transact",
+      requestId: "commit-in-flight",
+    }).finally(() => {
+      settled = true;
+    });
+    inFlight.catch(() => {});
+    for (let i = 0; i < 50 && session.closeError === undefined; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert(pushed);
+    assert(session.closeError !== undefined, "the key's session went on");
+    assertEquals(settled, false, "the refusal failed a request in flight");
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("a pushed challenge's signature refused for now leaves the connection's other requests alone", async () => {
+  setModernCellRepConfig(true);
+  let refuse = false;
+  let pushed = false;
+  const p = peer(frame(hello()), (body, push) => {
+    if (body.type === "connection.auth") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ...(refuse
+          ? {
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+              retriable: true,
+            },
+          }
+          : {
+            ok: {
+              principal: identity.did(),
+              expiresAt: Math.floor(Date.now() / 1000) + 600,
+            },
+          }),
+      });
+    } else if (body.type === "session.open") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          sessionId: "sdk-session",
+          sessionToken: "sdk-token",
+          serverSeq: 0,
+        },
+      });
+    } else if (body.requestId === "commit-in-flight") {
+      // Forwarded by the router; its answer has not come yet.
+      refuse = true;
+      pushed = true;
+      // A challenge in its last second: the refused signature is not sent
+      // again, and the refusal reaches the challenge's handler.
+      push({
+        type: "connection/challenge",
+        principal: identity.did(),
+        challenge: {
+          value: "11".repeat(32),
+          expiresAt: Math.floor(Date.now() / 1000) + 1,
+        },
+      });
+    }
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(identity.did(), {}, principal());
+    let settled = false;
+    const inFlight = client.request({
+      type: "transact",
+      requestId: "commit-in-flight",
+    }).finally(() => {
+      settled = true;
+    });
+    inFlight.catch(() => {});
+    for (let i = 0; i < 50 && !pushed; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert(pushed);
+    assertEquals(settled, false, "the refusal failed a request in flight");
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
   }
 });
 

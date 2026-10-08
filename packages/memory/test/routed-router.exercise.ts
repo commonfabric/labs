@@ -2288,6 +2288,59 @@ finally:
   pass(
     "the SDK creates a space through the router with its own key, sharing off and on",
   );
+  // Each creation authenticates its key on the shared connection and then
+  // releases it, as StorageManager.createSpace does, so twelve creations fit
+  // a connection limited to eight principals at once. A close can cross the
+  // creating session's revocation notice; the toolshed then answers it rather
+  // than closing the connection.
+  {
+    const user = await Identity.generate();
+    const factory = new RemoteSessionFactory(
+      createStorageAddressResolver(new URL("https://localhost:8443")),
+      user,
+      (address) => socketFactory(address, "127.0.0.39"),
+    );
+    factory.setSharedConnections(true);
+    try {
+      for (let i = 0; i < 12; i++) {
+        const key = await Identity.generate();
+        const space = key.did() as MemorySpace;
+        const { client: connection, session } = await factory.create(
+          space,
+          key,
+          { sessionId: crypto.randomUUID() },
+        );
+        try {
+          await session.transact({
+            localSeq: 1,
+            reads: {
+              confirmed: [{
+                id: aclDocId(space),
+                path: toDocumentPath([]),
+                seq: 0,
+              }],
+              pending: [],
+            },
+            operations: [{
+              op: "set",
+              id: aclDocId(space),
+              value: { value: { [alice.did()]: "OWNER" } },
+            }],
+          });
+        } finally {
+          try {
+            await connection.close();
+          } finally {
+            await connection.releasePrincipal?.(space);
+          }
+        }
+        assert(stored(space), `creation ${i} left no store`);
+      }
+    } finally {
+      await factory.close();
+    }
+  }
+  pass("one shared connection creates more spaces than its principal limit");
   const members = await new Client("127.0.0.36").start();
   clients.push(members);
   await members.authenticate(alice, 180, true);

@@ -9,7 +9,9 @@ import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { getMemoryProtocolFlags } from "../v2.ts";
 import {
   connect,
+  RESTORE_CONCURRENCY,
   type SessionPrincipal,
+  settleBounded,
   type SpaceSession,
   type Transport,
 } from "../v2/client.ts";
@@ -24,9 +26,11 @@ const identity = await Identity.fromRaw(new Uint8Array(32).fill(161));
 const SPACE_A = "did:key:z6Mk-held-restore-a";
 const SPACE_B = "did:key:z6Mk-held-restore-b";
 const SPACE_C = "did:key:z6Mk-held-restore-c";
+/** How long the peer's challenges last, in seconds. */
+let challengeLife = 60;
 const challenge = () => ({
   value: "22".repeat(32),
-  expiresAt: Math.floor(Date.now() / 1000) + 60,
+  expiresAt: Math.floor(Date.now() / 1000) + challengeLife,
 });
 /** A direct peer's session-open metadata names no deployment. */
 const sessionOpen = (direct = false) => ({
@@ -354,6 +358,116 @@ Deno.test("a retriable reopen denial holds only that session on a shared connect
     assertEquals(peer.opens.get(SPACE_A), 4);
     assertEquals(peer.opens.get(SPACE_B), 2);
     assertEquals(peer.hellos, 2);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("a reconnect reopens a bounded number of sessions at once", async () => {
+  // A router counts each open in flight against the connection; all of a
+  // large connection's reopens at once would meet its limit.
+  const peer = new RoutedPeer((_space, open) => open === 1 ? "ok" : "hold");
+  const client = await connect({ transport: peer });
+  try {
+    const spaces = Array.from(
+      { length: RESTORE_CONCURRENCY * 2 + 5 },
+      (_, i) => `did:key:z6Mk-bounded-restore-${i}`,
+    );
+    for (const space of spaces) await client.mount(space, {}, principal());
+    peer.drop();
+    await until(() => peer.held.length === RESTORE_CONCURRENCY);
+    await pause(20);
+    assertEquals(peer.held.length, RESTORE_CONCURRENCY);
+    // Each answered reopen frees one slot for the next.
+    for (let answered = 0; answered < spaces.length; answered++) {
+      await until(() => peer.held.length > 0);
+      assert(peer.held.length <= RESTORE_CONCURRENCY);
+      peer.held.shift()!();
+    }
+    await client.restoreConnection();
+    for (const space of spaces) assertEquals(peer.opens.get(space), 2);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("settleBounded runs at most the limit at once and settles in order", async () => {
+  let running = 0, most = 0;
+  const results = await settleBounded([1, 2, 3, 4, 5, 6, 7], 3, async (n) => {
+    running++;
+    most = Math.max(most, running);
+    await pause(n % 3);
+    running--;
+    if (n === 4) throw new Error("four");
+    return n * 10;
+  });
+  assertEquals(most, 3);
+  assertEquals(
+    results.map((r) => r.status === "fulfilled" ? r.value : "rejected"),
+    [10, 20, 30, "rejected", 50, 60, 70],
+  );
+  assertEquals(await settleBounded([], 3, () => Promise.resolve()), []);
+});
+
+Deno.test("a capacity refusal during a restore holds the session and reports no lost access", async () => {
+  // A router or toolshed at a capacity limit refuses a reopen, or the watch
+  // set after it, marked retriable. The session waits and tries again; only
+  // a final denial ends it as access lost.
+  for (const step of ["open", "watch set"] as const) {
+    const peer = new RoutedPeer(
+      (space, open) =>
+        space !== SPACE_A || open !== 2
+          ? "ok"
+          : step === "open"
+          ? "retriable"
+          : "new",
+      (space, n) =>
+        step === "watch set" && space === SPACE_A && n === 1
+          ? "retriable"
+          : "ok",
+    );
+    const client = await connect({ transport: peer });
+    try {
+      const a = await client.mount(SPACE_A, {}, principal());
+      await a.watchAdd([{
+        id: "root",
+        kind: "graph",
+        query: {
+          roots: [{
+            id: "of:held-root",
+            selector: { path: [], schema: false },
+          }],
+        },
+      }]);
+      const lost: Error[] = [];
+      a.subscribeAccessLoss((error) => lost.push(error));
+      peer.drop();
+      await until(() => a.held);
+      assert((await within(a.transact(commit(1)))).seq > 0, step);
+      assertEquals(lost, [], step);
+      assertEquals(a.held, false, step);
+      // The refused step was sent again.
+      assertEquals(
+        step === "open" ? peer.opens.get(SPACE_A) : peer.watchSets.get(SPACE_A),
+        step === "open" ? 3 : 2,
+        step,
+      );
+    } finally {
+      await client.close();
+    }
+  }
+  // The same refusal unmarked is final: the session's access is lost.
+  const peer = new RoutedPeer((space, open) =>
+    space === SPACE_A && open === 2 ? "permanent" : "ok"
+  );
+  const client = await connect({ transport: peer });
+  try {
+    const a = await client.mount(SPACE_A, {}, principal());
+    const lost: Error[] = [];
+    a.subscribeAccessLoss((error) => lost.push(error));
+    peer.drop();
+    await client.restoreConnection();
+    await until(() => lost.length === 1);
   } finally {
     await client.close();
   }
@@ -1097,7 +1211,9 @@ Deno.test("a hold that ends leaves no listener on the session's route", async ()
 Deno.test("a held retry whose signer outlives its connection leaves the next connection alone", async () => {
   const peer = new RoutedPeer(() => "ok");
   // connection.auth: the mount's passes, the reconnect's two are refused as
-  // retriable so A is held, and later ones pass.
+  // retriable so A is held, and later ones pass. A held retry sends a
+  // refused statement again while its challenge lasts; these challenges
+  // last two seconds, so a later retry signs a new one.
   let auths = 0;
   const send = peer.send.bind(peer);
   peer.send = (payload: string) => {
@@ -1116,7 +1232,6 @@ Deno.test("a held retry whose signer outlives its connection leaves the next con
     }
     return send(payload);
   };
-  let signs = 0;
   let release: () => void = () => {};
   const gate = new Promise<void>((r) => release = r);
   let gated = false;
@@ -1124,8 +1239,9 @@ Deno.test("a held retry whose signer outlives its connection leaves the next con
   const slowSigner: SessionPrincipal = {
     ...base,
     authorizeConnection: async (context) => {
-      // The held retry's signature waits until the test releases it.
-      if (++signs === 4) {
+      // The first signature after a refusal, the held retry's, waits until
+      // the test releases it.
+      if (auths >= 2 && !gated) {
         gated = true;
         await gate;
       }
@@ -1133,6 +1249,7 @@ Deno.test("a held retry whose signer outlives its connection leaves the next con
     },
   };
   const client = await connect({ transport: peer });
+  challengeLife = 2;
   try {
     const a = await client.mount(SPACE_A, {}, slowSigner);
     peer.drop();
@@ -1149,6 +1266,91 @@ Deno.test("a held retry whose signer outlives its connection leaves the next con
     assertEquals(peer.resets, resets);
     assert(client.isConnected());
   } finally {
+    challengeLife = 60;
+    await client.close();
+  }
+});
+
+Deno.test("a reconnect signs anew rather than sending a statement refused on the connection before", async () => {
+  const peer = new RoutedPeer(() => "ok");
+  // The reconnect's connection.auth is refused for now, so A is held with
+  // that statement kept; a second reconnect must not send it again.
+  let auths = 0;
+  const send = peer.send.bind(peer);
+  peer.send = (payload: string) => {
+    const body = JSON.parse(payload.slice(5));
+    if (body.type === "connection.auth" && ++auths === 2) {
+      peer.push({
+        type: "response",
+        requestId: body.requestId,
+        error: {
+          name: "AuthorizationError",
+          message: "Routed memory request denied",
+          retriable: true,
+        },
+      });
+      return Promise.resolve();
+    }
+    return send(payload);
+  };
+  let signs = 0;
+  const base = principal();
+  const counting: SessionPrincipal = {
+    ...base,
+    authorizeConnection: (context) => {
+      signs++;
+      return base.authorizeConnection(context);
+    },
+  };
+  const client = await connect({ transport: peer });
+  try {
+    const a = await client.mount(SPACE_A, {}, counting);
+    peer.drop();
+    await until(() => a.held);
+    peer.drop();
+    await within(client.restoreConnection());
+    await until(() => client.isConnected() && !a.held);
+    assertEquals(signs, 3);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("a held retry after a router refuses a challenge for now waits a second", async () => {
+  const peer = new RoutedPeer(() => "ok");
+  // Challenges last two seconds, too short to send a refused statement
+  // again, so each retry asks for a challenge; the first two are refused.
+  challengeLife = 2;
+  const asked: number[] = [];
+  let auths = 0;
+  const send = peer.send.bind(peer);
+  peer.send = (payload: string) => {
+    const body = JSON.parse(payload.slice(5));
+    const refuse = (body.type === "connection.auth" && ++auths === 2) ||
+      (body.type === "connection.challenge" && asked.push(Date.now()) <= 2);
+    if (refuse) {
+      peer.push({
+        type: "response",
+        requestId: body.requestId,
+        error: {
+          name: "AuthorizationError",
+          message: "Routed memory request denied",
+          retriable: true,
+        },
+      });
+      return Promise.resolve();
+    }
+    return send(payload);
+  };
+  const client = await connect({ transport: peer });
+  try {
+    const a = await client.mount(SPACE_A, {}, principal());
+    peer.drop();
+    await until(() => asked.length >= 2, 10_000);
+    assert(asked[1] - asked[0] >= 1000, `${asked[1] - asked[0]} ms`);
+    await until(() => !a.held, 10_000);
+  } finally {
+    challengeLife = 60;
     await client.close();
   }
 });

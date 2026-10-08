@@ -385,6 +385,54 @@ Deno.test("createSpace writes its ACL as the new space's first and only commit, 
   }
 });
 
+Deno.test("createSpace releases the new space's key from a shared connection", async () => {
+  // A router counts every principal a shared connection authenticates; each
+  // creation's key would otherwise stay counted until the connection ends.
+  const user = await Identity.fromPassphrase("acl create release user");
+  const server = createServer("runner-acl-create-release");
+  const inner = new RecordingLoopbackSessionFactory(server);
+  const events: string[] = [];
+  let failRelease = false;
+  const factory: SessionFactory = {
+    supportsAclBootstrap: true,
+    async create(space, signer, requested) {
+      const { client, session } = await inner.create(space, signer, requested);
+      return {
+        client: {
+          get serverFlags() {
+            return client.serverFlags;
+          },
+          delivered: () => client.delivered(),
+          close: async () => {
+            events.push(`close ${space}`);
+            await client.close();
+          },
+          releasePrincipal: (principal: string) => {
+            events.push(`release ${principal}`);
+            return failRelease
+              ? Promise.reject(new Error("memory transport closed"))
+              : Promise.resolve();
+          },
+        },
+        session,
+      };
+    },
+  };
+  const manager = TestStorageManager.overServer({ as: user }, factory);
+  try {
+    const space = await manager.createSpace({ [user.did()]: "OWNER" });
+    assertEquals(events, [`close ${space}`, `release ${space}`]);
+    // The release is best effort: a failed one still returns the space its
+    // genesis created.
+    failRelease = true;
+    const second = await manager.createSpace({ [user.did()]: "OWNER" });
+    assertEquals(events.slice(2), [`close ${second}`, `release ${second}`]);
+  } finally {
+    await manager.close();
+    await server.close();
+  }
+});
+
 Deno.test("createSpace gives every space a new DID", async () => {
   const user = await Identity.fromPassphrase("acl create twice user");
   const server = createServer("runner-acl-create-twice");
