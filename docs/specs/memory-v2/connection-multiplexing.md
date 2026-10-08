@@ -247,7 +247,7 @@ vectors are part of the phase 4 wire change.
 The toolshed verifies the client signature and signed fields itself. The
 invocation uses integral Unix seconds for `iat` and `exp`. At most 120 seconds
 of positive client clock skew is allowed against the attested receipt time;
-`exp` is no later than one hour after either `iat` or receipt, and a statement
+`exp` is no later than 600 s after either `iat` or receipt, and a statement
 presented at or after `exp` is refused. A challenge received at or after its
 expiry, or a proof for a different deployment, router, context, or link epoch,
 is refused. Clock skew cannot extend the challenge or lease past its recorded
@@ -261,7 +261,7 @@ from one router is refused on every other router's link.
 
 A statement's signed `exp` bounds both the window in which it may first reach a
 toolshed and the backend lease it creates. Forwarding it later never starts a
-new one-hour lease. The client renews before `exp` with a new challenge and
+new ten-minute lease. The client renews before `exp` with a new challenge and
 signature for the same context. A permanent refusal of renewal revokes the
 routed context and its sessions; a transient failure leaves authority only
 until the existing `exp`, when the toolshed closes or revokes its sessions.

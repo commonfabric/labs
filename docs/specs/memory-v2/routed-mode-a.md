@@ -94,8 +94,14 @@ signs issuance and receipt evidence; its fixed-format IPC never interprets
 public Memory values. The toolshed verifies the client signature, issuance
 signature, receipt signature, exact statement/issuance digests, claimed
 principal, router, deployment, epoch, context and timestamps. The statement's
-expiry cannot exceed one hour after either client issue or attested receipt.
-Positive client skew is bounded to 120 seconds.
+expiry cannot exceed ten minutes (600 seconds) after either client issue or
+attested receipt. The router refuses a longer lease for good
+(`lease-too-long`) rather than disconnecting the client, and a toolshed refuses
+one by closing the context, so the labs SDK, which asks for ten minutes, ships
+first, then the router, then the toolsheds. No router that admits an hour is in
+service: the rehearsal is the only deployment. Positive client skew is bounded
+to 120 seconds; the router answers a refusal that honest timing, clock skew
+within that bound or load can cause, and the router README lists each.
 
 Each toolshed link has its own epoch, fresh for every connection, and a
 toolshed checks a proof only against its own link. A challenge records the
@@ -167,23 +173,38 @@ asynchronous waits retain the originating session object, so resumed sessions
 cannot authorize an old queued write. Data frames are serialized through the
 protected Memory turn, retaining their queue budget until it ends.
 
-The durable ledger exclusively locks a separate inode, fsyncs authority changes
-before acknowledging them and fsyncs the parent directory on creation or atomic
-compaction. A link epoch cannot be reused while it is recorded: while its link
-lives, for 3,780 seconds after the link closes (the longest lease plus the
-challenge lifetime and clock skew), and while any unexpired claim names it.
-Links do not survive a restart, so a restart retires every live epoch. After
+The durable ledger records only what must outlive a restart: link epochs and
+router-key revocations. It exclusively locks a separate inode, fsyncs each
+change before acknowledging it and fsyncs the parent directory on creation or
+atomic compaction. A link epoch cannot be reused while it is recorded: while its
+link lives, and for 780 seconds after the link closes (the longest lease plus
+the challenge lifetime and clock skew). Links do not survive a restart, so a
+restart retires every live epoch and rewrites the file to what it holds. After
 that period every proof bound to the epoch has expired, so forgetting it frees
-the 1,024-epoch bound without reviving authority.
+the 1,024-epoch bound without reviving authority. Key revocation remains
+permanently denied after toolshed restart.
 
-Each principal/challenge and exact client digest binds to one
-router, deployment, epoch and context. Exact repeats within the same active
-context are idempotent. Re-signed router evidence cannot move them to another
-context or epoch. Release tombstones prevent replay from reinstating new-open
-authority; a fresh client signature can reauthorize. Closed contexts cannot
-reopen under the same link ID until every statement they could hold has
-expired (3,780 seconds), and their proofs are tombstoned through expiry.
-Key revocation remains permanently denied after toolshed restart.
+Each principal/challenge and exact client digest binds to one live context of
+one router: exact repeats within that context are idempotent, and re-signed
+router evidence cannot move them to another live context. Release tombstones
+prevent replay from reinstating new-open authority while the context lives; a
+fresh client signature can reauthorize. These bindings are held in memory with
+their context and dropped when it closes, when its link closes, and on a
+toolshed restart. A closed context ID may open again at once: its statements
+left with it, so refusing it would protect nothing.
+
+This departs from the router design, which kept every accepted statement in the
+ledger until it expired, closed context or not. A compromised router can already
+keep a disconnected client's authority until its lease ends by holding the
+client's contexts open (see the trust boundary in the router security
+requirements). Keeping a closed context's statements protected only where
+something outside that router closed the context: link loss, a toolshed restart
+or an operator, and any client could fill the ledger that kept them by cycling
+connections. The longest lease is ten minutes rather than an hour, which
+shortens the compromised-router window sixfold. The remaining window is an
+unenforced trust dependency on the router: a compromised router can re-present a
+closed context's statement, in a new context or on a new link epoch, for the
+rest of that statement's ten-minute lease. No toolshed check prevents it.
 
 Release leaves existing sessions on their original lease. Renewal with a fresh
 challenge extends current principal sessions; replaying an old statement cannot
@@ -206,8 +227,37 @@ resource bounds and exact values are in the infra router README.
 `MEMORY_ROUTER_CONFIG_FILE` opts in to a strict tracked policy with version 1,
 deployment, private bind hostname/port, certificate/key paths, shared
 authoritative directory, durable epoch ledger and per-router DID/network-peer
-allowlists. Directory storage and `MEMORY_ACL_MODE=enforce` are mandatory. The
-cell representation follows the deployment's `EXPERIMENTAL_MODERN_CELL_REP`
+allowlists. An optional `limits` object sets the toolshed's capacity
+(`RoutedHostLimits` in `routed-host.ts`); absent fields take defaults sized for
+the proof of concept. The values must be positive integers that nest from
+context to router to toolshed, a context's proofs must cover its principal
+history and a renewal for each active principal, and every allowed router's
+contexts must fit the sockets and tickets at once (`routedHostLimitsFor`); a
+limit that fails, or one the toolshed does not know, is named in the error.
+The infra router README's capacity section has the arithmetic and maps each
+limit to the router's.
+
+The toolshed answers one request it refuses and leaves the data socket open.
+A request over a session, watch (views included) or holdings limit, or one
+whose principal's grant expired after the router forwarded it, is denied
+marked `retriable`, so the client holds the session and tries again; a request
+for a session the toolshed revoked, or a principal it released, after the
+router forwarded it is denied for good, as is one past a fixed bound on one
+request (more than 64 views: `frame-limit`). Each is logged in the toolshed's
+own journal, never the router's, as a `routed-memory-verdict` with verdict
+`request-refused` and reason `session-limit`, `watch-limit`, `holdings-limit`,
+`frame-limit`, `principal-expired`, `session-not-held` or `principal-not-held`.
+A proof is refused with verdict `proof-denied` and reason `proof-limit`,
+`principal-limit` or `principal-history-limit`, and the refusal closes its
+context, which ends the client's connection. The proofs live contexts hold are
+bounded by the routers, `contextsPerLink` and `proofsPerContext`. An earlier
+toolshed's ledger also held `claim` lines; this one drops them when it loads,
+and an earlier toolshed reads this one's `epoch`, `retire` and `revoke` lines,
+so rolling either way needs no change to the file: every toolshed bounds the
+file at 32 MiB, and this one rewrites it without the claim lines as it loads.
+Directory storage and
+`MEMORY_ACL_MODE=enforce` are mandatory.
+The cell representation follows the deployment's `EXPERIMENTAL_MODERN_CELL_REP`
 setting, which every toolshed, every client and the router's `modern_cell_rep`
 must share: the router refuses a toolshed link at the other representation, and
 the toolshed's handshake refuses a client at it. Only the legacy representation

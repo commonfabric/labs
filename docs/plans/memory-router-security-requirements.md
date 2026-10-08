@@ -37,6 +37,16 @@ to the router's clients and accepted elsewhere only from service DIDs. The
 router protects Memory WebSockets; public HTTP routes need their own ingress and
 authorization review.
 
+### Amendments
+
+- 2026-10-08, owner Will Kelly: a toolshed keeps a client context's accepted
+  statements only while the context lives, and a routed lease is at most ten
+  minutes, not an hour. Changed: the trust boundary (the router-replay window,
+  stated as an unenforced trust dependency), requirements 1, 4 and 5, and the
+  public-stage acceptance gates. Each change is marked "(Amended 2026-10-08;
+  was: ...)" with the text it replaced, or "(Amended 2026-10-08; added.)".
+  Pending review by Bernhard, who wrote these requirements (#8292).
+
 ## Trust boundary
 
 The client authenticates a principal by signing a fresh challenge issued by the
@@ -53,9 +63,24 @@ Consequently, compromise of a router permits acting as its authenticated clients
 while their backend contexts remain valid. Process isolation limits which router
 can be compromised; it does not make traffic through a compromised router
 end-to-end authenticated. This authority must be represented explicitly in the
-threat model and operational response. With the one-hour lease proposed below,
+threat model and operational response. With the ten-minute lease below,
 compromise can preserve a disconnected client's authority for the remainder of
-that hour. The listener remains a shared ingress boundary: compromise can
+that lease. (Amended 2026-10-08; was: a one-hour lease.)
+
+Toolsheds drop a client context's accepted statements when the context closes,
+when its router link closes, and when the toolshed restarts (requirements 1, 4
+and 5 below). This leaves an unenforced trust dependency on the router, stated
+here as one: a compromised router can re-present a closed context's statement,
+in a new context or on a new link epoch, for the rest of that statement's
+ten-minute lease, and no toolshed check prevents it. Beyond what holding the
+context open already allows, this lets the router restore that authority after
+something outside its control closed the context: link loss, a toolshed
+restart or an operator. Keeping closed contexts' statements in a durable ledger
+until they expired protected only those cases, and let any client fill that
+ledger by cycling connections. The ten-minute lease bounds how long the window
+lasts. (Amended 2026-10-08; added.)
+
+The listener remains a shared ingress boundary: compromise can
 interfere with connections it accepts. If it terminates TLS and retains the
 certificate private key, compromise exposes that key too.
 
@@ -83,10 +108,16 @@ certificate private key, compromise exposes that key too.
    Each toolshed binds the statement to one router client-context ID and permits
    at most one live backend context for it. Re-presentation for recovery
    atomically replaces the old context; presentation for another client-context
-   ID is rejected. A new router-link epoch requires a new client signature. Both
+   ID is rejected. A new router-link epoch requires a new client signature.
+   These hold while the context that accepted the statement lives: once it
+   closes, or its link closes, or the toolshed restarts, its statements are
+   dropped, and the router may present one in another context or on a new link
+   epoch until it expires; see the trust boundary. (Amended 2026-10-08; was:
+   they held until the statement expired.) Both
    peers reject expired or malformed proofs, an `iat` beyond the bounded
    positive clock skew from attested receipt, and a client-chosen `exp` beyond
-   one hour from either the signed `iat` or the attested receipt.
+   ten minutes from either the signed `iat` or the attested receipt. (Amended
+   2026-10-08; was: one hour.)
    The forwarding protocol in the multiplexing design must carry this evidence
    before Mode A is implemented.
 2. **Authenticate the forwarding channel.** Every router has its own identity
@@ -114,16 +145,21 @@ certificate private key, compromise exposes that key too.
    control operation revokes a context and its sessions; it is distinct from
    `connection.release`. Router-link loss invalidates its epoch, upstream
    connections, contexts, and sessions; restoration requires fresh client
-   authentication.
+   authentication from an honest router, which the toolshed does not enforce
+   within a statement's lease; see the trust boundary. (Amended 2026-10-08;
+   was: restoration requires fresh client authentication.)
 5. **Bound the life of delegated authority.** Specify two distinct lifetimes: a
    single-use challenge valid for at most one minute to complete authentication,
-   and an authorization lease of at most one hour for the resulting client
-   context. The signed statement's `exp` can serve as the lease expiry, but the
+   and an authorization lease of at most ten minutes for the resulting client
+   context. (Amended 2026-10-08; was: one hour.)
+   The signed statement's `exp` can serve as the lease expiry, but the
    toolshed must enforce it after admission. The client renews with a new
    challenge and signature before expiry; forwarding the old statement must not
    extend the lease. A statement may establish one live context on each toolshed
-   until its expiry, so this choice also accepts a one-hour proof-presentation
-   window through its issuing router. The toolshed must expire a context and
+   at a time until its expiry, so this choice also accepts a ten-minute
+   proof-presentation window through its issuing router, closed contexts'
+   statements included. (Amended 2026-10-08; was: one live context until its
+   expiry, a one-hour window.) The toolshed must expire a context and
    close or revoke its sessions when renewal fails. A router's disconnect
    assertion alone cannot prove client liveness if the router is compromised.
    In routed mode, `connection.release` prevents new session opens as that
@@ -253,16 +289,19 @@ certificate private key, compromise exposes that key too.
 
 - A proof signed for Router A fails through Router B. One router challenge
   accepts one client submission; the resulting statement can reach several
-  toolsheds but cannot establish parallel or differently named contexts on one
-  toolshed or survive a router-link epoch change. Recovery atomically replaces
-  the old context.
+  toolsheds but cannot establish parallel or differently named live contexts on
+  one toolshed. Recovery atomically replaces the old context. Once its context
+  or link closes, the router may present it again until it expires, a new
+  router-link epoch included. (Amended 2026-10-08; was: nor survive a
+  router-link epoch change.)
 - After a routed `session.open` returns toolshed authentication metadata, a
   second key and a lease renewal still sign for the router and deployment from
   the client's `hello.ok`.
-- A challenge expires within one minute; a client-chosen lease longer than one
-  hour is rejected. A statement received after its challenge expired is
-  rejected; one received in time may reach another assigned toolshed until its
-  lease expires. Renewing with the same proof cannot extend a backend context.
+- A challenge expires within one minute; a client-chosen lease longer than ten
+  minutes is rejected. (Amended 2026-10-08; was: one hour.) A statement
+  received after its challenge expired is rejected; one received in time may
+  reach another assigned toolshed until its lease expires. Renewing with the
+  same proof cannot extend a backend context.
 - Disconnecting a client or killing its router eventually removes its backend
   authority within the documented lease; an expired proof cannot reopen it.
 - A toolshed restart does not end client sessions: the router treats a refusal
