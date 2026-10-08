@@ -21,6 +21,7 @@ import { setLLMUrl } from "@commonfabric/llm";
 import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
+  attestedPrincipalsAt,
   type Cell,
   cellRuntime,
   Console as RuntimeConsole,
@@ -666,8 +667,8 @@ export class PiecesController<T = unknown> {
    * runnable pattern, and rolling it forward changes no source. A root
    * following anything else has an owner's choice behind it, and replacing its
    * source with the system default would discard that choice rather than
-   * repair anything. So does a root an `inSpace()` call placed
-   * ({@link #isInSpaceRoot}), origin or none.
+   * repair anything. So does a root its creator's pattern placed
+   * ({@link #keepsCreatorsPattern}), origin or none.
    *
    * A by-identity load probe is the evidence this rests on, and with CFC
    * enforcement disabled that probe reports every artifact outside the
@@ -675,10 +676,33 @@ export class PiecesController<T = unknown> {
    */
   #rootNeedsRollForward(root: Cell<NameSchema>): boolean {
     if (this.runtime.cfcEnforcementMode === "disabled") return false;
-    if (this.#isInSpaceRoot(root)) return false;
+    if (this.#keepsCreatorsPattern(root)) return false;
     const origin = getPatternSource(root);
     return origin === undefined ||
       origin === deriveSystemPatternSource(this.#space, this.runtime);
+  }
+
+  /**
+   * Whether `root` was placed by its creator's pattern, which the space's
+   * system root is no replacement for: a root an `inSpace()` call placed
+   * ({@link #isInSpaceRoot}), and a root its own stored label says
+   * represents a principal, as a profile's does wherever the profile sits.
+   * The label read is of the root's own document, so a claim a link inside
+   * it carries in from another document does not count, and nothing is
+   * loaded or run to read it.
+   */
+  #keepsCreatorsPattern(root: Cell<NameSchema>): boolean {
+    if (this.#isInSpaceRoot(root)) return true;
+    const tx = this.runtime.edit();
+    try {
+      return (attestedPrincipalsAt(
+        tx,
+        root.getAsNormalizedFullLink(),
+        "represents-principal",
+      )?.length ?? 0) > 0;
+    } finally {
+      tx.abort();
+    }
   }
 
   /**
@@ -2658,14 +2682,14 @@ export class PiecesController<T = unknown> {
           );
           throw startError;
         }
-        if (this.#isInSpaceRoot(rootToStart)) {
-          // The system root is no replacement for a root an `inSpace()` call
+        if (this.#keepsCreatorsPattern(rootToStart)) {
+          // The system root is no replacement for a root its creator's pattern
           // placed, so this one fails closed like any other refused repair.
           pieceUpdateLogger.warn(
-            "cold-start-setup-repair-in-space-root",
+            "cold-start-setup-repair-creators-root",
             () => [
               "startEnsuredDefaultPattern: setup repair rejected for a root " +
-              "an `inSpace()` call placed; surfacing the original start error",
+              "its creator's pattern placed; surfacing the original start error",
               `${ref.identity}#${ref.symbol}`,
               repairError,
             ],
