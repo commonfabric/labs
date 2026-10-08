@@ -5949,6 +5949,47 @@ describe("runtime-processor", () => {
     });
   });
 
+  describe("awaited cell sends", () => {
+    it("rejects with the reason a throwing handler gave", async () => {
+      const signer = await Identity.fromPassphrase(
+        `awaited-cell-send-${crypto.randomUUID()}`,
+      );
+      const space = signer.did();
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost/"),
+        storageManager,
+      });
+      try {
+        const stream = runtime.getCell(
+          space,
+          `awaited-cell-send-${crypto.randomUUID()}`,
+          { asCell: ["stream"] },
+        );
+        const cancel = runtime.scheduler.addEventHandler(
+          () => {
+            throw new Error("refused by the handler");
+          },
+          stream.getAsNormalizedFullLink(),
+        );
+        try {
+          const processor = buildProcessor({ runtime });
+          await expect(processor.handleCellSend({
+            type: RequestType.CellSend,
+            cell: createCellRef(stream),
+            event: { body: "refused" },
+            awaitHandling: true,
+          })).rejects.toThrow("refused by the handler");
+        } finally {
+          cancel();
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
   describe("direct cell initialization", () => {
     it("rejects malformed initializers and surfaces transaction failures", async () => {
       const { runtime, storageManager } = createRuntime();
