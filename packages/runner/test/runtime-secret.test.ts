@@ -185,6 +185,22 @@ describe("runtime-secret", () => {
       }
     });
 
+    it("refuses a tracked read of the value among other paths", async () => {
+      await mint();
+
+      const tx = runtime.edit();
+      try {
+        expect(() =>
+          tx.trackReadPaths?.(
+            { space, id: link.id, type: "application/json" },
+            [["cfc"], ["value"]],
+          )
+        ).toThrow(/runtime secret/);
+      } finally {
+        tx.abort("refused tracked read");
+      }
+    });
+
     it("admits a read of the label envelope", async () => {
       await mint();
 
