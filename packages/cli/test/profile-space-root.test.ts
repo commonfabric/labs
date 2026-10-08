@@ -1,0 +1,259 @@
+/**
+ * Runs the store-wide profile root repair end to end: profiles created on a
+ * memory server that enforces access-control lists, a snapshot of its store
+ * taken the way an operator takes one, with `VACUUM INTO`, and the repair run
+ * as an unrelated identity over a fresh connection to the same store.
+ */
+
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { Database } from "@db/sqlite";
+
+import { Identity } from "@commonfabric/identity";
+import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  type Cell,
+  DEFAULT_APP_PATTERN_SOURCE,
+  type MemorySpace,
+  type NormalizedFullLink,
+  resolveSpaceRootPattern,
+  Runtime,
+  spaceRootPatternConfig,
+} from "@commonfabric/runner";
+import { discoverSpaceDbs } from "@commonfabric/state-inspector";
+
+import { TestStorageManager } from "../../runner/test/memory-v2-test-utils.ts";
+import {
+  createProfileThroughHome,
+  PrincipalSessionFactory,
+} from "../../runner/test/support/profile-create-host.ts";
+import type { SpaceConfig } from "../lib/piece.ts";
+import {
+  profileSpaceRoot,
+  type ProfileSpaceRootConfig,
+} from "../lib/profile-space-root.ts";
+
+const unrootedOwner = await Identity.fromPassphrase("repair-root unrooted");
+const plantedOwner = await Identity.fromPassphrase("repair-root planted");
+const rootedOwner = await Identity.fromPassphrase("repair-root rooted");
+const unlistedOwner = await Identity.fromPassphrase("repair-root unlisted");
+const admin = await Identity.fromPassphrase("repair-root admin");
+
+/** The planted root: an empty registry, as an open of the space makes one. */
+const PLANTED_ROOT = [
+  "import { pattern, Writable } from 'commonfabric';",
+  "export default pattern(() => {",
+  "  const pieceRegistry = new Writable<string[]>([]).for('pieceRegistry');",
+  "  return { pieceRegistry };",
+  "});",
+  "",
+].join("\n");
+
+describe("profileSpaceRoot()", () => {
+  let storeDir: string;
+  let snapshotDir: string;
+  let server: MemoryV2Server.Server | undefined;
+  let runtimes: Runtime[];
+  // Each profile's space and the id its Home lists it by.
+  let unrooted: NormalizedFullLink;
+  let planted: NormalizedFullLink;
+  let rooted: NormalizedFullLink;
+  let unlisted: NormalizedFullLink;
+
+  const serve = () => {
+    server = new MemoryV2Server.Server({
+      store: new URL(`file://${storeDir}/`),
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-profile-repair-root" },
+      acl: { mode: "enforce" },
+      subscriptionRefreshDelayMs: 0,
+    });
+    return server;
+  };
+
+  const runtimeAs = (as: Identity) => {
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: TestStorageManager.create(
+        { as, memoryHost: new URL("memory://") },
+        new PrincipalSessionFactory(server!),
+      ),
+    });
+    runtimes.push(runtime);
+    return runtime;
+  };
+
+  const stop = async () => {
+    for (const runtime of runtimes.splice(0).reverse()) {
+      await runtime.dispose();
+    }
+    await server?.close();
+    server = undefined;
+  };
+
+  /** The connections the command opens, each as the admin. */
+  const load = (config: SpaceConfig) => {
+    const pieces = new PiecesController(
+      { as: admin, space: config.space as MemorySpace },
+      runtimeAs(admin),
+      { deferSpaceCellSync: true },
+    );
+    pieces.dispose = () => Promise.resolve();
+    return Promise.resolve(pieces);
+  };
+
+  const config = (
+    extra: Partial<ProfileSpaceRootConfig> = {},
+  ): ProfileSpaceRootConfig => ({
+    apiUrl: "http://127.0.0.1:8000",
+    identity: "/unread.key",
+    snapshot: snapshotDir,
+    ...extra,
+  });
+
+  /** The id the space's root resolves to, read by a fresh runtime. */
+  const rootIdOf = async (space: string) =>
+    (await resolveSpaceRootPattern(runtimeAs(admin), space as MemorySpace))
+      ?.getAsNormalizedFullLink().id;
+
+  /** The id the listed slot `link` resolves to: the profile itself. */
+  const profileIdOf = async (link: NormalizedFullLink) => {
+    const named = runtimeAs(admin).getCellFromLink(link);
+    await named.sync();
+    return named.resolveAsCell().getAsNormalizedFullLink().id;
+  };
+
+  beforeEach(async () => {
+    runtimes = [];
+    storeDir = await Deno.makeTempDir({ prefix: "repair-root-store-" });
+    snapshotDir = await Deno.makeTempDir({ prefix: "repair-root-snapshot-" });
+    serve();
+    unrooted = await createProfileThroughHome(runtimeAs(unrootedOwner), "U", {
+      root: false,
+    });
+    planted = await createProfileThroughHome(runtimeAs(plantedOwner), "P", {
+      root: false,
+    });
+    rooted = await createProfileThroughHome(runtimeAs(rootedOwner), "R");
+    unlisted = await createProfileThroughHome(runtimeAs(unlistedOwner), "N", {
+      root: false,
+    });
+
+    // The planted profile's space gets the root an open of it would have
+    // made, written by the admin.
+    const plantRuntime = runtimeAs(admin);
+    const space = planted.space as MemorySpace;
+    const pattern = await plantRuntime.patternManager.compilePattern({
+      main: "/planted.tsx",
+      files: [{ name: "/planted.tsx", contents: PLANTED_ROOT }],
+    }, { space });
+    const { error } = await plantRuntime.editWithRetry((tx) => {
+      const root: Cell<unknown> = plantRuntime.getCell(
+        space,
+        spaceRootPatternConfig(false).cause,
+        undefined,
+        tx,
+      );
+      plantRuntime.runner.run(tx, pattern, {}, root, {
+        sourceOrigin: DEFAULT_APP_PATTERN_SOURCE,
+      });
+      plantRuntime.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
+        root,
+      );
+    });
+    expect(error).toBeUndefined();
+    await plantRuntime.storageManager.synced();
+    await stop();
+
+    // The snapshot leaves out the unlisted profile's Home, so no Home in it
+    // lists that profile.
+    for (
+      const { did, path } of discoverSpaceDbs({
+        dirs: [storeDir],
+        defaultRoots: false,
+      })
+    ) {
+      if (did === unlistedOwner.did()) continue;
+      const db = new Database(path, { readonly: true });
+      try {
+        db.exec(`VACUUM INTO '${snapshotDir}/${did}.sqlite'`);
+      } finally {
+        db.close();
+      }
+    }
+    serve();
+  });
+
+  afterEach(async () => {
+    await stop();
+    await Deno.remove(storeDir, { recursive: true });
+    await Deno.remove(snapshotDir, { recursive: true });
+  });
+
+  it("inspects each listed profile, and reports an unlisted one as skipped", async () => {
+    const report = await profileSpaceRoot(config(), { load });
+    expect(report.applied).toBe(false);
+    const statusBySpace = Object.fromEntries(
+      report.rows.map((row) => [row.named.space, row.status]),
+    );
+    expect(statusBySpace).toEqual({
+      [unrooted.space]: "unrooted",
+      [planted.space]: "junk-root",
+      [rooted.space]: "root",
+      [unlisted.space]: "unlisted",
+    });
+    expect(report.summary).toEqual({
+      unrooted: 1,
+      "junk-root": 1,
+      root: 1,
+      unlisted: 1,
+    });
+    const homeBySpace = Object.fromEntries(
+      report.rows.map((row) => [row.named.space, row.home]),
+    );
+    expect(homeBySpace[unrooted.space]).toBe(unrootedOwner.did());
+    expect(homeBySpace[unlisted.space]).toBeUndefined();
+    expect((await profileSpaceRoot(config(), { load })).inspection).toBe(
+      report.inspection,
+    );
+  });
+
+  it("applies the inspected plan, after which every listed profile is its space's root", async () => {
+    const plan = await profileSpaceRoot(config(), { load });
+    const applied = await profileSpaceRoot(
+      config({ expectedInspection: plan.inspection }),
+      { load },
+    );
+    expect(applied.applied).toBe(true);
+    expect(applied.summary).toEqual({ root: 3, unlisted: 1 });
+    for (const listed of [unrooted, planted, rooted]) {
+      expect(await rootIdOf(listed.space)).toBe(await profileIdOf(listed));
+    }
+    expect(await rootIdOf(unlisted.space)).toBeUndefined();
+
+    const again = await profileSpaceRoot(config(), { load });
+    expect(again.summary).toEqual({ root: 3, unlisted: 1 });
+  });
+
+  it("repairs an unlisted profile it is given by address", async () => {
+    const cells = [`//${unlisted.space}/${unlisted.id}`];
+    const plan = await profileSpaceRoot(config({ cells }), { load });
+    expect(plan.rows.map((row) => row.status)).toEqual(["unrooted"]);
+    await profileSpaceRoot(
+      config({ cells, expectedInspection: plan.inspection }),
+      { load },
+    );
+    expect(await rootIdOf(unlisted.space)).toBe(await profileIdOf(unlisted));
+  });
+
+  it("refuses to apply a receipt from another plan, and changes nothing", async () => {
+    await expect(
+      profileSpaceRoot(config({ expectedInspection: "not the plan" }), {
+        load,
+      }),
+    ).rejects.toThrow("changed after inspection");
+    expect(await rootIdOf(unrooted.space)).toBeUndefined();
+  });
+});

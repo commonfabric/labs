@@ -89,12 +89,13 @@ describe("profile-space-root", () => {
   };
 
   /**
-   * Plants a root in the controller's space at `cause`, following the system
-   * default source, with `registered` in its registry, as the admin.
+   * Plants a root in the controller's space at `cause`, following `origin`
+   * or the system default source, with `registered` in its registry, as the
+   * admin.
    */
   const plantRoot = async (
     controller: PiecesController,
-    options: { cause?: string; registered?: string[] } = {},
+    options: { cause?: string; registered?: string[]; origin?: string } = {},
   ): Promise<Cell<unknown>> => {
     const runtime = controller.runtime;
     const space = controller.getSpace();
@@ -117,7 +118,7 @@ describe("profile-space-root", () => {
         tx,
       );
       runtime.runner.run(tx, pattern, {}, root, {
-        sourceOrigin: DEFAULT_APP_PATTERN_SOURCE,
+        sourceOrigin: options.origin ?? DEFAULT_APP_PATTERN_SOURCE,
       });
     });
     expect(error).toBeUndefined();
@@ -177,11 +178,16 @@ describe("profile-space-root", () => {
   });
 
   describe("an occupied root", () => {
-    const occupiedCases: [string, { cause?: string; registered?: string[] }][] =
-      [
-        ["holds something registered", { registered: ["a piece"] }],
-        ["is at another address", { cause: "a root chosen on purpose" }],
-      ];
+    const occupiedCases: [
+      string,
+      { cause?: string; registered?: string[]; origin?: string },
+    ][] = [
+      ["holds something registered", { registered: ["a piece"] }],
+      ["is at another address", { cause: "a root chosen on purpose" }],
+      ["follows another source", {
+        origin: "https://example.test/root.tsx",
+      }],
+    ];
     for (const [condition, options] of occupiedCases) {
       it(`leaves a root alone that ${condition}`, async () => {
         const { controller, id } = await legacyProfile();

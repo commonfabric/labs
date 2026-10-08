@@ -16,6 +16,7 @@ import {
   type ProfileCommandDeps,
   profileCreateAction,
   profileRepairNameProtectionAction,
+  profileRepairRootAction,
   profileShowAction,
 } from "../commands/profile.ts";
 import type { CreatedProfile, ProfileCreateConfig } from "../lib/profile.ts";
@@ -23,6 +24,10 @@ import {
   profileNameProtection,
   type ProfileNameProtectionConfig,
 } from "../lib/profile-name-protection.ts";
+import type {
+  ProfileSpaceRootConfig,
+  ProfileSpaceRootReport,
+} from "../lib/profile-space-root.ts";
 import type { WishReadConfig, WishReadResult } from "../lib/wish.ts";
 import { withEnv } from "./utils.ts";
 
@@ -227,6 +232,69 @@ describe("cf profile command actions", () => {
       }
     });
   });
+  describe("profileRepairRootAction()", () => {
+    it("inspects by default and forwards the snapshot, the named cells and an accepted receipt", async () => {
+      const key = await makeTempKeyFile();
+      const requests: ProfileSpaceRootConfig[] = [];
+      const report: ProfileSpaceRootReport = {
+        applied: false,
+        inspection: "receipt",
+        rows: [],
+        summary: {},
+      };
+      const run = (config: ProfileSpaceRootConfig) => {
+        requests.push(config);
+        return Promise.resolve(report);
+      };
+      try {
+        const options = {
+          apiUrl: "http://127.0.0.1:8000",
+          identity: key.path,
+          fromSnapshot: "/snapshot",
+        };
+        expect(
+          JSON.parse(
+            await captureStdout(() => profileRepairRootAction(options, run)),
+          ),
+        ).toEqual(report);
+        await captureStdout(() =>
+          profileRepairRootAction({
+            ...options,
+            cell: ["//did:key:zProfileSpace/of:profile"],
+            apply: true,
+            expect: "receipt",
+          }, run)
+        );
+        expect(requests.map((request) => request.expectedInspection)).toEqual([
+          undefined,
+          "receipt",
+        ]);
+        expect(requests.map((request) => request.cells)).toEqual([
+          undefined,
+          ["//did:key:zProfileSpace/of:profile"],
+        ]);
+        expect(requests.map((request) => request.snapshot)).toEqual([
+          "/snapshot",
+          "/snapshot",
+        ]);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("requires apply and the inspection receipt together before opening an identity", async () => {
+      for (const flags of [{ apply: true }, { expect: "receipt" }]) {
+        await expect(
+          profileRepairRootAction({
+            fromSnapshot: "/snapshot",
+            identity: "/unread.key",
+            ...flags,
+          }),
+        ).rejects.toThrow("--apply and --expect");
+      }
+    });
+  });
+
   describe("profileRepairNameProtectionAction()", () => {
     it("inspects by default and forwards only an explicitly accepted receipt", async () => {
       const key = await makeTempKeyFile();

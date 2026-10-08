@@ -24,6 +24,49 @@ historical authorship from the current name, and it does not modify the
 profile's source. Rehearse a repair of real data on a writable space clone using
 the [space clone procedure](../../docs/development/space-clone-rehearsal.md).
 
+## Making existing profiles their space's root
+
+`cf profile repair-root --from-snapshot <dir> --identity <keyfile> --api-url
+<url>`
+is an operator's command. It makes each existing profile whose space has no
+profile as its root into that root, across a whole store, so that a host holding
+only a profile space's DID reaches the profile. What a repaired profile is, and
+what it is not, is under "Profile" in
+[`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md).
+
+Which profiles exist comes from `<dir>`, a snapshot of the store's space
+databases, read offline and never written: every link in each Home's profile
+list. A profile-shaped piece in a space no Home in the snapshot lists is
+reported as `unlisted` and skipped. Name it with `--cell <profile-address>`,
+repeatable, to repair it; `--cell` limits the run to the profiles it names. Take
+the snapshot the way
+[the space clone procedure](../../docs/development/space-clone-rehearsal.md)
+takes one, with `VACUUM INTO`, one file per space.
+
+Each profile is then inspected live, through an ordinary connection as the
+signing identity, which needs no privilege: a profile space grants every
+principal `WRITE`. The command prints JSON with one row per profile, a tally by
+status, and an `inspection` receipt for the whole run:
+
+| Status          | Meaning                                                                                                                                           | Applying it                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `root`          | the space's root already is the profile                                                                                                           | nothing                      |
+| `unrooted`      | the space has no root                                                                                                                             | links the profile            |
+| `junk-root`     | the root is one an open of the space created: at the ensure's address, following the system default app or nothing, with nothing registered in it | replaces it with the profile |
+| `occupied`      | any other root                                                                                                                                    | nothing                      |
+| `not-a-profile` | the piece's label names no single owner of its space that it represents                                                                           | nothing                      |
+| `unlisted`      | no Home in the snapshot lists it                                                                                                                  | nothing                      |
+| `failed`        | the inspection or the repair threw; `reason` says why                                                                                             | nothing                      |
+
+Review the rows, then repeat the command with `--apply --expect <inspection>`.
+It inspects every profile again, applies nothing unless the run's receipt is the
+one given, and then links profile by profile, each only while its own receipt
+still holds and while its space's root is still the one it inspected. A profile
+that changed in between is reported as `failed` and left alone. A second run
+finds a repaired profile as `root` and writes nothing. Rehearse it on a writable
+clone of a real profile space and its owner's Home before running it against a
+store with real data.
+
 ## Following a piece source
 
 `cf piece follow --cell <piece> <origin>` adopts the origin’s current pattern

@@ -1091,6 +1091,8 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   plan: () => Promise.resolve(directive({ kind: "files" })),
   // `cf inspect --dir` is an extra directory to search for space DBs.
   dir: () => Promise.resolve(directive({ kind: "dirs" })),
+  // `cf profile repair-root --from-snapshot` is a directory of space DBs.
+  "from-snapshot": () => Promise.resolve(directive({ kind: "dirs" })),
   // `cf inspect html --out` and `cf check --output` write a file.
   out: () => Promise.resolve(directive({ kind: "files" })),
   output: () => Promise.resolve(directive({ kind: "files" })),
