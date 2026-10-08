@@ -30,6 +30,7 @@ import type {
   CommitError,
   IExtendedStorageTransaction,
   IPreconditionFailedError,
+  IStorageManager,
   MemorySpace,
 } from "../storage/interface.ts";
 import {
@@ -37,6 +38,10 @@ import {
   releaseLocalReadBasis,
   validateLocalReadBasis,
 } from "../storage/local-read-policy.ts";
+import {
+  isLinkResolutionProbe,
+  isReadIgnoredForScheduling,
+} from "../storage/reactivity-log.ts";
 import {
   isConflictRejection,
   isPermanentRejection,
@@ -2031,7 +2036,7 @@ export async function dispatchQueuedEvent(state: {
       // reaches leaves the run free to dispatch.
       const refused = served === undefined
         ? undefined
-        : refusedReadIn(state.runtime, tx);
+        : refusedReadIn(state.runtime.storageManager, tx);
       if (refused !== undefined) {
         if (tx.status().status === "ready") {
           tx.abort(new Error(`served run read a refused document: ${refused}`));
@@ -2724,26 +2729,30 @@ export async function dispatchQueuedEvent(state: {
 }
 
 /**
- * The first document whose value `tx` read that `runtime`'s storage manager
- * refuses by construction, as `<space>/<scope>/<id>`, or `undefined` when it
- * read none. Two kinds of read do not count, since neither takes the
- * document's data: a read of its CFC metadata, which a run passing a link to
- * the document along makes, and a check for a link at a path of its value,
- * which resolving a link through the document makes, and which finds none in
- * a document this runtime cannot read.
+ * The first document whose value `tx` read that `manager` refuses by
+ * construction, as `<space>/<scope>/<id>`, or `undefined` when it read none.
+ * A read of the document's root counts, as a read of its value does, among
+ * the reads the run depends on. Three kinds of read do not count, since none
+ * is the run consuming the document's data: a read of its CFC metadata, which
+ * a run passing a link to the document along makes; a read the transaction
+ * records as a link-resolution probe, which resolving a link through the
+ * document makes; and a read it records as ignored for scheduling, which
+ * writing into the document makes.
  */
-function refusedReadIn(
-  runtime: Runtime,
-  tx: IExtendedStorageTransaction,
+export function refusedReadIn(
+  manager: Pick<IStorageManager, "refusesReadByConstruction">,
+  tx: Pick<IExtendedStorageTransaction, "getReadActivities">,
 ): string | undefined {
-  const manager = runtime.storageManager;
   if (manager.refusesReadByConstruction === undefined) return undefined;
-  const log = txToReactivityLog(tx);
-  for (const read of [...log.reads, ...log.shallowReads]) {
+  for (const read of tx.getReadActivities?.() ?? []) {
     if (
-      read.path[0] === "value" && !read.path.includes("/") &&
-      manager.refusesReadByConstruction(read)
+      isLinkResolutionProbe(read.meta) ||
+      isReadIgnoredForScheduling(read.meta)
     ) {
+      continue;
+    }
+    if (read.path.length > 0 && read.path[0] !== "value") continue;
+    if (manager.refusesReadByConstruction(read)) {
       return `${read.space}/${read.scope ?? "space"}/${read.id}`;
     }
   }
