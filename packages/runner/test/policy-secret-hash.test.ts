@@ -259,7 +259,7 @@ type Run = {
 const runDraw = async (
   runtime: Runtime,
   cause: string,
-  body: (run: Run) => Promise<void>,
+  body: (run: Run) => void | Promise<void>,
 ): Promise<void> => {
   const compileTx = runtime.edit();
   const pattern = await runtime.patternManager.compilePattern(PROGRAM, {
@@ -614,7 +614,7 @@ describe("policySecretHash()", () => {
 
     let digest: unknown;
     await withRuntime("enforce-strict", async (runtime) => {
-      await runDraw(runtime, "draw-digest", async ({ result }) => {
+      await runDraw(runtime, "draw-digest", ({ result }) => {
         digest = policyClauseOf(runtime, result.key("alice"))?.policyDigest;
       });
     });
