@@ -6,7 +6,7 @@
 
 import type { Status } from "./types.ts";
 export { renderTile } from "./tile-render.ts";
-import { REPOS_PATH } from "./config.ts";
+import { REPOS_PATH } from "./repo-page-href.ts";
 import {
   BOTTOM_CHART_RULES,
   DASHBOARD_GRID_RULE,
@@ -142,8 +142,9 @@ const TEXTURE_LAYER_PCT = Math.ceil(Math.hypot(1, MAX_TILE_ASPECT) * 100);
 
 /**
  * The texture a box of each class in `scopes` wears for its status, drawn in
- * the `.texture` layer it holds as its first child. The box needs a stacking
- * context of its own and to clip its overflow, as a tile has.
+ * the `.texture` layer it holds first, as its own first child or as the first
+ * child of its link (linkedBox). The box needs a stacking context of its own
+ * and to clip its overflow, as a tile has.
  */
 export function textureRules(scopes: readonly string[]): string {
   const each = (status: Status) =>
@@ -252,7 +253,7 @@ ${TILE_RULES}
   ${GREEN_STAR_RULES}
   a.cell{display:block}
   a.cell:hover{outline:1px solid var(--accent);outline-offset:-1px}
-  a.tile.link:hover{border-color:var(--border-hover)}
+  a.tile.link:hover,.tile.link:has(>.tile-head:hover){border-color:var(--border-hover)}
   .evscroll{max-height:340px;overflow:auto}
   .ev{display:flex;align-items:center;gap:11px;padding:6px 0;font-size:13px;border-top:1px solid var(--divider)}.ev:first-child{border-top:0}
   .ev .t{color:var(--text-muted);min-width:54px;flex:none}

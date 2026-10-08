@@ -70,15 +70,21 @@ function assertStandardTileLayout(
   for (const { label, subSelector, view } of standard) {
     const tile = tiles.get(label);
     assertExists(tile);
-    if (view.href) {
-      assert(tile instanceof HTMLAnchorElement, `${label} must render as a link`);
-      assertEquals(
-        getComputedStyle(tile).display,
-        "block",
-        `${label} linked tile must retain block layout`,
-      );
-    }
     const tileRect = tile.getBoundingClientRect();
+    // A linked tile is its link, or, when its chart holds links of its own,
+    // links its text alone.
+    const link = tile instanceof HTMLAnchorElement
+      ? tile
+      : tile.querySelector<HTMLAnchorElement>(":scope > a.tile-head");
+    if (view.href) {
+      assertExists(link, `${label} must render a link`);
+      assertEquals(
+        getComputedStyle(link).display,
+        "block",
+        `${label} link must retain block layout`,
+      );
+      assertExists(link.querySelector(".lbl"), `${label} link holds its label`);
+    }
     const headline = tile.querySelector<HTMLElement>(".big");
     assertExists(headline);
     if (view.valueLabel !== undefined) {
@@ -322,6 +328,66 @@ Deno.test("every standard tile shares text baselines and fits under benchmarks",
         `"${sub.textContent}" is cut short at full width: ${sub.scrollWidth}px in ${sub.clientWidth}px`,
       );
     }
+  } finally {
+    fixture.remove();
+  }
+});
+
+Deno.test("a link tile whose chart holds links keeps them apart from its own", async () => {
+  const trust = TILE_LAYOUT_FIXTURES.find(({ label }) => label === "labs ci trust");
+  assertExists(trust?.view.href);
+  const fixture = document.createElement("div");
+  fixture.style.cssText = "position:fixed;top:0;left:0;width:300px";
+  fixture.innerHTML = `<style>
+    ${TILE_BOX_RULE}
+    ${BOTTOM_CHART_RULES}
+    ${tileContentRules(SPARKLINE_HEIGHT)}
+    .cells.labeled .cell{display:block}
+  </style>${renderTile(trust.label, trust.view)}`;
+  document.body.append(fixture);
+
+  try {
+    await new Promise(requestAnimationFrame);
+    const tiles = fixture.querySelectorAll<HTMLElement>(".tile");
+    assertEquals(tiles.length, 1, "the parser does not split the tile");
+    const [tile] = tiles;
+    const head = tile.querySelector<HTMLAnchorElement>(":scope > a.tile-head");
+    assertExists(head);
+    assertEquals(head.getAttribute("href"), "/repos?name=labs");
+    const cells = tile.querySelectorAll<HTMLAnchorElement>(".cells > a.cell");
+    assertEquals(cells.length, 160);
+    assert(!head.contains(cells[0]), "a cell is not inside the tile's link");
+    const hitAt = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      return document.elementFromPoint(
+        box.left + box.width / 2,
+        box.top + box.height / 2,
+      );
+    };
+    for (const cell of [cells[0], cells[cells.length - 1]]) {
+      assertEquals(hitAt(cell), cell, "a cell opens its run");
+    }
+    // The text keeps its own tooltip, inside the tile's link.
+    for (const part of [".lbl", ".big", ".sub"]) {
+      const element = tile.querySelector(part);
+      assertExists(element);
+      const hit = hitAt(element);
+      assert(
+        hit !== null && element.contains(hit) && head.contains(hit),
+        `the tile's ${part} opens its link`,
+      );
+    }
+    // The chart sits at the bottom of the tile, as it does when the tile is
+    // not a link.
+    const chart = tile.querySelector<HTMLElement>(":scope > .chart");
+    assertExists(chart);
+    assertPixelAligned(
+      chart.getBoundingClientRect().bottom,
+      tile.getBoundingClientRect().bottom -
+        parseFloat(getComputedStyle(tile).paddingBottom) -
+        parseFloat(getComputedStyle(tile).borderBottomWidth),
+      "the chart ends at the tile's content edge",
+    );
   } finally {
     fixture.remove();
   }

@@ -368,8 +368,9 @@ describe("coverageLines()", () => {
       units: ["packages/memory/one.test.ts", "packages/memory/two.test.ts"],
     },
   };
+  const first = (commits: readonly string[]) => Promise.resolve(commits[0]);
 
-  it("names the baseline a measured set is compared against", () => {
+  it("names the baseline a measured set is compared against", async () => {
     const manifest = sampleManifest({
       coverageBaselines: [{
         suite: "workspace-unit",
@@ -379,19 +380,24 @@ describe("coverageLines()", () => {
         uncoveredLines: 41,
       }],
     });
-    expect(coverageLines(manifest, [workspaceUnit], [])).toEqual([
+    expect(await coverageLines(manifest, [workspaceUnit], [], first)).toEqual([
       "workspace-unit/packages/memory  2 units, against 41 uncovered lines " +
       "at abcdef0",
     ]);
     expect(
-      coverageLines(manifest, [{
-        suite: "workspace-unit",
-        set: { ...workspaceUnit.set, units: ["packages/memory/one.test.ts"] },
-      }], [])[0],
+      (await coverageLines(
+        manifest,
+        [{
+          suite: "workspace-unit",
+          set: { ...workspaceUnit.set, units: ["packages/memory/one.test.ts"] },
+        }],
+        [],
+        first,
+      ))[0],
     ).toContain("1 unit,");
   });
 
-  it("keeps two sets over one member apart", () => {
+  it("keeps two sets over one member apart", async () => {
     const manifest = sampleManifest({
       coverageBaselines: [
         {
@@ -410,54 +416,116 @@ describe("coverageLines()", () => {
         },
       ],
     });
-    const lines = coverageLines(manifest, [
-      workspaceUnit,
-      { suite: "memory-integration", set: workspaceUnit.set },
-    ], []);
+    const lines = await coverageLines(
+      manifest,
+      [
+        workspaceUnit,
+        { suite: "memory-integration", set: workspaceUnit.set },
+      ],
+      [],
+      first,
+    );
     expect(lines[0]).toContain("41 uncovered lines");
     expect(lines[1]).toContain("900 uncovered lines");
   });
 
-  it("says so when a set has no baseline yet", () => {
-    const lines = coverageLines(sampleManifest(), [workspaceUnit], []);
+  it("names the baseline at the newest commit the checkout holds", async () => {
+    const at = (commit: string, uncoveredLines: number) => ({
+      suite: "workspace-unit",
+      member: "packages/memory",
+      commit,
+      createdAt: "2026-08-20T00:00:00.000Z",
+      uncoveredLines,
+    });
+    // Newest first, as the publisher orders them: "ahead" is a commit the
+    // checkout does not hold, "near" its newest that it does.
+    const manifest = sampleManifest({
+      coverageBaselines: [at("ahead", 10), at("near", 20), at("far", 30)],
+    });
+    const history = ["near", "far"];
+    const asked: (readonly string[])[] = [];
+    const lines = await coverageLines(manifest, [workspaceUnit], [], (
+      commits,
+    ) => {
+      asked.push(commits);
+      return Promise.resolve(
+        history.find((commit) => commits.includes(commit)),
+      );
+    });
+    expect(lines).toEqual([
+      "workspace-unit/packages/memory  2 units, against 20 uncovered lines " +
+      "at near",
+    ]);
+    expect(asked).toEqual([["ahead", "near", "far"]]);
+    expect(
+      await coverageLines(
+        manifest,
+        [workspaceUnit],
+        [],
+        () => Promise.resolve(undefined),
+      ),
+    ).toEqual([
+      "workspace-unit/packages/memory  2 units, against no baseline yet",
+    ]);
+  });
+
+  it("says so when a set has no baseline yet", async () => {
+    const lines = await coverageLines(
+      sampleManifest(),
+      [workspaceUnit],
+      [],
+      first,
+    );
     expect(lines).toEqual([
       "workspace-unit/packages/memory  2 units, against no baseline yet",
     ]);
   });
 
-  it("gives the reason for a member that carries no set", () => {
+  it("gives the reason for a member that carries no set", async () => {
     const member = [...EXCLUDED_FROM_COVERAGE_GATE.keys()][0]!;
-    const lines = coverageLines(sampleManifest(), [], [member]);
+    const lines = await coverageLines(sampleManifest(), [], [member], first);
     expect(lines[0]).toContain("no measured set: ");
     expect(lines[0]).toContain(EXCLUDED_FROM_COVERAGE_GATE.get(member)!);
   });
 
-  it("says a member outside the list has no Deno-only tests", () => {
-    const lines = coverageLines(sampleManifest(), [], ["packages/nowhere"]);
+  it("says a member outside the list has no Deno-only tests", async () => {
+    const lines = await coverageLines(sampleManifest(), [], [
+      "packages/nowhere",
+    ], first);
     expect(lines[0]).toContain("no measured set: it has no Deno-only tests");
   });
 
-  it("leaves a member that carries a set out of the ungated half", () => {
-    const lines = coverageLines(
+  it("leaves a member that carries a set out of the ungated half", async () => {
+    const lines = await coverageLines(
       sampleManifest(),
       [workspaceUnit],
       ["packages/memory"],
+      first,
     );
     expect(lines).toHaveLength(1);
   });
 
-  it("reads a manifest that is missing the same as one with no baselines", () => {
-    expect(coverageLines(undefined, [workspaceUnit], ["packages/runner"]))
+  it("reads a manifest that is missing the same as one with no baselines", async () => {
+    expect(
+      await coverageLines(
+        undefined,
+        [workspaceUnit],
+        ["packages/runner"],
+        first,
+      ),
+    )
       .toEqual(
-        coverageLines(sampleManifest(), [workspaceUnit], ["packages/runner"]),
+        await coverageLines(sampleManifest(), [workspaceUnit], [
+          "packages/runner",
+        ], first),
       );
   });
 
-  it("pads every name to one width, so the column lines up", () => {
-    const lines = coverageLines(undefined, [], [
+  it("pads every name to one width, so the column lines up", async () => {
+    const lines = await coverageLines(undefined, [], [
       "packages/a",
       "packages/longer",
-    ]);
+    ], first);
     const at = lines.map((line) => line.indexOf("no measured set"));
     expect(at[0]).toBe(at[1]);
   });
@@ -544,6 +612,40 @@ describe("verdictFor()", () => {
     const said = explainLines(manifest, test, verdict).join("\n");
     expect(said).toContain("10m is past the bound");
     expect(said).not.toContain("3m20s is past the bound");
+  });
+
+  it("says whether the plan placed anything beyond what had to run", async () => {
+    const test = { k: "unit", s: "memory", n: "space > writes" };
+    const roomy = await planned(manifestOf(entry("space > writes", 0.1)));
+    expect(verdictFor(roomy, test).crowded).toBeUndefined();
+    const crowded = verdictFor(
+      { ...roomy, laid: { ...roomy.laid, lanes: [] } },
+      test,
+    );
+    expect(crowded.crowded).toBe(true);
+    const manifest = crowded.corpus;
+    const passedOver = explainLines(manifest, test, { selected: false });
+    expect(passedOver.join("\n")).toContain(
+      "leave of their budget with other tests",
+    );
+    expect(passedOver.join("\n")).not.toContain("no room");
+    expect(explainLines(manifest, test, crowded).join("\n")).toContain(
+      "leave no room in the lanes for anything else",
+    );
+  });
+
+  it("says a test was held back with its unit", async () => {
+    const test = { k: "unit", s: "memory", n: "space > writes" };
+    const roomy = await planned(manifestOf(entry("space > writes", 0.1)));
+    expect(verdictFor(roomy, test).heldWithUnit).toBeUndefined();
+    const verdict = verdictFor({
+      ...roomy,
+      laid: { ...roomy.laid, lanes: [], heldWithUnit: [test] },
+    }, test);
+    expect(verdict.heldWithUnit).toBe(true);
+    const text = explainLines(verdict.corpus, test, verdict).join("\n");
+    expect(text).toContain("held back with its unit");
+    expect(text).not.toContain("no room");
   });
 
   it("reports a test no lane could hold as unschedulable, not selected", async () => {
@@ -658,6 +760,8 @@ describe("dispatch()", () => {
         aliases: () =>
           Promise.resolve({ resolve: (test: TestIdentity) => test }),
         topology: () => Promise.resolve(TOPOLOGY),
+        nearest: () => (commits: readonly string[]) =>
+          Promise.resolve(commits[0]),
         ...sources,
       } as Sources, root);
       return { code, out: out.join("\n"), err: err.join("\n") };

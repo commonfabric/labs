@@ -133,10 +133,11 @@ export const localJobSpecOf = (
 
 /**
  * The progress events one transcript event reports: a `step` for each tool
- * the model called, and a `command` for each `run_command` the host ran.
- * Children carry their profile, run id, parent call id and depth. Browser
- * steps also name the action, so a reader can distinguish clicking from
- * waiting without receiving arguments, URLs or page content.
+ * the model called, and a `command` for each command the host ran, one per
+ * executed call of a `run_command` batch. Children carry their profile, run
+ * id, parent call id and depth. Browser steps also name the action, so a
+ * reader can distinguish clicking from waiting without receiving arguments,
+ * URLs or page content.
  */
 export const localJobEventsOf = (
   event: HarnessTranscriptEvent,
@@ -174,10 +175,38 @@ export const localJobEventsOf = (
     return [];
   }
   if (!isObjectNotArray(output)) return [];
-  const { status, outcome, entry } = output as Record<string, unknown>;
+  const asked = argumentsOf(transcript, message.toolCallId);
+  if (output.status !== "batch") {
+    return commandEventsOf(output, asked.command, child);
+  }
+  // A batch answers its calls in order, one result each.
+  const calls = Array.isArray(asked.calls) ? asked.calls : [];
+  const results = Array.isArray(output.results) ? output.results : [];
+  return results.flatMap((result, index) => {
+    const call: unknown = calls[index];
+    return isObjectNotArray(result)
+      ? commandEventsOf(
+        result,
+        isObjectNotArray(call) ? call.command : undefined,
+        child,
+      )
+      : [];
+  });
+};
+
+/**
+ * Helper for events, which reports one call's result: a `command` event when
+ * the host ran it, named by the outcome's id or else the name it was called
+ * by and carrying the child loop it ran in, and nothing otherwise.
+ */
+const commandEventsOf = (
+  result: Readonly<Record<string, unknown>>,
+  asked: unknown,
+  child: Record<string, unknown> | undefined,
+): { kind: "command"; body: Record<string, unknown> }[] => {
+  const { status, outcome, entry } = result;
   if (status !== "executed" || !isObjectNotArray(outcome)) return [];
   const { ok, id, code, hostCode } = outcome as Record<string, unknown>;
-  const asked = argumentsOf(transcript, message.toolCallId).command;
   const command = typeof id === "string" ? id : asked;
   if (typeof command !== "string" || typeof ok !== "boolean") return [];
   const value = isObjectNotArray(entry) &&

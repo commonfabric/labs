@@ -8,7 +8,8 @@
  * among them, makes the run a failure, and so does a second try whatever its
  * result, since the run needed a rerun. A run with no try left is left out of
  * the share. One factory builds the labs, loom, and weaver instances against
- * their own repository and workflow.
+ * their own repository and workflow. Each tile links to its repository's page,
+ * and each cell of its strip to its run.
  */
 
 import { maxOf, minOf } from "@commonfabric/utils/math";
@@ -19,8 +20,10 @@ import {
   type Tile,
   type TileView,
 } from "../types.ts";
+import { shortName } from "../ci-jobs-page.ts";
 import { CompletedAttempts } from "../completed-attempts.ts";
 import { strip } from "../lib.ts";
+import { repoPageHref } from "../repo-page-href.ts";
 import {
   CI_WORKFLOW,
   LOOM_CI_WORKFLOW,
@@ -103,6 +106,8 @@ function makeCiTrust(opts: { label: string; repo: string; workflow: string }): T
         extra: strip(cells, spanMs > 0),
         duration: spanMs,
         alignChartBottom: true,
+        href: repoPageHref(shortName(opts.repo)),
+        hint: "repository ↗",
       };
     },
   };

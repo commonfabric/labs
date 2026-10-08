@@ -3,7 +3,7 @@
  * of rows that fit under it; this is every job the tile read, at full width:
  * which repository and workflow it is, what its deciding run concluded, how
  * long that run took, when it ran, and whether a run of it was going when the
- * tile last collected.
+ * tile last collected. Each repository's name links to its page (repo-page.ts).
  *
  * It renders the tile's own last collection rather than asking GitHub again,
  * so opening it costs nothing and shows exactly what the tile is showing.
@@ -25,6 +25,7 @@ import {
   STATUS_RANK,
   worstStatus,
 } from "./tile-render-values.ts";
+import { repoPageHref } from "./repo-page-href.ts";
 import { statusDotRules } from "./status-dot.ts";
 import type { Status } from "./types.ts";
 
@@ -118,8 +119,9 @@ const STYLES = `
   td{padding:5px 12px 5px 0;border-top:1px solid var(--divider);color:var(--text-secondary);vertical-align:top}
   td.measure{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--text)}
   td.job{width:99%;word-break:break-word}
-  /* Each row's way to GitHub, drawn as the dashboard draws a link so it reads
-     as one: the job's run, the workflow's runs, or the repository's. */
+  /* Each row's links, drawn as the dashboard draws a link so they read as
+     links: the repository's page, and the job's run or the workflow's runs on
+     GitHub. */
   td a{color:var(--accent);text-decoration:none}
   td a:hover{text-decoration:underline}
   td.repo{white-space:nowrap;color:var(--text)}
@@ -154,6 +156,18 @@ function cell(className: string, text: string, sortKey?: string): string {
 }
 
 /**
+ * The cell naming the repository `name`, linked to its page, after a dot of
+ * `status`. It sorts by the name.
+ */
+function repoCell(name: string, status: Status): string {
+  return `<td class="repo" data-sort="${escapeHtml(name)}"><span class="dot ${
+    STATUS_DOT[status]
+  }"></span><a href="${escapeHtml(repoPageHref(name))}">${
+    escapeHtml(name)
+  }</a></td>`;
+}
+
+/**
  * The workflow's name, linked to where `job` points, and after it a blue dot
  * linked to the run in progress, when one is.
  */
@@ -182,13 +196,9 @@ function jobRow(job: Job, now: number): string {
   const severity = `${STATUS_RANK.bad - STATUS_RANK[job.status]} ${job.result}`;
   // A job with no measurement sorts to one end rather than among the measured.
   const missing = "-1";
-  return `<tr data-served="${
-    escapeHtml(servedKey(job))
-  }"><td class="repo" data-sort="${
-    escapeHtml(job.repo)
-  }"><span class="dot ${STATUS_DOT[job.status]}"></span>${
-    escapeHtml(job.repo)
-  }</td><td class="job" data-sort="${escapeHtml(job.workflow)}">${
+  return `<tr data-served="${escapeHtml(servedKey(job))}">${
+    repoCell(job.repo, job.status)
+  }<td class="job" data-sort="${escapeHtml(job.workflow)}">${
     workflowLink(job)
   }</td>${cell("measure", job.event ?? "—", job.event ?? "")}${
     cell("measure", job.result, severity)
@@ -463,9 +473,7 @@ export function ciJobsPage(
     : `<h2>Workflows with no verdict · ${silent.length}</h2>
   <div class="scroll"><table><thead><tr><th>repository</th><th>workflow</th><th>why</th></tr></thead><tbody>${
       silent.map((job) =>
-        `<tr><td class="repo"><span class="dot ${
-          STATUS_DOT[job.status]
-        }"></span>${escapeHtml(job.repo)}</td><td class="job">${
+        `<tr>${repoCell(job.repo, job.status)}<td class="job">${
           workflowLink(job)
         }</td><td class="measure">${escapeHtml(job.result)}</td></tr>`
       ).join("")
@@ -473,13 +481,13 @@ export function ciJobsPage(
   const unreadable = collected.unreadableRepos.length === 0
     ? ""
     : `<h2>Repositories that could not be read · ${collected.unreadableRepos.length}</h2>
-  <div class="scroll"><table><thead><tr><th>repository</th></tr></thead><tbody>${
+  <div class="scroll"><table><thead><tr><th>repository</th><th>workflows</th></tr></thead><tbody>${
       collected.unreadableRepos.map((repo) =>
-        `<tr><td class="repo"><span class="dot amber"></span><a href="https://github.com/${
+        `<tr>${
+          repoCell(shortName(repo), "warn")
+        }<td class="job"><a href="https://github.com/${
           escapeHtml(repo)
-        }/actions" target="_blank" rel="noopener">${
-          escapeHtml(repo)
-        }</a></td></tr>`
+        }/actions" target="_blank" rel="noopener">workflows</a></td></tr>`
       ).join("")
     }</tbody></table></div>`;
 

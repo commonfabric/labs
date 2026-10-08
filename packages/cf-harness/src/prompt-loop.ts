@@ -226,7 +226,10 @@ import { projectHarnessResearchKitForModel } from "./research/model-projection.t
 import { isBrowserScreenshotOutput } from "./tools/browser.ts";
 import { isEditFileToolSuccessOutput } from "./tools/edit-file.ts";
 import { isStructuredFileToolErrorOutput } from "./tools/file-errors.ts";
-import { loomCommandModelContextObservation } from "./tools/loom-commands.ts";
+import {
+  loomCommandModelContextObservation,
+  runCommandModelView,
+} from "./tools/loom-commands.ts";
 import { loomRetrievalModelContextObservation } from "./tools/loom-retrieval.ts";
 import { isReadFileToolSuccessOutput } from "./tools/read-file.ts";
 import {
@@ -5601,15 +5604,16 @@ export class CfHarnessPromptLoop {
     if (toolId === "run_command" && isObjectNotArray(output)) {
       // A command's answer is measured like a retrieval row: the model sees
       // the entry, and the answer's label stays on the artifact as the
-      // observation the run's model context accumulates.
-      const { cfc: _cfc, ...publicOutput } = output;
+      // observation the run's model context accumulates — for a batch, each
+      // result's entry and one observation joining their labels.
+      const view = runCommandModelView(output);
       const observation = loomCommandModelContextObservation(
         output,
         resultRef,
         toolCallId,
       );
       return {
-        output: stripInternalToolFields(publicOutput),
+        output: stripInternalToolFields(view.output),
         ...(observation !== undefined
           ? { cfcModelContextObservations: [observation] }
           : {}),
@@ -5617,12 +5621,12 @@ export class CfHarnessPromptLoop {
           createHarnessTranscriptOmissionRuleRecord(
             "artifact-only",
             resultRef,
-            presentFieldPointers(output, ["cfc"]),
+            view.artifactOnlyPointers,
           ),
           createHarnessTranscriptOmissionRuleRecord(
             "model-context-truncation",
             resultRef,
-            output.truncated === true ? ["/entry"] : [],
+            view.truncationPointers,
           ),
         ),
       };

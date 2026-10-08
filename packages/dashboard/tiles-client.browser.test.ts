@@ -125,6 +125,29 @@ Deno.test("an update moves focus from a replaced linked tile to its replacement"
   });
 });
 
+Deno.test("an update keeps focus on a tile's link when the chart under it gains or loses links of its own", () => {
+  // A chart holding a link takes the tile's link off the whole tile and puts
+  // it around the tile's text alone, and an empty chart puts it back.
+  const trust = (extra: string): TileView => ({
+    status: "good",
+    value: "99.0%",
+    extra,
+    href: "/repos?name=labs",
+  });
+  const strip = `<div class="cells"><a class="cell" href="https://example.com/run"></a></div>`;
+  withBoard([["labs ci trust", trust("")]], (container) => {
+    (container.children[0] as HTMLElement).focus();
+    reconcileTiles(container, rendering(["labs ci trust", trust(strip)]));
+    const head = container.querySelector("a.tile-head");
+    expect(head?.getAttribute("href")).toBe("/repos?name=labs");
+    expect(document.activeElement).toBe(head);
+
+    reconcileTiles(container, rendering(["labs ci trust", trust("")]));
+    expect(container.children[0].localName).toBe("a");
+    expect(document.activeElement).toBe(container.children[0]);
+  });
+});
+
 Deno.test("an update moves focus inside a replaced tile to the link with the same focus key", () => {
   withBoard([[
     "recent main runs",

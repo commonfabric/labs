@@ -19,6 +19,34 @@ export function newTab(href: string): string {
   return /^https?:/.test(href) ? ` target="_blank" rel="noopener"` : "";
 }
 
+/**
+ * A box carrying `attributes` that holds the texture layer, then `head`, then
+ * `chart`, all of it a link to `link.href` when there is a `link`, with its
+ * `hint` as the link's tooltip and description. The box is that link, unless
+ * `chart` holds links of its own: an anchor cannot hold another, so the link
+ * then wraps the texture and `head`, and `chart` follows it. The texture
+ * covers the box, so all of the box but `chart` is still the link.
+ */
+export function linkedBox(
+  attributes: string,
+  head: string,
+  chart: string,
+  link?: { href: string; hint?: string },
+): string {
+  const texture = `<div class="texture"></div>`;
+  if (link === undefined) {
+    return `<div ${attributes}>${texture}${head}${chart}</div>`;
+  }
+  const target = `href="${escapeHtml(link.href)}"${newTab(link.href)}${
+    link.hint
+      ? ` aria-description="${escapeHtml(link.hint)}" title="${escapeHtml(link.hint)}"`
+      : ""
+  }`;
+  return /<a[\s>]/i.test(chart)
+    ? `<div ${attributes}><a class="tile-head" ${target}>${texture}${head}</a>${chart}</div>`
+    : `<a ${attributes} ${target}>${texture}${head}${chart}</a>`;
+}
+
 export function renderTile(label: string, v: TileView, wide = false): string {
   const cls = `tile ${v.status}${v.href ? " link" : ""}${wide ? " wide" : ""}${
     v.alignChartBottom ? " bottom-chart" : ""
@@ -39,15 +67,10 @@ export function renderTile(label: string, v: TileView, wide = false): string {
   const sub = v.sub
     ? `<p class="sub" title="${escapeHtml(v.sub)}">${escapeHtml(v.sub)}</p>`
     : "";
-  const inner = `<div class="texture"></div>${header}${big}${sub}${
-    chartBody(v)
-  }`;
-  if (!v.href) return `<div ${attributes}>${inner}</div>`;
-  const tgt = newTab(v.href);
-  const description = v.hint
-    ? ` aria-description="${escapeHtml(v.hint)}" title="${escapeHtml(v.hint)}"`
-    : "";
-  return `<a ${attributes} href="${
-    escapeHtml(v.href)
-  }"${tgt}${description}>${inner}</a>`;
+  return linkedBox(
+    attributes,
+    `${header}${big}${sub}`,
+    chartBody(v),
+    v.href ? { href: v.href, hint: v.hint } : undefined,
+  );
 }
