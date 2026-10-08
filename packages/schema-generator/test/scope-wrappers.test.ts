@@ -59,6 +59,42 @@ interface SchemaRoot {
     });
   }
 
+  describe("two scopes' brands on one value where the schema declares no scope", () => {
+    // An inferred result declares no scope, so the brands the checker
+    // intersects onto its value are no part of its schema, as any other
+    // brand-only member is not.
+
+    it("returns the payload of a value two scope wrappers brand", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot = PerUser<string> & PerSpace<string>;`,
+        "SchemaRoot",
+      );
+
+      expect(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          declaresNoScope: true,
+        }),
+      ).toEqual({ type: "string" });
+    });
+
+    it("returns the payload of a property two scope wrappers brand", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot = { value: PerUser<string> & PerSpace<string> };`,
+        "SchemaRoot",
+      );
+
+      expect(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          declaresNoScope: true,
+        }),
+      ).toEqual({
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+      });
+    });
+  });
+
   it("caps a cell that two wrappers of one scope hold with that scope", async () => {
     const { type, checker, typeNode } = await getTypeFromCode(
       `

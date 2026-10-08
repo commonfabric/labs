@@ -1211,9 +1211,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       return true;
     }
 
+    // Two scopes' brands on one value are refused (`formatType()`), except
+    // where the schema declares no scope, which reads the value as it would
+    // any other brand-only member's.
     if (
       this.#scopeBrand(type, context) !== undefined ||
-      hasNestedScopeBrands(type, context.typeChecker)
+      (!context.declaresNoScope &&
+        hasNestedScopeBrands(type, context.typeChecker))
     ) {
       return true;
     }
