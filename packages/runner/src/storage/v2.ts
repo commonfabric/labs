@@ -1624,10 +1624,10 @@ export class StorageManager implements IStorageManager {
    * The space's key pair is generated here from random data. It opens one
    * session, as the space, through the same route every later session for
    * the DID takes, and signs one commit: `acl` as the space's access-control
-   * document, `genesis.root` as its reserved root pattern when one is given,
-   * and `genesis.spaceKind` as its declared kind when one is given. The
-   * session declares the same root and kind, which the server holds the
-   * commit to. The commit reads the document at sequence zero, so it lands
+   * document, `genesis.root` as its reserved root pattern when one is given
+   * (computed from the space's DID when it is a function), and
+   * `genesis.spaceKind` as its declared kind when one is given. The session
+   * declares the same root and kind, which the server holds the commit to. The commit reads the document at sequence zero, so it lands
    * only on a space with no history. The memory client resubmits the
    * identical commit after a lost connection until the server confirms or
    * refuses it. The key is held by nothing but this call, and is dropped when
@@ -1635,15 +1635,21 @@ export class StorageManager implements IStorageManager {
    */
   async createSpace(
     acl: ACL,
-    genesis: { root?: GenesisRoot; spaceKind?: string } = {},
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    } = {},
   ): Promise<MemorySpace> {
-    const { root, spaceKind } = genesis;
+    const key = await Identity.generate();
+    const space = key.did() as MemorySpace;
+    const { spaceKind } = genesis;
+    const root = typeof genesis.root === "function"
+      ? genesis.root(space)
+      : genesis.root;
     const declarations = {
       ...(root === undefined ? {} : { genesisRoot: root }),
       ...(spaceKind === undefined ? {} : { spaceKind }),
     };
-    const key = await Identity.generate();
-    const space = key.did() as MemorySpace;
     const aclId = aclDocId(space);
     const { client, session } = await this.#sessionFactory.create(
       space,

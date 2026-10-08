@@ -6,6 +6,7 @@ import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { type Cell } from "../src/cell.ts";
+import { getEntityId } from "../src/create-ref.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
   ensureSpaceRootPattern,
@@ -14,7 +15,7 @@ import {
   resolveSpaceRootPattern,
 } from "../src/ensure-space-root.ts";
 import { parseLink } from "../src/link-utils.ts";
-import { IN_SPACE_ROOT_CAUSE } from "../src/runner.ts";
+import { inSpaceRootCause } from "../src/runner.ts";
 import { Runtime, type RuntimeFetch } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import {
@@ -88,7 +89,7 @@ describe("in-space root", () => {
 
   /** The address the genesis reservation of an `inSpace` root names. */
   const reservedRootOf = (reader: Runtime, space: MemorySpace) =>
-    reader.getCell(space, IN_SPACE_ROOT_CAUSE);
+    reader.getCell(space, inSpaceRootCause(space));
 
   /**
    * Runs a root pattern whose `create` handler appends the children `make`
@@ -181,7 +182,7 @@ describe("in-space root", () => {
     const [space] = await root.spaces();
     expect(space).not.toBe(home);
     expect(readGenesisRoot(await server.engineForSpace(space))).toEqual({
-      cause: IN_SPACE_ROOT_CAUSE,
+      cause: inSpaceRootCause(space),
     });
     const reader = openRuntime();
     const linked = await rootOf(reader, space);
@@ -207,6 +208,26 @@ describe("in-space root", () => {
         reservedRootOf(reader, first),
       ),
     ).toBe(true);
+  });
+
+  it("gives the roots of two spaces different entities", async () => {
+    // A pattern keys a record by the entity a cell names, as one keys a
+    // person's record by their profile, so two spaces' roots must name two.
+    const runtime = openRuntime();
+    const root = await spawnRoot(runtime, (Child, value) => [
+      Child.inSpace(value, { root: true })({ value }),
+    ]);
+    await root.send("first");
+    await root.send("second");
+
+    const [first, second] = await root.spaces();
+    expect(second).not.toBe(first);
+    const reader = openRuntime();
+    const firstEntity = getEntityId(await rootOf(reader, first));
+    const secondEntity = getEntityId(await rootOf(reader, second));
+    expect(firstEntity).toBeDefined();
+    expect(secondEntity).toBeDefined();
+    expect(secondEntity).not.toEqual(firstEntity);
   });
 
   it("wins the race with a space-root ensure that runs between the space's genesis and the child's commit", async () => {
@@ -341,7 +362,9 @@ describe("in-space root", () => {
       root: true,
     });
     const engine = await server.engineForSpace(space);
-    expect(readGenesisRoot(engine)).toEqual({ cause: IN_SPACE_ROOT_CAUSE });
+    expect(readGenesisRoot(engine)).toEqual({
+      cause: inSpaceRootCause(space),
+    });
     expect((await server.readDocument(space, `of:${space}`))?.value).toEqual({
       [aliceSigner.did()]: "OWNER",
     });
