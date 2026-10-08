@@ -85,6 +85,7 @@ import {
   scopeUnionUnreadError,
 } from "../scope-placement.ts";
 import {
+  EVIDENCE_LABELS,
   POLICY_READ_IN_PART,
   referenceChain,
   withIfcLabels,
@@ -667,17 +668,6 @@ const boundPayloadOf = (metadata: CarriedMetadata): ts.Type | undefined => {
   }
   return payload;
 };
-
-/**
- * The labels that are evidence a value carries, which a part of a value may
- * carry only where it provably came from the policy's payload. Every other
- * label restricts what may happen to the value or is a claim the runtime
- * verifies at the write, and is safe wherever the payload's data may be.
- */
-const EVIDENCE_LABELS: ReadonlySet<string> = new Set([
-  "integrity",
-  "addIntegrity",
-]);
 
 /**
  * A mapped type as the checker holds it, with the type it maps over:
