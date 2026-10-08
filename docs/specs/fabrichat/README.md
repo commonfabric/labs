@@ -347,7 +347,9 @@ from this design, as below.
   by their profile, bound as its control's `name`, which crosses into the
   click's event as the profile's cell; the manager reads the counterpart from
   the profile's `represents-principal` label, and offers the room through the
-  share inbox the profile points at.
+  share inbox the profile points at. A chip a room rendered before its control
+  named a profile names the participant's principal instead, as
+  `target.dataset.counterpart`, which the manager still reads.
 - **Labels without a gesture.** Messages and reactions are labeled
   `authored-by` under a reviewed gesture, as the design says, and so is
   `about.record`, under the start that created the room. A `recentActivity`
