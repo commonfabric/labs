@@ -51,7 +51,7 @@ The specification has no runtime secret, and so nothing on minting one: the
 reserved store, the runtime's write authority over it, that a stored key never
 changes, that a value planted there without that authority is replaced, and
 that the mint attributes the value to no principal (§8.15.4 lists the
-initializations a runtime performs, and this is not one of them). specs#NN
+initializations a runtime performs, and this is not one of them). specs#58
 proposes these as a ruling. This runtime's arrangement stores something new,
 so it waits on that ruling.
 
