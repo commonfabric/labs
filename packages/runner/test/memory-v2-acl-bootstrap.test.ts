@@ -642,6 +642,43 @@ Deno.test("createSpace declares a kind in the genesis commit, which spaceKind() 
   }
 });
 
+Deno.test("spaceKind() reads the kind of a space whose genesis commits after the reader first opened it", async () => {
+  const member = await Identity.fromPassphrase("space kind early reader");
+  const server = createServer("space-kind-early-reader");
+  const factory = new RecordingLoopbackSessionFactory(server);
+  const reader = TestStorageManager.overServer({ as: member }, factory);
+  const key = await Identity.generate();
+  const space = key.did() as MemorySpace;
+  try {
+    assertEquals(await reader.spaceKind(space), undefined);
+    const { client, session } = await factory.create(space, key, {
+      spaceKind: "fabrichat-room",
+    });
+    try {
+      await session.transact({
+        spaceKind: "fabrichat-room",
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [member.did()]: "OWNER" } },
+        }],
+      });
+    } finally {
+      await client.close();
+    }
+    assertEquals(
+      readSpaceKind(await server.engineForSpace(space)),
+      "fabrichat-room",
+    );
+    assertEquals(await reader.spaceKind(space), "fabrichat-room");
+  } finally {
+    await reader.close();
+    await server.close();
+  }
+});
+
 Deno.test("spaceKind() throws for a space whose access list admits the reader to nothing", async () => {
   const user = await Identity.fromPassphrase("space kind refusing owner");
   const stranger = await Identity.fromPassphrase("space kind stranger");

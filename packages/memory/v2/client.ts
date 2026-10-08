@@ -194,6 +194,26 @@ export type MountOptions = {
   readCeiling?: SessionReadCeiling;
 };
 
+/**
+ * The kind a space's genesis commit declares, as a `session.open` result
+ * reported it: `kind` is absent when the genesis commit declares none, or when
+ * the server does not advertise `spaceKind` and so reports none.
+ */
+export type DeclaredSpaceKind = { readonly kind?: string };
+
+/**
+ * What `result`, a `session.open` result, says of the kind the space's genesis
+ * commit declares, or `undefined` when it says nothing either way: a result
+ * for a space with no history reports no kind, whatever its genesis commit
+ * will declare.
+ */
+function declaredSpaceKindOf(
+  result: SessionOpenResult,
+): DeclaredSpaceKind | undefined {
+  if (result.spaceKind !== undefined) return { kind: result.spaceKind };
+  return result.serverSeq > 0 ? {} : undefined;
+}
+
 export type SessionOpenAuth = {
   invocation: FabricPlainObject;
   authorization: FabricValue;
@@ -603,7 +623,7 @@ export class Client {
       options.readCeiling,
       options.genesisRoot,
       options.spaceKind,
-      result.spaceKind,
+      declaredSpaceKindOf(result),
     );
     this.#spaces.add(session);
     return session;
@@ -1540,7 +1560,7 @@ export class SpaceSession {
   readonly #readCeiling?: SessionReadCeiling;
   readonly #genesisRoot?: GenesisRoot;
   readonly #spaceKindIntent?: string;
-  #spaceKind?: string;
+  #declaredSpaceKind?: DeclaredSpaceKind;
 
   constructor(
     client: Client,
@@ -1554,7 +1574,7 @@ export class SpaceSession {
     readCeiling?: SessionReadCeiling,
     genesisRoot?: GenesisRoot,
     spaceKindIntent?: string,
-    spaceKind?: string,
+    declaredSpaceKind?: DeclaredSpaceKind,
   ) {
     this.#client = client;
     this.#auth = auth;
@@ -1565,7 +1585,7 @@ export class SpaceSession {
       ? undefined
       : cloneIfNecessary(genesisRoot, { frozen: false });
     this.#spaceKindIntent = spaceKindIntent;
-    this.#spaceKind = spaceKind;
+    this.#declaredSpaceKind = declaredSpaceKind;
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
     this.#serverSeq = serverSeq;
@@ -1590,13 +1610,14 @@ export class SpaceSession {
   }
 
   /**
-   * The kind the space's genesis commit declares, as the server reported it
-   * when this session last opened, or `undefined` when it reported none: the
-   * space declares no kind, had no genesis commit yet, or is served by a
-   * server that does not advertise `spaceKind`.
+   * What this session's latest open told it of the kind the space's genesis
+   * commit declares, or `undefined` when that open told it nothing either
+   * way, having come before the space had any history. A session that opens
+   * on a space with no history stays open as the space's genesis commits, and
+   * learns its kind only by opening again.
    */
-  get spaceKind(): string | undefined {
-    return this.#spaceKind;
+  get declaredSpaceKind(): DeclaredSpaceKind | undefined {
+    return this.#declaredSpaceKind;
   }
 
   /** The error this session was terminated with, or undefined while it is open.
@@ -3042,7 +3063,7 @@ export class SpaceSession {
     const sessionReplaced = sessionChanged || restored.resumed !== true;
     this.#sessionId = restored.sessionId;
     this.#sessionToken = restored.sessionToken ?? this.#sessionToken;
-    this.#spaceKind = restored.spaceKind;
+    this.#declaredSpaceKind = declaredSpaceKindOf(restored);
     this.#noteResult(restored.serverSeq);
 
     if (sessionReplaced) {

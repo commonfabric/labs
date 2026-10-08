@@ -1821,7 +1821,24 @@ export class StorageManager implements IStorageManager {
 
   /** @inheritDoc */
   async spaceKind(space: MemorySpace): Promise<string | undefined> {
-    return await this.#openProvider(space).spaceKind();
+    const declared = await this.#openProvider(space).declaredSpaceKind();
+    if (declared !== undefined) return declared.kind;
+    // The space's session opened before the space had any history, so it was
+    // told nothing of the kind, and stays open without being told. A session
+    // of its own, opened now, is told the kind as the space stands.
+    const { client, session } = await this.#sessionFactory.create(
+      space,
+      this.as,
+      {
+        sessionId: crypto.randomUUID(),
+        ...this.#sessionDescriptorFields(),
+      },
+    );
+    try {
+      return session.declaredSpaceKind?.kind;
+    } finally {
+      await client.close();
+    }
   }
 
   open(space: MemorySpace): IStorageProvider {
@@ -3291,9 +3308,9 @@ class Provider
     );
   }
 
-  /** See `SpaceReplica.spaceKind()`. */
-  spaceKind(): Promise<string | undefined> {
-    return this.#followReplacement((replica) => replica.spaceKind());
+  /** See `SpaceReplica.declaredSpaceKind()`. */
+  declaredSpaceKind(): Promise<MemoryV2Client.DeclaredSpaceKind | undefined> {
+    return this.#followReplacement((replica) => replica.declaredSpaceKind());
   }
 
   operationCodecs(): Promise<readonly string[]> {
@@ -4811,19 +4828,21 @@ export class SpaceReplica
   }
 
   /**
-   * The kind the space declares in its genesis commit, as the memory server
-   * reported it when this replica's session opened, or `undefined` when it
-   * declares none.
+   * What the memory server told this replica's session, when it last opened,
+   * of the kind the space declares in its genesis commit; see
+   * `SpaceSession.declaredSpaceKind`.
    *
    * @throws If the session cannot be opened, or if the memory server does not
    *   advertise `spaceKind`.
    */
-  async spaceKind(): Promise<string | undefined> {
+  async declaredSpaceKind(): Promise<
+    MemoryV2Client.DeclaredSpaceKind | undefined
+  > {
     const { client, session } = await this.#activeSessionHandle();
     if (client.serverFlags?.spaceKind !== true) {
       throw new Error("memory server does not report a space's declared kind");
     }
-    return session.spaceKind;
+    return session.declaredSpaceKind;
   }
 
   async operationCodecs(): Promise<readonly string[]> {

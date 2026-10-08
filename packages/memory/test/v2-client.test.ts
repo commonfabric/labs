@@ -3961,11 +3961,13 @@ Deno.test("memory v2 client refuses a space-kind expectation without server capa
 });
 
 /**
- * A handshake transport whose `session.open` results report the kind
- * `reported()` returns, and which records the kind each `session.open`
- * descriptor declares.
+ * A handshake transport whose `session.open` results carry the `serverSeq` and
+ * the kind `reported()` returns, and which records the kind each
+ * `session.open` descriptor declares.
  */
-const spaceKindTransport = (reported: () => string | undefined) => {
+const spaceKindTransport = (
+  reported: () => { serverSeq: number; spaceKind?: string },
+) => {
   const transport = handshakeTransport(HELLO_OK);
   const declared: unknown[] = [];
   const send = transport.send.bind(transport);
@@ -3990,13 +3992,11 @@ const spaceKindTransport = (reported: () => string | undefined) => {
         type: string;
         ok?: Record<string, FabricValue>;
       };
-      const spaceKind = reported();
       next(
-        message.type === "response" && message.ok?.sessionOpen !== undefined &&
-          spaceKind !== undefined
+        message.type === "response" && message.ok?.sessionOpen !== undefined
           ? encodeMemoryBoundary({
             ...message,
-            ok: { ...message.ok, spaceKind },
+            ok: { ...message.ok, ...reported() },
           })
           : payload,
       );
@@ -4004,34 +4004,37 @@ const spaceKindTransport = (reported: () => string | undefined) => {
   return { transport, declared };
 };
 
-Deno.test("memory v2 client reports the kind its latest open result carries, and declares none of its own", async () => {
-  let reported: string | undefined = "fabrichat-room";
+Deno.test("memory v2 client reports the kind its latest open of a space with history carries, and declares none of its own", async () => {
+  let reported: { serverSeq: number; spaceKind?: string } = {
+    serverSeq: 3,
+    spaceKind: "fabrichat-room",
+  };
   const { transport, declared } = spaceKindTransport(() => reported);
   const client = await connect({ transport });
   try {
     const session = await client.mount("did:key:reported-kind");
-    assertEquals(session.spaceKind, "fabrichat-room");
-    reported = undefined;
+    assertEquals(session.declaredSpaceKind, { kind: "fabrichat-room" });
+    reported = { serverSeq: 3 };
     await session.restore();
-    assertEquals(session.spaceKind, undefined);
+    assertEquals(session.declaredSpaceKind, {});
     assertEquals(declared, ["(none)", "(none)"]);
   } finally {
     await client.close();
   }
 });
 
-Deno.test("memory v2 client declares its kind intent on every open, and reports the kind once a result carries it", async () => {
-  let reported: string | undefined = undefined;
+Deno.test("memory v2 client reports nothing of the kind from an open of a space with no history, and declares its kind intent on every open", async () => {
+  let reported: { serverSeq: number; spaceKind?: string } = { serverSeq: 0 };
   const { transport, declared } = spaceKindTransport(() => reported);
   const client = await connect({ transport });
   try {
     const session = await client.mount("did:key:declared-kind", {
       spaceKind: "fabrichat-room",
     });
-    assertEquals(session.spaceKind, undefined);
-    reported = "fabrichat-room";
+    assertEquals(session.declaredSpaceKind, undefined);
+    reported = { serverSeq: 1, spaceKind: "fabrichat-room" };
     await session.restore();
-    assertEquals(session.spaceKind, "fabrichat-room");
+    assertEquals(session.declaredSpaceKind, { kind: "fabrichat-room" });
     assertEquals(declared, ["fabrichat-room", "fabrichat-room"]);
   } finally {
     await client.close();
