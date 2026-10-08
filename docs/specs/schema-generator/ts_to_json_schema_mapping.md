@@ -164,24 +164,34 @@ and every combination of arms is settled on its own; `unknown` is the
 identity; an empty object part drops out and takes `null` and `undefined`
 with it, as `T & {}` does; primitives are narrowed or found disjoint wherever
 they sit, `"a" & string` being `"a"` and `string & number` nothing; `null` or
-`undefined` beside an object leaves nothing; and a constituent that merge
-refuses — a non-object, or one with an index signature, which an array is —
-yields the same unsupported-pattern fallback the type path emits. Object
-parts merge into one object, and a property several of them declare is
-settled the same way from the schemas its declarations give it, documented
-as the type path documents it (§9). The keywords JSDoc writes are set aside
-while those schemas are settled, and an optional declaration admits
-`undefined` beside one that requires the property. What this settles
-differently from the checker it settles differently for a property too: it
-reads no assignability, so `unknown[]` beside `string[]` is the
-unsupported-pattern fallback, and the merged object keeps only the members
-and `required` of its parts, so a `scope` on one of them is not kept. Where a
-schema alone no longer says what its type was, the generation context
-records where it came from (`schemaOrigins`): `void` lowers to the opaque
-marker `OpaqueCell<any>` also lowers to, and reduces as `undefined` does
-beside another primitive (`undefined & void` is `undefined`, `string & void`
-nothing) while the wrapper, having no primitive domain, is refused by a
-merge as a non-object constituent; an unsupported-pattern fallback keeps the
+`undefined` beside an object or a cell leaves nothing; a cell among the
+constituents is the value, the first cell's, with the cap any of them puts
+on its handle, as the checker reads a value of intersected cells, so
+`Cell<unknown> & { y: number }` is that cell; arrays merge into an array of
+the intersection of their items; and a constituent that merge refuses — a
+non-object, or one with an index signature, as an array beside an object
+has — yields the same unsupported-pattern fallback the type path emits.
+Object parts merge into one object, and a property several of them declare
+is settled the same way from the schemas its declarations give it,
+documented as the type path documents it (§9) and refused where its
+declarations are in different scopes. The keywords JSDoc writes are set
+aside while those schemas are settled, and an optional declaration admits
+`undefined` beside one that requires the property. What a constituent states
+besides which values it holds is set aside while the values are settled and
+stated of what they settle to, as the type path reads it from the checker's
+type: its scope and its default belong to the whole value, so two scopes
+refuse the intersection, as a scope wrapper nested in another with no cell
+between them, and defaults that differ leave none; its labels go on the
+members of the result it declares, or on the whole result where it declares
+all of them or none, and a union's labels go on the members any of its arms
+declares. A keyword written beside a reference is read in place of the
+definition's, through a chain of references. Where a schema alone no longer
+says what its type was, the generation context records where it came from
+(`schemaOrigins`): `void` lowers to the opaque marker `OpaqueCell<any>` also
+lowers to, and reduces as `undefined` does beside another primitive
+(`undefined & void` is `undefined`, `string & void` nothing), while the
+wrapper is a cell, the value beside any other part; an unsupported-pattern
+fallback keeps the
 constituents behind it, so a nested or named intersection is reopened when
 an enclosing one reduces it (`(string & Brand) & number` is nothing); and a
 union whose arms fold to one schema — `void | OpaqueCell<any>`, or two
@@ -952,6 +962,10 @@ Default paths of §7:
   metadata carriers, whose labels §11 reads, are filtered before validation;
   a single survivor delegates directly, and where none survives the full set
   is merged.
+- An intersection of arrays is an array of the values every one of them
+  holds: its `items` are the schema of the intersection's number index, the
+  intersection of the element types, so `unknown[] & readonly string[]` is
+  `string[]`'s schema. Tested: intersection-formatter.test.ts.
 - Unsupported shapes — non-object constituent, constituent with an index
   signature, or a checker error — produce a **permissive fallback, not a
   throw**: `{ type: "object", additionalProperties: true, $comment:
@@ -960,15 +974,25 @@ Default paths of §7:
   the intersection, which the checker gives as the intersection of the
   declared types: `{ a: unknown } & { a: string }` and
   `{ a: string | number } & { a: string }`, in either order, give `a` the
-  schema of `string`, and `{ a: string } & { a: number }` gives it `false`.
-  Where one declaration's type is that type, or is assignable to every other
-  declaration's type and so admits just the values the intersection admits,
-  the property takes that declaration's schema, read through the node it is
-  written with: `{ a: unknown[] } & { a: string[] }` keeps `string[]`'s.
-  Declarations whose types are assignable to each other, such as
-  `PerUser<X>` beside `X`, keep the first one written. Any other type is
-  formatted as the property's, so `{ a: { x: string } } & { a: { y: number } }`
-  merges the two objects, and a callable keeps its wrapper marker.
+  schema of `string`, `{ a: string } & { a: number }` gives it `false`, and
+  `{ a: unknown[] } & { a: string[] }` gives it `string[]`'s. Where one
+  declaration's type is that very type, the property takes that
+  declaration's schema, read through the node it is written with. Any other
+  type is formatted as the property's, so what the checker keeps of every
+  declaration is read from the type, whichever declaration wrote it: a scope
+  wrapper's brand, as in `{ a: X } & { a: PerUser<X> }`, scoped to the user
+  in either order (§10); a CFC carrier, whose labels go on the members of
+  the payload it was written around (§11); and a `Default` brand.
+  `{ a: { x: string } } & { a: { y: number } }` merges the two objects, and a
+  callable keeps its wrapper marker.
+- A property whose declarations are in different scopes, a cell's cap
+  counting as its scope, is refused, as one value is stored in one scope:
+  `{ a: PerUser<X> } & { a: PerSpace<X> }` throws "The property `a` is
+  declared in scope `user` by one member of an intersection and in scope
+  `space` by another. A value is stored in one scope, so declare `a` in the
+  same scope wherever it is declared." Where the schema declares no scope, as
+  an inferred lift result's does (§10), the declarations' scopes are not
+  read, and a value two scope wrappers brand is read as its payload.
 - The property's description, the tags drawn from it, and its deprecation
   mark are the first declaration's where it has them, and otherwise those of
   the schema it takes. A later declaration's differing description is noted
