@@ -161,7 +161,7 @@ Each is something a reader relies on today, with the code that relies on it.
   a head to a new seq would make every one of those stale at once and hand the
   serving loop a full re-derivation on activation — a storm to end a storm.
   The one exception is the space's ACL document, `of:<did>`, which the
-  compaction commit patches with [the audit marker](#what-a-user-sees) and
+  compaction commit rewrites with [the audit marker](#what-a-user-sees) and
   which is never itself selected for compaction; its head advances to the
   compaction commit's seq, which every client re-reads on join anyway.
 - **I2 — every head has its revision row**, because the head read is a join.
@@ -278,17 +278,22 @@ Each is something a reader relies on today, with the code that relies on it.
 
 ### The options
 
-**(a) Materialize-and-truncate.** For each instance in the selection whose
-head is a `patch`, reconstruct the document at the head with the engine's own
-replay and rewrite that row in place as `op = 'set'` with the encoded
-document, at the same `(seq, op_index)`; update `head.op` to match. For every
-selected instance that loses at least one row, point the retained boundary
-row's `commit_seq` at the run's compaction commit (I4) — the materialized
-`set`, a head that was already a `set` or `delete`, or under a bounded cut
-the oldest row kept, rewritten as a `set` if it was a patch — and delete the
-revision rows ordered before it and every snapshot row at or below it (the
-boundary is now the base). An instance that loses nothing is left exactly as
-it was, attribution included. Then hollow the
+**(a) Materialize-and-truncate.** One algorithm for the default cut and the
+bounded ones, in this order per selected instance. First compute the retained
+boundary: the oldest row the cut keeps — the head itself under the default
+cut, or the oldest row at or above the cut under `--before-seq`, `--before`
+or `--keep-last`. If the instance has no row below the boundary, it loses
+nothing and is left exactly as it was, attribution included. Otherwise, if
+the boundary is a `patch`, reconstruct the document at that row with the
+engine's own replay and rewrite the row in place as `op = 'set'` with the
+encoded document, at the same `(seq, op_index)`, updating `head.op` when the
+boundary is the head; a boundary that is already a `set` or `delete` keeps
+its op. Then point the boundary row's `commit_seq` at the run's compaction
+commit (I4), delete the revision rows ordered before it and every snapshot
+row at or below it (the boundary is now the base), and leave every row above
+the boundary untouched — a head above a bounded cut stays a `patch` over the
+new base, under its original commit, exactly as it was. Nothing but the
+boundary is ever rewritten or re-attributed. Then hollow the
 `original` of every commit row that no surviving revision or `op_*` row
 references and that falls outside the retained window (I6). The compaction
 commit is inserted first, at `max(seq) + 1`, with the run's report as its
@@ -371,8 +376,10 @@ of what they allow: a row survives if any of them keeps it.
 
 The dry-run report, printed before any write and by `--dry-run` alone:
 
-- the selection: prefixes, scope kinds, the number of instances matched and
-  how many have a `patch` head (those get rewritten);
+- the selection: prefixes, scope kinds, the number of instances matched, how
+  many lose at least one row (their boundary is re-attributed), how many of
+  those have a `patch` boundary (materialized), and how many of those
+  boundaries are heads (the head's op changes);
 - rows to delete from `revision` and `snapshot`, and their byte totals as
   stored (`length(data)`, `length(value)`);
 - commit rows that become unreferenced, how many fall inside the retained
@@ -401,8 +408,9 @@ column for exactly this reason.
 own transaction; each instance is then compacted in its own transaction, and
 the hollowing pass runs last in seq-ranged batches, so a run interrupted
 anywhere leaves a store every reader can use and a second run picks up where
-the first stopped: an instance whose head is already a `set` pointing at a
-compaction commit is a no-op, and a hollowed row is recognized by its marker.
+the first stopped: an instance whose boundary already points at a compaction
+commit with nothing below it is a no-op, and a hollowed row is recognized by
+its marker.
 A second run inserts a second compaction commit under its own run id (I4);
 the report names both. The run ends with `PRAGMA foreign_key_check` and `PRAGMA integrity_check` on the
 result. Nothing is deleted from `commit`, so the foreign keys from the `op_*`
@@ -458,11 +466,13 @@ Each check fails differently and the order goes from cheap to expensive:
 2. **Heads unchanged, one excepted.** `SELECT branch, id, scope_key, seq,
    op_index FROM head WHERE id <> '<of:did>' ORDER BY 1, 2, 3` hashed on
    backup and result must match; the ACL document's head must be exactly the
-   compaction commit's seq at `op_index` 0 with op `patch`; the count of
-   heads whose `op` changed from `patch` to `set` must equal the dry run's
-   rewritten count; the count of boundary rows pointing at the compaction
-   commit must equal the dry run's truncated-instance count. Every head must
-   still join to a revision row.
+   compaction commit's seq at `op_index` 0 with op `set`; the count of heads
+   whose `op` changed from `patch` to `set` must equal the dry run's count of
+   materialized boundaries that are heads; the count of boundary rows
+   pointing at the compaction commit must equal the dry run's count of
+   instances that lost a row; and under a bounded cut every row above a
+   boundary is byte-identical to the backup's, op and `commit_seq` included.
+   Every head must still join to a revision row.
 3. **Every document reads back identical, one excepted.** Reconstruct every
    selected instance at its head on both files with the state inspector's
    replay (`packages/state-inspector/reconstruct.ts`), which is a second
@@ -476,7 +486,8 @@ Each check fails differently and the order goes from cheap to expensive:
    generated cells, so it is necessary rather than sufficient, and it is
    cheap.
 5. **The compaction commit is recorded**: one `system` row at the seq the dry
-   run named, every materialized row pointing at it, `branch.head_seq` equal
+   run named, every materialized boundary and no other row pointing at it,
+   `branch.head_seq` equal
    to it, the hollowed-row count equal to the dry run's, and the marker on
    the ACL document present and naming that seq.
 6. **Live metadata survives.** On the reopened result, `readGenesisRoot` and
@@ -543,13 +554,19 @@ changed nothing — to anyone reading the log. Robin's review asks for the
 equivalent of a browser's broken-key icon: something developers can wave
 past and a user of what looked like a safe space can see.
 
-So the compaction commit carries one revision of its own: a `patch` on the
-space's ACL document (`of:<did>`, the one entity named by the space's DID,
-which every client reads to join) adding a `compaction` member beside
-`value` at the document root, at `op_index` 0 of the compaction commit's
-seq. The ACL document is never in a compaction's selection, whatever the
-prefix flags say: its history is the membership audit, and this revision is
-the one change compaction makes to it.
+So the compaction commit carries one revision of its own: a whole-document
+`set` of the space's ACL document (`of:<did>`, the one entity named by the
+space's DID, which every client reads to join) — the document as it stands,
+with a `compaction` member added beside `value` at the root — at `op_index`
+0 of the compaction commit's seq. A `set` and not a `patch` because INV-12
+(`09-invariants.md`) admits an ACL mutation only as a whole-document `set`,
+the sole operation of its commit, with a value that still satisfies `isACL`;
+the tool writes rows offline and no admission runs, but it keeps the shape
+so that what every reader of the ACL document may assume — its head is
+always a `set`, never a replay — stays true. The ACL document is never in a
+compaction's selection, whatever the prefix flags say: its history is the
+membership audit, and this revision is the one change compaction makes to
+it.
 
 ```json
 {
@@ -848,7 +865,9 @@ compacted until the engine can tell compacted history from absence.
    checked as step 3 states; a confirmed read below the cut conflicts; all
    four protocol cases of §3, in every variant, against the tool's own
    output; every truncated instance's boundary row points at the compaction
-   commit and no untouched instance's does; a resubmitted commit inside the payload window is answered from
+   commit, no untouched instance's does, and under a bounded cut the rows
+   above the boundary are byte-identical to the input's; the ACL revision is
+   a whole-document `set` whose `value` satisfies `isACL` unchanged; a resubmitted commit inside the payload window is answered from
    its stored result; the genesis root and space kind read the same on the
    reopened result; the feed's view of the compaction commit is as I4 states;
    a store with a second branch is refused; a run interrupted after the first
