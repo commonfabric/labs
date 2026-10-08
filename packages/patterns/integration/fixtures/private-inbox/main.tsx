@@ -6,7 +6,8 @@
  * already point at inboxes when the host first ensures their own, and a fifth,
  * `readoptingHome`, is one whose default profile is pointed elsewhere after it
  * holds an inbox. `olderHome` stands in for a Home of the vintage whose ensure
- * takes no refusal. Fixture for `private-inbox-multi-runtime.test.ts`.
+ * takes no refusal, and `unreadableHome` for one whose profile keeps its
+ * pointer per user. Fixture for `private-inbox-multi-runtime.test.ts`.
  */
 
 import {
@@ -22,6 +23,7 @@ import {
   Writable,
 } from "commonfabric";
 import EarlierProfile from "./earlier-profile.tsx";
+import UserScopedProfile from "./user-scoped-profile.tsx";
 import ProfileCreate from "../../../system/profile-create.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
@@ -122,6 +124,21 @@ const createEarlierProfile = handler<
   profiles.push(
     asProfile(
       EarlierProfile.inSpace(undefined, { grants: { "*": "WRITE" } })({}),
+    ),
+  );
+});
+
+/**
+ * Creates a profile keeping its pointer per user, in a space of its own that
+ * grants anyone `WRITE`.
+ */
+const createUserScopedProfile = handler<
+  void,
+  { profiles: Writable<ProfileHomeOutput[]> }
+>((_event, { profiles }) => {
+  profiles.push(
+    asProfile(
+      UserScopedProfile.inSpace(undefined, { grants: { "*": "WRITE" } })({}),
     ),
   );
 });
@@ -527,6 +544,18 @@ export interface MainOutput {
    * does, handing it the private inbox.
    */
   createProfileThroughSurface: Stream<{ name?: string }>;
+
+  /** A Home whose profile keeps its pointer per user. */
+  unreadableHome: HomeStandInOutput;
+
+  /** Creates a profile keeping its pointer per user in `unreadableHome`. */
+  createUnreadableProfile: Stream<void>;
+
+  /** Points a profile of `unreadableHome` at the loom-shaped inbox. */
+  pointUnreadableProfileAtLoom: Stream<PointElsewhereRequest>;
+
+  /** Ensures `unreadableHome`'s inbox, with the event the host sends. */
+  ensureUnreadable: Stream<EnsurePrivateInboxEvent>;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -552,6 +581,9 @@ export default pattern<MainInput, MainOutput>((
   const creatingHome = HomeStandIn({ label: "Creating Home" });
   const olderHome = OlderHomeStandIn({});
   const readoptingHome = HomeStandIn({ label: "Home adopting again" });
+  const unreadableHome = HomeStandIn({
+    label: "Home of an unreadable profile",
+  });
   return {
     [NAME]: "Private inbox fixture",
     [UI]: <div>private inbox fixture</div>,
@@ -636,6 +668,15 @@ export default pattern<MainInput, MainOutput>((
     offer: offer({ profiles }),
     queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
     copyOffers: copyOffers({ privateInbox, copiedOffers }),
+    unreadableHome,
+    createUnreadableProfile: createUserScopedProfile({
+      profiles: unreadableHome.profiles,
+    }),
+    pointUnreadableProfileAtLoom: pointProfileAt({
+      profiles: unreadableHome.profiles,
+      inbox: loomInbox,
+    }),
+    ensureUnreadable: unreadableHome.ensurePrivateInbox,
     createProfileThroughSurface: ProfileCreate({
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,

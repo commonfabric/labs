@@ -118,7 +118,7 @@ describe("policy", () => {
           continue;
         }
         const inCode = [
-          policy.dialValue(dial),
+          String(dial.value),
           dial.unit,
           dial.setBy,
           dial.why,

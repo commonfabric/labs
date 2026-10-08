@@ -14,7 +14,8 @@
  * it; once its default profile is pointed at an inbox shaped as a loom
  * daemon's, as when the daemon writes the pointer last, it adopts that one,
  * though its other profile still points at the first, and retains the one it
- * held, whose offers stay readable.
+ * held, whose offers stay readable. A Home whose profile keeps its pointer
+ * per user creates no inbox while that profile advertises one.
  *
  * The inbox's space grants every principal `WRITE` in both server-execution
  * postures: the serving loop makes a sender's write where server execution is
@@ -622,6 +623,26 @@ describe("private inbox across runtimes", () => {
     );
 
     expect((await profileInbox(count)).id).toBe(inbox.id);
+  });
+
+  it("creates no inbox while a profile whose pointer it cannot read advertises one", async () => {
+    // The profile keeps its pointer per user in a space of its own. With
+    // server execution on, the Home's serving runtime refuses to read that
+    // pointer, so the ensure would see a profile advertising nothing; it
+    // fails instead, and Home holds no inbox. With it off, the owner's
+    // runtime reads the pointer, and Home creates nothing either.
+    await owner.send("createUnreadableProfile");
+    await harness.settle();
+    await owner.send("pointUnreadableProfileAtLoom", { index: 0 });
+    await harness.settleUntil(async () =>
+      await pointed(["unreadableHome", "profiles", 0])
+    );
+
+    await owner.send("ensureUnreadable", {});
+    await harness.settle();
+
+    expect(await owner.read(["unreadableHome", "privateInbox", "piece"]))
+      .toBeUndefined();
   });
 
   it("delivers each offer a sender's own handler sends, from the sender", async () => {
