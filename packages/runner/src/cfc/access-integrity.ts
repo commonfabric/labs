@@ -16,6 +16,13 @@
  * Integrity at a location the access consumed with no confidentiality does
  * not enter the join: such a location holds no clause to release, and its
  * value is released whatever a rule decides.
+ *
+ * Neither the stamp a location names nor leaving out the locations with no
+ * confidentiality is in §3.1.6.2, whose join takes every input and drops
+ * every value-bound atom from a join of two. The specification does not say
+ * whether locations resolving one stamp are one input, nor whether an input
+ * with nothing to release is one. Each departure keeps more than the literal
+ * join, and less than the union the gates pool when this join is not chosen.
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
@@ -24,7 +31,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { atomPropagationClass } from "./atom-classes.ts";
 import type { CfcConfClause } from "./clause.ts";
 
-/** One integrity atom at a location, with the label stamps supplying it there. */
+/** One integrity atom at a location, with the stamps supplying it there. */
 export type LocatedIntegrityAtom = {
   readonly atom: CfcAtom;
 

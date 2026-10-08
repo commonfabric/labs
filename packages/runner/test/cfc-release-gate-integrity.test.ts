@@ -24,6 +24,7 @@ import { STANDARD_PROMPT_CAVEAT_POLICY } from "../src/cfc/standard-profile.ts";
 import type {
   CfcReleaseGateIntegrityMode,
   ImplementationIdentity,
+  LabelMapEntry,
 } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -157,12 +158,12 @@ const idOf = (
   tx: IExtendedStorageTransaction,
 ) => runtime.getCell(space, cause, undefined, tx).getAsNormalizedFullLink().id;
 
-/** A document holding `value`, labeled at its root as `label` says. */
-const seedLabeled = async (
+/** A document holding `value`, with `entries` as its label map. */
+const seedEntries = async (
   runtime: Runtime,
   cause: string,
   value: FabricValue,
-  label: { confidentiality: unknown[]; integrity?: CfcAtom[] },
+  entries: LabelMapEntry[],
 ): Promise<void> => {
   const seed = runtime.edit();
   writeSeedEnvelopeDoc(seed, space);
@@ -176,11 +177,19 @@ const seedLabeled = async (
     cfc: {
       version: 1,
       schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-      labelMap: { version: 1, entries: [{ path: [], label }] },
+      labelMap: { version: 1, entries },
     },
   });
   expect((await seed.commit().settled).ok).toBeDefined();
 };
+
+/** A document holding `value`, labeled at its root as `label` says. */
+const seedLabeled = (
+  runtime: Runtime,
+  cause: string,
+  value: FabricValue,
+  label: { confidentiality: unknown[]; integrity?: CfcAtom[] },
+): Promise<void> => seedEntries(runtime, cause, value, [{ path: [], label }]);
 
 /** A room-confidential document holding one member's sealed note. */
 const seedSecret = (
@@ -348,6 +357,73 @@ const seedSharedList = async (runtime: Runtime): Promise<void> => {
     ([alice]) => (alice as { note: string }).note,
   );
 };
+
+// Screening evidence a stamp at a document's root carries, and a rule
+// releasing the room clause on it.
+const SCREENED = {
+  type: CFC_ATOM_TYPE.CaveatScreened,
+  kind: CFC_CONCEPT_KIND.PromptInjectionRiskValueScreened,
+  source: SOURCE,
+  stage: "value",
+  verdict: "pass",
+  valueRef: "root",
+};
+
+const SCREENED_RELEASE: CfcPolicyRecordInput[] = [{
+  id: "screened-release",
+  rules: [{
+    id: "release-screened",
+    appliesTo: ROOM,
+    preCondition: { integrity: [SCREENED] },
+    post: { dropClause: true },
+  }],
+}];
+
+// The tally's release, and a share grant consulted for an owner's clause.
+const OWNER_CLAUSE = cfcAtom.user(signer.did());
+const GRANTED_RELEASE: CfcPolicyRecordInput[] = [{
+  id: "granted-release",
+  rules: [
+    {
+      id: "a-release-owner",
+      appliesTo: { type: CFC_ATOM_TYPE.User, subject: { var: "$o" } },
+      preCondition: { integrity: [WITNESSED_GUARD] },
+      post: { dropClause: true },
+    },
+    {
+      id: "a-release-room",
+      appliesTo: ROOM,
+      preCondition: { integrity: [WITNESSED_GUARD] },
+      post: { dropClause: true },
+    },
+    {
+      id: "b-share",
+      appliesTo: { type: CFC_ATOM_TYPE.User, subject: { var: "$owner" } },
+      preCondition: {
+        policyState: [{
+          kind: "ShareGrant",
+          owner: { var: "$owner" },
+          resource: "of:photo",
+          audience: { type: CFC_ATOM_TYPE.User, subject: { var: "$r" } },
+        }],
+      },
+      post: {
+        addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: { var: "$r" } }],
+      },
+    },
+  ],
+}];
+
+// A floor on an evidence family no runtime code mints, so only seeded labels
+// carry it.
+const VOUCHED = { type: "https://example.com/atoms/Vouched" };
+const VOUCHED_STORE_SCHEMA = {
+  type: "object",
+  properties: {
+    out: { type: "string", ifc: { requiredIntegrity: [VOUCHED] } },
+  },
+  required: ["out"],
+} as const satisfies JSONSchema;
 
 /** A list the tally alone appended its count to. */
 const seedTalliedList = async (runtime: Runtime): Promise<void> => {
@@ -623,6 +699,35 @@ describe("release-gate integrity", () => {
       });
     });
 
+    it("consults no grant the decision did not", async () => {
+      // Under the pooled integrity the tally's evidence drops the owner's
+      // clause before the grant rule is tried; under the join it does not,
+      // and the grant rule would be.
+
+      for (const mode of ["off", "observe"] as const) {
+        await withRuntime(mode, async (runtime) => {
+          await seedBallot(runtime);
+          await seedLabeled(runtime, "owned", "mine", {
+            confidentiality: [OWNER_CLAUSE],
+          });
+          const tx = runtime.edit();
+          runtime.getCell(space, "ballot", undefined, tx).getRaw();
+          runtime.getCell(space, "owned", undefined, tx).getRaw();
+          enqueueSinkRequestPostCommitEffect(
+            tx,
+            SINK,
+            `${SINK}:grants`,
+            createFrozenRequestSnapshot({ url: "https://example.com/x" }),
+            `${SINK}-start`,
+            () => {},
+          );
+          tx.prepareCfc();
+          expect(tx.getCfcState().consultedGrants).toEqual([]);
+          tx.abort();
+        }, GRANTED_RELEASE);
+      }
+    });
+
     it("records nothing for the endorsed output read on its own", async () => {
       await withRuntime("observe", async (runtime) => {
         await seedSharedRoom(runtime);
@@ -691,6 +796,67 @@ describe("release-gate integrity", () => {
             ),
           ).toBe(true);
         });
+      });
+
+      it("fails a floor `off` fails, whatever a location the read consumed is exempt as", async () => {
+        // The read's own label carries no `Vouched`, so the pooled floor
+        // fails. Its one labeled location carries a template's integrity
+        // beside a link's `Origin`, which the join must not take for
+        // plumbing and pass.
+
+        for (const mode of ["off", "enforce"] as const) {
+          await withRuntime(mode, async (runtime) => {
+            await seedEntries(runtime, "templated", { items: ["a"] }, [{
+              path: ["items", "*"],
+              origin: "derived",
+              observes: "value",
+              label: {
+                integrity: [{ type: "https://example.com/atoms/Other" }],
+              },
+            }, {
+              path: ["items", "0"],
+              origin: "link",
+              label: {
+                integrity: [{ type: CFC_ATOM_TYPE.Origin, source: "probe" }],
+              },
+            }]);
+            expect(
+              refusedByFloor(
+                publish(
+                  runtime,
+                  "templated",
+                  ["items", "0"],
+                  VOUCHED_STORE_SCHEMA,
+                ),
+              ),
+            ).toBe(true);
+          });
+        }
+      });
+
+      it("refuses a child's clause that evidence other than `TransformedBy` on an ancestor stamp vouches for", async () => {
+        // `carriedStampLabel` withdraws only `TransformedBy` from a stamp
+        // another writer writes beneath, so no other atom on the root stamp
+        // speaks for `/b`, which the root resolves at.
+
+        await withRuntime("enforce", async (runtime) => {
+          await seedEntries(runtime, "screened-root", {
+            a: "screened",
+            b: "alice-secret",
+          }, [{
+            path: [],
+            origin: "derived",
+            observes: "value",
+            label: { confidentiality: [ROOM], integrity: [SCREENED] },
+          }, {
+            path: ["b"],
+            origin: "declared",
+            label: { confidentiality: [ROOM] },
+          }]);
+          expect(refusedByCeiling(publish(runtime, "screened-root"))).toBe(
+            true,
+          );
+        }, SCREENED_RELEASE);
       });
 
       it("passes the floor on the tally for its output read on its own", async () => {

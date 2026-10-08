@@ -312,10 +312,10 @@ export interface ResolvedCfcDials {
 /**
  * What each dial resolves to when a construction leaves it unset.
  *
- * The Runtime's defaults, in one place, rather than ten `??` arms inside a
- * constructor no other host can reach. `DEFAULT_CFC_*` in `types.ts` are not
- * these: those are the per-transaction floors an unconfigured transaction
- * carries, which is a different question with a different answer.
+ * The Runtime's defaults, in one place, rather than a `??` arm per dial
+ * inside a constructor no other host can reach. `DEFAULT_CFC_*` in `types.ts`
+ * are not these: those are the per-transaction floors an unconfigured
+ * transaction carries, which is a different question with a different answer.
  */
 export const RUNTIME_CFC_DIAL_DEFAULTS: ResolvedCfcDials = Object.freeze({
   cfcEnforcementMode: "enforce-strict",

@@ -36,7 +36,6 @@ import {
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
-  labelViewLocations,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
@@ -71,15 +70,19 @@ export type DisplayFitSources = {
 
   /**
    * The runtime's `cfcReleaseGateIntegrity` rung, which says what integrity
-   * a label is fitted with: under `off`, absent, everything the read
-   * consumed, pooled; under `enforce`, the per-access join of the integrity
-   * at the confidential locations it consumed. `observe` fits as `off` does
-   * and reports, through {@link noteReleaseGateDivergence}, a label the join
-   * would refuse.
+   * the labels the reads behind a value consumed are fitted with. At `off`,
+   * and when absent, it is everything those reads consumed, pooled; at
+   * `enforce`, the per-access join of the integrity at the confidential
+   * locations they consumed. `observe` fits as `off` does, and where
+   * {@link noteReleaseGateDivergence} is given, reports to it each label the
+   * join would refuse. A cell's stored label is fitted pooled at every rung.
    */
   readonly releaseGateIntegrity?: CfcReleaseGateIntegrityMode;
 
-  /** Receives, under `observe`, each label the per-access join would refuse. */
+  /**
+   * Receives, under `observe`, each label the per-access join would refuse.
+   * Absent, `observe` computes no join.
+   */
   readonly noteReleaseGateDivergence?: (refusal: RenderLabelSummary) => void;
 };
 
@@ -167,7 +170,6 @@ export function readRefusal(
   // The reads behind one rendered value are one access, so the per-access
   // join takes the locations of all of them together.
   const refusal = fitWithReleaseGateIntegrity(
-    "consumed",
     confidentiality,
     integrity,
     () => reads.flatMap((read) => read?.locations() ?? []),
@@ -181,13 +183,12 @@ export function readRefusal(
 }
 
 /**
- * Fits a label as `sources.releaseGateIntegrity` says, returning the refusal
- * or undefined when the policy admits it. `pooled` is the integrity of
- * everything the access consumed, and `locations` what the access consumed,
- * from which the per-access join is taken.
+ * Fits the labels reads consumed as `sources.releaseGateIntegrity` says,
+ * returning the refusal or undefined when the policy admits them. `pooled` is
+ * the integrity of everything the reads consumed, and `locations` what they
+ * consumed, from which the per-access join is taken.
  */
 function fitWithReleaseGateIntegrity(
-  labelSource: RenderLabelSummary["labelSource"],
   confidentiality: readonly CfcConfClause[],
   pooled: readonly CfcAtom[],
   locations: () => readonly ConsumedLocation[],
@@ -196,7 +197,11 @@ function fitWithReleaseGateIntegrity(
   sources: DisplayFitSources,
   watch: FitWatch | undefined,
 ): RenderLabelSummary | undefined {
-  const mode = sources.releaseGateIntegrity ?? "off";
+  const rung = sources.releaseGateIntegrity ?? "off";
+  const mode = rung === "observe" &&
+      sources.noteReleaseGateDivergence === undefined
+    ? "off"
+    : rung;
   // The join keeps a subset of the pooled atoms, so with none pooled it is
   // empty too, and nothing needs resolving.
   const joined = mode === "off"
@@ -215,7 +220,7 @@ function fitWithReleaseGateIntegrity(
       watch,
     )
   ) {
-    return { labelSource, confidentiality, integrity };
+    return { labelSource: "consumed", confidentiality, integrity };
   }
   // The join keeps a subset of the pooled atoms, and a guard matches no more
   // given less, so a join that keeps every pooled atom fits alike.
@@ -230,12 +235,11 @@ function fitWithReleaseGateIntegrity(
       sources,
     )
   ) {
-    const divergence = { labelSource, confidentiality, integrity: joined! };
-    logger.info(
-      "release-gate-integrity(observe): the per-access join would refuse",
-      () => divergence,
-    );
-    sources.noteReleaseGateDivergence?.(divergence);
+    sources.noteReleaseGateDivergence?.({
+      labelSource: "consumed",
+      confidentiality,
+      integrity: joined!,
+    });
   }
   return undefined;
 }
@@ -286,19 +290,27 @@ export function cellLabelRefusal(
         integrity: [],
       };
   }
+  // A stored label is fitted on the integrity at its root whatever
+  // `releaseGateIntegrity` says. A label view carries no origin, folds an
+  // ancestor's entry in beside a narrower cell's own, and merges a linked
+  // target's view into the slot's, so a per-access join over it would claim
+  // too much in one case and too little in another.
   for (const { view, spaces } of labelSources) {
     if (view === undefined) continue;
-    const refusal = fitWithReleaseGateIntegrity(
-      "stored",
-      confidentialityLabels(view),
-      integrityLabels(view),
-      () => labelViewLocations(view),
-      () => spaces,
-      policy,
-      sources,
-      watch,
-    );
-    if (refusal !== undefined) return refusal;
+    const confidentiality = confidentialityLabels(view);
+    const integrity = integrityLabels(view);
+    if (
+      !canRenderLabelUnderPolicy(
+        confidentiality,
+        integrity,
+        () => spaces,
+        policy,
+        sources,
+        watch,
+      )
+    ) {
+      return { labelSource: "stored", confidentiality, integrity };
+    }
   }
   return undefined;
 }

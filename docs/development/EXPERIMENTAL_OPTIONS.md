@@ -1192,26 +1192,34 @@ the per-epic implementation notes).
 - **Purpose.** Decides which integrity an exchange rule's guard is matched
   against at three release gates: the write input gate (a gated read's
   `maxConfidentiality` fit and its `requiredIntegrity` floor), sink egress,
-  and the display fit. Values are `off`, `observe`, and `enforce`. `off`
-  matches against the integrity of everything the access consumed, pooled, so
-  one consumed value's evidence can release a clause another value carries.
-  `enforce` matches against the per-access join of spec §5.3, §8.12.8 and
-  §8.10.1.1: the class-aware join (§3.1.6.2) of the integrity at the access's
-  confidential locations, where a value-bound atom such as `TransformedBy`
-  survives only where one label stamp supplies it at every location, and for
-  the floor, a witness every labeled location carries (§8.10.3). `observe`
-  decides as `off` does, and wherever the join would refuse, records a
-  `release-gate-integrity(observe)` diagnostic on the transaction (or, at the
-  display, reports it through `DisplayFitSources.noteReleaseGateDivergence`
-  and the `display-fit` logger), saying also whether evaluating each
-  confidential location on its own would admit the release. At the
-  `maxConfidentiality` fit and at sink egress the rung changes nothing unless
-  `cfcPolicyEvaluation` is `enforce`, the only rung where a rule decides; the
-  floor and the display fit decide on integrity whatever that dial says.
-  Within one location, the join of a label's components is unchanged.
+  and the display fit of the reads behind a rendered value. Values are `off`,
+  `observe`, and `enforce`. `off` matches against the integrity of everything
+  the access consumed, pooled, so one consumed value's evidence can release a
+  clause another value carries. `enforce` matches against the per-access join
+  (`cfc/access-integrity.ts`): over the access's confidential locations, a
+  hereditary atom survives where every location carries it, and any other
+  atom only where one location is observed, or, for `TransformedBy`, where one
+  derived or structure stamp supplies it at every location. The floor needs a
+  witness every labeled location carries as well as the pooled one, so it
+  refuses only more. Spec §5.3, §8.12.8 and §8.10.1.1 describe the join; the
+  stamp rule and leaving out locations with no confidentiality go beyond
+  §3.1.6.2's literal join and wait on a specification ruling. `observe`
+  decides as `off` does and, wherever the join would refuse, records a
+  `release-gate-integrity(observe)` diagnostic on the transaction, saying also
+  whether each confidential location evaluated on its own would be admitted.
+  Its evaluations answer grant lookups from the decision's own, so it reads,
+  records and stages nothing the decision did not. At the display, `observe`
+  computes the join only for a host that supplies
+  `DisplayFitSources.noteReleaseGateDivergence`, and the worker supplies none.
+  A cell's stored label is fitted pooled at every rung, since a label view
+  carries no origin. At the `maxConfidentiality` fit and at sink egress the
+  rung changes nothing unless `cfcPolicyEvaluation` is `enforce`, the only
+  rung where a rule decides. Within one location, the join of a label's
+  components is unchanged.
 - **Current default and planned end state.** `observe` by default. The target
-  is `enforce`, gate by gate, once the honest releases that rest on the union
-  today are carried another way; the plan is
+  is `enforce`, gate by gate, once the specification rules on what the join
+  keeps and the honest releases that rest on the union are carried another
+  way; the plan is
   [`../plans/cfc-release-gate-integrity.md`](../plans/cfc-release-gate-integrity.md).
 - **Status on 2026-10-08.** Implemented, observing. Covered by
   `packages/runner/test/cfc-release-gate-integrity.test.ts` and

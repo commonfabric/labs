@@ -78,8 +78,8 @@
  * | cfcDeclaredMonotonicity    | core-pinned `"observe"` (WP5 §8.12.1; `enforce`  |
  * |                            | once per-principal mints move to `derived`)      |
  * | cfcReleaseGateIntegrity    | core-pinned `"observe"` (§5.3, §8.12.8; its      |
- * |                            | `enforce` refuses releases the integrity union   |
- * |                            | carries today)                                   |
+ * |                            | `enforce` refuses releases that rest on          |
+ * |                            | integrity pooled across values, honest ones too) |
  * | cfcPolicyRecords           | core-default (none declared) — flip in           |
  * |                            | coreOptions when a first-party rollout begins    |
  * | cfcPrefixProvenanceStats   | core-default (off) — measurement opt-in, per     |
@@ -361,8 +361,7 @@ export const MAX_ENFORCEMENT_SINK_CEILINGS: SinkMaxConfidentiality =
  * - `cfcPrefixProvenanceStats` — measurement, not enforcement.
  * - `cfcReleaseGateIntegrity` — its `enforce` rung refuses every release
  *   that rests on integrity pooled across values, honest ones among them,
- *   until value-intrinsic exchange carries those
- *   (`docs/plans/cfc-release-gate-integrity.md`).
+ *   such as a list whose element and length were stamped apart.
  */
 export const MAX_ENFORCEMENT_CFC_OPTIONS = Object.freeze(
   {

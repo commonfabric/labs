@@ -138,6 +138,7 @@ import { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import { collectDeclaredMonotonicityViolations } from "./declared-monotonicity.ts";
 import {
   type CfcGrantConsumptionContext,
+  type CfcGrantResolver,
   evaluateExchangeRules,
 } from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
@@ -992,9 +993,15 @@ const observationInputWitnesses = (
 /**
  * The labeled locations one observation of the document `document` consumed,
  * as the release gates' per-access join reads them (`access-integrity.ts`).
- * Each integrity atom names the entries that supply it at its location, by
- * the document and the entry's own path, origin and observation class, so two
- * locations resolving one stamp name it alike. The other arguments are
+ * A `TransformedBy` atom names the derived and structure entries that supply
+ * it at its location, by the document and the entry's own path, origin and
+ * observation class, so two locations resolving one stamp name it alike.
+ * Those are the stamps `carriedStampLabel` withdraws the atom from once
+ * another writer writes at, above or below them, which is what lets one such
+ * stamp speak for every location it resolves at. Every atom also names its
+ * location, a link probe's being the slot it probes, so observing one
+ * location twice is observing one value; an atom no such stamp supplies
+ * survives a join only over that one location. The other arguments are
  * `resolvedLocations()`'s.
  */
 const consumedLocations = (
@@ -1009,20 +1016,32 @@ const consumedLocations = (
       const suppliers = (integrity?.length ?? 0) === 0
         ? []
         : entriesResolvedAtPath(evidence, location);
+      // A probe of whether a slot holds a link observes that slot.
+      const here = stringTupleKey([
+        document,
+        "location",
+        pathKey(probedSlotPath(location)),
+      ]);
       return {
         confidentiality: label.confidentiality ?? [],
         integrity: (integrity ?? []).map((atom) => ({
           atom,
-          stamps: suppliers.filter((entry) =>
-            entry.label.integrity?.some((held) => deepEqual(held, atom))
-          ).map((entry) =>
-            stringTupleKey([
-              document,
-              pathKey(entry.path),
-              entry.origin ?? "legacy",
-              entry.observes ?? "",
-            ])
-          ),
+          stamps: [
+            here,
+            ...suppliers.filter((entry) =>
+              isTransformedByAtom(atom) &&
+              (entry.origin === "derived" || entry.origin === "structure") &&
+              entry.label.integrity?.some((held) => deepEqual(held, atom))
+            ).map((entry) =>
+              stringTupleKey([
+                document,
+                "stamp",
+                pathKey(entry.path),
+                entry.origin!,
+                entry.observes ?? "",
+              ])
+            ),
+          ],
         })),
       };
     },
@@ -1046,16 +1065,6 @@ const externalContentLocations = (
       stamps: [stringTupleKey(["external-content", String(index)])],
     })),
   }];
-
-/**
- * The labeled locations a whole read of the value `view` labels consumes, as
- * the per-access join reads them (`access-integrity.ts`). A view's entries
- * carry no origin, so each location resolves to its most specific entries
- * whatever component they came from, which can only claim less integrity.
- */
-export const labelViewLocations = (
-  view: CfcLabelView,
-): ConsumedLocation[] => consumedLocations("", view.entries, [], false);
 
 // Read-like shape (space/id/scope/path + a recursive read profile) for the
 // addresses whose invalidating writes scheduled this run — the §8.9.2 trigger
@@ -6946,6 +6955,17 @@ const verifyInputRequirements = (
   // transaction's read count times those maps' sizes. Only a schema entry
   // declaring `requiredIntegrity` or `maxConfidentiality` reads the result,
   // so the set is assembled on first ask and kept for the rest of the call.
+  // One path index per document's label map, built for the per-access join
+  // the first time it resolves a read of that document.
+  const labelIndexes = new Map<CfcMetadata, ConsumedLabelIndex>();
+  const labelIndexOf = (metadata: CfcMetadata): ConsumedLabelIndex => {
+    let index = labelIndexes.get(metadata);
+    if (index === undefined) {
+      index = new ConsumedLabelIndex(metadata.labelMap.entries);
+      labelIndexes.set(metadata, index);
+    }
+    return index;
+  };
   const buildGatedReads = () => {
     const gatedReads = currentReads.flatMap((read, index) => {
       const path = gatePaths[index];
@@ -6969,7 +6989,14 @@ const verifyInputRequirements = (
               read.id,
               normalizeCellScope(read.scope),
             ]),
-            consumedEntriesForRead(metadata, path, selection),
+            // Only the entries bearing on the read, so the locations are
+            // resolved over them rather than over the whole document.
+            consumedEntriesForRead(
+              metadata,
+              path,
+              selection,
+              labelIndexOf(metadata),
+            ),
             path,
             read.nonRecursive,
           ),
@@ -7223,8 +7250,11 @@ const verifyInputRequirements = (
       // every gated read carries (§8.10.3), not one some location of each
       // read carries. A location that is provenance plumbing is exempt, as a
       // read that is (audit S7).
+      // The join can only refuse more: a witness every location carries is
+      // also one every read's union carries, and checking both keeps an
+      // exemption that differs between the two from admitting more.
       const gateMode = tx.getCfcState().releaseGateIntegrityMode;
-      const perAccess = gateMode === "off" ? pooled : (() => {
+      const perAccess = gateMode === "off" || !pooled ? pooled : (() => {
         const witnessed = gating.flatMap((read) =>
           read.locations().flatMap((location) => {
             const integrity = location.integrity.map(({ atom }) => atom);
@@ -7297,6 +7327,7 @@ const verifyInputRequirements = (
         // decision persists with the written value — but only under the
         // enforce dial, where this evaluation's outcome IS the decision.
         const gateMode = tx.getCfcState().releaseGateIntegrityMode;
+        const grantLog = new Map<string, readonly CfcAtom[]>();
         const outcome = evaluateGatedConfidentiality(
           tx,
           confidentiality,
@@ -7306,6 +7337,7 @@ const verifyInputRequirements = (
           [],
           mode === "enforce" ? "consuming" : "observing",
           target.space,
+          gateMode === "observe" ? { log: grantLog, replay: false } : undefined,
         );
         if (mode === "enforce") {
           // Exhaustion fails closed; otherwise subsumption-fit the REWRITTEN
@@ -7326,6 +7358,7 @@ const verifyInputRequirements = (
               (rewritten) =>
                 atomsOutsideCeiling(rewritten, maxConfidentiality).length === 0,
               "consuming",
+              grantLog,
               target.space,
             );
           }
@@ -10156,6 +10189,7 @@ const evaluateGatedConfidentiality = (
   destinationSpace?:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
+  grants?: GrantLog,
 ): {
   confidentiality: readonly CfcConfClause[];
   exhausted: boolean;
@@ -10184,9 +10218,12 @@ const evaluateGatedConfidentiality = (
       // consulted address+digest into the prepare state for the B5-style
       // digest binding. Rides the same cfcPolicyEvaluation dial as the rest
       // of this evaluation — this function only runs when the dial is on.
-      grantResolver: createTxCfcGrantResolver(tx, {
-        availability: grantAvailability,
-      }),
+      grantResolver: grants?.replay === true
+        ? (query) => grants.log.get(deepEqualKey(query)) ?? []
+        : loggedGrantResolver(
+          createTxCfcGrantResolver(tx, { availability: grantAvailability }),
+          grants?.log,
+        ),
       grantConsumption: consumption,
       modulePolicyResolver: createTxCfcModulePolicyResolver(
         tx,
@@ -10220,9 +10257,10 @@ const evaluateGatedConfidentiality = (
  * integrity it was admitted on, `locations` returns what the access
  * consumed, and `fits` decides a rewritten label against the site's ceiling.
  * It evaluates in the grant context `consumption` names, the one the decision
- * was made in: under it a single-use grant the decision resolved resolves
- * again, and stages no second receipt, since a transaction claims a grant
- * once however often it resolves it.
+ * was made in, answering each grant lookup from `grantLog`, what the
+ * decision's own lookups returned: it reads, records and stages nothing. A
+ * grant only the join would have consulted resolves nothing here, so such a
+ * release can be reported that a grant would have admitted.
  *
  * The diagnostic also says whether each confidential location, evaluated on
  * its own integrity, would be admitted: a release that holds that way rests
@@ -10239,6 +10277,7 @@ const noteReleaseGateDivergence = (
   boundary: readonly CfcAtom[],
   fits: (rewritten: readonly CfcConfClause[]) => boolean,
   consumption: CfcGrantConsumptionContext,
+  grantLog: Map<string, readonly CfcAtom[]>,
   destinationSpace?:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
@@ -10262,6 +10301,7 @@ const noteReleaseGateDivergence = (
       boundary,
       consumption,
       destinationSpace,
+      { log: grantLog, replay: true },
     );
     return !outcome.exhausted && fits(outcome.confidentiality);
   };
@@ -10279,6 +10319,30 @@ const noteReleaseGateDivergence = (
       `${perLocation ? "admit" : "refuse"} it`,
   );
 };
+
+/**
+ * What a gate decision's grant lookups returned, by query, so that an
+ * evaluation beside the decision can be answered from them. `replay` says
+ * which side an evaluation is on: `false` records into `log` through the
+ * transaction's grant resolver; `true` answers from `log` alone, resolving no
+ * grant the decision did not, so the evaluation reads, records and stages
+ * nothing. A query the decision never made resolves nothing.
+ */
+type GrantLog = {
+  readonly log: Map<string, readonly CfcAtom[]>;
+  readonly replay: boolean;
+};
+
+/** `resolver`, recording each answer into `log` when one is given. */
+const loggedGrantResolver = (
+  resolver: CfcGrantResolver,
+  log: Map<string, readonly CfcAtom[]> | undefined,
+): CfcGrantResolver =>
+  log === undefined ? resolver : (query) => {
+    const facts = resolver(query);
+    log.set(deepEqualKey(query), facts);
+    return facts;
+  };
 
 const noteModulePolicyResolutionFailures = (
   tx: IExtendedStorageTransaction,
@@ -10368,6 +10432,7 @@ const verifySinkRequestCeilings = (
         }
         return spaces[0];
       };
+      const grantLog = new Map<string, readonly CfcAtom[]>();
       const outcome = evaluateGatedConfidentiality(
         tx,
         consumed.confidentiality,
@@ -10377,6 +10442,7 @@ const verifySinkRequestCeilings = (
         boundary,
         mode === "enforce" ? "consuming" : "observing",
         destinationSpace,
+        gateMode === "observe" ? { log: grantLog, replay: false } : undefined,
       );
       if (mode === "enforce") {
         if (outcome.exhausted) {
@@ -10404,6 +10470,7 @@ const verifySinkRequestCeilings = (
             boundary,
             (rewritten) => atomsOutsideCeiling(rewritten, ceiling).length === 0,
             "consuming",
+            grantLog,
             destinationSpace,
           );
         }

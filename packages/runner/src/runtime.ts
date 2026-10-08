@@ -786,8 +786,8 @@ export interface RuntimeOptions {
    * sink egress, and at the display fit against the integrity of everything
    * the access consumed, pooled; `observe` decides the same way and records a
    * diagnostic wherever the per-access join decides otherwise; `enforce`
-   * decides on that join. The design is
-   * `docs/plans/cfc-release-gate-integrity.md`.
+   * decides on that join. `docs/development/EXPERIMENTAL_OPTIONS.md` says
+   * what the join keeps.
    */
   cfcReleaseGateIntegrity?: CfcReleaseGateIntegrityMode;
 

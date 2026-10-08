@@ -60,9 +60,15 @@ unscreened item's caveat.
 
 ## Classification
 
-Removing the union across entries and across reads is a **conforming
-implementation** of §5.3, §8.12.8 and §8.10.1.1. It refuses more and persists
-nothing, so it needs no ruling.
+Removing the union across entries and across reads moves the gates toward
+§5.3, §8.12.8 and §8.10.1.1, and refuses more while persisting nothing. The
+join as built is not the literal one, though. Three of its rules are cases the
+specification lacks: a `TransformedBy` one stamp supplies at several
+locations survives, locations with no confidentiality stay out of the join,
+and the floor counts each location as an observation. Each keeps more than the
+literal join and less than the union. By the correspondence procedure that
+makes the `enforce` rung a **semantic gap**: it waits on a ruling, and the
+dial rests at `observe`, which decides as before.
 
 Taken alone it would also refuse honest releases that depend on the union
 today. One example is an endorsed output whose fields are read through one
@@ -87,22 +93,25 @@ the join; `prepare.ts` resolves what an access consumed into locations.
   gate, where the template's clause and its integrity are one stamp's claims,
   though it witnesses nothing for the input witnesses.
 - **The join.** Over the access's confidential locations, a hereditary atom
-  survives when every location carries it. Any other atom survives only where
-  one label-map entry supplies it at every location. Locations resolving one
-  stamp are parts of the one value that stamp labels, and `carriedStampLabel`
-  withdraws a stamp's `TransformedBy` once another writer writes at, above or
-  below it. Without that rule, any read spanning a stamped value's children
-  would drop the stamp. Whether this is the §3.1.6.2 identity case or needs
-  the "what counts as one observation" ruling below is open.
+  survives when every location carries it. Any other atom survives where only
+  one location is observed (a link probe observes the slot it probes), and a
+  `TransformedBy` also where one derived or structure stamp supplies it at
+  every location. Locations resolving one such stamp are parts of the one
+  value it labels: `carriedStampLabel` withdraws the stamp's `TransformedBy`
+  once another writer writes at, above or below it, and withdraws nothing
+  else, which is why no other atom gets the exception. Without it, any read
+  spanning a stamped value's children would drop the stamp.
 - **`requiredIntegrity` at the write input gate.** The floor needs a witness
   every labeled location of every gated read carries, which is §8.10.3's
-  "shared witness key across all consumed observation labels". A location
-  that is provenance plumbing is exempt, as a read that is.
+  "shared witness key across all consumed observation labels", and the pooled
+  witness as well, so the join refuses only more. A location that is
+  provenance plumbing is exempt, as a read that is.
 - **Sink egress and display.** The locations of every read behind the
-  request, or behind the rendered value, are one access. At the display, a
-  cell's stored label is fitted the same way, over the locations of its label
-  view. A view's entries carry no origin, so each location resolves to its
-  most specific entries whatever their component.
+  request, or behind the rendered value, are one access. A cell's stored
+  label is fitted pooled at every rung: a label view carries no origin, folds
+  an ancestor's entry in beside a narrower cell's own, and merges a linked
+  target's view into the slot's, so a join over it would claim too much in
+  one case and too little in another.
 - **Other observations.** A label-metadata observation is a confidential
   location with no integrity. An external content observation carries the
   locations its reads consumed.
@@ -111,7 +120,10 @@ the join; `prepare.ts` resolves what an access consumed into locations.
   diagnostic also says whether evaluating each confidential location on its
   own integrity would admit it: per-location evaluation rescues the release
   that value-intrinsic exchange at observation would preserve, and does not
-  rescue one value's evidence vouching for another.
+  rescue one value's evidence vouching for another. Its evaluations answer
+  grant lookups from the decision's own, so `observe` reads, records and
+  stages nothing the decision did not. At the display it computes the join
+  only for a host that listens.
 
 ## Related leaks the gates do not close
 
@@ -181,7 +193,11 @@ gates. Each is a separate change; none is fixed here.
 - [ ] Enforce gate by gate. Update
       [input witnesses](../specs/cfc-transformed-by-input-witnesses.md) and the
       [conformance statement](../specs/cfc-conformance-statement.md).
-- [ ] File the within-location component join as a specs ruling question
-      (drafted, not filed), with the question of what counts as one
-      observation beside it.
+- [ ] File the specs ruling questions (drafted, not filed): what the join
+      across components within one location keeps; what counts as one
+      observation, and whether locations resolving one stamp are one input;
+      whether a location with nothing to release enters the join, or, more
+      narrowly, whether the join need span only the locations carrying the
+      clause a rule rewrites, so an input whose clause fits the ceiling does
+      not veto another's release.
 - [ ] Archive this plan.

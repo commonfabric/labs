@@ -276,8 +276,13 @@ Deno.test("display fit release-gate integrity", async (t) => {
     });
 
     await t.step(
-      "enforce: refuses a stored label whose root evidence vouches for a child's clause",
+      "enforce: still admits a stored label whose root evidence vouches for a child's clause",
       () => {
+        // A label view carries no origin and folds an ancestor's entry in
+        // beside a narrower cell's own, so the stored fit stays pooled at
+        // every rung. The reads behind a rendered value are what the join
+        // decides.
+
         expect(
           cellLabelRefusal(
             mixed,
@@ -285,7 +290,7 @@ Deno.test("display fit release-gate integrity", async (t) => {
             PUBLIC_ONLY,
             sourcesAt("enforce"),
           ),
-        ).toMatchObject({ labelSource: "stored" });
+        ).toBeUndefined();
       },
     );
   } finally {

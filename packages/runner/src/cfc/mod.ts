@@ -265,7 +265,6 @@ export {
   describeSinkReleaseRefusal,
   flowLabelWorkExists,
   gatedSinkRequestExists,
-  labelViewLocations,
   loadStoredCfcEnvelope,
   prepareBoundaryCommit,
   releaseMergeOptions,
