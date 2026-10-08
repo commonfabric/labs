@@ -72,7 +72,6 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { getLogger } from "@commonfabric/utils/logger";
 import { maxOf, minOf } from "@commonfabric/utils/math";
@@ -112,6 +111,11 @@ import {
   collectExternalSchemaRefHashes,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
+import {
+  deliverSchemaDocumentClosure,
+  linkSchemaRefHashes,
+} from "../schema-doc-delivery.ts";
 import {
   acquireSchemaRegistryLease,
   lookupSchemaDocument,
@@ -5360,11 +5364,51 @@ export class SpaceReplica
    * resolves as delivered (`EventAppendDuplicateError` — events.md §5's
    * duplicate-submission rule). The returned promise settles with the
    * delivery outcome; rendering never waits on it (the echo is local).
+   * The append carries the schema documents its payload's links reference
+   * and this space does not hold, as a transaction writing those links
+   * would (`#withPayloadSchemaDocuments`).
    */
   enqueueEventAppend(
     append: Omit<QueuedEventAppend, "clientSeq"> & { clientSeq?: number },
   ): Promise<EventAppendOutcome> {
-    return this.#ensureEventAppendQueue().enqueue(append);
+    return this.#ensureEventAppendQueue().enqueue(
+      this.#withPayloadSchemaDocuments(append),
+    );
+  }
+
+  /**
+   * Helper for `enqueueEventAppend()`, which returns `append` carrying the
+   * closure of schema documents behind its payload's link schemas, from the
+   * realm registry, less what this replica has confirmed the server holds.
+   * Gated on `contentAddressedSchemas` as a transaction's link scan is: only
+   * that writer stamps a link schema as a reference. Taken at enqueue, while
+   * the registry is certain to hold what the sender's links name; a document
+   * the server comes to hold meanwhile is installed as a no-op.
+   */
+  #withPayloadSchemaDocuments<T extends Pick<QueuedEventAppend, "payload">>(
+    append: T,
+  ): T {
+    if (!getContentAddressedSchemasConfig() || append.payload === undefined) {
+      return append;
+    }
+    const schemaDocuments: Record<string, JSONSchema> = {};
+    const { missing } = deliverSchemaDocumentClosure(
+      linkSchemaRefHashes(append.payload),
+      (hash) => this.isContentAddressedDocPersisted(hash),
+      (hash, schema) => {
+        schemaDocuments[hash] = schema;
+      },
+    );
+    for (const hash of missing.keys()) {
+      logger.warn("event-append-schema-doc-missing", () => [
+        "An event payload's link names a schema document the registry " +
+        "cannot supply:",
+        `cid:${hash}`,
+      ]);
+    }
+    return Object.keys(schemaDocuments).length === 0
+      ? append
+      : { ...append, schemaDocuments };
   }
 
   async resolveEventAttention(
@@ -8056,14 +8100,9 @@ export class SpaceReplica
       // Link positions — the `schema` metadata member was embedded above.
       // An `$alias`-shaped record in an arriving document is plain data,
       // never a delivery obligation.
-      mapLinkSchemas(doc as FabricValue, (schema) => {
-        for (
-          const hash of collectExternalSchemaRefHashes(schema as JSONSchema)
-        ) {
-          embed(hash, id);
-        }
-        return schema;
-      });
+      for (const hash of linkSchemaRefHashes(doc as FabricValue)) {
+        embed(hash, id);
+      }
     }
     for (const [id, document] of registered) {
       for (const dep of collectExternalSchemaRefHashes(document)) {
@@ -9490,14 +9529,9 @@ export class SpaceReplica
           }
         }
       } else {
-        mapLinkSchemas(upsert.doc as FabricValue, (schema) => {
-          for (
-            const hash of collectExternalSchemaRefHashes(schema as JSONSchema)
-          ) {
-            hashes.add(hash);
-          }
-          return schema;
-        });
+        for (const hash of linkSchemaRefHashes(upsert.doc as FabricValue)) {
+          hashes.add(hash);
+        }
       }
       return hashes;
     };
