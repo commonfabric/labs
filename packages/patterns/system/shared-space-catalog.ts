@@ -322,7 +322,74 @@ export const registerSharedSpace = handler<
   (input, { catalog }) => registerSharedSpaceIn(catalog, input),
 );
 
-/** Applies the user's choice only to the revision they observed. */
+/**
+ * Applies the user's membership choice in `catalog` only to the revision they
+ * observed, staging its writes in the transaction of the handler that calls
+ * it, so a handler can apply a choice in the same commit as its own writes.
+ * Returns `conflict` without writing anything when the space has no entry, the
+ * entry's state or action evidence is one this writer doesn't understand, the
+ * observed revision is not the current one, or the next revision would not
+ * fit. Repeating the last applied choice returns `confirmed`. Call it only
+ * from a handler, since a new revision names the handler's event.
+ *
+ * @throws When `change` is not a valid membership action, or `catalog` holds
+ *   something other than a valid catalog.
+ */
+export function changeSharedSpaceMembershipIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  change: SharedSpaceMembershipChange,
+): SharedSpaceMembershipResult {
+  if (
+    !plainObject(change) || !isWellFormedDID(change.space) ||
+    !membershipAction(change)
+  ) {
+    throw new TypeError("Invalid shared-space membership action.");
+  }
+  const current = readSharedSpaceCatalog(catalog).entries[change.space];
+  if (!current) return { status: "conflict", reason: "missing" };
+  if (!membership(current.state)) {
+    return {
+      status: "conflict",
+      reason: "unsupported-state",
+    };
+  }
+  const last = current.lastAction;
+  if (
+    last !== undefined &&
+    (!membershipAction(last) || last.state !== current.state)
+  ) {
+    return { status: "conflict", reason: "action" };
+  }
+  if (last?.id === change.id) {
+    return last.expectedRevision === change.expectedRevision &&
+        last.state === change.state
+      ? { status: "confirmed", space: change.space, id: change.id }
+      : { status: "conflict", reason: "action" };
+  }
+  if (current.revision !== change.expectedRevision) {
+    return {
+      status: "conflict",
+      reason: "revision",
+    };
+  }
+  const revision = nextRevision(current.revision);
+  if (revision === undefined) {
+    return { status: "conflict", reason: "unsupported-revision" };
+  }
+  catalog.key("entries", change.space, "state").set(change.state);
+  catalog.key("entries", change.space, "revision").set(revision);
+  catalog.key("entries", change.space, "lastAction").set({
+    id: change.id,
+    expectedRevision: change.expectedRevision,
+    state: change.state,
+  });
+  return { status: "applied", space: change.space, id: change.id };
+}
+
+/**
+ * Applies the user's choice only to the revision they observed, as
+ * {@link changeSharedSpaceMembershipIn} does.
+ */
 export const changeSharedSpaceMembership = handler<
   SharedSpaceMembershipChange,
   SharedSpaceCatalogState,
@@ -330,51 +397,5 @@ export const changeSharedSpaceMembership = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (change, { catalog }) => {
-    if (
-      !plainObject(change) || !isWellFormedDID(change.space) ||
-      !membershipAction(change)
-    ) {
-      throw new TypeError("Invalid shared-space membership action.");
-    }
-    const current = readSharedSpaceCatalog(catalog).entries[change.space];
-    if (!current) return { status: "conflict", reason: "missing" };
-    if (!membership(current.state)) {
-      return {
-        status: "conflict",
-        reason: "unsupported-state",
-      };
-    }
-    const last = current.lastAction;
-    if (
-      last !== undefined &&
-      (!membershipAction(last) || last.state !== current.state)
-    ) {
-      return { status: "conflict", reason: "action" };
-    }
-    if (last?.id === change.id) {
-      return last.expectedRevision === change.expectedRevision &&
-          last.state === change.state
-        ? { status: "confirmed", space: change.space, id: change.id }
-        : { status: "conflict", reason: "action" };
-    }
-    if (current.revision !== change.expectedRevision) {
-      return {
-        status: "conflict",
-        reason: "revision",
-      };
-    }
-    const revision = nextRevision(current.revision);
-    if (revision === undefined) {
-      return { status: "conflict", reason: "unsupported-revision" };
-    }
-    catalog.key("entries", change.space, "state").set(change.state);
-    catalog.key("entries", change.space, "revision").set(revision);
-    catalog.key("entries", change.space, "lastAction").set({
-      id: change.id,
-      expectedRevision: change.expectedRevision,
-      state: change.state,
-    });
-    return { status: "applied", space: change.space, id: change.id };
-  },
+  (change, { catalog }) => changeSharedSpaceMembershipIn(catalog, change),
 );

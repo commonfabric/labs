@@ -67,6 +67,15 @@ commit as its own writes, and gets back the outcome the handler would return. A
 new entry's revision names the calling handler's event, so only a handler can
 call it.
 
+Likewise, the whole of what `changeSharedSpaceMembership` does is
+`changeSharedSpaceMembershipIn()`, exported beside it, which applies a
+membership choice in the calling handler's transaction and returns the outcome
+the handler would. So a handler can archive or restore an entry in the same
+commit as its own writes. The revision the change names as observed is the one
+the person saw, carried in on the event: a handler that reads the current
+revision and names that one defeats the check. A new revision names the calling
+handler's event, so only a handler can call it.
+
 New entries record `since`, the recipient's admission time in epoch
 milliseconds. Registration records it when admitting the entry; a migration may
 supply a historical value. It is a handler-clock display hint, not a revision,
