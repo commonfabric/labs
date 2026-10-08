@@ -588,10 +588,10 @@ export class PiecesController<T = unknown> {
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
       // root HERE. Opening it already reconciled it against its origin, so a
       // start that still failed is not out of date; the one remaining rescue
-      // is for a root that records no origin at all and whose stored pattern
-      // this runtime cannot load. Roll that one forward to the space's
-      // official system root and retry the start ONCE. Every other failure
-      // rethrows untouched.
+      // is for a root that records no origin at all, that no `inSpace()` call
+      // placed, and whose stored pattern this runtime cannot load. Roll that
+      // one forward to the space's official system root and retry the start
+      // ONCE. Every other failure rethrows untouched.
       if (!start) throw error;
       let healed: Cell<NameSchema>;
       try {
@@ -2548,6 +2548,8 @@ export class PiecesController<T = unknown> {
         // for its kind. One that follows an origin keeps what its owner chose:
         // opening it already tried that origin, and replacing its source with
         // the system default would discard the choice rather than repair it.
+        // One an `inSpace()` call placed keeps its creator's pattern the same
+        // way, and fails closed.
         if (!this.#rootNeedsRollForward(rootToStart)) throw startError;
         return new PieceController<NameSchema>(
           this,
