@@ -7242,12 +7242,15 @@ const verifyInputRequirements = (
       // is not "the inputs were screened". The single-read case reduces to
       // the plain floor. Quantifies over D4's per-write prefix `gating`, not
       // the transaction-global gate-visible read set.
-      // The witness is shared across every consumed observation label
-      // (§8.10.3), and a whole read is a traversal over primitive
-      // observations (§4.6.3), so each location a gated read consumed is
-      // one of those labels: a witness one location carries and another
-      // lacks is no witness for the object. The read's own label is held to
-      // it as well, so the floor admits no witness that label lacks.
+      // Input requirements are checked against the labels on consumed input
+      // observations (§8.10.3), coherently across the consumed descendants
+      // of an object path, one shared witness key per required pattern
+      // (§8.8). A whole read is a traversal over primitive observations
+      // (§4.6.3), so each location a gated read consumed is one of those
+      // labels: a witness one location carries and another lacks is no
+      // witness for the object. §3.1.6.2's join labels a derived output,
+      // not an input check. The read's own label is held to the floor as
+      // well, so the floor admits no witness that label lacks.
       const ok = cfcIntegritySatisfiesFloorCoherently(
         gating.flatMap((read) => [
           read.label?.integrity ?? [],

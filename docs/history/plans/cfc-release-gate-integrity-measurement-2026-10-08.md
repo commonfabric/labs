@@ -105,8 +105,8 @@ dial.
 
 ## Questions for the specification
 
-- What counts as one observation: §5.3 evaluates "for an observation, the
-  effective label", and §8.10.1.1 joins the observations behind one
+- What counts as one observation: §5.3 evaluates an observation's effective
+  label, and §8.10.1.1 joins the observations behind one
   materialized value. Evaluating value-intrinsic rules at each location before
   the join keeps every honest shape above and refuses every leak; joining first
   refuses both.

@@ -17,8 +17,8 @@ compared with a count that the policy's commit step wrote
 The specification's answer to probing a trusted computation does not add
 anything to the output's label. It requires integrity on the computation's
 inputs. In §10's boundary-probing example, the trusted `to_city()` component
-"requires input integrity", and a shifted location computed by untrusted code
-is refused. This plan applies that answer to the code a rule endorses:
+requires integrity on its input, and a shifted location computed by untrusted
+code is refused. This plan applies that answer to the code a rule endorses:
 
 - Each argument of the endorsed code declares the integrity its value must
   carry, using the existing `RequiresIntegrity` authoring type.
@@ -34,11 +34,11 @@ need no new evidence form.
 
 ## What the specification says
 
-- §10, "Modification Attack (Boundary Probing)": the trusted component
-  "requires input integrity", and inputs computed by untrusted code are
-  refused.
+- §10, the boundary-probing attack: the trusted component requires integrity
+  on its input, and inputs computed by untrusted code are refused.
 - §3.8.4: a derived release condition needs trusted code that evaluates the
-  evidenced values directly, with evidence "on the evaluated guard values".
+  evidenced values directly, with the evidence on the guard values it
+  evaluates.
 - §8.10.3 defines input requirements per path of an invocation's input schema:
   - each is checked against every consumed read overlapping the path, public
     reads included;
@@ -50,8 +50,8 @@ need no new evidence form.
 - §8.7.2's `verifyEndorsedTransformation` honors a schema's endorsement claim
   only for the code that ran. Nothing yet says the same of an input schema.
 - §4.6.1 models a node's inputs as a map of cells, with no input schema.
-- specs#51 (pending) adds to §8.7.2 that `codeHash` alone "justifies only what
-  holds of every output of that code whatever it was fed". It requires a
+- specs#51 (pending) adds to §8.7.2 that `codeHash` alone justifies only what
+  holds of every output of the code, whatever it was fed. It requires a
   release that rests on what the code consumed to guard on a witness-bearing
   form. Requirements the identity binds hold of every output of the code, so
   an identity guard rests on them only if that sentence allows it.

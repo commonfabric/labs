@@ -1,12 +1,11 @@
 /**
  * What a release gate evaluates exchange rules over (spec §5.3): the label an
  * access consumed, taken one observation at a time. §4.6.3 has no primitive
- * read of a whole structured value — "Structured materialization is a
- * derived traversal over primitive observations, and the resulting label is
- * the join of the observations actually consumed" — and §5.3 applies a
- * value-intrinsic rule "at observation", on the evidence bound to the value
- * observed there, because "the class-aware meet drops it at the next
- * transformation". So a gate runs the value-intrinsic rules at each location
+ * read of a whole structured value: reading one is a traversal over primitive
+ * observations, labeled by the join of the observations it consumed. §5.3
+ * applies a value-intrinsic rule at observation, on the evidence bound to the
+ * value observed there, because the class-aware join drops that evidence at
+ * the next transformation. So a gate runs the value-intrinsic rules at each location
  * an access consumed, on that location's own label, joins what they leave,
  * and runs every rule over the join (§8.10.1.1).
  *
