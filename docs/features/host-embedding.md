@@ -541,27 +541,32 @@ every value the person is agreeing to in view.
 
 This is a trusted host capability that mints trusted events. The host calls the
 returned function, or `sendReviewed()`, only from the control's real user-input
-path, with exactly the values the control showed and the surface and action
-from the control's own definition, and keeps it away from pattern code, loaded
-web content, automation and agent interfaces, generic IPC, URL handlers, and
-restored state. The worker answers `cell:send-reviewed` from any client
-attached to it, so the host's runtime connection, and any relay carrying it, is
-part of the host, held to the same boundary: anything attached to the worker
-can grant `OWNER` in any space but the user's Home where the user holds it. A host that cannot hold that
-boundary renders the pattern's reviewed surface for the write instead. The
-generic `cell:send` request marks nothing. Pattern code reaches neither door:
-pattern source cannot import the module or the runtime client, and no module it
-can import exports the binding or the renderer-trust mark.
+path, with exactly the values the control showed and the surface and action from
+the control's own definition, and keeps it away from pattern code, loaded web
+content, automation and agent interfaces, generic IPC, URL handlers, and
+restored state. The worker answers `cell:send-reviewed` from any client attached
+to it, so the host's runtime connection, and any relay carrying it, is part of
+the host, held to the same boundary: anything attached to the worker can grant
+`OWNER` in any space where the user holds it, other than the user's Home space.
+A host that cannot hold that boundary renders the pattern's reviewed surface for
+the write instead. The generic `cell:send` request marks nothing. Pattern code
+reaches neither door: pattern source cannot import the module or the runtime
+client, and no module it can import exports the binding or the renderer-trust
+mark.
 
 The CFC specification names such a control a host-reviewed control, in §8.15.9.1
 of `cfc/08-15-write-authority.md`, "Attested UI Evidence", which
-commonfabric/specs pull request 55 proposes. It holds the host to the boundary
-above: "The host MUST take the surface and action from the control's own
-definition when it binds the control, never from an event or a payload; MUST
-mint evidence only from that control's own user-input path, with exactly the
-values the control displayed; and MUST keep the minting path out of reach of
-pattern code, loaded content, automation and agent interfaces, generic message
-channels, URL handlers, and restored state."
+commonfabric/specs pull request 55 proposes: "Evidence from either component is
+gesture evidence, and every requirement reads the two alike." It holds the host
+to the boundary above, among other obligations: the host "MUST take the surface
+and action from the control's own definition when it binds the control, never
+from an event or a payload", mints evidence only from the control's own
+user-input path, once for each act, and "MUST hold any connection or relay that
+carries the evidence to the runtime to the same terms, as part of the host". In
+place of a render binding it describes a host attestation of the control's
+reviewed definition and the values it displayed (`controlRef`,
+`displayDigest`). This runtime builds neither that attestation nor a renderer's
+render binding, and no check here reads either.
 
 **Tests.** `packages/runner/test/native-ui.test.ts` covers a gated write
 committing through a real handler and one bound to another action being
