@@ -664,9 +664,9 @@ export class PiecesController<T = unknown> {
 
   /**
    * Whether `root` is at the address the space's genesis commit reserves for
-   * the root an `inSpace(..., { root: true })` call places, as a profile and a
-   * standalone room are. Such a root was placed by its creator's pattern, so
-   * the space's system root is no replacement for it.
+   * the root an `inSpace(..., { root: true })` call places. Such a root was
+   * placed by its creator's pattern, so the space's system root is no
+   * replacement for it.
    */
   #isInSpaceRoot(root: Cell<NameSchema>): boolean {
     return root.equalLinks(

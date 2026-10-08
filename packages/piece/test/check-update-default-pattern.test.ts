@@ -1096,8 +1096,7 @@ describe("opening a space root", () => {
 
   describe("a root an `inSpace()` call placed", () => {
     // A root at the address the space's genesis reserves for an `inSpace()`
-    // root, as a profile is, was placed by its creator's pattern, and records
-    // no origin. The space's system root is no replacement for it, so each
+    // root was placed by its creator's pattern, and records no origin. The space's system root is no replacement for it, so each
     // heal that would roll a root forward to that system root leaves this one
     // as it is and surfaces the failure.
 

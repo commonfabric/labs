@@ -644,10 +644,10 @@ origin. A root that records no origin and cannot start is still rolled forward
 to its space's official system source, because that is a repair of an unopenable
 space rather than an update, and it stamps the origin it rolled to. A root at
 the address the space's genesis commit reserves for the root an
-`inSpace(..., { root: true })` call places, as a profile is, is the exception:
-its creator's pattern placed it, the system source is no replacement for it, and
-a start that fails leaves it as it is, whether its pattern cannot load or CFC
-migration rejects its setup repair.
+`inSpace(..., { root: true })` call places is the exception: its creator's
+pattern placed it, the system source is no replacement for it, and a start that
+fails leaves it as it is, whether its pattern cannot load or CFC migration
+rejects its setup repair.
 New spaces create their root through the ordinary source-creation transition
 and link that new piece as the space root.
 
