@@ -382,11 +382,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * least READ if this manager will open the space. `genesis.root` is the
    * reservation itself, or a function computing it from the new space's DID,
    * which nothing knows before the key is generated. It requires a host that
-   * supports root reservations; its complete source, cause,
+   * advertises the `genesisRoot` server flag; its complete source, cause,
    * arguments, and attached source roots are snapshotted in the genesis
    * receipt, and a later mount that declares a root intent must match it.
-   * `genesis.spaceKind` requires a host that advertises `spaceKind`, and is
-   * sealed the same way (`docs/features/space-kinds.md`).
+   * `genesis.spaceKind` requires a host that advertises the `spaceKind` server
+   * flag, and is sealed the same way (`docs/features/space-kinds.md`).
    *
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
