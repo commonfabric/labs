@@ -4,11 +4,15 @@
  * the user's home space, where `#chatManager` finds it, so everything it holds
  * is private to its user.
  *
- * It creates each room in a space of its own with `inSpace()`, which grants its
+ * It creates each room with `inSpace()` as the root of a space of its own,
+ * which declares itself a `fabrichat-room`. The space grants the room's
  * creator and each other member named at creation OWNER, and no one else,
  * except that a group made joinable by its link grants everyone WRITE as well.
  * After that, who is in the space is the space's business: any OWNER may add
  * someone from the room's own rendering, and the manager never changes it.
+ *
+ * The room keeps its space's participants itself, and the manager adds its
+ * user to them when it creates or accepts a room.
  */
 import {
   type Cell,
@@ -21,10 +25,12 @@ import {
   eventKey,
   handler,
   type InSpaceGrants,
+  isWellFormedDID,
   NAME,
   pattern,
   principalOf,
   spaceAccess,
+  spaceOf,
   Stream,
   UI,
   VIEWS,
@@ -35,6 +41,7 @@ import {
 import FabriChatRoom from "./room.tsx";
 import {
   type AboutRecord,
+  CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatDisplay,
@@ -163,6 +170,9 @@ export interface ManagerActState {
   /** Notices waiting for a client to deliver them. */
   outgoingNotices: NoticesCell;
 
+  /** Adds this user's profile to a room's participants. */
+  joinRooms: Stream<JoinRoomsEvent>;
+
   /** The session's group draft, which a rendered create reads. */
   draft: Writable<GroupDraft>;
 
@@ -225,6 +235,47 @@ const lists = (rooms: RoomsCell, room: Cell<ChatRoomLink>): boolean =>
     equals(entry.room, room)
   );
 
+/** What joining a room asks: the room, and the profile to join it as. */
+export interface JoinRoomsEvent {
+  /** The room to join. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  room: Cell<ChatRoomLink>;
+
+  /** This user's profile. */
+  profile: Cell<ChatProfile>;
+}
+
+/** The room's stream that adds a profile to its participants. */
+function joinStreamOf(
+  room: Cell<ChatRoomLink>,
+): Cell<{ addParticipant: Stream<{ profile: Cell<ChatProfile> }> }>;
+function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
+  return room;
+}
+
+/**
+ * Adds the event's profile to the room's participants, through the room's own
+ * `addParticipant`, the one writer its roster admits, so that whoever creates
+ * or accepts a room is listed in it without a step of their own. It runs as an
+ * event of its own, queued by the one that creates or accepts the room, so
+ * that the room's streams exist when it sends. A profile that hasn't resolved
+ * is added to nothing.
+ */
+const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
+  (event) => {
+    // TODO(danfuzz): A stop-gap. A member whose manager neither created nor
+    // accepted the room is never sent here, so isn't on the room's roster,
+    // and is shown among its participants only as an author, once they write.
+    // Add each member once their manager lists the room without a step of
+    // their own.
+    const profile = event?.profile?.resolveAsCell();
+    if (profile === undefined || profile.get() === undefined) return;
+    joinStreamOf(event.room).key("addParticipant").send({ profile });
+  },
+);
+
 /**
  * A room's result, as the link an index entry holds. The room is created
  * where the link can't be typed as a cell, and stored as a link to it.
@@ -260,10 +311,15 @@ interface RoomOptions {
 }
 
 /**
- * Creates a room in a space of its own, and its notices, and records its
- * entry, all in one transaction: the space's grants are part of creating it,
- * so nothing has to commit apart. A notice for each other member is queued for
- * a client to deliver.
+ * Creates a room in a space of its own, as the space's root, and its notices,
+ * and records its entry, all in one transaction: the space's grants and its
+ * declared kind are part of creating it, so nothing has to commit apart. A
+ * notice for each other member is queued for a client to deliver, and adding
+ * this user to the room's participants is queued to follow.
+ *
+ * The space's name is pending on the first run, which the runtime discards and
+ * runs again with the name resolved. Nothing is sent until the name resolves,
+ * since a discarded run's sends may still be delivered.
  */
 const createRoom = (
   state: ManagerActState,
@@ -281,7 +337,11 @@ const createRoom = (
     ...(joinableByLink ? [["*", "WRITE"]] : []),
   ]) as InSpaceGrants;
   const room = roomLinkOf(
-    FabriChatRoom.inSpace(undefined, { grants })({
+    FabriChatRoom.inSpace(undefined, {
+      grants,
+      root: true,
+      spaceKind: CHAT_ROOM_OFFER_KIND,
+    })({
       about: {
         kind,
         createdAt,
@@ -296,6 +356,9 @@ const createRoom = (
       recipient,
     });
   });
+  if (isWellFormedDID(spaceOf(room)) && state.myProfile !== undefined) {
+    state.joinRooms.send({ room, profile: state.myProfile });
+  }
   const entry: ChatIndexEntry = {
     room,
     kind,
@@ -336,10 +399,28 @@ const performManagerAct = (
     });
     return;
   }
+  // So is accepting one, whose acceptance adds this user's profile to the
+  // room's participants.
+  if (act === "accept" && state.myProfile?.get() === undefined) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason: "Accepting a chat needs a profile.",
+    });
+    return;
+  }
 
   if (act === "delivered") {
     const id = event?.id ?? state.id;
-    if (typeof id !== "string") return;
+    // An event's type doesn't refuse an event that lacks a field it requires,
+    // so each act refuses the request itself, where a rendered control's
+    // binding doesn't supply the field.
+    if (typeof id !== "string") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The request names no notice.",
+      });
+      return;
+    }
     outgoingNotices.set(
       ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((
         notice,
@@ -410,6 +491,13 @@ const performManagerAct = (
       });
       return;
     }
+    if (draft === undefined && !Array.isArray(event?.members)) {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "A group's members must be listed.",
+      });
+      return;
+    }
     const listed = event?.members ?? principalsIn(draft?.members ?? "");
     const notPrincipals = listed.filter((member) => !isPrincipalDID(member));
     if (notPrincipals.length > 0) {
@@ -437,7 +525,13 @@ const performManagerAct = (
   }
 
   const room = event?.room ?? state.room;
-  if (room === undefined) return;
+  if (room === undefined) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason: "The request names no room.",
+    });
+    return;
+  }
 
   if (act === "forget") {
     rooms.set(
@@ -496,6 +590,9 @@ const performManagerAct = (
   if (!lists(rooms, room)) {
     rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), entry]);
   }
+  if (state.myProfile !== undefined) {
+    state.joinRooms.send({ room, profile: state.myProfile });
+  }
   if (
     kind === "direct" && counterpart !== undefined &&
     direct.key(counterpart).get() === undefined
@@ -518,7 +615,8 @@ export const commitStart = handler<ManagerStreamEvent, ManagerActState>(
 /**
  * Performs one of the manager's other acts: accepting a room, forgetting one,
  * or reporting a notice delivered. None of them needs a gesture, since each
- * changes only this user's own manager.
+ * changes only this user's own manager, except that accepting a room also
+ * adds this user to its participants, which anyone in its space may do.
  */
 export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
   (event, state) => performManagerAct(event, state),
@@ -617,6 +715,7 @@ export const FabriChatManagerCore = pattern<
       direct,
       requests,
       outgoingNotices,
+      joinRooms: joinRooms({}),
       draft,
       startRefusal,
     };

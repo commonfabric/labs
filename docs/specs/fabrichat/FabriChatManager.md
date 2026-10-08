@@ -28,20 +28,29 @@ keep the two consistent: `direct` holds one entry per counterpart, including
 forgotten rooms, and `rooms` can also hold a second direct room with the same
 counterpart after crossing creations.
 
+Creating or accepting a room also adds this user's profile to the room's
+participants, through the room's `addParticipant`, from an event of its own
+that follows; accepting a room is refused while the user has no profile.
+
 ## Creating a room
 
 `openDirect` (when there is no entry for the counterpart) and `createGroup`
-create a space for the conversation, with the room as its chat, in four steps:
+create a space for the conversation, with the room as its root, in four steps:
 
 1. Create the conversation's space, with only this user granted (OWNER), and
-   instantiate `FabriChatRoom` there with its `about`. The space's root, its
-   default pattern, comes from its host the first time someone opens it.
+   instantiate `FabriChatRoom` there with its `about`, as the space's root, in
+   a space that declares itself a `fabrichat-room`
+   (`inSpace(undefined, { grants, root: true, spaceKind: "fabrichat-room" })`).
+   The room is then a social space in its own right: opening the space shows
+   it, and it keeps the space's participants itself.
 2. Grant each other member OWNER on the room's space, by principal, so any
    member may add others.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
    deliver.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
-   request `done`.
+   request `done`. Adding this user to the room's participants follows, once
+   the space's name has resolved: the run that sees it pending is discarded and
+   run again, and its sends could still be delivered.
 
 Each step is recorded under the request's `requestId` as it completes, which is
 how a repeated request resumes where the last attempt stopped instead of
@@ -60,8 +69,8 @@ is what labels it `authored-by` this user.
   `represents-principal` label, which
   `principalOf(profile, "represents-principal")` reads
   ([reading the principal a label attests](../../features/principal-of.md)).
-  A shared space's member set pairs each principal with a profile (see [shared
-  spaces](README.md#shared-spaces)), so starting a conversation with someone
+  A social space's member set pairs each principal with a profile (see [social
+  spaces](README.md#social-spaces)), so starting a conversation with someone
   found in one needs nothing more.
 
 ### First contact

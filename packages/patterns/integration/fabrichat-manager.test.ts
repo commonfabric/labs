@@ -1,9 +1,10 @@
 /**
- * The real FabriChat manager, creating rooms in spaces of their own. Which
- * space a room lives in is something a pattern can't read, so this is checked
- * here, against a runtime and storage of the test's own;
- * `../fabrichat/creation.test.tsx` covers the rest of what the manager does
- * with the rooms it creates.
+ * The real FabriChat manager, creating rooms in spaces of their own, each its
+ * space's root, in a space that declares itself a `fabrichat-room`. Which
+ * space a room lives in, what that space's root is, and what kind the space
+ * declares are things a pattern can't read, so they are checked here, against
+ * a runtime and storage of the test's own; `../fabrichat/creation.test.tsx`
+ * covers the rest of what the manager does with the rooms it creates.
  */
 
 import { expect } from "@std/expect";
@@ -12,7 +13,12 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
-import { Runtime } from "@commonfabric/runner";
+import {
+  type Cell,
+  IN_SPACE_ROOT_CAUSE,
+  isCell,
+  Runtime,
+} from "@commonfabric/runner";
 import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
@@ -33,6 +39,9 @@ const CAROL = "did:key:z6MkCaro1";
 const MANAGER_PATH = fromFileUrl(
   new URL("../fabrichat/manager.tsx", import.meta.url),
 );
+
+// The patterns package, which the manager's imports reach across.
+const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
 
 const RESULT_CAUSE = "fabrichat manager";
 
@@ -55,6 +64,22 @@ const startClick = (
   markRendererTrustedEvent(click);
   return click;
 };
+
+// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
+// because a room's participants link only a document that carries a label.
+const profileSchema = {
+  type: "object",
+  properties: { name: { type: "string" } },
+  ifc: { addIntegrity: ["fabrichat-test-profile"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
+
+// Reads a room's participants as links, not copies.
+const participantListSchema = {
+  type: "array",
+  items: { type: "unknown", asCell: ["cell"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
 
 // Reads an index entry with its room as a link, not a copy.
 const entryListSchema = {
@@ -102,7 +127,7 @@ describe("fabrichat-manager", () => {
     const program = {
       ...await resolveLocalProgram(
         (resolver) => runtime.harness.resolve(resolver),
-        { main: MANAGER_PATH },
+        { main: MANAGER_PATH, root: PATTERNS },
       ),
       mainExport: "FabriChatManagerCore",
     };
@@ -114,7 +139,7 @@ describe("fabrichat-manager", () => {
     const profile = runtime.getCell<{ name: string }>(
       home,
       "profile",
-      undefined,
+      profileSchema,
       tx,
     );
     profile.set({ name: "Tester" });
@@ -148,8 +173,74 @@ describe("fabrichat-manager", () => {
     const rooms = () =>
       // deno-lint-ignore no-explicit-any
       manager.key("rooms").asSchema(entryListSchema).get() as any[];
-    return { manager, send, rooms };
+    return { manager, send, rooms, profile };
   };
+
+  it("creates each room as its space's root, at the address the space's genesis reserves for one", async () => {
+    const { send, rooms } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
+    });
+    const listed = rooms();
+    expect(listed.length).toBe(2);
+    for (const entry of listed) {
+      const room = entry.room.resolveAsCell();
+      const space = room.getAsNormalizedFullLink().space;
+      // Read as a host vetting an offer of the room reads it: the space's
+      // root, as its space cell links it.
+      const root = await runtime.getSpaceCell(space).key("defaultPattern")
+        .pull();
+      if (!isCell(root)) throw new Error("The room's space has no root.");
+      expect(root.space).toBe(space);
+      expect(root.getAsNormalizedFullLink().path).toEqual([]);
+      expect(root.equalLinks(runtime.getCell(space, IN_SPACE_ROOT_CAUSE)))
+        .toBe(true);
+      expect(root.equalLinks(room)).toBe(true);
+    }
+  });
+
+  it("lists this user among the participants of each room it creates", async () => {
+    const { send, rooms, profile } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
+    });
+    const listed = rooms();
+    expect(listed.length).toBe(2);
+    for (const entry of listed) {
+      const room = entry.room.resolveAsCell();
+      await room.pull();
+      const participants = room.key("participants")
+        .asSchema(participantListSchema).get() as Cell<unknown>[];
+      expect(participants.length).toBe(1);
+      expect(participants[0].equalLinks(profile)).toBe(true);
+    }
+  });
+
+  it("declares each room's space a `fabrichat-room`", async () => {
+    const { send, rooms } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
+    });
+    const spaces = rooms().map((entry) =>
+      entry.room.getAsNormalizedFullLink().space
+    );
+    expect(spaces.length).toBe(2);
+    for (const space of spaces) {
+      expect(await runtime.spaceKind(space)).toBe("fabrichat-room");
+    }
+  });
 
   it("creates each room in a space of its own that grants its members alone", async () => {
     const { send, rooms } = await startManager();

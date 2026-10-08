@@ -1235,6 +1235,17 @@ export class StorageManager implements IStorageManager {
 
   #settings: IRemoteStorageProviderSettings;
   #providers = new Map<MemorySpace, Provider>();
+
+  /**
+   * The kind each space declares, as {@link spaceKind} read it in a session
+   * of its own, for a space whose provider's session opened before the space
+   * had history. A space with history keeps its kind, so an entry never goes
+   * stale.
+   */
+  #spaceKindsReadAfresh = new Map<
+    MemorySpace,
+    MemoryV2Client.DeclaredSpaceKind
+  >();
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
@@ -1613,30 +1624,41 @@ export class StorageManager implements IStorageManager {
    * The space's key pair is generated here from random data. It opens one
    * session, as the space, through the same route every later session for
    * the DID takes, and signs one commit: `acl` as the space's access-control
-   * document, and `root` as its reserved root pattern when one is given. The
-   * commit reads the document at sequence zero, so it lands only on a space
-   * with no history. The memory client resubmits the identical commit after a
-   * lost connection until the server confirms or refuses it. The key is held
-   * by nothing but this call, and is dropped when the call returns.
+   * document, `genesis.root` as its reserved root pattern when one is given,
+   * and `genesis.spaceKind` as its declared kind when one is given. The
+   * session declares the same root and kind, which the server holds the
+   * commit to. The commit reads the document at sequence zero, so it lands
+   * only on a space with no history. The memory client resubmits the
+   * identical commit after a lost connection until the server confirms or
+   * refuses it. The key is held by nothing but this call, and is dropped when
+   * the call returns.
    */
-  async createSpace(acl: ACL, root?: GenesisRoot): Promise<MemorySpace> {
+  async createSpace(
+    acl: ACL,
+    genesis: { root?: GenesisRoot; spaceKind?: string } = {},
+  ): Promise<MemorySpace> {
+    const { root, spaceKind } = genesis;
+    const declarations = {
+      ...(root === undefined ? {} : { genesisRoot: root }),
+      ...(spaceKind === undefined ? {} : { spaceKind }),
+    };
     const key = await Identity.generate();
     const space = key.did() as MemorySpace;
     const aclId = aclDocId(space);
     const { client, session } = await this.#sessionFactory.create(
       space,
       key,
-      {
-        sessionId: crypto.randomUUID(),
-        ...(root === undefined ? {} : { genesisRoot: root }),
-      },
+      { sessionId: crypto.randomUUID(), ...declarations },
     );
     try {
       if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
         throw new Error("Host does not support genesis root reservations");
       }
+      if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
+        throw new Error("Host does not support declared space kinds");
+      }
       await session.transact({
-        ...(root === undefined ? {} : { genesisRoot: root }),
+        ...declarations,
         localSeq: 1,
         reads: {
           confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
@@ -1808,7 +1830,38 @@ export class StorageManager implements IStorageManager {
       0;
   }
 
+  /** @inheritDoc */
+  async spaceKind(space: MemorySpace): Promise<string | undefined> {
+    const declared = await this.#openProvider(space).declaredSpaceKind() ??
+      this.#spaceKindsReadAfresh.get(space);
+    if (declared !== undefined) return declared.kind;
+    // The space's session opened before the space had any history, so it was
+    // told nothing of the kind, and stays open without being told. A session
+    // of its own, opened now, is told the kind as the space stands, and is
+    // closed however the read ends.
+    const { client, session } = await this.#sessionFactory.create(
+      space,
+      this.as,
+      {
+        sessionId: crypto.randomUUID(),
+        ...this.#sessionDescriptorFields(),
+      },
+    );
+    try {
+      const afresh = session.declaredSpaceKind;
+      if (afresh !== undefined) this.#spaceKindsReadAfresh.set(space, afresh);
+      return afresh?.kind;
+    } finally {
+      await client.close();
+    }
+  }
+
   open(space: MemorySpace): IStorageProvider {
+    return this.#openProvider(space);
+  }
+
+  /** Helper for {@link open}, which returns the provider it opens. */
+  #openProvider(space: MemorySpace): Provider {
     // A manager reused after close() starts a new session; retention
     // follows it.
     this.#schemaRegistryLease ??= acquireSchemaRegistryLease();
@@ -3268,6 +3321,11 @@ class Provider
         throw error;
       },
     );
+  }
+
+  /** See `SpaceReplica.declaredSpaceKind()`. */
+  declaredSpaceKind(): Promise<MemoryV2Client.DeclaredSpaceKind | undefined> {
+    return this.#followReplacement((replica) => replica.declaredSpaceKind());
   }
 
   operationCodecs(): Promise<readonly string[]> {
@@ -4782,6 +4840,24 @@ export class SpaceReplica
   ): Promise<OperationFieldSnapshot> {
     const { session } = await this.#activeSessionHandle();
     return (await session.queryOperationField(query)).field;
+  }
+
+  /**
+   * What the memory server told this replica's session, when it last opened,
+   * of the kind the space declares in its genesis commit; see
+   * `SpaceSession.declaredSpaceKind`.
+   *
+   * @throws If the session cannot be opened, or if the memory server does not
+   *   advertise `spaceKind`.
+   */
+  async declaredSpaceKind(): Promise<
+    MemoryV2Client.DeclaredSpaceKind | undefined
+  > {
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.spaceKind !== true) {
+      throw new Error("memory server does not report a space's declared kind");
+    }
+    return session.declaredSpaceKind;
   }
 
   async operationCodecs(): Promise<readonly string[]> {

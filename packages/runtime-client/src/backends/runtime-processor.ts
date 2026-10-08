@@ -95,6 +95,7 @@ import {
   type SigilLink,
   SlugResolutionError,
   SpaceHostValidationError,
+  transactionFailureMessage,
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForResolvedCell,
@@ -2194,7 +2195,7 @@ export class RuntimeProcessor {
       return this.#requireCellCommit(commit).then(async () => {
         const handling = (await handled.promise).status();
         if (handling.status === "error") {
-          throw new Error(handling.error.message);
+          throw new Error(transactionFailureMessage(handling.error));
         }
       });
     }

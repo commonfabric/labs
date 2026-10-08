@@ -29,6 +29,7 @@
     "./v2/presence": "./v2/presence.ts",
     "./v2/message-compression": "./v2/message-compression.ts",
     "./v2/genesis-root": "./v2/genesis-root.ts",
+    "./v2/space-kind": "./v2/space-kind.ts",
     "./v2/engine": "./v2/engine.ts",
     "./v2/execution-lease": "./v2/execution-lease.ts",
     "./v2/execution-outbox": "./v2/execution-outbox.ts",

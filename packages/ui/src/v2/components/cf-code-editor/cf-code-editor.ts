@@ -94,6 +94,12 @@ import {
   MentionableSchema,
 } from "../../core/mentionable.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
+import {
+  type CFTheme,
+  cfThemeContext,
+  defaultTheme,
+  resolveColorScheme,
+} from "../theme-context.ts";
 import { type StoredFile, uploadFile } from "../../utils/file-cell-storage.ts";
 import { mentionIdFromCellId } from "../../utils/mention-id.ts";
 import {
@@ -277,7 +283,10 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   (e.g. "700px", "50rem"). Default: undefined
  * @attr {number} tabSize - Tab size (spaces shown for a tab, default: 2)
  * @attr {boolean} tabIndent - Indent on Tab key (default: true)
- * @attr {"light"|"dark"} theme - Editor theme mode; "dark" enables oneDark.
+ * @attr {"light"|"dark"} theme - "dark" paints the editor with oneDark's own
+ *   palette. "light", the default, paints it with the `--cf-theme-*` tokens and
+ *   follows the nearest `<cf-theme>`'s color scheme, light or dark; wrap the
+ *   editor in its own `<cf-theme>` to give it a different scheme from the page.
  * @attr {"code"|"prose"} mode - Editor mode; "prose" enables markdown prose editing.
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
@@ -401,6 +410,17 @@ export class CFCodeEditor extends BaseElement {
   @consume({ context: spaceContext, subscribe: true })
   @property({ attribute: false })
   accessor contextSpace: DID | undefined = undefined;
+
+  /**
+   * The nearest `<cf-theme>`'s theme. Its color scheme tells CodeMirror
+   * whether it sits on a dark page, so the caret, selection, tooltips and
+   * panels CodeMirror draws itself stay legible on the surface the
+   * `--cf-theme-*` tokens paint. With no `<cf-theme>` above, those tokens
+   * fall back to their light values, and so does this.
+   */
+  @consume({ context: cfThemeContext, subscribe: true })
+  @property({ attribute: false })
+  accessor ambientTheme: CFTheme = { ...defaultTheme, colorScheme: "light" };
 
   private _editorView: EditorView | undefined;
   private _lang = new Compartment();
@@ -2756,11 +2776,12 @@ export class CFCodeEditor extends BaseElement {
     }
 
     // Update theme plugin
-    if (changedProperties.has("theme") && this._editorView) {
+    if (
+      (changedProperties.has("theme") ||
+        changedProperties.has("ambientTheme")) && this._editorView
+    ) {
       this._editorView.dispatch({
-        effects: this._themeComp.reconfigure(
-          this.theme === "dark" ? oneDark : [],
-        ),
+        effects: this._themeComp.reconfigure(this._themeExtension()),
       });
     }
 
@@ -2977,6 +2998,17 @@ export class CFCodeEditor extends BaseElement {
     ];
   }
 
+  /**
+   * oneDark when `theme` asks for it; otherwise CodeMirror's own light or
+   * dark base, picked by the ambient color scheme.
+   */
+  private _themeExtension(): Extension {
+    if (this.theme === "dark") return oneDark;
+    return EditorView.darkTheme.of(
+      resolveColorScheme(this.ambientTheme.colorScheme) === "dark",
+    );
+  }
+
   private _getModeExtension(): Extension {
     if (this.mode !== "prose") return [];
 
@@ -3056,8 +3088,8 @@ export class CFCodeEditor extends BaseElement {
             : [] as unknown as Extension;
         })(),
       ),
-      // Theme (dark -> oneDark)
-      this._themeComp.of(this.theme === "dark" ? oneDark : []),
+      // Theme (dark -> oneDark, else the ambient color scheme)
+      this._themeComp.of(this._themeExtension()),
       // Prose/code mode extensions
       this._modeComp.of(this._getModeExtension()),
       this._proseMarkdownComp.of(

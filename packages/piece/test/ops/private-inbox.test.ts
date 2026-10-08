@@ -25,8 +25,9 @@ const identity = await Identity.fromPassphrase("private inbox adoption");
 const someoneElse = (await Identity.fromPassphrase("someone else")).did();
 
 // A Home pattern reduced to the fields the host reads and the stream it sends,
-// whose handler records what it is sent. `defaultProfile` is a slot holding the
-// default under `profile`, as Home's is.
+// whose handler records what it is sent: the inbox to adopt, the deciding
+// profile, and the refusal, its reason and inbox. `defaultProfile` is a slot
+// holding the default under `profile`, as Home's is.
 const program: RuntimeProgram = {
   main: "/home.tsx",
   files: [{
@@ -38,17 +39,29 @@ type Pointer = { piece?: Cell<{ name?: string }> };
 
 type Named = { piece?: Cell<{ inbox?: Pointer }> };
 
+type Refused = { reason?: string; piece?: Cell<{ name?: string }> };
+
 const ensurePrivateInbox = handler<
-  { adopt?: Cell<{ name?: string }>; from?: Cell<{ inbox?: Pointer }> },
+  {
+    adopt?: Cell<{ name?: string }>;
+    from?: Cell<{ inbox?: Pointer }>;
+    refused?: { reason: string; inbox: Cell<{ name?: string }> };
+  },
   {
     ensured: Writable<number>;
     adopted: Writable<Pointer>;
     decidedBy: Writable<Named>;
+    refused: Writable<Refused>;
   }
->((event, { ensured, adopted, decidedBy }) => {
+>((event, { ensured, adopted, decidedBy, refused }) => {
   ensured.set(ensured.get() + 1);
   adopted.set(event?.adopt === undefined ? {} : { piece: event.adopt });
   decidedBy.set(event?.from === undefined ? {} : { piece: event.from });
+  refused.set(
+    event?.refused === undefined
+      ? {}
+      : { reason: event.refused.reason, piece: event.refused.inbox },
+  );
 });
 
 export default pattern(() => {
@@ -61,6 +74,7 @@ export default pattern(() => {
   const ensured = new Writable(0).for("ensured");
   const adopted = new Writable<Pointer>({}).for("adopted");
   const decidedBy = new Writable<Named>({}).for("decidedBy");
+  const refused = new Writable<Refused>({}).for("refused");
   return {
     privateInbox,
     profiles,
@@ -69,7 +83,13 @@ export default pattern(() => {
     ensured,
     adopted,
     decidedBy,
-    ensurePrivateInbox: ensurePrivateInbox({ ensured, adopted, decidedBy }),
+    refused,
+    ensurePrivateInbox: ensurePrivateInbox({
+      ensured,
+      adopted,
+      decidedBy,
+      refused,
+    }),
   };
 });`,
   }],
@@ -191,6 +211,29 @@ describe("ensurePrivateInboxOf()", () => {
     return pointer?.piece;
   }
 
+  /**
+   * The refusal the event Home's handler was last sent names, as its reason
+   * and the address of the inbox refused, if any.
+   */
+  async function refusedSent(): Promise<
+    { reason?: string; inbox?: { space: string; id: string } } | undefined
+  > {
+    const sent = await home.key("refused" as never).asSchema({
+      type: "object",
+      properties: {
+        reason: { type: "string" },
+        piece: { type: "unknown", asCell: ["cell"] },
+      },
+    }).pull() as { reason?: string; piece?: Cell<unknown> } | undefined;
+    if (sent?.reason === undefined && sent?.piece === undefined) {
+      return undefined;
+    }
+    return {
+      reason: sent.reason,
+      inbox: sent.piece === undefined ? undefined : addressOf(sent.piece),
+    };
+  }
+
   /** How many adoption refusals have been logged. */
   function refusalsLogged(): number {
     return getLoggerCountsBreakdown()["piece.private-inbox"]
@@ -208,6 +251,7 @@ describe("ensurePrivateInboxOf()", () => {
     expect(named === undefined ? undefined : addressOf(named)).toEqual(
       addressOf(inbox),
     );
+    expect(await refusedSent()).toBeUndefined();
   });
 
   it("vets the first profile in list order that points at an inbox", async () => {
@@ -477,8 +521,30 @@ describe("ensurePrivateInboxOf()", () => {
 
       const result = await ensure();
 
-      expect(result).toEqual({ outcome: "held" });
+      expect(result.outcome).toBe("held");
       expect(await adopted()).toBeUndefined();
+    });
+
+    it("names the deciding profile, and no inbox or refusal, when it advertises the held inbox", async () => {
+      const held = await usableInbox();
+      await hold(held);
+      const deciding = await profilePointingAt(held);
+      await listProfiles([deciding, await profilePointingAt(undefined)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("held");
+      expect(
+        result.outcome === "held" && result.profile !== undefined
+          ? addressOf(result.profile)
+          : undefined,
+      ).toEqual(addressOf(deciding));
+      const decider = await decidedBy();
+      expect(decider === undefined ? undefined : addressOf(decider)).toEqual(
+        addressOf(deciding),
+      );
+      expect(await adopted()).toBeUndefined();
+      expect(await refusedSent()).toBeUndefined();
     });
 
     it("names the deciding profile's inbox, though a later profile advertises the held one", async () => {
@@ -511,7 +577,7 @@ describe("ensurePrivateInboxOf()", () => {
 
       const result = await ensure();
 
-      expect(result).toEqual({ outcome: "held" });
+      expect(result.outcome).toBe("held");
       expect(await adopted()).toBeUndefined();
     });
 
@@ -522,7 +588,9 @@ describe("ensurePrivateInboxOf()", () => {
       const result = await ensure();
 
       expect(result).toEqual({ outcome: "held" });
+      expect(result).not.toHaveProperty("profile");
       expect(await adopted()).toBeUndefined();
+      expect(await decidedBy()).toBeUndefined();
       expect(await home.key("ensured" as never).pull()).toBe(1);
     });
 
@@ -772,6 +840,27 @@ describe("ensurePrivateInboxOf()", () => {
         .toThrow("transport failed");
       await runtime.idle();
       expect(await home.key("ensured" as never).pull()).toBe(0);
+    });
+
+    it("names the refusal, with its reason and the refused inbox, and the deciding profile, for Home to record", async () => {
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      const inbox = await documentIn(space, inboxValue(space));
+      const profile = await profilePointingAt(inbox);
+
+      await ensureOver(inbox, profile);
+
+      expect(await refusedSent()).toEqual({
+        reason: "inbox-adoption-acl-mismatch",
+        inbox: addressOf(inbox),
+      });
+      const decider = await decidedBy();
+      expect(decider === undefined ? undefined : addressOf(decider)).toEqual(
+        addressOf(profile),
+      );
+      expect(await adopted()).toBeUndefined();
     });
 
     it("names no inbox for Home to adopt, and logs the refusal", async () => {

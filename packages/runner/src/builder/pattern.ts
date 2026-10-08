@@ -19,6 +19,10 @@ import {
   UNUSED_SINGLE_SUBSCHEMA_KEYS,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { isDID } from "@commonfabric/identity/did";
+import {
+  isSpaceKind,
+  SPACE_KIND_MAX_LENGTH,
+} from "@commonfabric/memory/v2/space-kind";
 
 import { type AliasBinding } from "../alias-binding.ts";
 import {
@@ -650,10 +654,9 @@ function factoryFromPattern<T, R>(
   const makePatternFactory = (
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
-    spaceGrants?: InSpaceGrants,
-    spaceRoot?: true,
+    spaceRequest?: InSpaceRequest,
   ): PatternFactory<T, R> => {
-    if (spaceRoot) {
+    if (spaceRequest?.root) {
       // The runner places a result at the reserved root address only in the
       // space scope; any other scope would put it somewhere else.
       const resultScope = schemaCellScope(pattern.resultSchema) ??
@@ -682,14 +685,13 @@ function factoryFromPattern<T, R>(
         if (defaultSpace !== undefined) {
           const targetSpace = resolveInSpaceTargetSpace(
             defaultSpace,
-            spaceGrants,
-            spaceRoot,
+            spaceRequest,
             frame,
           );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
-            if (spaceRoot) module.targetSpaceRoot = true;
+            if (spaceRequest?.root) module.targetSpaceRoot = true;
           }
         }
         const node: NodeRef = {
@@ -723,12 +725,7 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(
-        scope,
-        defaultSpace,
-        spaceGrants,
-        spaceRoot,
-      );
+      const derived = makePatternFactory(scope, defaultSpace, spaceRequest);
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -763,12 +760,27 @@ function factoryFromPattern<T, R>(
             "and a DID or a cell names a space that exists",
         );
       }
-      const derived = makePatternFactory(
-        defaultScope,
-        space ?? "",
-        grants,
-        options?.root ? true : undefined,
-      );
+      const spaceKind = options?.spaceKind;
+      if (spaceKind !== undefined) {
+        if (isDID(space) || isCell(space)) {
+          throw new Error(
+            "inSpace() declares the kind only of a space it creates, and a " +
+              "DID or a cell names a space that exists",
+          );
+        }
+        if (!isSpaceKind(spaceKind)) {
+          throw new Error(
+            debugStr`inSpace() declares a space kind of lowercase words ` +
+              debugStr`joined by hyphens, at most ${SPACE_KIND_MAX_LENGTH} ` +
+              debugStr`characters, not $quote${spaceKind}`,
+          );
+        }
+      }
+      const derived = makePatternFactory(defaultScope, space ?? "", {
+        ...(grants !== undefined ? { grants } : {}),
+        ...(options?.root ? { root: true } : {}),
+        ...(spaceKind !== undefined ? { spaceKind } : {}),
+      });
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -1160,6 +1172,23 @@ function assignComputedCellKinds(
 }
 
 /**
+ * What an `inSpace(...)` call asks of a space it creates, as the call checks
+ * and copies it from its options: the grants beside the space's owner,
+ * whether the space's genesis commit reserves its root, and the kind that
+ * commit declares.
+ */
+type InSpaceRequest = {
+  /** Access the created space grants beyond its owner. */
+  grants?: InSpaceGrants;
+
+  /** Whether the pattern's result is the root of the space. */
+  root?: true;
+
+  /** The kind the space's genesis commit declares. */
+  spaceKind?: string;
+};
+
+/**
  * Resolves a `PatternFactory.inSpace(...)` target to a concrete space DID at
  * graph-construction time.
  *
@@ -1167,12 +1196,12 @@ function assignComputedCellKinds(
  * - A named string (or the anonymous case below) names a space as the frame's
  *   space calls it, and resolves through that space's allocation record (see
  *   `Runtime.resolveInSpaceNameSync`). When the name has not been resolved,
- *   it is recorded on the frame as pending, with `grants`, and `undefined` is
- *   returned; the runner resolves pending names after the run and re-runs the
- *   handler or action (RetryImmediately), at which point the target resolves
- *   synchronously. The first call to name a space in a run is the one whose
- *   grants and `root` create it: a later call naming it reads the record that
- *   call writes, as it would read the record of an earlier run.
+ *   it is recorded on the frame as pending, with `request`, and `undefined`
+ *   is returned; the runner resolves pending names after the run and re-runs
+ *   the handler or action (RetryImmediately), at which point the target
+ *   resolves synchronously. The first call to name a space in a run is the
+ *   one whose request creates it: a later call naming it reads the record
+ *   that call writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
  *   call site gets its own space that survives re-runs — mirroring how cell ids
@@ -1180,8 +1209,7 @@ function assignComputedCellKinds(
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
-  grants: InSpaceGrants | undefined,
-  root: true | undefined,
+  request: InSpaceRequest | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1204,19 +1232,13 @@ function resolveInSpaceTargetSpace(
     callingSpace,
     name,
     tx,
-    grants,
-    root,
+    request,
   );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
   const pending = frame!.pendingSpaceNames ??= new Map();
-  if (!pending.has(name)) {
-    pending.set(name, {
-      ...(grants !== undefined ? { grants } : {}),
-      ...(root ? { root } : {}),
-    });
-  }
+  if (!pending.has(name)) pending.set(name, { ...request });
   return undefined;
 }
 

@@ -172,6 +172,10 @@ export type ConnectionState =
 export type MountOptions = {
   /** Require the space's complete persisted custom-root intent. */
   genesisRoot?: GenesisRoot;
+
+  /** Require the space's sealed declared kind. */
+  spaceKind?: string;
+
   sessionId?: string;
   seenSeq?: number;
   sessionToken?: string;
@@ -189,6 +193,26 @@ export type MountOptions = {
    * a resumed session is bounded exactly as the first open was. */
   readCeiling?: SessionReadCeiling;
 };
+
+/**
+ * The kind a space's genesis commit declares, as a `session.open` result
+ * reported it: `kind` is absent when the genesis commit declares none, or when
+ * the server does not advertise `spaceKind` and so reports none.
+ */
+export type DeclaredSpaceKind = { readonly kind?: string };
+
+/**
+ * What `result`, a `session.open` result, says of the kind the space's genesis
+ * commit declares, or `undefined` when it says nothing either way: a result
+ * for a space with no history reports no kind, whatever its genesis commit
+ * will declare.
+ */
+function declaredSpaceKindOf(
+  result: SessionOpenResult,
+): DeclaredSpaceKind | undefined {
+  if (result.spaceKind !== undefined) return { kind: result.spaceKind };
+  return result.serverSeq > 0 ? {} : undefined;
+}
 
 export type SessionOpenAuth = {
   invocation: FabricPlainObject;
@@ -598,6 +622,8 @@ export class Client {
       options.actingAs,
       options.readCeiling,
       options.genesisRoot,
+      options.spaceKind,
+      declaredSpaceKindOf(result),
     );
     this.#spaces.add(session);
     return session;
@@ -736,6 +762,13 @@ export class Client {
     ) {
       throw protocolError(
         "memory server does not support a custom root intent",
+      );
+    }
+    if (
+      session.spaceKind !== undefined && this.serverFlags?.spaceKind !== true
+    ) {
+      throw protocolError(
+        "memory server does not seal a space's declared kind",
       );
     }
     // A drop while an open is being signed leaves it with a challenge of
@@ -1526,6 +1559,8 @@ export class SpaceSession {
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
   readonly #genesisRoot?: GenesisRoot;
+  readonly #spaceKindIntent?: string;
+  #declaredSpaceKind?: DeclaredSpaceKind;
 
   constructor(
     client: Client,
@@ -1538,6 +1573,8 @@ export class SpaceSession {
     actingAs?: "space-owner",
     readCeiling?: SessionReadCeiling,
     genesisRoot?: GenesisRoot,
+    spaceKindIntent?: string,
+    declaredSpaceKind?: DeclaredSpaceKind,
   ) {
     this.#client = client;
     this.#auth = auth;
@@ -1547,6 +1584,8 @@ export class SpaceSession {
     this.#genesisRoot = genesisRoot === undefined
       ? undefined
       : cloneIfNecessary(genesisRoot, { frozen: false });
+    this.#spaceKindIntent = spaceKindIntent;
+    this.#declaredSpaceKind = declaredSpaceKind;
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
     this.#serverSeq = serverSeq;
@@ -1568,6 +1607,17 @@ export class SpaceSession {
 
   get serverSeq(): number {
     return this.#serverSeq;
+  }
+
+  /**
+   * What this session's latest open told it of the kind the space's genesis
+   * commit declares, or `undefined` when that open told it nothing either
+   * way, having come before the space had any history. A session that opens
+   * on a space with no history stays open as the space's genesis commits, and
+   * learns its kind only by opening again.
+   */
+  get declaredSpaceKind(): DeclaredSpaceKind | undefined {
+    return this.#declaredSpaceKind;
   }
 
   /** The error this session was terminated with, or undefined while it is open.
@@ -2978,6 +3028,9 @@ export class SpaceSession {
       ...(this.#genesisRoot === undefined
         ? {}
         : { genesisRoot: this.#genesisRoot }),
+      ...(this.#spaceKindIntent === undefined
+        ? {}
+        : { spaceKind: this.#spaceKindIntent }),
       sessionId: this.#sessionId,
       seenSeq: this.#serverSeq,
       sessionToken: this.#sessionToken,
@@ -3010,6 +3063,7 @@ export class SpaceSession {
     const sessionReplaced = sessionChanged || restored.resumed !== true;
     this.#sessionId = restored.sessionId;
     this.#sessionToken = restored.sessionToken ?? this.#sessionToken;
+    this.#declaredSpaceKind = declaredSpaceKindOf(restored);
     this.#noteResult(restored.serverSeq);
 
     if (sessionReplaced) {

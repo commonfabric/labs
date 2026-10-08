@@ -231,6 +231,9 @@ statement.
 - The hereditary meet is empty until every input carries the certified atom,
   an under-claim stated in `cfc-observation-classes.md` §5 as the fail-safe
   direction.
+- `atomPropagationClass` classes `ExternalIngest` as provenance where §15.4
+  registers it value-bound, so a verified projection does not carry a scoped
+  form of it: an under-claim of integrity, which §15.1.1 holds sound.
 - One guard matched on a consumed read releases another writer's value in
   the same document at the release gate, stated in
   `cfc-transformed-by-input-witnesses.md` under "What this does not cover" as
