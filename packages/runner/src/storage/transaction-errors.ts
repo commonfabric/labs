@@ -46,7 +46,8 @@ export const TransactionAborted = (
  * carries the cause itself, and is returned as it is, whether or not the error
  * also has a `reason`. For that message, or none, the `reason`, when there is
  * one, is read the same way, so the cause a handler threw is what is returned.
- * An error with neither message nor reason is rendered whole.
+ * An error with neither message nor reason is rendered whole. A `reason` chain
+ * that cycles back on itself overflows the stack.
  */
 export const transactionFailureMessage = (error: unknown): string => {
   if (typeof error === "string") return error;
