@@ -93,6 +93,32 @@ export interface Presentation {
   focusedPanel?: Writable<Panel>;
 }
 
+/**
+ * A chat room as the Loom links it: its name, and nothing of its conversation,
+ * so a reader of the Loom loads none of the room's messages. A client opens
+ * the room through the link, under its own access.
+ */
+export interface LinkedChatRoom {
+  [NAME]?: string;
+}
+
+/**
+ * Where the Loom keeps its chat room: a link to a room piece in the Loom's own
+ * space, in `room`, absent while the Loom names none.
+ */
+export interface ChatRoomRecord {
+  room?: Writable<LinkedChatRoom>;
+}
+
+/**
+ * The shared chat-room cell; a Loom naming no room holds `{}`. It holds a
+ * record rather than the link itself, so that a write replaces the link: a
+ * write to a cell holding a link writes through it, into the room.
+ */
+export type ChatRoomCell = Writable<
+  ChatRoomRecord | Default<Record<PropertyKey, never>>
+>;
+
 /** Shared state supplied when a Loom is instantiated. */
 export interface LoomInput {
   title?: PerSpace<Writable<string | Default<"Shared Loom">>>;
@@ -101,6 +127,12 @@ export interface LoomInput {
     Writable<Presentation | Default<{ stagedPanels: [] }>>
   >;
   participants?: PerSpace<ParticipantRosterCell>;
+  chatRoom?: PerSpace<ChatRoomCell>;
+}
+
+/** The room `setChatRoom` names as the Loom's chat. Omission clears it. */
+export interface ChatRoomChoice {
+  room?: Writable<LinkedChatRoom>;
 }
 
 /** An occurrence and its optional insertion anchor. Omission appends. */
@@ -158,4 +190,6 @@ export interface LoomOutput {
   setPresentation: Stream<Presentation>;
   participants: ParticipantProfile[];
   addParticipant: Stream<{ profile: ParticipantProfile }>;
+  chatRoom?: Writable<LinkedChatRoom>;
+  setChatRoom: Stream<ChatRoomChoice>;
 }
