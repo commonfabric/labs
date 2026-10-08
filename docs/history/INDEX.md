@@ -4,6 +4,8 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Audits and reports
 
+- [The Topics space write storm](development/performance/2026-10-07-topics-space-write-storm.md) — 2026-10-07; the Estuary toolshed instance owning the shared Topics space at 95% main-thread CPU for a day, with 19.4 of its 23 hours in `memory/frame/handle`, traced through the space's 2.29-million-commit history to four client sessions each re-persisting the same six computed documents with a value that differed only in the scope of a link, a link at session scope against the same link at space scope or its declared empty default, because output placement followed the narrowest instance a reader held rather than the narrowest scope its inputs declared; the storm began thirty minutes after the 2026-10-06 deploy and peaked at about 50 commits per second.
+
 - [Generic-normalization baseline cleanup](development/generic-normalization-baseline-cleanup-2026-10-03.md) — PR #8395 after Opus's second review: remove 14 never-shipped candidate records, restore the existing acceptance registry, and record only the final contracts.
 
 - [Generic-normalization review audit](development/generic-normalization-review-audit-2026-10-03.md) — PR #8395 after Opus review and rebase onto main 8d2cc3f864: 403 compiled entry points, 86 changed outputs classified, identical IFC metadata kinds, values and counts, and a notebook deletion mutation control.
