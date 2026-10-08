@@ -13,13 +13,14 @@ import type { PiecesController } from "../src/ops/pieces-controller.ts";
  * first open does with the source it has: compiles the program, runs it into
  * a fresh cell, and links that cell as the space's root. No provenance URL is
  * stamped, which is what a custom root looks like; `repository` records a
- * locator the way a custom deployment would.
+ * locator the way a custom deployment would. `cause` names the cell the root
+ * runs into, a fresh one by default.
  */
 export async function installCustomRoot(
   runtime: Runtime,
   controller: PiecesController,
   program: RuntimeProgram,
-  options: { repository?: string } = {},
+  options: { repository?: string; cause?: string } = {},
 ): Promise<Cell<NameSchema>> {
   const space = controller.getSpace();
   const pattern = await runtime.patternManager.compilePattern(program, {
@@ -29,7 +30,7 @@ export async function installCustomRoot(
   const { error } = await runtime.editWithRetry((tx) => {
     root = runtime.getCell<NameSchema>(
       space,
-      `test-root-${crypto.randomUUID()}`,
+      options.cause ?? `test-root-${crypto.randomUUID()}`,
       nameSchema,
       tx,
     );
