@@ -32,7 +32,11 @@ import {
 import { ContextualFlowControl } from "./cfc.ts";
 import type { Runtime } from "./runtime.ts";
 import type { CfcAddress, CfcDereferenceTrace } from "./cfc/types.ts";
-import { canFollowScopedLink, narrowerScopeCap } from "./scope.ts";
+import {
+  canFollowScopedLink,
+  narrowerScopeCap,
+  noteDeclaredReadScope,
+} from "./scope.ts";
 import type { JSONSchema, SchemaScope } from "./builder/types.ts";
 
 const logger = getLogger("link-resolution");
@@ -817,6 +821,7 @@ export function resolveLinkTracingDereferences(
         link = undefinedDataLink(link);
         break;
       }
+      noteDeclaredReadScope(tx, hopCap, nextHop.link.scope);
       // A link whose target passes back through the link's own position can
       // never resolve: the value at that position is the link itself, so
       // every hop re-follows it with a longer path and the (document, path)
