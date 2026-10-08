@@ -875,6 +875,7 @@ describe("scheduler event lineage", () => {
         );
 
         expect(result.originAttempts).toBe(1);
+        expect(result.delivered).toEqual([]);
         expect(
           result.warnings.filter((line) =>
             line.includes("permanently rejected")
