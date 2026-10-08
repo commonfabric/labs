@@ -32,6 +32,7 @@ import {
 import {
   readRoutedBase64,
   readRoutedHex,
+  readRoutedProof,
   readRoutedStatement,
   routedBase64,
   routedHex,
@@ -873,6 +874,96 @@ Deno.test("a closed context's tickets leave with it", async () => {
   }
 });
 
+Deno.test("connections that come and go cannot fill the ledger or refuse a live context's proofs", async () => {
+  // Before a context's proofs left with it, each passing context's stayed
+  // in the ledger until they expired, so cycling connections filled it.
+  const f = await fixture("cycling", {
+    limits: { contextsPerLink: 2, sockets: 3, tickets: 2 },
+  });
+  try {
+    const ledger = `${f.root}/ledger`, size = Deno.statSync(ledger).size;
+    for (let i = 0; i < 200; i++) {
+      const ctx = new Uint8Array(16);
+      ctx[0] = 60, ctx[1] = i;
+      assertEquals(
+        (await f.control(
+          6,
+          new RoutedWriter("mvp1").fixed(ctx).blob(f.flags).blob(
+            await f.proof(f.outsider, 600, ctx),
+          ).bytes,
+        )).status,
+        0,
+      );
+      assertEquals((await f.control(3, ctx)).status, 0);
+    }
+    // Nothing a context accepts is written down.
+    assertEquals(Deno.statSync(ledger).size, size);
+    assertEquals(
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(f.principal),
+        ).bytes,
+      )).status,
+      0,
+    );
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a statement serves one live context; after it closes, the router may present it again within its lease, by design", async () => {
+  const f = await fixture("one-live-context");
+  try {
+    const admit = async (ctx: Uint8Array<ArrayBuffer>, statement: Uint8Array) =>
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(ctx).blob(f.flags).blob(
+          await f.attest(statement, ctx),
+        ).bytes,
+      )).status;
+    const first = new Uint8Array(16).fill(61),
+      second = new Uint8Array(16).fill(62),
+      third = new Uint8Array(16).fill(63);
+    const proof = readRoutedProof(await f.proof(f.outsider, 600, first));
+    assertEquals(await admit(first, proof.statement), 0);
+    // While the first context lives, no other context may hold it.
+    assertEquals(await admit(second, proof.statement), 1);
+    assertEquals(await admit(first, proof.statement), 0);
+    // Once it closes its statements leave with it, so a new context may be
+    // given the same statement until it expires. A compromised router could
+    // keep the first context open for that long anyway.
+    assertEquals((await f.control(3, first)).status, 0);
+    assertEquals(await admit(third, proof.statement), 0);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a released principal's statement cannot admit it again while its context lives", async () => {
+  const f = await fixture("released-statement");
+  try {
+    const ctx = new Uint8Array(16).fill(64);
+    const proof = await f.proof(f.outsider, 600, ctx);
+    const admit = async () =>
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(ctx).blob(f.flags).blob(proof).bytes,
+      )).status;
+    assertEquals(await admit(), 0);
+    assertEquals(
+      (await f.control(
+        4,
+        new RoutedWriter("mrl1").fixed(ctx).text(f.outsider.did()).bytes,
+      )).status,
+      0,
+    );
+    assertEquals(await admit(), 1);
+  } finally {
+    await f.close();
+  }
+});
 Deno.test("one context holds at most its quota of unexpired proofs", async () => {
   const f = await fixture("proof-quota", {
     limits: {
@@ -1444,16 +1535,26 @@ Deno.test("SDK pins router metadata across toolshed responses and signs pushed r
   }
 });
 
-Deno.test("release cannot acknowledge authority when the durable ledger fails", async () => {
+Deno.test("a release needs no durable record, and a proof without the ledger closes the host", async () => {
   const f = await fixture("failed-release");
   try {
     await f.open();
     f.epochs.close();
-    // A durability failure closes the link before any release acknowledgement.
-    await assertRejects(() =>
-      f.control(
+    // A release lasts only as long as its context, so it records nothing.
+    assertEquals(
+      (await f.control(
         4,
         new RoutedWriter("mrl1").fixed(f.context).text(f.principal.did()).bytes,
+      )).status,
+      0,
+    );
+    // An admission still fails closed once the ledger is gone.
+    await assertRejects(async () =>
+      f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(f.outsider),
+        ).bytes,
       )
     );
     assertEquals(f.socket.readyState, 3);

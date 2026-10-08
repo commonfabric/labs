@@ -16,6 +16,25 @@ import {
 
 import type { Signer } from "../interface.ts";
 
+/**
+ * The longest lease a routed statement may carry, from its signed issue time
+ * and from the link agent's attested receipt. A compromised router that holds
+ * a disconnected client's context open keeps the client's authority at most
+ * this long after its last signature.
+ */
+export const MAX_ROUTED_LEASE_SECONDS = 600;
+/** The longest a router challenge may stay open for a client's signature. */
+export const ROUTED_CHALLENGE_SECONDS = 60;
+/** How far a statement's issue time may run ahead of its attested receipt. */
+export const ROUTED_CLOCK_SKEW_SECONDS = 120;
+/**
+ * How long after its link or context closes a proof bound to it can still be
+ * unexpired: the longest lease, signed at the end of a challenge's life by a
+ * clock running ahead by the most skew allowed.
+ */
+export const ROUTED_PROOF_HORIZON_SECONDS = MAX_ROUTED_LEASE_SECONDS +
+  ROUTED_CHALLENGE_SECONDS + ROUTED_CLOCK_SKEW_SECONDS;
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -249,7 +268,8 @@ export async function verifyRoutedProof(proof: RoutedProof, options: {
   const received = r.time();
   r.end();
   requireRouted(
-    expires > issued && expires - issued <= 60 && issued <= received &&
+    expires > issued && expires - issued <= ROUTED_CHALLENGE_SECONDS &&
+      issued <= received &&
       received < expires && received <= options.now,
   );
   const s = await readRoutedStatement(proof.statement);
@@ -259,8 +279,10 @@ export async function verifyRoutedProof(proof: RoutedProof, options: {
       equalRoutedBytes(s.challenge, challenge),
   );
   requireRouted(
-    s.iat <= received + 120 && s.exp > s.iat && s.exp > options.now &&
-      s.exp <= s.iat + 3600 && s.exp <= received + 3600,
+    s.iat <= received + ROUTED_CLOCK_SKEW_SECONDS && s.exp > s.iat &&
+      s.exp > options.now &&
+      s.exp <= s.iat + MAX_ROUTED_LEASE_SECONDS &&
+      s.exp <= received + MAX_ROUTED_LEASE_SECONDS,
   );
   return s;
 }

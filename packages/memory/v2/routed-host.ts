@@ -54,16 +54,23 @@ type Context = {
   totals: Totals;
   grants: Map<string, Grant>;
   released: Set<string>;
-  accepted: Map<string, { digest: string; exp: number }>;
+  /**
+   * Unexpired statements this context accepted, by principal and challenge.
+   * A released principal's are marked, and cannot admit it again.
+   */
+  accepted: Map<string, Accepted>;
   /** IDs of the tickets issued for it. */
   tickets: Set<string>;
   backend?: Backend;
   socket?: WebSocket;
   closed: boolean;
 };
-const CLOSED_CONTEXT_RETENTION_SECONDS = 3600 + 60 + 120;
-/** Closed contexts remembered per link within the retention period. */
-const MAX_CLOSED_CONTEXTS = 65536;
+type Accepted = {
+  principal: string;
+  digest: string;
+  exp: number;
+  released: boolean;
+};
 
 /**
  * Capacity a toolshed admits from routers, from its Mode A policy config.
@@ -267,8 +274,12 @@ type Link = {
   peer: string;
   socket: WebSocket;
   contexts: Map<string, Context>;
-  /** Closed context IDs and when they closed, oldest first. */
-  closedContexts: Map<string, number>;
+  /**
+   * The live context holding each accepted statement, keyed as `accepted`
+   * is: a statement serves one live context at a time. A context's entries
+   * leave with it, and none outlive the link or a restart.
+   */
+  claims: Map<string, Context>;
   sequence: number;
   closed: boolean;
 };
@@ -291,7 +302,7 @@ export interface RoutedHostOptions {
   ownership: (space: string) => number | undefined;
   /** Unix seconds; tests can drive the same verifier deterministically. */
   now?: () => number;
-  /** Durable tombstones, consumed before link admission and retained across restart. */
+  /** Durable link epochs and router revocations, kept across restart. */
   epochs: RoutedEpochStore;
   /** Capacity, over {@link DEFAULT_ROUTED_HOST_LIMITS}. */
   limits?: Partial<RoutedHostLimits>;
@@ -443,30 +454,16 @@ export class RoutedMemoryHost {
     }
   }
 
+  /** Closes one context and drops the statements it accepted. */
   #closeContext(link: Link, context: Context): void {
     if (context.closed) return;
     context.closed = true;
     this.#audit(link, context, "context-closed");
-    link.closedContexts.set(context.idHex, this.#now());
-    try {
-      for (const principal of context.grants.keys()) {
-        this.#options.epochs.release(
-          link.router,
-          this.#options.deployment,
-          link.epochHex,
-          context.idHex,
-          principal,
-          this.#now(),
-        );
-      }
-    } catch {
-      this.#closed = true;
-      for (const other of [...this.#links.values()]) this.#closeLink(other);
-    }
     context.backend?.close();
     if (context.socket !== undefined) safeClose(context.socket);
     this.#clearUsage(link, context);
     context.grants.clear();
+    for (const key of context.accepted.keys()) link.claims.delete(key);
     context.accepted.clear();
     link.contexts.delete(context.idHex);
     for (const id of context.tickets) {
@@ -474,22 +471,6 @@ export class RoutedMemoryHost {
       this.#unredeemed.delete(id);
     }
     context.tickets.clear();
-  }
-
-  /**
-   * Whether a context ID may open on this link. A closed ID stays refused
-   * until every statement it could hold has expired: the longest lease plus
-   * challenge lifetime and clock skew. Without expiry, a link that outlives
-   * 4,096 client disconnects would refuse every new client.
-   */
-  #reopenable(link: Link, id: Uint8Array): boolean {
-    const now = this.#now();
-    for (const [key, closed] of link.closedContexts) {
-      if (closed + CLOSED_CONTEXT_RETENTION_SECONDS > now) break;
-      link.closedContexts.delete(key);
-    }
-    return !link.closedContexts.has(routedHex(id)) &&
-      link.closedContexts.size < MAX_CLOSED_CONTEXTS;
   }
 
   #closeLink(link: Link): void {
@@ -580,7 +561,7 @@ export class RoutedMemoryHost {
             peer,
             socket,
             contexts: new Map(),
-            closedContexts: new Map(),
+            claims: new Map(),
             sequence: 0,
             closed: false,
           };
@@ -640,9 +621,6 @@ export class RoutedMemoryHost {
     if (op === 1) {
       const r = new RoutedReader(payload, "mat1");
       const id = r.fixed(16);
-      requireRouted(
-        this.#reopenable(link, id),
-      );
       const flags = r.blob();
       const parsed = parseRoutedJson(
         new TextDecoder("utf-8", { fatal: true }).decode(flags),
@@ -700,9 +678,6 @@ export class RoutedMemoryHost {
     if (op === 6) {
       const r = new RoutedReader(payload, "mvp1");
       const id = r.fixed(16);
-      requireRouted(
-        this.#reopenable(link, id),
-      );
       const flags = r.blob();
       requireRouted(
         equalRoutedBytes(
@@ -762,18 +737,8 @@ export class RoutedMemoryHost {
       if (!context.grants.has(principal) || context.released.has(principal)) {
         return new Uint8Array();
       }
-      try {
-        this.#options.epochs.release(
-          link.router,
-          this.#options.deployment,
-          link.epochHex,
-          context.idHex,
-          principal,
-          this.#now(),
-        );
-      } catch (error) {
-        this.close();
-        throw error;
+      for (const accepted of context.accepted.values()) {
+        if (accepted.principal === principal) accepted.released = true;
       }
       context.released.add(principal);
       context.backend?.releasePrincipal(principal);
@@ -811,15 +776,24 @@ export class RoutedMemoryHost {
       });
       requireRouted(
         !link.closed && !context.closed && statement.exp > this.#now() &&
-          !this.#options.routers.has(statement.principal),
+          !this.#options.routers.has(statement.principal) &&
+          this.#options.epochs.healthy,
       );
       const now = this.#now();
       const digest = routedHex(sha256(proof.statement));
       const key = `${statement.principal}:${routedHex(statement.challenge)}`;
+      // A statement serves one live context; once that context closes,
+      // another may present it until it expires.
+      const owner = link.claims.get(key);
+      requireRouted(owner === undefined || owner === context);
       const prior = context.accepted.get(key);
-      requireRouted(prior === undefined || prior.digest === digest);
+      requireRouted(
+        prior === undefined || prior.digest === digest && !prior.released,
+      );
       for (const [key, accepted] of context.accepted) {
-        if (accepted.exp <= now) context.accepted.delete(key);
+        if (accepted.exp > now) continue;
+        context.accepted.delete(key);
+        link.claims.delete(key);
       }
       // A released principal whose statement has expired admits nothing
       // more, so the history forgets it, as the router's does; creating a
@@ -846,17 +820,13 @@ export class RoutedMemoryHost {
         !context.grants.has(statement.principal) &&
         context.grants.size >= this.#limits.principalHistoryPerContext
       ) throw new RoutedProofRefusal("principal-history-limit");
-      this.#options.epochs.claim({
-        router: link.router,
-        deployment: this.#options.deployment,
+      context.accepted.set(key, {
         principal: statement.principal,
-        challenge: routedHex(statement.challenge),
         digest,
-        epoch: link.epochHex,
-        context: context.idHex,
         exp: statement.exp,
-      }, now);
-      context.accepted.set(key, { digest, exp: statement.exp });
+        released: false,
+      });
+      link.claims.set(key, context);
       context.grants.set(statement.principal, { statement, digest });
       this.#audit(link, context, "proof-accepted");
       context.released.delete(statement.principal);

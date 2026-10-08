@@ -16,7 +16,9 @@ import {
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
 import {
+  MAX_ROUTED_LEASE_SECONDS,
   readRoutedHex,
+  ROUTED_CHALLENGE_SECONDS,
   routedBase64,
   routedStatementPayload,
 } from "@commonfabric/memory/v2/routed-wire";
@@ -58,6 +60,14 @@ export interface SessionConnection {
    * nothing else can be using it.
    */
   close(): Promise<void>;
+
+  /**
+   * Ends the connection's authentication of `principal`, for a key no later
+   * session will use, such as a created space's. Only a share of a
+   * connection that outlives the session has one; a connection that closes
+   * with its session has nothing to release.
+   */
+  releasePrincipal?(principal: string): Promise<void>;
 }
 
 export interface SessionFactory {
@@ -152,8 +162,10 @@ const storageAddressForMemoryHost = (host: URL): URL => {
 export const SESSION_OPEN_TTL_SECONDS = 300;
 
 /**
- * Lease a signed `connection.auth` asks for, in seconds: the server caps it
- * at its own limit, and the client renews ahead of whatever it granted.
+ * Lease a signed direct `connection.auth` asks for, in seconds: the server
+ * caps it at its own limit, and the client renews ahead of whatever it
+ * granted. A routed statement asks for MAX_ROUTED_LEASE_SECONDS, the longest
+ * a router admits.
  */
 export const CONNECTION_AUTH_LEASE_SECONDS = 3600;
 
@@ -653,8 +665,9 @@ export async function createSignedConnectionAuth(
           challenge: readRoutedHex(context.challenge.value, 32),
           iat,
           exp: Math.min(
-            iat + CONNECTION_AUTH_LEASE_SECONDS,
-            context.challenge.expiresAt - 60 + CONNECTION_AUTH_LEASE_SECONDS,
+            iat + MAX_ROUTED_LEASE_SECONDS,
+            context.challenge.expiresAt - ROUTED_CHALLENGE_SECONDS +
+              MAX_ROUTED_LEASE_SECONDS,
           ),
         }).sign(signer),
       ),
@@ -731,6 +744,14 @@ class SharedSessionConnection implements SessionConnection {
     if (this.#closed) return;
     this.#closed = true;
     await this.#session.close();
+  }
+
+  /**
+   * Ends the shared connection's authentication of `principal`, which a
+   * router counts against the connection until it is released.
+   */
+  async releasePrincipal(principal: string): Promise<void> {
+    await this.#client.release(principal);
   }
 }
 

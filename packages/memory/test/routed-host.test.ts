@@ -9,6 +9,7 @@ import { RoutedEpochStore } from "../v2/routed-epochs.ts";
 import { RoutedMemoryHost } from "../v2/routed-host.ts";
 import { routedFlags } from "../v2/routed-parser.ts";
 import {
+  MAX_ROUTED_LEASE_SECONDS,
   readRoutedProof,
   RoutedReader,
   routedStatementPayload,
@@ -166,12 +167,16 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
     assertEquals((await first.request(6, admit(context, original))).status, 1);
     const renewed = await link(router, new Uint8Array(16).fill(5));
     assertEquals(first.socket.readyState, 3);
+    // The replaced link closed every context on it and dropped their
+    // statements, so the router may present one again on its new link
+    // within the statement's lease. This is deliberate: a router that holds
+    // its contexts open keeps that authority anyway.
     assertEquals(
       (await renewed.request(
         6,
         admit(context, await proof(context, new Uint8Array(16).fill(5))),
       )).status,
-      1,
+      0,
     );
     host.revokeRouter(router.did());
     assertEquals(renewed.socket.readyState, 3);
@@ -181,11 +186,10 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
       1,
     );
     assert(independent.socket.readyState === 1);
-    // Losing durable custody must close every context on the affected link,
-    // including a different context from the one triggering the failed write.
-    const contexts = [new Uint8Array(16).fill(31), new Uint8Array(16).fill(32)];
-    for (const ctx of contexts) {
-      const challenge = new Uint8Array(32).fill(ctx[0]);
+    // Losing durable custody must close every context, including ones other
+    // than the context whose proof found the ledger gone.
+    const otherProof = async (ctx: Uint8Array, seed: number) => {
+      const challenge = new Uint8Array(32).fill(seed);
       const statement = await routedStatementPayload({
         principal: client.did(),
         router: other.did(),
@@ -201,13 +205,28 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
         .time(now + 60).sign(other);
       const receipt = await new RoutedWriter("mrr1").fixed(sha256(issuance))
         .text(client.did()).fixed(sha256(statement)).time(now).sign(other);
-      const proof =
-        new RoutedWriter("mrp1").blob(statement).blob(issuance).blob(receipt)
-          .bytes;
-      assertEquals((await independent.request(6, admit(ctx, proof))).status, 0);
+      return new RoutedWriter("mrp1").blob(statement).blob(issuance).blob(
+        receipt,
+      ).bytes;
+    };
+    const contexts = [new Uint8Array(16).fill(31), new Uint8Array(16).fill(32)];
+    for (const ctx of contexts) {
+      assertEquals(
+        (await independent.request(
+          6,
+          admit(ctx, await otherProof(ctx, ctx[0])),
+        ))
+          .status,
+        0,
+      );
     }
     store.close();
-    await assertRejects(() => independent.request(3, contexts[0]));
+    await assertRejects(async () =>
+      independent.request(
+        6,
+        admit(contexts[0], await otherProof(contexts[0], 33)),
+      )
+    );
     assertEquals(independent.socket.readyState, 3);
   } finally {
     host.close();
@@ -217,9 +236,9 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
   }
 });
 
-Deno.test("a closed context ID stays refused only until its longest lease has expired", async () => {
+Deno.test("a closed context ID may open again at once", async () => {
   const root = Deno.makeTempDirSync();
-  let clock = Math.floor(Date.now() / 1000);
+  const clock = Math.floor(Date.now() / 1000);
   const [toolshed, router, client, space] = await Promise.all(
     [101, 102, 103, 104].map((seed) =>
       Identity.fromRaw(new Uint8Array(32).fill(seed))
@@ -283,7 +302,7 @@ Deno.test("a closed context ID stays refused only until its longest lease has ex
       deployment: "fixture",
       challenge,
       iat: clock,
-      exp: clock + 3600,
+      exp: clock + MAX_ROUTED_LEASE_SECONDS,
     }).sign(client);
     const issuance = await new RoutedWriter("mrc1").text("fixture").text(
       router.did(),
@@ -301,13 +320,11 @@ Deno.test("a closed context ID stays refused only until its longest lease has ex
   try {
     assertEquals(await admit(10), 0);
     assertEquals(await request(3, context), 0);
-    // Within the longest lease a closed ID cannot reopen, even with a fresh
-    // statement: its earlier statements could still be presented.
-    clock += 3600;
-    assertEquals(await admit(11), 1);
-    // After the lease, challenge lifetime and skew it is forgotten.
-    clock += 60 + 120 + 1;
-    assertEquals(await admit(12), 0);
+    // A closed context's statements leave with it, so refusing its ID would
+    // protect nothing: a router may present them in any new context anyway.
+    assertEquals(await admit(11), 0);
+    assertEquals(await request(3, context), 0);
+    assertEquals(await admit(10), 0);
   } finally {
     host.close();
     store.close();

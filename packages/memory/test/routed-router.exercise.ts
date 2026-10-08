@@ -1388,6 +1388,42 @@ finally:
   crowdedPrincipals.close();
   crowdedSessions.close();
   pass("a connection at its session limit is refused one open and goes on");
+  // Renewals keep a session alive across several leases, a lease may be
+  // ten minutes, and a longer one is refused.
+  const renewing = new Client("127.0.0.63");
+  clients.push(renewing);
+  await renewing.start();
+  await renewing.authenticate(alice, 3, true);
+  const renewed = await renewing.request({
+    type: "session.open",
+    space: spaces[0],
+    principal: alice.did(),
+    session: {},
+  });
+  assert(renewed.ok !== undefined, JSON.stringify(renewed));
+  const renewedId = (renewed.ok as { sessionId: string }).sessionId;
+  for (let i = 0; i < 5; i++) {
+    await pause(2000);
+    await renewing.authenticate(alice, 3);
+  }
+  // Ten seconds on, past three of its three-second leases.
+  const stillOpen = await renewing.request({
+    type: "session.watch.set",
+    space: spaces[0],
+    sessionId: renewedId,
+    watches: [],
+  });
+  assert(stillOpen.ok !== undefined, JSON.stringify(stillOpen));
+  await renewing.authenticate(alice, 600);
+  const overLease = await renewing.authenticate(alice, 601).then(
+    () => undefined,
+    (error: Error) => error,
+  );
+  assert(overLease !== undefined, "a 601-second lease was admitted");
+  renewing.close();
+  pass(
+    "renewals keep a session open across several leases; a lease may be ten minutes and no longer",
+  );
   const sdkAudiences: string[] = [];
   const socketFactory = (address: URL, localAddress = "127.0.0.7") => {
     const socket = new WebSocket(address, {
