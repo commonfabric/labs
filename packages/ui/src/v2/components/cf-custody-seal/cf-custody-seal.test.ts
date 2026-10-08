@@ -82,6 +82,7 @@ const preview: Preview = {
     name: "calendar",
     subject: "did:key:actor",
   }],
+  otherHolders: [],
   witnessedRelease: true,
   stance: "sushi",
 };
@@ -242,6 +243,40 @@ describe("CFCustodySeal workflow", () => {
     );
     expect(text).toContain("Where should we eat?");
     expect(text).not.toContain("one answer at a time");
+  });
+
+  it("names the other people a value is held with, and says nothing was added only when nothing was", async () => {
+    {
+      using state = setup({
+        prepare: () =>
+          Promise.resolve({
+            ...preview,
+            sources: [],
+            otherHolders: ["did:key:member", "did:key:outsider"],
+          }),
+      });
+      await state.element.accessForTestingOnly.prepare();
+      const text = renderedText(state.element);
+      expect(text).toContain("Also held by");
+      expect(text).toContain("None of your sources is named.");
+      expect(text).not.toContain("Nothing beyond what you entered yourself.");
+      expect(interpolatedInto(state.element, '<bdi class="principal"'))
+        .toContain("did:key:outsider");
+    }
+    {
+      using state = setup();
+      await state.element.accessForTestingOnly.prepare();
+      expect(renderedText(state.element)).not.toContain("Also held by");
+    }
+    {
+      using state = setup({
+        prepare: () => Promise.resolve({ ...preview, sources: [] }),
+      });
+      await state.element.accessForTestingOnly.prepare();
+      const text = renderedText(state.element);
+      expect(text).toContain("Nothing beyond what you entered yourself.");
+      expect(text).not.toContain("Also held by");
+    }
   });
 
   it("warns instead of bounding an answer when the room's release is not witnessed", async () => {

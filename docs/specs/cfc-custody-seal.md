@@ -3,7 +3,7 @@
 A person can release something derived from their own data without releasing
 the data itself, if they trust the code that does the deriving. The custody seal
 is the host operation that makes that concrete. The actor reviews a value that
-is entirely their own, and the host copies it into the custody of a policy
+only they can read, and the host copies it into the custody of a policy
 module `P` that the actor's trust configuration names as a trusted declassifier.
 After the seal, the only way anything derived from the value leaves is through
 `P`'s own release rules. Those rules can require, through the input witness on
@@ -51,40 +51,50 @@ established the checks are compared against the committing transaction: the
 transaction that writes the entry reads each of them again and refuses the seal
 if any holds something else, so the value checked is the value committed.
 
-- **The actor can release every clause of the draft's label.** A clause is the
-  actor's to release when one of its alternatives is the actor's own: each
-  alternative of an OR-clause is an independent release path for that clause
-  only (§3.1.8(3), `03-core-concepts.md`). A message row labeled for its
-  participants and the store's owner (§13.12) is the owner's to release, and
-  releasing it discharges no other clause. An alternative is the actor's own
-  when it is one of six shapes: a bare DID equal to the actor;
-  `User{subject}`; `Context{name, subject}`; `Resource{class, subject}`;
-  `Space{id}`; or `PersonalSpace{owner}`. The subject, `id`, or `owner` must
-  equal the acting principal exactly, and each shape is matched on its exact
-  key set. The two space shapes admit only the actor's home space, the space
-  whose DID is the actor's own, which is where a draft written at home is
-  labeled; a `Space` naming any other DID is not the actor's, whether it is the
-  room or another member's home. A `Context` that carries a `hash` is a named
-  policy reference, and an atom with any other extra field (a `scope`, a
-  `role`) also belongs to someone else's policy, so neither counts as the
-  actor's. The seal refuses:
+- **Only the actor can read the draft.** Every clause must admit the actor
+  through an alternative of the actor's own, and when any clause also names
+  other people, another clause must admit the actor alone. A reader satisfies
+  some alternative of every clause (§3.1.4, `03-core-concepts.md`), so then no
+  one but the actor can read the value, and a clause that also names others is
+  absorbed by the actor's own (§3.1.8(5)): sealing it releases nothing the actor
+  did not hold alone. That is a value the actor made their own from data held
+  with others, such as a message row labeled for its participants and the
+  store's owner (§13.12), joined with a clause naming the actor alone. An
+  alternative is the actor's own when it is one of six shapes: a bare DID equal
+  to the actor; `User{subject}`; `Context{name, subject}`;
+  `Resource{class, subject}`; `Space{id}`; or `PersonalSpace{owner}`. The
+  subject, `id`, or `owner` must equal the acting principal exactly, and each
+  shape is matched on its exact key set. The two space shapes admit only the
+  actor's home space, the space whose DID is the actor's own, which is where a
+  draft written at home is labeled; a `Space` naming any other DID is not the
+  actor's, whether it is the room or another member's home. A `Context` that
+  carries a `hash` is a named policy reference, and an atom with any other extra
+  field (a `scope`, a `role`) also belongs to someone else's policy, so neither
+  counts as the actor's. The seal refuses:
   - a clause with no alternative that is the actor's own;
+  - a value whose clauses name other people when no clause admits the actor
+    alone, since those people could read it too;
+  - beside the actor's own alternatives, anything that is not a person, a
+    `User{subject}` or a bare DID: an expiry, a policy, or another principal's
+    source or space (§3.1.8(2));
   - an empty clause, which no one can read and which sealing would open;
-  - a clause carrying a `Caveat`. The caveat has to be discharged before the
-    seal, for example by instruction-inert structured generation;
-  - a clause carrying an `Expires` alternative, which is not a principal and
-    would loosen the expiry inside the clause (§3.1.8(2)).
+  - a clause carrying a `Caveat`, as an atom or by its short name. The caveat
+    has to be discharged before the seal, for example by instruction-inert
+    structured generation.
+
+  The preview names the other people a value is held with (`otherHolders`), and
+  the dialog shows them. The actor-private receipt records them; the box entry
+  does not.
 
   When an owner-shaped alternative names another DID, the refusal names both
   DIDs. That makes a stance labeled under a rotated key diagnosable: the seal
   never accepts an alternate or mapped DID.
 - **The sources are allowed.** The host must supply `allowedSources`, and every
   `Context` and `Resource` the draft draws on must be among them: those are the
-  actor's own `Context` and `Resource` alternatives. An empty list admits only
-  a value whose clauses name none, such as a value labeled for the actor alone,
-  as a value the actor typed in is, or one the actor holds with others under a
-  `User` or DID alternative, as a message row is. A host that wants to keep
-  such a value out keeps it out of the draft. The preview lists these sources. A host passes the actor's private
+  actor's own `Context` and `Resource` alternatives. An empty list admits only a
+  value that names none of them, as a value the actor typed in is, or one made
+  the actor's own from data held with others, whose other holders the preview
+  names. The preview lists these sources. A host passes the actor's private
   settings cell rather than a list it read itself; the seal reads it as
   `readCustodySourcePolicy(settings)` does: a list of the actor's own `Context`
   and `Resource` atoms in a document in the actor's home space, and nowhere

@@ -422,7 +422,22 @@ export class CFCustodySeal extends BaseElement {
                 html`<li>${describeSource(source)}</li>`
               )
             }</ul>`
+            : (preview?.otherHolders ?? []).length > 0
+            ? "None of your sources is named."
             : "Nothing beyond what you entered yourself."}</dd>
+          ${(preview?.otherHolders ?? []).length > 0
+            ? html`
+              <dt>Also held by</dt>
+              <dd class="other-holders">
+                <ul>${(preview?.otherHolders ?? []).map((holder) =>
+                  html`<li>${principal(holder)}</li>`
+                )}</ul>
+                <p class="note">The value was drawn from data you hold with
+                  them, such as a conversation. Only you can read it, and
+                  sealing it sends them nothing.</p>
+              </dd>
+            `
+            : nothing}
         </dl>
         <h3>What the room's terms say</h3>
         <dl class="stated">

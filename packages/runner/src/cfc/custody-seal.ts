@@ -32,6 +32,7 @@ import {
 import { sha256 } from "@commonfabric/content-hash";
 import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
+import { PROMPT_CAVEAT_FAMILY_KINDS } from "./prompt-caveat-kinds.ts";
 import {
   aclDocId,
   ANYONE_USER,
@@ -207,6 +208,14 @@ export interface PreparedCustodySeal {
   readonly sources: readonly CfcAtom[];
 
   /**
+   * The other people the value's label names beside the actor, in label
+   * order: it was made the actor's own from data held with them, such as a
+   * conversation. Empty when no clause names anyone else. The receipt
+   * records them; the box entry does not.
+   */
+  readonly otherHolders: readonly string[];
+
+  /**
    * Whether every release rule of the room's policy requires that everything
    * confidential its releasing code read was written by this seal (an
    * integrity guard on `TransformedBy` with the seal's builtin identity as its
@@ -266,6 +275,7 @@ interface Inspection {
   readonly instance: string;
   readonly policy: CfcModulePolicyRefAtom;
   readonly sources: readonly CfcAtom[];
+  readonly otherHolders: readonly string[];
   readonly entryKey: string;
   readonly witnessedRelease: boolean;
   readonly evidence: readonly ReadEvidence[];
@@ -397,24 +407,58 @@ const ownerShapedSubject = (atom: unknown): string | undefined => {
   return exact && isDID(atom.subject) ? atom.subject : undefined;
 };
 
+/** Whether one alternative is a caveat, as an atom or by its short name. */
+const isCaveatAlternative = (atom: unknown): boolean =>
+  typeof atom === "string"
+    ? PROMPT_CAVEAT_FAMILY_KINDS.includes(atom)
+    : isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.Caveat;
+
 /**
- * Checks that the actor can release every clause of the draft's label, and
- * returns the `Context` and `Resource` sources it draws on.
- *
- * A clause is the actor's to release when one of its alternatives is the
- * actor's own: each alternative of an OR-clause is an independent release
- * path for that clause only (§3.1.8(3), `03-core-concepts.md`), as with a
- * message row labeled for its participants and the store's owner (§13.12).
- * The sources are the actor's own `Context` and `Resource` alternatives.
- *
- * @throws If a clause is empty, carries a caveat or an expiry among its
- *   alternatives, or has no alternative that is the actor's own.
+ * The person an alternative stands for when it is another principal: a bare
+ * DID, or `User{subject}` on its exact key set. `undefined` for anything else.
  */
-const actorOwnedSources = (
+const otherHolderOf = (atom: unknown): string | undefined => {
+  if (typeof atom === "string") return isDID(atom) ? atom : undefined;
+  return isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.User &&
+      hasExactKeys(atom, ["type", "subject"]) && isDID(atom.subject)
+    ? atom.subject
+    : undefined;
+};
+
+/** What the draft's label says about whose the value is. */
+interface ActorLabel {
+  /** The actor's own `Context` and `Resource` sources the value draws on. */
+  readonly sources: CfcAtom[];
+  /** The other people a clause names beside the actor, in label order. */
+  readonly otherHolders: string[];
+}
+
+/**
+ * Checks that the draft's label admits the actor alone, and returns the
+ * actor's sources it draws on and the other people it names.
+ *
+ * Every clause must admit the actor through an alternative of its own, and
+ * when any clause also names other people, another clause must admit the
+ * actor alone. A reader satisfies some alternative of every clause (§3.1.4),
+ * so then no one but the actor can read the value, and the clause naming
+ * others is absorbed by the actor's own (§3.1.8(5)): sealing releases
+ * nothing the actor did not hold alone. That is a value the actor made their
+ * own from data held with others, such as a message row labeled for its
+ * participants and the store's owner (§13.12). The other alternatives of
+ * such a clause must each be a person, a `User` or a bare DID: an expiry, a
+ * policy, or another principal's source or space is refused (§3.1.8(2)).
+ *
+ * @throws If a clause is empty, carries a caveat, has no alternative of the
+ *   actor's own, names something other than a person beside the actor, or no
+ *   clause admits the actor alone while one names others.
+ */
+const actorLabel = (
   confidentiality: readonly CfcConfClause[],
   actor: string,
-): CfcAtom[] => {
+): ActorLabel => {
   const sources: CfcAtom[] = [];
+  const otherHolders: string[] = [];
+  let actorAlone = false;
   for (const clause of confidentiality) {
     const alternatives = clauseAlternatives(clause);
     if (alternatives.length === 0) {
@@ -422,11 +466,7 @@ const actorOwnedSources = (
         "Custody seal refuses an unsatisfiable clause; sealing it would open it",
       );
     }
-    if (
-      alternatives.some((atom) =>
-        isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.Caveat
-      )
-    ) {
+    if (alternatives.some(isCaveatAlternative)) {
       throw new Error(
         debugStr`Custody seal refuses a value that still carries a caveat: $quote${clause}`,
       );
@@ -434,40 +474,48 @@ const actorOwnedSources = (
     const owned = alternatives.filter((atom) =>
       isActorOwnedAlternative(atom, actor)
     );
-    if (owned.length > 0) {
-      // An expiry is not a principal, and as an alternative it would loosen
-      // the expiry rather than tighten it (§3.1.8(2)).
-      if (
-        alternatives.some((atom) =>
-          isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.Expires
-        )
-      ) {
+    if (owned.length === 0) {
+      const other = alternatives.map(ownerShapedSubject)
+        .find((subject) => subject !== undefined && subject !== actor);
+      if (other !== undefined) {
         throw new Error(
-          debugStr`Custody seal refuses a clause with an \`Expires\` alternative: $quote${clause}`,
+          `Custody seal identity mismatch: the value is labeled for \`${other}\`, and this runtime acts as \`${actor}\``,
         );
       }
-      for (const atom of owned) {
-        if (
-          isObjectNotArray(atom) &&
-          (atom.type === CFC_ATOM_TYPE.Context ||
-            atom.type === CFC_ATOM_TYPE.Resource) &&
-          !sources.some((source) => deepEqual(source, atom))
-        ) sources.push(atom as CfcAtom);
-      }
-      continue;
-    }
-    const other = alternatives.map(ownerShapedSubject)
-      .find((subject) => subject !== undefined && subject !== actor);
-    if (other !== undefined) {
       throw new Error(
-        `Custody seal identity mismatch: the value is labeled for \`${other}\`, and this runtime acts as \`${actor}\``,
+        debugStr`Custody seal refuses a clause the authenticated actor does not own: $quote,long${clause}`,
       );
     }
+    const others = alternatives.filter((atom) =>
+      !isActorOwnedAlternative(atom, actor)
+    );
+    if (others.length === 0) actorAlone = true;
+    for (const atom of others) {
+      const holder = otherHolderOf(atom);
+      if (holder === undefined) {
+        throw new Error(
+          debugStr`Custody seal refuses a clause that names something other than a person beside the actor: $quote,long${clause}`,
+        );
+      }
+      if (!otherHolders.includes(holder)) otherHolders.push(holder);
+    }
+    for (const atom of owned) {
+      if (
+        isObjectNotArray(atom) &&
+        (atom.type === CFC_ATOM_TYPE.Context ||
+          atom.type === CFC_ATOM_TYPE.Resource) &&
+        !sources.some((source) => deepEqual(source, atom))
+      ) sources.push(atom as CfcAtom);
+    }
+  }
+  if (otherHolders.length > 0 && !actorAlone) {
     throw new Error(
-      debugStr`Custody seal refuses a clause the authenticated actor does not own: $quote,long${clause}`,
+      `Custody seal identity mismatch: the value is also labeled for \`${
+        otherHolders[0]
+      }\`, and this runtime acts as \`${actor}\`; a value held with others is sealed once a clause admits the actor alone`,
     );
   }
-  return sources;
+  return { sources, otherHolders };
 };
 
 /** Stands in for a property the stance leaves out: its schema alone is checked. */
@@ -1651,6 +1699,7 @@ const inspect = async (
   let draftLink: NormalizedFullLink;
   let stance: JSONValue;
   let sources: CfcAtom[];
+  let otherHolders: string[];
   try {
     const acting = draftTx.getCfcState().trustSnapshot?.actingPrincipal;
     if (!isDID(acting)) {
@@ -1659,10 +1708,10 @@ const inspect = async (
     actor = acting;
     draftLink = draft.withTx(draftTx).resolveAsCell().getAsNormalizedFullLink();
     stance = snapshotJsonValue(draft.withTx(draftTx).get());
-    sources = actorOwnedSources(
+    ({ sources, otherHolders } = actorLabel(
       collectConsumedLabel(draftTx).confidentiality,
       actor,
-    );
+    ));
     for (const read of readEvidence(draftTx, "Custody seal")) {
       evidence.push(read);
     }
@@ -1747,6 +1796,7 @@ const inspect = async (
     instance,
     policy,
     sources,
+    otherHolders,
     entryKey,
     witnessedRelease,
     evidence,
@@ -1758,7 +1808,7 @@ const inspect = async (
  * The preview is exactly what the commit writes; the consent it returns is
  * good for one commit.
  *
- * @throws If the value is not entirely the actor's own, is not instruction
+ * @throws If anyone but the actor can read the value, it is not instruction
  *   inert, draws on a source the room does not allow, or the room's policy is
  *   malformed, untrusted, not the room space's, or not installed there, or the
  *   actor holds no seat or has already sealed.
@@ -1776,6 +1826,7 @@ export async function prepareCustodySeal(
   deepFreeze(inspected.terms);
   deepFreeze(inspected.policy);
   deepFreeze(inspected.sources);
+  deepFreeze(inspected.otherHolders);
   deepFreeze(inspected.allowedSources);
   deepFreeze(inspected.readers);
   const consent = Object.freeze({}) as CustodySealConsent;
@@ -1799,6 +1850,7 @@ export async function prepareCustodySeal(
     instance: inspected.instance,
     policy: inspected.policy,
     sources: inspected.sources,
+    otherHolders: inspected.otherHolders,
     witnessedRelease: inspected.witnessedRelease,
     consent,
   });
@@ -1846,6 +1898,7 @@ export async function commitCustodySeal(
     current.instance !== state.instance ||
     !deepEqual(current.policy, state.policy) ||
     !deepEqual(current.sources, state.sources) ||
+    !deepEqual(current.otherHolders, state.otherHolders) ||
     !deepEqual(current.draftLink, state.draftLink) ||
     !deepEqual(current.termsLink, state.termsLink) ||
     current.entryKey !== state.entryKey
@@ -1917,6 +1970,7 @@ export async function commitCustodySeal(
       instance,
       entryKey,
       sources: state.sources,
+      otherHolders: state.otherHolders,
       stanceDigest: hashStringOf(state.stance),
       draftId: state.draftLink.id,
     });

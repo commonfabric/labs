@@ -262,6 +262,7 @@ describe("custody-seal", () => {
         "actor",
         "id",
         "instance",
+        "otherHolders",
         "policy",
         "readers",
         "room",

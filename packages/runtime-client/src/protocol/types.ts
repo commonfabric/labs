@@ -1410,6 +1410,12 @@ export type CustodySealPreview = {
   sources: CfcAtom[];
 
   /**
+   * The other people the value's label names beside the actor: it was made
+   * the actor's own from data held with them, such as a conversation.
+   */
+  otherHolders: DID[];
+
+  /**
    * Whether every release rule of the room's policy requires the seal's input
    * witness and releases only to the seal, which publishes the answer once
    * per instance. When `false`, a member's own code can learn the actor's

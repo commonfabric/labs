@@ -1520,7 +1520,7 @@ describe("cfc-custody-seal", () => {
             cfcAtom.user(rotated.did()),
             context(rotated.did()),
             rotated.did(),
-            { anyOf: [cfcAtom.user(rotated.did()), cfcAtom.user(bob.did())] },
+            { anyOf: [cfcAtom.user(alice.did()), cfcAtom.user(bob.did())] },
           ]
         ) {
           const draft = await fixture.draft(alice, honestStance, [clause]);
@@ -1533,11 +1533,12 @@ describe("cfc-custody-seal", () => {
       }
     });
 
-    it("seals a value the actor holds with others, each alternative being a release path (§3.1.8(3))", async () => {
+    it("seals a value made the actor's own from data held with others, and names them", async () => {
       // A message row is labeled with one clause naming its participants and
-      // the store's owner (§13.12). §3.1.8(3): each alternative of an
-      // OR-clause is an independent release path for that clause, so the
-      // actor, as one alternative, may seal it.
+      // the store's owner (§13.12). Joined with a clause admitting the actor
+      // alone, only the actor can read the value (§3.1.4), and the row's
+      // clause is absorbed (§3.1.8(5)): sealing releases nothing the actor
+      // did not hold alone.
       const fixture = await setup();
       try {
         const coHolder = await Identity.fromPassphrase(
@@ -1550,58 +1551,118 @@ describe("cfc-custody-seal", () => {
             cfcAtom.user(owner(alice)),
           ],
         };
-        const draft = await fixture.draft(alice, honestStance, [row], "row");
+        const draft = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          row,
+        ], "row");
         const prepared = await prepareCustodySeal(draft, fixture.room(alice));
         expect(prepared.sources).toEqual([]);
+        expect(prepared.otherHolders).toEqual([bob.did(), coHolder.did()]);
+        expect(Object.isFrozen(prepared.otherHolders)).toBe(true);
 
         // The actor's own `Context` and `Resource` alternatives are still the
         // sources the draft draws on, and the room must allow them.
         const messages = context(owner(alice), "messages");
         const drawn = await fixture.draft(alice, honestStance, [
+          messages,
           { anyOf: [messages, cfcAtom.user(bob.did())] },
         ], "drawn");
         const allowed = await prepareCustodySeal(drawn, fixture.room(alice), {
           allowedSources: [messages],
         });
         expect(allowed.sources).toEqual([messages]);
+        expect(allowed.otherHolders).toEqual([bob.did()]);
         await expect(
           prepareCustodySeal(drawn, fixture.room(alice), {
             allowedSources: [context(owner(alice), "calendar")],
           }),
         ).rejects.toThrow(/source this room does not allow/);
+
+        // The receipt, the actor's own, records the other holders; the box
+        // entry, which every seat's projector reads, does not name them (Bob
+        // holds a seat, so the terms in the entry name him anyway).
         // One entry per actor per room: the row's seal commits last.
-        await commitCustodySeal(prepared.consent, trustedClick());
+        const sealed = await commitCustodySeal(
+          prepared.consent,
+          trustedClick(),
+        );
+        expect(
+          (sealed.receipt.get() as { otherHolders?: unknown }).otherHolders,
+        ).toEqual([bob.did(), coHolder.did()]);
+        const entry = JSON.stringify(sealed.box.get());
+        expect(entry).not.toContain(coHolder.did());
       } finally {
         await fixture.dispose();
       }
     });
 
-    it("releases only the clauses the actor holds, and refuses an expiry offered as an alternative", async () => {
+    it("refuses a value others can also read, and a clause naming anything but a person beside the actor", async () => {
       const fixture = await setup();
       try {
-        // Releasing one clause through the actor discharges no other clause
-        // (§3.1.8(3), invariant 11).
+        const carol = await Identity.fromPassphrase("custody-seal-carol");
         const shared = {
           anyOf: [cfcAtom.user(owner(alice)), cfcAtom.user(bob.did())],
         };
-        const other = await fixture.draft(alice, honestStance, [
+        // No clause admits the actor alone: Bob can read the value too.
+        for (
+          const [index, label] of [
+            [shared],
+            [shared, { anyOf: [owner(alice), carol.did()] }],
+          ].entries()
+        ) {
+          const draft = await fixture.draft(
+            alice,
+            honestStance,
+            label,
+            `shared-${index}`,
+          );
+          const refusal = prepareCustodySeal(draft, fixture.room(alice));
+          await expect(refusal).rejects.toThrow(/identity mismatch/);
+          await expect(refusal).rejects.toThrow(bob.did());
+          await expect(refusal).rejects.toThrow(alice.did());
+        }
+        // A clause the actor does not hold is refused whatever the others
+        // say: it names Carol, not Bob.
+        const unheld = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
           shared,
-          cfcAtom.user(bob.did()),
-        ], "clause-local");
-        const refusal = prepareCustodySeal(other, fixture.room(alice));
-        await expect(refusal).rejects.toThrow(/identity mismatch/);
-        await expect(refusal).rejects.toThrow(bob.did());
-        // An `Expires` alternative would loosen the expiry inside the clause
-        // (§3.1.8(2)), so a clause carrying one is refused even beside the
-        // actor.
-        const expiring = await fixture.draft(alice, honestStance, [{
-          anyOf: [
-            cfcAtom.user(owner(alice)),
+          cfcAtom.user(carol.did()),
+        ], "unheld");
+        const unheldRefusal = prepareCustodySeal(unheld, fixture.room(alice));
+        await expect(unheldRefusal).rejects.toThrow(carol.did());
+        await expect(unheldRefusal).rejects.not.toThrow(bob.did());
+        // Beside the actor, an alternative must be a person (§3.1.8(2)): not
+        // an expiry, a policy, another principal's source or space, or a
+        // caveat by its short name.
+        for (
+          const [index, alternative] of [
             cfcAtom.expires(Date.now() + 60_000),
-          ],
-        }], "expiring");
-        await expect(prepareCustodySeal(expiring, fixture.room(alice)))
-          .rejects.toThrow(/`Expires` alternative/);
+            policyOf(SCRATCH),
+            context(bob.did(), "messages"),
+            cfcAtom.space(S),
+            { ...cfcAtom.user(bob.did()), role: "reader" },
+          ].entries()
+        ) {
+          const draft = await fixture.draft(alice, honestStance, [
+            cfcAtom.user(owner(alice)),
+            { anyOf: [cfcAtom.user(owner(alice)), alternative] },
+          ], `not-a-person-${index}`);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/something other than a person/);
+        }
+        for (
+          const [index, alias] of [
+            "prompt-injection-risk-unscreened",
+            "prompt-influence",
+          ].entries()
+        ) {
+          const draft = await fixture.draft(alice, honestStance, [
+            cfcAtom.user(owner(alice)),
+            { anyOf: [cfcAtom.user(owner(alice)), alias] },
+          ], `alias-${index}`);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/still carries a caveat/);
+        }
       } finally {
         await fixture.dispose();
       }
