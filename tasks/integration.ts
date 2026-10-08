@@ -20,6 +20,7 @@ import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
+import { batchQosArgv } from "./batch-qos.ts";
 import {
   FragmentWriter,
   markUnitsBegan,
@@ -90,8 +91,9 @@ async function runCommand(
 ): Promise<
   { success: boolean; code: number; stdout?: string; stderr?: string }
 > {
-  const command = new Deno.Command(cmd[0], {
-    args: cmd.slice(1),
+  const [program, ...args] = batchQosArgv(cmd);
+  const command = new Deno.Command(program, {
+    args,
     cwd: options.cwd,
     env: { ...Deno.env.toObject(), ...options.env },
     stdout: options.inheritStdio ? "inherit" : "piped",
