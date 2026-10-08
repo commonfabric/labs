@@ -3009,6 +3009,21 @@ export class SchemaGenerator {
           checker.getTypeFromTypeNode(typeNode) === values[0]
         ? typeNode
         : memberNode(values[0]!);
+      // A node no member is paired through, as a reference to a generic alias
+      // whose body is the union, is read whole, and the value has the labels
+      // formatting attaches to its member. A cell's are its value's, read at
+      // the value's node, as above.
+      if (
+        !valueNode && typeNode &&
+        getCellWrapperInfo(values[0]!, checker) === undefined
+      ) {
+        const whole = this.formatChildType(type, context, typeNode);
+        const labels = declaredIfcLabels(
+          labeledValueMember(whole, context.definitions) ?? whole,
+          context.definitions,
+        );
+        if (labels) return labels;
+      }
       return this.#labelsOf(values[0]!, valueNode, context, reading);
     }
     const whole = this.formatChildType(type, context, typeNode);

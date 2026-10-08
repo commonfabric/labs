@@ -224,11 +224,14 @@ export default pattern<{ a: Outer<Secret> }>(({ a }) => ({
       }
     });
 
-    it("keeps the policy a scoped alias's declaration spells beside `null` written outside the wrapper, where a holder's values are read by type", async () => {
-      // The alias's body is the wrapper beside `null`, which is the wrapper
-      // around both, read at the payload its declaration writes.
-      const valuesFor = async (box: string) => {
-        const output = await transformFiles({
+    /**
+     * The module `main` compiles to, beside a module exporting the exchange
+     * rules `rules`, with `Confidential`, `PerUser`, `PolicyOf` and `rules` in
+     * scope and an interface `Secret`.
+     */
+    const withRules = async (main: string): Promise<ts.SourceFile> =>
+      parseModule(
+        (await transformFiles({
           "/rules.ts":
             `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
 export const rules = exchangeRules([exchangeRule({
@@ -241,41 +244,85 @@ export const rules = exchangeRules([exchangeRule({
 import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string }
+${main}`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true }))["/main.tsx"]!,
+      );
+
+    /** The labeled payload of a `Box<Secret>` beside `null` in the user scope. */
+    const LABELED_BESIDE_NULL = {
+      anyOf: [{
+        $ref: "#/$defs/Secret",
+        ifc: {
+          confidentiality: [{
+            policyRefKind: "module",
+            __ctPolicyIdentityOf: { file: "/rules.ts", path: ["rules"] },
+          }],
+        },
+      }, { type: "null" }],
+      scope: "user",
+    };
+
+    /** `Box<T>` with `null` written inside the wrapper. */
+    const INSIDE_BOX =
+      "type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]> | null>;";
+
+    for (
+      const [form, box] of [
+        [
+          "as the alias's body",
+          "type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null;",
+        ],
+        [
+          "at the end of a chain of generic aliases",
+          `type Inner<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null;
+type Box<T> = Inner<T>;`,
+        ],
+      ] as const
+    ) {
+      it(`keeps the policy a scoped alias's declaration spells beside \`null\` written outside the wrapper ${form}, where a holder's values are read by type`, async () => {
+        // The wrapper beside `null` is the wrapper around both, read at the
+        // payload the declaration writes.
+        const valuesFor = async (declaration: string) => {
+          const module = await withRules(`${declaration}
 interface Dict<U> { [key: string]: U }
-type Box<T> = ${box};
 type Outer<T> = { inner: Dict<Box<T>> };
 export default pattern<{ a: Outer<Secret> }>(({ a }) => ({
   out: computed(() => a.inner),
-}));`,
-        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
-        const module = parseModule(output["/main.tsx"]!);
+}));`);
+          return [patternSchemas(module).input, callSchemas(module, "lift")[0]!]
+            // deno-lint-ignore no-explicit-any
+            .map((schema: any) => schema.properties.a.properties.inner);
+        };
+        const outside = await valuesFor(box);
+
+        for (const values of outside) {
+          expect(values.additionalProperties).toMatchObject(
+            LABELED_BESIDE_NULL,
+          );
+        }
+        expect(outside).toEqual(await valuesFor(INSIDE_BOX));
+      });
+    }
+
+    it("keeps the policy a scoped alias's declaration spells beside `null` written outside the wrapper in the capture of the whole value", async () => {
+      // The capture's type keeps no alias to read the declaration by; its
+      // print is read as the input's annotation, which spells it.
+      const schemasFor = async (declaration: string) => {
+        const module = await withRules(`${declaration}
+export default pattern<{ a: Box<Secret> }>(({ a }) => ({
+  out: computed(() => a),
+}));`);
         return [patternSchemas(module).input, callSchemas(module, "lift")[0]!]
           // deno-lint-ignore no-explicit-any
-          .map((schema: any) => schema.properties.a.properties.inner);
+          .map((schema: any) => schema.properties.a);
       };
-      const outside = await valuesFor(
-        "PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null",
+      const [input, capture] = await schemasFor(
+        "type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null;",
       );
 
-      for (const values of outside) {
-        expect(values.additionalProperties).toMatchObject({
-          anyOf: [{
-            $ref: "#/$defs/Secret",
-            ifc: {
-              confidentiality: [{
-                policyRefKind: "module",
-                __ctPolicyIdentityOf: { file: "/rules.ts", path: ["rules"] },
-              }],
-            },
-          }, { type: "null" }],
-          scope: "user",
-        });
-      }
-      expect(outside).toEqual(
-        await valuesFor(
-          "PerUser<Confidential<T, [PolicyOf<typeof rules>]> | null>",
-        ),
-      );
+      expect(capture).toMatchObject(LABELED_BESIDE_NULL);
+      expect(capture).toEqual(input);
+      expect(capture).toEqual((await schemasFor(INSIDE_BOX))[1]);
     });
 
     it("reads a wrapper around an intersection as the intersection in its scope", async () => {

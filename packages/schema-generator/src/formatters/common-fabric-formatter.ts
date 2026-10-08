@@ -29,6 +29,7 @@ import {
   type TypeWithInternals,
 } from "../type-utils.ts";
 import {
+  isCommonFabricDeclaration,
   isCommonFabricSymbol,
   isImportedFromCommonFabric,
 } from "../typescript/common-fabric-symbols.ts";
@@ -1983,10 +1984,13 @@ export class CommonFabricFormatter implements TypeFormatter {
    * to read it in: the node at this position, through parentheses and aliases
    * that bind nothing, read as `type`; and otherwise the body of the alias the
    * reference at this position names, or, with no node here, the one `type`
-   * is reached by. A generic alias's body is the declaration's own type, read
-   * with each parameter bound to the argument the reference writes for it, or
-   * to the type's argument where none is written, at `type`
-   * (`GenerationContext.instantiatedAs`).
+   * is reached by, followed down a chain of aliases, each the whole body of
+   * the one before, to one whose body is a union. A generic alias's body is the
+   * declaration's own type, read with each parameter bound to the argument
+   * the reference to it writes, read under the bindings of the place it is
+   * written, or to the type's argument where none is written, at `type`
+   * (`GenerationContext.instantiatedAs`). `commonfabric`'s own aliases end
+   * the chain.
    */
   #writtenUnion(
     type: ts.UnionType,
@@ -1999,58 +2003,77 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     | undefined {
     const checker = context.typeChecker;
-    const reference = context.typeNode &&
+    const at = context.typeNode &&
       readThroughIdentityAliases(context.typeNode, checker);
-    if (reference && ts.isUnionTypeNode(reference)) {
-      return { node: reference, type, context };
+    if (at && ts.isUnionTypeNode(at)) {
+      return { node: at, type, context };
     }
-    if (reference && !ts.isTypeReferenceNode(reference)) return undefined;
-    const declaration = this.#getTypeAliasDeclarationForSymbol(
-      reference
-        ? checker.getSymbolAtLocation(reference.typeName)
-        : type.aliasSymbol,
+    if (at && !ts.isTypeReferenceNode(at)) return undefined;
+    const typeDeclaration = this.#getTypeAliasDeclarationForSymbol(
+      type.aliasSymbol,
       context,
     );
-    const body = declaration && unwrapTypeParentheses(declaration.type);
-    if (!declaration || !body || !ts.isUnionTypeNode(body)) return undefined;
-    const typeArguments = type.aliasSymbol &&
-        this.#getTypeAliasDeclarationForSymbol(type.aliasSymbol, context) ===
-          declaration
-      ? type.aliasTypeArguments
-      : undefined;
-    const written = reference?.typeArguments ?? [];
-    const bound = new Map<ts.TypeParameterDeclaration, BoundTypeArgument>();
-    for (
-      const [index, parameter] of (declaration.typeParameters ?? []).entries()
+    let reference = at;
+    let declaration = reference
+      ? this.#getTypeAliasDeclarationForSymbol(
+        checker.getSymbolAtLocation(reference.typeName),
+        context,
+      )
+      : typeDeclaration;
+    let bound = context.boundTypeParameters;
+    const visited = new Set<ts.TypeAliasDeclaration>();
+    while (
+      declaration && !visited.has(declaration) &&
+      !isCommonFabricDeclaration(declaration)
     ) {
-      // An argument the reference leaves out is its parameter's default, read
-      // with the arguments before it.
-      const node = written[index] ?? (reference && parameter.default);
-      const argument = node &&
-        this.#bindWrittenArgument(
-          node,
-          written[index]
-            ? context.boundTypeParameters
-            : { arguments: new Map(bound), declaredNode: node },
-          context,
-        );
-      const argumentType = typeArguments?.[index];
-      const binding = argument || (argumentType && { type: argumentType });
-      if (!binding) return undefined;
-      bound.set(parameter, binding);
+      visited.add(declaration);
+      const body = unwrapTypeParentheses(declaration.type);
+      const typeArguments = declaration === typeDeclaration
+        ? type.aliasTypeArguments
+        : undefined;
+      const written = reference?.typeArguments ?? [];
+      const here = new Map<ts.TypeParameterDeclaration, BoundTypeArgument>();
+      for (
+        const [index, parameter] of (declaration.typeParameters ?? [])
+          .entries()
+      ) {
+        // An argument the reference leaves out is its parameter's default,
+        // read with the arguments before it.
+        const node = written[index] ?? (reference && parameter.default);
+        const argument = node &&
+          this.#bindWrittenArgument(
+            node,
+            written[index]
+              ? bound
+              : { arguments: new Map(here), declaredNode: node },
+            context,
+          );
+        const argumentType = typeArguments?.[index];
+        const binding = argument || (argumentType && { type: argumentType });
+        if (!binding) return undefined;
+        here.set(parameter, binding);
+      }
+      bound = here.size > 0
+        ? { arguments: here, declaredNode: body }
+        : undefined;
+      if (ts.isUnionTypeNode(body)) {
+        const { boundTypeParameters: _, ...outer } = context;
+        return {
+          node: body,
+          type: this.#writtenArgumentType(body, context),
+          context: bound
+            ? { ...outer, boundTypeParameters: bound, instantiatedAs: type }
+            : outer,
+        };
+      }
+      if (!ts.isTypeReferenceNode(body)) return undefined;
+      reference = body;
+      declaration = this.#getTypeAliasDeclarationForSymbol(
+        checker.getSymbolAtLocation(body.typeName),
+        context,
+      );
     }
-    const { boundTypeParameters: _, ...outer } = context;
-    return {
-      node: body,
-      type: this.#writtenArgumentType(body, context),
-      context: bound.size > 0
-        ? {
-          ...outer,
-          boundTypeParameters: { arguments: bound, declaredNode: body },
-          instantiatedAs: type,
-        }
-        : outer,
-    };
+    return undefined;
   }
 
   /**

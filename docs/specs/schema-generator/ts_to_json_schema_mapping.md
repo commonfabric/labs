@@ -1003,8 +1003,10 @@ CFC parts pass over the brand (`cfcCarriedParts`), and otherwise by the
 formatters after it (`formatStructure`). Such a payload that is a cell, as
 `Cell<A> & Cell<B>`, is read as the cell. Where a union of one scope's
 wrappers beside `null` or `undefined` is written as one, `PerUser<A> | null`,
-at the position or as the body of the alias the type is reached by, under that
-alias's arguments (`scopeOfWrittenScopedUnion`), the payload's type is read at
+at the position or as the body of the alias the type is reached by, followed
+down a chain of aliases, each the whole body of the one before, under the
+arguments each reference writes (`scopeOfWrittenScopedUnion`), the payload's
+type is read at
 the members written for it: the payload written in each wrapper, and each
 `null` or `undefined` (`GenerationContext.scopePayloadNodes`), as the members
 of `A | null` written in `PerUser<A | null>` are. So what only the syntax says,
@@ -1740,7 +1742,10 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   one other member, and where the node's schema is such a union whose value
   member declares labels of its own and the union none, they are combined into
   that member's, where formatting put the part of them it could read
-  (`labeledValueMember` in `ifc-labels.ts`). A node
+  (`labeledValueMember` in `ifc-labels.ts`). Where no member node is paired
+  through the value's node, as a reference to a generic alias whose body is
+  the union, the value is formatted whole at that node and has the labels
+  formatting attaches to its value member, unless that member is a cell. A node
   narrowed from any other union stands for any of its members, so it has the
   union's labels, every member's confidentiality, and each other label every
   member declares alike (`joinMemberIfcLabels`). A member is spelled by the

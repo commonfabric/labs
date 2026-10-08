@@ -458,6 +458,48 @@ interface SchemaRoot {
         .toEqual(properties?.outside);
     });
 
+    it("keeps a policy only the payload's syntax names, with `null` written outside the wrapper at the end of a chain of generic aliases", async () => {
+      // Each alias in the chain is the whole body of the one before, and binds
+      // its parameters to the arguments the reference to it writes.
+      const { type, checker } = await getTypeFromFiles(
+        {
+          "/cfc-types.ts":
+            `export type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };`,
+          "/entry.ts": `
+            import type { PolicyOf } from "./cfc-types.ts";
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+            type Confidential<T, X extends readonly unknown[]> =
+              Cfc<T, { confidentiality: X }>;
+            declare const rules: unknown;
+            interface Dict<U> { [key: string]: U }
+            type Outside<T> =
+              PerUser<Confidential<T, readonly [PolicyOf<typeof rules>]>> | null;
+            type Middle<T> = Outside<T>;
+            type Box<T> = Middle<T>;
+            type Inside<T> =
+              PerUser<Confidential<T, readonly [PolicyOf<typeof rules>]> | null>;
+            interface SchemaRoot {
+              outside: Box<string>;
+              inside: Inside<string>;
+              outsideValues: Dict<Box<string>>;
+            }
+          `,
+        },
+        "/entry.ts",
+        "SchemaRoot",
+      );
+      const { properties } = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+
+      expect(properties?.outside).toEqual(properties?.inside);
+      expect(asObjectSchema(properties?.outsideValues).additionalProperties)
+        .toEqual(properties?.inside);
+      expect(JSON.stringify(properties?.inside)).toContain(
+        '"__ctPolicyIdentityOf":{"file":"/entry.ts","path":["rules"]}',
+      );
+    });
+
     for (const nullish of ["null", "undefined"]) {
       it(`declares a scoped cell's scope for the slot and as its handle's cap beside \`${nullish}\``, async () => {
         // The cell is an `anyOf` branch: the slot's scope is read at the top,
