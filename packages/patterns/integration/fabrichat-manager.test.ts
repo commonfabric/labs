@@ -15,7 +15,7 @@ import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   type Cell,
-  IN_SPACE_ROOT_CAUSE,
+  inSpaceRootCause,
   isCell,
   Runtime,
 } from "@commonfabric/runner";
@@ -255,7 +255,7 @@ describe("fabrichat-manager", () => {
       if (!isCell(root)) throw new Error("The room's space has no root.");
       expect(root.space).toBe(space);
       expect(root.getAsNormalizedFullLink().path).toEqual([]);
-      expect(root.equalLinks(runtime.getCell(space, IN_SPACE_ROOT_CAUSE)))
+      expect(root.equalLinks(runtime.getCell(space, inSpaceRootCause(space))))
         .toBe(true);
       expect(root.equalLinks(room)).toBe(true);
     }

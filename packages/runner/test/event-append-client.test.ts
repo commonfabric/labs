@@ -18,6 +18,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
@@ -26,13 +27,19 @@ import type {
   ClientCommit,
   StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import type { JSONSchema } from "../src/builder/types.ts";
+import { sendEvent } from "../src/cell.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
+import { lookupSchemaDocument } from "../src/schema-registry.ts";
 import {
   type EventIntentOutcome,
   SpeculationOverlayDestination,
 } from "../src/speculation/overlay-destination.ts";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import type {
+  EventAppendDeliveryOutcome,
+  MemorySpace,
+} from "../src/storage/interface.ts";
 import {
   EventAppendQueue,
   type EventAppendQueueStore,
@@ -54,6 +61,8 @@ import {
 const spaceSigner = await Identity.fromPassphrase("event append space");
 const space = spaceSigner.did() as MemorySpace;
 const aliceSigner = await Identity.fromPassphrase("event append alice");
+const otherSpace = (await Identity.fromPassphrase("event append other space"))
+  .did() as MemorySpace;
 
 const namedError = (name: string, message: string): Error => {
   const error = new Error(message);
@@ -985,5 +994,58 @@ describe("the fire fork (protocol.md §1's scheduler tell)", () => {
     expect(sidecars.length).toBe(1);
     expect(sidecars[0].entries.length).toBe(1);
     cancelDemand();
+  });
+
+  it("installs the schema document a payload link references into the stream's space, in the append's own commit", async () => {
+    // The link names a cell in another space, as a control bound to a
+    // person's profile does. Its schema document is owed to the space
+    // holding the stream, which holds nothing of it beforehand; the
+    // commit boundary refuses an append whose payload references a
+    // document that is neither in the commit nor in the space.
+
+    clientManager = EmulatedStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const engine = await server.engineForSpace(space);
+    const profile = clientRuntime.getCell(
+      otherSpace,
+      "append-schema-doc-profile",
+      {
+        type: "object",
+        properties: { name: { type: "string" } },
+      } as const satisfies JSONSchema,
+    );
+    const stream = clientRuntime.getCell(space, "append-schema-doc-stream");
+    {
+      const tx = clientRuntime.edit();
+      profile.withTx(tx).set({ name: "Ada" });
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    {
+      const tx = clientRuntime.edit();
+      stream.withTx(tx).set({ $stream: true });
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    const link = profile.getAsLink({ includeSchema: true });
+    const ref = (linkRefPayload(link).schema as {
+      $ref?: string;
+    }).$ref!;
+    expect(ref).toMatch(/^cid:/);
+    const schema = lookupSchemaDocument(ref.slice("cid:".length));
+    expect(schema).toMatchObject({ type: "object" });
+    expect(Engine.read(engine, { id: ref })).toBeNull();
+
+    const appended = Promise.withResolvers<EventAppendDeliveryOutcome>();
+    sendEvent(stream, { target: { name: link } }, undefined, {
+      onAppended: appended.resolve,
+    });
+
+    expect(await appended.promise).toEqual({ delivered: true });
+    expect(Engine.read(engine, { id: ref })?.value).toEqual(schema);
   });
 });

@@ -21,9 +21,11 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { principalOf } from "../src/builder/principal-of.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
+import { getEntityId } from "../src/create-ref.ts";
 import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
-import { IN_SPACE_ROOT_CAUSE } from "../src/runner.ts";
+import type { NormalizedFullLink } from "../src/link-utils.ts";
+import { inSpaceRootCause } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
@@ -263,6 +265,32 @@ describe("profile-space-access", () => {
     }
   });
 
+  it("gives two users' profiles different entities", async () => {
+    // A pattern keys a per-person record by the entity its profile names, as
+    // the lunch poll keys a vote, so two people's profiles must not name one.
+    const ownerRuntime = runtimeAs(owner);
+    const visitorRuntime = runtimeAs(visitor);
+    try {
+      const entityOf = async (link: NormalizedFullLink) => {
+        const listed = ownerRuntime.getCellFromLink(link);
+        await listed.sync();
+        return getEntityId(listed.resolveAsCell());
+      };
+      const ownerEntity = await entityOf(
+        await createProfile(ownerRuntime, "Ada"),
+      );
+      const visitorEntity = await entityOf(
+        await createProfile(visitorRuntime, "Grace"),
+      );
+      expect(ownerEntity).toBeDefined();
+      expect(visitorEntity).toBeDefined();
+      expect(visitorEntity).not.toEqual(ownerEntity);
+    } finally {
+      await visitorRuntime.dispose();
+      await ownerRuntime.dispose();
+    }
+  });
+
   it("makes the profile its space's root, which a visitor's runtime finds from the space's DID alone", async () => {
     const ownerRuntime = runtimeAs(owner);
     const visitorRuntime = runtimeAs(visitor);
@@ -286,12 +314,12 @@ describe("profile-space-access", () => {
         path: [],
       });
       expect(profile.id).toBe(
-        visitorRuntime.getCell(profileSpace, IN_SPACE_ROOT_CAUSE)
+        visitorRuntime.getCell(profileSpace, inSpaceRootCause(profileSpace))
           .getAsNormalizedFullLink().id,
       );
       expect(
         readGenesisRoot(await server.engineForSpace(profileSpace)),
-      ).toEqual({ cause: IN_SPACE_ROOT_CAUSE });
+      ).toEqual({ cause: inSpaceRootCause(profileSpace) });
 
       // The profile reached that way still says whom it represents, which is
       // what a host checks before taking it for its owner's.

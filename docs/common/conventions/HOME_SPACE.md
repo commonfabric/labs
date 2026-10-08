@@ -281,6 +281,11 @@ nobody opens, and the wish does not open it; a custom home pattern
 Until then `wish({ query: "#chatManager" })` reports an error naming both
 remedies, rather than resolving to nothing.
 
+Home hands the manager its shared-space catalog ([Shared-space
+catalog](../../features/shared-space-catalog.md)), and the manager registers
+there each room it creates, and each room a manager created that it accepts, as
+a `fabrichat-room` entry.
+
 ## Custom Home Pattern
 
 The home space's default pattern is the home experience itself — by default,
@@ -430,13 +435,15 @@ Both the home pattern and the default app pattern follow the same mechanism:
 1. When a space is opened, `PiecesController.ensureDefaultPattern()` checks if
    a `defaultPattern` piece already exists on the space cell. Through
    `RuntimeClient.getSpaceRootPattern()`, which is how the shell opens a space,
-   a space with no root gets one only from an open that runs the root (`start`
-   true) by an identity that owns the space, as its Home or as an `OWNER` in
-   its access list. For such a space, the open of any other principal the
-   space admits, and any read with `start` false, returns `undefined` and
-   writes nothing, so a visitor never puts a root in someone else's space. A
-   principal the space refuses gets that refusal instead, whether or not the
-   space has a root
+   a space whose genesis reserved no root, and which has none, gets one only
+   from an open that runs the root (`start` true) by an identity that owns the
+   space, as its Home or as an `OWNER` in its access list. For such a space,
+   the open of any other principal the space admits, and any read with `start`
+   false, returns `undefined` and writes nothing, so a visitor never puts a
+   root in someone else's space. A principal the space refuses gets that
+   refusal instead, whether or not the space has a root. A space whose genesis
+   reserved its root, as a profile's space does, gets that root from the run of
+   its creator's `inSpace(..., { root: true })` call
 2. If not, it creates one:
    - **Home space** (`space === userIdentityDID`): uses
      `/api/patterns/system/home.tsx`

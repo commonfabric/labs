@@ -21,6 +21,7 @@ import {
   type TrustedActionWrite,
   Writable,
 } from "commonfabric";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import PrivateInbox, {
   type Offer,
   type OfferEvent,
@@ -50,6 +51,10 @@ import {
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+/** An empty shared-space catalog, as a manager registers its rooms in. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 
 /** The reviewed surface and action a person writes their own profile from. */
 const PROFILE_SURFACE = "FabriChatTestProfileSurface";
@@ -261,6 +266,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const manager = FabriChatManagerCore({
     myProfile: profile,
     rooms: Writable.of<ChatIndexEntry[]>([]),
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: notices,

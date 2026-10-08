@@ -6,7 +6,7 @@ import type { ACL } from "@commonfabric/memory/acl";
 import {
   ACLManager,
   type Cell,
-  IN_SPACE_ROOT_CAUSE,
+  inSpaceRootCause,
   type MemorySpace,
   Runtime,
   type RuntimeProgram,
@@ -181,7 +181,7 @@ describe("share-intake", () => {
   /**
    * A space granting `grants`, owned by the owner unless `owner` says
    * otherwise, whose genesis commit reserves its root at
-   * `IN_SPACE_ROOT_CAUSE`'s address and declares `spaceKind`, `fabrichat-room`
+   * the address `inSpaceRootCause()` derives there and declares `spaceKind`, `fabrichat-room`
    * by default, or no kind for `null`. Its root is a room placed at the
    * reserved address, a room placed elsewhere in the space for `"misplaced"`,
    * and none for `false`. For `"elsewhere"` its root pointer reaches a
@@ -199,7 +199,7 @@ describe("share-intake", () => {
     const space = await runtime.createSpace({
       grants,
       ...(owner === undefined ? {} : { owner: owner as never }),
-      root: { cause: IN_SPACE_ROOT_CAUSE },
+      root: (created) => ({ cause: inSpaceRootCause(created) }),
       ...(spaceKind === null ? {} : { spaceKind }),
     });
     if (root === "elsewhere" || root === "inside") {
@@ -238,7 +238,7 @@ describe("share-intake", () => {
       runtime,
       rooms,
       roomProgram,
-      reserved ? { cause: IN_SPACE_ROOT_CAUSE } : {},
+      reserved ? { cause: inSpaceRootCause(space) } : {},
     );
   }
 

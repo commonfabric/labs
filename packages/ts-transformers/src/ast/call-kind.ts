@@ -615,6 +615,8 @@ export function getLiftAppliedInputAndCallback(
   // call's callee as a CallExpression (the inner `lift(...)` factory). That is
   // the only way detectCallKind produces kind:"lift-applied" — see its
   // recognition in resolveExpressionKind (requires ts.isCallExpression(target)).
+  // resolveSymbolKind() does not carry it across a binding, whose call has the
+  // binding as its callee.
   // Lift is function-first, so the callback is inner argument zero even after
   // schema injection or scheduler options; the applied input is outer arg zero.
   // detectCallKind's lift-applied result proves this structural invariant.
@@ -2199,6 +2201,11 @@ function resolveSymbolKind(
         seen,
       );
       if (!nested) continue;
+      // `resolveExpressionKind()` reads the initializer as a callee, so
+      // `lift-applied` here describes a call whose callee is the initializer.
+      // A call through this binding has the binding as its callee, so that
+      // kind never carries across it.
+      if (nested.kind === "lift-applied") continue;
       if (
         nested.kind === "builder" &&
         !isConstVariableDeclaration(declaration)

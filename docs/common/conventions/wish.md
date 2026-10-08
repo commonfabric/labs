@@ -151,8 +151,9 @@ wish({ query: "#portfolio", scope: ["profile"] })
 
 ### Well-Known Profile Targets
 
-A user may have multiple profiles, stored on the home default pattern at
-`homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
+A user may have multiple profiles. Each is a piece in a space of its own, and a
+new profile is that space's root. The home default pattern holds links to them
+at `homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
 recency-ordered `mru`. The well-known wishes enumerate that list and resolve,
 ordered **default first, then by MRU, then list order**:
 

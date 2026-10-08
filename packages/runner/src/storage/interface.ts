@@ -379,19 +379,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * for nothing else, and is never stored, returned, or logged.
    *
    * `acl` must name a concrete OWNER, and must grant this manager's signer at
-   * least READ if this manager will open the space. `genesis.root` requires a
-   * host that supports root reservations; its complete source, cause,
+   * least READ if this manager will open the space. `genesis.root` is the
+   * reservation itself, or a function computing it from the new space's DID,
+   * which nothing knows before the key is generated. It requires a host that
+   * advertises the `genesisRoot` server flag; its complete source, cause,
    * arguments, and attached source roots are snapshotted in the genesis
    * receipt, and a later mount that declares a root intent must match it.
-   * `genesis.spaceKind` requires a host that advertises `spaceKind`, and is
-   * sealed the same way (`docs/features/space-kinds.md`).
+   * `genesis.spaceKind` requires a host that advertises the `spaceKind` server
+   * flag, and is sealed the same way (`docs/features/space-kinds.md`).
    *
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
   createSpace?(
     acl: ACL,
-    genesis?: { root?: GenesisRoot; spaceKind?: string },
+    genesis?: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
   ): Promise<MemorySpace>;
 
   /**
@@ -618,6 +623,18 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     IMemorySpaceAddress,
     "space" | "scope" | "id"
   >[];
+
+  /**
+   * Whether this manager refuses every read of `address` by construction: a
+   * serving manager reads no scoped instance of a space other than its home
+   * (protocol.md §2's fail-closed interim). Such a read returns no data
+   * however long it is waited for, so the manager registers no pending load
+   * for it, and a served run that reads it has read an absence that is not
+   * the document's state.
+   */
+  refusesReadByConstruction?(
+    address: Pick<IMemorySpaceAddress, "space" | "scope">,
+  ): boolean;
 
   /**
    * Generation of the currently in-flight load for an entity key, or
@@ -3492,9 +3509,12 @@ export type PullError =
 /** A serving runtime's refusal of a scoped read of a space other than its home
  * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
  * scope and the runtime's serving posture decide it, never transport or session
- * state, so the same read from the same runtime is refused every time. A served
- * event whose required load meets it terminalizes at once instead of spending
- * the delivery-failure budget (events.md §5). */
+ * state, so the same read from the same runtime is refused every time. So it is
+ * no load in flight: the storage manager registers no pending load for it. A
+ * served run that reads the document's value fails permanently in
+ * `dispatch-load` (events.md §5), and where the refusal reaches a load
+ * failure it is permanent evidence rather than a retryable `connection`
+ * failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
 }

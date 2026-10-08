@@ -172,7 +172,10 @@ import {
 } from "./scheduler.ts";
 import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
-import { RetryImmediately } from "./scheduler/retry-immediately.ts";
+import {
+  InSpaceTargetUnresolved,
+  RetryImmediately,
+} from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
@@ -1248,10 +1251,16 @@ export const SEALING_SOURCE_UPDATE_REFUSAL =
 
 /**
  * The cause of the root `PatternFactory.inSpace(..., { root: true })` places
- * in the space it creates. The space's genesis commit reserves the address it
- * derives there, so the root's address is fixed before the run that places it.
+ * in `space`, the space it creates. The space's genesis commit reserves the
+ * address it derives there, so the root's address is fixed before the run that
+ * places it. The cause names `space`, so the roots of two such spaces are two
+ * entities, and a pattern keying a record by the entity a root names, as one
+ * keys a person's record by their profile, keeps one person's record apart
+ * from another's.
  */
-export const IN_SPACE_ROOT_CAUSE = "in-space-root";
+export function inSpaceRootCause(space: MemorySpace): string {
+  return `in-space-root:${space}`;
+}
 
 /**
  * Reports work which failed after storage accepted a pattern setup.
@@ -10554,6 +10563,24 @@ export class Runner {
     tx.enableMultiSpaceWrites?.([...childSpaces, parentSpace]);
   }
 
+  /**
+   * Helper for the handler paths, which returns the result cell of the
+   * handling caused by `cause`: its receipt, in the space of the handler's
+   * own result cell `patternResultCell`.
+   */
+  #handlingReceiptCell(
+    patternResultCell: Cell<any>,
+    cause: Record<string, any>,
+    tx: IExtendedStorageTransaction,
+  ): Cell<unknown> {
+    return this.#runtime.getCell(
+      patternResultCell.space,
+      { resultFor: cause },
+      undefined,
+      tx,
+    );
+  }
+
   #handleJavaScriptHandlerResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
@@ -10564,12 +10591,7 @@ export class Runner {
     addCancel: AddCancel,
     cause: Record<string, any>,
   ): any {
-    const receiptCell = this.#runtime.getCell(
-      patternResultCell.space,
-      { resultFor: cause },
-      undefined,
-      tx,
-    );
+    const receiptCell = this.#handlingReceiptCell(patternResultCell, cause, tx);
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
       // Events-down (runtime-mapping.md, row N26): receipt create-only
@@ -10877,7 +10899,9 @@ export class Runner {
    * throws {@link RetryImmediately} so the scheduler re-runs the handler or
    * action. On the re-run each name resolves synchronously (see the pattern
    * builder's resolveInSpaceTargetSpace), and the run records the allocation
-   * in the same commit as the writes that refer to it.
+   * in the same commit as the writes that refer to it. A name the runtime
+   * leaves unresolved throws {@link InSpaceTargetUnresolved} instead (see
+   * `Runtime.resolveInSpaceName()`).
    *
    * Each space created for a name is owned by the owner
    * {@link Runtime.actingPrincipalFor} gives the run's transaction, the one the
@@ -10888,6 +10912,7 @@ export class Runner {
   async #resolvePendingSpaceNamesAndRetry(
     frame: Frame,
     tx?: IExtendedStorageTransaction,
+    receiptCell?: Cell<unknown>,
   ): Promise<never> {
     const pending = [...(frame.pendingSpaceNames ?? [])];
     const space = frame.space;
@@ -10901,11 +10926,24 @@ export class Runner {
           "acting user, and this run has none",
       );
     }
-    await Promise.all(
-      pending.map(([name, request]) =>
-        this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
-      ),
-    );
+    try {
+      await Promise.all(
+        pending.map(([name, request]) =>
+          this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
+        ),
+      );
+    } catch (error) {
+      // A withdrawn run still names the handling's receipt, which the serving
+      // runtime's run of the same event writes: the address derives from the
+      // event, and a caller reads the served outcome through it.
+      if (
+        error instanceof InSpaceTargetUnresolved && tx !== undefined &&
+        receiptCell !== undefined
+      ) {
+        tx.handlingReceiptLink = receiptCell.getAsNormalizedFullLink();
+      }
+      throw error;
+    }
     throw new RetryImmediately(
       `Resolving in-space target spaces: ${
         pending.map(([name]) => name).join(", ")
@@ -11309,7 +11347,11 @@ export class Runner {
           logger.timeStart("stream", "postRun");
           try {
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
-              return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
+              return this.#resolvePendingSpaceNamesAndRetry(
+                frame,
+                tx,
+                this.#handlingReceiptCell(resultCell, cause, tx),
+              );
             }
             const handleResult = () => {
               const normalized = normalizeSandboxResult(result, name);
@@ -11354,8 +11396,11 @@ export class Runner {
           frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
         ) {
           popFrameAfterReturn = false;
-          return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
-            .finally(() => popFrame(frame));
+          return this.#resolvePendingSpaceNamesAndRetry(
+            frame,
+            tx,
+            this.#handlingReceiptCell(resultCell, cause, tx),
+          ).finally(() => popFrame(frame));
         }
         (error as Error & { frame?: Frame }).frame = frame;
         throw error;
@@ -12689,7 +12734,7 @@ export class Runner {
       targetSpace,
       // A space's root sits where its genesis reservation says, which the
       // reservation fixed before this output existed.
-      module.targetSpaceRoot ? IN_SPACE_ROOT_CAUSE : {
+      module.targetSpaceRoot ? inSpaceRootCause(targetSpace) : {
         resultFor: {
           space: outputRedirect.space,
           id: outputRedirect.id,
