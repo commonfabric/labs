@@ -1,7 +1,6 @@
 /**
- * Stands in for a room a sender creates and offers to the owner. Its result
- * declares the members the share intake requires of a `fabrichat-room` root.
- * Fixture for `share-intake-multi-runtime.test.ts`.
+ * Stands in for a room a sender creates and offers to the owner. Fixture for
+ * `share-intake-multi-runtime.test.ts`.
  */
 
 import {

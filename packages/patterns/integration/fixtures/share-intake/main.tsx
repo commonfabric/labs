@@ -49,7 +49,7 @@ import {
 } from "../../../system/shared-space-catalog.ts";
 import Room, { type RoomOutput } from "./room.tsx";
 
-/** The kind of every offer here. */
+/** The kind of every offer here, and of the space each room's is by default. */
 const OFFER_KIND = "fabrichat-room";
 
 /** A space a sender's handler created and offered, as the test reads it. */
@@ -74,6 +74,12 @@ export interface CreateAndOfferRequest {
 
   /** Whether the room is its space's root; absent, it is. */
   root?: boolean;
+
+  /**
+   * The kind the room's space declares: absent, the offer's kind, and `null`,
+   * none.
+   */
+  spaceKind?: string | null;
 }
 
 /** A space a sender's handler offers again, under another key. */
@@ -159,9 +165,9 @@ const createProfile = handler<
 });
 
 /**
- * Creates a room in a space of its own, as the space's root unless the event
- * says otherwise, which the event's actor owns and which grants the recipient
- * `OWNER`, and queues offering it to the owner.
+ * Creates a room in a space of its own, as the space's root and declaring the
+ * offer's kind unless the event says otherwise, which the event's actor owns
+ * and which grants the recipient `OWNER`, and queues offering it to the owner.
  */
 const createAndOffer = handler<
   CreateAndOfferRequest,
@@ -171,10 +177,15 @@ const createAndOffer = handler<
     event.recipient,
     "OWNER",
   ]]) as InSpaceGrants;
+  const spaceKind = event.spaceKind === undefined
+    ? OFFER_KIND
+    : event.spaceKind;
   const room = roomLinkOf(
-    Room.inSpace(undefined, { grants, root: event.root !== false })({
-      title: event.title,
-    }),
+    Room.inSpace(undefined, {
+      grants,
+      root: event.root !== false,
+      ...(spaceKind === null ? {} : { spaceKind }),
+    })({ title: event.title }),
   );
   offerRoom.send({ room, id: event.id, title: event.title });
 });

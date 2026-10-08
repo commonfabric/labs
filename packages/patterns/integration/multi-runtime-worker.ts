@@ -1079,6 +1079,29 @@ const handlers: Record<
     return { decisions };
   },
 
+  /**
+   * Links the root of `space` to a fresh document in it, in place of the root
+   * it had, as any member with `WRITE` there can.
+   */
+  async repointSpaceRoot({ space }) {
+    const runtime = controller().runtime;
+    const elsewhere = runtime.getCell<FabricValue>(
+      space as MemorySpace,
+      crypto.randomUUID(),
+    );
+    const { error } = await runtime.editWithRetry((tx) => {
+      elsewhere.withTx(tx).set({ elsewhere: true });
+      runtime.getSpaceCell(space as MemorySpace).withTx(tx).key(
+        "defaultPattern",
+      ).set(elsewhere as never);
+    });
+    if (error) {
+      throw new Error(`repointSpaceRoot failed: ${error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
   /** Reads an explicit held address with the same stored-label gate as any Cell. */
   async readAddress({ link }) {
     const cell = controller().runtime.getCellFromLink(link as never);
