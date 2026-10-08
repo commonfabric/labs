@@ -154,7 +154,7 @@ loads nothing of the conversation, and a client opens the room through the link
 under its own access. A Loom that names no room, including a root whose state
 holds no `chatRoom` field, reads the link's value as `undefined`.
 `setChatRoom({room?})` names the room, or clears it when `room` is omitted;
-naming the room already named changes nothing. It refuses a room in another
+sending the same event again leaves the same state. It refuses a room in another
 space. A FabriChat room takes its access list from its space, and its
 participants from its space's default pattern, which in the Loom's space is this
 root's `participants`, so a room in the Loom's space has the Loom's members.

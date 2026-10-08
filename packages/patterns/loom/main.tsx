@@ -158,18 +158,12 @@ const setPresentation = handler<Presentation, State>(
  */
 const setChatRoom = handler<ChatRoomChoice, { chatRoom: ChatRoomCell }>(
   ({ room }, { chatRoom }) => {
-    const current = chatRoom.get().room;
-    if (room === undefined) {
-      if (current !== undefined) chatRoom.set({});
-      return;
-    }
     // `chatRoom` holds a record rather than a link, so its space is the
     // Loom's.
-    if (spaceOf(room) !== spaceOf(chatRoom)) {
+    if (room !== undefined && spaceOf(room) !== spaceOf(chatRoom)) {
       throw new Error("The chat room must be in this Loom's space");
     }
-    if (current?.equals(room)) return;
-    chatRoom.set({ room });
+    chatRoom.set(room === undefined ? {} : { room });
   },
 );
 
