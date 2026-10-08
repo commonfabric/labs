@@ -34,6 +34,9 @@ const MANAGER_PATH = fromFileUrl(
   new URL("../fabrichat/manager.tsx", import.meta.url),
 );
 
+// The patterns package, which the manager's imports reach across.
+const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
+
 const RESULT_CAUSE = "fabrichat manager";
 
 // The reviewed action a start is admitted from, as
@@ -102,7 +105,7 @@ describe("fabrichat-manager", () => {
     const program = {
       ...await resolveLocalProgram(
         (resolver) => runtime.harness.resolve(resolver),
-        { main: MANAGER_PATH },
+        { main: MANAGER_PATH, root: PATTERNS },
       ),
       mainExport: "FabriChatManagerCore",
     };
