@@ -31,9 +31,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Release gates without an integrity union](cfc-release-gate-integrity.md)
   keeps one consumed value's evidence from releasing another value's clause:
   the write, sink and display gates run value-intrinsic rules at each location
-  an access consumed and every rule over the join (§5.3, §4.6.3). What remains
-  is a specs ruling on the looser variants and the display's fit of a cell's
-  stored label.
+  an access consumed and the other rules over the join (§5.3, §4.6.3). What
+  remains is a specs ruling on the join within one location and the display's
+  fit of a cell's stored label.
 - [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
   refuses a stand-in fed to code a rule endorses, by checking the integrity
   each argument declares against the reads made through it. The declaration is

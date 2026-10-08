@@ -116,7 +116,7 @@ import {
 } from "../storage/transaction-inspection.ts";
 import {
   type ConsumedLocation,
-  joinLocationIntegrity,
+  exchangeEachObservation,
 } from "./access-integrity.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
@@ -140,9 +140,9 @@ import {
 import { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import { collectDeclaredMonotonicityViolations } from "./declared-monotonicity.ts";
 import {
+  admitsRulesOfKind,
   type CfcGrantConsumptionContext,
   evaluateExchangeRules,
-  isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
 import {
@@ -335,22 +335,6 @@ const labelForEntriesAtPath = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
 ): IFCLabel | undefined => {
-  const resolved = entriesResolvedAtPath(entries, path);
-  if (resolved.length === 0) return undefined;
-  return resolved.length === 1
-    ? resolved[0].label
-    : joinLabels(resolved.map((entry) => entry.label));
-};
-
-/**
- * The entries of `entries` whose labels `labelForEntriesAtPath` joins into
- * the label at `path`: for each component, its most specific entry at or
- * above `path`, or every entry tied for most specific.
- */
-const entriesResolvedAtPath = (
-  entries: readonly LabelMapEntry[],
-  path: readonly string[],
-): LabelMapEntry[] => {
   // Per-component longest-prefix resolution: within one origin component a
   // more specific entry replaces its ancestor (§4.6.3 replace-down), but
   // components layer independently, so the effective label is the join of
@@ -359,7 +343,7 @@ const entriesResolvedAtPath = (
   // single-map resolution for pre-component metadata.
   const matches = new Map<
     string,
-    { depth: number; entries: LabelMapEntry[] }
+    { depth: number; labels: IFCLabel[] }
   >();
   for (const entry of entries) {
     if (!isPrefix(entry.path, path)) {
@@ -399,21 +383,25 @@ const entriesResolvedAtPath = (
       : component;
     const match = matches.get(bucket);
     if (match === undefined || match.depth < entry.path.length) {
-      matches.set(bucket, { depth: entry.path.length, entries: [entry] });
+      matches.set(bucket, { depth: entry.path.length, labels: [entry.label] });
     } else if (match.depth === entry.path.length) {
       // Two equally specific prefixes of one queried path are the same
       // path — or, with wildcard segments, a concrete entry and a `*`
       // template covering the same slot; duplicate (path, origin) entries
       // shouldn't survive coalescing, but join defensively (fail-toward-
       // taint) rather than drop one.
-      match.entries.push(entry);
+      match.labels.push(entry.label);
     }
   }
-  const resolved: LabelMapEntry[] = [];
-  for (const match of matches.values()) {
-    for (const entry of match.entries) resolved.push(entry);
+  if (matches.size === 0) {
+    return undefined;
   }
-  return resolved;
+  const labels = Array.from(
+    matches.values(),
+    (match) =>
+      match.labels.length === 1 ? match.labels[0] : joinLabels(match.labels),
+  );
+  return labels.length === 1 ? labels[0] : joinLabels(labels);
 };
 
 // The §4.6.4 redundant-entry collapse, applied to the per-value components
@@ -6797,10 +6785,7 @@ const isNonEndorsementProvenanceAtom = (atom: unknown): boolean =>
 // count as "the write had labeled input" for the #14 empty-prefix arm — the
 // group-chat admin-grant shape (provenance lookup + protected write, no
 // endorsed read) must keep committing.
-const isProvenanceOnlyConsumedLabel = (label: {
-  readonly confidentiality?: readonly unknown[];
-  readonly integrity?: readonly unknown[];
-}): boolean => {
+const isProvenanceOnlyConsumedLabel = (label: IFCLabel): boolean => {
   if ((label.confidentiality?.length ?? 0) > 0) return false;
   const integrity = label.integrity ?? [];
   return integrity.length > 0 &&
@@ -7236,26 +7221,24 @@ const verifyInputRequirements = (
     // — the read-side half of #14 rides the same dial as the write-side
     // half by design.
     if (requiredIntegrity.length > 0 && gating.length > 0) {
-      // Coherent satisfaction (§8.10.3, Epic B5): each requirement must be
-      // met by ONE shared witness atom across every gated read, not by a
-      // different witness per read — "each input was screened by someone"
-      // is not "the inputs were screened". The single-read case reduces to
-      // the plain floor. Quantifies over D4's per-write prefix `gating`, not
-      // the transaction-global gate-visible read set.
-      // Input requirements are checked against the labels on consumed input
-      // observations (§8.10.3), coherently across the consumed descendants
-      // of an object path, one shared witness key per required pattern
-      // (§8.8). A whole read is a traversal over primitive observations
-      // (§4.6.3), so each location a gated read consumed is one of those
-      // labels: a witness one location carries and another lacks is no
-      // witness for the object. §3.1.6.2's join labels a derived output,
-      // not an input check. The read's own label is held to the floor as
-      // well, so the floor admits no witness that label lacks.
+      // Coherent satisfaction (§8.10.3, §8.8, Epic B5): each requirement must
+      // be met by ONE witness, by its key, that every consumed observation
+      // carries, not by a different witness per observation — "each input
+      // was screened by someone" is not "the inputs were screened". A whole
+      // read is a traversal over primitive observations (§4.6.3), so each
+      // location a gated read consumed is one observation, and a witness one
+      // location carries and another lacks is no witness for the object. A
+      // read none of whose locations is labeled is one observation under its
+      // own label. §3.1.6.2's join labels a derived value, not an input
+      // check. Quantifies over D4's per-write prefix `gating`, not the
+      // transaction-global gate-visible read set.
       const ok = cfcIntegritySatisfiesFloorCoherently(
-        gating.flatMap((read) => [
-          read.label?.integrity ?? [],
-          ...read.locations().map((location) => location.integrity),
-        ]),
+        gating.flatMap((read) => {
+          const locations = read.locations();
+          return locations.length === 0
+            ? [read.label?.integrity ?? []]
+            : locations.map((location) => location.integrity);
+        }),
         requiredIntegrity,
         cfcFloorTrustContext(tx),
       );
@@ -9790,10 +9773,10 @@ const collectConsumedLabelImpl = (
   sources: readonly ConsumedAtomSource[];
 
   /**
-   * Every labeled location the transaction consumed, as the release gates'
-   * per-access join reads them (`access-integrity.ts`), resolved on first
-   * ask: where the union above pools integrity across the whole consumed
-   * set, the join takes only what vouches for every confidential location.
+   * Every labeled location the transaction consumed, as the release gates
+   * evaluate exchange rules over them (`access-integrity.ts`), resolved on
+   * first ask: one location at a time, then over their class-aware join,
+   * never over the union above.
    */
   locations: () => readonly ConsumedLocation[];
 } => {
@@ -9833,11 +9816,10 @@ const collectConsumedLabelImpl = (
     if (bucket === undefined) sourceBuckets.set(key, [source]);
     else bucket.push(source);
   };
-  // Integrity evidence riding the same consumed entries: the guard pool the
-  // exchange evaluator matches rule preconditions against (Epic B5). Same
-  // transaction-global over-approximation as the confidentiality union —
-  // rules bind kind/source structurally, so evidence still has to match the
-  // clause it discharges.
+  // Integrity evidence riding the same consumed entries, pooled the way the
+  // confidentiality union is. The release gates evaluate rules over
+  // `locations()` instead, and use this union only to tell whether any
+  // integrity was consumed at all.
   const integrityAtoms: CfcAtom[] = [];
   // What each observation consumed, for `locations()`.
   const observations: {
@@ -10214,13 +10196,10 @@ const evaluateGatedConfidentiality = (
 /**
  * Evaluates the exchange rules over what one access consumed, as a release
  * gate does (`access-integrity.ts`): the value-intrinsic rules at each
- * location `locations` returns, each matched against that location's own
- * evidence, then every rule over the join, whose integrity is
- * `joinLocationIntegrity()`'s and whose confidentiality is what the
- * per-location evaluations left, with any clause of `confidentiality` no
- * location resolved kept as it was read. A location whose evaluation runs
- * out of fuel keeps its clauses and marks the whole outcome exhausted, and
- * its resolution failures are the outcome's. The other arguments are
+ * location `locations` returns, matched against that location's own evidence
+ * (`exchangeEachObservation()`), then every other rule over the join. An
+ * evaluation that runs out of fuel leaves `confidentiality` as read and marks
+ * the outcome exhausted. The other arguments are
  * `evaluateGatedConfidentiality()`'s.
  *
  * With no rule that could fire, or no integrity consumed for a rule to
@@ -10253,58 +10232,51 @@ const evaluateAccessExchange = (
       destinationSpace,
     );
   }
-  const consumed = locations();
-  const exchanged: CfcConfClause[] = [];
-  const resolved: CfcConfClause[] = [];
-  const resolutionFailures: ReturnType<
-    typeof evaluateGatedConfidentiality
-  >["resolutionFailures"][number][] = [];
   let exhausted = false;
   let firings = 0;
-  for (const location of consumed) {
-    if (location.confidentiality.length === 0) continue;
-    for (const clause of location.confidentiality) resolved.push(clause);
-    const outcome = evaluateGatedConfidentiality(
-      tx,
-      location.confidentiality,
-      location.evidence,
-      [],
-      "observing",
-      destinationSpace,
-      isValueIntrinsicExchangeRule,
-    );
-    exhausted ||= outcome.exhausted;
-    firings += outcome.firings;
-    for (const failure of outcome.resolutionFailures) {
-      resolutionFailures.push(failure);
-    }
-    for (const clause of outcome.confidentiality) exchanged.push(clause);
-  }
-  // Every clause the access consumed resolves at one of its locations; one
-  // that did not stays as it was read.
-  for (const clause of confidentiality) {
-    if (!resolved.some((other) => deepEqual(other, clause))) {
-      exchanged.push(clause);
-    }
-  }
+  const failures: ReturnType<
+    typeof evaluateGatedConfidentiality
+  >["resolutionFailures"][number][] = [];
+  const access = exchangeEachObservation(
+    confidentiality,
+    locations(),
+    (clauses, evidence) => {
+      const outcome = evaluateGatedConfidentiality(
+        tx,
+        clauses,
+        evidence,
+        [],
+        "observing",
+        destinationSpace,
+        admitsRulesOfKind("value-intrinsic"),
+      );
+      exhausted ||= outcome.exhausted;
+      firings += outcome.firings;
+      for (const failure of outcome.resolutionFailures) {
+        failures.push(failure);
+      }
+      return outcome.confidentiality;
+    },
+  );
   const joined = evaluateGatedConfidentiality(
     tx,
-    uniqueCfcAtoms(exchanged) as CfcConfClause[],
-    joinLocationIntegrity(consumed),
+    access.confidentiality,
+    access.integrity,
     boundary,
     consumption,
     destinationSpace,
+    admitsRulesOfKind("not-value-intrinsic"),
   );
-  for (const failure of joined.resolutionFailures) {
-    resolutionFailures.push(failure);
-  }
+  exhausted ||= joined.exhausted;
+  for (const failure of joined.resolutionFailures) failures.push(failure);
   return {
     ...joined,
-    // An exhausted location keeps its clauses, so the confidentiality is
-    // never a partial rewrite; the flag fails the access closed.
-    exhausted: exhausted || joined.exhausted,
+    confidentiality: exhausted ? confidentiality : joined.confidentiality,
+    exhausted,
     firings: firings + joined.firings,
-    resolutionFailures,
+    resolutionFailures: failures.filter((failure, index) =>
+      failures.findIndex((other) => deepEqual(other, failure)) === index
+    ),
   };
 };
 

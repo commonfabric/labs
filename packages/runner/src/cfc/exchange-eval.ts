@@ -241,6 +241,21 @@ export const isValueIntrinsicExchangeRule = (rule: ExchangeRule): boolean => {
     );
 };
 
+/**
+ * Which exchange rules one evaluation runs: the value-intrinsic rules, as at
+ * one location an access consumed, or every other rule, as over the join of
+ * its locations (`access-integrity.ts`).
+ */
+export type ExchangeRuleKind = "value-intrinsic" | "not-value-intrinsic";
+
+/** The rules of `kind`, as an evaluation's `admitsRule` takes them. */
+export const admitsRulesOfKind = (
+  kind: ExchangeRuleKind,
+): (rule: ExchangeRule) => boolean =>
+  kind === "value-intrinsic"
+    ? isValueIntrinsicExchangeRule
+    : (rule) => !isValueIntrinsicExchangeRule(rule);
+
 export type ModulePolicyResolutionFailure = {
   readonly reference: unknown;
   readonly reason:

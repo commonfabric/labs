@@ -22,9 +22,9 @@ import {
   Runtime,
 } from "@commonfabric/runner";
 import {
+  admitsRulesOfKind,
   buildCfcPolicySnapshot,
   evaluateExchangeRules,
-  isValueIntrinsicExchangeRule,
   type RenderConfidentialityResolver,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -83,9 +83,9 @@ Deno.test("display fit release-gate integrity", async (t) => {
         integrity: [...(label.integrity ?? [])],
       },
       snapshot,
-      label.valueIntrinsicOnly === true
-        ? { admitsRule: isValueIntrinsicExchangeRule }
-        : {},
+      label.rules === undefined
+        ? {}
+        : { admitsRule: admitsRulesOfKind(label.rules) },
     ).label.confidentiality ?? [];
   const sources = { resolveConfidentiality };
 
@@ -207,12 +207,13 @@ Deno.test("display fit release-gate integrity", async (t) => {
     );
 
     await t.step(
-      "admits a stored label whose root evidence vouches for a child's clause",
+      "still admits a child's clause on its root's evidence at a cell's stored label, a known gap",
       () => {
         // A label view carries no origin and folds an ancestor's entry in
         // beside a narrower cell's own, so a cell's stored label is fitted on
-        // its root's integrity. The reads behind a rendered value are what
-        // the boundary decides location by location.
+        // its root's integrity, an under-taint the CFC conformance statement
+        // records. The reads behind a rendered value are what the boundary
+        // decides location by location.
 
         expect(
           cellLabelRefusal(

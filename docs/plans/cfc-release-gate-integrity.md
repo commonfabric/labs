@@ -25,9 +25,9 @@ on the gates holding.
   carries the join of their labels.
 - **§3.1.6.2:** the join keeps the hereditary atoms present in every input.
   Value-bound atoms, `TransformedBy` among them (§15.4), drop.
-- **§5.3, on value-intrinsic rules:** a rule whose guard only value-bound
-  claims in the consumed label satisfy is applied at observation, and values
-  derived from that observation carry the exchanged confidentiality.
+- **§5.3, on value-intrinsic rules:** a rule that only claims bound to the
+  current value can satisfy runs where that value is observed, and whatever
+  is derived from the observation keeps the confidentiality the rule left.
   This is how evidence that a later join drops still releases what it vouched
   for.
 
@@ -49,18 +49,23 @@ on the gates holding.
 
 ## Classification
 
-Removing the union is a **conforming implementation**. §5.3 states the rule:
-an exchanged label wherever a label is consumed, carried forward by rule kind,
-with a value-intrinsic rule applied at observation. §4.6.3 makes a whole read
-a traversal over primitive observations, and §8.10.1.1 joins their labels.
-The ceilings take the literal form of each step, and they store nothing new.
+Removing the union is a **conforming implementation**. §5.3 has every label
+that is consumed exchanged where it is consumed, each kind of rule's result
+carried forward as that kind allows, and a value-intrinsic rule evaluated
+where the value is observed. §4.6.3 makes a whole read a traversal over
+primitive observations, and §8.10.1.1 joins their labels. The ceilings follow
+each step and store nothing new. They depart from it in one direction, as the
+pooled code did: an observation that consumed no label (a document with no
+CFC metadata, or a location no entry labels) never enters the join, so a
+hereditary atom every labeled location carries survives a join §3.1.6.2 would
+empty. That over-claims integrity, and the conformance statement records it.
 
-The `requiredIntegrity` floor is conforming as well. §8.10.3 checks input
-requirements against the labels on consumed input observations, and §8.8's
-annotation summary asks for coherence across the consumed descendants of an
-object path, one shared witness key per required pattern. A whole read is a
-traversal over primitive observations (§4.6.3), so each location a gated read
-consumed is one of those labels. §3.1.6.2's class-aware join governs the label
+The `requiredIntegrity` floor is conforming as well. §8.10.3 checks an input
+requirement on what the consumed observations' labels say, and §8.8's summary
+of the annotation makes an object path's requirement coherent across its
+consumed descendants: one witness, by key, for each required pattern. A whole
+read is a traversal over primitive observations (§4.6.3), so each location a
+gated read consumed is one of those labels. §3.1.6.2's class-aware join governs the label
 of a derived output, not an input check. The write side's own floor,
 §8.12.4.1, checks each write against the declared patterns.
 
@@ -76,18 +81,24 @@ value:
    path and, for a recursive read, the path of every entry beneath it, each
    resolved over the entries that resolve there, as the input witnesses
    resolve them. A link probe observes the slot it probes, and two
-   observations of one location are one.
+   observations of one location that consumed the same integrity are one.
 2. At each location, the value-intrinsic rules (`isValueIntrinsicExchangeRule`)
    run over that location's own clauses, matched against the integrity of the
    entries there that bind the current value: flow stamps and the writer's
    own stamps, not existence stamps, declared policy, link copies, or ingest
-   marks.
+   marks. A location with no such evidence keeps its clauses as read.
 3. The results are joined. A clause no location resolved stays as it was
    read. The integrity is §3.1.6.2's class-aware join of every location:
    hereditary atoms every location carries, and anything else only where the
    access observed one location.
-4. Every rule then runs over the joined label, with the gate's boundary
+4. The other rules then run over the joined label, with the gate's boundary
    context, and the ceiling is fitted.
+
+So a rule that is not value-intrinsic and guards on a value-bound or
+provenance atom never fires on an access that consumed two or more locations,
+since the join keeps only hereditary atoms. The standard profile's influence
+discharges, which guard on `DisclosureRendered` and `DisclosureAcknowledged`,
+are such rules.
 
 The `requiredIntegrity` floor needs one witness key shared by every location
 each gated read consumed and by the read's own label. A cell's stored label at

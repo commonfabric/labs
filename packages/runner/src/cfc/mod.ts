@@ -7,6 +7,7 @@ export type {
 } from "./label-view.ts";
 export {
   type ConsumedLocation,
+  exchangeEachObservation,
   joinLocationIntegrity,
 } from "./access-integrity.ts";
 export {
@@ -217,8 +218,10 @@ export type {
   RuleFiring,
 } from "./exchange-eval.ts";
 export {
+  admitsRulesOfKind,
   DEFAULT_EXCHANGE_FUEL,
   evaluateExchangeRules,
+  type ExchangeRuleKind,
   isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 export type {

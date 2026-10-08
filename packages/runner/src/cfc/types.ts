@@ -847,8 +847,9 @@ export type CfcAssertedValueRoot = {
  * A content observation made outside durable Fabric storage and admitted by
  * the runtime through a prepared, aborted write transaction. Both labels are
  * canonical runtime products: `flow` carries the effective content label whose
- * hereditary integrity the final flow fold meets, while `consumed` carries the
- * egress guard pool.
+ * hereditary integrity the final flow fold meets, while `consumed` carries
+ * what the content's reads consumed, and `locations` the locations they
+ * consumed it at, which the release gates evaluate exchange rules over.
  */
 export type CfcExternalContentObservation = {
   readonly source: CfcAddress;

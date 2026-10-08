@@ -22,9 +22,9 @@ export {
  *   path's confidentiality with THAT path's freshly-minted `InjectionSafe`, so
  *   the discharge is value-local by construction — replacing the old hardcoded
  *   `filterMaterialRiskAtoms` strip with a rule firing (goldens prove
- *   equivalence). This set is deliberately NOT in the deployment profile: a bare
- *   `InjectionSafe` names no source, so wherever integrity is still pooled
- *   across values (a cell's stored label at the display, for one), one
+ *   equivalence). This set is deliberately NOT in the deployment profile: a
+ *   bare `InjectionSafe` names no source, so wherever integrity is still
+ *   pooled across values (a cell's stored label at the display, for one), one
  *   value's would discharge a material-risk caveat on another (cubic P1 on
  *   #4567 — the tx-wide-aggregation cross-value hole).
  * - `STANDARD_PROMPT_CAVEAT_POLICY` — the tier upgrades, the value-screened
@@ -36,8 +36,9 @@ export {
  *   item discharges an unscreened sibling. A release gate evaluates rules one
  *   observation at a time and then over the class-aware join of what the
  *   access consumed (`access-integrity.ts`), which is what keeps each value to
- *   its own evidence. Deployments spread this into `RuntimeOptions.cfcPolicyRecords`
- *   so it runs at real boundaries under `cfcPolicyEvaluation`. At a boundary a
+ *   its own evidence. Deployments spread this into
+ *   `RuntimeOptions.cfcPolicyRecords` so it runs at real boundaries under
+ *   `cfcPolicyEvaluation`. At a boundary a
  *   material-risk caveat is handled through the screening gradient
  *   (`CaveatScreened` evidence carries a `source`, so the tier rules correlate
  *   it to the caveat) → value-screened discharge — never by bare
@@ -53,7 +54,7 @@ const injectionSafeGuard = { type: CFC_ATOM_TYPE.InjectionSafe } as const;
 // caveat with or without a `source` discharges alike — exactly the
 // source-generic, field-agnostic reach the old wholesale strip had. Guarded by
 // bare `InjectionSafe`, so these rules are SANITIZER-ONLY (path-local): see the
-// module doc for why they must not run at a tx-wide boundary.
+// module doc for why they stay out of the deployment profile.
 const materialRiskDischargeRules: ExchangeRule[] = MATERIAL_RISK_DISCHARGE_KINDS
   .map((kind) => ({
     id: `discharge-material-risk:${kind}`,
@@ -256,8 +257,8 @@ const influenceDisclaimerRule: ExchangeRule = {
  * The material-risk discharge rules, isolated as their own policy. Consumed
  * ONLY by the trusted-schema sanitizer, which runs them path-locally with the
  * path's own minted `InjectionSafe` (see module doc). NOT part of the
- * deployment profile — bare-`InjectionSafe` discharge is unsound against the
- * tx-wide integrity a boundary evaluates over.
+ * deployment profile — bare-`InjectionSafe` discharge is unsound wherever a
+ * boundary pools integrity across values.
  */
 export const MATERIAL_RISK_DISCHARGE_POLICY: readonly CfcPolicyRecordInput[] = [
   {

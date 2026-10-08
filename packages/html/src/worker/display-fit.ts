@@ -31,7 +31,8 @@ import {
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
-  joinLocationIntegrity,
+  exchangeEachObservation,
+  type ExchangeRuleKind,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
@@ -162,6 +163,7 @@ export function readRefusal(
       policy,
       sources,
       watch,
+      "not-value-intrinsic",
     )
     ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
     : { labelSource: "consumed", confidentiality, integrity: access.integrity };
@@ -171,12 +173,11 @@ export function readRefusal(
  * The label the reads behind one rendered value consumed, as a release
  * boundary evaluates it (spec §5.3, §4.6.3): the value-intrinsic rules run at
  * each location the reads consumed, on that location's own evidence, through
- * the resolver among `sources`, and the result carries what they left, with
- * any clause of `confidentiality` no location resolved kept as it was read,
- * and the class-aware join of the locations' integrity (§3.1.6.2), over which
- * every rule then runs. With no resolver or no ceiling the label is fitted
- * atom by atom, which reads no integrity, and with none of it consumed no
- * rule could fire; either way the label is the one the reads consumed.
+ * the resolver among `sources` (`exchangeEachObservation()`), and the result
+ * carries the class-aware join of the locations' integrity (§3.1.6.2), over
+ * which the other rules then run. With no resolver or no ceiling the label is
+ * fitted atom by atom, which reads no integrity, and with none of it consumed
+ * no rule could fire; either way the label is the one the reads consumed.
  */
 function exchangedAccessLabel(
   confidentiality: readonly CfcConfClause[],
@@ -196,34 +197,17 @@ function exchangedAccessLabel(
   ) {
     return { confidentiality, integrity };
   }
-  const locations = reads.flatMap((read) => read?.locations() ?? []);
-  const exchanged: CfcConfClause[] = [];
-  const resolved: CfcConfClause[] = [];
-  for (const location of locations) {
-    if (location.confidentiality.length === 0) continue;
-    for (const clause of location.confidentiality) resolved.push(clause);
-    for (
-      const clause of resolve({
-        confidentiality: location.confidentiality,
-        integrity: location.evidence,
+  return exchangeEachObservation(
+    confidentiality,
+    reads.flatMap((read) => read?.locations() ?? []),
+    (clauses, evidence) =>
+      resolve({
+        confidentiality: clauses,
+        integrity: evidence,
         spaces,
-        valueIntrinsicOnly: true,
-      })
-    ) {
-      exchanged.push(clause);
-    }
-  }
-  for (const clause of confidentiality) {
-    if (!resolved.some((other) => deepEqual(other, clause))) {
-      exchanged.push(clause);
-    }
-  }
-  return {
-    confidentiality: ContextualFlowControl.uniqueAtoms(
-      exchanged,
-    ) as readonly CfcConfClause[],
-    integrity: joinLocationIntegrity(locations),
-  };
+        rules: "value-intrinsic",
+      }),
+  );
 }
 
 /** Whether `policy` admits `cell`'s labels, as {@link cellLabelRefusal} decides. */
@@ -326,7 +310,8 @@ export function cellLabelSources(
  * ceiling is in force, and fitted atom by atom otherwise. `spaces` names where
  * a module policy the label selects has its manifest. Watches, through
  * `watch` when given, the membership and the manifests the label names, so
- * that the decision is made again when one changes.
+ * that the decision is made again when one changes. `rules`, when given, is
+ * the one kind of rule the resolver evaluates.
  */
 export function canRenderLabelUnderPolicy(
   confidentiality: readonly CfcConfClause[],
@@ -335,6 +320,7 @@ export function canRenderLabelUnderPolicy(
   policy: RenderPolicy,
   sources: DisplayFitSources,
   watch?: FitWatch,
+  rules?: ExchangeRuleKind,
 ): boolean {
   if (watch !== undefined) {
     watchLabelSources(confidentiality, spaces(), watch, sources);
@@ -348,7 +334,12 @@ export function canRenderLabelUnderPolicy(
     policy.maxConfidentiality !== undefined
   ) {
     return resolvedConfidentialityRenderable(
-      sources.resolveConfidentiality({ confidentiality, integrity, spaces }),
+      sources.resolveConfidentiality({
+        confidentiality,
+        integrity,
+        spaces,
+        ...(rules === undefined ? {} : { rules }),
+      }),
       policy,
     );
   }
