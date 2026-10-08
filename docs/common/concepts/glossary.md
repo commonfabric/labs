@@ -101,8 +101,9 @@ collection of social spaces a person keeps; an entry in it grants no access.
 
 What kind of [space] a space declares itself to be, such as `fabrichat-room`
 for a standalone FabriChat room's space. Its creator states it once, in the
-space's genesis commit beside its access list, with
-`inSpace(name, { spaceKind })`, and nothing changes it afterward. It is a fact
+space's genesis commit beside its access list: a pattern with
+`inSpace(name, { spaceKind })`, and host code with
+`Runtime.createSpace({ spaceKind })`. Nothing changes it afterward. It is a fact
 about the space, not a list of what the space holds: a social space that hosts
 a chat among other things declares its own kind
 ([`space-kinds.md`](../../features/space-kinds.md)).

@@ -21,10 +21,11 @@ Creating a space and opening a space are separate operations.
   generates a key pair from the platform random source, opens one session as
   that key through the same route every later session for the DID takes, and
   commits `acl` as the space's genesis document against a confirmed absent one,
-  with an optional reserved root and an optional declared kind. The memory
-  client resubmits the identical commit after a lost connection until the
-  server confirms or refuses it. The DID is returned only after confirmation,
-  and the key is dropped when the call returns.
+  with an optional reserved root and an optional declared kind, each of which
+  requires the host to advertise its capability (`genesisRoot`, `spaceKind`).
+  The memory client resubmits the identical commit after a lost connection
+  until the server confirms or refuses it. The DID is returned only after
+  confirmation, and the key is dropped when the call returns.
   `Runtime.createSpace({ owner?, grants?, root?, spaceKind? })` writes
   `{ ...grants, [owner]: "OWNER" }`, defaulting the owner to the runtime's
   identity; a serving runtime requires an owner. The client surfaces are
@@ -51,17 +52,20 @@ Creating a space and opening a space are separate operations.
   takes a DID only. The shell's `resolveSpaceDid`, the CLI's ingest-channel
   resolver, `PiecesController.initialize`, the connectors, and `cellFromUrl`
   resolve names through it, offline. Creation never calls it.
-- **`inSpace` allocation records.** `PatternFactory.inSpace(name, { grants })`
-  resolves through one document per name in the calling space, addressed by
-  the cause `{ inSpaceAllocation: { space, name } }`
-  (`Runtime.resolveInSpaceNameSync` and `Runtime.resolveInSpaceName`). On a
-  miss the runner creates a space and the re-run writes the record in the same
-  commit as the writes that refer to it; a concurrent writer of the same record
-  makes that commit conflict. A record is never overwritten, and one naming a
-  DID with no history is reported rather than replaced. The in-process map of
-  resolved names only grows. Profile creation grants the wildcard `"*"` WRITE
-  on the space it creates, because a runtime showing a profile writes into the
-  profile's space.
+- **`inSpace` allocation records.**
+  `PatternFactory.inSpace(name, { grants, root, spaceKind })` resolves through
+  one document per name in the calling space, addressed by the cause
+  `{ inSpaceAllocation: { space, name } }` (`Runtime.resolveInSpaceNameSync`
+  and `Runtime.resolveInSpaceName`). On a miss the runner creates a space with
+  the request's grants, root reservation and declared kind, which are
+  independent of one another, and the re-run writes the record in the same
+  commit as the writes that refer to it; until the record is written, a
+  request finds only a space created for the same grants, root and kind. A
+  concurrent writer of the same record makes that commit conflict. A record is
+  never overwritten, and one naming a DID with no history is reported rather
+  than replaced. The in-process map of resolved names only grows. Profile
+  creation grants the wildcard `"*"` WRITE on the space it creates, because a
+  runtime showing a profile writes into the profile's space.
 - **Narrowed space-identity authority.** The memory server grants a principal
   equal to the space DID OWNER only while the space has no ACL document and is
   at server sequence 0 (`#resolveCapability`), and grants it nothing beyond the

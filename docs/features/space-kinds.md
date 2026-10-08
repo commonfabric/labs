@@ -30,10 +30,12 @@ refuses a kind of any other form before it creates anything. `inSpace()` also
 refuses `spaceKind` with a DID or a cell, which name a space that already
 exists.
 
-An `inSpace()` name whose allocation record already names a space resolves to
-that space, whatever kind the call names. A kind declares what a space is when
-it is created; asking for a kind later does not give one to a space created
-without it.
+The kind is part of what an `inSpace()` call asks for, beside its grants and
+`root`. Until a name's allocation record is written, requests for different
+kinds create different spaces for the same name. A name whose allocation
+record already names a space resolves to that space, whatever kind the call
+names. A kind declares what a space is when it is created; asking for a kind
+later does not give one to a space created without it.
 
 ## How it is sealed
 
@@ -65,9 +67,16 @@ kind.
 
 `Runtime.spaceKind(space)` returns the kind `space` declares, or `undefined`
 when it declares none. The memory server reports the kind in the result of
-every `session.open` it admits, so whoever the space's access list admits,
-with any level of access, can read it. A principal the space admits to nothing
-cannot open it, and learns nothing.
+every `session.open` it admits, so whoever can open the space can read it.
+Under the `enforce` access-control mode, that is whoever the space's access
+list admits, with any level of access, and a principal the list admits to
+nothing learns nothing. The `observe` and `off` modes admit more opens, and
+report the kind to each of them.
+
+A session that opens a space with no history yet is told nothing of the kind,
+and is not told when the genesis commit lands. `Runtime.spaceKind()` reads the
+kind afresh, in a session of its own, when the space's session opened that
+way, so the kind it returns is the space's as it stands.
 
 `Runtime.spaceKind()` throws when the space cannot be opened, and when the
 host does not advertise the `spaceKind` capability. A host without the
