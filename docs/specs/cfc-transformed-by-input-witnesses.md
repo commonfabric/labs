@@ -361,20 +361,13 @@ not rely on the witness without them.
   a chain is evidence minted where data enters — a user's gesture on a trusted
   surface — which is proof-of-gesture work, and a family this design can
   retain once it exists.
-- **Composition at the release gate.** Under `cfcReleaseGateIntegrity` at
-  `off` or `observe`, the gate evaluates a rule once per consumed read over
-  that read's effective label, whose integrity is the union described above,
-  and sink egress and the display pool every read an access made. A document
-  that holds the endorsed output at one path and a value written by other code
-  at another satisfies the guard through the first and releases both,
-  verbatim. The identity-only guard has the same exposure; the witness does
-  not change it. At `enforce`, the gate matches the guard against the join of
-  the integrity at every confidential location the access consumed, which
-  keeps a `TransformedBy` only where one stamp supplies it at every location,
-  and refuses the composite
-  ([release gates without an integrity union](../plans/cfc-release-gate-integrity.md)).
-  An endorsed transformer whose output document nobody else can write (a
-  writer policy again) is not exposed at any rung.
+- **Composition at the release gate.** A gate runs a value-intrinsic rule at
+  each location an access consumed, on that location's own evidence (§5.3,
+  §4.6.3), so a document that holds the endorsed output at one path and a
+  value written by other code at another releases the first and not the
+  second. A cell's stored label at the display is still fitted on its root's
+  integrity, so a root stamp written whole by the endorsed transformer
+  speaks for a child entry beneath it there.
 - **Stance stuffing through an endorsed entry point.** Implementation identity
   is content-addressed, so any program that imports the endorsed module runs the
   same identity. A member can bind the submit step to a crafted event and

@@ -29,13 +29,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
 - [Release gates without an integrity union](cfc-release-gate-integrity.md)
-  stops one consumed value's evidence from releasing another value's clause.
-  Today the write, sink and display gates evaluate exchange rules against
-  integrity unioned across entries and reads. The plan moves them to the
-  per-access, class-aware join §5.3 and §8.12.8 describe, staged from
-  `observe` to `enforce`. The join refuses honest releases too, a pushed list
-  read whole among them, which the value-intrinsic carry does not rescue when
-  the gate reads the endorsed value itself.
+  keeps one consumed value's evidence from releasing another value's clause:
+  the write, sink and display gates run value-intrinsic rules at each location
+  an access consumed and every rule over the join (§5.3, §4.6.3). What remains
+  is a specs ruling on the looser variants and the display's fit of a cell's
+  stored label.
 - [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
   refuses a stand-in fed to code a rule endorses, by checking the integrity
   each argument declares against the reads made through it. The declaration is

@@ -234,16 +234,15 @@ statement.
 - `atomPropagationClass` classes `ExternalIngest` as provenance where §15.4
   registers it value-bound, so a verified projection does not carry a scoped
   form of it: an under-claim of integrity, which §15.1.1 holds sound.
-- The hereditary meet meets each observation's integrity as
-  `labelForConsumedEntries` resolves it, a union across the locations a
-  recursive read consumed, so a value derived from a read of one certified and
-  one uncertified field is stamped `PolicyCertified`. §8.9.3 says an
-  implementation "MUST NOT attach unioned input integrity". Under-taint.
-- One guard matched on a consumed read releases another writer's value in
-  the same document at the release gate, an under-taint: §5.3 evaluates a
-  rule over the label the access consumes, which §8.12.8 and §8.10.1.1 make
-  the class-aware join of its locations' labels. Section 5 states the dial
-  that governs it.
+- The release gates (`verifyInputRequirements` and
+  `verifySinkRequestCeilings` in `cfc/prepare.ts`, `readRefusal` in
+  `packages/html/src/worker/display-fit.ts`) evaluate the value-intrinsic
+  rules at each location an access consumed and every rule over the join
+  (`evaluateAccessExchange`, `joinLocationIntegrity` in
+  `cfc/access-integrity.ts`), per §5.3, §4.6.3 and §8.10.1.1. A cell's stored
+  label at the display, which `cellLabelRefusal` fits on its root's
+  integrity, is not resolved location by location: a root stamp's evidence
+  can release a clause a child entry carries, an under-taint.
 
 ## 5. Position in the §18.6.3 matrix and the auxiliary dials
 
@@ -258,8 +257,8 @@ cell, `enforce-strict` with `persist`, with write floor `enforce`, trigger read
 gating on, policy evaluation `enforce` (with no policy records a no-op, except
 under the `max-enforcement` preset, `MAX_ENFORCEMENT_CFC_OPTIONS` in
 `runtime-presets.ts`, which installs the standard prompt-caveat policy and sink
-ceilings), label-metadata protection `enforce`, declared monotonicity `observe`, and
-release-gate integrity `observe`. `cfcPostureReport` in `cfc/posture-report.ts` reports the resolved
+ceilings), label-metadata protection `enforce`, and declared monotonicity
+`observe`. `cfcPostureReport` in `cfc/posture-report.ts` reports the resolved
 dials; `CFC_DIAL_LADDERS` there holds each ladder, and `resolveCfcDials`
 refuses a value off its ladder. The strict rung's one additional refusal, the
 writer-fit misfit, is in `prepareBoundaryCommit` in `cfc/prepare.ts`; trigger
@@ -278,19 +277,6 @@ dials.
   no taint direction. Whether the write floor, policy evaluation and
   label-metadata protection each passed through `observe` in a deployed host
   is not established; the deployment history would establish it.
-- At release-gate integrity `observe`, the write input gate, sink egress and
-  the display fit match exchange-rule guards against integrity pooled across
-  everything an access consumed (`verifyInputRequirements` and
-  `verifySinkRequestCeilings` in `cfc/prepare.ts`; `readRefusal` and
-  `cellLabelRefusal` in `packages/html/src/worker/display-fit.ts`), so one
-  value's evidence releases another value's clause. §5.3 evaluates rules per
-  access over the label it consumes, and §8.12.8 and §8.10.1.1 make that
-  label's integrity the class-aware join: under-taint. The `enforce` rung
-  decides on that join (`accessIntegrity` in `cfc/access-integrity.ts`),
-  except for a cell's stored label at the display, which `cellLabelRefusal`
-  fits pooled at every rung, so that under-taint survives `enforce`; what
-  holds the default at `observe` is
-  [`../plans/cfc-release-gate-integrity.md`](../plans/cfc-release-gate-integrity.md).
 - Nothing refuses `enforce-strict` with `cfcFlowLabels` below `persist`, a
   cell §18.6.3 marks non-conforming; `presetCfcOptions` lowers the write floor
   to `observe` when a caller lowers flow labels, and leaves the enforcement

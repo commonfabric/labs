@@ -2,20 +2,16 @@
 
 ## Why
 
-An exchange rule releases a clause when the integrity it requires is present.
-The release gates here assemble that integrity as a union. Whatever any
-consumed value carries counts as evidence for every clause the access consumed.
-So one value's evidence can release a clause that came from another value.
-
-[Input witnesses](../specs/cfc-transformed-by-input-witnesses.md) records the
-form of this exposure that sits within one read, under "Composition at the
-release gate". A document that holds an endorsed output beside a value other
-code wrote releases both.
-
-The sink and display gates union across every read of the transaction too, not
-only within one. Every rule guarded on a value-bound atom is exposed, and
-[input requirements on arguments](cfc-argument-input-requirements.md) depends
-on closing it.
+An exchange rule releases a clause when the integrity it requires is present,
+and that integrity has to describe the value the clause came from. Pooled
+across everything an access consumed, one value's evidence releases another
+value's clause: a document holding an endorsed output beside a value other code
+wrote releases both. The write input gate, sink egress and the display's read
+fit now evaluate each observation, then the join ("How the gates evaluate").
+What remains is the specification ruling on the looser variants, and the
+display's fit of a cell's stored label, which still pools.
+[Input requirements on arguments](cfc-argument-input-requirements.md) depends
+on the gates holding.
 
 ## What the specification says
 
@@ -36,95 +32,60 @@ on closing it.
   This is how evidence that a later join drops still releases what it vouched
   for.
 
-## Where this runtime unions integrity
+## What still pools
 
-| Gate | What the rule's integrity pool is today |
-| --- | --- |
-| Write input gate (`verifyInputRequirements`) | per gated read, the union over the entries the read consumes (`labelForConsumedEntries`) |
-| Sink egress (`verifySinkRequestCeilings`) | the union over every entry of every read in the transaction (`collectConsumedLabel`) |
-| Display (`display-fit.ts`) | for reads, the union over the transaction's reads; for a cell's stored label, every entry's confidentiality fitted against the root's integrity |
-| Custody seal (`releasedToSeal`) | one scalar location, so already per value |
-
-Within one location, `labelForEntriesAtPath` also unions integrity across
-components. The component that declares the store's policy carries none in
-practice, so the union there equals the one component that carries any. The
-question is what §8.12.8's join means when a component makes no integrity
-claim. Read literally, the join would drop every per-value claim wherever a
-policy is declared. That reading needs a ruling before anything changes.
-
-The standard prompt-caveat profile rides the sink's union too. Its rules bind
-a screening record to the caveat's source, which keeps one source's evidence
-off another source's caveat, but two items from one source carry the same
-caveat: sent together, the screened item's `CaveatScreened` discharges the
-unscreened item's caveat.
+- A cell's stored label at the display (`cellLabelRefusal`) is fitted on the
+  integrity at its root, every entry's clauses included. A label view carries
+  no origin and folds an ancestor's entry in beside a narrower cell's own, so
+  it cannot be resolved location by location until views carry origins.
+- Within one location, `labelForEntriesAtPath` unions integrity across
+  components. The component that declares the store's policy carries none in
+  practice, so the union there equals the one component that carries any. The
+  question is what §8.12.8's join means when a component makes no integrity
+  claim. Read literally, the join would drop every per-value claim wherever a
+  policy is declared. That reading needs a ruling before anything changes.
 
 ## Classification
 
-Removing the union across entries and across reads moves the gates toward
-§5.3, §8.12.8 and §8.10.1.1, and refuses more while persisting nothing. The
-join as built is not the literal one, though. Three of its rules are cases the
-specification lacks: a `TransformedBy` one stamp supplies at several
-locations survives, locations with no confidentiality stay out of the join,
-and the floor counts each location as an observation. Each keeps more than the
-literal join and less than the union. By the correspondence procedure that
-makes the `enforce` rung a **semantic gap**: it waits on a ruling, and the
-dial rests at `observe`, which decides as before.
+Removing the union is a **conforming implementation**. Berni's 2026-09-25
+review of D5 (`cfc/13-11-decisions.md` in the specs repository) states the
+rule: an exchanged label wherever a label is consumed, carried forward by rule
+kind. §5.3 applies a value-intrinsic rule at observation, and §4.6.3 makes a
+whole read a traversal over primitive observations whose labels are joined.
+The gates take the literal form of each step, which refuses at least as much
+as any ruling that loosens it, and they store nothing new.
 
-Taken alone it would also refuse honest releases that depend on the union
-today. One example is an endorsed output whose fields are read through one
-aggregate read. The specification keeps those releases through §5.3's
-value-intrinsic carry: the rule fires at the observation that consumed the
-evidence, and the derived value carries the result. labs#8531 implements that
-carry. It is a draft, and lands only with its owner's approval.
+Three looser variants go to a specs ruling as proposals: one stamp speaking
+for every location it resolves at, a join over the confidential locations
+only, and a floor that counts each location as an observation. The join
+within one location is the separate gap above.
 
-The join within one location is a **semantic gap** (see above), and stays as
-it is until ruled.
+## How the gates evaluate
 
-## The per-access join as built
+At the write input gate, at sink egress, and for the reads behind a rendered
+value:
 
-The `cfcReleaseGateIntegrity` dial (`off`, `observe`, `enforce`) chooses the
-integrity each gate matches rule guards against. `access-integrity.ts` holds
-the join; `prepare.ts` resolves what an access consumed into locations.
+1. The access is resolved into the locations it consumed: each read's own
+   path and, for a recursive read, the path of every entry beneath it, each
+   resolved over the entries that resolve there, as the input witnesses
+   resolve them. A link probe observes the slot it probes, and two
+   observations of one location are one.
+2. At each location, the value-intrinsic rules (`isValueIntrinsicExchangeRule`)
+   run over that location's own clauses, matched against the integrity of the
+   entries there that bind the current value: flow stamps and the writer's
+   own stamps, not existence stamps, declared policy, link copies, or ingest
+   marks.
+3. The results are joined. A clause no location resolved stays as it was
+   read. The integrity is §3.1.6.2's class-aware join of every location:
+   hereditary atoms every location carries, and anything else only where the
+   access observed one location.
+4. Every rule then runs over the joined label, with the gate's boundary
+   context, and the ceiling is fitted.
 
-- **Locations.** A read's locations are its own path and, for a recursive
-  read, the path of every label-map entry beneath it, each resolved over the
-  entries that resolve there, as the input witnesses already resolve them.
-  Existence stamps are not evidence. A `*` template's integrity counts at a
-  gate, where the template's clause and its integrity are one stamp's claims,
-  though it witnesses nothing for the input witnesses.
-- **The join.** Over the access's confidential locations, a hereditary atom
-  survives when every location carries it. Any other atom survives where only
-  one location is observed (a link probe observes the slot it probes), and a
-  `TransformedBy` also where one derived or structure stamp supplies it at
-  every location. Locations resolving one such stamp are parts of the one
-  value it labels: `carriedStampLabel` withdraws the stamp's `TransformedBy`
-  once another writer writes at, above or below it, and withdraws nothing
-  else, which is why no other atom gets the exception. Without it, any read
-  spanning a stamped value's children would drop the stamp.
-- **`requiredIntegrity` at the write input gate.** The floor needs a witness
-  every labeled location of every gated read carries, which is §8.10.3's
-  "shared witness key across all consumed observation labels", and the pooled
-  witness as well, so the join refuses only more. A location that is
-  provenance plumbing is exempt, as a read that is.
-- **Sink egress and display.** The locations of every read behind the
-  request, or behind the rendered value, are one access. A cell's stored
-  label is fitted pooled at every rung: a label view carries no origin, folds
-  an ancestor's entry in beside a narrower cell's own, and merges a linked
-  target's view into the slot's, so a join over it would claim too much in
-  one case and too little in another.
-- **Other observations.** A label-metadata observation is a confidential
-  location with no integrity. An external content observation carries the
-  locations its reads consumed.
-- **Under `observe`**, a release the union admits and the join would refuse
-  is recorded as a `release-gate-integrity(observe)` diagnostic. The
-  diagnostic also says whether evaluating each confidential location on its
-  own integrity would admit it: per-location evaluation rescues the release
-  that value-intrinsic exchange at observation would preserve, and does not
-  rescue one value's evidence vouching for another. Its evaluations answer
-  grant lookups from the decision's own, so `observe` reads, records and
-  stages nothing the decision did not. At the display it computes the join
-  only for a host that listens, and no shipped host does, so display
-  divergences are unmeasured.
+The `requiredIntegrity` floor needs a witness that the join of each gated
+read's locations keeps. A cell's stored label at the display is still fitted
+on its root's integrity: a label view carries no origin, so it cannot be
+resolved location by location yet.
 
 ## Related leaks the gates do not close
 
@@ -149,61 +110,20 @@ gates. Each is a separate change; none is fixed here.
 - **A link written at a payload field named `internal`** leaves the root
   stamp's `TransformedBy` in place.
 
-## Approach
-
-1. **Observe.** Each gate computes, beside its current decision, the decision
-   the per-access rule gives:
-   - integrity is the class-aware join of the access's locations, or of its
-     reads at a sink;
-   - each location resolves as `entriesResolvingAtLocation` resolves it, with
-     its components as today;
-   - a location with no confidentiality has no clause to release.
-
-   A diagnostic records each divergence. The pattern suite, run under that dial
-   position, lists which honest releases the union carries today.
-2. **Carry.** The releases the list names move to observation-time evaluation
-   through labs#8531's carry.
-3. **Enforce.** Enforce gate by gate, from the cleanest to the widest: the
-   write input gate first, then display, then sink egress. At sink egress,
-   grant consumption and fuel are spent per evaluation, which needs its own
-   look at single-use grants.
-
 ## Plan
 
-- [x] Write the regression tests:
-  - the documented composition case, with the document existing before the
-    endorsed write so that no root stamp masks it;
-  - the across-reads cases at sink egress and display;
-  - each asserts today's release, marked as the behavior to remove.
-- [x] Add a dial (`off`, `observe`, `enforce`) in
-      [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md).
-      Implement the observe arm at the three gates, and the enforce arm
-      beside it. The dial rests at `observe`.
-- [x] Run the pattern suite at `observe`, and list the divergences. The
-      record is
-      [the measurement](../history/plans/cfc-release-gate-integrity-measurement-2026-10-08.md):
-      no divergence in the pattern suite or the runner's CFC tests at
-      `observe`, and no failure at `enforce`, but honest shapes neither suite
-      exercises (a pushed list, a `lift`'s object at a sink) are refused at
-      `enforce` and admitted per location.
-- [ ] Before any gate's `enforce` lands as more than an opt-in rung: file the
-      ruling below, and mark the deciding sites (`accessIntegrity` and the
-      floor's per-location witness in `verifyInputRequirements`) with
-      `SPEC-PENDING` naming it, as the correspondence procedure requires of gap
-      code.
-- [ ] Decide with labs#8531's owner whether its carry lands first, or this
-      lands first at `enforce` and accepts the refusals. The carry rescues a
-      value derived from an endorsed output, never a direct read of it, so
-      keeping those shapes at a gate means evaluating value-intrinsic rules
-      per location there as well.
-- [ ] Enforce gate by gate. Update
-      [input witnesses](../specs/cfc-transformed-by-input-witnesses.md) and the
-      [conformance statement](../specs/cfc-conformance-statement.md).
-- [ ] File the specs ruling questions (drafted, not filed): what the join
-      across components within one location keeps; what counts as one
-      observation, and whether locations resolving one stamp are one input;
-      whether a location with nothing to release enters the join, or, more
-      narrowly, whether the join need span only the locations carrying the
-      clause a rule rewrites, so an input whose clause fits the ceiling does
-      not veto another's release.
+- [x] Write the regression tests: the composition case, with the document
+      existing before the endorsed write; the across-reads cases at sink
+      egress and display; and the honest shapes the join keeps.
+- [x] Measure what a per-access join would refuse, at `observe` and
+      `enforce` (the
+      [measurement](../history/plans/cfc-release-gate-integrity-measurement-2026-10-08.md)).
+- [x] Switch the three gates to exchange each observation, then join,
+      unconditionally, with the value-intrinsic rule classifier copied from
+      labs#8531.
+- [ ] File the specs ruling: the looser variants above as proposals, the
+      pseudocode that leaves out the observation step, and the within-location
+      component join. Mark the deciding site with `SPEC-PENDING` naming it.
+- [ ] Resolve a cell's stored label at the display location by location, once
+      label views carry each entry's origin.
 - [ ] Archive this plan.
