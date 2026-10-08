@@ -144,6 +144,18 @@ describe("verifySessionOpenAuthorization", () => {
         "authorization mismatch",
       );
     }
+    const malformed = await buildOpen(signedFields(), alice, {
+      spaceKind: 7 as unknown as string,
+    });
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...malformed, session: {} },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
     const unsigned = await buildOpen(signedFields());
     await assertRejects(
       () =>

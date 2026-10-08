@@ -75,8 +75,9 @@ const sameSessionDescriptor = (
   (typeof left.actingAs === "string" ? left.actingAs : undefined) ===
     right.actingAs &&
   valueEqual(left.genesisRoot, right.genesisRoot) &&
-  (typeof left.spaceKind === "string" ? left.spaceKind : undefined) ===
-    right.spaceKind;
+  // Compared as signed, so a signed kind the message does not carry, of any
+  // form, is a mismatch rather than read as no kind.
+  left.spaceKind === right.spaceKind;
 
 export type SessionOpenMessage = {
   space: string;
