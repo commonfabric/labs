@@ -88,7 +88,7 @@ The home default pattern stores them as a list, plus a chosen default and a
 most-recently-used (MRU) ordering:
 
 - `homeSpaceCell.defaultPattern.profiles` — the list of profile links (each a
-  cross-space link to a `profile-home.tsx` default pattern in its own space).
+  cross-space link to a `profile-home.tsx` piece in its own space).
 - `homeSpaceCell.defaultPattern.defaultProfile` — a slot holding, under
   `profile`, the link to the profile `#profile` resolves to in headless mode and
   that the picker selects by default; no `profile` while none is chosen. The
@@ -113,7 +113,15 @@ profile's data fields, and its view state is per session; nothing else in the
 space is protected from a visitor (a *named* `inSpace(name)` would put every
 profile created under one name in one space) —
 running `/api/patterns/system/profile-home.tsx`; the link
-is appended to `profiles`. The home Profile tab renders the **profile picker**
+is appended to `profiles`.
+
+The create passes `root: true`, so the profile is its space's root: the space's
+genesis commit reserves the root's address, the space cell's `defaultPattern`
+links the profile there, and a host holding only the profile space's DID
+reaches the profile as it reaches any space's root. A profile space whose
+genesis reserved no root, which is every profile space created before the
+create passed `root: true`, has no profile as its root, and its profile is
+reached only through a link to it, such as the one in `profiles`. The home Profile tab renders the **profile picker**
 (`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
 the default, and stamp MRU. There is no `profileName` mirror field anymore.
 
@@ -427,13 +435,15 @@ Both the home pattern and the default app pattern follow the same mechanism:
 1. When a space is opened, `PiecesController.ensureDefaultPattern()` checks if
    a `defaultPattern` piece already exists on the space cell. Through
    `RuntimeClient.getSpaceRootPattern()`, which is how the shell opens a space,
-   a space with no root gets one only from an open that runs the root (`start`
-   true) by an identity that owns the space, as its Home or as an `OWNER` in
-   its access list. For such a space, the open of any other principal the
-   space admits, and any read with `start` false, returns `undefined` and
-   writes nothing, so a visitor never puts a root in someone else's space. A
-   principal the space refuses gets that refusal instead, whether or not the
-   space has a root
+   a space whose genesis reserved no root, and which has none, gets one only
+   from an open that runs the root (`start` true) by an identity that owns the
+   space, as its Home or as an `OWNER` in its access list. For such a space,
+   the open of any other principal the space admits, and any read with `start`
+   false, returns `undefined` and writes nothing, so a visitor never puts a
+   root in someone else's space. A principal the space refuses gets that
+   refusal instead, whether or not the space has a root. A space whose genesis
+   reserved its root, as a profile's space does, gets that root from the run of
+   its creator's `inSpace(..., { root: true })` call
 2. If not, it creates one:
    - **Home space** (`space === userIdentityDID`): uses
      `/api/patterns/system/home.tsx`
