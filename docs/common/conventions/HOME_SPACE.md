@@ -123,19 +123,25 @@ links the profile there, and a host holding only the profile space's DID
 reaches the profile as it reaches any space's root.
 
 A profile space whose genesis reserved no root, which is every profile space
-created before the create passed `root: true`, gets its profile as its root
+created before the create passed `root: true`, can get its profile as its root
 from an operator's repair, `cf profile repair-root` (the
-[CLI README](../../../packages/cli/README.md) describes running it): the
-space cell's `defaultPattern` links the existing profile, replacing a root an
-open of the space created and nothing was added to, and leaving any other root
-alone. Such a profile is not at the reserved address, since a genesis commit
-cannot gain a reservation afterward, and it is a root like any other in a space
-that grants every principal `WRITE`: anyone can link something else there. A
-host that finds a person's profile from the space's DID therefore takes the
-root only when it is a piece in that space, rather than a path into one, and
-its label says it represents the person the host expects. Until the repair
-reaches it, such a profile is reached only through a link to it, such as the
-one in `profiles`.
+[CLI README](../../../packages/cli/README.md) describes running it). The repair
+links the existing profile as the space cell's `defaultPattern` where the space
+has no root, and where its root is one a space-root ensure created and nothing
+was added to: a client's open of the space by its owner creates one, and so,
+with server execution on, does the server when any session opens the space.
+Any other root it leaves alone, and that space's profile stays a profile its
+space does not have as its root. A repaired profile is not at the reserved
+address, since a genesis commit cannot gain a reservation afterward, and it is
+a root like any other in a space that grants every principal `WRITE`: anyone
+can link something else there. `getSpaceRootPattern()` returns whatever root
+the space cell links, without asking whether it is a profile or whom it
+represents, so a host that finds a person's profile from the space's DID makes
+those checks itself: it takes the root as the person's profile only when the
+root is a piece in that space, rather than a path into one, and its label says
+it represents the person the host expects. Until the repair reaches it, a
+profile in such a space is reached only through a link to it, such as the one
+in `profiles`.
 
 `profiles`/`defaultProfile`/`mru` are CFC-protected profile-link data, created
 through the trusted profile-create / picker surfaces. Untrusted writes are

@@ -48,22 +48,35 @@ signing identity, which needs no privilege: a profile space grants every
 principal `WRITE`. The command prints JSON with one row per profile, a tally by
 status, and an `inspection` receipt for the whole run:
 
-| Status          | Meaning                                                                                                                                           | Applying it                  |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| `root`          | the space's root already is the profile                                                                                                           | nothing                      |
-| `unrooted`      | the space has no root                                                                                                                             | links the profile            |
-| `junk-root`     | the root is one an open of the space created: at the ensure's address, following the system default app or nothing, with nothing registered in it | replaces it with the profile |
-| `occupied`      | any other root                                                                                                                                    | nothing                      |
-| `not-a-profile` | the piece's label names no single owner of its space that it represents                                                                           | nothing                      |
-| `unlisted`      | no Home in the snapshot lists it                                                                                                                  | nothing                      |
-| `failed`        | the inspection or the repair threw; `reason` says why                                                                                             | nothing                      |
+| Status          | Meaning                                                                                                                                                                                                    | Applying it                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `root`          | the space's root already is the profile                                                                                                                                                                    | nothing                      |
+| `unrooted`      | the space has no root                                                                                                                                                                                      | links the profile            |
+| `junk-root`     | the root is one a space-root ensure created (see below): at the ensure's address, running the default app by its stored source, following the system default app or nothing, with nothing registered in it | replaces it with the profile |
+| `occupied`      | any other root                                                                                                                                                                                             | nothing                      |
+| `not-a-profile` | the piece's label names no single owner of its space that it represents                                                                                                                                    | nothing                      |
+| `unlisted`      | no Home in the snapshot lists it                                                                                                                                                                           | nothing                      |
+| `failed`        | the inspection or the repair threw; `reason` says why                                                                                                                                                      | nothing                      |
+
+Two ensures create the roots reported as `junk-root`. A client's open of a
+profile space creates one only when its signing identity holds `OWNER` there;
+the `WRITE` every principal holds, which is all this command needs, creates
+none. With server execution on, the server creates one in a space that has no
+root and whose genesis reserved none as soon as any session opens it, and the
+inspection's own connection is such a session. In a served store, then, a
+profile reported as `unrooted` can hold a `junk-root` by the time it is applied:
+the apply reports it as `failed`, and a fresh inspection reports it as
+`junk-root`, which the apply after that replaces.
 
 Review the rows, then repeat the command with `--apply --expect <inspection>`.
-It inspects every profile again, applies nothing unless the run's receipt is the
-one given, and then links profile by profile, each only while its own receipt
-still holds and while its space's root is still the one it inspected. A profile
-that changed in between is reported as `failed` and left alone. A second run
-finds a repaired profile as `root` and writes nothing.
+It inspects every profile again first. When that run's receipt is not the one
+given, it applies nothing and prints no report: it exits with an error saying
+the profiles changed, and a fresh inspection is what to run next. Otherwise it
+links profile by profile, each only while its own receipt still holds and while
+its space's root is still the one it inspected, with a junk root still running
+the default app and holding nothing registered. A profile that changed in
+between, or whose inspection failed, is reported as `failed` and left alone. A
+second run finds a repaired profile as `root` and writes nothing.
 
 Rehearse it before running it against a store with real data. The live part of a
 repair reads and writes the profile's own space and nothing else, so a rehearsal
