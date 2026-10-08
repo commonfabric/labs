@@ -99,8 +99,15 @@ gcloud pubsub subscriptions create <subscription> --project <project> \
   --topic <topic> \
   --push-endpoint="<toolshed>/api/spaces/<service space>/ingest-push/gmail" \
   --push-auth-service-account="<account>" \
-  --push-auth-token-audience="<audience>"
+  --push-auth-token-audience="<audience>" \
+  --expiration-period=never
 ```
+
+A subscription expires 31 days after its last subscriber activity unless
+told otherwise, and an expired subscription is deleted. Successful pushes
+count as activity, so a subscription that is delivering keeps itself alive;
+one whose every watch has lapsed does not, and would have to be created
+again. `--expiration-period=never` is what keeps it through a quiet month.
 
 Pub/Sub mints each push token itself, as its own service agent,
 `service-<project number>@gcp-sa-pubsub.iam.gserviceaccount.com`. A project
@@ -151,8 +158,12 @@ reaches toolshed from inside the network.
 
 ```bash
 gcloud pubsub subscriptions create <subscription> --project <project> \
-  --topic <topic> --ack-deadline=30 --message-retention-duration=1d
+  --topic <topic> --ack-deadline=30 --message-retention-duration=1d \
+  --expiration-period=never
 ```
+
+Pulls count as subscriber activity the way pushes do, so the expiration
+setting matters here for the same reason.
 
 Whoever runs the relay needs two permissions. The first is to pull from the
 subscription. A project owner has it already; anyone else needs the Pub/Sub
