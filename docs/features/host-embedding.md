@@ -1,7 +1,7 @@
 # Host Embedding Contract
 
 The seams a non-shell host (Loom, or any future embedder) may bind to
-when mounting labs components and patterns, plus two policy records
+when mounting labs components and patterns, plus three policy records
 upstream commits to honor. Each seam has a labs-side test that goes red
 when the contract changes.
 
@@ -38,6 +38,7 @@ weeks later.
 | 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
 | 9 | Custody seal and trust configuration | trusted host API | `runtime-client`, `runner`, `ui` | available | `runtime-client/test/backends/custody-seal.test.ts`; `runtime-client/test/custody-seal.test.ts`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `ui/src/v2/components/cf-custody-seal/` |
 | 10 | Native reviewed controls | trusted host API | `runner` | available | `runner/test/native-ui.test.ts` |
+| 11 | Native reviewed acts count as trusted gestures | policy record | `runner` | n/a | none yet: the runtime does not meet it |
 
 ---
 
@@ -533,7 +534,9 @@ served handler the way a DOM event's does, through the attestation the firing
 runtime writes on the stream entry
 ([events, §2](../specs/server-side-execution/events.md#2-lifecycle-end-to-end)). A native event is not a trusted gesture: `isTrustedGesture()` admits only
 events of `dom` origin, so a native control cannot confirm a snapshot share, a
-custody seal, a reviewed intent, or a change to a space's access list.
+custody seal, or a change to a space's access list. That is a gap, not a
+design: §11 records that a native reviewed act counts wherever a trusted
+gesture does, and lists the gates that do not admit one yet.
 
 This is a trusted host capability that mints trusted events. The host calls the
 returned function, or `sendReviewed()`, only from the control's real user-input
@@ -570,6 +573,84 @@ another surface or action refused with its reason, a payload `provenance`
 deciding nothing, the same payload refused through `sendStrict()`, a refused
 handling resolving `sendStrict()` without `awaitHandling`, the event the
 worker delivers, and the requests it refuses.
+
+---
+
+## 11. Policy record: native reviewed acts count as trusted gestures
+
+Not a bindable API — a statement upstream commits to honor. The runtime does
+not yet honor it at every gate; [the gates that fall short](#gates-that-fall-short)
+are listed below.
+
+**The principle.** Anything labs UI requires a trusted gesture for must be
+achievable by a native reviewed act. A native reviewed act is a reviewed
+action a host sends from a control it draws natively (§10), issued from the
+host's single issuing point in response to a person's real gesture on that
+control, with nothing automated. It counts wherever a trusted gesture does. No
+surface or contract opts in to that, and none opts out: it holds for every gate
+labs places on a trusted gesture, and a new gate on a trusted gesture admits a
+native reviewed act from the start.
+
+**Why.** A pattern's labs UI reaches a person in one of two ways. A web host
+can show it directly, with no other layer, so every act a person takes there is
+a gesture on the rendered surface. A native client, a host that draws some
+controls itself, can cover parts of it selectively with implementations of its
+own, and render the rest. A decision to cover labs UI natively is legitimate by
+default: a client owes no justification for drawing a control itself. So a
+trusted-gesture requirement written into labs UI has to be satisfiable by a
+native reviewed act; a requirement that is not would make the act impossible
+wherever a host made that legitimate choice. Nor do the two differ in what they
+show. The trusted mark certifies that an event came from a reviewed surface,
+not that a person meant it (§6), and a host that draws the control is the
+renderer for it, inside the same trust boundary as the renderer that marks a
+DOM event.
+
+**What the host owes.** A native reviewed act stands in for a trusted gesture
+only when the host holds what a renderer holds:
+
+- **One issuing point.** The host issues reviewed acts from exactly one place
+  in its code, reachable only from the controls that draw a reviewed surface.
+- **A real gesture.** It issues one only in response to a person's own input
+  on that control.
+- **Nothing automated.** No timer, restored state, automation or agent
+  interface, scripting or command interface, URL handler, loaded content, or
+  pattern code reaches the issuing point.
+- **What was shown is what is sent.** The payload carries exactly the values
+  the control displayed when the person acted, with the surface and action
+  from the control's own definition.
+
+The FabriChat client requirements state the same obligations as six rules for
+a native chat client
+([`clients.md`](../specs/fabrichat/clients.md#writing-the-reviewed-gesture-requirement)),
+and `bindNativeUiControl()` in `packages/runner/src/native-ui.ts` is where a
+host binds a control to them (§10). The CFC specification's side is §8.15.9.1
+of `cfc/08-15-write-authority.md`, as commonfabric/specs pull request 55
+proposes it.
+
+### Gates that fall short
+
+`isTrustedGesture()` in `packages/runner/src/cfc/ui-contract.ts` admits only
+events of `dom` origin, so a native reviewed act is not a trusted gesture
+today. A write gated on a `UiAction` contract already admits one, since
+`trustedEventMatchesUiContract()` accepts `native` provenance as it accepts
+`dom`. These gates do not admit one as itself:
+
+| Gate | Where it checks | A native reviewed act today |
+| --- | --- | --- |
+| `grantSpaceAccess()`, `revokeSpaceAccess()` | the handler frame's `trustedGesture`, which the runner sets from `isTrustedGesture()` when the run starts, checked in `packages/runner/src/builder/space-access-change.ts` | refused: the call throws |
+| `commitSnapshotShare()` (§8) | `isTrustedGestureOn(event, "ShareSnapshot")` in `packages/runner/src/cfc/host-review.ts` | refused as an event. A host confirming through `RuntimeClient.commitSnapshotShare(id)` passes, because the worker builds the gesture itself with `hostGestureProvenance()`, which records `dom` origin whatever the host drew |
+| `commitCustodySeal()` (§9) | `isTrustedGestureOn(event, "CustodySeal")` | as for the snapshot share, through `RuntimeClient.commitCustodySeal(id)` |
+| a write gated on a `UiPromptSlot` or `UiDisclosure` contract | `recordedTrustedEventProvenanceMatchesUiContract()` in `ui-contract.ts`, which matches a `UiPromptSlot` contract on the event's `uiSurface`, and its `uiRole` when the contract names a role, and a `UiDisclosure` contract on its `uiDisclosureKind` | refused: `bindNativeUiControl()` takes only a surface and an action, so the event it sends carries none of those fields |
+
+So a native client can confirm a snapshot share or a custody seal through its
+runtime client today, but cannot change an access list, and cannot satisfy a
+`UiPromptSlot` or `UiDisclosure` contract. The runtime change that admits a
+native reviewed act at each of these gates, recorded as native, is pending.
+Until it lands, a host that does one of those acts renders the pattern's
+reviewed surface for it. §10,
+[`space-access-changes.md`](space-access-changes.md), and
+[the runtime client's README](../../packages/runtime-client/README.md#sending-events)
+describe each gate as it behaves now.
 
 ---
 

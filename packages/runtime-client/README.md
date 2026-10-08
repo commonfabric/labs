@@ -140,8 +140,11 @@ gated on that surface and action commits as it would for a reviewed gesture on
 the pattern's rendered surface. It always waits for the handler's run, as
 `sendStrict()` does with `awaitHandling`, and rejects with the reason on the
 same refusals. The event is renderer-trusted but is not a trusted gesture, so it
-confirms no snapshot share, custody seal, reviewed intent, or change to an
-access list. It mints trusted events, so it is for the host's own code alone;
+confirms no snapshot share, custody seal, or change to an access list. That is a
+gap the runtime has yet to close, not a design:
+[host embedding, §11](../../docs/features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)
+records that a native reviewed act counts wherever a trusted gesture does.
+`sendReviewed()` mints trusted events, so it is for the host's own code alone;
 [host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
 says what it owes in exchange.
 
