@@ -694,7 +694,9 @@ that space on this connection, and that the space's access list now grants
 of `READ`, and when an access-list change revokes a session for the same
 reason. An access-list commit that gives a recorded principal `READ` sends the
 notice to the connection the refusal was recorded on, and removes the record,
-so each refusal is told at most once. A change that leaves the principal
+so each refusal is told at most once. A grant written to the space's store by
+another process sends it at the space's next refresh turn after the server
+finds the change (see the capability cache under the ACL policy below). A change that leaves the principal
 without `READ` sends nothing, and the notice reaches no other connection.
 
 The notice is a hint and grants nothing. A client that acts on it opens the
@@ -1331,6 +1333,25 @@ The server's unauthenticated `writeDocument` operator path cannot create a
 fresh space or mutate the ACL document while ACL policy is active. Its access
 to ordinary documents in an already-created space remains a known deferred
 blob-authorization issue.
+
+The server caches, per space and principal, the capability the space's ACL
+resolves to. The cache is valid only for the store as it was when the entry
+was made: each space's entry records the store's SQLite `data_version`, read
+on the space's connection just before the ACL, and a cached decision is served
+only while a fresh reading matches. Otherwise the space's entries are dropped
+and the ACL is read again, on the current snapshot, before the operation is
+authorized. A commit the server makes to the ACL drops the entries itself. So
+a grant written to the space's store through another connection, by another
+process on the same host, admits its principal at that principal's next
+`session.open`, and a revocation written there refuses the principal's next
+command, without a restart. A change that lands while a request is being
+authorized is seen by the next request. When the dropped entries show the ACL
+document itself at a new revision, the space's next refresh turn also runs
+what follows an ACL commit the server makes: it revokes the sessions the
+change deauthorized, before any frame of that turn, and sends
+`session/admissible` for the principals it admits; the request that found the
+change schedules that turn. Each capability check costs one prepared pragma
+read.
 
 The challenge protects against replay of a captured signed `session.open` after
 the original WebSocket handshake has moved on.

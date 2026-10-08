@@ -747,6 +747,8 @@ SELECT COALESCE(MAX(seq), 0) AS seq
 FROM "commit"
 `;
 
+const SELECT_DATA_VERSION = `PRAGMA data_version`;
+
 const SELECT_EXISTING_COMMIT = `
 SELECT seq, branch, original, resolution, class, holder
 FROM "commit"
@@ -916,6 +918,7 @@ interface PreparedStatements {
   selectBranches: PreparedStatement;
   selectCommitRevisions: PreparedStatement;
   selectCurrentLocal: PreparedStatement;
+  selectDataVersion: PreparedStatement;
   selectCurrentEntityId: PreparedStatement;
   selectCurrentEntityIds: PreparedStatement;
   selectCurrentEntityIdPage: PreparedStatement;
@@ -1606,6 +1609,7 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   selectBranches: database.prepare(SELECT_BRANCHES),
   selectCommitRevisions: database.prepare(SELECT_COMMIT_REVISIONS),
   selectCurrentLocal: database.prepare(SELECT_CURRENT_LOCAL),
+  selectDataVersion: database.prepare(SELECT_DATA_VERSION),
   selectCurrentEntityId: database.prepare(SELECT_CURRENT_ENTITY_ID),
   selectCurrentEntityIds: database.prepare(SELECT_CURRENT_ENTITY_IDS),
   selectCurrentEntityIdPage: database.prepare(SELECT_CURRENT_ENTITY_ID_PAGE),
@@ -2762,6 +2766,21 @@ export const headSeq = (
 export const serverSeq = (engine: Engine): number => {
   return (engine.statements.selectServerSeq.get() as { seq: number }).seq;
 };
+
+/**
+ * SQLite's `PRAGMA data_version` on this engine's connection. It differs
+ * between two readings when another connection committed to the store in
+ * between, and never for this connection's own commits, so two equal
+ * readings mean that what was read from the store between them has not been
+ * changed by another connection. A reading that differs may also follow a
+ * commit that changed nothing the caller read, which costs it one re-read.
+ * The reading comes from the connection's current snapshot, so inside a
+ * transaction it describes what that transaction sees, and it is one
+ * prepared pragma step.
+ */
+export const dataVersion = (engine: Engine): number =>
+  (engine.statements.selectDataVersion.get() as { data_version: number })
+    .data_version;
 
 // Event-append admission (server-execution v2 Phase 3, D-v2-1;
 // events.md §1, §4; protocol.md §2's event-append rows). ONE stamping

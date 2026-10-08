@@ -26,6 +26,7 @@ import {
   close,
   ConflictError,
   createBranch,
+  dataVersion,
   deleteBranch,
   type Engine,
   entityIdExists,
@@ -3755,6 +3756,56 @@ Deno.test("read forwards an explicit scopeKey to readState (protocol.md §2's re
     });
     assertEquals(doc?.value, { owner: "alice" });
   } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 engine data version moves for another connection's commits and not for its own", async () => {
+  const { engine, path } = await createEngine();
+  const other = await open({ url: toFileUrl(path) });
+  const commit = (target: Engine, localSeq: number) =>
+    applyCommit(target, {
+      sessionId: `session:${localSeq}`,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `entity:data-version-${localSeq}`,
+          value: { value: { n: localSeq } },
+        }],
+      },
+    });
+  try {
+    const initial = dataVersion(engine);
+    assertEquals(dataVersion(engine), initial);
+
+    commit(engine, 1);
+    assertEquals(
+      dataVersion(engine),
+      initial,
+      "the connection's own commit leaves its reading alone",
+    );
+
+    commit(other, 2);
+    const afterForeign = dataVersion(engine);
+    assertEquals(
+      afterForeign === initial,
+      false,
+      "another connection's commit moves the reading",
+    );
+    assertEquals(
+      dataVersion(engine),
+      afterForeign,
+      "and a repeated reading with no commit between stays put",
+    );
+    assertExists(
+      read(engine, { id: "entity:data-version-2" }),
+      "the other connection's write is readable on this one",
+    );
+  } finally {
+    close(other);
     close(engine);
     await Deno.remove(path);
   }

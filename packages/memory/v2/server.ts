@@ -2694,9 +2694,25 @@ export class Server {
    *  would break that traffic). */
   readonly aclStats = { wouldDeny: 0, denied: 0 };
 
-  /** space → (principal key → capability). Invalidated whenever a commit
-   *  touches the space's ACL document. */
-  #aclCapabilities = new Map<string, Map<string, Capability | null>>();
+  /** space → the capabilities its ACL grants, by principal key, and what
+   *  they were resolved from: the space's engine, its store's data version
+   *  as read before the ACL, and the ACL document's revision. A space's
+   *  entry is dropped when this process commits a change to its ACL, and by
+   *  {@link #capabilityFor} when the store's data version has moved, which
+   *  is how a grant or revocation written through another connection to
+   *  the same store takes effect here at the next access. */
+  #aclCapabilities = new Map<string, {
+    engine: Engine.Engine;
+    dataVersion: number;
+    aclRevision: string | null;
+    byPrincipal: Map<string, Capability | null>;
+  }>();
+
+  /** Spaces whose ACL document another connection changed, as
+   *  {@link #capabilityFor} found. At the space's next refresh turn the
+   *  server revokes the sessions the change deauthorized and notices the
+   *  admissions it allows, as it does when an ACL commit of its own lands. */
+  #aclChangedElsewhere = new Set<string>();
 
   #aclMode(): MemoryAclMode {
     return this.options.acl?.mode ?? "off";
@@ -2783,9 +2799,6 @@ export class Server {
     space: string,
     principal: string | undefined,
   ): Capability | null {
-    if (principal !== undefined && this.#isServicePrincipal(principal)) {
-      return "OWNER";
-    }
     const state = this.#aclState(engine, space);
     if (state.kind === "valid") {
       return (principal !== undefined ? state.acl[principal] : undefined) ??
@@ -2813,18 +2826,58 @@ export class Server {
     space: string,
     principal: string | undefined,
   ): Capability | null {
+    // A service DID is OWNER whatever the ACL says, so neither the store nor
+    // the cache is consulted for it.
+    if (principal !== undefined && this.#isServicePrincipal(principal)) {
+      return "OWNER";
+    }
     const key = principal ?? "";
-    let bySpace = this.#aclCapabilities.get(space);
-    if (bySpace !== undefined && bySpace.has(key)) {
-      return bySpace.get(key) ?? null;
+    // The version is read before the ACL, never after: a commit from another
+    // connection landing between the two pairs the old version with the new
+    // list, and the next check re-reads; the other order would pair the new
+    // version with the old list and serve it until the version next moved.
+    const dataVersion = Engine.dataVersion(engine);
+    let cached = this.#aclCapabilities.get(space);
+    if (
+      cached !== undefined &&
+      (cached.engine !== engine || cached.dataVersion !== dataVersion)
+    ) {
+      this.#invalidateAclCapabilities(space);
+      // Another connection committed to the store. Only a commit that moved
+      // the ACL document calls for the follow-ups of an ACL change; any
+      // other costs the re-read alone. A version from another engine says
+      // nothing about this one's connection.
+      if (
+        cached.engine === engine &&
+        cached.aclRevision !== this.#aclRevision(engine, space)
+      ) {
+        this.#aclChangedElsewhere.add(space);
+        this.markSpaceDirty(space, [toDirtyKey(aclDocId(space))]);
+      }
+      cached = undefined;
+    }
+    if (cached !== undefined && cached.byPrincipal.has(key)) {
+      return cached.byPrincipal.get(key) ?? null;
     }
     const capability = this.#resolveCapability(engine, space, principal);
-    if (bySpace === undefined) {
-      bySpace = new Map();
-      this.#aclCapabilities.set(space, bySpace);
+    if (cached === undefined) {
+      cached = {
+        engine,
+        dataVersion,
+        aclRevision: this.#aclRevision(engine, space),
+        byPrincipal: new Map(),
+      };
+      this.#aclCapabilities.set(space, cached);
     }
-    bySpace.set(key, capability);
+    cached.byPrincipal.set(key, capability);
     return capability;
+  }
+
+  /** The revision of `space`'s ACL document, `seq/opIndex`, or `null` when
+   *  its store holds no row for it. */
+  #aclRevision(engine: Engine.Engine, space: string): string | null {
+    const state = Engine.readState(engine, { id: aclDocId(space) });
+    return state === null ? null : `${state.seq}/${state.opIndex}`;
   }
 
   /** Evaluate the ACL policy for a message. Returns `null` when the message
@@ -9113,7 +9166,18 @@ export class Server {
           // context manager propagates the active context into timer callbacks,
           // so without it this span could parent under whichever memory.transact
           // happened to schedule the refresh.
+          const aclChangedElsewhere = this.#aclChangedElsewhere.delete(space);
           try {
+            if (aclChangedElsewhere) {
+              // An ACL change written through another connection: revoke
+              // the sessions it deauthorized and notice the admissions it
+              // allows, as an ACL commit of this server's own does when it
+              // lands, before any frame of this turn can reach a revoked
+              // session.
+              const engine = await this.#openEngine(space);
+              this.#revokeDeauthorizedSessions(engine, space);
+              this.#noticeAdmissions(engine, space);
+            }
             await tracer.startActiveSpan(
               "memory.fanout",
               { root: true },
@@ -9177,6 +9241,9 @@ export class Server {
             // (newer provenance wins), reschedule, and rethrow so callers
             // see the failure.
             this.#dirtySpaces.add(space);
+            if (aclChangedElsewhere) {
+              this.#aclChangedElsewhere.add(space);
+            }
             if (dirtyIds !== undefined) {
               let current = this.#dirtyDocsBySpace.get(space);
               if (current === undefined) {
