@@ -307,7 +307,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
     await Deno.mkdir(`${pkgDir}/integration`);
     await Deno.writeTextFile(`${pkgDir}/integration/home-profile.test.ts`, "");
     await Deno.writeTextFile(`${pkgDir}/integration/counter.test.ts`, "");
-    let captured: { cmd: string[]; cwd?: string } | undefined;
+    let captured: { cmd: string[]; cwd?: string; batch?: boolean } | undefined;
     const result = await runFilteredIntegration(
       "patterns",
       pkgDir,
@@ -315,7 +315,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
       "home-profile",
       undefined,
       (cmd, options) => {
-        captured = { cmd, cwd: options?.cwd };
+        captured = { cmd, cwd: options?.cwd, batch: options?.batch };
         return Promise.resolve({ success: true, code: 0 });
       },
     );
@@ -330,6 +330,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
       "--trace-leaks",
       "./integration/home-profile.test.ts",
     ]);
+    assertEquals(captured?.batch, true, "a test run starts at batch QoS");
   } finally {
     await Deno.remove(pkgDir, { recursive: true });
   }
@@ -593,4 +594,15 @@ Deno.test("precompilePatternTests treats a run that cannot spawn as that group's
     true,
   );
   assertEquals(logged.includes("   Error: no such binary"), true);
+});
+
+Deno.test("startServers starts the dev servers at full priority", async () => {
+  let batch: boolean | undefined = true;
+  await startServers(17, "/repo", {}, (_cmd, options) => {
+    batch = options?.batch;
+    return Promise.resolve({ success: true, code: 0 });
+  });
+  // Servers outlive a run with an explicit offset, and a person keeps using
+  // them; batch QoS is for the tests alone.
+  assertEquals(batch, undefined);
 });

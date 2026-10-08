@@ -20,6 +20,10 @@ Deno.test("Linux, CI and the off switch leave the command as written", () => {
   assertEquals(batchQosArgv(argv, context("linux")), argv);
   assertEquals(batchQosArgv(argv, context("darwin", { CI: "true" })), argv);
   assertEquals(
+    batchQosArgv(argv, context("darwin", { CI: "false" }))[0],
+    TASKPOLICY,
+  );
+  assertEquals(
     batchQosArgv(argv, context("darwin", { CF_TEST_QOS: "0" })),
     argv,
   );

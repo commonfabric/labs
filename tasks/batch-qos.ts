@@ -9,9 +9,11 @@
  * interactive work (measured: priority 20 against 31), and unlike the
  * background class it always makes progress.
  *
- * The clamp applies only on macOS, never under CI, and not with
+ * The clamp applies only on macOS, never under CI (CI=true), and not with
  * CF_TEST_QOS=0, so a run can ask for full priority when it has the machine
- * to itself.
+ * to itself. It covers the root `deno task test` and `deno task integration`
+ * runs; a member's own `deno task test` grants --allow-run to deno alone, so
+ * it cannot start taskpolicy.
  */
 
 export const TASKPOLICY = "/usr/sbin/taskpolicy";
@@ -33,7 +35,7 @@ export function batchQosArgv(
 ): string[] {
   if (argv.length === 0) throw new Error("batchQosArgv: empty argv");
   if (
-    context.os !== "darwin" || context.env("CI") ||
+    context.os !== "darwin" || context.env("CI") === "true" ||
     context.env("CF_TEST_QOS") === "0"
   ) {
     return [...argv];
