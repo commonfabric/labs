@@ -5,6 +5,9 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
+import { matchAtomPatternAgainstAtoms } from "../src/cfc/atom-pattern.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-projection");
 
@@ -40,7 +43,7 @@ describe("CFC projection claims", () => {
               path: string[];
               label: {
                 confidentiality?: unknown[];
-                integrity?: unknown[];
+                integrity?: CfcAtom[];
               };
             }>;
           };
@@ -115,6 +118,91 @@ describe("CFC projection claims", () => {
           scope: { projection: "/lat" },
         },
       ]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("scopes value-bound runtime evidence onto a projection and drops provenance (§15.4)", async () => {
+    // Runtime-minted evidence survives the write gate only for a builtin
+    // author, so the write is attributed to one. §15.4 registers
+    // `TransformedBy` and `Builtin` value-bound: a projection keeps a scoped
+    // form of each (§3.1.6.1, §8.3.2), a claim that the field is the `/lat`
+    // component of a value that writer produced. It registers
+    // `PromptSlotBound` provenance: evidence of one binding event, which no
+    // projection may carry (§15.1.1).
+    const transformedBy = {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: { kind: "builtin", builtinId: "projection-writer" },
+    };
+    const builtin = { type: CFC_ATOM_TYPE.Builtin, name: "map" };
+    const promptSlotBound = {
+      type: CFC_ATOM_TYPE.PromptSlotBound,
+      role: "context",
+      kernelName: "kernel",
+    };
+    const schema = {
+      type: "object",
+      properties: {
+        measurement: {
+          type: "object",
+          properties: {
+            lat: { type: "number" },
+            long: { type: "number" },
+          },
+          ifc: { integrity: [transformedBy, builtin, promptSlotBound] },
+        },
+        latitude: {
+          type: "number",
+          ifc: { projection: { from: "/measurement", path: "/lat" } },
+        },
+      },
+      required: ["measurement", "latitude"],
+    } as const satisfies JSONSchema;
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const tx = runtime.edit();
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "projection-writer",
+      });
+      const cell = runtime.getCell(
+        signer.did(),
+        "cfc-projection-value-bound-evidence",
+        schema,
+        tx,
+      );
+      cell.set({
+        measurement: { lat: 37.77, long: -122.41 },
+        latitude: 37.77,
+      });
+
+      tx.prepareCfc();
+      const result = await tx.commit().settled;
+      expect(result.ok).toBeDefined();
+
+      const entries = readPersistedEntries(
+        storageManager,
+        parseLink(cell.getAsLink()).id!,
+      );
+      const integrity = entries?.find((e) =>
+        e.path.length === 1 && e.path[0] === "latitude"
+      )?.label.integrity;
+      expect(integrity).toEqual([
+        { ...transformedBy, scope: { projection: "/lat" } },
+        { ...builtin, scope: { projection: "/lat" } },
+      ]);
+      // A guard naming the writer matches the scoped atom: atom patterns
+      // leave unnamed fields, `scope` among them, unconstrained. The field is
+      // a verified component of the writer's output, so a rule releasing that
+      // output releases nothing more by releasing the field.
+      expect(
+        matchAtomPatternAgainstAtoms(
+          { type: CFC_ATOM_TYPE.TransformedBy, identity: { var: "$writer" } },
+          integrity ?? [],
+        ).length,
+      ).toBeGreaterThan(0);
     } finally {
       await runtime.dispose();
       await storageManager.close();

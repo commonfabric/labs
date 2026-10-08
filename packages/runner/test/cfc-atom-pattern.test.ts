@@ -496,5 +496,27 @@ describe("CFC atom patterns", () => {
       expect(atomPropagationClass({ kind: "authored-by" }))
         .toBe("value-bound");
     });
+
+    it("matches the §15 registry's propagation column", () => {
+      // §15.4 and §3.1.6.2: a `TransformedBy` is a production claim about
+      // the exact current value, minted fresh per operation — value-bound.
+      // §15.4 registers `Builtin` value-bound, and §15.6 gives
+      // `UserSurfaceInput` (bound to the entered value's digest) the same
+      // default.
+      for (
+        const type of [
+          CFC_ATOM_TYPE.TransformedBy,
+          CFC_ATOM_TYPE.Builtin,
+          CFC_ATOM_TYPE.UserSurfaceInput,
+        ]
+      ) {
+        expect(atomPropagationClass({ type })).toBe("value-bound");
+      }
+      // §15.4 registers `PromptSlotBound` provenance: evidence of one
+      // trusted binding event, whose slot authority must not reach a
+      // derivative, a projection included.
+      expect(atomPropagationClass({ type: CFC_ATOM_TYPE.PromptSlotBound }))
+        .toBe("provenance");
+    });
   });
 });
