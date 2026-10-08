@@ -78,6 +78,17 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
     assertEquals(sized.config.limits.contextsPerLink, 4000);
     assertEquals(sized.config.limits.sockets, 9000);
     assertEquals(sized.config.limits.sessionsPerContext, 1200);
+    // The frame slot cap is config too, defaulting to the router's
+    // `max_frame_slots`, and is named when it fails.
+    assertEquals(policy.config.limits.frameSlots, 150_000);
+    write({ ...config, limits: { frameSlots: 64 } });
+    assertEquals(new MemoryRouterPolicy(path).config.limits.frameSlots, 64);
+    write({ ...config, limits: { frameSlots: 0 } });
+    assertThrows(
+      () => new MemoryRouterPolicy(path),
+      Error,
+      "invalid routed limit: frameSlots",
+    );
     // The limits must fit every allowed router at once: the defaults fit
     // two, and fewer sockets than two routers' contexts and links do not.
     const second = (await Identity.fromRaw(new Uint8Array(32).fill(20))).did();

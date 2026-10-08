@@ -1,7 +1,7 @@
 /** Durable router epochs and router-key revocations. */
 import { dirname } from "@std/path";
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
-import { parseRoutedJson } from "./routed-parser.ts";
+import { parseRoutedJson, ROUTED_DEFAULT_SLOT_LIMIT } from "./routed-parser.ts";
 import { requireRouted, ROUTED_PROOF_HORIZON_SECONDS } from "./routed-wire.ts";
 
 const MAX_BYTES = 32 * 1024 * 1024;
@@ -50,7 +50,7 @@ export class RoutedEpochStore {
         // An earlier toolshed's client proofs bind nothing once it restarts,
         // and the rewrite below drops them, so they are not decoded.
         if (line === "" || line.startsWith('["claim",')) continue;
-        const record = parseRoutedJson(line);
+        const record = parseRoutedJson(line, ROUTED_DEFAULT_SLOT_LIMIT);
         requireRouted(
           Array.isArray(record) && isCanonicalEd25519DID(record[1]),
         );

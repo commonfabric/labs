@@ -14,6 +14,7 @@ import { encodeMemoryBoundary, type ServerMessage } from "../v2.ts";
 import {
   decodeRoutedFrame,
   parseRoutedJson,
+  ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_QUEUE_LIMIT,
   routedFlags,
   routedIdentifier,
@@ -119,6 +120,16 @@ export interface RoutedHostLimits {
   holdingsPerRouter: number;
   holdingsPerToolshed: number;
   holdingsPerPrincipal: number;
+  /**
+   * JSON values in one frame a data socket receives, counted as the router
+   * counts them: one per value, keys free. A frame over it closes the
+   * socket. Must equal the router's `max_frame_slots` (a check for the infra
+   * preflight, beside the limits it compares already), and a client's
+   * `ROUTED_FRAME_SLOTS` must not exceed it. Sized by the deployment's
+   * largest sync frame against the router worker's memory, not by this
+   * toolshed.
+   */
+  frameSlots: number;
 }
 
 /**
@@ -148,6 +159,7 @@ export const DEFAULT_ROUTED_HOST_LIMITS: Readonly<RoutedHostLimits> = {
   holdingsPerRouter: 2097152,
   holdingsPerToolshed: 4194304,
   holdingsPerPrincipal: 655360,
+  frameSlots: ROUTED_DEFAULT_SLOT_LIMIT,
 };
 
 /** Watches one request may set; bounds one frame, so it stays fixed. */
@@ -624,6 +636,7 @@ export class RoutedMemoryHost {
       const flags = r.blob();
       const parsed = parseRoutedJson(
         new TextDecoder("utf-8", { fatal: true }).decode(flags),
+        ROUTED_DEFAULT_SLOT_LIMIT,
       );
       requireRouted(equalRoutedBytes(routedFlags(parsed), flags));
       const space = r.text();
@@ -684,6 +697,7 @@ export class RoutedMemoryHost {
           routedFlags(
             parseRoutedJson(
               new TextDecoder("utf-8", { fatal: true }).decode(flags),
+              ROUTED_DEFAULT_SLOT_LIMIT,
             ),
           ),
           flags,
@@ -1104,7 +1118,11 @@ export class RoutedMemoryHost {
         requireRouted(
           !failed && socket.readyState === WebSocket.OPEN && !this.#closed,
         );
-        const parsed = decodeRoutedFrame(frame, compression);
+        const parsed = decodeRoutedFrame(
+          frame,
+          compression,
+          this.#limits.frameSlots,
+        );
         const body = parsed.body;
         if (ticket === undefined) {
           requireRouted(

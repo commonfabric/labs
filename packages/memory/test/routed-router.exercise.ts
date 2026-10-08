@@ -10,6 +10,7 @@ import {
   createSignedConnectionAuth,
   createStorageAddressResolver,
   RemoteSessionFactory,
+  ROUTED_FRAME_SLOTS,
   WebSocketTransport,
 } from "../../runner/src/storage/v2-remote-session.ts";
 import { aclDocId } from "../acl.ts";
@@ -544,6 +545,7 @@ class Client {
           decodeRoutedFrame(
             binary ? new Uint8Array(bytes as ArrayBuffer) : bytes.toString(),
             true,
+            ROUTED_FRAME_SLOTS,
           ).body,
         );
         this.#notify();

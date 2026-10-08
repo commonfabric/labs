@@ -242,9 +242,20 @@ The private listener uses TLS 1.3 and bounded `ws` framing before application
 parsing. It exposes only `/memory/router-link` and `/memory/router-data`, and
 serves no toolshed HTTP API. Both boundaries reject duplicate JSON keys,
 ambiguous security tags, invalid UTF-8/DIDs, unknown critical flags, unsupported
-versions, mismatched hints and gzip expansion/CRC/member violations. Context,
-principal, router and toolshed quotas cover sessions, watches and holdings;
-resource bounds and exact values are in the infra router README.
+versions, mismatched hints and gzip expansion/CRC/member violations. A frame's
+JSON is at most 64 levels deep and at most `limits.frameSlots` values, counted
+as the router counts them: one slot per value, whether scalar, object or array,
+with keys free. The default, 150,000, is the router's default `max_frame_slots`,
+sized from the largest measured sync frame (119,720 slots) against the router
+worker's memory. The router and the toolshed close the socket a frame over the
+cap arrives on; the SDK refuses to send one and closes on receiving one. The
+slot cap exists for the router worker's memory; a toolshed's own exposure to one
+frame is bounded by the byte caps (8 MiB raw, 16 MiB expanded, 4 MiB queued per
+data socket). A whole-space sync still exceeds any per-frame cap (the largest
+rehearsal stores are 7 to 29 million slots as one frame) and needs chunking
+(infra#244). Context, principal, router and toolshed quotas cover sessions,
+watches and holdings; resource bounds and exact values are in the infra router
+README.
 
 ## Toolshed deployment inputs
 
@@ -258,8 +269,12 @@ context to router to toolshed, a context's proofs must cover its principal
 history and a renewal for each active principal, and every allowed router's
 contexts must fit the sockets and tickets at once (`routedHostLimitsFor`); a
 limit that fails, or one the toolshed does not know, is named in the error.
-The infra router README's capacity section has the arithmetic and maps each
-limit to the router's.
+`frameSlots` is the one limit the router must match rather than cover:
+`max_frame_slots == frameSlots`, a check for the infra preflight beside the
+limits it compares already, and the SDK sends and accepts at most
+`ROUTED_FRAME_SLOTS` (150,000), which must not exceed either. The infra router
+README's capacity section has the arithmetic and maps each limit to the
+router's.
 
 The toolshed answers one request it refuses and leaves the data socket open.
 A request over a session, watch (views included) or holdings limit, or one

@@ -41,6 +41,23 @@ const logger = getLogger("storage.v2.remote", {
 });
 
 /**
+ * JSON values in one routed frame this SDK sends or accepts, counted as the
+ * router counts them: one per value, keys free. It matches the router's
+ * default `max_frame_slots` and the toolshed's default `limits.frameSlots`,
+ * and must not exceed the deployment's router/toolshed cap: the router and
+ * the toolshed close the socket a larger frame arrives on, so the SDK refuses
+ * one here, compressed or raw, before it is sent, and closes on receiving one.
+ * The SDK does not learn the deployment's cap.
+ */
+export const ROUTED_FRAME_SLOTS = 150_000;
+
+/** A raw routed frame, checked as its receiver checks it before it is sent. */
+function checkedRoutedText(payload: string): string {
+  decodeRoutedFrame(payload, false, ROUTED_FRAME_SLOTS);
+  return payload;
+}
+
+/**
  * The connection a session was opened on, as far as the session's holder may
  * use it. A `MemoryClient.Client` holding one session is one, and so is a
  * holder's share of a client that holds several.
@@ -302,8 +319,10 @@ export class WebSocketTransport implements MemoryClient.Transport {
       const connection = await opening;
       const frame = compressionEnabled
         ? routed
-          ? encodeRoutedFrame(payload)
+          ? encodeRoutedFrame(payload, ROUTED_FRAME_SLOTS)
           : await encodeCompressedMemoryMessage(payload)
+        : routed
+        ? checkedRoutedText(payload)
         : payload;
       if (this.#socket !== connection.socket) {
         throw MemoryClient.connectionError(
@@ -404,9 +423,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
                 : frame instanceof ArrayBuffer
                 ? new Uint8Array(frame)
                 : frame;
-              payload =
-                decodeRoutedFrame(routedFrame, this.#receiveCompressionEnabled)
-                  .payload;
+              payload = decodeRoutedFrame(
+                routedFrame,
+                this.#receiveCompressionEnabled,
+                ROUTED_FRAME_SLOTS,
+              ).payload;
             } else if (this.#receiveCompressionEnabled) {
               payload = await decodeCompressedMemoryMessage(frame);
             } else {

@@ -17,6 +17,7 @@ import {
 import { listenRoutedMemory } from "@commonfabric/memory/v2/routed-listener";
 import {
   parseRoutedJson,
+  ROUTED_DEFAULT_SLOT_LIMIT,
   routedObject,
 } from "@commonfabric/memory/v2/routed-parser";
 import { requireRouted } from "@commonfabric/memory/v2/routed-wire";
@@ -51,7 +52,9 @@ export function isPrivateMemoryAddress(value: unknown): value is string {
 
 /** Denies malformed configuration before allocating a private listener. */
 function load(path: string): RouterConfig {
-  const value = routedObject(parseRoutedJson(Deno.readTextFileSync(path)));
+  const value = routedObject(
+    parseRoutedJson(Deno.readTextFileSync(path), ROUTED_DEFAULT_SLOT_LIMIT),
+  );
   const { limits: configured, ...fields } = value;
   requireRouted(
     Object.keys(fields).sort().join(",") ===
@@ -159,7 +162,7 @@ export class MemoryRouterPolicy {
       return;
     }
     const directory = routedObject(
-      parseRoutedJson(source),
+      parseRoutedJson(source, ROUTED_DEFAULT_SLOT_LIMIT),
     );
     requireRouted(
       Object.keys(directory).every((key) =>

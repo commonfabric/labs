@@ -43,6 +43,9 @@ import {
 import { Server } from "../v2/server.ts";
 import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
 
+/** The frame cap the test's router peer and clients apply, the toolshed's default. */
+const FRAME_SLOTS = DEFAULT_ROUTED_HOST_LIMITS.frameSlots;
+
 class FramedSocket extends EventTarget {
   readyState = 1;
   bufferedAmount = 0;
@@ -287,7 +290,8 @@ async function fixture(
     return socket;
   }
   const socket = await dataSocket();
-  const greeted = decodeRoutedFrame(await socket.take(), true).body;
+  const greeted =
+    decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body;
   if (modernCellRep === clientModernCellRep) {
     assertEquals(greeted.type, "hello.ok");
   }
@@ -295,10 +299,14 @@ async function fixture(
   async function request(body: Record<string, unknown>) {
     const requestId = `r${++requestNumber}`;
     socket.receive(
-      encodeRoutedFrame(`fvj1:${JSON.stringify({ ...body, requestId })}`),
+      encodeRoutedFrame(
+        `fvj1:${JSON.stringify({ ...body, requestId })}`,
+        FRAME_SLOTS,
+      ),
     );
     while (true) {
-      const message = decodeRoutedFrame(await socket.take(), true).body;
+      const message =
+        decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body;
       if (message.requestId === requestId) return message;
     }
   }
@@ -584,41 +592,48 @@ Deno.test("a request for a session revoked while it was in flight is denied, and
     const frames: Record<string, unknown>[] = [];
     const until = async (requestId: string) => {
       while (true) {
-        const message = decodeRoutedFrame(await f.socket.take(), true).body;
+        const message =
+          decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS).body;
         frames.push(message);
         if (message.requestId === requestId) return message;
       }
     };
     f.socket.receive(
-      encodeRoutedFrame(`fvj1:${
-        JSON.stringify({
-          type: "transact",
-          requestId: "handover",
-          space: f.space.did(),
-          sessionId: session.sessionId,
-          commit: {
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: `of:${f.space.did()}`,
-              value: { value: { [f.outsider.did()]: "OWNER" } },
-            }],
-          },
-        })
-      }`),
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "transact",
+            requestId: "handover",
+            space: f.space.did(),
+            sessionId: session.sessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: `of:${f.space.did()}`,
+                value: { value: { [f.outsider.did()]: "OWNER" } },
+              }],
+            },
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
     );
     const committed = await until("handover");
     assert(committed.ok !== undefined, JSON.stringify(committed));
     f.socket.receive(
-      encodeRoutedFrame(`fvj1:${
-        JSON.stringify({
-          type: "session.close",
-          requestId: "close",
-          space: f.space.did(),
-          sessionId: session.sessionId,
-        })
-      }`),
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "session.close",
+            requestId: "close",
+            space: f.space.did(),
+            sessionId: session.sessionId,
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
     );
     const closed = await until("close");
     assert(
@@ -700,6 +715,73 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
   }
 });
 
+Deno.test("the toolshed admits a frame at its configured slot cap and closes on one more", async () => {
+  // The hello, flags included, and a session.open are well under 64 slots.
+  const f = await fixture("frame-slots", { limits: { frameSlots: 64 } });
+  try {
+    const session = await f.open();
+    // One slot per value, keys free, as the router counts.
+    const countValues = (value: unknown): number =>
+      1 +
+      (value !== null && typeof value === "object"
+        ? Object.values(value).reduce(
+          (total: number, member) => total + countValues(member),
+          0,
+        )
+        : 0);
+    const transact = (requestId: string, slots: number) => {
+      const body = {
+        type: "transact",
+        requestId,
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: `of:pad-${requestId}`,
+            value: { value: [] as number[] },
+          }],
+        },
+      };
+      body.commit.operations[0].value.value = Array(slots - countValues(body))
+        .fill(0);
+      assertEquals(countValues(body), slots);
+      return encodeRoutedFrame(`fvj1:${JSON.stringify(body)}`, FRAME_SLOTS);
+    };
+    // At the cap the request is answered, whatever its verdict, and the
+    // socket stays open.
+    f.socket.receive(transact("exact", 64));
+    while (true) {
+      const message =
+        decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS)
+          .body;
+      if (message.requestId === "exact") break;
+    }
+    assertEquals(f.socket.readyState, 1);
+    // One value more closes the socket, as the router closes on a frame over
+    // its `max_frame_slots`; the link is untouched.
+    f.socket.receive(transact("over", 65));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error("a frame over the slot cap left the socket open")),
+        5000,
+      );
+    });
+    try {
+      await Promise.race([f.socket.closed.promise, deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+    assertEquals(f.link.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
 Deno.test("a refusal that cannot be answered closes only its socket", async () => {
   const f = await fixture("refusal-output-bound");
   try {
@@ -708,14 +790,17 @@ Deno.test("a refusal that cannot be answered closes only its socket", async () =
     // queued: the socket closes, and nothing escapes as an unhandled error.
     f.socket.bufferedAmount = 4 * 1024 * 1024;
     f.socket.receive(
-      encodeRoutedFrame(`fvj1:${
-        JSON.stringify({
-          type: "session.close",
-          requestId: "gone",
-          space: f.space.did(),
-          sessionId: "no-such-session",
-        })
-      }`),
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "session.close",
+            requestId: "gone",
+            space: f.space.did(),
+            sessionId: "no-such-session",
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
     );
     await f.socket.closed.promise;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1027,9 +1112,11 @@ Deno.test("a routed toolshed serves either cell representation, and refuses a cl
                 session: {},
               })
             }`,
+            FRAME_SLOTS,
           ),
         );
-        const after = decodeRoutedFrame(await f.socket.take(), true).body;
+        const after =
+          decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS).body;
         assertEquals(after.ok, undefined);
         assertEquals(
           (after.error as { name: string }).name,
@@ -1067,34 +1154,38 @@ Deno.test("a routed connection is not sent session/admissible when a grant admit
     const frames: Record<string, unknown>[] = [];
     const until = async (requestId: string) => {
       while (true) {
-        const message = decodeRoutedFrame(await f.socket.take(), true).body;
+        const message =
+          decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS).body;
         frames.push(message);
         if (message.requestId === requestId) return message;
       }
     };
     f.socket.receive(
-      encodeRoutedFrame(`fvj1:${
-        JSON.stringify({
-          type: "transact",
-          requestId: "grant",
-          space: f.space.did(),
-          sessionId: session.sessionId,
-          commit: {
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: `of:${f.space.did()}`,
-              value: {
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "transact",
+            requestId: "grant",
+            space: f.space.did(),
+            sessionId: session.sessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: `of:${f.space.did()}`,
                 value: {
-                  [f.principal.did()]: "OWNER",
-                  [f.outsider.did()]: "READ",
+                  value: {
+                    [f.principal.did()]: "OWNER",
+                    [f.outsider.did()]: "READ",
+                  },
                 },
-              },
-            }],
-          },
-        })
-      }`),
+              }],
+            },
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
     );
     const granted = await until("grant");
     assert(granted.ok !== undefined, JSON.stringify(granted));
@@ -1108,6 +1199,7 @@ Deno.test("a routed connection is not sent session/admissible when a grant admit
             enabled: false,
           })
         }`,
+        FRAME_SLOTS,
       ),
     );
     await until("after");
@@ -1381,7 +1473,7 @@ Deno.test("custom transports omit routed capability and reject an unsolicited ro
   let receiver: ((payload: string) => void) | undefined;
   const transport: Transport = {
     send: (payload) => {
-      const hello = decodeRoutedFrame(payload, false).body;
+      const hello = decodeRoutedFrame(payload, false, FRAME_SLOTS).body;
       assertEquals(
         (hello.flags as Record<string, unknown>).routedAuthV1,
         false,
@@ -1426,7 +1518,7 @@ Deno.test("SDK pins router metadata across toolshed responses and signs pushed r
     },
     close: () => Promise.resolve(),
     send: async (payload) => {
-      const body = decodeRoutedFrame(payload, false).body;
+      const body = decodeRoutedFrame(payload, false, FRAME_SLOTS).body;
       if (body.type === "hello") {
         assertEquals(
           (body.flags as Record<string, unknown>).routedAuthV1,
@@ -1903,17 +1995,21 @@ Deno.test("quota totals return to zero across socket replacement and context clo
       })
     }`);
     assertEquals(
-      decodeRoutedFrame(await socket.take(), true).body.type,
+      decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body.type,
       "hello.ok",
     );
     let n = 0;
     const request = async (body: Record<string, unknown>) => {
       const requestId = `q${++n}`;
       socket.receive(
-        encodeRoutedFrame(`fvj1:${JSON.stringify({ ...body, requestId })}`),
+        encodeRoutedFrame(
+          `fvj1:${JSON.stringify({ ...body, requestId })}`,
+          FRAME_SLOTS,
+        ),
       );
       while (true) {
-        const m = decodeRoutedFrame(await socket.take(), true).body;
+        const m =
+          decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body;
         if (m.requestId === requestId) return m;
       }
     };

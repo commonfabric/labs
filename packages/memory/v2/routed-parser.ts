@@ -17,15 +17,34 @@ export const ROUTED_RAW_LIMIT = 8 * 1024 * 1024;
 export const ROUTED_EXPANDED_LIMIT = 16 * 1024 * 1024;
 /** Maximum queued bytes on one ticketed data socket. */
 export const ROUTED_QUEUE_LIMIT = 4 * 1024 * 1024;
+/** Maximum JSON nesting in any routed input; the router's `DEPTH_LIMIT`. */
+export const ROUTED_DEPTH_LIMIT = 64;
+/**
+ * JSON values in one frame by default: the router's default `max_frame_slots`
+ * and the toolshed's default `limits.frameSlots`. Also the cap on the
+ * toolshed's own inputs, which are not frames (its policy config, the
+ * directory snapshot, the epoch ledger's lines and a link agent's flags), as
+ * the router applies its default to its own inputs. A frame's cap is the
+ * receiver's: the toolshed's `limits.frameSlots` or the SDK's
+ * `ROUTED_FRAME_SLOTS`.
+ */
+export const ROUTED_DEFAULT_SLOT_LIMIT = 150_000;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 /**
  * Parses bounded JSON after rejecting duplicate decoded keys, lone surrogates,
- * excess nesting and slots. Escaped names have the same duplicate-key rule.
+ * nesting past {@link ROUTED_DEPTH_LIMIT} and more than `maxSlots` values.
+ * Slots count as the router counts them: one per value, whether scalar,
+ * object or array, with keys free; the root is the first. Escaped names have
+ * the same duplicate-key rule.
  */
-export function parseRoutedJson(source: string): unknown {
+export function parseRoutedJson(source: string, maxSlots: number): unknown {
+  // A caller's error, not a hostile input: it must not read as a denial.
+  if (!Number.isSafeInteger(maxSlots) || maxSlots <= 0) {
+    throw new TypeError(`invalid routed slot cap: ${maxSlots}`);
+  }
   requireRouted(source.length <= ROUTED_EXPANDED_LIMIT);
   let at = 0;
   let slots = 0;
@@ -51,7 +70,7 @@ export function parseRoutedJson(source: string): unknown {
     throw new Error("Routed memory request denied");
   };
   const value = (depth: number): void => {
-    requireRouted(depth <= 64 && ++slots <= 100_000);
+    requireRouted(depth <= ROUTED_DEPTH_LIMIT && ++slots <= maxSlots);
     whitespace();
     if (source[at] === '"') {
       string();
@@ -193,13 +212,20 @@ export interface RoutedFrame {
   space?: string;
 }
 
-/** Checks a text frame and compares an optional binary routing hint. */
-export function parseRoutedText(payload: string, hint?: string): RoutedFrame {
+/**
+ * Checks a text frame of at most `maxSlots` JSON values and compares an
+ * optional binary routing hint.
+ */
+export function parseRoutedText(
+  payload: string,
+  maxSlots: number,
+  hint?: string,
+): RoutedFrame {
   requireRouted(
     payload.startsWith("fvj1:") &&
       encoder.encode(payload).length <= ROUTED_EXPANDED_LIMIT,
   );
-  const body = routedObject(parseRoutedJson(payload.slice(5)));
+  const body = routedObject(parseRoutedJson(payload.slice(5), maxSlots));
   requireRouted(
     typeof body.type === "string" && /^[A-Za-z0-9./_:-]{1,64}$/.test(body.type),
   );
@@ -235,14 +261,19 @@ export function parseRoutedText(payload: string, hint?: string): RoutedFrame {
   };
 }
 
-/** Decodes one gzip member, enforcing header, expansion, size and JSON bounds. */
+/**
+ * Decodes one gzip member, enforcing header, expansion, size and JSON bounds.
+ * `maxSlots` is the receiver's frame cap: the toolshed's `limits.frameSlots`
+ * or the SDK's `ROUTED_FRAME_SLOTS`.
+ */
 export function decodeRoutedFrame(
   frame: string | Uint8Array,
   compression: boolean,
+  maxSlots: number,
 ): RoutedFrame {
   if (typeof frame === "string") {
     requireRouted(encoder.encode(frame).length <= ROUTED_RAW_LIMIT);
-    return parseRoutedText(frame);
+    return parseRoutedText(frame, maxSlots);
   }
   requireRouted(
     compression && frame.length <= ROUTED_RAW_LIMIT && frame.length >= 12 &&
@@ -296,14 +327,19 @@ export function decodeRoutedFrame(
     trailer.getUint32(4, true) === bytes.length &&
       trailer.getUint32(0, true) === gzipCrc32(bytes),
   );
-  return parseRoutedText(decoder.decode(bytes), hint);
+  return parseRoutedText(decoder.decode(bytes), maxSlots, hint);
 }
 
-/** Encodes a routed envelope with its cleartext, untrusted space hint. */
+/**
+ * Encodes a routed envelope with its cleartext, untrusted space hint, after
+ * checking the payload against the sender's frame cap `maxSlots`, so a frame
+ * the receiver would refuse is never sent.
+ */
 export function encodeRoutedFrame(
   payload: string,
+  maxSlots: number,
 ): string | Uint8Array<ArrayBuffer> {
-  const parsed = parseRoutedText(payload);
+  const parsed = parseRoutedText(payload, maxSlots);
   const bytes = encoder.encode(payload);
   const raw = () => {
     requireRouted(bytes.length <= ROUTED_RAW_LIMIT);
