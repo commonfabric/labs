@@ -313,14 +313,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       { label: "bob-done" },
     ],
-    // TODO(danfuzz): The first run of the event offering the room reads the
-    // inbox's `receive` before Bob's replica holds the inbox, so its commit
-    // is refused as a stale read and the event is retried. The runner drops
-    // the offer that run sent with a warning, though the retry sends it
-    // again. Expect no warnings once the runner drops a retried run's
-    // follow-ups quietly, as it does a run aborted to run again, or the first
-    // run reads the inbox as stored.
-    allowConsoleWarnings: true,
   };
 });
 
