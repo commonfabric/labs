@@ -3083,6 +3083,76 @@ describe("what a lane records about itself", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("ships no record of a test its own skip list named, and still hears the unit", async () => {
+    // A unit the lane opened for one test registers the rest of it as
+    // ignored. Those tests are another lane's share, so only the skip a
+    // test registers itself reaches the store.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-skips-" });
+    const record = (n: string, outcome: string) =>
+      JSON.stringify({
+        line: "record",
+        test: { k: "unit", s: "bakery", n },
+        outcome,
+        durationMs: 1,
+      }) + "\n";
+    const unitOf: Record<string, string> = {
+      bakes: "a-unit",
+      glazes: "a-unit",
+      frosts: "a-unit",
+      sugars: "b-unit",
+    };
+    // "frosts" is on b-unit's list and is a skip in a-unit, so only a
+    // list keyed by unit as well as by name keeps it.
+    try {
+      const result = await runBatch(
+        {
+          suite: suite({
+            id: "workspace-unit",
+            units: ["a-unit", "b-unit"],
+            locate: (located) => ({
+              level: "unit",
+              unit: unitOf[located.test.n]!,
+            }),
+            command: (_units, context) =>
+              Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                    ${
+                    JSON.stringify(
+                      record("bakes", "pass") + record("glazes", "skip") +
+                        record("frosts", "skip") + record("sugars", "skip"),
+                    )
+                  },
+                  )`,
+                ],
+                cwd: context.root,
+              }]),
+          }),
+          units: [
+            { unit: "a-unit", skip: ["glazes"] },
+            { unit: "b-unit", skip: ["sugars", "frosts"] },
+          ],
+          runs: new Map([["a-unit", 1], ["b-unit", 1]]),
+          projected: 0,
+        },
+        lane,
+        workDir,
+        undefined,
+        {},
+      );
+      expect(result.records.map((kept) => kept.test.n)).toEqual([
+        "bakes",
+        "frosts",
+      ]);
+      expect(result.silent).toEqual([]);
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+    }
+  });
+
   it("reports a producer's own variant in a default batch", async () => {
     // The execution was a default one, so a marker on its record
     // describes a configuration that did not run.

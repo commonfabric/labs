@@ -8,11 +8,14 @@ must make ordinary subscriptions and handler invocation reliable for consumers.
 
 ## State and operations
 
-Home exposes reactive catalog data and handlers for registration and explicit
-membership changes. Registration remains insert-if-absent, receipts deduplicate
-offers without restoring archived entries, and membership actions retain their
-action ID and observed revision. Retries preserve the original user intent; they
-cannot rebase an old choice onto a peer's newer revision.
+Home exposes reactive catalog data and handlers for registration, explicit
+membership changes, and an application's removal of an entry it imported.
+Registration remains insert-if-absent, receipts deduplicate offers without
+restoring archived entries, and membership actions retain their action ID and
+observed revision. Retries preserve the original user intent; they cannot rebase
+an old choice onto a peer's newer revision. Removal applies only at the revision
+its caller observed, refuses an entry an offer receipt names, and is not a
+person's operation: archive remains how a person puts a shared space away.
 
 The catalog contains shared spaces only. Migration must not register a private,
 unshared hosted loom merely because it has a Fabric binding. A subsequent
@@ -97,8 +100,8 @@ authority; landing Home does not switch that authority.
   unlinking it, including a Home installed by another initializer during
   compilation. First creation and in-place source updates retain their normal
   behavior.
-- Authored and host callers register, archive, and restore through the same
-  handlers, with server execution enabled and disabled.
+- Authored and host callers register, archive, restore, and remove through the
+  same handlers, with server execution enabled and disabled.
 - Duplicate offers, stale actions, unknown states, malformed optional fields,
   invalid hosts, and extension fields retain the base contract's protections.
 - Competing actions rerun safely. Held, rejected, or superseded commits do not
@@ -113,7 +116,10 @@ authority; landing Home does not switch that authority.
   projection and waits for a compatible Home update instead of blindly retrying.
   Pending or denied loading, including pending serving output after a completed
   read, must not be classified as an old Home. Interface absence requires a
-  settled Home or verified source-interface evidence.
+  settled Home or verified source-interface evidence. A consumer that removes
+  entries reports the same state for a Home missing `removeSharedSpace`; that
+  absence does not make Home outdated for a consumer that only registers or
+  changes membership.
 - The authenticated actor reaches their configured Home. Serving execution does
   not substitute the service identity or a pattern-compilation origin for the
   owner or Home route.

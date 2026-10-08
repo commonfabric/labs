@@ -123,6 +123,36 @@ function findBinding(value: unknown, marker: string): unknown {
   return undefined;
 }
 
+/**
+ * The value bound right after a template part ending in `marker`, falsy or not,
+ * or `NOT_BOUND` when no part ends in `marker`.
+ */
+function boundValue(value: unknown, marker: string): unknown {
+  if (!isObjectOrArray(value)) return NOT_BOUND;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = boundValue(item, marker);
+      if (found !== NOT_BOUND) return found;
+    }
+    return NOT_BOUND;
+  }
+  const template = value as {
+    strings?: readonly string[];
+    values?: readonly unknown[];
+  };
+  if (!template.strings || !template.values) return NOT_BOUND;
+  const at = template.strings.findIndex((part) => part.endsWith(marker));
+  if (at >= 0) return template.values[at];
+  for (const item of template.values) {
+    const found = boundValue(item, marker);
+    if (found !== NOT_BOUND) return found;
+  }
+  return NOT_BOUND;
+}
+
+/** What {@link boundValue} returns when nothing is bound after the marker. */
+const NOT_BOUND = Symbol("not bound");
+
 /** Find the load-error value passed through a nested Lit template. */
 function findLoadError(value: unknown): unknown {
   if (!isObjectOrArray(value)) return undefined;
@@ -389,6 +419,66 @@ describe("load-errors", () => {
             console.error = originalError;
             restore();
           }
+        });
+
+        describe("when the space root lookup returns no root", () => {
+          /** An app view on the space home of `space`, over `rt`. */
+          const spaceHome = async (space: DID, rt: unknown) => {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space },
+            } as never;
+            view.space = space;
+            view.rt = rt as never;
+            return view;
+          };
+
+          it("tells the body view the space has no root once the lookup completes, and not while it is pending", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const lookup = Promise.withResolvers<undefined>();
+              const view = await spaceHome(
+                "did:key:z6Mk-shell-space-no-root" as DID,
+                {
+                  signal: new AbortController().signal,
+                  getSpaceRootPattern: () => lookup.promise,
+                },
+              );
+
+              view._spaceRootPattern.run();
+              const pending = boundValue(view.render(), '.spaceHasNoRoot="');
+              lookup.resolve(undefined);
+              await view._spaceRootPattern.taskComplete;
+
+              expect(pending).toBe(false);
+              expect(boundValue(view.render(), '.spaceHasNoRoot="')).toBe(true);
+              expect(findLoadError(view.render())).toBeUndefined();
+            } finally {
+              restore();
+            }
+          });
+
+          it("does not tell the body view the space has no root when there is no runtime to look it up with", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const view = await spaceHome(
+                "did:key:z6Mk-shell-space-no-runtime" as DID,
+                undefined,
+              );
+
+              view._spaceRootPattern.run();
+              await view._spaceRootPattern.taskComplete;
+
+              expect(boundValue(view.render(), '.spaceHasNoRoot="')).toBe(
+                false,
+              );
+            } finally {
+              restore();
+            }
+          });
         });
 
         it("passes a selected piece load error to the body view", async () => {
@@ -865,6 +955,24 @@ describe("load-errors", () => {
               const text = templateText(view.render());
               expect(text).toContain("We could not load this piece");
               expect(text).not.toContain("No space answers");
+            } finally {
+              restore();
+            }
+          });
+        });
+
+        describe("when the space has no root", () => {
+          it("says the space has nothing in it yet", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              const before = templateText(view.render());
+              view.spaceHasNoRoot = true;
+
+              const text = templateText(view.render());
+              expect(text).toContain("Nothing is in this space yet");
+              expect(before).not.toContain("Nothing is in this space yet");
             } finally {
               restore();
             }

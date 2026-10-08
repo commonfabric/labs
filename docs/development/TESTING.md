@@ -84,13 +84,13 @@ another test created are all things a test has to arrange for itself.
 [Test selection](test-selection.md) describes the machinery that picks them.
 
 Such a test fails by waiting. The waits an integration test uses resolve on an
-event, and the event never comes, so the wait runs to its stuck-condition
-safety net and the test costs five minutes. Selection then charges the test
-what it cost, and five minutes is more than a lane can hold. A lane may fill
-to `LANE_BUDGET_SECONDS`, and a lane running one test and nothing else may go
-up to `LANE_BOUND_SECONDS`, which is 300 — so a test charged more than that
-fits nowhere at all, and one charged between the two runs only while a change
-makes it mandatory. [Test selection](test-selection.md) has the packing rules;
+event, and the event never comes, so the wait runs to its stuck-condition safety
+net and the test fails when the net runs out, which for `waitForCondition` is
+after five minutes. A pull request's lane is packed to finish inside
+`LANE_BOUND_SECONDS`, which is 300, so the lane holding the test runs past its
+bound as well as failing. Selection measures what a test costs only from runs
+that passed, so the failure leaves the test's charge where it was. [Test
+selection](test-selection.md) has the packing rules;
 `tasks/test-selection/policy.ts` has the numbers.
 
 A page and a value are not equally easy to find missing. A page a test never

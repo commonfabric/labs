@@ -26,12 +26,15 @@ import {
   changeSharedSpaceMembership,
   readSharedSpaceCatalog,
   registerSharedSpace,
+  removeSharedSpace,
   type SharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
+  type SharedSpaceRemoval,
+  type SharedSpaceRemovalResult,
 } from "./shared-space-catalog.ts";
 import {
   type CreateProfileEvent,
@@ -152,6 +155,12 @@ export type HomeOutput = {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
+  // Only for an application undoing its own import of shared spaces: removes
+  // one entry no offer receipt names, at the revision the caller observed (see
+  // `removeSharedSpace` for what the caller must do). Home renders no control
+  // for it, and nothing a person invokes calls it: archive is how a person puts
+  // a shared space away.
+  removeSharedSpace: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
   createProfile: Stream<CreateProfileEvent>;
   // Gives Home the private inbox the deciding profile advertises: it adopts the
   // one the host vetted and names, with that profile, when the profile is in
@@ -382,7 +391,7 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
-    const chatManager = FabriChatManager({});
+    const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
       retainedPrivateInboxes,
@@ -537,6 +546,7 @@ const Home = pattern(
       // Exported handlers
       registerSharedSpace: registerSharedSpace({ catalog }),
       changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
+      removeSharedSpace: removeSharedSpace({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

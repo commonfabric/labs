@@ -439,7 +439,7 @@ offer is registered when:
   `Runtime.spaceKind()` reads it;
 - `space` has a root, its space cell linking a piece in `space` itself, and
   that piece is at the address the space's genesis commit reserves for a root
-  `inSpace()` makes with `root: true`: the address `IN_SPACE_ROOT_CAUSE`
+  `inSpace()` makes with `root: true`: the address `inSpaceRootCause(space)`
   derives in `space`.
 
 The kind check reads the kind the space's creator declared, which nobody can

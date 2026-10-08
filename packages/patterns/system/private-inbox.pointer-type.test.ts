@@ -9,7 +9,8 @@
  * the inbox the host names for it to adopt, the inbox Home holds, the ones it
  * retains and the one its refusal record names, Home's pointing step, the seed
  * step that points a profile once it is created, and a sender reading through
- * `profile-home.tsx`'s own types, therefore reads it as a typed link.
+ * `profile-home.tsx`'s own types, as FabriChat's manager does offering a room,
+ * therefore reads it as a typed link.
  *
  * The inbox an event names as refused is read as the same typed link, for a
  * narrower reason. The event carries no label of its own, so that link read
@@ -31,6 +32,7 @@ import { expect } from "@std/expect";
 import type { Cell, NAME } from "commonfabric";
 import type { inboxPieceLinkSchema } from "@commonfabric/piece/ops";
 import type { Schema } from "@commonfabric/runner";
+import type { ChatManagerProfile } from "../fabrichat/schemas.tsx";
 import type {
   advertisedInbox,
   EnsurePrivateInboxEvent,
@@ -109,6 +111,10 @@ const seedStepReachesOnlyTheName: ReachesOnlyTheName<
   PointeeOf<NonNullable<SeedProfileTarget["inbox"]>>
 > = true;
 
+const fabriChatManagerReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<NonNullable<ChatManagerProfile["inbox"]>>
+> = true;
+
 describe("private-inbox pointer type", () => {
   it("types the host's pointer as a link naming only the inbox's name", () => {
     expect(hostReachesOnlyTheName).toBe(true);
@@ -148,5 +154,9 @@ describe("private-inbox pointer type", () => {
 
   it("types the seed step's pointer as a link naming only the inbox's name", () => {
     expect(seedStepReachesOnlyTheName).toBe(true);
+  });
+
+  it("types FabriChat's manager's pointer as a link naming only the inbox's name", () => {
+    expect(fabriChatManagerReachesOnlyTheName).toBe(true);
   });
 });
