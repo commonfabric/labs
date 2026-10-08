@@ -67,7 +67,7 @@ tool comes after it.
 
 Compaction is therefore a deliberate departure from the spec's retain-all
 default, run by an operator and never by the server, and
-[stage 3](#stages) amends §7 to say so.
+[stage 5](#stages) amends §7 to say so.
 
 ## What the history costs today (measured on copies)
 
@@ -145,7 +145,7 @@ so the next storm never reaches this state.
 The storm investigation's 180 ms per `transact` with no lock wait is
 consistent with this walk running at commit time for each of the four or five
 confirmed reads, on top of the conflict scans from old bases. The rehearsal in
-[stage 4](#stages) measures it on the real file rather than inferring it.
+[stage 1](#stages) measures it on the real file rather than inferring it.
 
 ## 1. What compaction means
 
@@ -170,10 +170,20 @@ Each is something a reader relies on today, with the code that relies on it.
   and a foreign write folded into an own-attributed row would vanish from the
   scan (Astra's review reproduced this on a store that kept every commit row).
   The materialized row's `commit_seq` therefore points at one `system`-class
-  compaction commit the run inserts at the next free seq, with a session id no
-  client can hold; its own `seq` and `op_index` stay (I1), and
-  `commitClassOfSeq`, which resolves by the row's `seq`, still finds the
-  original commit's class.
+  compaction commit the run inserts at the next free seq; its own `seq` and
+  `op_index` stay (I1), and `commitClassOfSeq`, which resolves by the row's
+  `seq`, still finds the original commit's class. The commit's
+  `(session_id, local_seq)` is unique per run — `compaction:<run id>` and
+  `1`, where the run id is the run's UTC timestamp — because the `commit`
+  table has a unique index on that pair and a second or resumed run inserts
+  a second commit. The commit feed (`selectCommitsSince`) would list every
+  compacted instance as that commit's writes if a feed read ever spanned its
+  seq; none does, because the serving loop reads the feed from the seq of a
+  commit it has just made, and after the restart every such commit is newer
+  than the compaction commit. If one ever did, the cost is one dirtiness mark
+  per compacted instance and no change of value, which the stage-4 tests
+  state rather than leave implicit. The commit also carries the one revision
+  of its own that [a user can see](#what-a-user-sees).
 - **I5 — tombstones survive.** An `entity-absent` precondition refuses when
   any `set` or `delete` exists for the id; dropping a `delete` row would let a
   deleted entity be recreated under its old id.
@@ -191,6 +201,24 @@ Each is something a reader relies on today, with the code that relies on it.
   state. `origin-committed` preconditions, `commitClassOfSeq` and the commit
   feed read the columns that stay. [§5](#5-what-the-server-should-do-afterward)
   turns the refusal into a faithful `replayed` answer.
+
+  "Nothing references it" is not the same as "only history reads it". The
+  genesis receipt — commit 1's `original` — is read directly by
+  `readGenesisRoot` and `readSpaceKind` in `packages/memory/v2/genesis-root.ts`
+  for the root reservation and the declared space kind, with no revision or
+  foreign key naming it; session opening and root initialization depend on
+  both (Astra's review reproduced `Invalid genesis receipt` after hollowing
+  it). Commit 1 is therefore never hollowed. The eligibility rule is a list,
+  not a predicate: a payload is hollowed only when no surviving `revision` or
+  `op_*` row references the commit, its seq is not 1, and it is outside the
+  retained window. The audit behind the list is every `FROM "commit"` outside
+  the engine: `genesis-root.ts` is the one live reader of `original`; the
+  state inspector's readers (`conflicts.ts`, `timetravel.ts`, `churn.ts`,
+  `scopes.ts`, `grouping.ts`, `queries.ts`, `clone.ts`, `discover.ts`) are
+  offline history readers that lose what the archive keeps. A reader added
+  later that consumes `original` directly must add itself to the list, and
+  the stage-4 test that reopens a compacted store and reads the genesis root
+  and space kind is what notices if it does not.
 - **I7 — everything that is not revision history is untouched**: `head`
   addresses, `op_*` tables, `scheduler_basis`, `execution_outbox`,
   `blob_store`, `branch`, `execution_lease`, and every table a pattern created
@@ -201,6 +229,30 @@ Each is something a reader relies on today, with the code that relies on it.
   Compaction refuses a store with any non-deleted non-default branch rather
   than reasoning about forks; the Topics space has one branch row, the
   default.
+- **I9 — compacted history is never mistaken for absence.** This one is an
+  engine invariant, not a tool invariant, and it must ship before any store
+  is compacted. The identity exemption of the commit model
+  (`03-commit-model.md` §3.6.1) accepts a conflicting commit when replaying
+  its operations on the reader's actual basis yields the stored document;
+  the engine reads that basis with `read({seq})`, which returns absent for a
+  seq below the instance's first surviving row. An absent basis is a
+  fabricated one: a patch applied to nothing can equal the stored document
+  while the same patch applied to the reader's real view would not (Astra's
+  review reproduced this for a confirmed read at seq 1 and for a pending read
+  naming an own layer, with every commit payload retained and the
+  materialized row already attributed to the compaction commit). The engine
+  therefore distinguishes a compacted basis from a genuine absence and
+  returns `known: false` before the identity proof, for confirmed and pending
+  reads alike, so the staleness refusal stands and the client retries against
+  fresh state. The distinguishing fact is already in the store: an instance
+  whose oldest surviving row points at a compaction commit (`class =
+  'system'`, session `compaction:`) was compacted, and any basis older than
+  that row is unknown; an instance whose oldest row is an ordinary `set` was
+  never compacted, and a basis older than it is a genuine absence as today.
+  Robin's framing — compaction is an operations event, and the restart that
+  accompanies it drops every session — covers everything except this: a
+  client's queued commit from before the restart carries its old basis into
+  the new session, and only the engine can tell that basis is gone.
 
 ### The options
 
@@ -325,8 +377,8 @@ the hollowing pass runs last in seq-ranged batches, so a run interrupted
 anywhere leaves a store every reader can use and a second run picks up where
 the first stopped: an instance whose head is already a `set` pointing at a
 compaction commit is a no-op, and a hollowed row is recognized by its marker.
-A second run inserts a second compaction commit; the report names both. The
-run ends with `PRAGMA foreign_key_check` and `PRAGMA integrity_check` on the
+A second run inserts a second compaction commit under its own run id (I4);
+the report names both. The run ends with `PRAGMA foreign_key_check` and `PRAGMA integrity_check` on the
 result. Nothing is deleted from `commit`, so the foreign keys from the `op_*`
 tables are never exercised; the pass still refuses to hollow a commit an
 `op_*` row references, because those tables read `original` through their
@@ -393,23 +445,29 @@ Each check fails differently and the order goes from cheap to expensive:
    cheap.
 5. **The compaction commit is recorded**: one `system` row at the seq the dry
    run named, every materialized row pointing at it, `branch.head_seq` equal
-   to it, and the hollowed-row count equal to the dry run's.
-6. **Serve it.** Clone the result (`cf space clone --from <result>`), start a
+   to it, the hollowed-row count equal to the dry run's, and the marker on
+   the ACL document present and naming that seq.
+6. **Live metadata survives.** On the reopened result, `readGenesisRoot` and
+   `readSpaceKind` return what they return on the backup, and commit 1's
+   `original` is byte-identical.
+7. **Serve it.** Clone the result (`cf space clone --from <result>`), start a
    local toolshed on it with the workspace's port offset, open the Topics
    board cold, and read the board and a handful of topics through `cf`. The
    acceptance checks are the ones `space-clone-rehearsal.md` lists plus two
    for this tool: `/api/health/stats` for the space shows `patchReplays` not
    climbing on a cold board load, and `transact` round trips on a topic edit
    are below the storm's 180 ms.
-7. On the host after install, the two checks `staging-space-copy.md` ends
+8. On the host after install, the two checks `staging-space-copy.md` ends
    with: the space is listed, and a read through the API returns the content.
 
-### Two protocol cases the verification must cover
+### Four protocol cases the verification must cover
 
-Head equality passes both of these; they are what Astra's review showed
-materialize-and-truncate gets wrong without I4 and I6, and they are the
-regression tests of [stage 3](#stages), run against the engine on a store the
-tool compacted:
+Head equality passes all four; they are what Astra's two reviews showed
+materialize-and-truncate gets wrong without I4, I6 and I9. The first two are
+regression tests of [stage 4](#stages), run against the engine on a store the
+tool compacted; the last two are tests of the engine guard in
+[stage 2](#stages), run against a store transformed by hand the way the tool
+will transform it, and run again in stage 4 against the tool's own output:
 
 - **A pending read crossing compacted foreign writes stays refused.** Session
   A sets a document (localSeq 1); session B patches a path of it; session A
@@ -424,6 +482,55 @@ tool compacted:
   document keeps B's value and the response is a refusal (or, once §5 lands,
   `replayed: true` at the original seq). Before compaction the same
   resubmission is answered `replayed: true` at seq 1.
+- **A confirmed read whose basis was compacted away cannot prove identity.**
+  Seed a document with `{x: 2, y: 3}` at seq 1; another session replaces it
+  with `{x: 1}` and then patches `/value/x` to `1`, so the head is a patch;
+  compact. Submit the same patch with a confirmed read of the document at
+  seq 1 and path `[]`. Before compaction this conflicts: the patch on the
+  reader's real basis yields `{x: 1, y: 3}`, not the stored `{x: 1}`. After
+  compaction it must still be refused, not accepted with the operation
+  elided because the patch on an absent basis happens to equal the stored
+  document.
+- **A pending read whose basis was compacted away cannot prove identity.**
+  The same seed; session A's localSeq 1 adds `/value/x = 2`; session B does
+  the replacement and the patch; compact. Session A's localSeq 2 submits the
+  same final patch with a pending read at `basisSeq: 1` naming layer 1. Refused
+  before compaction; it must stay refused.
+
+### What a user sees
+
+A space's history is a promise to the people in it: the transaction log is
+persisted, and anything that happened can be audited. Compaction breaks that
+promise for the compacted range, on purpose and with the owner's agreement,
+and a hollowed commit is indistinguishable from an elided one — a write that
+changed nothing — to anyone reading the log. Robin's review asks for the
+equivalent of a browser's broken-key icon: something developers can wave
+past and a user of what looked like a safe space can see.
+
+So the compaction commit carries one revision of its own: a patch on the
+space's ACL document (`of:<did>`, the one entity named by the space's DID,
+which every client reads to join) adding a `compaction` member beside
+`value` at the document root:
+
+```json
+{
+  "compaction": {
+    "lastCommitSeq": 1494536,
+    "compactedAt": "2026-10-09T18:00:00Z",
+    "runs": [{ "commitSeq": 1494537, "documents": "computed:", "hollowed": 1307316 }]
+  }
+}
+```
+
+`lastCommitSeq` is the newest seq any hollowed or deleted row had; a reader
+that wants history older than it knows to ask for the archive. The member is
+a sibling of `value` rather than inside it because `value` is the ACL, with
+its own schema and its own admission, and because the state inspector
+classifies an entity by its top-level paths and can learn one more. The
+shell's space header is where the icon belongs; that is a change for the
+shell's owners and is [left open](#what-is-deliberately-left-open) here, with
+the marker as the hook it hangs on. The compaction commit itself is the
+second record, with the run's report as its `original`, for `cf inspect`.
 
 ### Rollback
 
@@ -457,7 +564,7 @@ and `deno` on the machine that runs it, and the host runs a built binary. A
 carry the live-store rail, already serialize under `--json`, and `cf` ships as
 a single built binary that can be copied to a host. `check-command-docs` then
 requires the command be described in a live document, which is the
-`packages/cli/README.md` section this plan's stage 3 writes.
+`packages/cli/README.md` section this plan's stage 5 writes.
 
 So: **`cf space compact`** in `packages/cli/commands/space.ts`, over a module
 `packages/memory/v2/compact.ts` exported as `./v2/compact` beside `./v2/dump`.
@@ -494,7 +601,10 @@ Topics space hashed to port 8020 in October; `deploy` owns `/data/memory` and
 runs the services with passwordless sudo; team members reach the host as
 themselves and read the space files, which are mode 644.
 
-The steps, each a command the operator runs on the host unless noted:
+The steps, each a command the operator runs on the host unless noted. Before
+step 2 the space's owner has agreed to the compaction and to the archive's
+retention, since the history being removed is theirs
+([what a user sees](#what-a-user-sees)):
 
 ```bash
 # 0. Space, disk, and which instance owns it. The hash is nginx's; the storm
@@ -530,7 +640,7 @@ cf space compact /data/replaced/<did>.work.sqlite --documents computed: \
   --out '/data/replaced/<did>.compacted.sqlite'
 rm /data/replaced/<did>.work.sqlite
 
-# 5. Verify (§3, steps 1–5), on the host, against the post-stop backup.
+# 5. Verify (§3, steps 1–6), on the host, against the post-stop backup.
 cf space compact --verify '/data/replaced/<did>.compacted.sqlite' \
   --against '/data/replaced/<did>.pre-compaction-<date>.sqlite'
 
@@ -577,7 +687,7 @@ do the same at the index level and needs a migration; the query bound needs
 none, so it goes first, and the index is the follow-up if measurement on the
 clone says the bound is not enough.
 
-**Answer a hollowed commit's resubmission faithfully (stage 7).** After
+**Answer a hollowed commit's resubmission faithfully (stage 8).** After
 compaction a resubmitted commit whose payload was hollowed is refused as a
 replay mismatch: safe, but the client reports an error for a write that
 landed. The marker the tool writes carries a hash of the original bytes, so
@@ -590,12 +700,20 @@ the tool inserts is the compaction log, with the run's report as its
 was compacted on <date>; the archive is <file>" rather than showing a
 document that appears from nowhere.
 
-**Refuse a historical read below the cut explicitly (stage 7).** A pending
-read whose basis is below an instance's first surviving row reconstructs that
-basis as "absent" today and fails safe only because the identity proof then
-cannot match; a `read({seq})` below the cut returns absent. Both should name
-the compaction commit instead. Hygiene rather than safety, and it belongs
-with the faithful replay answer.
+**Distinguish a compacted basis from absence (stage 2, prerequisite).** I9
+is the engine change that has to exist before any store is compacted: a
+confirmed or pending read whose basis is older than an instance's oldest
+surviving row, when that row points at a compaction commit, is `known:
+false` to the identity proof. It is small — one lookup of the oldest row's
+commit class, consulted only on the path that already found a conflict — and
+it is the difference between a compacted store that refuses a stale write
+and one that accepts it with every operation elided.
+
+**Refuse a historical read below the cut explicitly (stage 8).** A
+`read({seq})` below the cut returns absent today; it should name the
+compaction commit instead, so `cf inspect value-at --seq` can say where the
+history went. Hygiene rather than safety, and it belongs with the faithful
+replay answer.
 
 **Snapshot cadence: leave it.** The interval of ten bounds the replay to ten
 rows and the retention of two bounds the snapshot table to two documents per
@@ -648,44 +766,62 @@ operator took.
   `integrity_check` must pass before the first write.
 - **A `--space <did> --store <dir>` form** composing the storage-path
   functions, for operators who would rather not list a directory.
+- **The user-visible icon.** The marker on the ACL document is the hook; the
+  shell's space header (and Weaver's) showing it is the shell owners' change.
+- **Whether a space's owner agrees to compaction at all.** Robin's point
+  stands above every mechanism here: the log is a promise to the people in
+  the space. The tool refuses nothing on that ground; the runbook requires the
+  owner's agreement before step 2, and the marker makes the decision visible
+  afterward.
 - **Automatic compaction by the server.** Not proposed. The spec's retain-all
   default stands; compaction is an operator's decision about one space, with
   the owner's agreement, after a rehearsal.
 
 ## Stages
 
-Each stage is a pull request; none has started. The engine change comes
-first because it preserves history, helps the uncompacted store on the day it
-ships, and is the measurement the compaction decision should be made against.
+Each stage is a pull request; none has started. Two engine changes come
+first: the base search, because it preserves history, helps the uncompacted
+store on the day it ships, and is the measurement the compaction decision
+should be made against; and the basis guard, because no store may be
+compacted until the engine can tell compacted history from absence.
 
 1. **The snapshot-bounded base search**, measured on a clone of the current
    Topics file: cold board load and `transact` round trips before and after,
    on the uncompacted store. This is where the 180 ms claim is tested rather
    than inferred, and where the question "is compaction still needed for
    latency, or only for disk?" gets its answer.
-2. **Dry run and report.** `packages/memory/v2/compact.ts` with the
+2. **The basis guard (I9).** `known: false` for a confirmed or pending read
+   whose basis predates an instance's oldest surviving row when that row
+   points at a compaction commit. Tests: the last two protocol cases of §3,
+   against stores transformed by hand the way the tool will transform them,
+   red before and green after; an uncompacted instance's genuine absence
+   still proves identity as today.
+3. **Dry run and report.** `packages/memory/v2/compact.ts` with the
    selection, the cut, and the report, read-only; `cf space compact --dry-run`
    over it. Exercised against the September Topics copy, whose numbers replace
    the estimates above. Tests: a store built with the engine, patched past the
    snapshot interval, reports the rows and bytes a hand count gives.
-3. **The write path.** The compaction commit, materialize, truncate, hollow,
+4. **The write path.** The compaction commit with its per-run identity and
+   its ACL-document marker, materialize, truncate, hollow (commit 1 exempt),
    `VACUUM INTO`, `--verify --against`. Tests: every head reads back identical
    through both the engine and the inspector's replay; a confirmed read below
-   the cut conflicts; the two protocol cases of §3 — a pending read crossing
-   compacted foreign writes stays refused, and an old resubmission never
-   mutates state — reproduced with Astra's schedules before the fix and green
-   after; a resubmitted commit inside the payload window is answered from its
-   stored result; a store with a second branch is refused; a run interrupted
-   after the first instance resumes to the same result as an uninterrupted
-   one.
-4. **Documentation and the spec amendment.** The `cf space compact` section
+   the cut conflicts; all four protocol cases of §3 against the tool's own
+   output; a resubmitted commit inside the payload window is answered from
+   its stored result; the genesis root and space kind read the same on the
+   reopened result; the feed's view of the compaction commit is as I4 states;
+   a store with a second branch is refused; a run interrupted after the first
+   instance resumes to the same result as an uninterrupted one, with two
+   compaction commits.
+5. **Documentation and the spec amendment.** The `cf space compact` section
    of `packages/cli/README.md` (the command-docs gate requires it), the
-   §7 paragraph in `02-storage.md`, and a runbook section in
+   §7 paragraph in `02-storage.md`, the state inspector learning the
+   `compaction` member and the compaction commit, and a runbook section in
    `staging-space-copy.md` or a sibling document carrying the Estuary recipe
    of §4 once it has been run.
-5. **Rehearsal on a clone of the current Topics file**, with the same
+6. **Rehearsal on a clone of the current Topics file**, with the same
    timings as stage 1 taken after compaction.
-6. **The production run**, by the operator, from the rehearsed flag set, only
-   if stage 1's measurement leaves a reason beyond disk, or disk is the reason.
-7. **Faithful replay of hollowed commits and explicit refusal of reads
+7. **The production run**, by the operator, from the rehearsed flag set, with
+   the owner's agreement, only if stage 1's measurement leaves a reason
+   beyond disk, or disk is the reason.
+8. **Faithful replay of hollowed commits and explicit refusal of reads
    below the cut**, the two engine changes of §5.
