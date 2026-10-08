@@ -135,9 +135,10 @@ space does not have as its root. A repaired profile is not at the reserved
 address, since a genesis commit cannot gain a reservation afterward, and it is
 a root like any other in a space that grants every principal `WRITE`: anyone
 can link something else there. `getSpaceRootPattern()` returns whatever root
-the space cell links, without asking whether it is a profile or whom it
-represents, so a host that finds a person's profile from the space's DID makes
-those checks itself: it takes the root as the person's profile only when the
+the space cell links, or `undefined` when it links none, and throws the server's
+refusal when the server refuses the reader the space; it does not ask whether
+the root is a profile or whom it represents. So a host that finds a person's
+profile from the space's DID makes those checks itself: it takes the root as the person's profile only when the
 root is a piece in that space, rather than a path into one, and its label says
 it represents the person the host expects. Until the repair reaches it, a
 profile in such a space is reached only through a link to it, such as the one

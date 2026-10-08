@@ -56,6 +56,7 @@ status, and an `inspection` receipt for the whole run:
 | `occupied`      | any other root                                                                                                                                                                                             | nothing                      |
 | `not-a-profile` | the piece's label names no single owner of its space that it represents                                                                                                                                    | nothing                      |
 | `unlisted`      | no Home in the snapshot lists it                                                                                                                                                                           | nothing                      |
+| `unreadable`    | a space file of the snapshot did not open, or reading it failed; it may hold profiles no row names, and `reason` says why                                                                                  | nothing                      |
 | `failed`        | the inspection or the repair threw; `reason` says why                                                                                                                                                      | nothing                      |
 
 Two ensures create the roots reported as `junk-root`. A client's open of a
