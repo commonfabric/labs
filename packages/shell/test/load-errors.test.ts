@@ -391,6 +391,33 @@ describe("load-errors", () => {
           }
         });
 
+        it("tells the body view the space has no root when the lookup returns `null`", async () => {
+          const restore = installBrowserGlobals();
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-space-no-root" as DID;
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space },
+            } as never;
+            view.space = space;
+            view.rt = {
+              signal: new AbortController().signal,
+              getSpaceRootPattern: () => Promise.resolve(null),
+            } as never;
+
+            view._spaceRootPattern.run();
+            await view._spaceRootPattern.taskComplete;
+
+            expect(findBinding(view.render(), '.spaceHasNoRoot="')).toBe(true);
+            expect(findLoadError(view.render())).toBeUndefined();
+          } finally {
+            restore();
+          }
+        });
+
         it("passes a selected piece load error to the body view", async () => {
           const restore = installBrowserGlobals();
           const originalError = console.error;
@@ -865,6 +892,24 @@ describe("load-errors", () => {
               const text = templateText(view.render());
               expect(text).toContain("We could not load this piece");
               expect(text).not.toContain("No space answers");
+            } finally {
+              restore();
+            }
+          });
+        });
+
+        describe("when the space has no root", () => {
+          it("says the space has nothing in it yet", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              const before = templateText(view.render());
+              view.spaceHasNoRoot = true;
+
+              const text = templateText(view.render());
+              expect(text).toContain("Nothing is in this space yet");
+              expect(before).not.toContain("Nothing is in this space yet");
             } finally {
               restore();
             }

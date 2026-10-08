@@ -367,6 +367,28 @@ describe("RuntimeInternals", () => {
         await runtime.dispose();
       }
     });
+
+    it("asks again after a lookup returns no root", async () => {
+      const client = new MockRuntimeClient();
+      const rootPattern = { id: "root-pattern" };
+      const answers = [null, rootPattern];
+      client.getSpaceRootPattern = (space: DID) => {
+        client.spaceRootCalls.push(space);
+        return Promise.resolve(answers.shift() as never);
+      };
+      const runtime = new RuntimeInternals(client as any);
+      const space = "did:key:z6Mk-root-absent" as DID;
+
+      try {
+        await expect(runtime.getSpaceRootPattern(space)).resolves.toBeNull();
+        await expect(runtime.getSpaceRootPattern(space)).resolves.toBe(
+          rootPattern,
+        );
+        expect(client.spaceRootCalls).toEqual([space, space]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
   });
 
   it("reads a piece's source state through the client", async () => {

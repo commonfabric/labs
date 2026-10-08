@@ -2583,8 +2583,11 @@ export type GetSpaceRootPatternRequest = BaseRequest & {
    * A caller that only reads what the root exported passes false. Starting
    * a root materializes everything its result reaches, which on a space
    * whose root reaches a large piece is the dominant cost of opening
-   * anything; a stored export costs a read. Either way an absent root is
-   * still created, since a space needs one before it can have exports.
+   * anything; a stored export costs a read.
+   *
+   * A space with no root gets one only when this is true and the requesting
+   * identity owns the space. Otherwise the response is `null`, and nothing
+   * is written.
    */
   start?: boolean;
 };
@@ -4474,7 +4477,7 @@ export type Commands = {
   };
   [RequestType.GetSpaceRootPattern]: {
     request: GetSpaceRootPatternRequest;
-    response: PieceResponse;
+    response: PieceResponse | NullResponse;
   };
   // Diagnosis requests
   [RequestType.DetectNonIdempotent]: {

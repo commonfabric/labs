@@ -409,6 +409,7 @@ export class XAppView extends BaseView {
       [app, rt, space],
     ): Promise<
       | PieceHandle<NameSchema>
+      | null
       | undefined
     > => {
       if (!rt || !space) return;
@@ -606,7 +607,7 @@ export class XAppView extends BaseView {
       activePattern: PieceHandle<NameSchema> | undefined;
     } {
       const spaceRootPattern = spaceRootPatternStatus === TaskStatus.COMPLETE
-        ? spaceRootPatternValue
+        ? spaceRootPatternValue ?? undefined
         : undefined;
       // The "active" pattern is the main pattern to be rendered.
       // This may be the same as the space root pattern, unless we're
@@ -1136,6 +1137,9 @@ export class XAppView extends BaseView {
         .spaceName="${"spaceName" in this.app.view
           ? this.app.view.spaceName
           : undefined}"
+        .spaceHasNoRoot="${isViewingDefaultPattern &&
+          this._spaceRootPattern.status === TaskStatus.COMPLETE &&
+          this._spaceRootPattern.value === null}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"
         .showSidebar="${config.showSidebar ?? false}"
         .embedded="${embedded}"

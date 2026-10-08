@@ -420,7 +420,13 @@ This enables users to maintain personal forks of the default app pattern (e.g.,
 Both the home pattern and the default app pattern follow the same mechanism:
 
 1. When a space is opened, `PiecesController.ensureDefaultPattern()` checks if
-   a `defaultPattern` piece already exists on the space cell
+   a `defaultPattern` piece already exists on the space cell. Through
+   `RuntimeClient.getSpaceRootPattern()`, which is how the shell opens a space,
+   a space with no root gets one only from an open that runs the root (`start`
+   true) by an identity that owns the space, as its Home or as an `OWNER` in
+   its access list. Any other principal's open, and any read with `start`
+   false, returns `null` for such a space and writes nothing, so a visitor
+   never puts a root in someone else's space
 2. If not, it creates one:
    - **Home space** (`space === userIdentityDID`): uses
      `/api/patterns/system/home.tsx`
