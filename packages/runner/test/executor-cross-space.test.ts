@@ -2574,11 +2574,14 @@ export default pattern<
     });
   });
 
-  it("a client creates no space for a served handler's unrecorded `inSpace(name)`, and its sender's callback settles done once the served handling consequenced", async () => {
-    // The client's speculative echo of the handler finds no record for the
-    // name. It creates no space of its own and withdraws; the serving run
-    // creates the space its record names. The sender's callback reads the
-    // served outcome, not the withdrawn echo's aborted transaction.
+  /**
+   * Stands up, for Alice's client runtime with server execution on, a home
+   * pattern whose `create` handler places a child in the space it names
+   * `lobby`, which no record names yet, and starts the serving host. Returns
+   * the pattern's result and argument cells, and the count of spaces the
+   * client has created.
+   */
+  const standUpUnrecordedInSpace = async (label: string) => {
     clientManager = SharedServerStorageManager.connectTo(server, {
       as: aliceSigner,
     });
@@ -2614,11 +2617,11 @@ export default pattern<
     }, { space: homeSpace });
     const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
       homeSpace,
-      "in-space-echo-argument",
+      `${label}-argument`,
     );
     const result = clientRuntime.getCell<{ create: unknown }>(
       homeSpace,
-      "in-space-echo-result",
+      `${label}-result`,
       compiled.resultSchema,
     );
     await Promise.all([argument.sync(), result.sync()]);
@@ -2628,11 +2631,28 @@ export default pattern<
     expect((await seed.commit().settled).error).toBeUndefined();
     await clientManager.synced();
     host = newHost();
+    return { argument, result, createdSpaces: () => clientCreatedSpaces };
+  };
 
+  it("a client creates no space for a served handler's unrecorded `inSpace(name)`, and its sender's callback settles done once the served handling consequenced", async () => {
+    // The client's speculative echo of the handler finds no record for the
+    // name. It creates no space of its own and withdraws; the serving run
+    // creates the space its record names. The sender's callbacks read the
+    // served outcome, not the withdrawn echo's aborted transaction: the
+    // append report as a clean append, the commit callback as done.
+    const { argument, result, createdSpaces } = await standUpUnrecordedInSpace(
+      "in-space-echo",
+    );
+
+    const appended = Promise.withResolvers<string>();
     const acked = Promise.withResolvers<IExtendedStorageTransaction>();
-    sendEvent(result.key("create"), { title: "lobby" }, acked.resolve);
+    sendEvent(result.key("create"), { title: "lobby" }, acked.resolve, {
+      onAppended: (_delivery, appendedTx) =>
+        appended.resolve(appendedTx.status().status),
+    });
     const ackTx = await acked.promise;
 
+    expect(await appended.promise).toBe("done");
     expect(ackTx.status().status).toBe("done");
     expect(ackTx.handlingReceiptLink).toBeDefined();
     const engine = await server.engineForSpace(homeSpace);
@@ -2641,7 +2661,21 @@ export default pattern<
     })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
     expect(rooms).toHaveLength(1);
     expect(parseLink(rooms[0])!.space).not.toBe(homeSpace);
-    expect(clientCreatedSpaces).toBe(0);
+    expect(createdSpaces()).toBe(0);
+  });
+
+  it("hands a sender's commit callback the withdrawn echo's own failure when no overlay observed the served handling", async () => {
+    // Without an overlay nothing observes the served consequence, so the
+    // callback is handed what the echo itself saw.
+    const { result } = await standUpUnrecordedInSpace("in-space-echo-bare");
+    Object.defineProperty(clientRuntime, "speculationOverlay", {
+      get: () => undefined,
+    });
+
+    const acked = Promise.withResolvers<IExtendedStorageTransaction>();
+    sendEvent(result.key("create"), { title: "lobby" }, acked.resolve);
+
+    expect((await acked.promise).status().status).toBe("error");
   });
 
   it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {
