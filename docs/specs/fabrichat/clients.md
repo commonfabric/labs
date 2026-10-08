@@ -111,8 +111,11 @@ gesture on the reviewed surface its policy names:
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 | add a member | room's rendering | `addMember` | `ChatAddMemberSurface` |
 
-Adding a member is admitted only from a DOM gesture on the room's own rendering
-for now (see [the sanctioned issuing path](#the-sanctioned-issuing-path)).
+A client that draws natively sends `addMember` through
+[the sanctioned issuing path](#the-sanctioned-issuing-path) on
+`ChatAddMemberSurface`, as it sends the acts above. It finds the stream on the
+room's output rather than in `[VIEWS]` (see
+[`ChatRoomOutput`](ChatRoomOutput.md#addmembertarget--value-string-)).
 
 A client sends to the room's own streams, never through a placement or an
 adapter.
@@ -207,12 +210,11 @@ it checks a rendered gesture's provenance, and the mark reaches a served
 handler the way a rendered gesture's does. The generic `cell:send` marks
 nothing, and pattern code can reach neither path.
 
-A native act is not a DOM gesture, so a write that requires one is refused from
-a native control. Adding a member is such a write: `addMember` admits someone
-with `grantSpaceAccess()`, which changes the space's access list only from a
-DOM gesture. So a client offers the add control only by rendering the room's
-`[UI]`, until the runtime counts a native reviewed act as a trusted gesture for
-that change.
+A native reviewed act counts wherever a trusted gesture does ([host
+embedding](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures),
+§11), a change to a space's access list included. So adding a member works the
+same way: `addMember` admits someone with `grantSpaceAccess()`, which admits a
+native reviewed act as it admits a gesture on the room's rendered add control.
 
 ## Delivering notices
 

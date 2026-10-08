@@ -267,8 +267,9 @@ names the ones it needs, and they are gathered here:
 - **Native reviewed acts as trusted gestures.** A client that draws natively
   issues a reviewed act through the sanctioned path
   ([host embedding](../../features/host-embedding.md#10-native-reviewed-controls),
-  §10), but a native act is not a DOM gesture, so a write that requires one,
-  as adding a member does, can't be made from it yet (see
+  §10), and a native reviewed act counts wherever a trusted gesture does
+  ([§11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)),
+  adding a member included (see
   [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 
 ## Implementation status
@@ -293,16 +294,16 @@ from this design, as below.
   root, naming grants: the creator and each other member OWNER, and everyone
   WRITE for a group made joinable by its link. After that, who is in it
   changes through the space's own tools, and through the room's add control,
-  from which any OWNER admits someone as OWNER with `grantSpaceAccess()`.
-  That control needs a DOM gesture, so a host drawing a room natively can't
-  offer it. A room in a space of its own keeps the space's participants,
-  through `addParticipant`, the roster's one writer
-  (`packages/patterns/loom/participants.tsx`): the manager that creates or
-  accepts the room adds its user, from an event that follows. As a stop-gap, a
-  member whose manager has done neither, as when the share intake registered
-  an offer of the room, is not on the roster, and is shown once they write, as
-  an author. A room in an existing social space lists that
-  space's participants, then those who joined the room.
+  from which any OWNER admits someone as OWNER with `grantSpaceAccess()`. A
+  client that draws natively can offer it too, through the sanctioned issuing
+  path (see [`clients.md`](clients.md#the-sanctioned-issuing-path)). A room in
+  a space of its own keeps the space's participants, through `addParticipant`,
+  the roster's one writer (`packages/patterns/loom/participants.tsx`): the
+  manager that creates or accepts the room adds its user, from an event that
+  follows. As a stop-gap, a member whose manager has done neither, as when the
+  share intake registered an offer of the room, is not on the roster, and is
+  shown once they write, as an author. A room in an existing social space lists
+  that space's participants, then those who joined the room.
 - **Principals.** A handler learns the principal it acts for
   (`currentPrincipal()`), so a room keys its request memory by the sender's
   principal, and the manager refuses a direct room with the user themself and

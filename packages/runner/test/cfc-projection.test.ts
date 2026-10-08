@@ -5,6 +5,8 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-projection");
 
@@ -114,6 +116,80 @@ describe("CFC projection claims", () => {
           device: "test-device",
           scope: { projection: "/lat" },
         },
+      ]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("carries value-bound TransformedBy and Builtin scoped onto a projection and drops PromptSlotBound", async () => {
+    // §15.4 registers `TransformedBy` and `Builtin` value-bound, so a verified
+    // projection keeps a form of each scoped to the projected path
+    // (§3.1.6.1, §8.3.2). It registers `PromptSlotBound` provenance, which no
+    // projection carries (§15.1.1). All three are runtime-minted, and only a
+    // builtin author's write keeps them, so the write is attributed to one.
+
+    const transformedBy = {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: { kind: "builtin", builtinId: "projection-writer" },
+    };
+    const builtin = { type: CFC_ATOM_TYPE.Builtin, name: "map" };
+    const promptSlotBound = {
+      type: CFC_ATOM_TYPE.PromptSlotBound,
+      role: "context",
+      kernelName: "kernel",
+    };
+    const schema = {
+      type: "object",
+      properties: {
+        measurement: {
+          type: "object",
+          properties: {
+            lat: { type: "number" },
+            long: { type: "number" },
+          },
+          ifc: { integrity: [transformedBy, builtin, promptSlotBound] },
+        },
+        latitude: {
+          type: "number",
+          ifc: { projection: { from: "/measurement", path: "/lat" } },
+        },
+      },
+      required: ["measurement", "latitude"],
+    } as const satisfies JSONSchema;
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const tx = runtime.edit();
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "projection-writer",
+      });
+      const cell = runtime.getCell(
+        signer.did(),
+        "cfc-projection-value-bound-evidence",
+        schema,
+        tx,
+      );
+      cell.set({
+        measurement: { lat: 37.77, long: -122.41 },
+        latitude: 37.77,
+      });
+
+      tx.prepareCfc();
+      const result = await tx.commit().settled;
+      expect(result.ok).toBeDefined();
+
+      const entries = readPersistedEntries(
+        storageManager,
+        parseLink(cell.getAsLink()).id!,
+      );
+      const integrity = entries?.find((e) =>
+        e.path.length === 1 && e.path[0] === "latitude"
+      )?.label.integrity;
+      expect(integrity).toEqual([
+        { ...transformedBy, scope: { projection: "/lat" } },
+        { ...builtin, scope: { projection: "/lat" } },
       ]);
     } finally {
       await runtime.dispose();

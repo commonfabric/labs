@@ -3,7 +3,11 @@ import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import * as Engine from "../v2/engine.ts";
 import { encodeMemoryBoundary, type GenesisRoot } from "../v2.ts";
-import { isGenesisRoot, readGenesisRoot } from "../v2/genesis-root.ts";
+import {
+  isGenesisRoot,
+  readGenesisRoot,
+  readSpaceKind,
+} from "../v2/genesis-root.ts";
 
 const space = "did:key:root-test-space";
 const root = {
@@ -139,6 +143,114 @@ describe("v2-genesis-root", () => {
       false,
       false,
     ]);
+  });
+
+  it("reads back the kind a genesis receipt declares, and none from one that declares none", async () => {
+    const engine = await Engine.open({
+      url: new URL("memory://space-kind-genesis-receipt"),
+    });
+    const genesis = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set" as const,
+        id: `of:${space}`,
+        value: { value: { ["did:key:manager"]: "OWNER" } },
+      }],
+    };
+    try {
+      expect(readSpaceKind(engine)).toBeUndefined();
+      Engine.applyCommit(engine, {
+        sessionId: "bootstrap",
+        space,
+        principal: space,
+        commit: { ...genesis, spaceKind: "fabrichat-room" },
+      });
+      expect(readSpaceKind(engine)).toBe("fabrichat-room");
+      engine.database.prepare(
+        'UPDATE "commit" SET original = ? WHERE seq = 1',
+      ).run(encodeMemoryBoundary(genesis));
+      expect(readSpaceKind(engine)).toBeUndefined();
+    } finally {
+      Engine.close(engine);
+    }
+  });
+
+  it("reads a receipt whose kind is not well formed as declaring none, and leaves its root reservation readable", async () => {
+    const engine = await Engine.open({
+      url: new URL("memory://malformed-space-kind-receipt"),
+    });
+    const commit = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      genesisRoot: root,
+      operations: [{
+        op: "set" as const,
+        id: `of:${space}`,
+        value: { value: { ["did:key:manager"]: "OWNER" } },
+      }],
+    };
+    try {
+      Engine.applyCommit(engine, {
+        sessionId: "bootstrap",
+        space,
+        principal: space,
+        commit,
+      });
+      for (const spaceKind of ["Fabrichat Room", "", 7, { kind: "notebook" }]) {
+        engine.database.prepare(
+          'UPDATE "commit" SET original = ? WHERE seq = 1',
+        ).run(encodeMemoryBoundary({ ...commit, spaceKind }));
+        expect(readSpaceKind(engine)).toBeUndefined();
+        expect(readGenesisRoot(engine)).toEqual(root);
+      }
+    } finally {
+      Engine.close(engine);
+    }
+  });
+
+  it("reads a genesis receipt that holds no commit as declaring no kind, where reading its root throws", async () => {
+    const engine = await Engine.open({
+      url: new URL("memory://non-commit-space-kind-receipt"),
+    });
+    try {
+      Engine.applyCommit(engine, {
+        sessionId: "bootstrap",
+        space,
+        principal: space,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          spaceKind: "notebook",
+          operations: [{
+            op: "set",
+            id: `of:${space}`,
+            value: { value: { ["did:key:manager"]: "OWNER" } },
+          }],
+        },
+      });
+      for (
+        const receipt of [
+          encodeMemoryBoundary({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            spaceKind: "notebook",
+          }),
+          encodeMemoryBoundary({ spaceKind: "notebook" }),
+          "truncated durable receipt",
+        ]
+      ) {
+        engine.database.prepare(
+          'UPDATE "commit" SET original = ? WHERE seq = 1',
+        ).run(receipt);
+        expect(readSpaceKind(engine)).toBeUndefined();
+        expect(() => readGenesisRoot(engine)).toThrow(
+          "Invalid genesis receipt",
+        );
+      }
+    } finally {
+      Engine.close(engine);
+    }
   });
 
   it("retains the root reservation atomically across a store restart", async () => {

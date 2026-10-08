@@ -70,10 +70,18 @@ call it.
 Likewise, the whole of what `changeSharedSpaceMembership` does is
 `changeSharedSpaceMembershipIn()`, exported beside it, which applies a
 membership choice in the calling handler's transaction and returns the outcome
-the handler would. FabriChat's manager calls both from its own handlers:
-creating or accepting a room registers the room's space, and forgetting a room
-archives its entry, or finding a forgotten one again restores it, naming the
-revision the handler reads as the one observed.
+the handler would. So a handler can archive or restore an entry in the same
+commit as its own writes. The revision the change names as observed is the one
+the person saw, carried in on the event: a handler that reads the current
+revision and names that one defeats the check. A new revision names the calling
+handler's event, so only a handler can call it.
+
+FabriChat's manager calls both from its own handlers. Creating or accepting a
+room registers the room's space, and forgetting a room archives its entry at
+the revision the request carries. Starting a chat with a forgotten room's
+counterpart, or accepting a forgotten room, restores its entry at the revision
+the handler reads, defeating the check by choice: the request is the person's
+choice to have the room listed whatever its archive state.
 
 New entries record `since`, the recipient's admission time in epoch
 milliseconds. Registration records it when admitting the entry; a migration may

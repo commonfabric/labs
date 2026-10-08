@@ -152,6 +152,8 @@ These rules hold for every stream:
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
 - A request that is interrupted is resumed by sending the same event again with
   the same `requestId`. It never creates a second room.
+- An admitted request missing a key its stream needs is refused, with a reason
+  that says which, rather than ignored.
 - Every stream changes only this user's own manager, except `openDirect` and
   `createGroup`, which also create a room and grant other people access to it,
   and `openDirect`, which can also offer the room to the other person.

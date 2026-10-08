@@ -1,6 +1,6 @@
 /**
- * The Loom names its chat room, reads it back, clears it, forgets it with the
- * room's last panel, and refuses a room in another space.
+ * The Loom names its chat room, reads it back, clears it, keeps it through
+ * panel changes, and refuses a room in another space.
  */
 import { action, assert, NAME, pattern, TESTS, Writable } from "commonfabric";
 import Loom from "./main.tsx";
@@ -64,28 +64,23 @@ export default pattern(() => {
       { action: name },
       { action: nameForeign },
       { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
-      // Removing panels other than the room's leaves it named, and so does
-      // removing one of two occurrences of the room.
+      // The designation is independent of the panels: removing every panel
+      // showing the room, through either removal stream, leaves it named,
+      // and adding the room back changes nothing.
       { action: addRoom },
       { action: duplicateRoom },
       { action: addUnrelated },
       { action: removeUnrelated },
       { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
       { action: removeFirst },
-      { assertion: assert(() => loom.panels.length === 1) },
-      { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
       { action: removeFirst },
       { assertion: assert(() => loom.panels.length === 0) },
-      { assertion: assert(() => loom.chatRoom?.get() === undefined) },
-      // `removePiece` clears it too.
+      { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
       { action: addRoom },
-      { action: name },
+      { assertion: assert(() => loom.panels.length === 1) },
+      { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
       { action: removeRoomPiece },
-      { assertion: assert(() => loom.chatRoom?.get() === undefined) },
-      // A room that is not a panel stays named through a removal.
-      { action: addUnrelated },
-      { action: name },
-      { action: removeUnrelated },
+      { assertion: assert(() => loom.panels.length === 0) },
       { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
     ],
   };

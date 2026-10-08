@@ -1426,6 +1426,14 @@ the per-epic implementation notes).
 >   omitting it, which parses as `false`, leaves the connection without the
 >   notice, and a refused client then learns of a grant only by asking again.
 >   It is permanent.
+> - **`spaceKind`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server seals the kind a space's genesis commit
+>   declares, and reports it in every `session.open` result
+>   ([`space-kinds.md`](../features/space-kinds.md)). Older servers omit it,
+>   which parses as `false`. A client then refuses to declare a kind there,
+>   since such a server would neither validate nor seal it, and
+>   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
+>   is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 

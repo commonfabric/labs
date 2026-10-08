@@ -1092,6 +1092,14 @@ export type CreatorPlacedGenesisRoot = {
 
 export type ClientCommit = {
   genesisRoot?: GenesisRoot;
+
+  /**
+   * The kind the space declares, sealed with its access list. Admitted only
+   * on a space's genesis commit, as `genesisRoot` is; see
+   * `docs/features/space-kinds.md`.
+   */
+  spaceKind?: string;
+
   localSeq: number;
   reads: {
     confirmed: ConfirmedRead[];
@@ -1124,12 +1132,24 @@ export type SessionOpenResult = {
   resumed?: boolean;
   sync?: SessionSync;
 
+  /** The kind the space's genesis commit declares, when it declares one. */
+  spaceKind?: string;
+
   /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
 };
 
 export type MemoryProtocolFlags = {
   genesisRoot?: boolean;
+
+  /**
+   * The server seals a kind a space declares in its genesis commit, and
+   * reports it in every `session.open` result. Build-inherent, so a peer of
+   * this version always advertises it. Absent (an older server) parses to
+   * false, and a client then neither declares a kind nor reads one there.
+   */
+  spaceKind?: boolean;
+
   modernCellRep: boolean;
 
   /**
@@ -1284,6 +1304,7 @@ export type MemoryProtocolFlags = {
  */
 export type WireMemoryProtocolFlags = {
   genesisRoot?: boolean;
+  spaceKind?: boolean;
   modernCellRep?: boolean;
 
   /** Expression result identity contract required for session admission. */
@@ -1339,6 +1360,10 @@ export type SessionOpenAuthMetadata = {
 export type SessionDescriptor = {
   /** Assert the immutable custom-root reservation when mounting or resuming. */
   genesisRoot?: GenesisRoot;
+
+  /** Assert the immutable declared kind when mounting or resuming. */
+  spaceKind?: string;
+
   sessionId?: SessionId;
   seenSeq?: number;
   sessionToken?: SessionToken;
@@ -2377,6 +2402,7 @@ export function resetOwnWriteEchoConfig(): void {
 
 export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   genesisRoot: true,
+  spaceKind: true,
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
   commitPreconditions: getCommitPreconditionsConfig(),
@@ -2452,6 +2478,10 @@ export const parseMemoryProtocolFlags = (
 
   const genesisRoot = value.genesisRoot;
   if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
+    return null;
+  }
+  const spaceKind = value.spaceKind;
+  if (spaceKind !== undefined && typeof spaceKind !== "boolean") {
     return null;
   }
   const stableExpressionResultIds = value.stableExpressionResultIds;
@@ -2612,6 +2642,7 @@ export const parseMemoryProtocolFlags = (
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
+    spaceKind: spaceKind === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
     applyOp: applyOp === true,
@@ -2665,6 +2696,7 @@ export const wireMemoryProtocolFlags = (
   flags: MemoryProtocolFlags,
 ): WireMemoryProtocolFlags => ({
   genesisRoot: flags.genesisRoot,
+  spaceKind: flags.spaceKind,
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,
