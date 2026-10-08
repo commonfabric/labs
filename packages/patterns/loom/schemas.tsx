@@ -112,8 +112,9 @@ export interface ChatRoomRecord {
 
 /**
  * The shared chat-room cell; a Loom naming no room holds `{}`. It holds a
- * record rather than the link itself, so that a write replaces the link: a
- * write to a cell holding a link writes through it, into the room.
+ * record rather than the link itself because a handler's cell for a field
+ * holding a link writes through the link, so replacing the link there would
+ * write into the room it names.
  */
 export type ChatRoomCell = Writable<
   ChatRoomRecord | Default<Record<PropertyKey, never>>
