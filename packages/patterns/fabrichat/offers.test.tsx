@@ -16,11 +16,15 @@ import {
   multiUserTest,
   pattern,
   type RepresentsCurrentUser,
+  type Stream,
   TESTS,
   type TrustedActionWrite,
   Writable,
 } from "commonfabric";
-import PrivateInbox, { type Offer } from "../system/private-inbox.tsx";
+import PrivateInbox, {
+  type Offer,
+  type OfferEvent,
+} from "../system/private-inbox.tsx";
 import type { ShareInboxPiece } from "../system/profile-home.tsx";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
@@ -96,6 +100,36 @@ const writeOwnProfile = handler<unknown, ProfileWriteState>((
   );
 });
 
+/** What `countAndForward` is bound to. */
+interface CountingState {
+  /** The id of every offer received, in order, repeats included. */
+  received: Writable<string[]>;
+
+  /** The inbox each offer is forwarded to. */
+  inbox: { receive: Stream<OfferEvent> };
+}
+
+/** Records the offer's id, then hands the offer to the inbox it wraps. */
+const countAndForward = handler<OfferEvent, CountingState>((
+  event,
+  { received, inbox },
+) => {
+  received.push(event?.id ?? "");
+  inbox.receive.send(event);
+});
+
+/**
+ * A share inbox that counts every offer sent to it, repeats included, before
+ * the inbox it wraps keeps one per sender and `id`.
+ */
+const CountingInbox = pattern<
+  { inbox: { receive: Stream<OfferEvent> } },
+  { received: string[]; receive: Stream<OfferEvent> }
+>(({ inbox }) => {
+  const received = Writable.of<string[]>([]);
+  return { received, receive: countAndForward({ received, inbox }) };
+});
+
 /** An inbox's result, as the link a profile holds. */
 function inboxLinkOf(inbox: unknown): Cell<ShareInboxPiece>;
 function inboxLinkOf(inbox: unknown): unknown {
@@ -156,11 +190,12 @@ export const setup = pattern(() => ({
 // Bob's room offered in her inbox.
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const inbox = PrivateInbox({ offers: [] });
+  const counting = CountingInbox({ inbox });
   const profile = Writable.of<OwnProfile>();
   const writeProfile = writeOwnProfile({
     profile,
     name: "Alice",
-    inbox: inboxLinkOf(inbox),
+    inbox: inboxLinkOf(counting),
   });
   const action_note_principal = action(() =>
     setup.aliceDid.set(currentPrincipal() ?? "")
@@ -201,6 +236,13 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
             isWellFormedDID(offer.space) && isOrigin(offer.host) &&
             offer.ownerOrigin === offer.host && offer.title === "";
         }),
+      },
+      // And it was sent once, not merely kept once.
+      {
+        assertion: assert(() =>
+          counting.received.length === 1 &&
+          counting.received[0] === "d-alice"
+        ),
       },
     ],
   };
