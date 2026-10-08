@@ -4132,8 +4132,11 @@ const forEachFlowObservation = (
     ) {
       return true;
     }
-    // A trigger read of a `length` observes its parent's membership.
-    const lengthOf = triggerReadLengthParent(at.path);
+    // A trigger read of a `length` observes its parent's membership. A
+    // probe's trigger, read shallowly at its slot, is no read of a `length`.
+    const lengthOf = at.nonRecursive
+      ? undefined
+      : triggerReadLengthParent(at.path);
     if (
       lengthOf !== undefined &&
       consume(
@@ -9717,7 +9720,11 @@ const collectConsumedLabelImpl = (
       canonicalizeLogicalPath(read.path),
       read.nonRecursive,
     );
-    const lengthOf = triggerReadLengthParent(read.path);
+    // A probe's trigger, read shallowly at its slot, is no read of a
+    // `length`.
+    const lengthOf = read.nonRecursive
+      ? undefined
+      : triggerReadLengthParent(read.path);
     if (lengthOf !== undefined) {
       collectAt(read, labels, lengthOf, true);
     }
