@@ -2625,14 +2625,17 @@ export class SchemaGenerator {
     const stackKey = bindingKey === undefined
       ? type
       : `${this.#bindingId(bindingType)}|${bindingKey}`;
-    // `never`, `null` and `undefined` hold no type, so none is met inside
-    // itself, and none is a cycle's entry. A wrapper the checker reduces to
-    // one, as it reduces `PerUser<never>` (`never & brand` is `never`) and
-    // `PerUser<null>` (`Scoped` keeps `null` outside its brand), has it both
-    // for its own type and for its payload's, and the payload read inside it
-    // is the value it wraps, not its recursion.
+    // `never`, `null` and `undefined` hold no type, and `unknown` and `any`
+    // hold any, so none is met inside itself, and none is a cycle's entry. A
+    // wrapper the checker reduces to one, as it reduces `PerUser<never>`
+    // (`never & brand` is `never`) and `PerUser<null>` (`Scoped` keeps `null`
+    // outside its brand), has it both for its own type and for its payload's,
+    // and the payload read inside it is the value it wraps, not its recursion.
+    // So does a scope wrapper read from its node alone, which is read at
+    // `unknown` (`#analyzeTypeNodeStructure()`), around `unknown`.
     const holdsNoType = (type.flags &
-      (ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
+      (ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined |
+        ts.TypeFlags.Unknown | ts.TypeFlags.Any)) !== 0;
     const tracksCycle = !scopesHandle && !isWrapperContext && !holdsNoType;
     // The same type read inside itself with the same arguments written for
     // it, each read under deeper bindings, is either a nesting its author

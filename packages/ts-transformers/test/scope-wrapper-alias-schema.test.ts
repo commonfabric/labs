@@ -639,6 +639,22 @@ export default pattern<{ r: string }, { out: string }>(({ r }) => ({
       expect(result).toEqual({ type: "string" });
     });
 
+    it("reads a lift's parameter written as `PerUser<unknown>` as `unknown` in its scope", async () => {
+      // A parameter type holding `unknown` is read from its node alone.
+      const [input] = callSchemas(
+        await transformed(
+          `import { lift, pattern, type PerUser } from "commonfabric";
+const helper = lift((r: PerUser<unknown>): string => String(r));
+export default pattern<{ r: PerUser<unknown> }>(({ r }) => ({
+  out: helper(r),
+}));`,
+        ),
+        "lift",
+      );
+
+      expect(input).toEqual({ type: "unknown", scope: "user" });
+    });
+
     it("refuses a generic lift's parameter that wrappers of two scopes type", async () => {
       await expect(transformed(
         `import { lift, pattern, type PerSession, type PerUser } from "commonfabric";

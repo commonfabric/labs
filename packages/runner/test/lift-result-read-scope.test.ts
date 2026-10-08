@@ -237,5 +237,38 @@ describe("runner", () => {
         value: "hello",
       });
     });
+
+    it("resolves the result of a compiled lift returning its `PerUser<unknown>` parameter to the user-scoped input", async () => {
+      // The parameter's schema is `unknown` in the user scope: the lift reads
+      // a reference to the input, which its result writes back as a link. A
+      // read through `unknown` yields that reference, so the input is read at
+      // the end of the links.
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            "import { lift, pattern, type PerUser } from 'commonfabric';",
+            "const helper = lift((r: PerUser<unknown>) => r);",
+            "export default pattern<{ r: PerUser<unknown> }>(",
+            "  ({ r }) => ({ out: helper(r) }),",
+            ");",
+          ].join("\n"),
+        }],
+      }, { space });
+      const result = await run(
+        compiled,
+        { r: scopedCell("unknown input", "hello", "user") },
+        "unknown lift",
+      );
+      let held = result.key("out") as Cell<unknown>;
+      for (let link = parseLink(held.getRaw(), held); link;) {
+        held = runtime.getCellFromLink(link) as Cell<unknown>;
+        link = parseLink(held.getRaw(), held);
+      }
+
+      expect(held.getAsNormalizedFullLink().scope).toBe("user");
+      expect(held.getRaw()).toBe("hello");
+    });
   });
 });

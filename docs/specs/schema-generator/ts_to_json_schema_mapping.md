@@ -554,11 +554,14 @@ entry, because TypeScript reuses one type object for identical wrapper
 instantiations at different positions, which would otherwise create false
 cycles; the cycle is found at the wrapper's value instead (fixtures
 `nested-default-aliases`, `default-array-recursive`). Nor is `never`, `null`
-or `undefined`, none of which holds a type, and so none is met inside itself.
-A wrapper the checker reduces to one has it for its own type and for its
-payload's: `PerUser<never>` is `never & brand`, which is `never`, and
-`PerUser<null>` is `null`, which `Scoped` keeps outside the brand; its payload
-is read as the value it wraps (§10), not as its recursion.
+or `undefined`, none of which holds a type, or `unknown` or `any`, which hold
+any, and so none is met inside itself. A wrapper the checker reduces to one has
+it for its own type and for its payload's: `PerUser<never>` is
+`never & brand`, which is `never`, and `PerUser<null>` is `null`, which
+`Scoped` keeps outside the brand; its payload is read as the value it wraps
+(§10), not as its recursion. So does a scope wrapper read from its node alone,
+which is read at `unknown`, around `unknown`: `PerUser<unknown[]>` read that
+way is `{ type: "array", items: { type: "unknown" }, scope: "user" }`.
 
 **Dead computation (observed implementation note):** every run performs a full
 DFS cycle pre-pass (`getCycles`, using `safe*` wrappers that

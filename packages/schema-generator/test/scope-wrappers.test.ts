@@ -157,6 +157,40 @@ interface SchemaRoot {
     });
   });
 
+  describe("a scope wrapper around `unknown` read from its node alone", () => {
+    // A node the checker has no type for, as a synthetic node, is read at the
+    // wrapper's place as `unknown`, which the payload's `unknown` is too.
+
+    for (
+      const [payload, expected] of [
+        ["unknown", { type: "unknown" }],
+        ["unknown[]", { type: "array", items: { type: "unknown" } }],
+        ["{ a: unknown }", {
+          type: "object",
+          properties: { a: { type: "unknown" } },
+          required: ["a"],
+        }],
+      ] as const
+    ) {
+      it(`emits the payload's schema in the scope for \`PerUser<${payload}>\``, async () => {
+        const { checker, sourceFile } = await createTestProgram(
+          `type SchemaRoot = PerUser<${payload}>;`,
+        );
+        const root = sourceFile.statements.find(ts.isTypeAliasDeclaration)!;
+        const { $schema: _, ...schema } = new SchemaGenerator()
+          .generateSchemaFromSyntheticTypeNode(
+            root.type,
+            checker,
+            undefined,
+            undefined,
+            sourceFile,
+          ) as JSONSchemaObj;
+
+        expect(schema).toEqual({ ...expected, scope: "user" });
+      });
+    }
+  });
+
   describe("a scope wrapper around `unknown` read by its type", () => {
     // The checker drops `unknown` from the wrapper's intersection, leaving
     // the brand alone, which is the wrapper around `unknown`.
