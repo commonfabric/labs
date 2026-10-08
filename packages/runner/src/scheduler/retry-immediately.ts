@@ -30,8 +30,10 @@ export class RetryImmediately extends Error {
  * client's speculative echo of a handler that would create one withdraws
  * rather than running again: the serving runtime's run creates the space, and
  * its consequence replaces the echo. A reactive action is retried as for any
- * other {@link RetryImmediately}, and resolves the name once the record has
- * arrived.
+ * other {@link RetryImmediately}: a bounded number of immediate re-runs, each
+ * reading the record again, resolve the name if the record arrives in time.
+ * Otherwise the action is abandoned with an "exhausted retries resolving
+ * inSpace names" error, and runs again only once one of its inputs changes.
  */
 export class InSpaceTargetUnresolved extends RetryImmediately {
   /** Constructs an instance naming the unresolved target `names`. */
