@@ -5241,9 +5241,9 @@ const entryPathCoversPrefix = (
 // projected location itself is an exact copy, so its atoms carry unscoped
 // (§8.3.4's interop note: no `projection: "/"`). Dropped, fail-closed:
 // - string atoms (no field to carry the scope binding),
-// - provenance-class atoms (facts about how a specific value came to be —
-//   the propagation-class registry forbids any claim carrying them onto an
-//   output; see atom-classes.ts),
+// - provenance-class atoms (evidence about a specific event, boundary, or
+//   environment — the propagation-class registry forbids any claim carrying
+//   them onto an output; see atom-classes.ts),
 // - atoms whose existing `scope` is not a record (cannot be extended).
 // Like the `exactCopyOf` carry, the result feeds `derivePersistedLabel`,
 // so `gateRuntimeMintedIntegrity` still strips runtime-minted evidence from

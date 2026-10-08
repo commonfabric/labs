@@ -1,0 +1,1 @@
+{"date":"2026-10-07","from":{"k":"unit","s":"runner","n":"host-review > hostGestureProvenance() > returns `dom` provenance naming the surface"},"to":{"k":"unit","s":"runner","n":"host-review > hostGestureProvenance() > returns `native` provenance naming the surface"}}

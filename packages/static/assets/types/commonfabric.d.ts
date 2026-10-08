@@ -4899,10 +4899,11 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * what is written after it, since adding a member changes no value's label.
  *
  * The acting principal, the event's actor, must hold `OWNER` in the space, and
- * the event must be a trusted gesture: a person's action on a rendered UI.
- * `principal` must be a DID other than the actor's own, the space's own, and
- * `"*"`. The space may not be the actor's own Home space. Lowering the space's
- * last concrete `OWNER` is refused. A runtime
+ * the event must be a trusted gesture: a person's action on a rendered UI or
+ * on a native host's reviewed control. `principal` must be a DID other than
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Lowering the space's last concrete `OWNER` is
+ * refused. A runtime
  * cannot know the deployment's service DIDs, or the identities its serving
  * runtimes act through, so it does not refuse one of those as `principal`.
  *

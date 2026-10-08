@@ -1,11 +1,13 @@
 /**
  * The multi-runtime harness driving the host's share intake: the owner's host
  * follows the private inbox of a Home stand-in, and a second identity creates
- * a space of its own, grants the owner, and offers it through the inbox the
- * owner's profile points at. The intake vets each offer as the owner and
- * registers it in the stand-in's shared-space catalog, through Home's own
- * catalog handlers, while the owner's worker runs. A third identity appends a
- * forged row directly, which the intake refuses.
+ * a space of its own, declaring its kind, grants the owner, and offers it
+ * through the inbox the owner's profile points at. The intake vets each offer
+ * as the owner and registers it in the stand-in's shared-space catalog,
+ * through Home's own catalog handlers, while the owner's worker runs. It
+ * refuses an offer of a space declaring another kind or none, or whose root is
+ * not where the space's genesis reserves it, and a forged row a third identity
+ * appends directly.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -112,6 +114,36 @@ describe("share intake across runtimes", () => {
     return space;
   };
 
+  /**
+   * Has the sender create a space as `request` says and offer it under `id`,
+   * and returns what the owner's host decided about the offer once an offer
+   * after it is registered, and how many refusals it logged meanwhile.
+   */
+  const createAndRefuse = async (
+    id: string,
+    request: { root?: boolean; spaceKind?: string | null },
+  ): Promise<{ decisions: string[]; logged: number; received: boolean }> => {
+    const before = await refusalsLogged();
+    await sender.send("createAndOffer", {
+      id,
+      title: `Room ${id}`,
+      recipient: owner.identity.did(),
+      ...request,
+    });
+    await harness.settleUntil(async () => await delivered(sender, id));
+
+    // The intake decides an inbox's offers in order, so this offer was
+    // decided by the time an offer after it is registered.
+    await createAndOffer(`after ${id}`);
+
+    return {
+      decisions: await decisions(sender, id),
+      logged: await refusalsLogged() - before,
+      received: (await catalog())?.offers[receiptKey(sender, id)] !==
+        undefined,
+    };
+  };
+
   beforeAll(async () => {
     harness = await MultiRuntimeHarness.create({
       programPath: PROGRAM_PATH,
@@ -198,22 +230,50 @@ describe("share intake across runtimes", () => {
   });
 
   it("refuses an offer of a room that is not its space's root, and logs it", async () => {
-    const before = await refusalsLogged();
-    await sender.send("createAndOffer", {
-      id: "unrooted",
-      title: "Room unrooted",
-      recipient: owner.identity.did(),
-      root: false,
+    expect(await createAndRefuse("unrooted", { root: false })).toEqual({
+      decisions: ["space-root-missing"],
+      logged: 1,
+      received: false,
     });
-    await harness.settleUntil(async () => await delivered(sender, "unrooted"));
+  });
 
-    // The intake decides an inbox's offers in order, so the unrooted room's
-    // offer was decided by the time an offer after it is registered.
-    await createAndOffer("after the unrooted room");
+  it("refuses an offer of a room whose space declares another kind, and logs it", async () => {
+    expect(await createAndRefuse("album", { spaceKind: "photo-album" }))
+      .toEqual({
+        decisions: ["space-kind-mismatch"],
+        logged: 1,
+        received: false,
+      });
+  });
 
-    expect((await catalog())?.offers[receiptKey(sender, "unrooted")])
+  it("refuses an offer of a room whose space declares no kind, and logs it", async () => {
+    expect(await createAndRefuse("unkinded", { spaceKind: null })).toEqual({
+      decisions: ["space-kind-undeclared"],
+      logged: 1,
+      received: false,
+    });
+  });
+
+  it("refuses an offer of a space whose root a member has linked away from the reserved address, and logs it", async () => {
+    const space = await createAndOffer("to repoint");
+    await sender.client().call("repointSpaceRoot", { space });
+    const before = await refusalsLogged();
+    await sender.send("offerAgain", {
+      id: "repointed",
+      space,
+      title: "Repointed",
+    });
+    await harness.settleUntil(async () => await delivered(sender, "repointed"));
+
+    // The intake decides an inbox's offers in order, so the repointed offer
+    // was decided by the time an offer after it is registered.
+    await createAndOffer("after the repointed root");
+
+    expect((await catalog())?.offers[receiptKey(sender, "repointed")])
       .toBeUndefined();
-    expect(await decisions(sender, "unrooted")).toEqual(["space-root-missing"]);
+    expect(await decisions(sender, "repointed")).toEqual([
+      "space-root-misplaced",
+    ]);
     expect(await refusalsLogged()).toBe(before + 1);
   });
 

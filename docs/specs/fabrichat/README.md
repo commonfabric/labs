@@ -260,9 +260,8 @@ names the ones it needs, and they are gathered here:
   issues a reviewed act through the sanctioned path
   ([host embedding](../../features/host-embedding.md#10-native-reviewed-controls),
   §10), and a native reviewed act counts wherever a trusted gesture does
-  ([§11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)).
-  The runtime does not honor that yet where a write changes an access list, as
-  adding a member does (see
+  ([§11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)),
+  adding a member included (see
   [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 
 ## Implementation status
@@ -287,10 +286,12 @@ from this design, as below.
   creator and each other member OWNER, and everyone WRITE for a group made
   joinable by its link. After that, who is in it changes through the space's
   own tools, and through the room's add control, from which any OWNER admits
-  someone as OWNER with `grantSpaceAccess()`. That control needs a DOM gesture,
-  so a host drawing a room natively can't offer it. The room's participants come from the space's
-  default pattern, which a host creates the first time someone opens the
-  space, so until then they are only the room's authors.
+  someone as OWNER with `grantSpaceAccess()`. A client that draws natively can
+  offer it too, through the sanctioned issuing path (see
+  [`clients.md`](clients.md#the-sanctioned-issuing-path)). The room's
+  participants come from the space's default pattern, which a host creates the
+  first time someone opens the space, so until then they are only the room's
+  authors.
 - **Principals.** A handler learns the principal it acts for
   (`currentPrincipal()`), so a room keys its request memory by the sender's
   principal, and the manager refuses a direct room with the user themself and
