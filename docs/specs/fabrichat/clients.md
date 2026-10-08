@@ -24,10 +24,10 @@ a room to anyone its space doesn't admit.
   way. It is what keeps one person's conversation from splitting.
 - **The conversations a container shows** are the adapters the container holds,
   each linking to a placement of one room, plus the container's own chat when it
-  is a shared space that has one.
-- **The people a client offers** when starting a conversation from a shared
+  is a social space that has one.
+- **The people a client offers** when starting a conversation from a social
   space are that space's participants, as claims, until it offers a member set
-  (see [shared spaces](README.md#shared-spaces)).
+  (see [social spaces](README.md#social-spaces)).
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about.record` is labeled
@@ -110,6 +110,9 @@ gesture on the reviewed surface its policy names:
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 | add a member | room's rendering | `addMember` | `ChatAddMemberSurface` |
 
+For now a client offers adding a member only by rendering the room's own `[UI]`
+(see [the sanctioned issuing path](#the-sanctioned-issuing-path)).
+
 A client sends to the room's own streams, never through a placement or an
 adapter.
 
@@ -185,21 +188,31 @@ MUST behave as a trustworthy renderer:
 A client that can't meet all six MUST NOT issue trusted gestures. It can still
 read and show conversations, and it can host the room's `[UI]` for writing.
 
-### Prerequisite: a sanctioned issuing path
+### The sanctioned issuing path
 
-A native client needs a sanctioned way to hand the runtime a gesture it vouches
-for. The host embedding record already names this as the right posture: "a
-sanctioned headless issuance path, **not** a weakening of the in-runtime
-surface-origin defense". No such path exists yet. The runtime client's generic
-`cell:send` doesn't mark an event, and the in-repository precedents that do mark
-one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
-`trustedUi` steps) are not for embedding hosts. The path this design needs:
+A native client hands the runtime a gesture it vouches for through the
+sanctioned issuing path that [host
+embedding](../../features/host-embedding.md#10-native-reviewed-controls), §10,
+describes. A host running the runtime in its own process binds each control to
+its stream with `bindNativeUiControl()` from `@commonfabric/runner/native-ui`,
+naming the surface and action from the table above once, when it binds the
+control. The function that returns sends the control's payload with `native`
+provenance for that surface and action, carrying the renderer-trust mark. A
+host whose runtime runs in a worker sends the same act with
+`CellHandle.sendReviewed(event, { surface, action })`, which waits for the
+handler's run, and rejects with the reason when its write is refused. Either
+way, the runtime checks the surface and action against the write's policy as
+it checks a rendered gesture's provenance, and the mark reaches a served
+handler the way a rendered gesture's does. The generic `cell:send` marks
+nothing, and pattern code can reach neither path.
 
-- It is available only to the host, never to pattern code that the runtime runs.
-- It takes the surface and action with the event, and the runtime checks them
-  against the write's policy as it checks a rendered gesture's provenance.
-- It carries the mark to wherever the handler runs, as `rendererTrusted` already
-  does between runtimes.
+A native reviewed act counts wherever a trusted gesture does ([host
+embedding](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures),
+§11), but the runtime doesn't honor that yet for a change to a space's access
+list. Adding a member is such a change: `addMember` admits someone with
+`grantSpaceAccess()`, which refuses a native reviewed act today. So until it
+admits one, a client offers the add control only by rendering the room's
+`[UI]`.
 
 ## Delivering notices
 
