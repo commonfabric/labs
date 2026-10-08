@@ -6,6 +6,7 @@ import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { type Cell } from "../src/cell.ts";
+import { getEntityId } from "../src/create-ref.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
   ensureSpaceRootPattern,
@@ -207,6 +208,26 @@ describe("in-space root", () => {
         reservedRootOf(reader, first),
       ),
     ).toBe(true);
+  });
+
+  it("gives the roots of two spaces different entities", async () => {
+    // A pattern keys a record by the entity a cell names, as one keys a
+    // person's record by their profile, so two spaces' roots must name two.
+    const runtime = openRuntime();
+    const root = await spawnRoot(runtime, (Child, value) => [
+      Child.inSpace(value, { root: true })({ value }),
+    ]);
+    await root.send("first");
+    await root.send("second");
+
+    const [first, second] = await root.spaces();
+    expect(second).not.toBe(first);
+    const reader = openRuntime();
+    const firstEntity = getEntityId(await rootOf(reader, first));
+    const secondEntity = getEntityId(await rootOf(reader, second));
+    expect(firstEntity).toBeDefined();
+    expect(secondEntity).toBeDefined();
+    expect(secondEntity).not.toEqual(firstEntity);
   });
 
   it("wins the race with a space-root ensure that runs between the space's genesis and the child's commit", async () => {
