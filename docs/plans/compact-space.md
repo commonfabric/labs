@@ -284,10 +284,25 @@ boundary: the oldest row the cut keeps — the head itself under the default
 cut, or the oldest row at or above the cut under `--before-seq`, `--before`
 or `--keep-last`. If the instance has no row below the boundary, it loses
 nothing and is left exactly as it was, attribution included. Otherwise, if
-the boundary is a `patch`, reconstruct the document at that row with the
-engine's own replay and rewrite the row in place as `op = 'set'` with the
-encoded document, at the same `(seq, op_index)`, updating `head.op` when the
-boundary is the head; a boundary that is already a `set` or `delete` keeps
+the boundary is a `patch`, reconstruct the document at exactly that row —
+its `(seq, op_index)`, not its seq — and rewrite the row in place as `op =
+'set'` with the encoded document, at the same `(seq, op_index)`, updating
+`head.op` when the boundary is the head. Exactness matters because one
+commit can carry several operations on one document and a bounded cut can
+fall between them: the state at the boundary is the state after the
+boundary's own operation and before the later ones the cut keeps, which the
+tail then replays. The engine's reconstruction is bounded by `(seq,
+op_index)` for the base row and the patches but chooses a snapshot by seq
+alone, and a snapshot at a seq always holds the state after that commit's
+last operation, so with a snapshot at the boundary's seq it would fold the
+kept operations into the base and the tail would apply them twice (Astra's
+review reproduced `["a", "b", "b"]` from a two-append commit). No caller
+reaches that today — a read resolves to a commit's last operation, and the
+in-commit validator runs before any snapshot at its seq exists — so the tool
+needs a reconstruction the engine exports for it, taking the exact `(seq,
+op_index)` and considering only snapshots at a strictly smaller seq. Under
+the default cut the boundary is the head, a commit's last operation on the
+document, and the two agree; a boundary that is already a `set` or `delete` keeps
 its op. Then point the boundary row's `commit_seq` at the run's compaction
 commit (I4), delete the revision rows ordered before it and every snapshot
 row at or below it (the boundary is now the base), and leave every row above
@@ -486,8 +501,9 @@ Each check fails differently and the order goes from cheap to expensive:
    generated cells, so it is necessary rather than sufficient, and it is
    cheap.
 5. **The compaction commit is recorded**: one `system` row at the seq the dry
-   run named, every materialized boundary and no other row pointing at it,
-   `branch.head_seq` equal
+   run named; the rows pointing at it are exactly every boundary this run
+   re-attributed — materialized or already a `set` or `delete` — plus the
+   run's one ACL audit revision, and no other; `branch.head_seq` equal
    to it, the hollowed-row count equal to the dry run's, and the marker on
    the ACL document present and naming that seq.
 6. **Live metadata survives.** On the reopened result, `readGenesisRoot` and
@@ -626,8 +642,11 @@ So: **`cf space compact`** in `packages/cli/commands/space.ts`, over a module
 `packages/memory/v2/compact.ts` exported as `./v2/compact` beside `./v2/dump`.
 The module owns the algorithm and the report; it opens the store through the
 engine's `open` so the schema it sees is the one the server writes and so
-reconstruction is the engine's own `read` at head and `encodeMemoryBoundary`
-for the materialized value, the same pair `maybeMaterializeSnapshot` uses. The
+reconstruction is an engine export that returns the document at an exact
+`(seq, op_index)`, considering only snapshots at a smaller seq (§1's option
+(a) says why the existing read, which returns the state after a whole
+commit, is not enough), and `encodeMemoryBoundary` for the materialized
+value, as `maybeMaterializeSnapshot` encodes a snapshot. The
 verification in §3 deliberately uses the inspector's replay instead, so the
 two spellings check each other. The command is the first `cf space` member
 that rewrites a store's rows rather than copying or restoring a file, and its
@@ -857,16 +876,22 @@ compacted until the engine can tell compacted history from absence.
    selection, the cut, and the report, read-only; `cf space compact --dry-run`
    over it. Exercised against the September Topics copy, whose numbers replace
    the estimates above. Tests: a store built with the engine, patched past the
-   snapshot interval, reports the rows and bytes a hand count gives.
+   snapshot interval, reports the rows and bytes a hand count gives. Also
+   the engine export the write path needs: reconstruction at an exact
+   `(seq, op_index)` that ignores snapshots at that seq, tested on a
+   multi-operation commit with and without such a snapshot.
 4. **The write path.** The compaction commit with its per-run identity and
    its ACL-document marker, materialize, truncate, hollow (commit 1 exempt),
    `VACUUM INTO`, `--verify --against`. Tests: every head reads back identical
    through both the engine and the inspector's replay, with the ACL document
    checked as step 3 states; a confirmed read below the cut conflicts; all
    four protocol cases of §3, in every variant, against the tool's own
-   output; every truncated instance's boundary row points at the compaction
-   commit, no untouched instance's does, and under a bounded cut the rows
-   above the boundary are byte-identical to the input's; the ACL revision is
+   output; the rows pointing at the compaction commit are exactly the
+   re-attributed boundaries plus the ACL revision; under a bounded cut the
+   rows above the boundary are byte-identical to the input's, and a boundary
+   that falls between two operations of one commit on one document
+   materializes the state after its own operation only, with and without a
+   snapshot at that seq, so the reopened head reads back identical; the ACL revision is
    a whole-document `set` whose `value` satisfies `isACL` unchanged; a resubmitted commit inside the payload window is answered from
    its stored result; the genesis root and space kind read the same on the
    reopened result; the feed's view of the compaction commit is as I4 states;
