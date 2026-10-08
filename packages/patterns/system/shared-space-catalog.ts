@@ -1,7 +1,8 @@
 /**
  * Home's shared-space collection. Registration retains the first accepted
- * route; explicit membership choices compare the revision the user observed.
- * Handler results describe the action, while the catalog carries membership.
+ * route; explicit membership choices compare the revision the user observed,
+ * and so does a removal. Handler results describe the action, while the catalog
+ * carries membership.
  */
 
 import {
@@ -79,6 +80,17 @@ export type SharedSpaceMembershipResult =
       | "unsupported-state"
       | "unsupported-revision";
   };
+
+/** Names one entry to remove, at the revision its remover observed. */
+export interface SharedSpaceRemoval {
+  space: string;
+  expectedRevision: string;
+}
+
+/** A removal's outcome, carried by its normal handler receipt. */
+export type SharedSpaceRemovalResult =
+  | { status: "removed"; space: string }
+  | { status: "conflict"; reason: "missing" | "revision" | "offer" };
 
 /**
  * The validating reader deliberately selects every stored field. A narrower
@@ -398,4 +410,65 @@ export const changeSharedSpaceMembership = handler<
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
   (change, { catalog }) => changeSharedSpaceMembershipIn(catalog, change),
+);
+
+/**
+ * Removes one entry from the catalog, for one purpose only: an application
+ * that registered spaces on the person's behalf undoing that import. It is not
+ * how a person puts a shared space away (archive is, and nothing a person
+ * invokes calls this), and it is not a general way to delete, clean up,
+ * repair, or compact entries.
+ *
+ * It removes the entry only while the entry is still at `expectedRevision`,
+ * the revision its caller observed, so a membership choice made since is never
+ * lost, and only when no offer receipt names the space: removing such an entry
+ * alone leaves an invalid receipt, and removing the receipt as well forgets the
+ * offer that it refuses to replay. Removal grants and revokes no access.
+ *
+ * The rest of a safe undo is the caller's, since only the caller knows it:
+ * - remove only entries it can show it registered itself;
+ * - keep the complete entry it observed, as its backup, before calling;
+ * - stop registering those spaces first, because a later registration admits a
+ *   removed space again as a new entry, and a re-admitted invocation of the
+ *   original registration recreates it at its original revision.
+ *
+ * CFS's `share.catalog-undo` is the caller written to these rules.
+ */
+export const removeSharedSpace = handler<
+  SharedSpaceRemoval,
+  SharedSpaceCatalogState,
+  SharedSpaceRemovalResult
+>(
+  eventSchema,
+  toSchema<SharedSpaceCatalogState>(),
+  (removal, { catalog }) => {
+    if (
+      !plainObject(removal) || !isWellFormedDID(removal.space) ||
+      !boundedString(removal.expectedRevision, 320)
+    ) {
+      throw new TypeError("Invalid shared-space removal.");
+    }
+    const stored = readSharedSpaceCatalog(catalog);
+    const current = stored.entries[removal.space];
+    if (!current) return { status: "conflict", reason: "missing" };
+    if (current.revision !== removal.expectedRevision) {
+      return { status: "conflict", reason: "revision" };
+    }
+    if (
+      Object.values(stored.offers).some((receipt) =>
+        receipt.space === removal.space
+      )
+    ) return { status: "conflict", reason: "offer" };
+    // Writing the entries without this one deletes its slot and leaves the
+    // others unwritten. `undefined` written at the slot itself would be stored
+    // as its value, which the validating reader refuses.
+    catalog.key("entries").set(
+      Object.fromEntries(
+        Object.entries(stored.entries).filter(([space]) =>
+          space !== removal.space
+        ),
+      ),
+    );
+    return { status: "removed", space: removal.space };
+  },
 );
