@@ -666,7 +666,10 @@ export class PiecesController<T = unknown> {
    * Whether `root` is at the address the space's genesis commit reserves for
    * the root an `inSpace(..., { root: true })` call places. Such a root was
    * placed by its creator's pattern, so the space's system root is no
-   * replacement for it.
+   * replacement for it. It reads the address, not the space's genesis
+   * reservation, which no client can read: a writer who places a root at that
+   * address in a space that reserved none makes it fail closed, as a root
+   * following any other origin already does.
    */
   #isInSpaceRoot(root: Cell<NameSchema>): boolean {
     return root.equalLinks(
