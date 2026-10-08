@@ -320,6 +320,7 @@ export class SchedulerGates {
       node.gate.debounceReadyAt ?? 0,
       node.gate.throttleReadyAt ?? 0,
       node.gate.backoffUntil ?? 0,
+      node.gate.echoBackoffUntil ?? 0,
     );
   }
 
@@ -431,6 +432,32 @@ export class SchedulerGates {
     node.gate.backoffStreak = 0;
     node.gate.convergenceHoldPasses = 0;
     return clearedDeadline;
+  }
+
+  /**
+   * Defer `action`'s re-runs until `until` for the remote-echo breaker
+   * (docs/plans/scheduler-remote-echo-breaker.md §2). Folded into `eligibleAt`
+   * like the other gates and armed through the single wake timer, so a
+   * tripped action is skipped as a settle seed until the deadline and then
+   * runs once. Raises an existing deadline rather than lowering it, so a
+   * fresh trip cannot shorten a longer backoff already in place.
+   */
+  setEchoBackoff(action: Action, until: number): void {
+    const gate = this.#mutableGate(action);
+    gate.echoBackoffUntil = Math.max(gate.echoBackoffUntil ?? 0, until);
+    this.scheduleWake(until);
+  }
+
+  /**
+   * Lift the echo-breaker backoff on `action` — on a convergence that ended
+   * the loop — and recompute the shared wake, since the cleared node may have
+   * been the one it was armed for.
+   */
+  clearEchoBackoff(action: Action): void {
+    const gate = this.#gate(action);
+    if (gate?.echoBackoffUntil === undefined) return;
+    delete gate.echoBackoffUntil;
+    this.recomputeWakeAfterClear();
   }
 
   #armComputationDebounce(

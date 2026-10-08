@@ -145,6 +145,11 @@ import {
 } from "./registration.ts";
 import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
 import {
+  type EchoBreakerStats,
+  type EchoStep,
+  RemoteEchoBreaker,
+} from "./echo-breaker.ts";
+import {
   readsOverlapWrites,
   SchedulerWriteIndex,
 } from "./scheduling-writes.ts";
@@ -460,6 +465,15 @@ export class Scheduler {
 
   /** Called with each action {@link unsubscribe} is given. */
   #unsubscribeObservers = new Set<(action: Action) => void>();
+
+  /**
+   * Bounds the remote-echo write loop
+   * (docs/plans/scheduler-remote-echo-breaker.md). Fed a committed reactive
+   * run's echo steps on success, it backs an action off through the gate once
+   * its re-runs sustain against a remote writer. Inert unless the
+   * `remoteEchoBreaker` flag wires `observeRemoteEcho` into the run state.
+   */
+  readonly #echoBreaker = new RemoteEchoBreaker();
 
   #currentActionId?: string;
   #dependencyGraphState!: DependencyGraphState;
@@ -944,6 +958,7 @@ export class Scheduler {
   ): void {
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
+    this.#echoBreaker.forget(this.#getActionId(action));
     for (const observer of [...this.#unsubscribeObservers]) observer(action);
   }
 
@@ -3419,7 +3434,46 @@ export class Scheduler {
         this.#executingAction = null;
         this.#currentActionId = undefined;
       },
+      // Wired only under the flag, so the off arm keeps its exact behavior and
+      // pays one optional-call check per successful reactive commit.
+      ...(this.runtime.experimental.remoteEchoBreaker === true
+        ? {
+          observeRemoteEcho: (action, actionId, steps) =>
+            this.#observeRemoteEcho(action, actionId, steps),
+        }
+        : {}),
     };
+  }
+
+  /**
+   * Feed a successful reactive commit's echo steps to the remote-echo breaker
+   * and apply its verdict to the action's gate: a positive deadline defers the
+   * action's re-runs (a tripped loop), `0` lifts the deferral (a convergence
+   * that ended the loop), and `undefined` leaves the gate untouched.
+   */
+  #observeRemoteEcho(
+    action: Action,
+    actionId: string,
+    steps: readonly EchoStep[],
+  ): void {
+    const deadline = this.#echoBreaker.observe(
+      actionId,
+      steps,
+      performance.now(),
+    );
+    if (deadline === undefined) return;
+    if (deadline > 0) this.#gates.setEchoBackoff(action, deadline);
+    else this.#gates.clearEchoBackoff(action);
+  }
+
+  /**
+   * The remote-echo breaker's visible counts
+   * (docs/plans/scheduler-remote-echo-breaker.md §3): pairs currently backing
+   * off, cumulative trips, and cumulative echo cycles. All zero unless the
+   * `remoteEchoBreaker` flag is on.
+   */
+  getEchoBreakerStats(): EchoBreakerStats {
+    return this.#echoBreaker.stats();
   }
 
   #createGraphSnapshotState(): SchedulerGraphSnapshotState {

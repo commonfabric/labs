@@ -20,6 +20,17 @@ export interface SchedulerGateState {
 
   /** Backoff passes charged to the current idle-wait episode. */
   convergenceHoldPasses: number;
+
+  /**
+   * Remote-echo breaker backoff
+   * (docs/plans/scheduler-remote-echo-breaker.md): the instant a re-run
+   * deferred by a tripped echo loop becomes eligible. Separate from
+   * `backoffUntil` so clearing the convergence backoff never lifts it and so
+   * the idle probe (`isConvergenceBackoffDeferred` reads `backoffUntil`
+   * alone) treats a deferred echo re-run like a throttle window — a freshness
+   * bound that does not hold `idle()` open.
+   */
+  echoBackoffUntil?: number;
 }
 
 export interface SchedulerNode {

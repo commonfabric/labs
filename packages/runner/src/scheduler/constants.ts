@@ -85,3 +85,27 @@ export const INITIAL_RUN_SYNC_HOLD_TIMEOUT_MS = 2_000;
  * entry is the one to lose.
  */
 export const MAX_ACTION_STATS = 20_000;
+
+// Remote-echo breaker (docs/plans/scheduler-remote-echo-breaker.md). A
+// reactive computation that reads and writes one document, re-triggered by a
+// remote change to that same document and writing a differing value back,
+// counts one echo cycle per such run. ECHO_TRIP_THRESHOLD cycles within
+// ECHO_WINDOW_MS on one (action, document) pair trip the breaker; a run that
+// writes an equal value (convergence) or a window that elapses with no cycle
+// resets the count. Defaults chosen against the 2026-10-07 storm's ~10
+// writes/second: a real loop fills the window many times over while an
+// eventually-consistent derivation settles in a run or two. They await tuning
+// against a live per-space rate signal (Topic 913) before any default-on
+// decision.
+export const ECHO_WINDOW_MS = 10_000;
+export const ECHO_TRIP_THRESHOLD = 12;
+// Capped exponential backoff on the tripped action's re-run, doubling per
+// trip of the same pair. At the cap a looping document re-runs at most once
+// every ECHO_BACKOFF_MAX_MS, so the commit rate falls from ~10/s to ~0.03/s.
+export const ECHO_BACKOFF_BASE_MS = 500;
+export const ECHO_BACKOFF_MAX_MS = 30_000;
+// Per-(action, document) pair states kept before the least recently touched is
+// dropped. A pair key arrives per document a self-referential computation
+// writes; the entries are hints whose loss costs only a forgotten cycle count,
+// so a bounded table is safe (BoundedKeyMap, oldest-evicted).
+export const MAX_ECHO_PAIRS = 4_096;

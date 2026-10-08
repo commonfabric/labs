@@ -35,6 +35,7 @@ import type {
   SchedulerActionInfo,
 } from "../telemetry.ts";
 import { reportDroppedCfcRejectedWrite } from "./cfc-rejection-report.ts";
+import { computeEchoSteps, type EchoStep } from "./echo-breaker.ts";
 import {
   MAX_ACTION_RUN_TRACE_HISTORY,
   MAX_RETRIES_FOR_REACTIVE,
@@ -535,6 +536,20 @@ export interface SchedulerActionRunState {
   readonly queueExecution: () => void;
   readonly setExecutingAction: (action: Action, actionId: string) => void;
   readonly clearExecutingAction: () => void;
+
+  /**
+   * Feed a successful reactive commit's echo steps to the remote-echo breaker
+   * (docs/plans/scheduler-remote-echo-breaker.md). Wired only when the
+   * `remoteEchoBreaker` flag is on; absent otherwise, so the off arm pays one
+   * optional-call check and computes no steps at all. The steps are computed
+   * at commit kickoff, while the transaction's write details are still
+   * staged, and applied here once the commit has succeeded.
+   */
+  readonly observeRemoteEcho?: (
+    action: Action,
+    actionId: string,
+    steps: readonly EchoStep[],
+  ) => void;
 }
 
 export async function runSchedulerAction(
@@ -1175,6 +1190,11 @@ function finalizeReactiveActionCommit(
   // outbox, before the async flush clears it): does this commit have
   // asynchronous post-commit work that `settled()` must wait on?
   let hasPostCommitEffects = false;
+  // The remote-echo breaker's view of this run, computed at kickoff while the
+  // transaction's write details are still staged — a committed transaction no
+  // longer exposes them — and applied once the commit has succeeded. Empty
+  // unless the `remoteEchoBreaker` flag wired `observeRemoteEcho`.
+  let echoSteps: readonly EchoStep[] = [];
   const commitPromise = startReactiveActionCommit({
     runtime: state.runtime,
     tx: args.tx,
@@ -1183,6 +1203,9 @@ function finalizeReactiveActionCommit(
       log = txToReactivityLog(args.tx);
       if (validateLocalReadBasis(args.tx) !== undefined) return;
       warnOnWriteSurfaceViolations(state, args, log);
+      if (state.observeRemoteEcho !== undefined) {
+        echoSteps = computeEchoSteps(args.tx, log, args.invalidCauses);
+      }
       hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
       if (args.fanOutRun !== undefined) {
         // The DISCOVERY half of stage B's ratchet (design §B3): the run's
@@ -1258,6 +1281,9 @@ function finalizeReactiveActionCommit(
     onSuccess: () => {
       if (args.succeeded && owner !== undefined) {
         owner.hasCommittedResult = true;
+      }
+      if (echoSteps.length > 0) {
+        state.observeRemoteEcho?.(args.action, args.actionId, echoSteps);
       }
       state.runtime.scheduler.noteViewActionCurrent(args.action);
     },
