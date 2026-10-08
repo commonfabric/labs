@@ -131,6 +131,20 @@ describe("IntersectionFormatter", () => {
     });
   });
 
+  describe("intersections of arrays", () => {
+    it("returns the array of the values every array holds", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = unknown[] & readonly string[];`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "array",
+        items: { type: "string" },
+      });
+    });
+  });
+
   describe("unsupported intersections", () => {
     it("should reject intersection with index signature", async () => {
       const code = `
@@ -338,6 +352,20 @@ describe("IntersectionFormatter", () => {
         properties: { x: { type: "string" }, y: { type: "number" } },
         required: ["x", "y"],
       });
+    });
+
+    it("declares no scope for declarations in different scopes where the schema declares none", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { a: PerUser<string> } & { a: PerSpace<string> };`,
+        "Result",
+      );
+      const schema = asObjectSchema(
+        transformer.generateSchema(type, checker, undefined, {
+          declaresNoScope: true,
+        }),
+      );
+
+      expect(schema.properties?.a).toEqual({ type: "string" });
     });
 
     it("returns the array schema whose element type is the narrower", async () => {

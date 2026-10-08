@@ -43,3 +43,22 @@ export function unionFoldedFrom(
   origins.set(schema, { kind: "union", parts: () => arms });
   return schema;
 }
+
+/**
+ * `copy`, a schema made from `original` by changing keywords that say nothing
+ * about its source type, recorded as coming from what `original` came from.
+ * A copy with no record would read as the one type its schema stands for.
+ */
+export function withOriginOf(
+  copy: MutableJSONSchema,
+  original: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const origin = isObjectOrArray(original)
+    ? context.schemaOrigins?.get(original)
+    : undefined;
+  if (origin && isObjectOrArray(copy) && copy !== original) {
+    context.schemaOrigins?.set(copy, origin);
+  }
+  return copy;
+}

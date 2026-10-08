@@ -9,18 +9,38 @@ import ts from "typescript";
 import { attachDocTags, extractDocFromType } from "../doc-utils.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
+import { withOriginOf } from "../schema-origins.ts";
 import {
   cloneSchemaDefinition,
   getNativeTypeSchema,
   safeGetPropertyType,
 } from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
-import { isCfcCarrier } from "./common-fabric-formatter.ts";
+import {
+  isCfcCarrier,
+  scopeOfScopeWrapper,
+} from "./common-fabric-formatter.ts";
 import { classifyCallableProperty } from "./object-formatter.ts";
 
 const logger = getLogger("schema-generator.intersection");
 const DOC_CONFLICT_COMMENT =
   "Conflicting docs across intersection constituents; using first";
+
+/**
+ * The error for a property that members of an intersection declare in
+ * different scopes, `scopes`: one value is stored in one scope.
+ */
+export function propertyScopesError(
+  key: string,
+  scopes: readonly string[],
+): Error {
+  return new Error(
+    `The property \`${key}\` is declared in scope \`${scopes[0]}\` by one ` +
+      `member of an intersection and in scope \`${scopes[1]}\` by another. ` +
+      `A value is stored in one scope, so declare \`${key}\` in the same ` +
+      `scope wherever it is declared.`,
+  );
+}
 
 /** A part of an intersection that declares a property, and its schema there. */
 type PropertyDeclaration = {
@@ -45,9 +65,8 @@ function descriptionOf(schema: MutableJSONSchema): string | undefined {
  */
 function documentedAs(
   value: MutableJSONSchemaObj,
-  documented: MutableJSONSchema,
+  documented: MutableJSONSchemaObj,
 ): MutableJSONSchemaObj {
-  if (!isObjectOrArray(documented)) return value;
   const schema: Record<string, unknown> = { ...value };
   if (typeof documented.description === "string") {
     delete schema.tags;
@@ -84,12 +103,14 @@ export function withoutDocumentation(
  * of the declared types — which may be one of `declared`. The first
  * declaration's documentation replaces the value's own where it has any. A
  * later declaration whose description differs from the first's is noted in
- * a `$comment`, unless the value carries one.
+ * a `$comment`, unless the value carries one. A copy made to document the
+ * value keeps the origin recorded for it (`withOriginOf()`).
  */
 export function sharedPropertySchema(
   key: string,
   value: MutableJSONSchema,
   declared: readonly MutableJSONSchema[],
+  context: GenerationContext,
 ): MutableJSONSchema {
   const [first, ...later] = declared;
   const description = descriptionOf(first!);
@@ -105,10 +126,18 @@ export function sharedPropertySchema(
     );
   }
   if (!isObjectOrArray(value)) return value;
-  const documented = value === first ? value : documentedAs(value, first!);
-  return conflicting && typeof documented.$comment !== "string"
-    ? { ...documented, $comment: DOC_CONFLICT_COMMENT }
-    : documented;
+  // A first declaration accepting anything or nothing makes the value do the
+  // same, so a documented value has a first declaration that is an object.
+  const documented = value === first || !isObjectOrArray(first)
+    ? value
+    : documentedAs(value, first);
+  return withOriginOf(
+    conflicting && typeof documented.$comment !== "string"
+      ? { ...documented, $comment: DOC_CONFLICT_COMMENT }
+      : documented,
+    value,
+    context,
+  );
 }
 
 export class IntersectionFormatter implements TypeFormatter {
@@ -164,6 +193,19 @@ export class IntersectionFormatter implements TypeFormatter {
     // If filtering reduced us to a single substantive part, delegate directly.
     if (partsToProcess.length === 1) {
       return this.#schemaGenerator.formatChildType(partsToProcess[0]!, context);
+    }
+
+    // An intersection of arrays is an array of the values each of them holds,
+    // whose type the checker gives as the intersection's number index: the
+    // intersection of their element types.
+    if (partsToProcess.every((part) => checker.isArrayType(part))) {
+      return {
+        type: "array",
+        items: this.#schemaGenerator.formatChildType(
+          checker.getIndexTypeOfType(type, ts.IndexKind.Number)!,
+          context,
+        ),
+      };
     }
 
     const failureReason = this.#validateIntersectionParts(
@@ -329,11 +371,13 @@ export class IntersectionFormatter implements TypeFormatter {
    * The schema of `key`, a property several parts of `intersection` declare
    * (`declared`, in part order): the schema of the type the checker gives the
    * property, which is the intersection of the declared types, documented as
-   * `sharedPropertySchema()` says. Where one declaration's type is that
-   * type, or is assignable to every other declaration's and so holds just the
-   * values the intersection holds, the schema is that declaration's, read
-   * through the node it is written with; the first such declaration is
-   * taken. Any other type is formatted as the property's.
+   * `sharedPropertySchema()` says. Where one declaration's type is that very
+   * type, the schema is that declaration's, read through the node it is
+   * written with. Any other type is formatted as the property's, so what the
+   * checker keeps of each declaration, a scope wrapper's brand and a CFC
+   * carrier among it, is read from the type, whichever declaration wrote it.
+   * Declarations in different scopes are refused (`propertyScopesError()`),
+   * except where the schema declares no scope.
    */
   #sharedPropertySchema(
     key: string,
@@ -349,14 +393,18 @@ export class IntersectionFormatter implements TypeFormatter {
     const types = declared.map(({ part }) =>
       checker.getTypeOfSymbol(checker.getPropertyOfType(part, key)!)
     );
-    const own = types.indexOf(type);
-    const narrowest = own !== -1
-      ? own
-      : types.findIndex((candidate) =>
-        types.every((other) => checker.isTypeAssignableTo(candidate, other))
+    if (!context.declaresNoScope) {
+      const scopes = new Set(
+        types.flatMap((declaredType) => {
+          const scope = scopeOfScopeWrapper(declaredType, checker);
+          return scope ? [scope] : [];
+        }),
       );
-    if (narrowest !== -1) {
-      return sharedPropertySchema(key, schemas[narrowest]!, schemas);
+      if (scopes.size > 1) throw propertyScopesError(key, [...scopes]);
+    }
+    const own = types.indexOf(type);
+    if (own !== -1) {
+      return sharedPropertySchema(key, schemas[own]!, schemas, context);
     }
 
     // Every declaration has a schema, so each is a data property or a
@@ -374,6 +422,7 @@ export class IntersectionFormatter implements TypeFormatter {
         ? callable.schema
         : this.#schemaGenerator.formatChildType(valueType, context),
       schemas,
+      context,
     );
   }
 

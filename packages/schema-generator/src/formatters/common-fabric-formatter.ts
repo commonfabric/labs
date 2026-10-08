@@ -251,7 +251,12 @@ export const resolveScopeWrapperNode = (
   return scope === undefined ? undefined : { scope, node: typeNode };
 };
 
-const applyScopeToAsCellEntry = (
+/**
+ * `entry`, a cell's `asCell` entry, capped to `scope`: following the cell's
+ * handle reads in that scope. Throws where another scope already caps the
+ * cell (`nestedScopeError()`).
+ */
+export const applyScopeToAsCellEntry = (
   entry: AsCellEntry,
   scope: SchemaScope,
 ): AsCellEntry => {
@@ -283,7 +288,7 @@ const isNullishSchema = (schema: unknown): boolean =>
     (schema as { type?: unknown }).type === "undefined");
 
 /** The error for a scope wrapper nested in another with no cell between. */
-const nestedScopeError = (): Error =>
+export const nestedScopeError = (): Error =>
   new Error("Nested scope wrappers require a cell boundary between scopes.");
 
 /**

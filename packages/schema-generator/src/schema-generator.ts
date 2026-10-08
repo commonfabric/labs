@@ -2,8 +2,11 @@ import ts from "typescript";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type {
+  AsCellEntry,
+  JSONValue,
   MutableJSONSchema,
   MutableJSONSchemaObj,
+  SchemaScope,
 } from "@commonfabric/api";
 import type {
   BoundTypeArgument,
@@ -21,8 +24,10 @@ import {
 } from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import {
+  applyScopeToAsCellEntry,
   CommonFabricFormatter,
   lowersFromReferenceArguments,
+  nestedScopeError,
   resolveScopeWrapperNode,
   scopeOfScopeWrapper,
   scopesCellHandle,
@@ -34,6 +39,7 @@ import {
 } from "./formatters/union-formatter.ts";
 import {
   IntersectionFormatter,
+  propertyScopesError,
   sharedPropertySchema,
   withoutDocumentation,
 } from "./formatters/intersection-formatter.ts";
@@ -71,7 +77,7 @@ import {
   type TypeWithInternals,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
-import { unionFoldedFrom } from "./schema-origins.ts";
+import { unionFoldedFrom, withOriginOf } from "./schema-origins.ts";
 import {
   reportUnreadCfcRecursion,
   reportUnreadTypes,
@@ -813,6 +819,344 @@ function dedupeIntersectionParts<T extends MutableJSONSchema>(
 }
 
 /**
+ * What a schema states about its whole value besides which values it is: the
+ * scope the value is stored in, and the default it takes. A value of an
+ * intersection is a value of every constituent at once, so it takes what any
+ * of them states.
+ */
+type WholeValueKeywords = {
+  readonly scope?: SchemaScope;
+  readonly default?: {
+    readonly value: NonNullable<MutableJSONSchemaObj["default"]>;
+  };
+};
+
+/**
+ * What `schemas` state about their whole value (`WholeValueKeywords`), each
+ * read as `withBesideKeywords()` reads it. Their scopes must agree: one value
+ * stored in two scopes is a scope wrapper nested in another with no cell
+ * between them, which generation refuses (`nestedScopeError()`). Defaults that differ
+ * leave none, as two `Default` brands that differ leave the checker none.
+ */
+function wholeValueKeywordsOf(
+  schemas: readonly MutableJSONSchema[],
+  context: GenerationContext,
+): WholeValueKeywords {
+  const resolved = schemas
+    .map((schema) => withBesideKeywords(schema, context))
+    .filter(isObjectOrArray);
+  const scopes = [
+    ...new Set(
+      resolved.flatMap(({ scope }) => scope ? [scope as SchemaScope] : []),
+    ),
+  ];
+  if (scopes.length > 1) throw nestedScopeError();
+  const defaults = dedupeByValueEqual(
+    resolved.filter((schema) => "default" in schema).map(({ default: value }) =>
+      value as JSONValue
+    ),
+  );
+  return {
+    ...(scopes.length === 1 ? { scope: scopes[0] } : {}),
+    ...(defaults.length === 1
+      ? {
+        default: {
+          value: defaults[0] as NonNullable<MutableJSONSchemaObj["default"]>,
+        },
+      }
+      : {}),
+  };
+}
+
+/**
+ * `schema` read through local references with the keywords written beside
+ * each reference in place of the definition's, as resolving a reference
+ * reads them: a label beside one states the definition's labels as well as
+ * its own (`ifc-labels.ts`). A definition that is itself a reference is read
+ * the same way, and a reference to no definition reads as itself. A schema
+ * that is no reference is returned as it came.
+ */
+function withBesideKeywords(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+  followed: Set<string> = new Set(),
+): MutableJSONSchema {
+  if (
+    !isObjectOrArray(schema) || typeof schema.$ref !== "string" ||
+    followed.has(schema.$ref)
+  ) {
+    return schema;
+  }
+  const resolved = resolveLocalRef(schema, context);
+  followed.add(schema.$ref);
+  const { $ref: _, ...beside } = schema;
+  return withBesideKeywords(
+    Object.keys(beside).length > 0 && isObjectOrArray(resolved)
+      ? withOriginOf({ ...resolved, ...beside }, resolved, context)
+      : resolved,
+    context,
+    followed,
+  );
+}
+
+/**
+ * An arm of a union, and the labels of the unions it is an arm of: a union's
+ * labels label whichever arm the value is, on the members any of its arms
+ * declares (`unionMembersOf()`), as the type path places a carrier's labels
+ * on the members of the payload it was written around.
+ */
+type LabeledArm = {
+  readonly schema: MutableJSONSchema;
+  readonly labels: readonly PartLabels[];
+};
+
+/**
+ * The arms of the union `schema` denotes, each read as `withBesideKeywords()`
+ * reads a schema and flattened through nested unions, with the labels of
+ * the unions it is an arm of (`LabeledArm`). A schema that is no union is its
+ * own single arm.
+ */
+function labeledArms(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): LabeledArm[] {
+  const stated = withBesideKeywords(schema, context);
+  if (!isObjectOrArray(stated) || !Array.isArray(stated.anyOf)) {
+    return [{ schema: stated, labels: [] }];
+  }
+  const arms = stated.anyOf as MutableJSONSchema[];
+  const own: PartLabels[] = isObjectOrArray(stated.ifc)
+    ? [{
+      labels: stated.ifc as Record<string, unknown>,
+      members: unionMembersOf(arms, context),
+    }]
+    : [];
+  return arms.flatMap((arm) =>
+    labeledArms(arm, context).map(({ schema, labels }) => ({
+      schema,
+      labels: [...own, ...labels],
+    }))
+  );
+}
+
+/**
+ * The members any of `arms` declares, each read as `withBesideKeywords()`
+ * reads it, or the whole value where none of them declares any.
+ */
+function unionMembersOf(
+  arms: readonly MutableJSONSchema[],
+  context: GenerationContext,
+): readonly string[] | "all" {
+  const members = new Set<string>();
+  for (const arm of arms) {
+    const stated = withBesideKeywords(arm, context);
+    if (isObjectSchema(stated) && isObjectOrArray(stated.properties)) {
+      for (const member of Object.keys(stated.properties)) members.add(member);
+    }
+  }
+  return members.size > 0 ? [...members] : "all";
+}
+
+/**
+ * `schema` as the value it denotes, without what it states about its whole
+ * value (`WholeValueKeywords`), read as `withBesideKeywords()` reads it. A
+ * schema stating neither, beside a reference or in it, is returned as it
+ * came.
+ */
+function valueOf(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const stated = withBesideKeywords(schema, context);
+  if (
+    !isObjectOrArray(stated) || (!("scope" in stated) && !("default" in stated))
+  ) {
+    return stated === resolveLocalRef(schema, context) ? schema : stated;
+  }
+  const { scope: _, default: __, ...value } = stated;
+  return withOriginOf(value, stated, context);
+}
+
+/**
+ * `settled`, the schema an intersection settled to, stating what `keywords`
+ * say of its whole value: the scope at its top, or, for a cell, as the cap
+ * on its handle (`applyScopeToAsCellEntry()`); and the default. A schema
+ * accepting anything or nothing states nothing.
+ */
+function withWholeValueKeywords(
+  settled: MutableJSONSchema,
+  keywords: WholeValueKeywords,
+  context: GenerationContext,
+): MutableJSONSchema {
+  if (
+    !isObjectOrArray(settled) ||
+    (keywords.scope === undefined && keywords.default === undefined)
+  ) {
+    return settled;
+  }
+  const schema: MutableJSONSchemaObj = { ...settled };
+  if (keywords.scope !== undefined) {
+    const [entry, ...rest] = Array.isArray(settled.asCell)
+      ? settled.asCell
+      : [];
+    if (entry !== undefined) {
+      schema.asCell = [applyScopeToAsCellEntry(entry, keywords.scope), ...rest];
+    } else if (
+      settled.scope !== undefined && settled.scope !== keywords.scope
+    ) {
+      throw nestedScopeError();
+    } else {
+      schema.scope = keywords.scope;
+    }
+  }
+  if (keywords.default !== undefined) schema.default = keywords.default.value;
+  return withOriginOf(schema, settled, context);
+}
+
+/** `schema` without its `ifc` labels, or `schema` itself where it has none. */
+function withoutLabels(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  if (!isObjectOrArray(schema) || !("ifc" in schema)) return schema;
+  const { ifc: _, ...value } = schema;
+  return withOriginOf(value, schema, context);
+}
+
+/**
+ * The `ifc` labels a part of an intersection states, and where in the merged
+ * value they belong: on the members the part declares, where it is an object
+ * that declares some, and otherwise on the whole value. A CFC carrier's
+ * labels are placed the same way on the type path, on the members of the
+ * payload they were written around (`CommonFabricFormatter`).
+ */
+type PartLabels = {
+  readonly labels: Record<string, unknown>;
+  readonly members: readonly string[] | "all";
+};
+
+/** The labels each of `parts` states (`PartLabels`). */
+function partLabelsOf(parts: readonly MutableJSONSchemaObj[]): PartLabels[] {
+  return parts.flatMap((part) => {
+    if (!isObjectOrArray(part.ifc)) return [];
+    const members = isObjectSchema(part) && isObjectOrArray(part.properties)
+      ? Object.keys(part.properties)
+      : [];
+    return [{
+      labels: part.ifc as Record<string, unknown>,
+      members: members.length > 0 ? members : "all",
+    }];
+  });
+}
+
+/**
+ * `schema`, a merged value, with each of `placed`'s labels on the members it
+ * belongs on: each of them alone, where they are some but not all of the
+ * value's members, and otherwise the whole value, which a value accepting
+ * nothing does not need.
+ */
+function withPartLabels(
+  schema: MutableJSONSchema,
+  placed: readonly PartLabels[],
+  context: GenerationContext,
+): MutableJSONSchema {
+  if (schema === false || placed.length === 0) return schema;
+  let result: MutableJSONSchema = schema;
+  for (const { labels, members } of placed) {
+    const properties: Record<string, MutableJSONSchema> | undefined =
+      isObjectSchema(result) && isObjectOrArray(result.properties)
+        ? result.properties as Record<string, MutableJSONSchema>
+        : undefined;
+    const reached = properties && members !== "all"
+      ? members.filter((member) => Object.hasOwn(properties, member))
+      : [];
+    if (
+      properties && reached.length > 0 &&
+      reached.length < Object.keys(properties).length
+    ) {
+      const labeled: Record<string, MutableJSONSchema> = { ...properties };
+      for (const member of reached) {
+        labeled[member] = withIfcLabels(properties[member]!, labels);
+      }
+      result = { ...(result as MutableJSONSchemaObj), properties: labeled };
+    } else {
+      result = withIfcLabels(result, labels);
+    }
+  }
+  return withOriginOf(result, schema, context);
+}
+
+/** The keywords a value of `unknown` may carry beside its `type`. */
+const UNKNOWN_VALUE_KEYWORDS: ReadonlySet<string> = new Set([
+  "type",
+  "description",
+  "tags",
+  "deprecated",
+  "$comment",
+]);
+
+/**
+ * Whether `part` is `unknown`, the identity of an intersection: its `type`
+ * and documentation alone, so a cell of `unknown` is not.
+ */
+function isUnknownValue(part: MutableJSONSchema): boolean {
+  return isObjectOrArray(part) && part.type === "unknown" &&
+    Object.keys(part).every((key) => UNKNOWN_VALUE_KEYWORDS.has(key));
+}
+
+/**
+ * Whether `part` declares a cell: an `asCell` entry on a schema that is not
+ * `void`'s, which lowers to the opaque marker too (`schemaOrigins`).
+ */
+function isCellValue(
+  part: MutableJSONSchemaObj,
+  context: GenerationContext,
+): boolean {
+  return Array.isArray(part.asCell) && part.asCell.length > 0 &&
+    context.schemaOrigins?.get(part)?.kind !== "void";
+}
+
+/**
+ * The cell an intersection holding `cells` is: the first of them, whose
+ * value is the one its handle reads, as the checker resolves a read of
+ * intersected cells to the first one's signature, with the cap any of them
+ * puts on following its handle.
+ */
+function cellOf(cells: readonly MutableJSONSchemaObj[]): MutableJSONSchemaObj {
+  const [first, ...rest] = cells;
+  const [entry, ...entries] = first!.asCell as AsCellEntry[];
+  let capped = entry!;
+  for (const cell of rest) {
+    const [other] = cell.asCell as AsCellEntry[];
+    if (isObjectOrArray(other) && other.scope !== undefined) {
+      capped = applyScopeToAsCellEntry(capped, other.scope);
+    }
+  }
+  return capped === entry
+    ? first!
+    : { ...first!, asCell: [capped, ...entries] };
+}
+
+/**
+ * The scope `schema` declares: its value's own `scope`, or, for a cell, the
+ * cap its `asCell` entry puts on following the cell's handle.
+ */
+function declaredScopeOf(schema: MutableJSONSchema): SchemaScope | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  if (schema.scope !== undefined) return schema.scope as SchemaScope;
+  const [entry] = Array.isArray(schema.asCell) ? schema.asCell : [];
+  return isObjectOrArray(entry)
+    ? entry.scope as SchemaScope | undefined
+    : undefined;
+}
+
+/** Whether `schema` is an array schema stating its items and nothing more. */
+function isPlainArraySchema(schema: MutableJSONSchema): boolean {
+  return isArraySchema(schema) &&
+    Object.keys(schema).every((key) => key === "type" || key === "items");
+}
+
+/**
  * The schema of an intersection whose constituents have these schemas, as
  * the checker settles one. Nested fallbacks expose their source constituents
  * before reduction, and identical constituents fold. A constituent
@@ -822,7 +1166,9 @@ function dedupeIntersectionParts<T extends MutableJSONSchema>(
  * looks before `any` wins: it never distributes a union beside `any`, so
  * `any & null & (string | number)` is `any` where `any & null & string` is
  * nothing. Otherwise a union constituent distributes, and every combination
- * of arms is merged on its own (`mergeParts`).
+ * of arms is merged on its own (`mergeParts`). What a constituent states
+ * about its whole value is set aside while it is settled (`valueOf()`) and
+ * stated of what it settles to (`withWholeValueKeywords()`).
  */
 function intersectionOf(
   constituents: MutableJSONSchema[],
@@ -842,7 +1188,8 @@ function intersectionOf(
     context,
   );
   if (distinct.some((constituent) => constituent === false)) return false;
-  const arms = distinct
+  const values = distinct.map((constituent) => valueOf(constituent, context));
+  const arms = values
     .filter((constituent) => constituent !== true)
     .map((constituent) => {
       const resolved = resolveLocalRef(constituent, context);
@@ -850,13 +1197,13 @@ function intersectionOf(
         ? context.schemaOrigins?.get(resolved)
         : undefined;
       return origin?.kind === "union"
-        ? origin.parts().flatMap((part) => unionArms(part, context))
-        : unionArms(constituent, context);
+        ? origin.parts().flatMap((part) => labeledArms(part, context))
+        : labeledArms(constituent, context);
     });
-  if (arms.length < distinct.length) {
+  if (arms.length < values.length) {
     const direct = arms
       .filter((alternatives) => alternatives.length === 1)
-      .map((alternatives) => alternatives[0] as MutableJSONSchemaObj)
+      .map((alternatives) => alternatives[0]!.schema as MutableJSONSchemaObj)
       .filter((part) => {
         const domain = primitiveDomain(part, context);
         return domain === undefined ||
@@ -864,25 +1211,37 @@ function intersectionOf(
       });
     return contradictory(direct, context) ? false : true;
   }
-  const combinations = arms.reduce<MutableJSONSchema[][]>(
+  const keywords = wholeValueKeywordsOf(distinct, context);
+  const combinations = arms.reduce<LabeledArm[][]>(
     (prefixes, alternatives) =>
       prefixes.flatMap((prefix) => alternatives.map((arm) => [...prefix, arm])),
     [[]],
   );
-  return unionOfSchemas(
-    combinations.map((parts) => {
-      const expanded = parts.flatMap(expand);
-      if (
-        expanded.length !== parts.length ||
-        expanded.some((part, index) => part !== parts[index])
-      ) {
-        return intersectionOf(expanded, context);
-      }
-      return parts.some((part) => part === false) ? false : mergeParts(
-        parts as MutableJSONSchemaObj[],
-        context,
-      );
-    }),
+  return withWholeValueKeywords(
+    unionOfSchemas(
+      combinations.map((combination) => {
+        const parts = combination.map(({ schema }) => schema);
+        const labels = combination.flatMap((arm) => arm.labels);
+        const expanded = parts.flatMap(expand);
+        if (
+          expanded.length !== parts.length ||
+          expanded.some((part, index) => part !== parts[index])
+        ) {
+          return withPartLabels(
+            intersectionOf(expanded, context),
+            labels,
+            context,
+          );
+        }
+        return parts.some((part) => part === false) ? false : mergeParts(
+          parts as MutableJSONSchemaObj[],
+          context,
+          labels,
+        );
+      }),
+      context,
+    ),
+    keywords,
     context,
   );
 }
@@ -899,8 +1258,10 @@ function contradictory(
   direct: MutableJSONSchemaObj[],
   context: GenerationContext,
 ): boolean {
-  const parts = direct.filter((part) => part.type !== "unknown");
-  if (parts.length < 2 || mergeParts(parts, context) !== false) return false;
+  const parts = direct
+    .map((part) => withoutLabels(valueOf(part, context), context))
+    .filter((part) => !isUnknownValue(part)) as MutableJSONSchemaObj[];
+  if (parts.length < 2 || mergeValues(parts, context) !== false) return false;
   const domains = parts.map((part) => primitiveDomain(part, context));
   const bareBoolean = (domain: PrimitiveDomain | undefined) =>
     domain?.types[0] === "boolean" && domain.values === undefined;
@@ -911,25 +1272,56 @@ function contradictory(
 
 /**
  * The schema of an intersection of these parts, none of them a union,
- * `never`, or `any`, reduced the way the checker reduces the types before
- * `IntersectionFormatter` merges them, in this order: `unknown` is the
- * identity and drops out; an empty object drops out beside anything else and
- * takes `null` and `undefined` with it, `T & {}` being `NonNullable<T>`;
- * primitives are narrowed or found disjoint wherever they sit
- * (`reducePrimitiveParts`); and `null` or `undefined` beside an object
- * leaves nothing. What remains is one schema, returned as it is, or object
- * schemas whose properties are unioned, a property several of them declare
- * taking the intersection of its declarations (`sharedPropertyOf`), and
- * whose `required` lists are unioned. A part that merge refuses —
- * a non-object, or one with an index signature, which an array is — yields
- * the same unsupported-pattern fallback the type-based path emits.
+ * `never`, or `any`: the values they hold settled with the labels and the
+ * whole-value keywords each states set aside (`mergeValues`), and those
+ * stated of the result. A part's labels go on the members of the result it
+ * declares, or on the whole result (`partLabelsOf()`); `carried` are the
+ * labels of the unions the parts are arms of (`LabeledArm`).
  */
 function mergeParts(
   parts: MutableJSONSchemaObj[],
   context: GenerationContext,
+  carried: readonly PartLabels[] = [],
+): MutableJSONSchema {
+  const keywords = wholeValueKeywordsOf(parts, context);
+  const placed = [...carried, ...partLabelsOf(parts)];
+  const settled = mergeValues(
+    parts.map((part) =>
+      withoutLabels(valueOf(part, context), context)
+    ) as MutableJSONSchemaObj[],
+    context,
+  );
+  return withWholeValueKeywords(
+    withPartLabels(settled, placed, context),
+    keywords,
+    context,
+  );
+}
+
+/**
+ * The schema of an intersection of these parts, which state no labels or
+ * whole-value keywords (`mergeParts`), reduced the way the checker reduces
+ * the types before `IntersectionFormatter` merges them, in this order:
+ * `unknown` is the identity and drops out; an empty object drops out beside
+ * anything else and takes `null` and `undefined` with it, `T & {}` being
+ * `NonNullable<T>`; primitives are narrowed or found disjoint wherever they
+ * sit (`reducePrimitiveParts`); and `null` or `undefined` beside an object or
+ * a cell leaves nothing. What remains is one schema, returned as it is; the
+ * first cell among the parts, which the value is, with the caps every cell
+ * among them puts on its handle (`cellOf()`); arrays, whose items are the
+ * intersection of theirs; or object schemas whose properties are unioned, a
+ * property several of them declare taking the intersection of its
+ * declarations (`sharedPropertyOf`), and whose `required` lists are unioned.
+ * A part that merge refuses — a non-object, or one with an index signature,
+ * which an array beside an object is — yields the same unsupported-pattern
+ * fallback the type-based path emits.
+ */
+function mergeValues(
+  parts: MutableJSONSchemaObj[],
+  context: GenerationContext,
 ): MutableJSONSchema {
   const substantive = dedupeIntersectionParts(
-    parts.filter((part) => part.type !== "unknown"),
+    parts.filter((part) => !isUnknownValue(part)),
     context,
   );
   if (substantive.length === 0) return { type: "unknown" };
@@ -957,6 +1349,17 @@ function mergeParts(
       domain.types.every((type) => type === "null" || type === "undefined");
   };
   if (reduced.some(nullish)) return false;
+  const cells = reduced.filter((part) => isCellValue(part, context));
+  if (cells.length > 0) return cellOf(cells);
+  if (reduced.every(isPlainArraySchema)) {
+    return {
+      type: "array",
+      items: intersectionOf(
+        reduced.map((part) => (part.items as MutableJSONSchema) ?? true),
+        context,
+      ),
+    };
+  }
   const unsupported = (reason: string): MutableJSONSchema => {
     const schema: MutableJSONSchemaObj = {
       type: "object",
@@ -1028,6 +1431,7 @@ type PartProperty = {
  * Where some declaration requires the property, an optional one admits
  * `undefined` as well, as its `?` does. A result that is one declaration's
  * schema with its keywords set aside stands as that declaration's schema.
+ * Declarations in different scopes are refused (`propertyScopesError()`).
  */
 function sharedPropertyOf(
   key: string,
@@ -1035,16 +1439,16 @@ function sharedPropertyOf(
   context: GenerationContext,
 ): MutableJSONSchema {
   const schemas = declared.map(({ schema }) => schema);
-  const bare = schemas.map((schema) => {
-    const value = withoutDocumentation(schema);
-    const origin = isObjectOrArray(schema)
-      ? context.schemaOrigins?.get(schema)
-      : undefined;
-    if (origin && isObjectOrArray(value) && value !== schema) {
-      context.schemaOrigins?.set(value, origin);
-    }
-    return value;
-  });
+  const scopes = new Set(
+    schemas.flatMap((schema) => {
+      const scope = declaredScopeOf(resolveLocalRef(schema, context));
+      return scope ? [scope] : [];
+    }),
+  );
+  if (scopes.size > 1) throw propertyScopesError(key, [...scopes]);
+  const bare = schemas.map((schema) =>
+    withOriginOf(withoutDocumentation(schema), schema, context)
+  );
   const requiredAnywhere = declared.some(({ required }) => required);
   const value = intersectionOf(
     bare.map((schema, index) =>
@@ -1055,7 +1459,12 @@ function sharedPropertyOf(
     context,
   );
   const at = bare.indexOf(value);
-  return sharedPropertySchema(key, at === -1 ? value : schemas[at]!, schemas);
+  return sharedPropertySchema(
+    key,
+    at === -1 ? value : schemas[at]!,
+    schemas,
+    context,
+  );
 }
 
 /**
