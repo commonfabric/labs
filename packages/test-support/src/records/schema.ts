@@ -1,8 +1,8 @@
 /**
  * The test-run record schema: the identity of a test, the record of one
  * execution, and the context line that heads every uploaded object. The
- * design, including the field discipline that keeps every value public
- * material, is docs/history/plans/test-run-telemetry.md.
+ * contract, including the field discipline that keeps every value public
+ * material, is docs/specs/test-records.md.
  */
 
 import { isObjectOrArray } from "@commonfabric/utils/types";
