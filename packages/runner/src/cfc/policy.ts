@@ -625,6 +625,55 @@ const validateStringArray = (value: unknown, where: string): void => {
   }
 };
 
+/**
+ * The one shape a template may name a list in (spec §8.7.5): a `Members`
+ * pattern whose `list` is a variable and whose `subject` is
+ * `THIS_POLICY.subject`. Returns the list variable's name, or `undefined`
+ * for any other shape.
+ */
+const boundMembersListVariable = (pattern: unknown): string | undefined => {
+  if (
+    !isPlainRecord(pattern) || pattern.type !== CFC_ATOM_TYPE.Members ||
+    Object.keys(pattern).length !== 3 || !isAtomVarPlaceholder(pattern.list) ||
+    !isPlainRecord(pattern.subject) ||
+    Object.keys(pattern.subject).length !== 1 ||
+    pattern.subject.thisPolicyField !== "subject"
+  ) {
+    return undefined;
+  }
+  return pattern.list.var;
+};
+
+/**
+ * Refuses a postcondition that adds a `Members` alternative in any shape but
+ * {@link boundMembersListVariable}'s, with its list variable bound by a
+ * precondition pattern of the same shape. A template therefore cannot name a
+ * list literal, nor rebind a list authored for another subject.
+ */
+const validateTemplateMembersRelease = (
+  preConfidentiality: readonly AtomPattern[],
+  postConfidentiality: readonly AtomPattern[],
+  where: string,
+): void => {
+  const releasable = new Set(
+    preConfidentiality.slice(1).flatMap((pattern) => {
+      const variable = boundMembersListVariable(pattern);
+      return variable === undefined ? [] : [variable];
+    }),
+  );
+  for (const pattern of postConfidentiality) {
+    if (!isPlainRecord(pattern) || pattern.type !== CFC_ATOM_TYPE.Members) {
+      continue;
+    }
+    const variable = boundMembersListVariable(pattern);
+    if (variable === undefined || !releasable.has(variable)) {
+      throw new Error(
+        `cfcPolicyManifest: ${where} may add Members only from a precondition Members pattern on THIS_POLICY.subject`,
+      );
+    }
+  }
+};
+
 const validatePolicyTemplateRule = (
   input: unknown,
 ): PolicyTemplateExchangeRuleV1 => {
@@ -708,6 +757,7 @@ const validatePolicyTemplateRule = (
       `${where} postCondition.confidentiality[${index}]`,
     )
   );
+  validateTemplateMembersRelease(confidentiality, postConfidentiality, where);
 
   let policyState: readonly AtomPattern[] = [];
   if (input.guard !== undefined) {

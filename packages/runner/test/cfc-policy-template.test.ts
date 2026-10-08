@@ -49,6 +49,13 @@ const mutableTemplate = (body: MutableRecord): MutableRecord =>
 const mutableRule = (body: MutableRecord): MutableRecord =>
   (mutableTemplate(body).exchangeRules as unknown[])[0] as MutableRecord;
 
+/** The `Members` shape a template may release to (spec §8.7.5). */
+const membersPattern = (variable: string) => ({
+  type: CFC_ATOM_TYPE.Members,
+  list: { var: variable },
+  subject: { thisPolicyField: "subject" },
+});
+
 describe("CFC module policy templates", () => {
   it("computes the normative manifest digest and deep-freezes the artifact", () => {
     const body = manifestBody();
@@ -155,6 +162,58 @@ describe("CFC module policy templates", () => {
     };
     expect(() => buildCfcPolicyArtifactManifest(body)).toThrow(
       /unbound postcondition variable "\$unbound"/,
+    );
+  });
+
+  it("admits a Members release bound to THIS_POLICY.subject (spec §8.7.5)", () => {
+    const body = manifestBody();
+    body.template.exchangeRules[0] = {
+      ...body.template.exchangeRules[0],
+      preCondition: {
+        ...body.template.exchangeRules[0].preCondition,
+        confidentiality: [{ thisPolicy: true }, membersPattern("$l")],
+      },
+      preConfScope: "anywhere",
+      postCondition: { confidentiality: [membersPattern("$l")], integrity: [] },
+    } as never;
+    expect(() => buildCfcPolicyArtifactManifest(body)).not.toThrow();
+  });
+
+  it("rejects a Members postcondition naming a list literal", () => {
+    const body = manifestBody();
+    body.template.exchangeRules[0] = {
+      ...body.template.exchangeRules[0],
+      postCondition: {
+        confidentiality: [{
+          type: CFC_ATOM_TYPE.Members,
+          list: { space: "did:key:share", id: "of:list", path: [] },
+          subject: { thisPolicyField: "subject" },
+        }],
+        integrity: [],
+      },
+    } as never;
+    expect(() => buildCfcPolicyArtifactManifest(body)).toThrow(
+      /may add Members only from a precondition Members pattern/,
+    );
+  });
+
+  it("rejects a Members postcondition rebinding another subject's list", () => {
+    const body = manifestBody();
+    body.template.exchangeRules[0] = {
+      ...body.template.exchangeRules[0],
+      preCondition: {
+        ...body.template.exchangeRules[0].preCondition,
+        confidentiality: [{ thisPolicy: true }, {
+          type: CFC_ATOM_TYPE.Members,
+          list: { var: "$l" },
+          subject: { var: "$other" },
+        }],
+      },
+      preConfScope: "anywhere",
+      postCondition: { confidentiality: [membersPattern("$l")], integrity: [] },
+    } as never;
+    expect(() => buildCfcPolicyArtifactManifest(body)).toThrow(
+      /may add Members only from a precondition Members pattern/,
     );
   });
 
