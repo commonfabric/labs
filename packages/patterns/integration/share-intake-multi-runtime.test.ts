@@ -206,6 +206,12 @@ describe("share intake across runtimes", () => {
     await harness.settle();
     expect(await sender.read(["chatRequests", "chat", "status"])).toBe("done");
     const room = await sender.link(["chatRequests", "chat", "entry", "room"]);
+    // The manager joins the sender to the room it creates, which holds no one
+    // else yet.
+    expect(await sender.read(["participants", "length"], { piece: room }))
+      .toBe(1);
+    expect(await sender.read(["participants", 0, "name"], { piece: room }))
+      .toBe("Sender");
     await sender.send("offerAgain", {
       id: "real room",
       space: room.space,
