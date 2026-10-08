@@ -1235,6 +1235,17 @@ export class StorageManager implements IStorageManager {
 
   #settings: IRemoteStorageProviderSettings;
   #providers = new Map<MemorySpace, Provider>();
+
+  /**
+   * The kind each space declares, as {@link spaceKind} read it in a session
+   * of its own, for a space whose provider's session opened before the space
+   * had history. A space with history keeps its kind, so an entry never goes
+   * stale.
+   */
+  #spaceKindsReadAfresh = new Map<
+    MemorySpace,
+    MemoryV2Client.DeclaredSpaceKind
+  >();
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
@@ -1821,11 +1832,13 @@ export class StorageManager implements IStorageManager {
 
   /** @inheritDoc */
   async spaceKind(space: MemorySpace): Promise<string | undefined> {
-    const declared = await this.#openProvider(space).declaredSpaceKind();
+    const declared = await this.#openProvider(space).declaredSpaceKind() ??
+      this.#spaceKindsReadAfresh.get(space);
     if (declared !== undefined) return declared.kind;
     // The space's session opened before the space had any history, so it was
     // told nothing of the kind, and stays open without being told. A session
-    // of its own, opened now, is told the kind as the space stands.
+    // of its own, opened now, is told the kind as the space stands, and is
+    // closed however the read ends.
     const { client, session } = await this.#sessionFactory.create(
       space,
       this.as,
@@ -1835,7 +1848,9 @@ export class StorageManager implements IStorageManager {
       },
     );
     try {
-      return session.declaredSpaceKind?.kind;
+      const afresh = session.declaredSpaceKind;
+      if (afresh !== undefined) this.#spaceKindsReadAfresh.set(space, afresh);
+      return afresh?.kind;
     } finally {
       await client.close();
     }

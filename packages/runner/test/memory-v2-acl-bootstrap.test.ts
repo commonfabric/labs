@@ -642,7 +642,7 @@ Deno.test("createSpace declares a kind in the genesis commit, which spaceKind() 
   }
 });
 
-Deno.test("spaceKind() reads the kind of a space whose genesis commits after the reader first opened it", async () => {
+Deno.test("spaceKind() reads the kind of a space whose genesis commits after the reader first opened it, opening one session of its own to do so", async () => {
   const member = await Identity.fromPassphrase("space kind early reader");
   const server = createServer("space-kind-early-reader");
   const factory = new RecordingLoopbackSessionFactory(server);
@@ -672,7 +672,11 @@ Deno.test("spaceKind() reads the kind of a space whose genesis commits after the
       readSpaceKind(await server.engineForSpace(space)),
       "fabrichat-room",
     );
+    const opened = factory.sessions.length;
     assertEquals(await reader.spaceKind(space), "fabrichat-room");
+    assertEquals(factory.sessions.length, opened + 1);
+    assertEquals(await reader.spaceKind(space), "fabrichat-room");
+    assertEquals(factory.sessions.length, opened + 1);
   } finally {
     await reader.close();
     await server.close();
