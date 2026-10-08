@@ -1613,6 +1613,24 @@ export async function dispatchQueuedEvent(state: {
   state.eventQueue.shift();
 
   const tx = state.runtime.edit();
+  // The attempt's commit outcome is classified once, when its verdict lands.
+  // Verdict callbacks run before every commit callback, so a run of the event
+  // that is coming — a stale-basis rejection backing off to run the handler
+  // again — is noted on the lineage before the lineage's own settle callback
+  // drops the follow-ups this attempt sent: the re-run sends its own.
+  let verdictDisposition:
+    | { readonly error: unknown; readonly disposition: CommitDisposition }
+    | undefined;
+  tx.addVerdictCallback((_tx, result) => {
+    if (result.error === undefined) return;
+    const disposition = classifyCommitDisposition(
+      result.error,
+      queuedEvent,
+      state.backpressure,
+    );
+    verdictDisposition = { error: result.error, disposition };
+    if (disposition.kind === "backoff") state.noteLineageRerun(tx);
+  });
   let viewHandler = presyncedImplementation ?? handler;
   const served = queuedEvent.served;
   let lineageReleased = false;
@@ -2241,12 +2259,16 @@ export async function dispatchQueuedEvent(state: {
         // intent must converge or fail loudly: a stale-basis rejection backs off
         // and retries within a bounded window rather than being dropped; a
         // permanent or non-stale-basis rejection is not retried; an unconverged
-        // write surfaces a terminal error.
-        const disposition = classifyCommitDisposition(
-          error,
-          queuedEvent,
-          state.backpressure,
-        );
+        // write surfaces a terminal error. A rejection the verdict already
+        // classified keeps that classification, which the lineage acted on.
+        const disposition =
+          error !== undefined && verdictDisposition?.error === error
+            ? verdictDisposition.disposition
+            : classifyCommitDisposition(
+              error,
+              queuedEvent,
+              state.backpressure,
+            );
 
         let telemetryFailure: { readonly error: unknown } | undefined;
         try {

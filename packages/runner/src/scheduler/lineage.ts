@@ -8,7 +8,7 @@ interface OriginRecord {
   events: Set<QueuedEvent>;
   pieceStops: Array<() => void>;
 
-  /** Whether the scheduler aborts the origin in order to run it again. */
+  /** Whether the scheduler runs the origin's work again once it fails. */
   rerun: boolean;
 }
 
@@ -94,7 +94,7 @@ export class SpeculationLineage {
               this.#hooks.dropQueuedEvent(
                 event,
                 settled.rerun
-                  ? `Event dropped: speculative origin was aborted to run again before ${event.id} dispatched`
+                  ? `Event dropped: speculative origin failed and runs again before ${event.id} dispatched`
                   : `Event dropped: speculative origin failed before ${event.id} dispatched`,
                 settled.rerun,
               );
@@ -138,10 +138,11 @@ export class SpeculationLineage {
   }
 
   /**
-   * Notes that the scheduler is about to abort `origin` in order to run its
-   * work again, so the follow-up events the abort drops are logged at debug
-   * rather than as warnings. Called before the abort, whose settle callback
-   * does the dropping; an origin with no recorded launches has nothing to
+   * Notes that the scheduler runs `origin`'s work again once `origin` fails,
+   * so the follow-up events its failure drops are logged at debug rather than
+   * as warnings. Called before the settle callback that does the dropping:
+   * ahead of an abort to run again, and from the origin's verdict ahead of a
+   * stale-basis retry. An origin with no recorded launches has nothing to
    * note.
    */
   noteRerun(origin: IExtendedStorageTransaction): void {
