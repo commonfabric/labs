@@ -398,11 +398,17 @@ const ownerShapedSubject = (atom: unknown): string | undefined => {
 };
 
 /**
- * Checks that every clause of the draft's label is the actor's own, and
+ * Checks that the actor can release every clause of the draft's label, and
  * returns the `Context` and `Resource` sources it draws on.
  *
- * @throws If a clause is empty, carries a caveat, names another principal, or
- *   holds any alternative that is not the actor's own.
+ * A clause is the actor's to release when one of its alternatives is the
+ * actor's own: each alternative of an OR-clause is an independent release
+ * path for that clause only (§3.1.8(3), `03-core-concepts.md`), as with a
+ * message row labeled for its participants and the store's owner (§13.12).
+ * The sources are the actor's own `Context` and `Resource` alternatives.
+ *
+ * @throws If a clause is empty, carries a caveat or an expiry among its
+ *   alternatives, or has no alternative that is the actor's own.
  */
 const actorOwnedSources = (
   confidentiality: readonly CfcConfClause[],
@@ -425,8 +431,22 @@ const actorOwnedSources = (
         debugStr`Custody seal refuses a value that still carries a caveat: $quote${clause}`,
       );
     }
-    if (alternatives.every((atom) => isActorOwnedAlternative(atom, actor))) {
-      for (const atom of alternatives) {
+    const owned = alternatives.filter((atom) =>
+      isActorOwnedAlternative(atom, actor)
+    );
+    if (owned.length > 0) {
+      // An expiry is not a principal, and as an alternative it would loosen
+      // the expiry rather than tighten it (§3.1.8(2)).
+      if (
+        alternatives.some((atom) =>
+          isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.Expires
+        )
+      ) {
+        throw new Error(
+          debugStr`Custody seal refuses a clause with an \`Expires\` alternative: $quote${clause}`,
+        );
+      }
+      for (const atom of owned) {
         if (
           isObjectNotArray(atom) &&
           (atom.type === CFC_ATOM_TYPE.Context ||
