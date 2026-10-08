@@ -13,6 +13,7 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
   CHAT_SEND_ACTION,
@@ -26,6 +27,10 @@ import {
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+/** An empty shared-space catalog, as a manager registers its rooms in. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 
 // A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
 // because a room's participants link only a document that carries a label.
@@ -52,6 +57,7 @@ export default pattern(() => {
   const manager = FabriChatManagerCore({
     myProfile: Writable.of<TestProfile>({ name: "Tester" }),
     rooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: notices,

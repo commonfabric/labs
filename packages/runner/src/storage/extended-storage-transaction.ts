@@ -362,6 +362,27 @@ export type CfcInstrumentationHooks = {
 // lands in the throwing trap.
 const readOnlyCfcViews = new WeakMap<object, object>();
 
+/**
+ * The errors a transaction's commit callbacks receive when its commit promise
+ * rejects, each standing for the rejection held in its `reason`.
+ */
+const commitPromiseRejections = new WeakSet<object>();
+
+/**
+ * The rejection a commit promise rejected with, when `error` is the error a
+ * transaction's commit callbacks receive for that rejection, or `undefined`
+ * for any other error. The commit's own settlement rejects with that same
+ * rejection, so a callback reading it here sees what the committer's
+ * settlement handler sees.
+ */
+export function commitPromiseRejectionOf(
+  error: unknown,
+): { readonly reason: unknown } | undefined {
+  return isObjectOrArray(error) && commitPromiseRejections.has(error)
+    ? { reason: (error as { reason?: unknown }).reason }
+    : undefined;
+}
+
 const throwCfcReadOnly = (): never => {
   throw new Error(
     "CFC transaction state is read-only: use the IExtendedStorageTransaction methods",
@@ -3937,6 +3958,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           message: "Transaction commit promise rejected",
           reason,
         };
+        commitPromiseRejections.add(error);
         this.#statusOverride = {
           status: "error",
           journal: this.tx.journal,

@@ -172,7 +172,10 @@ import {
 } from "./scheduler.ts";
 import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
-import { RetryImmediately } from "./scheduler/retry-immediately.ts";
+import {
+  InSpaceTargetUnresolved,
+  RetryImmediately,
+} from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
@@ -4149,42 +4152,6 @@ export class Runner {
   }
 
   /**
-   * True when `resultCell` is its space's default/root pattern — the piece the
-   * PieceController's own cold-start repair (startEnsuredDefaultPattern) owns,
-   * including its roll-forward-to-official backstop and clear-error contract.
-   * The runner's initial-start setup repair must DEFER to the controller for
-   * the root and heal only the nested pieces the controller never sees (a
-   * profile mounted via a #wish, say). Profiles are plain `inSpace` pieces and
-   * are never a space's `defaultPattern` (only the controller sets that), so
-   * they are correctly not excluded. Called only on the rare repair path, so
-   * the space-cell read costs nothing on a healthy start. A read failure
-   * returns false: better to attempt the idempotent, fail-closed repair than
-   * to leave a piece bricked because a lookup raced.
-   */
-  #isSpaceDefaultPattern(resultCell: Cell<unknown>): boolean {
-    try {
-      const defaultPatternCell = this.#runtime
-        .getSpaceCell(resultCell.space)
-        .key("defaultPattern")
-        .get() as Cell<unknown> | undefined;
-      if (defaultPatternCell === undefined) return false;
-      const a = resultCell.getAsNormalizedFullLink();
-      const b = defaultPatternCell.getAsNormalizedFullLink();
-      // Full document identity: space + scope + id. `scope` (space/user/session)
-      // is part of the address — a user- or session-scoped nested cell can share
-      // an entity id with the space-scoped root, so omitting scope would
-      // misclassify it as the root and silently suppress its heal. `path` is
-      // intentionally not compared: doStart normalizes a subpath input to its
-      // root before `#startCore()`, so resultCell is always a root cell here.
-      return a.space === b.space &&
-        (a.scope ?? "space") === (b.scope ?? "space") &&
-        a.id === b.id;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Whether the internal-cell manifest stored on `resultCell` names every
    * derived internal cell of `pattern`. `false` says no setup for this pattern
    * ran over this document, which is what the cold-start repair in
@@ -5447,9 +5414,10 @@ export class Runner {
     // setup for it: the internal cells the new version's setup would have
     // materialized — a handler's stream among them — have no manifest entry
     // and no result projection reaching them, and nothing about the stored
-    // doc changes on its own. A fresh run() would materialize them; this is
-    // the same repair the home ROOT gets in startEnsuredDefaultPattern,
-    // reachable here for the nested pieces that never pass through it.
+    // doc changes on its own. A fresh run() would materialize them, and this
+    // repair does the same for every piece, whatever starts it: a space's root
+    // is repaired as a nested piece is, a profile that is its space's root
+    // among them.
     //
     // The trigger is that stored state and nothing else: a setup-completion
     // marker that does not name this version, and a manifest missing one of
@@ -5485,10 +5453,7 @@ export class Runner {
             ref,
             this.#sessionPatternPointer(resultCell),
           ) !== "matches" &&
-        !this.#storedManifestCovers(resultCell, pattern) &&
-        // The root/default pattern is the PieceController's to repair (it has
-        // the richer roll-forward + clear-error path); defer to it there.
-        !this.#isSpaceDefaultPattern(resultCell)
+        !this.#storedManifestCovers(resultCell, pattern)
       ) {
         setupRepair = {
           pattern,
@@ -10598,6 +10563,24 @@ export class Runner {
     tx.enableMultiSpaceWrites?.([...childSpaces, parentSpace]);
   }
 
+  /**
+   * Helper for the handler paths, which returns the result cell of the
+   * handling caused by `cause`: its receipt, in the space of the handler's
+   * own result cell `patternResultCell`.
+   */
+  #handlingReceiptCell(
+    patternResultCell: Cell<any>,
+    cause: Record<string, any>,
+    tx: IExtendedStorageTransaction,
+  ): Cell<unknown> {
+    return this.#runtime.getCell(
+      patternResultCell.space,
+      { resultFor: cause },
+      undefined,
+      tx,
+    );
+  }
+
   #handleJavaScriptHandlerResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
@@ -10608,12 +10591,7 @@ export class Runner {
     addCancel: AddCancel,
     cause: Record<string, any>,
   ): any {
-    const receiptCell = this.#runtime.getCell(
-      patternResultCell.space,
-      { resultFor: cause },
-      undefined,
-      tx,
-    );
+    const receiptCell = this.#handlingReceiptCell(patternResultCell, cause, tx);
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
       // Events-down (runtime-mapping.md, row N26): receipt create-only
@@ -10921,7 +10899,9 @@ export class Runner {
    * throws {@link RetryImmediately} so the scheduler re-runs the handler or
    * action. On the re-run each name resolves synchronously (see the pattern
    * builder's resolveInSpaceTargetSpace), and the run records the allocation
-   * in the same commit as the writes that refer to it.
+   * in the same commit as the writes that refer to it. A name the runtime
+   * leaves unresolved throws {@link InSpaceTargetUnresolved} instead (see
+   * `Runtime.resolveInSpaceName()`).
    *
    * Each space created for a name is owned by the owner
    * {@link Runtime.actingPrincipalFor} gives the run's transaction, the one the
@@ -10932,6 +10912,7 @@ export class Runner {
   async #resolvePendingSpaceNamesAndRetry(
     frame: Frame,
     tx?: IExtendedStorageTransaction,
+    receiptCell?: Cell<unknown>,
   ): Promise<never> {
     const pending = [...(frame.pendingSpaceNames ?? [])];
     const space = frame.space;
@@ -10945,11 +10926,24 @@ export class Runner {
           "acting user, and this run has none",
       );
     }
-    await Promise.all(
-      pending.map(([name, request]) =>
-        this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
-      ),
-    );
+    try {
+      await Promise.all(
+        pending.map(([name, request]) =>
+          this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
+        ),
+      );
+    } catch (error) {
+      // A withdrawn run still names the handling's receipt, which the serving
+      // runtime's run of the same event writes: the address derives from the
+      // event, and a caller reads the served outcome through it.
+      if (
+        error instanceof InSpaceTargetUnresolved && tx !== undefined &&
+        receiptCell !== undefined
+      ) {
+        tx.handlingReceiptLink = receiptCell.getAsNormalizedFullLink();
+      }
+      throw error;
+    }
     throw new RetryImmediately(
       `Resolving in-space target spaces: ${
         pending.map(([name]) => name).join(", ")
@@ -11353,7 +11347,11 @@ export class Runner {
           logger.timeStart("stream", "postRun");
           try {
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
-              return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
+              return this.#resolvePendingSpaceNamesAndRetry(
+                frame,
+                tx,
+                this.#handlingReceiptCell(resultCell, cause, tx),
+              );
             }
             const handleResult = () => {
               const normalized = normalizeSandboxResult(result, name);
@@ -11398,8 +11396,11 @@ export class Runner {
           frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
         ) {
           popFrameAfterReturn = false;
-          return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
-            .finally(() => popFrame(frame));
+          return this.#resolvePendingSpaceNamesAndRetry(
+            frame,
+            tx,
+            this.#handlingReceiptCell(resultCell, cause, tx),
+          ).finally(() => popFrame(frame));
         }
         (error as Error & { frame?: Frame }).frame = frame;
         throw error;

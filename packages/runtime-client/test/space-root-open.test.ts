@@ -171,6 +171,9 @@ async function rootlessSpace(grants: ACL = { "*": "WRITE" }) {
       }
     },
 
+    /** Whether a space answers to `did`, asked as the owner. */
+    spaceExists: (did: MemorySpace) => ownerParty.runtime.spaceExists(did),
+
     /** The space cell, as the memory server holds it. */
     storedSpaceCell: async () => {
       for (const { runtime, storage } of parties) {
@@ -252,6 +255,19 @@ describe("space-root-open", () => {
           .rejects.toThrow("lacks READ");
       }
       expect(await room.storedSpaceCell()).toBeUndefined();
+      expect(room.fetched).toEqual([]);
+    });
+  });
+
+  describe("a DID no space answers to", () => {
+    it("is not found on opening, and is not created", async () => {
+      await using room = await rootlessSpace();
+      const nobody = (await Identity.generate({ implementation: "noble" }))
+        .did();
+
+      await expect(room.visitor.getSpaceRootPattern(nobody))
+        .rejects.toThrow(`No space answers to ${nobody}`);
+      expect(await room.spaceExists(nobody)).toBe(false);
       expect(room.fetched).toEqual([]);
     });
   });

@@ -56,11 +56,9 @@ describe("nested-piece-setup-repair", () => {
   // marker names V1 and the manifest lacks the stream V3's `bump` registers
   // on. `Runner.#startCore()` reads exactly that state and re-runs the pinned
   // pattern's OWN setup before instantiating — the same repair the home ROOT
-  // gets in startEnsuredDefaultPattern, here for the nested pieces that never
-  // pass through the PieceController. The repair moves no durable identity
-  // pointer; it replays the pattern the pointer already names. The root itself
-  // is excluded because its controller owns the repair; a nested piece is
-  // never a space's `.defaultPattern`, so it heals here.
+  // gets in startEnsuredDefaultPattern, here for every start, a space's root
+  // included. The repair moves no durable identity pointer; it replays the
+  // pattern the pointer already names.
 
   let storageManager: ReturnType<typeof StorageManager.emulate>;
 
@@ -120,6 +118,14 @@ describe("nested-piece-setup-repair", () => {
     }
     await tx2.commit().settled;
     return { cell, v3Ref };
+  };
+
+  // Links `cell` as the root of its space, as the space cell of a space whose
+  // root is a profile does.
+  const linkAsSpaceRoot = async (rt: Runtime, cell: Cell<unknown>) => {
+    const tx = rt.edit();
+    rt.getSpaceCell(space).withTx(tx).key("defaultPattern").set(cell);
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   const setupMarkerOf = (cell: unknown) =>
@@ -225,6 +231,24 @@ describe("nested-piece-setup-repair", () => {
       await cell.pull();
       const after = (cell.getAsQueryResult() as { count: number }).count;
       expect(after).toBe(before + 1);
+    } finally {
+      await rt.dispose();
+    }
+  });
+
+  it("heals a piece that is its space's root", async () => {
+    // A profile is its space's root, and the start walk reaches it from the
+    // pieces that link it, with no controller behind the start.
+    const rt = newRuntime();
+    try {
+      const { cell } = await nestedPieceSetUpForV1(rt);
+      await linkAsSpaceRoot(rt, cell);
+      const manifest = manifestOf(cell);
+      expect(await rt.start(cell)).toBe(true);
+      await cell.pull();
+      expect(manifestOf(cell)).not.toEqual(manifest);
+      expect(await bumpAndCount(cell)).toBe(1);
+      await rt.storageManager.synced();
     } finally {
       await rt.dispose();
     }

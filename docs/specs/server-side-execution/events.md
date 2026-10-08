@@ -289,7 +289,11 @@ ambient-state one.
   client-written ones; a flag-ON client's diverted echo publishes that
   same address on its transaction, and the durable-ack coupling settles
   the sender's callback only after the handling consequenced — the
-  receipt is durable before the address is ever dereferenced. A sender
+  receipt is durable before the address is ever dereferenced. The
+  callback reads that outcome rather than the echo's: where the echo's
+  own transaction failed — an echo that withdrew (speculation.md §2), or
+  one whose commit was refused — the transaction it is handed reports
+  done once the handling consequenced. A sender
   that needs only its own act on the record takes the send's
   `onAppended` hook, which settles when the append is durable and
   carries the delivery outcome; the commit callback keeps the coupling
@@ -618,14 +622,22 @@ loop's duty).
   and ambiguous storage-time or transport outcomes, are not authorized
   for explicit replay.
 - A serving runtime's refusal of a foreign scoped read (protocol.md §2's
-  fail-closed interim) is a `protocol` verdict in `dispatch-load` and
-  terminalizes immediately. The read's scope and the runtime's serving
-  posture decide it, so the same read from the same runtime is refused
-  every time. A handler whose declared inputs reach a user- or
-  session-scoped document in another space therefore seals its
-  `needs-attention` notice at once, and the arrival barrier releases the
-  space's later events without waiting out the budget. Explicit retry
-  is the recovery once a runtime no longer refuses the read.
+  fail-closed interim) is no load in flight. The read's scope and the
+  runtime's serving posture decide it, so the same read from the same
+  runtime is refused every time, and the storage manager registers no
+  pending load for it, so a served event's preflight never parks on one.
+  What decides the event is what its run reads. A run that reads the
+  value of such a document, a user- or session-scoped document in
+  another space reached through its declared event or its bound state,
+  read an absence that is not the document's state: the run is withdrawn
+  and the event fails as a permanent `protocol` verdict in
+  `dispatch-load`, sealing its `needs-attention` notice at once, the same
+  every time. A run that passes a link to such a document along reads
+  only the document's CFC metadata and dispatches. So does a run whose
+  refused documents only the preflight reaches: the preflight's
+  dependency walk reads beyond the handler's declared schema, following a
+  linked piece's own fields (a profile's view and per-user state, for
+  example), and what it reads there decides nothing.
 - An event held only behind an earlier failed head preserves arrival
   order but records no checkpoint and spends no budget. A load-park
   observation neither increments nor clears the independent cold-view
