@@ -105,8 +105,8 @@ const isStart = (act: ManagerAct): boolean =>
  * An event on one of the manager's streams. Each stream's event carries the
  * fields its act needs. A rendered control sends no request id, which the
  * manager then mints, and either the text it holds, as `target.value`, or, for
- * a control that starts a direct room with one person, that person's principal
- * as `target.dataset.counterpart`.
+ * a control that starts a direct room with one person, that person's profile,
+ * bound as the control's `name`, as `target.name`.
  */
 export interface ManagerStreamEvent {
   /**
@@ -146,10 +146,15 @@ export interface ManagerStreamEvent {
   /** The id of a notice delivered. */
   id?: string;
 
-  /** A rendered control's text, or the principal it starts a direct room with. */
+  /** A rendered control's text, or the profile it starts a direct room with. */
   readonly target?: {
     readonly value?: string;
-    readonly dataset?: { readonly counterpart?: string };
+
+    /** The profile of the person a participant's chip starts a chat with. */
+    // `Cell<…>` is written out rather than reached through an alias: the
+    // event's schema marks a reference position only where the wrapper is
+    // written in the event type.
+    readonly name?: Cell<ChatManagerProfile>;
   };
 }
 
@@ -552,8 +557,14 @@ const performManagerAct = (
   }
 
   if (act === "openDirect") {
-    const counterpart = event?.counterpart ??
-      event?.target?.dataset?.counterpart ?? typed;
+    // A participant's chip names the person by their profile, which says
+    // whose it is with its `represents-principal` label. A `name` attesting
+    // no principal names no one, so it is offered nothing either.
+    const named = event?.target?.name;
+    const namedPrincipal = named === undefined
+      ? undefined
+      : principalOf(named, "represents-principal");
+    const counterpart = event?.counterpart ?? namedPrincipal ?? typed;
     if (!isPrincipalDID(counterpart)) {
       const reason = "The counterpart is not a principal.";
       // The session is shown the text it sent, which says what is wrong
@@ -578,7 +589,8 @@ const performManagerAct = (
     }
     // The room is offered through the profile's inbox, so the profile has to
     // be the counterpart's own.
-    const profile = event?.profile;
+    const profile = event?.profile ??
+      (namedPrincipal === undefined ? undefined : named);
     if (
       profile !== undefined &&
       principalOf(profile, "represents-principal") !== counterpart

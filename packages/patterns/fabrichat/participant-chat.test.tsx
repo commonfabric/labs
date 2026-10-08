@@ -110,14 +110,15 @@ const chatDisplay = (chip: unknown): unknown =>
     ) as { display?: unknown })?.display,
   );
 
-// Whom a chip's chat control names to the manager it sends its click to.
-const chatCounterpart = (chip: unknown): unknown =>
-  readValue(
-    propValue(
-      findNodeByProp(chip, "data-ui-action", CHAT_START_ACTION),
-      "data-counterpart",
-    ),
+// The profile a chip's chat control names to the manager it sends its click
+// to, bound as the control's `name`.
+const chatNamed = (chip: unknown): object | undefined => {
+  const named = propValue(
+    findNodeByProp(chip, "data-ui-action", CHAT_START_ACTION),
+    "$name",
   );
+  return typeof named === "object" && named !== null ? named : undefined;
+};
 
 // The stream a chip's chat control sends its click to.
 const chatTarget = (chip: unknown): object | undefined => {
@@ -224,8 +225,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     startDirect: manager.openDirect,
   };
   // Alice's profile, reached as the room reaches it: through her message.
+  const aliceProfile = setup.records.messages.key(0).key("authorProfile");
   const aliceChip = ParticipantChip({
-    participant: setup.records.messages.key(0).key("authorProfile"),
+    participant: aliceProfile,
     ...chipFor,
   } as ChipArg);
   const ownChip = ParticipantChip(
@@ -264,21 +266,19 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           chatDisplay(unclaimedChip[UI]) === "none"
         ),
       },
-      // Alice's chip names her by the principal her profile attests, and its
-      // click is the viewer's reviewed start, sent to the manager itself.
+      // Alice's chip names her by her profile, and its click is the viewer's
+      // reviewed start, sent to the manager itself.
       {
         assertion: assert(() =>
-          setup.aliceDid.get() !== "" &&
-          chatCounterpart(aliceChip[UI]) === setup.aliceDid.get() &&
+          equals(chatNamed(aliceChip[UI]), aliceProfile) &&
           equals(chatTarget(aliceChip[UI]), manager.openDirect)
         ),
       },
+      // The click names her profile as its target's `name`, from which the
+      // manager reads whom it names.
       {
         action: manager.openDirect,
-        event: {
-          type: "click",
-          target: { dataset: { counterpart: setup.aliceDid } },
-        },
+        event: { type: "click", target: { name: aliceProfile } },
         trustedUi: startGesture,
       },
       {
