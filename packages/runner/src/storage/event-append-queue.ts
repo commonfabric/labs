@@ -54,7 +54,7 @@ import {
   type StreamEventEntry,
   type StreamLinkRef,
 } from "@commonfabric/memory/v2";
-import type { FabricValue } from "@commonfabric/api";
+import type { FabricValue, JSONSchema } from "@commonfabric/api";
 
 const logger = getLogger("event-append-queue", {
   enabled: true,
@@ -82,6 +82,15 @@ export type QueuedEventAppend = {
 
   /** See StreamEventEntry.rendererTrusted (fan-out stage B). */
   rendererTrusted?: true;
+
+  /**
+   * The schema documents the payload's links reference, by hash, that the
+   * space was not known to hold when the event was queued. The append's own
+   * commit installs them, which is the write-side delivery guarantee of
+   * `docs/specs/content-addressed-schemas.md`: the commit boundary refuses a
+   * reference whose document is neither in the commit nor in the space.
+   */
+  schemaDocuments?: Record<string, JSONSchema>;
 };
 
 /** The delivery outcome one discharge resolves with. */
@@ -584,7 +593,8 @@ export class EventAppendQueue {
    * merge patch (concurrent appends merge against durable state; the
    * array and path create if absent) plus the declaration admission
    * stamps from (events.md §1; the same shape the memory server's own
-   * delegated delivery uses). Reads are EMPTY — admission is append
+   * delegated delivery uses), preceded by an install of each schema
+   * document the entry carries. Reads are EMPTY — admission is append
    * authority + the eventId CAS, never a base-revision check. */
   #commitFor(append: QueuedEventAppend): ClientCommit {
     const entry: StreamEventEntry = {
@@ -604,15 +614,24 @@ export class EventAppendQueue {
     return {
       localSeq: this.#nextLocalSeq(),
       reads: { confirmed: [], pending: [] },
-      operations: [{
-        op: "patch",
-        id: append.sidecarId as never,
-        patches: [{
-          op: "append",
-          path: "/value/entries",
-          values: [entry as never],
-        }],
-      }],
+      operations: [
+        ...Object.entries(append.schemaDocuments ?? {}).map((
+          [hash, schema],
+        ) => ({
+          op: "set" as const,
+          id: `cid:${hash}` as const,
+          value: { value: schema },
+        })),
+        {
+          op: "patch",
+          id: append.sidecarId as never,
+          patches: [{
+            op: "append",
+            path: "/value/entries",
+            values: [entry as never],
+          }],
+        },
+      ],
       eventAppends: [decl],
     };
   }

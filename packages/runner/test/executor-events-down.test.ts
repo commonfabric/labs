@@ -256,6 +256,8 @@ const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("events down service");
 const aliceSigner = await Identity.fromPassphrase("events down alice");
 const bobSigner = await Identity.fromPassphrase("events down bob");
+const profileSpace = (await Identity.fromPassphrase("events down profiles"))
+  .did() as MemorySpace;
 
 /** The TRUE sidecar doc ids in the store (the client derives the id
  * from the RESOLVED stream link — a pattern's stream resolves into an
@@ -292,6 +294,25 @@ const BUMP_PATTERN = [
   "export default pattern<",
   "  { value: Writable<number> },",
   "  { value: number; bump: Stream<unknown> }",
+  ">(({ value }) => ({ value, bump: bump({ value }) }));",
+].join("\n");
+
+/**
+ * Like `BUMP_PATTERN`, except that the handler sets the value to the `age` of
+ * the profile its event's `target.name` links to.
+ */
+const PROFILE_AGE_PATTERN = [
+  "import { Cell, handler, pattern, Stream, Writable } from 'commonfabric';",
+  "interface Profile { age?: number }",
+  "interface Pick { target?: { name?: Cell<Profile> } }",
+  "const bump = handler<Pick, { value: Writable<number> }>(",
+  "  (event, { value }) => {",
+  "    value.set(event?.target?.name?.get()?.age ?? -1);",
+  "  },",
+  ");",
+  "export default pattern<",
+  "  { value: Writable<number> },",
+  "  { value: number; bump: Stream<Pick> }",
   ">(({ value }) => ({ value, bump: bump({ value }) }));",
 ].join("\n");
 
@@ -910,6 +931,60 @@ describe("Phase 3 events-down (serving side)", () => {
     // consequenced handling, not the local echo — and reads non-error.
     await acks.reached(1);
     expect(acks.entries[0]).not.toBe("error");
+    cancelDemand();
+  });
+
+  it("runs a served handler on an event whose payload links to a cell in another space through a content-addressed schema, reading the linked cell", async () => {
+    // The profile's schema document lives in the profile's space alone
+    // until the fire: the append is what owes it to the stream's space.
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(
+      clientRuntime,
+      PROFILE_AGE_PATTERN,
+      { arg: "profile-age-arg", result: "profile-age-result" },
+    );
+    const profile = clientRuntime.getCell(
+      profileSpace,
+      "profile-age",
+      {
+        type: "object",
+        properties: { age: { type: "number" } },
+      } as const satisfies JSONSchema,
+    );
+    {
+      const tx = clientRuntime.edit();
+      profile.withTx(tx).set({ age: 36 });
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost();
+    const appends = new ArrivalLog<{ delivered: boolean }>();
+    sendEvent(
+      result.key("bump"),
+      { target: { name: profile.getAsLink({ includeSchema: true }) } },
+      undefined,
+      { onAppended: appends.record },
+    );
+    await appends.reached(1);
+    expect(appends.entries[0]).toEqual({ delivered: true });
+
+    // The entry is consequenced by a handler run that errored as much as by
+    // one that wrote, so the write is read only once it is.
+    const entryOf = () =>
+      (Engine.read(engine, { id: sidecarIdsIn(engine)[0] })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries?.[0];
+    await awaitAdmitted(server, () => entryOf()?.consequenced === true);
+    expect(entryOf()?.error).toBeUndefined();
+    expect(
+      Engine.read(engine, { id: argument.getAsNormalizedFullLink().id })
+        ?.value,
+    ).toEqual({ value: 36 });
     cancelDemand();
   });
 
