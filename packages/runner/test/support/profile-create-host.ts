@@ -1,9 +1,10 @@
 /**
  * Creates profiles the way Home does, through the real `profile-create.tsx`,
  * for tests that need a profile in a space of its own, on a memory server that
- * enforces access-control lists. A test can also create a profile as one
- * made before profiles were their space's root, in a space whose genesis
- * reserved no root.
+ * enforces access-control lists. A test can also create a profile the way
+ * one was made before profiles were their space's root, in a space whose
+ * genesis reserved no root, without depending on how `profile-create.tsx`
+ * makes a root.
  */
 
 import { fromFileUrl } from "@std/path";
@@ -64,40 +65,55 @@ const sysDir = fromFileUrl(
 );
 const read = (name: string) => Deno.readTextFileSync(sysDir + name);
 
-/** What makes a profile its space's root in `profile-create.tsx`. */
-const ROOT_OPTION = ", root: true }";
+/**
+ * A host that owns a Home-like `profiles` list and embeds the real create
+ * pattern, which makes each profile its space's root.
+ */
+const CREATE_HOST = [
+  "import ProfileCreate from './profile-create.tsx';",
+  "import { pattern, Writable } from 'commonfabric';",
+  "import type { ProfileHomeOutput } from './profile-home.tsx';",
+  "",
+  "export default pattern(() => {",
+  "  const profiles = new Writable<ProfileHomeOutput[]>([]).for('profiles');",
+  "  const created = ProfileCreate({ profiles });",
+  "  return { profiles, createProfile: created.createProfile };",
+  "});",
+].join("\n");
 
 /**
- * A host that owns a Home-like `profiles` list and embeds the create pattern,
- * which is the real one, or with `root: false` the real one without its
- * `root: true`.
+ * A host with the same list and stream that creates each profile the way
+ * profiles were made before they were their space's root: an anonymous
+ * `inSpace()` granting every principal `WRITE`, with no root.
  */
+const EARLIER_SHAPE_HOST = [
+  "import { handler, pattern, Writable } from 'commonfabric';",
+  "import ProfileHome, { type ProfileHomeOutput } from './profile-home.tsx';",
+  "",
+  "const create = handler<",
+  "  { name: string },",
+  "  { profiles: Writable<ProfileHomeOutput[]> }",
+  ">((event, { profiles }) => {",
+  "  profiles.push(",
+  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WRITE' } })({",
+  "      initialName: event.name,",
+  "    }) as ProfileHomeOutput,",
+  "  );",
+  "});",
+  "",
+  "export default pattern(() => {",
+  "  const profiles = new Writable<ProfileHomeOutput[]>([]).for('profiles');",
+  "  return { profiles, createProfile: create({ profiles }) };",
+  "});",
+].join("\n");
+
+/** The host program: the real create pattern, or with `root: false` the earlier shape. */
 function hostProgram(root: boolean): RuntimeProgram {
-  const create = read("profile-create.tsx");
-  if (!create.includes(ROOT_OPTION)) {
-    throw new Error("`profile-create.tsx` no longer passes `root: true`");
-  }
   return {
     main: "/main.tsx",
     files: [
-      {
-        name: "/main.tsx",
-        contents: [
-          "import ProfileCreate from './profile-create.tsx';",
-          "import { pattern, Writable } from 'commonfabric';",
-          "import type { ProfileHomeOutput } from './profile-home.tsx';",
-          "",
-          "export default pattern(() => {",
-          "  const profiles = new Writable<ProfileHomeOutput[]>([]).for('profiles');",
-          "  const created = ProfileCreate({ profiles });",
-          "  return { profiles, createProfile: created.createProfile };",
-          "});",
-        ].join("\n"),
-      },
-      {
-        name: "/profile-create.tsx",
-        contents: root ? create : create.replace(ROOT_OPTION, " }"),
-      },
+      { name: "/main.tsx", contents: root ? CREATE_HOST : EARLIER_SHAPE_HOST },
+      { name: "/profile-create.tsx", contents: read("profile-create.tsx") },
       { name: "/profile-home.tsx", contents: read("profile-home.tsx") },
     ],
   };
@@ -131,7 +147,8 @@ function createEvent(name: string): { name: string } {
  * Creates a profile named `name` through the create pattern, run by `runtime`
  * in its user's home space, and returns the link the host's list holds, which
  * names the slot that links on to the profile. With `root: false` the profile
- * is created without `root: true`, so its space's genesis reserves no root.
+ * is created the way profiles were before they were their space's root, so
+ * its space's genesis reserves no root.
  * The host's root lives at `hostCause` in the home space.
  *
  * @throws Error when a commit fails or the list does not end up holding
