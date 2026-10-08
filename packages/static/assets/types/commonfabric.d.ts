@@ -2805,6 +2805,11 @@ export type JSONSchemaObj = {
       readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
     }[];
     readonly exactCopyOf?: readonly string[];
+    // CFC spec §8.7.5: a JSON pointer into this value's run's result naming
+    // the list the value is released to, as the authored clause
+    // `[User(actor) ∨ Members(list, subject)]` the runtime adds when the
+    // capture check admits it.
+    readonly members?: string;
     // §8.3 projection claim (the lowered form of `Projection` /
     // `ProjectionOf` / `ProjectionPath`): this value is the field at JSON
     // pointer `path` inside the structured value at logical path `from`.

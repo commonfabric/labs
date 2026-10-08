@@ -50,7 +50,9 @@ export declare const CFC_ATOM_TYPE: {
   readonly HasRole: "https://commonfabric.org/cfc/atom/HasRole";
   readonly InjectionSafe: "https://commonfabric.org/cfc/atom/InjectionSafe";
   readonly LinkReference: "https://commonfabric.org/cfc/atom/LinkReference";
+  readonly ListedIn: "https://commonfabric.org/cfc/atom/ListedIn";
   readonly LlmDerived: "https://commonfabric.org/cfc/atom/LlmDerived";
+  readonly Members: "https://commonfabric.org/cfc/atom/Members";
   readonly Origin: "https://commonfabric.org/cfc/atom/Origin";
   readonly Policy: "https://commonfabric.org/cfc/atom/Policy";
   readonly PolicyCertified: "https://commonfabric.org/cfc/atom/PolicyCertified";
@@ -192,8 +194,22 @@ export type CfcHasRolePattern = CfcAtomObject & {
   readonly space: CfcPatternString;
   readonly role: "owner" | "writer" | "reader" | CfcPatternVariable;
 };
+type CfcListPosition = CfcAtomObject & {
+  readonly space: string;
+  readonly id: string;
+  readonly path: readonly string[];
+};
+type CfcMembersPattern = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.Members;
+  readonly list: CfcListPosition | CfcPatternVariable;
+  readonly subject: CfcPatternString | CfcPolicySubjectCommitment;
+};
 type CfcPatternConstructors = {
   readonly user: (subject: CfcPatternString) => CfcUserPattern;
+  readonly members: (
+    list: CfcMembersPattern["list"],
+    subject: CfcMembersPattern["subject"],
+  ) => CfcMembersPattern;
   readonly hasRole: (
     principal: CfcPatternString,
     space: CfcPatternString,
@@ -247,6 +263,16 @@ export type CfcPersonalSpaceAtom = CfcAtomObject & {
 export type CfcExpiresAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.Expires;
   readonly timestamp: number;
+};
+type CfcMembersAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.Members;
+  readonly list: CfcListPosition;
+  readonly subject: string | CfcPolicySubjectCommitment;
+};
+type CfcListedInAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.ListedIn;
+  readonly principal: string;
+  readonly list: CfcListPosition;
 };
 export type CfcHasRoleAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.HasRole;
@@ -414,6 +440,14 @@ export declare const cfcAtom: {
     space: string,
     role: "owner" | "writer" | "reader",
   ) => CfcHasRoleAtom;
+  readonly members: (
+    list: CfcListPosition,
+    subject: string | CfcPolicySubjectCommitment,
+  ) => CfcMembersAtom;
+  readonly listedIn: (
+    principal: string,
+    list: CfcListPosition,
+  ) => CfcListedInAtom;
   readonly boundaryContext: (
     key: string,
     value?: string,

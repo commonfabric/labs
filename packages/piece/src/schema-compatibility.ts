@@ -387,6 +387,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   maxConfidentiality: "declared",
   ownerPrincipal: "declared",
   exactCopyOf: "declared",
+  members: "declared",
   projection: "declared",
   collection: "declared",
   flowPrecisionClaim: "declared",

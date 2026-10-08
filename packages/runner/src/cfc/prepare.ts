@@ -60,6 +60,7 @@ import {
   droppedStoredClaim,
   type ForeignPositions,
 } from "./claim-preservation.ts";
+import { aclDocId, isACL } from "@commonfabric/memory/acl";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import { waveRunActorOf, waveRunContextOf } from "../executor/wave.ts";
 import {
@@ -139,6 +140,11 @@ import {
   evaluateExchangeRules,
 } from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
+import {
+  authorsMembersAtom,
+  membersCaptureClause,
+  type MembersCaptureReads,
+} from "./members-capture.ts";
 import {
   CFC_GRANT_ID_PREFIX,
   createTxCfcGrantResolver,
@@ -5130,6 +5136,10 @@ const disallowedAuthoredClauseReason = (
   if (!Array.isArray(confidentiality)) {
     return undefined;
   }
+  if (authorsMembersAtom(confidentiality)) {
+    return `an authored Members atom is not permitted at /${path.join("/")} ` +
+      `(spec §8.7.5: a list is named only through ifc.members)`;
+  }
   for (const clause of confidentiality) {
     if (!isOrClause(clause)) {
       continue;
@@ -5296,6 +5306,103 @@ const projectedSourceLabel = (
  * owners a field has, as the store records them. `undefined` for an envelope
  * that cannot be read, which names no owner and rules none out.
  */
+/**
+ * The storage reads the spec §8.7.5 capture check consults, as verifier
+ * reads in `tx`. A read that throws resolves `undefined`, which the check
+ * refuses.
+ */
+const membersCaptureReadsFor = (
+  tx: IExtendedStorageTransaction,
+  scope: ReturnType<typeof normalizeCellScope>,
+): MembersCaptureReads => {
+  const attempt = <T>(read: () => T): T | undefined => {
+    try {
+      return read();
+    } catch {
+      return undefined;
+    }
+  };
+  const meta = (space: string, id: string, member: string) =>
+    tx.readOrThrow({
+      space: space as MemorySpace,
+      id: id as URI,
+      scope,
+      type: "application/json",
+      path: [member],
+    }, { meta: INTERNAL_VERIFIER_META });
+  const patternModuleOf = (space: string, id: string) => {
+    const identity = meta(space, id, "patternIdentity");
+    return isObjectOrArray(identity) && typeof identity.identity === "string"
+      ? identity.identity
+      : undefined;
+  };
+  return {
+    owners: (space) =>
+      attempt(() => {
+        const acl = tx.readValueOrThrow({
+          space: space as MemorySpace,
+          id: aclDocId(space) as URI,
+          scope: "space",
+          path: [],
+        }, { meta: INTERNAL_VERIFIER_META });
+        if (!isACL(acl)) return undefined;
+        return Object.entries(acl).flatMap(([principal, capability]) =>
+          capability === "OWNER" ? [principal] : []
+        );
+      }),
+    runOf: ({ space, id }) =>
+      attempt(() => {
+        const own = patternModuleOf(space, id);
+        if (own !== undefined) return { resultId: id, moduleIdentity: own };
+        const result = meta(space, id, "result");
+        const target = isPrimitiveCellLink(result)
+          ? parseLink(result, {
+            space: space as MemorySpace,
+            id: id as URI,
+            scope,
+            path: [],
+          })
+          : undefined;
+        if (target?.id === undefined) return undefined;
+        const module = patternModuleOf(target.space ?? space, target.id);
+        return module === undefined
+          ? undefined
+          : { resultId: target.id, moduleIdentity: module };
+      }),
+    position: ({ space, id, path }) =>
+      attempt(() => {
+        const document = { space: space as MemorySpace, id, scope };
+        const owners = storedRepresentedPrincipalsAt(tx, document, path);
+        const envelope = loadStoredCfcEnvelope(tx, document);
+        if (owners === undefined || envelope.status !== "loaded") {
+          return undefined;
+        }
+        const schema = ContextualFlowControl.getSchemaAtPath(envelope.schema, [
+          ...path,
+        ]);
+        const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
+        return { owners, declaresWriter: ifc?.writeAuthorizedBy !== undefined };
+      }),
+    linkTarget: ({ space, id, path }) =>
+      attempt(() => {
+        const position = {
+          space: space as MemorySpace,
+          id: id as URI,
+          scope,
+          path: [...path],
+        };
+        const held = tx.readValueOrThrow(position, {
+          meta: INTERNAL_VERIFIER_META,
+        });
+        if (!isPrimitiveCellLink(held)) return "none" as const;
+        const target = parseLink(held, position);
+        return target === undefined
+          ? undefined
+          : { space: target.space, id: target.id, path: [...target.path] };
+      }),
+  };
+};
+
 const storedRepresentedPrincipalsAt = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -11042,13 +11149,33 @@ export function* prepareBoundaryCommitSteps(
           const prior = existingConfidentiality
             .filter((e) => isPrefix(e.path, entry.path))
             .flatMap((e) => e.confidentiality);
+          // Spec §8.7.5: an output that names a list of its run carries the
+          // authored clause the capture check admits, or the write is
+          // refused.
+          let membersClause: CfcConfClause | undefined;
+          if (ifc?.members !== undefined) {
+            const captured = membersCaptureClause({
+              actingPrincipal: tx.getCfcState().trustSnapshot?.actingPrincipal,
+              members: ifc.members,
+              target: { space, id },
+              flowConfidentiality,
+            }, membersCaptureReadsFor(tx, scope));
+            if ("refusal" in captured) {
+              reasons.push(verdictReason(
+                `${captured.refusal} at /${entry.path.join("/")}`,
+              ));
+              return [];
+            }
+            membersClause = captured.clause;
+          }
           const label = {
             ...derived,
-            ...(prior.length > 0
+            ...(prior.length > 0 || membersClause !== undefined
               ? {
                 confidentiality: mergeLabelValues(
                   derived.confidentiality,
                   prior,
+                  membersClause === undefined ? [] : [membersClause],
                 ),
               }
               : {}),
