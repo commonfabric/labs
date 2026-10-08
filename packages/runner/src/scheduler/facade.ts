@@ -608,6 +608,7 @@ export class Scheduler {
   get accessForTestingOnly(): {
     readonly actionStats: BoundedKeyMap<string, ActionStats>;
     readonly dependencyUpdateState: DependencyUpdateState;
+    readonly echoBreaker: RemoteEchoBreaker;
     readonly eventExecutionState: SchedulerEventExecutionState;
     readonly eventQueue: QueuedEvent[];
     readonly eventQueueState: SchedulerEventQueueState;
@@ -637,6 +638,7 @@ export class Scheduler {
       get dependencyUpdateState() {
         return outerThis.#dependencyUpdateState;
       },
+      echoBreaker: this.#echoBreaker,
       get eventExecutionState() {
         return outerThis.#eventExecutionState;
       },
@@ -958,7 +960,10 @@ export class Scheduler {
   ): void {
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
+    // The node record outlives the registration, so its echo gate would
+    // otherwise defer a later registration of the same action.
     this.#echoBreaker.forget(this.#getActionId(action));
+    this.#gates.clearEchoBackoff(action);
     for (const observer of [...this.#unsubscribeObservers]) observer(action);
   }
 
@@ -3468,12 +3473,12 @@ export class Scheduler {
 
   /**
    * The remote-echo breaker's visible counts
-   * (docs/plans/scheduler-remote-echo-breaker.md §3): pairs currently backing
-   * off, cumulative trips, and cumulative echo cycles. All zero unless the
-   * `remoteEchoBreaker` flag is on.
+   * (docs/plans/scheduler-remote-echo-breaker.md §3): pairs whose backoff is in
+   * force now, pairs that have tripped, and echo cycles counted. All zero
+   * unless the `remoteEchoBreaker` flag is on.
    */
   getEchoBreakerStats(): EchoBreakerStats {
-    return this.#echoBreaker.stats();
+    return this.#echoBreaker.stats(performance.now());
   }
 
   #createGraphSnapshotState(): SchedulerGraphSnapshotState {

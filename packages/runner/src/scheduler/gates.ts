@@ -407,10 +407,11 @@ export class SchedulerGates {
    * Release the freshness gates on `action` for a retry the scheduler owes
    * (`MarkInvalidOptions.retry`): an armed debounce readiness and throttle
    * readiness are cleared and the wake recomputed, so the retry is eligible
-   * in the pass queued for it. The convergence backoff (§7.7) stays — it
-   * bounds a non-settling graph, and a retry inside one waits its turn like
-   * every other run. Further invalidations preserve this release until the
-   * owed run starts. The policies apply again to invalidations after that.
+   * in the pass queued for it. The convergence backoff (§7.7) and the
+   * remote-echo backoff stay — each bounds a loop, and a retry inside one
+   * waits its turn like every other run. Further invalidations preserve this
+   * release until the owed run starts. The policies apply again to
+   * invalidations after that.
    */
   releaseForRetry(action: Action): void {
     const gate = this.#gate(action);
@@ -440,12 +441,14 @@ export class SchedulerGates {
    * like the other gates and armed through the single wake timer, so a
    * tripped action is skipped as a settle seed until the deadline and then
    * runs once. Raises an existing deadline rather than lowering it, so a
-   * fresh trip cannot shorten a longer backoff already in place.
+   * fresh trip cannot shorten a longer backoff already in place, and arms the
+   * wake for the deadline that stands.
    */
   setEchoBackoff(action: Action, until: number): void {
     const gate = this.#mutableGate(action);
-    gate.echoBackoffUntil = Math.max(gate.echoBackoffUntil ?? 0, until);
-    this.scheduleWake(until);
+    const deadline = Math.max(gate.echoBackoffUntil ?? 0, until);
+    gate.echoBackoffUntil = deadline;
+    this.scheduleWake(deadline);
   }
 
   /**

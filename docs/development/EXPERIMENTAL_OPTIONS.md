@@ -800,8 +800,10 @@ holds the measurements and the conditions for revisiting.
   cleanly, so the reactive retry budget and committed-write backpressure never
   see it. Under this flag the scheduler counts the successful re-runs per
   `(action, document)` pair and, once they sustain, defers the action's
-  re-runs with capped exponential backoff, logs one counted line per trip, and
-  exposes `scheduler.getEchoBreakerStats()`. It is trigger-independent: it
+  re-runs with capped exponential backoff renewed on every further echo, so a
+  continuing loop re-runs at most once per backoff. It logs one counted line
+  per trip and exposes `scheduler.getEchoBreakerStats()`. A run that leaves the
+  document unchanged clears the pair. It is trigger-independent: it
   bounds the loop whatever made the two sides disagree, the guardrail Topic 911
   waits for and the first of Topic 913's three.
 - **Behavior and design.**
@@ -812,17 +814,21 @@ holds the measurements and the conditions for revisiting.
 - **Current default and planned end state.** Off by default: a new guardrail
   that changes write cadence under a loop, enabled deliberately for dogfooding
   on a dev space before any default-on decision. The thresholds
-  (`ECHO_WINDOW_MS`, `ECHO_TRIP_THRESHOLD`, the backoff bounds in
-  `packages/runner/src/scheduler/constants.ts`) await tuning against the
-  per-space rate signal of Topic 913. The end state is to fold the breaker into
-  base scheduler semantics and delete the flag once the thresholds have soaked.
+  (`ECHO_WINDOW_MS`, `ECHO_TRIP_THRESHOLD`, the backoff bounds, and
+  `ECHO_QUIET_RESET_MS` in `packages/runner/src/scheduler/constants.ts`) await
+  tuning against the per-space rate signal of Topic 913. The end state is to
+  fold the breaker into base scheduler semantics and delete the flag once the
+  thresholds have soaked.
 - **Status on 2026-10-08.** Implemented behind the flag; detection hooked at
   the reactive commit success path (`scheduler/run.ts`), backoff through the
   existing gate primitive (`scheduler/gates.ts`, the `echoBackoffUntil` field).
-  The breaker's threshold, reset, backoff escalation, and bounded table are
-  pinned by `packages/runner/test/scheduler-remote-echo-breaker.test.ts`, which
-  also drives a two-session loop over a shared emulated server and a legitimate
-  alternating edit that does not trip.
+  The classifier, the threshold, the renewal and reset rules, and the bounded
+  table are pinned by
+  `packages/runner/test/scheduler-remote-echo-breaker.test.ts`, which also
+  drives a two-session loop over a shared emulated server: the trip, the
+  sustained one-re-run-per-backoff bound, the reset once the sessions agree, a
+  legitimate re-derivation that does not trip, and a re-registration that does
+  not inherit an old backoff.
 - **Path to removal.** Tune the thresholds from live rate data, soak at a
   default-on posture, then make the breaker unconditional in
   `#createActionRunState`, remove the env mapping, the runtime option and its

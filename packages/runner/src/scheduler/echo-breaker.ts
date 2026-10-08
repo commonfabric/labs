@@ -1,16 +1,18 @@
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 
-import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
+import { entityKey } from "./keys.ts";
 import type { ReactivityLog } from "./types.ts";
 import {
   ECHO_BACKOFF_BASE_MS,
   ECHO_BACKOFF_MAX_MS,
+  ECHO_QUIET_RESET_MS,
   ECHO_TRIP_THRESHOLD,
   ECHO_WINDOW_MS,
   MAX_ECHO_PAIRS,
@@ -22,33 +24,38 @@ const logger = getLogger("scheduler", {
 });
 
 /**
- * One run of a self-referential computation, classified for the breaker: the
- * document the run both read and wrote and was triggered by, a label for the
- * log line, and whether the written value DIFFERED from the value the document
- * held before this run (an echo step) or converged on it (a reset).
+ * One run of a self-referential computation, classified for the breaker: a
+ * document the run read and was triggered by, and whether the run changed it
+ * (an echo step) or left it as it was (a convergence step).
  */
 export interface EchoStep {
-  /** Pair key within the breaker: resolved scope instance plus document id. */
+  /**
+   * The document's complete identity, `space/scope instance/id` — the
+   * scheduler's {@link entityKey} — which keys the breaker's pair and names
+   * the document in the log line.
+   */
   readonly docKey: string;
-  /** `space/id`, for the loud line. */
-  readonly docLabel: string;
-  /** True when the write overwrote a differing value; false on convergence. */
+
+  /** True when the run overwrote a differing value; false on convergence. */
   readonly changed: boolean;
 }
 
 /** A tripped breaker's visible counts (the health route / client summary). */
 export interface EchoBreakerStats {
-  /** Pairs currently in backoff. */
+  /** Pairs whose backoff is in force right now. */
   readonly active: number;
-  /** Trips since construction, escalations included. */
+
+  /** Pairs that have entered the tripped state since construction. */
   readonly trips: number;
-  /** Echo cycles counted since construction. */
+
+  /** Echo cycles counted since construction, renewals included. */
   readonly cyclesObserved: number;
 }
 
 /**
- * The delay a trip at `streak` (1-based) backs off to: capped exponential
- * growth from {@link ECHO_BACKOFF_BASE_MS} to {@link ECHO_BACKOFF_MAX_MS}.
+ * The delay a tripped pair's `streak`th consecutive echo (1-based) backs off
+ * to: capped exponential growth from {@link ECHO_BACKOFF_BASE_MS} to
+ * {@link ECHO_BACKOFF_MAX_MS}.
  */
 export function echoBackoffDelayMs(streak: number): number {
   const exponent = Math.max(0, streak - 1);
@@ -56,72 +63,82 @@ export function echoBackoffDelayMs(streak: number): number {
 }
 
 /**
- * Classifies a reactive run's committed effect as echo steps
- * (docs/plans/scheduler-remote-echo-breaker.md §1). A document is an echo step
- * for this run when it is in the run's write set, in the run's read set (the
- * self-referential shape — the diff-base read satisfies this), and among the
- * addresses that triggered the run (`invalidCauses` — the run ran BECAUSE this
- * document changed). The step's `changed` is true when the written value
- * differs from the value the document held before the write, aggregated over
- * every path written under the document: the loop overwrites a foreign value,
- * while a convergence writes an equal one.
+ * Classifies a reactive run as echo and convergence steps
+ * (docs/plans/scheduler-remote-echo-breaker.md §1). The candidates are the
+ * documents among the addresses that triggered the run (`invalidCauses`) that
+ * the run also read — the self-referential shape, which the write path's
+ * diff-base read satisfies. A candidate the run changed is an echo step; one
+ * it did not change is a convergence step. Storage drops a write of an equal
+ * value before it reaches the write details, so a candidate with no changed
+ * write detail is a convergence whether the run wrote the same value again or
+ * did not write it at all.
+ *
+ * Every address is compared by its complete identity — space, scope instance,
+ * and id — resolved against `identity`, the one identity the transaction
+ * serves: the run's demanded instance on a serving runtime, the runtime's own
+ * session everywhere else. Write details name a scope but not its instance,
+ * so they resolve through `identity` too.
  *
  * The own-commit-source skip (`invalidation.ts`) has already removed a run
- * triggered by the echo of its OWN commit, so a cause that reaches here is a
- * foreign writer — exactly the loop to bound.
+ * triggered by the echo of its OWN commit, so a cause that reaches here is
+ * another writer.
  */
 export function computeEchoSteps(
-  tx: IExtendedStorageTransaction,
+  tx: Pick<IExtendedStorageTransaction, "getWriteDetails">,
   log: ReactivityLog,
   invalidCauses: readonly IMemorySpaceAddress[] | undefined,
+  identity: ScopeKeyIdentity,
 ): EchoStep[] {
-  if (log.writes.length === 0 || invalidCauses === undefined) return [];
-  const causeIds = new Set<string>();
-  for (const cause of invalidCauses) causeIds.add(cause.id);
-  if (causeIds.size === 0) return [];
+  if (invalidCauses === undefined || invalidCauses.length === 0) return [];
+  const causeKeys = new Set<string>();
+  for (const cause of invalidCauses) {
+    causeKeys.add(entityKey(cause, identity));
+  }
 
-  const readIds = new Set<string>();
-  for (const read of log.reads) readIds.add(read.id);
-  for (const read of log.shallowReads) readIds.add(read.id);
+  const candidates = new Set<string>();
+  for (const read of [...log.reads, ...log.shallowReads]) {
+    const key = entityKey(read, identity);
+    if (causeKeys.has(key)) candidates.add(key);
+  }
+  if (candidates.size === 0) return [];
 
-  // One entry per document the run wrote that is both self-read and a trigger;
-  // `changed` is the OR over its written paths, so any differing path makes the
-  // document an echo step and only an all-equal write is a convergence.
-  const byDoc = new Map<string, { label: string; changed: boolean }>();
-  const spaces = new Set(log.writes.map((write) => write.space));
-  for (const space of spaces) {
-    const details = tx.getWriteDetails?.(space);
-    if (details === undefined) continue;
-    for (const detail of details) {
-      const address = detail.address;
-      if (!causeIds.has(address.id) || !readIds.has(address.id)) continue;
-      const instance = address.scopeKey ?? normalizeCellScope(address.scope);
-      const docKey = `${instance}\u0000${address.id}`;
-      const changed = !valueEqual(
-        detail.previousValue as FabricValue,
-        detail.value as FabricValue,
-      );
-      const existing = byDoc.get(docKey);
-      if (existing === undefined) {
-        byDoc.set(docKey, { label: `${space}/${address.id}`, changed });
-      } else if (changed) {
-        existing.changed = true;
+  const changed = new Set<string>();
+  for (const space of new Set(log.writes.map((write) => write.space))) {
+    for (const detail of tx.getWriteDetails?.(space) ?? []) {
+      const key = entityKey(detail.address, identity);
+      if (
+        candidates.has(key) &&
+        !valueEqual(
+          detail.previousValue as FabricValue,
+          detail.value as FabricValue,
+        )
+      ) {
+        changed.add(key);
       }
     }
   }
 
-  return [...byDoc].map(([docKey, { label, changed }]) => ({
+  return [...candidates].map((docKey) => ({
     docKey,
-    docLabel: label,
-    changed,
+    changed: changed.has(docKey),
   }));
 }
 
 interface EchoPairState {
+  /** When the current counting window opened. */
   windowStart: number;
+
+  /** Echo cycles in the current window, before the pair trips. */
   cycles: number;
-  tripped: boolean;
+
+  /** Consecutive echoes since the pair tripped; 0 while untripped. */
   backoffStreak: number;
+
+  /** When the pair's most recent echo was counted. */
+  lastEchoAt: number;
+
+  /** When the pair's backoff ends; 0 when none was set. */
+  deadline: number;
 }
 
 /** Separates the action id from the document key in a pair key. */
@@ -135,37 +152,27 @@ const PAIR_SEPARATOR = "\u001F";
  * retry budget and committed-write backpressure never see it; this counts the
  * successful re-runs instead and backs the action off once they sustain.
  *
- * State is per `(action, document)` pair: the breaker trips a pair after
+ * State is per `(action, document)` pair. An untripped pair trips after
  * {@link ECHO_TRIP_THRESHOLD} echo cycles within {@link ECHO_WINDOW_MS}, and a
- * convergence step or a lapsed window resets it. The table is bounded
+ * convergence step or a lapsed window resets its count. A tripped pair renews
+ * its backoff one step longer on every further echo, so the rate bound holds
+ * at the cap, and is cleared by a convergence step or by
+ * {@link ECHO_QUIET_RESET_MS} without an echo. The table is bounded
  * ({@link MAX_ECHO_PAIRS}); a lost entry costs only a forgotten count.
  */
 export class RemoteEchoBreaker {
-  #active = 0;
   #trips = 0;
   #cyclesObserved = 0;
 
-  readonly #pairs: BoundedKeyMap<string, EchoPairState>;
-
-  /** Constructs a breaker holding at most {@link MAX_ECHO_PAIRS} pair states. */
-  constructor() {
-    this.#pairs = new BoundedKeyMap<string, EchoPairState>(MAX_ECHO_PAIRS, {
-      onEvict: (_key, state) => {
-        if (state.tripped) this.#active--;
-      },
-    });
-  }
+  readonly #pairs = new BoundedKeyMap<string, EchoPairState>(MAX_ECHO_PAIRS);
 
   //
   // Instance members
   //
 
-  /**
-   * A test's view of the breaker's internals: the current state of a pair, and
-   * the live count of pairs in backoff.
-   */
+  /** A test's view of the breaker's pair table. */
   get accessForTestingOnly(): {
-    pairCount: number;
+    readonly pairCount: number;
     pairState(actionId: string, docKey: string): EchoPairState | undefined;
   } {
     // deno-lint-ignore no-this-alias
@@ -180,96 +187,106 @@ export class RemoteEchoBreaker {
   }
 
   /**
-   * Records a committed run's echo steps and returns the action's echo-backoff
-   * deadline to apply: a positive instant to defer re-runs until (a trip), `0`
-   * to clear the deferral (a convergence that left no pair tripped), or
-   * `undefined` to leave the gate as it is. `now` is the caller's clock, so the
-   * breaker holds no timer of its own.
+   * Records a committed run's steps and returns the action's echo-backoff
+   * deadline to apply: a positive instant to defer re-runs until (a trip or a
+   * renewal), `0` to lift the deferral (a convergence that left no other pair
+   * of the action in backoff), or `undefined` to leave the gate as it is.
+   * `now` is the caller's clock, so the breaker holds no timer of its own.
    */
   observe(
     actionId: string,
     steps: readonly EchoStep[],
     now: number,
   ): number | undefined {
-    let maxTripDeadline: number | undefined;
+    let maxDeadline: number | undefined;
     let clearedTripped = false;
 
     for (const step of steps) {
       const key = `${actionId}${PAIR_SEPARATOR}${step.docKey}`;
+      const existing = this.#pairs.get(key);
       if (!step.changed) {
-        const state = this.#pairs.get(key);
-        if (state?.tripped) {
-          this.#active--;
-          clearedTripped = true;
-        }
+        if (existing === undefined) continue;
+        if (existing.backoffStreak > 0) clearedTripped = true;
         this.#pairs.delete(key);
         continue;
       }
 
       this.#cyclesObserved++;
-      const state = this.#pairs.get(key) ??
-        { windowStart: now, cycles: 0, tripped: false, backoffStreak: 0 };
-      if (now - state.windowStart > ECHO_WINDOW_MS) {
-        state.windowStart = now;
-        state.cycles = 0;
-      }
-      state.cycles++;
+      // A tripped pair that has been quiet longer than any backoff is a loop
+      // that ended without a convergence step reaching it; start it afresh.
+      const stale = existing !== undefined && existing.backoffStreak > 0 &&
+        now - existing.lastEchoAt > ECHO_QUIET_RESET_MS;
+      const state = existing !== undefined && !stale ? existing : {
+        windowStart: now,
+        cycles: 0,
+        backoffStreak: 0,
+        lastEchoAt: now,
+        deadline: 0,
+      };
+      state.lastEchoAt = now;
 
-      if (state.cycles >= ECHO_TRIP_THRESHOLD) {
-        if (!state.tripped) {
-          state.tripped = true;
-          this.#active++;
-        }
+      if (state.backoffStreak > 0) {
         state.backoffStreak++;
-        this.#trips++;
-        const delay = echoBackoffDelayMs(state.backoffStreak);
-        const deadline = now + delay;
-        maxTripDeadline = maxTripDeadline === undefined
-          ? deadline
-          : Math.max(maxTripDeadline, deadline);
-        // A fresh window for the next escalation, so a tripped pair needs
-        // another full threshold of echoes before it backs off further.
-        state.windowStart = now;
-        state.cycles = 0;
-        logger.error("remote-echo-breaker-tripped", () => [
-          `action ${actionId} rewrote document ${step.docLabel} ` +
-          `${ECHO_TRIP_THRESHOLD} times in ${ECHO_WINDOW_MS}ms against a ` +
-          `remote writer; backing off to ${delay}ms`,
-        ]);
+        state.deadline = now + echoBackoffDelayMs(state.backoffStreak);
+      } else {
+        if (now - state.windowStart > ECHO_WINDOW_MS) {
+          state.windowStart = now;
+          state.cycles = 0;
+        }
+        state.cycles++;
+        if (state.cycles >= ECHO_TRIP_THRESHOLD) {
+          state.backoffStreak = 1;
+          const delay = echoBackoffDelayMs(1);
+          state.deadline = now + delay;
+          this.#trips++;
+          logger.error("remote-echo-breaker-tripped", () => [
+            `action ${actionId} rewrote document ${step.docKey} ` +
+            `${ECHO_TRIP_THRESHOLD} times within ${ECHO_WINDOW_MS}ms against ` +
+            `a remote writer; backing off its re-runs, starting at ${delay}ms`,
+          ]);
+        }
+      }
+      if (state.backoffStreak > 0) {
+        maxDeadline = Math.max(maxDeadline ?? 0, state.deadline);
       }
       this.#pairs.set(key, state);
     }
 
-    if (maxTripDeadline !== undefined) return maxTripDeadline;
-    if (clearedTripped && !this.#hasTrippedPair(actionId)) return 0;
+    if (maxDeadline !== undefined) return maxDeadline;
+    if (clearedTripped && !this.#hasPairInBackoff(actionId, now)) return 0;
     return undefined;
   }
 
   /** Drops every pair for a removed or retired action. */
   forget(actionId: string): void {
     const prefix = `${actionId}${PAIR_SEPARATOR}`;
-    const stale: string[] = [];
-    for (const [key, state] of this.#pairs.entries()) {
-      if (!key.startsWith(prefix)) continue;
-      stale.push(key);
-      if (state.tripped) this.#active--;
-    }
+    const stale = [...this.#pairs.keys()].filter((key) =>
+      key.startsWith(prefix)
+    );
     for (const key of stale) this.#pairs.delete(key);
   }
 
-  /** The counts a tripped breaker is visible through. */
-  stats(): EchoBreakerStats {
+  /**
+   * The counts a tripped breaker is visible through. `active` counts the pairs
+   * whose backoff is still in force at `now`, so a loop that ended without a
+   * convergence step stops counting once its last deadline passes.
+   */
+  stats(now: number): EchoBreakerStats {
+    let active = 0;
+    for (const state of this.#pairs.values()) {
+      if (state.deadline > now) active++;
+    }
     return {
-      active: this.#active,
+      active,
       trips: this.#trips,
       cyclesObserved: this.#cyclesObserved,
     };
   }
 
-  #hasTrippedPair(actionId: string): boolean {
+  #hasPairInBackoff(actionId: string, now: number): boolean {
     const prefix = `${actionId}${PAIR_SEPARATOR}`;
     for (const [key, state] of this.#pairs.entries()) {
-      if (key.startsWith(prefix) && state.tripped) return true;
+      if (key.startsWith(prefix) && state.deadline > now) return true;
     }
     return false;
   }

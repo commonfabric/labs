@@ -1204,7 +1204,12 @@ function finalizeReactiveActionCommit(
       if (validateLocalReadBasis(args.tx) !== undefined) return;
       warnOnWriteSurfaceViolations(state, args, log);
       if (state.observeRemoteEcho !== undefined) {
-        echoSteps = computeEchoSteps(args.tx, log, args.invalidCauses);
+        echoSteps = computeEchoSteps(
+          args.tx,
+          log,
+          args.invalidCauses,
+          args.tx.tx.scopeKeyIdentity ?? state.runtime.scopeKeyIdentity,
+        );
       }
       hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
       if (args.fanOutRun !== undefined) {

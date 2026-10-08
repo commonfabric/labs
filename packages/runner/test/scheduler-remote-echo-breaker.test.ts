@@ -3,9 +3,12 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { type ScopeKeyIdentity, toDocumentPath } from "@commonfabric/memory/v2";
+import type { FabricValue } from "@commonfabric/data-model";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import {
+  computeEchoSteps,
   echoBackoffDelayMs,
   type EchoStep,
   RemoteEchoBreaker,
@@ -13,62 +16,74 @@ import {
 import {
   ECHO_BACKOFF_BASE_MS,
   ECHO_BACKOFF_MAX_MS,
+  ECHO_QUIET_RESET_MS,
   ECHO_TRIP_THRESHOLD,
   ECHO_WINDOW_MS,
   MAX_ECHO_PAIRS,
 } from "../src/scheduler/constants.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { Action } from "../src/scheduler/types.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+  TransactionWriteDetail,
+} from "../src/storage/interface.ts";
+import type { Action, ReactivityLog } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const ACTION = "action-1";
 
-// Shared fixtures for the two-session loop (below). The signer needs a
-// top-level await, so it lives at module scope as the sibling suites do.
-const signer = await Identity.fromPassphrase("remote-echo two-session");
-const space = signer.did();
-const DOC = "echo-document";
-// A schema that accepts any value, so the looping cell can hold a scalar.
-// deno-lint-ignore no-explicit-any
-const anySchema = {} as any;
-
-/** An echo step (a differing re-write) for the given document key. */
+/** An echo step (a run that changed the document) for `docKey`. */
 function echo(docKey: string): EchoStep {
-  return { docKey, docLabel: `space/${docKey}`, changed: true };
+  return { docKey, changed: true };
 }
 
-/** A convergence step (an equal re-write) for the given document key. */
+/** A convergence step (a run that left the document as it was) for `docKey`. */
 function converge(docKey: string): EchoStep {
-  return { docKey, docLabel: `space/${docKey}`, changed: false };
+  return { docKey, changed: false };
 }
 
 /**
- * Drives `count` echo steps for one document at `start`, spaced `stepMs` apart,
- * and returns the deadline each `observe` returned. One step per call so each
- * counts as one cycle.
+ * Feeds `count` echo steps for one document starting at `start`, spaced
+ * `stepMs` apart, one step per call so each counts as one cycle, and returns
+ * what each call returned.
  */
-function driveEchoes(
+function feedEchoes(
   breaker: RemoteEchoBreaker,
   docKey: string,
   count: number,
   start: number,
   stepMs: number,
 ): (number | undefined)[] {
-  const deadlines: (number | undefined)[] = [];
+  const verdicts: (number | undefined)[] = [];
   for (let i = 0; i < count; i++) {
-    deadlines.push(breaker.observe(ACTION, [echo(docKey)], start + i * stepMs));
+    verdicts.push(breaker.observe(ACTION, [echo(docKey)], start + i * stepMs));
   }
-  return deadlines;
+  return verdicts;
 }
+
+/** Trips the pair for `docKey` at instants 0 through threshold - 1. */
+function trip(breaker: RemoteEchoBreaker, docKey: string): number {
+  const verdicts = feedEchoes(breaker, docKey, ECHO_TRIP_THRESHOLD, 0, 1);
+  return verdicts[verdicts.length - 1]!;
+}
+
+// The two-session suites share one signer, space, and document. The signer
+// needs a top-level await, so these live at module scope.
+const signer = await Identity.fromPassphrase("remote-echo two-session");
+const space = signer.did();
+const DOC = "echo-document";
+// A schema that accepts any value, so a looping cell can hold a scalar.
+// deno-lint-ignore no-explicit-any
+const anySchema = {} as any;
 
 describe("scheduler-remote-echo-breaker", () => {
   describe("echoBackoffDelayMs()", () => {
-    it("returns the base delay for the first trip", () => {
+    it("returns the base delay for the first step", () => {
       expect(echoBackoffDelayMs(1)).toBe(ECHO_BACKOFF_BASE_MS);
     });
 
-    it("doubles the delay on each further trip", () => {
+    it("doubles the delay on each further step", () => {
       expect(echoBackoffDelayMs(2)).toBe(ECHO_BACKOFF_BASE_MS * 2);
       expect(echoBackoffDelayMs(3)).toBe(ECHO_BACKOFF_BASE_MS * 4);
     });
@@ -77,8 +92,140 @@ describe("scheduler-remote-echo-breaker", () => {
       expect(echoBackoffDelayMs(100)).toBe(ECHO_BACKOFF_MAX_MS);
     });
 
-    it("treats a non-positive streak as the base delay", () => {
+    it("treats a non-positive step as the first", () => {
       expect(echoBackoffDelayMs(0)).toBe(ECHO_BACKOFF_BASE_MS);
+    });
+  });
+
+  describe("computeEchoSteps()", () => {
+    const alpha = "did:key:alpha" as IMemorySpaceAddress["space"];
+    const beta = "did:key:beta" as IMemorySpaceAddress["space"];
+    const session1: ScopeKeyIdentity = {
+      principal: "did:key:p",
+      sessionId: "s1",
+    };
+    const session2: ScopeKeyIdentity = {
+      principal: "did:key:p",
+      sessionId: "s2",
+    };
+
+    function address(
+      inSpace: IMemorySpaceAddress["space"],
+      id: string,
+      scope: "space" | "session" = "space",
+    ): IMemorySpaceAddress {
+      return {
+        space: inSpace,
+        id: id as IMemorySpaceAddress["id"],
+        scope,
+        path: [],
+      };
+    }
+
+    /** A write detail as storage records one: a scope name, no instance. */
+    function written(
+      at: IMemorySpaceAddress,
+      previousValue: FabricValue,
+      value: FabricValue,
+    ): TransactionWriteDetail {
+      return {
+        address: {
+          space: at.space,
+          id: at.id,
+          scope: at.scope,
+          path: toDocumentPath(["value"]),
+        },
+        previousValue,
+        value,
+      };
+    }
+
+    /** The one transaction surface the classifier reads. */
+    function tx(
+      details: readonly TransactionWriteDetail[],
+    ): Pick<IExtendedStorageTransaction, "getWriteDetails"> {
+      return {
+        getWriteDetails: (inSpace) =>
+          details.filter((detail) => detail.address.space === inSpace),
+      };
+    }
+
+    function log(
+      reads: readonly IMemorySpaceAddress[],
+      writes: readonly IMemorySpaceAddress[],
+    ): ReactivityLog {
+      return { reads: [...reads], shallowReads: [], writes: [...writes] };
+    }
+
+    it("returns an echo step for a document the run read, was triggered by, and changed", () => {
+      const doc = address(alpha, "of:d");
+      const steps = computeEchoSteps(
+        tx([written(doc, "B", "A")]),
+        log([doc], [doc]),
+        [doc],
+        session1,
+      );
+      expect(steps).toEqual([{ docKey: `${alpha}/space/of:d`, changed: true }]);
+    });
+
+    it("returns a convergence step when the run wrote nothing to the document", () => {
+      // Storage drops a write of an equal value before it reaches the write
+      // details, so an agreeing run leaves no write behind at all.
+      const doc = address(alpha, "of:d");
+      const steps = computeEchoSteps(tx([]), log([doc], []), [doc], session1);
+      expect(steps).toEqual([{
+        docKey: `${alpha}/space/of:d`,
+        changed: false,
+      }]);
+    });
+
+    it("returns no echo step for a written document that did not trigger the run", () => {
+      // The input is read and is the trigger, so it is a candidate, and an
+      // unchanged one; the output is neither, so it is no candidate at all.
+
+      const input = address(alpha, "of:input");
+      const output = address(alpha, "of:output");
+      const steps = computeEchoSteps(
+        tx([written(output, "x!", "y!")]),
+        log([input], [output]),
+        [input],
+        session1,
+      );
+      expect(steps).toEqual([{
+        docKey: `${alpha}/space/of:input`,
+        changed: false,
+      }]);
+    });
+
+    it("does not match a trigger in another space that has the same id", () => {
+      const inAlpha = address(alpha, "of:d");
+      const inBeta = address(beta, "of:d");
+      const steps = computeEchoSteps(
+        tx([written(inBeta, "B", "A")]),
+        log([inBeta], [inBeta]),
+        [inAlpha],
+        session1,
+      );
+      expect(steps).toEqual([]);
+    });
+
+    it("keys two session instances of one document apart", () => {
+      const doc = address(alpha, "of:d", "session");
+      const [first] = computeEchoSteps(
+        tx([written(doc, "B", "A")]),
+        log([doc], [doc]),
+        [doc],
+        session1,
+      );
+      const [second] = computeEchoSteps(
+        tx([written(doc, "B", "A")]),
+        log([doc], [doc]),
+        [doc],
+        session2,
+      );
+      expect(first.changed).toBe(true);
+      expect(second.changed).toBe(true);
+      expect(first.docKey).not.toBe(second.docKey);
     });
   });
 
@@ -87,144 +234,159 @@ describe("scheduler-remote-echo-breaker", () => {
       describe("observe()", () => {
         it("returns no deadline below the trip threshold", () => {
           const breaker = new RemoteEchoBreaker();
-          const deadlines = driveEchoes(
+          const verdicts = feedEchoes(
             breaker,
             "d",
             ECHO_TRIP_THRESHOLD - 1,
             0,
             1,
           );
-          expect(deadlines.every((d) => d === undefined)).toBe(true);
-          expect(breaker.stats().trips).toBe(0);
+          expect(verdicts.every((verdict) => verdict === undefined)).toBe(true);
+          expect(breaker.stats(0).trips).toBe(0);
         });
 
         it("trips at the threshold and returns a backoff deadline", () => {
           const breaker = new RemoteEchoBreaker();
-          const deadlines = driveEchoes(
-            breaker,
-            "d",
-            ECHO_TRIP_THRESHOLD,
-            0,
-            1,
-          );
-          const trip = deadlines[ECHO_TRIP_THRESHOLD - 1];
           const tripTime = ECHO_TRIP_THRESHOLD - 1;
-          expect(trip).toBe(tripTime + ECHO_BACKOFF_BASE_MS);
-          expect(breaker.stats().trips).toBe(1);
-          expect(breaker.stats().active).toBe(1);
-          expect(breaker.stats().cyclesObserved).toBe(ECHO_TRIP_THRESHOLD);
+          expect(trip(breaker, "d")).toBe(tripTime + ECHO_BACKOFF_BASE_MS);
+          expect(breaker.stats(tripTime)).toEqual({
+            active: 1,
+            trips: 1,
+            cyclesObserved: ECHO_TRIP_THRESHOLD,
+          });
         });
 
-        it("escalates the backoff on a second trip of the same pair", () => {
+        it("renews the backoff one step longer on every echo after a trip", () => {
           const breaker = new RemoteEchoBreaker();
-          driveEchoes(breaker, "d", ECHO_TRIP_THRESHOLD, 0, 1);
-          // A fresh threshold of echoes after the trip escalates the streak,
-          // so the second backoff is double the first.
-          const second = driveEchoes(
-            breaker,
-            "d",
-            ECHO_TRIP_THRESHOLD,
-            1000,
-            1,
+          trip(breaker, "d");
+          // Each further echo backs off again at once, without a fresh
+          // threshold of echoes, so the loop never runs a burst.
+          expect(breaker.observe(ACTION, [echo("d")], 1000)).toBe(
+            1000 + ECHO_BACKOFF_BASE_MS * 2,
           );
-          const trip = second[ECHO_TRIP_THRESHOLD - 1];
-          const tripTime = 1000 + (ECHO_TRIP_THRESHOLD - 1);
-          expect(trip).toBe(tripTime + ECHO_BACKOFF_BASE_MS * 2);
-          expect(breaker.stats().trips).toBe(2);
-          // Still one pair, backing off harder rather than a second pair.
-          expect(breaker.stats().active).toBe(1);
+          expect(breaker.observe(ACTION, [echo("d")], 2000)).toBe(
+            2000 + ECHO_BACKOFF_BASE_MS * 4,
+          );
+          expect(breaker.stats(2000).trips).toBe(1);
         });
 
-        it("resets the count and clears the backoff on a convergence step", () => {
+        it("holds the renewal at the cap", () => {
           const breaker = new RemoteEchoBreaker();
-          driveEchoes(breaker, "d", ECHO_TRIP_THRESHOLD, 0, 1);
-          expect(breaker.stats().active).toBe(1);
-
-          // The loop ends: the action writes an equal value.
-          const cleared = breaker.observe(ACTION, [converge("d")], 100);
-          expect(cleared).toBe(0);
-          expect(breaker.stats().active).toBe(0);
-          expect(
-            breaker.accessForTestingOnly.pairState(ACTION, "d"),
-          ).toBeUndefined();
+          trip(breaker, "d");
+          let verdict: number | undefined;
+          for (let i = 1; i <= 20; i++) {
+            verdict = breaker.observe(ACTION, [echo("d")], i * 1000);
+          }
+          expect(verdict).toBe(20_000 + ECHO_BACKOFF_MAX_MS);
         });
 
         it("does not trip when echoes are spread beyond the window", () => {
           const breaker = new RemoteEchoBreaker();
-          // Each echo lands more than a window after the last, so the window
-          // resets every time and the count never reaches the threshold.
-          const deadlines = driveEchoes(
+          const verdicts = feedEchoes(
             breaker,
             "d",
             ECHO_TRIP_THRESHOLD * 2,
             0,
             ECHO_WINDOW_MS + 1,
           );
-          expect(deadlines.every((d) => d === undefined)).toBe(true);
-          expect(breaker.stats().trips).toBe(0);
+          expect(verdicts.every((verdict) => verdict === undefined)).toBe(true);
+          expect(breaker.stats(0).trips).toBe(0);
+        });
+
+        it("keeps a tripped pair tripped across a lapsed window", () => {
+          const breaker = new RemoteEchoBreaker();
+          trip(breaker, "d");
+          // Longer than the window but shorter than the quiet reset: the echo
+          // renews the backoff rather than starting the count again.
+          const later = ECHO_WINDOW_MS * 2;
+          expect(breaker.observe(ACTION, [echo("d")], later)).toBe(
+            later + ECHO_BACKOFF_BASE_MS * 2,
+          );
+        });
+
+        it("starts a tripped pair afresh after a quiet stretch", () => {
+          const breaker = new RemoteEchoBreaker();
+          trip(breaker, "d");
+          const later = ECHO_TRIP_THRESHOLD + ECHO_QUIET_RESET_MS + 1;
+          expect(breaker.observe(ACTION, [echo("d")], later)).toBeUndefined();
+          expect(breaker.accessForTestingOnly.pairState(ACTION, "d"))
+            .toMatchObject({ backoffStreak: 0, cycles: 1 });
+        });
+
+        it("lifts the backoff on a convergence step", () => {
+          const breaker = new RemoteEchoBreaker();
+          trip(breaker, "d");
+          expect(breaker.observe(ACTION, [converge("d")], 100)).toBe(0);
+          expect(breaker.stats(100).active).toBe(0);
+          expect(breaker.accessForTestingOnly.pairState(ACTION, "d"))
+            .toBeUndefined();
+        });
+
+        it("keeps the backoff when another document of the action is still backing off", () => {
+          const breaker = new RemoteEchoBreaker();
+          trip(breaker, "a");
+          trip(breaker, "b");
+          expect(breaker.observe(ACTION, [converge("a")], 100))
+            .toBeUndefined();
+          expect(breaker.stats(100).active).toBe(1);
+        });
+
+        it("ignores a convergence step for a document it is not tracking", () => {
+          const breaker = new RemoteEchoBreaker();
+          expect(breaker.observe(ACTION, [converge("d")], 0)).toBeUndefined();
+          expect(breaker.accessForTestingOnly.pairCount).toBe(0);
         });
 
         it("counts each document independently", () => {
           const breaker = new RemoteEchoBreaker();
-          // `a` reaches the threshold; `b` stays one short, so only `a` trips.
-          driveEchoes(breaker, "a", ECHO_TRIP_THRESHOLD, 0, 1);
-          const bDeadlines = driveEchoes(
+          trip(breaker, "a");
+          const verdicts = feedEchoes(
             breaker,
             "b",
             ECHO_TRIP_THRESHOLD - 1,
             0,
             1,
           );
-          expect(bDeadlines.every((d) => d === undefined)).toBe(true);
-          expect(breaker.stats().trips).toBe(1);
-          expect(breaker.stats().active).toBe(1);
+          expect(verdicts.every((verdict) => verdict === undefined)).toBe(true);
+          expect(breaker.stats(0).trips).toBe(1);
         });
+      });
 
-        it("keeps the backoff when one of several tripped documents converges", () => {
+      describe("stats()", () => {
+        it("stops counting a pair as active once its deadline has passed", () => {
           const breaker = new RemoteEchoBreaker();
-          driveEchoes(breaker, "a", ECHO_TRIP_THRESHOLD, 0, 1);
-          driveEchoes(breaker, "b", ECHO_TRIP_THRESHOLD, 0, 1);
-          expect(breaker.stats().active).toBe(2);
-
-          // `a` converges while `b` is still tripped, so the action stays
-          // deferred: the verdict is "leave the gate", not "clear it".
-          const verdict = breaker.observe(ACTION, [converge("a")], 100);
-          expect(verdict).toBeUndefined();
-          expect(breaker.stats().active).toBe(1);
+          const deadline = trip(breaker, "d");
+          expect(breaker.stats(deadline - 1).active).toBe(1);
+          expect(breaker.stats(deadline).active).toBe(0);
+          expect(breaker.stats(deadline).trips).toBe(1);
         });
       });
 
       describe("forget()", () => {
-        it("drops a tripped pair and releases its active count", () => {
+        it("drops every pair of the action", () => {
           const breaker = new RemoteEchoBreaker();
-          driveEchoes(breaker, "d", ECHO_TRIP_THRESHOLD, 0, 1);
-          expect(breaker.stats().active).toBe(1);
-
+          trip(breaker, "a");
+          trip(breaker, "b");
           breaker.forget(ACTION);
-          expect(breaker.stats().active).toBe(0);
           expect(breaker.accessForTestingOnly.pairCount).toBe(0);
         });
 
         it("leaves another action's pairs in place", () => {
           const breaker = new RemoteEchoBreaker();
-          driveEchoes(breaker, "d", ECHO_TRIP_THRESHOLD, 0, 1);
+          trip(breaker, "d");
           for (let i = 0; i < ECHO_TRIP_THRESHOLD; i++) {
             breaker.observe("action-2", [echo("d")], i);
           }
-          expect(breaker.stats().active).toBe(2);
-
           breaker.forget(ACTION);
-          expect(breaker.stats().active).toBe(1);
-          expect(
-            breaker.accessForTestingOnly.pairState("action-2", "d"),
-          ).toBeDefined();
+          expect(breaker.accessForTestingOnly.pairState("action-2", "d"))
+            .toBeDefined();
+          expect(breaker.stats(ECHO_TRIP_THRESHOLD).active).toBe(1);
         });
       });
 
       describe("the bounded pair table", () => {
         it("evicts the oldest pair past the limit", () => {
           const breaker = new RemoteEchoBreaker();
-          // One echo each for more distinct documents than the table holds.
           for (let i = 0; i < MAX_ECHO_PAIRS + 50; i++) {
             breaker.observe(ACTION, [echo(`d-${i}`)], i);
           }
@@ -237,10 +399,10 @@ describe("scheduler-remote-echo-breaker", () => {
   describe("the two-session loop over a shared emulated server", () => {
     // Two runtimes share one emulated server and one space, with manual
     // fan-out so each round's cross-session delivery is an explicit flush
-    // rather than a timing race. `clock.settle()` drains each round's reactive
-    // work without moving logical time, so a tripped action's echo backoff —
-    // armed at a future instant — never elapses within the test: the loop
-    // stops writing the moment the breaker trips rather than merely slowing.
+    // rather than a timing race. `clock.settle()` drains a round's reactive
+    // work without moving logical time, so an echo backoff armed at a future
+    // instant holds for as long as the test does not advance the clock;
+    // `clock.tick()` advances it through the backoff deliberately.
 
     let server: MemoryV2Server.Server;
 
@@ -265,15 +427,51 @@ describe("scheduler-remote-echo-breaker", () => {
       return { storage, runtime };
     }
 
+    /** Commits `value` to `document` from `writer` and loads it on `reader`. */
+    async function seed(
+      writer: { storage: EmulatedStorageManager; runtime: Runtime },
+      reader: Runtime,
+      document: string,
+      value: unknown,
+    ): Promise<void> {
+      const tx = writer.runtime.edit();
+      writer.runtime.getCell(space, document, anySchema, tx).set(value);
+      await tx.commit({ holdSyncedUntilCovered: false }).verdict;
+      await writer.storage.synced();
+      const mirror = reader.getCell(space, document, anySchema);
+      await mirror.sync();
+      await mirror.pull();
+    }
+
     /**
-     * Runs the shared document through `rounds` cross-session exchanges: each
-     * round delivers the server's latest to both sessions and drains their
-     * reactions without moving logical time. Returns the server's commit
-     * sequence after each round.
+     * Subscribes an effect that reads the shared document and writes
+     * `tag.value` to it on every run — a derivation whose output is the
+     * document it reads. Two sessions with different tags never agree.
      */
-    async function drive(
-      rounds: number,
-    ): Promise<number[]> {
+    function subscribeTagWriter(
+      runtime: Runtime,
+      tag: { value: string },
+    ): Action {
+      const action: Action = (tx) => {
+        const cell = runtime.getCell<string>(space, DOC, anySchema);
+        cell.withTx(tx).get();
+        cell.withTx(tx).set(tag.value);
+      };
+      runtime.scheduler.subscribe(
+        action,
+        { reads: [], shallowReads: [], writes: [] },
+        { isEffect: true },
+      );
+      runtime.scheduler.queueExecution();
+      return action;
+    }
+
+    /**
+     * Runs `rounds` cross-session exchanges without moving logical time: each
+     * round delivers the server's latest to both sessions and drains their
+     * reactions. Returns the server's commit sequence after each round.
+     */
+    async function drive(rounds: number): Promise<number[]> {
       const engine = await server.engineForSpace(space);
       const sequence: number[] = [];
       for (let round = 0; round < rounds; round++) {
@@ -284,146 +482,157 @@ describe("scheduler-remote-echo-breaker", () => {
       return sequence;
     }
 
+    async function commitSequence(): Promise<number> {
+      return Engine.serverSeq(await server.engineForSpace(space));
+    }
+
+    function runCount(runtime: Runtime, action: Action): number {
+      return runtime.scheduler.getActionStats(action)?.runCount ?? 0;
+    }
+
+    function pairCount(runtime: Runtime): number {
+      return runtime.scheduler.accessForTestingOnly.echoBreaker
+        .accessForTestingOnly.pairCount;
+    }
+
+    async function dispose(
+      ...sessions: { storage: EmulatedStorageManager; runtime: Runtime }[]
+    ): Promise<void> {
+      for (const session of sessions) await session.runtime.dispose();
+      for (const session of sessions) await session.storage.close();
+    }
+
     it("trips the breaker and stops the loop when two sessions disagree", async () => {
-      // Session A writes "A" whenever it reads anything else; session B writes
-      // "B" the same way. Each reads the shared document (so a remote change
-      // re-triggers it) and overwrites the other's value — the self-referential
-      // echo loop the storm was.
       const a = connect(true);
       const b = connect(true);
       try {
-        const seed = a.runtime.edit();
-        a.runtime.getCell<string>(space, DOC, anySchema, seed).set("seed");
-        await seed.commit({ holdSyncedUntilCovered: false }).verdict;
-        await a.storage.synced();
-        const mirror = b.runtime.getCell<string>(space, DOC, anySchema);
-        await mirror.sync();
-        await mirror.pull();
-
-        const disagree = (runtime: Runtime, tag: string): Action => (tx) => {
-          const cell = runtime.getCell<string>(space, DOC, anySchema);
-          if (cell.withTx(tx).get() !== tag) cell.withTx(tx).set(tag);
-        };
-        const actionA = disagree(a.runtime, "A");
-        const actionB = disagree(b.runtime, "B");
-        a.runtime.scheduler.subscribe(
-          actionA,
-          { reads: [], shallowReads: [], writes: [] },
-          { isEffect: true },
-        );
-        b.runtime.scheduler.subscribe(
-          actionB,
-          { reads: [], shallowReads: [], writes: [] },
-          { isEffect: true },
-        );
-        a.runtime.scheduler.queueExecution();
-        b.runtime.scheduler.queueExecution();
+        await seed(a, b.runtime, DOC, "seed");
+        subscribeTagWriter(a.runtime, { value: "A" });
+        subscribeTagWriter(b.runtime, { value: "B" });
         await clock.settle();
 
-        // Enough rounds that each side passes the trip threshold with margin.
         const sequence = await drive(ECHO_TRIP_THRESHOLD * 3);
 
-        // The breaker tripped on both sides.
-        expect(a.runtime.scheduler.getEchoBreakerStats().trips)
-          .toBeGreaterThanOrEqual(1);
-        expect(b.runtime.scheduler.getEchoBreakerStats().trips)
-          .toBeGreaterThanOrEqual(1);
-
-        // The commit rate fell to zero: the last several rounds added no
-        // commits, where the unflagged loop would have added one per round.
+        expect(a.runtime.scheduler.getEchoBreakerStats().trips).toBe(1);
+        expect(b.runtime.scheduler.getEchoBreakerStats().trips).toBe(1);
+        // With logical time held, the last rounds added no commits, where the
+        // unflagged loop adds one per round.
         const tail = sequence.slice(-ECHO_TRIP_THRESHOLD);
         expect(tail[tail.length - 1]).toBe(tail[0]);
-
-        // The last committed value stands: neither side wrote again.
-        const finalA = a.runtime.getCell<string>(space, DOC, anySchema);
-        await finalA.pull();
-        const finalValue = finalA.get();
-        expect(finalValue === "A" || finalValue === "B").toBe(true);
+        // The last committed value stands.
+        const shared = a.runtime.getCell<string>(space, DOC, anySchema);
+        await shared.pull();
+        expect(["A", "B"]).toContain(shared.get());
       } finally {
-        await a.runtime.dispose();
-        await b.runtime.dispose();
-        await a.storage.close();
-        await b.storage.close();
+        await dispose(a, b);
+      }
+    });
+
+    it("holds each session to one re-run per backoff while the loop continues", async () => {
+      const a = connect(true);
+      const b = connect(true);
+      try {
+        await seed(a, b.runtime, DOC, "seed");
+        const actionA = subscribeTagWriter(a.runtime, { value: "A" });
+        const actionB = subscribeTagWriter(b.runtime, { value: "B" });
+        await clock.settle();
+        await drive(ECHO_TRIP_THRESHOLD * 3);
+
+        const runsA = runCount(a.runtime, actionA);
+        const runsB = runCount(b.runtime, actionB);
+        const commits = await commitSequence();
+
+        // Each cycle lets every backoff in force expire, then offers the loop
+        // a threshold's worth of exchanges. A breaker that waited for a fresh
+        // threshold after each wake would run a whole burst here.
+        const cycles = 4;
+        for (let cycle = 0; cycle < cycles; cycle++) {
+          await clock.tick(ECHO_BACKOFF_MAX_MS);
+          await clock.settle();
+          await drive(ECHO_TRIP_THRESHOLD);
+        }
+
+        const moreA = runCount(a.runtime, actionA) - runsA;
+        const moreB = runCount(b.runtime, actionB) - runsB;
+        expect(moreA).toBeLessThanOrEqual(cycles);
+        expect(moreB).toBeLessThanOrEqual(cycles);
+        // The loop is spaced, not stopped: the disagreement is still live.
+        expect(moreA + moreB).toBeGreaterThan(0);
+        expect(await commitSequence() - commits).toBeLessThanOrEqual(
+          2 * cycles,
+        );
+      } finally {
+        await dispose(a, b);
+      }
+    });
+
+    it("clears the breaker once the two sessions agree", async () => {
+      const a = connect(true);
+      const b = connect(true);
+      try {
+        await seed(a, b.runtime, DOC, "seed");
+        const tagA = { value: "A" };
+        const tagB = { value: "B" };
+        subscribeTagWriter(a.runtime, tagA);
+        subscribeTagWriter(b.runtime, tagB);
+        await clock.settle();
+        await drive(ECHO_TRIP_THRESHOLD * 3);
+        expect(pairCount(a.runtime) + pairCount(b.runtime)).toBe(2);
+
+        // Both sessions now compute the same value. The session that reads it
+        // writes it again, which storage drops as unchanged, and that run is
+        // the convergence step that clears its pair.
+        tagB.value = "A";
+        for (let cycle = 0; cycle < 3; cycle++) {
+          await clock.tick(ECHO_BACKOFF_MAX_MS);
+          await clock.settle();
+          await drive(ECHO_TRIP_THRESHOLD);
+        }
+
+        const commits = await commitSequence();
+        await clock.tick(ECHO_BACKOFF_MAX_MS);
+        await clock.settle();
+        await drive(ECHO_TRIP_THRESHOLD);
+        expect(await commitSequence()).toBe(commits);
+        expect(pairCount(a.runtime) + pairCount(b.runtime)).toBeLessThan(2);
+        expect(a.runtime.scheduler.getEchoBreakerStats().active).toBe(0);
+        expect(b.runtime.scheduler.getEchoBreakerStats().active).toBe(0);
+      } finally {
+        await dispose(a, b);
       }
     });
 
     it("keeps looping without the flag, and never trips", async () => {
-      // The same disagreement with the flag off: the loop runs unbounded, so a
-      // bounded drive keeps adding commits and the breaker, which is inert,
-      // counts nothing.
       const a = connect(false);
       const b = connect(false);
       try {
-        const seed = a.runtime.edit();
-        a.runtime.getCell<string>(space, DOC, anySchema, seed).set("seed");
-        await seed.commit({ holdSyncedUntilCovered: false }).verdict;
-        await a.storage.synced();
-        const mirror = b.runtime.getCell<string>(space, DOC, anySchema);
-        await mirror.sync();
-        await mirror.pull();
-
-        const disagree = (runtime: Runtime, tag: string): Action => (tx) => {
-          const cell = runtime.getCell<string>(space, DOC, anySchema);
-          if (cell.withTx(tx).get() !== tag) cell.withTx(tx).set(tag);
-        };
-        a.runtime.scheduler.subscribe(
-          disagree(a.runtime, "A"),
-          { reads: [], shallowReads: [], writes: [] },
-          { isEffect: true },
-        );
-        b.runtime.scheduler.subscribe(
-          disagree(b.runtime, "B"),
-          { reads: [], shallowReads: [], writes: [] },
-          { isEffect: true },
-        );
-        a.runtime.scheduler.queueExecution();
-        b.runtime.scheduler.queueExecution();
+        await seed(a, b.runtime, DOC, "seed");
+        subscribeTagWriter(a.runtime, { value: "A" });
+        subscribeTagWriter(b.runtime, { value: "B" });
         await clock.settle();
 
         const sequence = await drive(ECHO_TRIP_THRESHOLD * 3);
 
-        // Still climbing at the end — the loop never stops without the breaker.
         const tail = sequence.slice(-ECHO_TRIP_THRESHOLD);
         expect(tail[tail.length - 1]).toBeGreaterThan(tail[0]);
         expect(a.runtime.scheduler.getEchoBreakerStats().trips).toBe(0);
         expect(b.runtime.scheduler.getEchoBreakerStats().trips).toBe(0);
       } finally {
-        await a.runtime.dispose();
-        await b.runtime.dispose();
-        await a.storage.close();
-        await b.storage.close();
+        await dispose(a, b);
       }
     });
 
     it("does not trip a derivation re-run by a second session's edits", async () => {
-      // A legitimate collaboration: one session edits a source document over
-      // and over (a person typing), and the other session runs a derivation
-      // that reads the source and writes a SEPARATE output. The derivation
-      // re-runs on every edit, far past the trip threshold — but it is
-      // triggered by the source, not by its own output, so no run is an echo
-      // step and the breaker never trips. This is the discrimination that
-      // separates the loop from a derivation whose input genuinely changes.
+      // One session edits a source document over and over, and the other runs
+      // a derivation that reads the source and writes a SEPARATE output. The
+      // derivation re-runs far past the threshold, but its trigger is the
+      // source rather than its own output, so no run is an echo step.
       const SOURCE = "collab-source";
       const OUTPUT = "collab-output";
       const editor = connect(true);
       const deriver = connect(true);
       try {
-        const seed = editor.runtime.edit();
-        editor.runtime.getCell<string>(space, SOURCE, anySchema, seed).set(
-          "v0",
-        );
-        await seed.commit({ holdSyncedUntilCovered: false }).verdict;
-        await editor.storage.synced();
-        const mirror = deriver.runtime.getCell<string>(
-          space,
-          SOURCE,
-          anySchema,
-        );
-        await mirror.sync();
-        await mirror.pull();
-
-        // The derivation reads the source and writes the output — a different
-        // document — so its own writes are never its trigger.
+        await seed(editor, deriver.runtime, SOURCE, "v0");
         const derive: Action = (tx) => {
           const src = deriver.runtime.getCell<string>(space, SOURCE, anySchema);
           const out = deriver.runtime.getCell<string>(space, OUTPUT, anySchema);
@@ -437,28 +646,46 @@ describe("scheduler-remote-echo-breaker", () => {
         deriver.runtime.scheduler.queueExecution();
         await clock.settle();
 
-        const rounds = ECHO_TRIP_THRESHOLD * 2;
-        for (let round = 0; round < rounds; round++) {
-          // The editor makes a fresh edit to the source.
+        for (let round = 0; round < ECHO_TRIP_THRESHOLD * 2; round++) {
           const edit = editor.runtime.edit();
           editor.runtime.getCell<string>(space, SOURCE, anySchema, edit)
             .set(`v${round + 1}`);
           await edit.commit({ holdSyncedUntilCovered: false }).verdict;
-          // The deriver observes it and re-derives the output.
           server.flushSessions([space]);
           await clock.settle();
         }
 
-        // The derivation ran well past the threshold, yet never tripped: its
-        // output is not its trigger.
-        expect(deriver.runtime.scheduler.getActionStats(derive)!.runCount)
+        expect(runCount(deriver.runtime, derive))
           .toBeGreaterThan(ECHO_TRIP_THRESHOLD);
         expect(deriver.runtime.scheduler.getEchoBreakerStats().trips).toBe(0);
       } finally {
-        await editor.runtime.dispose();
-        await deriver.runtime.dispose();
-        await editor.storage.close();
-        await deriver.storage.close();
+        await dispose(editor, deriver);
+      }
+    });
+
+    it("does not carry a retired registration's backoff into a new one", async () => {
+      const session = connect(true);
+      try {
+        const action: Action = () => {};
+        const options = { isEffect: true };
+        const log = { reads: [], shallowReads: [], writes: [] };
+        session.runtime.scheduler.subscribe(action, log, options);
+        session.runtime.scheduler.queueExecution();
+        await clock.settle();
+        expect(runCount(session.runtime, action)).toBe(1);
+
+        session.runtime.scheduler.accessForTestingOnly.gates.setEchoBackoff(
+          action,
+          performance.now() + ECHO_BACKOFF_MAX_MS,
+        );
+        session.runtime.scheduler.unsubscribe(action);
+        session.runtime.scheduler.subscribe(action, log, options);
+        session.runtime.scheduler.queueExecution();
+        await clock.settle();
+
+        expect(runCount(session.runtime, action)).toBe(2);
+      } finally {
+        await dispose(session);
       }
     });
   });

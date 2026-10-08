@@ -90,20 +90,27 @@ export const MAX_ACTION_STATS = 20_000;
 // reactive computation that reads and writes one document, re-triggered by a
 // remote change to that same document and writing a differing value back,
 // counts one echo cycle per such run. ECHO_TRIP_THRESHOLD cycles within
-// ECHO_WINDOW_MS on one (action, document) pair trip the breaker; a run that
-// writes an equal value (convergence) or a window that elapses with no cycle
-// resets the count. Defaults chosen against the 2026-10-07 storm's ~10
-// writes/second: a real loop fills the window many times over while an
-// eventually-consistent derivation settles in a run or two. They await tuning
-// against a live per-space rate signal (Topic 913) before any default-on
-// decision.
+// ECHO_WINDOW_MS on one (action, document) pair trip the breaker. Before a
+// trip, a run that does not change the document (convergence) or a window
+// that elapses with no cycle resets the count. Defaults chosen against the
+// 2026-10-07 storm's ~10 writes/second: a real loop fills the window many
+// times over while an eventually-consistent derivation settles in a run or
+// two. They await tuning against a live per-space rate signal (Topic 913)
+// before any default-on decision.
 export const ECHO_WINDOW_MS = 10_000;
 export const ECHO_TRIP_THRESHOLD = 12;
-// Capped exponential backoff on the tripped action's re-run, doubling per
-// trip of the same pair. At the cap a looping document re-runs at most once
-// every ECHO_BACKOFF_MAX_MS, so the commit rate falls from ~10/s to ~0.03/s.
+// Capped exponential backoff on the tripped action's re-run. Once a pair has
+// tripped, every further echo renews the backoff one step longer, so at the
+// cap a looping document re-runs at most once every ECHO_BACKOFF_MAX_MS and
+// the commit rate falls from ~10/s to ~0.03/s.
 export const ECHO_BACKOFF_BASE_MS = 500;
 export const ECHO_BACKOFF_MAX_MS = 30_000;
+// A tripped pair is cleared by a convergence step, or by this long a quiet
+// stretch since its last echo. It is longer than the backoff cap, so a loop
+// still running at the cap never looks quiet; the ten-second window resets
+// only pairs that have not tripped, since it would otherwise cancel a longer
+// backoff before its deadline.
+export const ECHO_QUIET_RESET_MS = 2 * ECHO_BACKOFF_MAX_MS;
 // Per-(action, document) pair states kept before the least recently touched is
 // dropped. A pair key arrives per document a self-referential computation
 // writes; the entries are hints whose loss costs only a forgotten cycle count,

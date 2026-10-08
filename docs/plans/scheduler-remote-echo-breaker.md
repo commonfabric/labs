@@ -61,40 +61,49 @@ a remote party writing the same document back.
 
 ## 1. Detection
 
-### One echo cycle
+### Echo and convergence steps
 
-A run of `A` is an **echo step** for document `D` when all of the following
-hold at the commit of that run:
+After each successful run of `A`, the breaker classifies the documents that
+triggered the run and that the run read. Such a document `D` satisfies:
 
-1. `D` is in the run's write set (`A` wrote `D`).
+1. `D` is among the addresses that triggered this run (the run's invalid
+   causes — `A` ran *because* `D` changed, not because an unrelated input did).
 2. `D` is in the run's read set, deep or shallow (`A` read `D` — the
    self-referential shape; the diff-base read satisfies this).
-3. `D`'s id is among the addresses that triggered this run (the run's invalid
-   causes — `A` ran *because* `D` changed, not because an unrelated input did).
-4. The value `A` wrote to `D` differs from the value `D` held before this run
-   wrote it (`!valueEqual(previousValue, value)` on `D`'s write detail — the
-   run overwrote a differing value rather than converging on it).
 
-Condition 4 reads the write detail's `previousValue`, which in the loop is the
-foreign session's value: `A` read it as its diff base and is now writing over
-it. A run that writes a value *equal* to what `D` held is a **convergence
-step**, not an echo step.
+The run is an **echo step** for `D` when it also changed `D`: a write detail
+under `D` holds a value that differs from the value `D` held before the run
+(`!valueEqual(previousValue, value)`). In the loop that previous value is the
+other session's: `A` read it as its diff base and wrote its own over it.
 
-An **echo cycle** for `(A, D)` is one echo step counted against a sliding
-window. The window and the counter are keyed by the pair `(action id, resolved
-document key)`, where the resolved document key is the address id together with
-its resolved scope instance (`scopeKey` when the serving arm set one, else the
-declared `scope`). Keying by the *resolved* instance keeps two legitimately
-distinct scoped instances of one node apart: the storm wrote one shared
-space-scoped document, so the pair that oscillates is a single key.
+Otherwise the run is a **convergence step** for `D`. Storage drops a write of
+an equal value before it reaches the transaction's write details, so a run that
+wrote `D`'s current value again leaves no write behind, exactly as a run that
+did not write `D` at all. Both are convergence: this run did not overwrite
+anything.
+
+Every address is compared by its complete identity — space, scope instance, and
+id, the scheduler's `entityKey` — resolved against the one identity the
+transaction serves: the demanded instance on a serving runtime, the runtime's
+own session everywhere else. Write details name a scope but not its instance,
+so they resolve through the same identity. Matching on less would let the same
+id in two spaces, or two session instances of one document, pass for one
+document.
+
+The step is computed at commit kickoff, while the transaction's write details
+are still staged, and handed to the breaker once the commit has succeeded. A
+counter of echo steps is kept per pair `(action id, document identity)`: the
+storm wrote one shared space-scoped document, so the pair that oscillates is a
+single key, while two demanded instances of one node write distinct documents
+and stay apart.
 
 ### Trip condition
 
-The breaker trips for `(A, D)` when its echo-cycle count reaches
-`ECHO_TRIP_THRESHOLD` within `ECHO_WINDOW_MS`. A convergence step for `(A, D)`,
-or a window that elapses with no echo step, resets the count. The count is of
-sustained oscillation: an eventually-consistent derivation that writes `D`
-once or twice and then agrees resets before it ever trips.
+An untripped pair trips when its echo-step count reaches `ECHO_TRIP_THRESHOLD`
+within `ECHO_WINDOW_MS`. Before a trip, a convergence step clears the pair and a
+window that elapses with no echo step resets the count. The count is of
+sustained oscillation: an eventually-consistent derivation that writes `D` once
+or twice and then agrees resets long before it trips.
 
 Proposed defaults, to be tuned against the health-route rate signal (Topic
 913) once that exists:
@@ -106,28 +115,27 @@ Proposed defaults, to be tuned against the health-route rate signal (Topic
 
 ### Telling it from legitimate work
 
-The four conditions together are what separate the loop from collaboration,
-and each rules out a specific honest case:
+The conditions together are what separate the loop from collaboration, and each
+rules out a specific honest case:
 
 - **Two people typing into one document.** A collaborative edit is an event
   handler appending or patching, not a reactive computation re-triggered by its
-  own output. A handler is not re-triggered by the document it wrote, so no
-  echo step is ever counted. Condition 2 (the computation reads what it wrote)
-  and condition 3 (the re-trigger is the document itself) both fail for a
-  handler-driven edit.
+  own output. A handler is not a reactive run, and is not re-triggered by the
+  document it wrote, so no step is ever counted for it.
 - **A derivation whose inputs genuinely change often.** A clock, a counter, a
   fast sensor: `A` reads input `S` and writes `D`. A change to `S` re-triggers
-  `A`, which writes a new, correct `D`. The trigger is `S`, not `D`, so
-  condition 3 fails — the breaker never counts it, however fast `S` moves.
+  `A`, which writes a new, correct `D`. The trigger is `S`, not `D`, so `D` is
+  never a candidate, and `S`, which `A` does not change, is a convergence step —
+  the breaker never trips, however fast `S` moves.
 - **A cold load re-persisting a derived label per item.** Topic 913 records one
   session writing 663 commits in a minute on a cold board load, doing nothing
-  wrong. Those are 663 *distinct* documents written once each. The breaker is
-  keyed per `(action, document)`, so every pair has a count of one and nothing
-  trips. The loop rewrites the *same* document; a bulk load does not.
+  wrong. Those are 663 *distinct* documents written once each, each written
+  because of an input rather than because of itself. The breaker is keyed per
+  `(action, document)`; the loop rewrites the *same* document and a bulk load
+  does not.
 - **A genuine convergence over a few runs.** Two sessions settling on one value
   write differing values for a run or two and then agree. The agreeing run is a
-  convergence step (condition 4 fails), which resets the count before the
-  threshold.
+  convergence step, which clears the pair before the threshold.
 
 ## 2. Response
 
@@ -135,17 +143,22 @@ and each rules out a specific honest case:
 
 On a trip, the breaker defers `A`'s re-runs with capped exponential backoff.
 It rides the scheduler's existing time-gate primitive (§8.1 of the
-scheduler-v2 spec): a new gate field `echoBackoffUntil` folded into
+scheduler-v2 spec): a gate field `echoBackoffUntil` folded into
 `eligibleAt(N) = max(debounceReadyAt, throttleReadyAt, backoffUntil,
 echoBackoffUntil)`. A time-gated action is not selected as a settle seed until
-it is eligible, and a single wake is scheduled for the deadline. The delay
-doubles on each further trip of the same pair, from `ECHO_BACKOFF_BASE_MS` to
-`ECHO_BACKOFF_MAX_MS`.
+it is eligible, and the single wake is armed for the deadline that stands.
+
+The threshold governs only the entry into the tripped state. Once a pair has
+tripped, every further echo step renews the backoff at once, one step longer,
+from `ECHO_BACKOFF_BASE_MS` doubling to `ECHO_BACKOFF_MAX_MS`. The loop never
+gets a fresh burst after a deadline passes: each wake allows one run, and if
+that run echoes again the next backoff is already in place.
 
 | Constant | Value |
 | --- | --- |
 | `ECHO_BACKOFF_BASE_MS` | 500 |
 | `ECHO_BACKOFF_MAX_MS` | 30000 |
+| `ECHO_QUIET_RESET_MS` | 60000 |
 
 At the cap, `A` re-runs at most once every thirty seconds in response to a
 remote echo, so the commit rate for the loop falls from the storm's ~10/s to
@@ -161,47 +174,55 @@ an already-ran computation that does **not** hold `idle()` open. An echo re-run
 is not idle-relevant work a caller must observe; a reader sees the last
 committed value, which stands.
 
+A retry the scheduler owes after a conflict releases the debounce and throttle
+but not this backoff, as it does not release the convergence backoff: each
+bounds a loop, and a retry inside one waits its turn like every other run.
+
 ### What stands, and what stops
 
 The run's last committed value stands. It is durable and valid — the loop is
 not a correctness failure on either side, only a disagreement about which of
 two valid values wins, and neither write is rolled back. The breaker does not
-stop `A` writing; it rate-limits how often a *remote echo* re-runs it. `A` is
-still re-triggered immediately by a genuine change to any *other* document it
-reads, because the backoff gates the action and a real input change still marks
-it invalid and schedules a wake — the backoff only delays *when* the deferred
-run becomes eligible, and a legitimate input change that arrives after the
-deadline runs at once.
+stop `A` writing; it rate-limits how often `A` re-runs while it keeps echoing.
+A real change to another input still marks `A` invalid and is served when the
+backoff ends.
 
-Eventual consistency is preserved: if the other side goes away, `A`'s next
-run reads the now-stable value, writes an equal value, and the convergence step
-clears the breaker.
+Eventual consistency is preserved: once the other side agrees or goes away,
+`A`'s next run reads the now-stable value, leaves it as it is, and that
+convergence step clears the pair and lifts the backoff.
 
 ### The loud line
 
-On each trip the breaker logs one line at error level through a counted
-channel, naming the action, the document, the cycle count, and the window:
+When a pair trips, the breaker logs one line at error level through a counted
+channel, naming the action, the document, the threshold, and the window:
 
 ```
-remote-echo-breaker tripped: action <id> rewrote document <space>/<id>
-<count> times in <window>ms against a remote writer; backing off to <delay>ms
+remote-echo-breaker-tripped action <id> rewrote document <space>/<scope>/<id>
+12 times within 10000ms against a remote writer; backing off its re-runs,
+starting at 500ms
 ```
 
 Counted regardless of log level (via `getLoggerCountsBreakdown()`), and emitted
-once per trip rather than per cycle — the same discipline as
+once per trip rather than per renewal — the same discipline as
 `reactive-retry-not-converging` — so a permanent loop does not flood the log.
 
 ### Reset
 
-The breaker resets a pair's count and clears its `echoBackoffUntil` when any of:
+An untripped pair is cleared by a convergence step and has its count reset by
+a lapsed `ECHO_WINDOW_MS`. A tripped pair is cleared, and its backoff lifted,
+by:
 
-- `A` takes a **convergence step** for `D` (writes a value equal to what `D`
-  held) — the loop has ended.
-- `ECHO_WINDOW_MS` elapses with no echo step for the pair — no sustained loop.
-- `A`'s node is removed or its registration retired — the state is pruned with
-  the node.
+- a **convergence step** for `D` — the loop has ended;
+- `ECHO_QUIET_RESET_MS` with no echo step — the loop ended without a run that
+  could observe it, for instance because the other session went away. The
+  quiet stretch is longer than the backoff cap, so a loop still running at the
+  cap never looks quiet. The ten-second window does not reset a tripped pair,
+  since it would cancel a thirty-second backoff before its deadline;
+- `A`'s registration being retired — the pair state is dropped, and the gate
+  on the node record, which outlives the registration, is cleared so a later
+  registration of the same action does not inherit it.
 
-The per-pair state lives in a bounded map (`ECHO_STATE_MAX`, oldest-evicted),
+The per-pair state lives in a bounded map (`MAX_ECHO_PAIRS`, oldest-evicted),
 so a space that touches very many documents cannot grow the table without
 bound.
 
@@ -216,9 +237,11 @@ rising order of plumbing:
    (`commonfabric.getLoggerCountsBreakdown()`) with no new wiring. The prototype
    ships this.
 2. **A scheduler stat** — `scheduler.getEchoBreakerStats()` returns
-   `{ active, trips, cyclesObserved }`: how many pairs are currently in backoff,
-   the cumulative trip count, and the cumulative echo-cycle count. The prototype
-   ships this.
+   `{ active, trips, cyclesObserved }`: the pairs whose backoff is in force
+   right now, the pairs that have tripped, and the echo steps counted. `active`
+   counts deadlines rather than tripped pairs, so a loop that ended without a
+   convergence step stops counting once its last backoff runs out. The
+   prototype ships this.
 3. **The health route** — a per-space field on `/api/health/stats` so a tripped
    breaker on a serving instance is a dashboard fact. This composes with the
    per-space commit-rate signal Topic 913 scopes, and is best built alongside
@@ -245,10 +268,10 @@ so it applies unchanged. Three points make it correct there:
   echo step against its own wave output. A counted echo step on the serving arm
   comes from a genuine foreign writer (a client still writing the space, or a
   second instance of the node), which is exactly the loop to bound.
-- Keying by resolved instance (`scopeKey`) keeps two demanded instances of one
-  fanned-out node apart: they write distinct scoped documents, so neither
-  counts against the other. The storm's shared space-scoped document is one
-  key, which is what trips.
+- Keying by complete identity, resolved against the run's demanded instance,
+  keeps two demanded instances of one fanned-out node apart: they write
+  distinct scoped documents, so neither counts against the other. The storm's
+  shared space-scoped document is one key, which is what trips.
 - `echoBackoffUntil` behaves like a throttle for the wave's idle probe
   (`isIdle`, `hasArmedGateWake`): a deferred echo re-run does not hold a wave
   open, and the SpaceServer's parking policy already treats an armed gate wake
@@ -281,34 +304,45 @@ The breaker ships behind `remoteEchoBreaker`, registered in
 
 ## 6. Tests
 
-- **Unit** (`packages/runner/test/scheduler-remote-echo-breaker.test.ts`,
-  `describe("RemoteEchoBreaker")`): feed the breaker synthetic echo and
-  convergence steps on a fake clock and assert the threshold trips, a
-  convergence step resets, a window lapse resets, the backoff escalates to the
-  cap, the per-pair keying keeps distinct documents independent, and the
-  bounded map evicts. Deterministic, no sleeps — the breaker takes `now` as an
-  argument.
-- **Two-session** (same file or a companion), modeled on
-  `scoped-output-convergence.test.ts` and `array-push-mergeable.test.ts`: two
-  runtimes over one emulated shared server, a program whose computation writes a
-  space-scoped document from a per-session input so the two sessions disagree on
-  purpose. Assert that with the flag on the breaker trips, the shared server's
-  commit sequence advances slower under the backoff than it does with the flag
-  off (`Engine.serverSeq`), and the last value stands. A companion case drives a
-  *legitimate* alternating edit — each session writing its own value in turn,
-  converging — and asserts the breaker does not trip. Waits are on cell and
-  commit events and the fake clock's `tick`, never a sleep or a poll, per
-  [`../development/waiting-in-tests.md`](../development/waiting-in-tests.md).
+`packages/runner/test/scheduler-remote-echo-breaker.test.ts` holds both
+levels. Waits are on scheduler drains and the fake clock's `settle` and `tick`,
+never a sleep or a poll, per
+[`../development/waiting-in-tests.md`](../development/waiting-in-tests.md).
+
+- **The classifier and the breaker.** `computeEchoSteps()` against a stand-in
+  transaction: an echo step for a changed self-read trigger, a convergence step
+  when nothing was written, no echo step for an output that was not the
+  trigger, no match across spaces for one id, and distinct keys for two session
+  instances. The breaker fed synthetic steps at chosen instants: the threshold
+  trips, every later echo renews one step longer up to the cap, a lapsed window
+  resets only an untripped pair, a quiet stretch starts a tripped pair afresh, a
+  convergence step lifts the backoff unless another document of the action is
+  still backing off, `active` follows deadlines, and the table is bounded.
+- **Two sessions over one emulated server** with manual fan-out, each running
+  an effect that reads a shared document and writes its own tag to it. The
+  breaker trips on both sides and the commit sequence stops while logical time
+  is held. With time advanced through repeated backoffs, each session re-runs
+  at most once per cycle while the disagreement continues. Once the two agree,
+  the session that reads the agreed value writes it again, storage drops the
+  write, and that convergence step clears its pair; commits stop and nothing is
+  active. With the flag off the same loop keeps committing and never trips. A
+  derivation re-run past the threshold by another session's edits to its input
+  does not trip. A re-subscribed action does not inherit the retired
+  registration's backoff.
+
+Each of the renewal, convergence, identity, and unsubscribe behaviors has been
+checked to fail its test when reverted.
 
 ## Stages
 
-1. **The breaker and the flag.** The `RemoteEchoBreaker` module, the
+1. [x] **The breaker and the flag.** The `RemoteEchoBreaker` module, the
    `echoBackoffUntil` gate field and its `eligibleAt` fold, the `run.ts`
-   finalize hook that computes echo steps and applies the backoff, the flag, and
-   the unit test. Flag off, no behavior change.
-2. **The two-session test** manufacturing the loop and proving the trip, the
-   commit-rate fall, and the no-trip on legitimate alternation.
-3. **The health-route field**, built with Topic 913's per-space rate signal.
-4. **Tuning and graduation:** set the thresholds from live rate data, soak, then
-   fold in and delete the flag. Revisiting the sticky placement (Topic 911)
-   unblocks once stage 1 is on.
+   finalize hook that computes the steps and applies the backoff, the flag, and
+   the unit tests. Flag off, no behavior change.
+2. [x] **The two-session tests** manufacturing the loop and proving the trip,
+   the sustained rate bound, the convergence reset, and the no-trip on
+   legitimate re-derivation.
+3. [ ] **The health-route field**, built with Topic 913's per-space rate signal.
+4. [ ] **Tuning and graduation:** set the thresholds from live rate data, soak,
+   then fold in and delete the flag. Revisiting the sticky placement (Topic
+   911) unblocks once stage 1 is on.
