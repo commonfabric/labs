@@ -642,9 +642,11 @@ home root, any more than a non-home one does. Migration preserves both as
 detached unless a durable tracking choice explicitly supplies and authorizes an
 origin. A root that records no origin and cannot start is still rolled forward
 to its space's official system source, because that is a repair of an unopenable
-space rather than an update, and it stamps the origin it rolled to. A root at
-the address the space's genesis commit reserves for the root an
-`inSpace(..., { root: true })` call places is the exception: its creator's
+space rather than an update, and it stamps the origin it rolled to. Two kinds
+of root are the exception: one at the address the space's genesis commit
+reserves for the root an `inSpace(..., { root: true })` call places, and one
+whose own stored label carries a `represents-principal` claim, as a profile's
+does wherever it sits, a claim a link carries in not counting. Its creator's
 pattern placed it, the system source is no replacement for it, and a start that
 fails leaves it as it is, whether its pattern cannot load or CFC migration
 rejects its setup repair.
