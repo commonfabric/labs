@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -582,4 +584,52 @@ Deno.test("resolveCallbackFunctionExpression takes the shared helper's whole wra
   const wrapped = ts.factory.createPartiallyEmittedExpression(arrow);
 
   assertEquals(resolveCallbackFunctionExpression(wrapped, checker), arrow);
+});
+
+describe("call-kind", () => {
+  describe("a call through a binding of a `lift()` call", () => {
+    // `lift-applied` describes a call whose callee is the inner `lift()` call
+    // itself. Here the callee is the binding, so that kind never applies; the
+    // `const` case shows the harness resolves `lift` as a builder at all.
+
+    function findBindingCall(declarationName: string) {
+      const { sourceFile, checker } = createProgram(`
+        declare function lift<T, U>(
+          callback: (value: T) => U,
+        ): (input: T) => U;
+
+        const constBound = lift((value: number) => value + 1);
+        let letBound = lift((value: number) => value + 1);
+
+        const viaConst = constBound(1);
+        const viaLet = letBound(1);
+      `);
+      const call = findInitializer(sourceFile, declarationName);
+      if (!ts.isCallExpression(call)) {
+        throw new Error(`Expected ${declarationName} to be a call`);
+      }
+      return { call, checker };
+    }
+
+    it("returns the builder kind `lift` from `detectCallKind()` for a `const` binding", () => {
+      const { call, checker } = findBindingCall("viaConst");
+      const callKind = detectCallKind(call, checker);
+
+      expect(callKind?.kind).toBe("builder");
+      expect(callKind?.kind === "builder" ? callKind.builderName : undefined)
+        .toBe("lift");
+    });
+
+    it("returns `undefined` from `detectCallKind()` for a `let` binding", () => {
+      const { call, checker } = findBindingCall("viaLet");
+
+      expect(detectCallKind(call, checker)?.kind).toBeUndefined();
+    });
+
+    it("returns `undefined` from `getLiftAppliedInputAndCallback()` for a `let` binding", () => {
+      const { call, checker } = findBindingCall("viaLet");
+
+      expect(getLiftAppliedInputAndCallback(call, checker)).toBeUndefined();
+    });
+  });
 });
