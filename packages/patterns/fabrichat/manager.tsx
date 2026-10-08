@@ -296,6 +296,11 @@ const listRoom = (
 ): void => {
   const entry = readSharedSpaceCatalog(catalog).entries[space];
   if (entry === undefined) {
+    // The host is this pattern's own. A runtime reads every space from the
+    // one memory host its `apiUrl` names, and a link carries no host, so a
+    // room this manager creates or accepts is one this runtime has read, and
+    // so one this host serves; the share intake refuses an offer of a room
+    // on any other host.
     registerSharedSpaceIn(catalog, {
       space,
       host: hostOrigin(),
@@ -565,6 +570,15 @@ const performManagerAct = (
     });
     return;
   }
+  // So is accepting one, whose acceptance adds this user's profile to the
+  // room's participants.
+  if (act === "accept" && state.myProfile?.get() === undefined) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason: "Accepting a chat needs a profile.",
+    });
+    return;
+  }
 
   if (act === "delivered") {
     const id = event?.id ?? state.id;
@@ -713,6 +727,18 @@ const performManagerAct = (
       recordOutcome(state, requestId, {
         status: "refused",
         reason: "The request names no revision of the room's entry.",
+      });
+      return;
+    }
+    // The catalog names a room by its space, which holds at most one room,
+    // its root; a link to anything else in that space, such as one of the
+    // room's messages, names no room to forget.
+    const kind = aboutRecordOf(room).key("kind").get() ??
+      room.key("about").get()?.kind;
+    if (kind !== "direct" && kind !== "group") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The request names no room.",
       });
       return;
     }

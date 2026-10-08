@@ -251,8 +251,9 @@ Records a room this user has been admitted to.
   a member. For a direct room, it also records the entry in `direct`, unless
   `direct` already has an entry for `counterpart`, in which case that entry
   stays, as under [crossing creations](#crossing-creations).
-- **Outcome:** `done` with the entry, or `refused` if the request names no
-  room, or this user can't read the room, or if the room is direct and its
+- **Outcome:** `done` with the entry, or `refused` if this user has no
+  profile to join the room's participants as, or the request names no room, or
+  this user can't read the room, or if the room is direct and its
   label names no creator, names this user, or names someone other than a
   `counterpart` sent, or, once there are member sets, the counterpart isn't a
   member.

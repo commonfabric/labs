@@ -154,6 +154,13 @@ export default pattern(() => {
       revision: "1:stale",
     })
   );
+  const action_forget_direct_message_list = action(() =>
+    direct.forget.send({
+      requestId: "f-not-room",
+      room: directHeld.key("room").key("messages").resolveAsCell(),
+      revision: direct.rooms[0]?.revision,
+    })
+  );
   const action_forget_direct = action(() =>
     direct.forget.send({
       requestId: "f-1",
@@ -323,15 +330,19 @@ export default pattern(() => {
       },
       // Forgetting names the revision of the room's entry its list showed, so
       // a request naming none, or one the entry has moved on from, is refused,
-      // and the room stays listed.
+      // and so is one whose link names something other than the room, from
+      // the room's space; the room stays listed.
       { action: action_forget_direct_unrevised },
       { action: action_forget_direct_stale },
+      { action: action_forget_direct_message_list },
       {
         assertion: assert(() =>
           reasonOf(directRequests, "f-unrevised") ===
             "The request names no revision of the room's entry." &&
           reasonOf(directRequests, "f-stale") ===
             "The room's entry changed since it was listed." &&
+          reasonOf(directRequests, "f-not-room") ===
+            "The request names no room." &&
           direct.rooms.length === 1
         ),
       },
