@@ -343,20 +343,10 @@ export class IntersectionFormatter implements TypeFormatter {
         return "non-object constituent";
       }
 
-      try {
-        const stringIndex = checker.getIndexTypeOfType(
-          part,
-          ts.IndexKind.String,
-        );
-        const numberIndex = checker.getIndexTypeOfType(
-          part,
-          ts.IndexKind.Number,
-        );
-        if (stringIndex || numberIndex) {
-          return "index signature on constituent";
-        }
-      } catch (error) {
-        return `checker error while validating intersection: ${error}`;
+      // An array, whose items no object member can hold, is refused beside
+      // an object; any other index signature merges with the members.
+      if (checker.isArrayType(part) || checker.isTupleType(part)) {
+        return "index signature on constituent";
       }
     }
 
@@ -368,6 +358,7 @@ export class IntersectionFormatter implements TypeFormatter {
     intersection: ts.Type,
     context: GenerationContext,
   ): { schema: MutableJSONSchemaObj } & ConstituentDocs {
+    const checker = context.typeChecker;
     const declarations = new Map<string, PropertyDeclaration[]>();
     const requiredSet = new Set<string>();
 
@@ -402,6 +393,21 @@ export class IntersectionFormatter implements TypeFormatter {
       type: "object",
       properties: mergedProps,
     };
+
+    // The keys no member names hold the intersection's index type, as one
+    // object type declaring all of these members and index signatures would:
+    // a member keeps the type its own declarations give it, as the checker
+    // reads it.
+    const indexType = checker.getIndexTypeOfType(
+      intersection,
+      ts.IndexKind.String,
+    ) ?? checker.getIndexTypeOfType(intersection, ts.IndexKind.Number);
+    if (indexType) {
+      result.additionalProperties = this.#schemaGenerator.formatChildType(
+        indexType,
+        context,
+      );
+    }
 
     if (requiredSet.size > 0) {
       result.required = Array.from(requiredSet);
