@@ -14,6 +14,7 @@ import {
 } from "../storage/transaction-inspection.ts";
 import { ignoreReadForScheduling } from "../storage/reactivity-log.ts";
 import { arraysOverlap } from "../reactive-dependencies.ts";
+import { isRuntimeSecretId } from "../runtime-secret.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   CycleReport,
@@ -127,6 +128,8 @@ export function captureCommittedReads(
   const readValues = new Map<string, FabricValue>();
 
   for (const read of reads) {
+    // No code reads a runtime secret, and a diagnosis records what it reads.
+    if (isRuntimeSecretId(read.id)) continue;
     const key = makeAddressKey(read);
     let readerTx: IExtendedStorageTransaction | undefined;
     try {

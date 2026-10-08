@@ -264,6 +264,16 @@ describe("scheduler-diagnosis", () => {
       expect(values.get(makeAddressKey(target))).toBe("committed");
     });
 
+    it("records nothing of a runtime secret", () => {
+      const secret = address("of:runtime-secret:salt", ["value"]);
+      const values = captureCommittedReads(
+        [secret],
+        () => readerFor(() => ({ ok: { value: "the salt" } }), () => {}),
+      );
+
+      expect(values.has(makeAddressKey(secret))).toBe(false);
+    });
+
     it("marks an address whose read threw", () => {
       const target = address("of:throws", ["value"]);
       const values = captureCommittedReads(
