@@ -284,7 +284,9 @@ remedies, rather than resolving to nothing.
 Home hands the manager its shared-space catalog ([Shared-space
 catalog](../../features/shared-space-catalog.md)), and the manager registers
 there each room it creates, and each room a manager created that it accepts, as
-a `fabrichat-room` entry.
+a `fabrichat-room` entry. Its `rooms` is a view over the catalog: the saved
+`fabrichat-room` entries, a room offered to the user and registered by the share
+intake among them, and forgetting a room archives its entry.
 
 ## Custom Home Pattern
 

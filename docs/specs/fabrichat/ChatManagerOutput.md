@@ -16,6 +16,9 @@ interface ChatManagerOutput {
   /** The direct room this user shares with each counterpart, by principal. */
   direct: Record<string, ChatIndexEntry>;
 
+  /** The user's shared-space catalog, as stored. */
+  sharedSpaceCatalog: object;
+
   /** The outcome of each request, by the `requestId` its caller chose. */
   requests: Record<
     string,
@@ -43,7 +46,11 @@ interface ChatManagerOutput {
     room: Cell<ChatRoomOutput>;
     counterpart?: string;
   }>;
-  forget: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
+  forget: Stream<{
+    requestId: string;
+    room: Cell<ChatRoomOutput>;
+    revision: string;
+  }>;
   delivered: Stream<{ requestId: string; id: string }>;
 
   [VIEWS]: { chats: object };
@@ -102,7 +109,13 @@ in it needs to be `PerUser` or `PerSession`.
   room, under the reader's own access. Through the link a reader finds the
   room's `about`, and where its conversation stands, `messages.count` and
   `messages.newestAt`; [`ChatIndexEntry`](ChatIndexEntry.md) says why the link
-  declares those and no more.
+  declares those and no more. `rooms` is drawn from the user's shared-space
+  catalog, Home's: each entry the catalog keeps as a saved `fabrichat-room`,
+  whose space's root is a room.
+- **`sharedSpaceCatalog`** is that catalog
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), as
+  stored. A room reads it to tell whether the viewer's chats list it, without
+  this manager's own facts having been computed.
 - **`direct`** holds, for each counterpart principal, the entry of the direct
   room this user shares with them. It has at most one entry per counterpart. It
   keeps a direct room's entry even after the room is forgotten, so the
@@ -150,7 +163,7 @@ These rules hold for every stream:
 | [`openDirect`](#opendirectrequestid-string-counterpart-string-profile-cellchatprofile) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
 | [`createGroup`](#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
 | [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
-| [`forget`](#forgetrequestid-string-room-cellchatroomoutput) | none | the entry removed from `rooms`; the room itself is untouched |
+| [`forget`](#forgetrequestid-string-room-cellchatroomoutput-revision-string) | none | the entry removed from `rooms`; the room itself is untouched |
 | [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
 
 ### `openDirect(requestId: string, counterpart: string, profile?: Cell<ChatProfile>)`
@@ -169,7 +182,10 @@ outward act when it creates a room.
 
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
 - **Effect:** if `direct` has an entry for `counterpart`, that entry is the
-  outcome, and it is put back in `rooms` if it was forgotten. Otherwise, if a
+  outcome, and it is put back in `rooms` if it was forgotten, whatever its
+  catalog entry's revision: starting the chat is the person's choice to have it
+  listed, so this restore wins over a concurrent forget, from another device,
+  say. Otherwise, if a
   creation for the same `counterpart` is still pending under another
   `requestId`, the manager MUST resume that creation rather than start another,
   and records its outcome under both ids. Otherwise, creates a direct room whose
@@ -231,7 +247,10 @@ Records a room this user has been admitted to.
   own index, beside adding them to the room's participants, which needs none.
   Whether to add a room to their index is the user's decision (see
   [`clients.md`](clients.md#finding-conversations)).
-- **Effect:** records an entry in `rooms`. For a direct room, the counterpart it
+- **Effect:** records an entry in `rooms`, putting a forgotten room back
+  whatever its catalog entry's revision: accepting the room is the person's
+  choice to have it listed, so this restore wins over a concurrent forget. For
+  a direct room, the counterpart it
   records is the creator `about.record`'s label names, which it reads itself;
   once the room's space has a member set, it also checks that the counterpart is
   a member. For a direct room, it also records the entry in `direct`, unless
@@ -240,28 +259,34 @@ Records a room this user has been admitted to.
   user's profile to the room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if this user has no
   profile to join the room's participants as, or the request names no room, or
-  this user can't read the room, or if the room is direct and its label names
+  this user can't read the room, or the room is a social space's own chat, or
+  if the room is direct and its label names
   no creator, names this user, or names someone other than a `counterpart`
   sent, or, once there are member sets, the counterpart isn't a member.
 
-A client also sends `accept` when the user first opens the chat of an existing
-social space, which is created with its space and not by a manager.
+A social space's own chat is created with its space and not by a manager, so
+it has no `about.record`, and the catalog lists rooms by their own spaces, so
+`accept` refuses one: its space is the social space it belongs to.
 
-### `forget(requestId: string, room: Cell<ChatRoomOutput>)`
+### `forget(requestId: string, room: Cell<ChatRoomOutput>, revision: string)`
 
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
   with it resumes the request rather than starting another.
 - `room: Cell<ChatRoomOutput>` — A link to a room in this user's list.
+- `revision: string` — The room's entry's `revision`, as the list the request
+  was made from showed it. A choice about the room made since, by another
+  client, is never overridden by one made against an older list.
 
 Removes a room from this user's list.
 
 - **Admitted:** without a reviewed gesture.
-- **Effect:** removes the entry from `rooms`. A direct room's entry stays in
-  `direct`, so a later `openDirect` with the same person returns the same room.
-  The room, and this user's access to it, are untouched.
-- **Outcome:** `done`, with no entry, or `refused` if the request names no
-  room.
+- **Effect:** archives the room's catalog entry, which removes it from `rooms`.
+  A direct room's entry stays in `direct`, so a later `openDirect` with the same
+  person returns the same room. The room, and this user's access to it, are
+  untouched.
+- **Outcome:** `done`, with no entry, or `refused` if the request names no room
+  or no revision, or the room's entry has moved on from `revision`.
 
 ### `delivered(requestId: string, id: string)`
 
