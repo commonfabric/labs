@@ -157,7 +157,11 @@ would not have scheduled the run, do not join it. A read of an array's
 `length` observes the array's membership, so a trigger read of a `length` is
 also charged as a shape read of its parent, whatever the parent holds when the
 rerun prepares. It joins the labels that apply at the parent itself, such as an
-`observes: "enumerate"` or `structure` entry.
+`observes: "enumerate"` or `structure` entry. A link probe asks which reference
+sits at a slot, so a trigger read at the sub-path where a link exposes its
+recognizable form is charged as a shallow read of that slot. It joins the
+labels that apply at the slot itself. That sub-path's segments are not child
+segments, so no `*` template beneath the slot applies to it (§4.6.3).
 
 ## 5. Consequences for the two payoffs
 

@@ -114,8 +114,8 @@ import {
   RESERVED_SIBLINGS,
   type ReservedSibling,
 } from "../reserved-sibling-seam.ts";
+import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import {
-  isRuntimeSecretId,
   readRuntimeSecret,
   RUNTIME_SECRET_SCHEMA,
   RUNTIME_SECRET_WRITER,

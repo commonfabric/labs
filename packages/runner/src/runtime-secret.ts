@@ -37,15 +37,13 @@ import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./cfc/observation.ts";
 import type { JSONSchema } from "./builder/types.ts";
 import type { NormalizedFullLink } from "./link-utils.ts";
+import { RUNTIME_SECRET_ID_PREFIX } from "./runtime-secret-id.ts";
 import type { URI } from "./sigil-types.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
   ignoreReadForScheduling,
   internalVerifierRead,
 } from "./storage/reactivity-log.ts";
-
-/** The reserved id namespace of runtime secrets. */
-export const RUNTIME_SECRET_ID_PREFIX = "of:runtime-secret:";
 
 /**
  * The confidentiality a runtime secret is stored under: the read-failed
@@ -79,10 +77,6 @@ export const runtimeSecretLink = (
   scope: "space",
   path: [],
 });
-
-/** Returns whether `id` names a runtime secret. */
-export const isRuntimeSecretId = (id: string): boolean =>
-  id.startsWith(RUNTIME_SECRET_ID_PREFIX);
 
 /**
  * Returns the runtime secret called `name` in `space`, or `undefined` when no
