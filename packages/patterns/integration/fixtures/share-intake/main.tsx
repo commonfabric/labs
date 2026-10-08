@@ -49,7 +49,10 @@ import {
 } from "../../../system/shared-space-catalog.ts";
 import Room, { type RoomOutput } from "./room.tsx";
 
-/** The kind of every offer here, and of the space each room's is by default. */
+/**
+ * The kind of every offer here, and the kind each room's space declares by
+ * default.
+ */
 const OFFER_KIND = "fabrichat-room";
 
 /** A space a sender's handler created and offered, as the test reads it. */
