@@ -33,6 +33,7 @@ export interface ExpectedPosture {
   policyEvaluation?: string;
   labelMetadataProtection?: string;
   declaredMonotonicity?: string;
+  releaseGateIntegrity?: string;
   triggerReadGating?: boolean;
   decomposedEnvelopes?: boolean;
   contentAddressedLabels?: boolean;
@@ -65,6 +66,7 @@ const RUNG_FIELDS = [
   "policyEvaluation",
   "labelMetadataProtection",
   "declaredMonotonicity",
+  "releaseGateIntegrity",
 ] as const;
 
 /** The runtime dial each of those fields reports. */
@@ -75,6 +77,7 @@ const RUNG_FIELD_DIALS = {
   policyEvaluation: "cfcPolicyEvaluation",
   labelMetadataProtection: "cfcLabelMetadataProtection",
   declaredMonotonicity: "cfcDeclaredMonotonicity",
+  releaseGateIntegrity: "cfcReleaseGateIntegrity",
 } as const satisfies Record<
   typeof RUNG_FIELDS[number],
   keyof typeof CFC_DIAL_LADDERS

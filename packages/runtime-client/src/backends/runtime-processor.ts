@@ -4057,6 +4057,7 @@ export class RuntimeProcessor {
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
       modulePolicySource: this.#renderModulePolicySource,
+      releaseGateIntegrity: this.#runtime.cfcReleaseGateIntegrity,
       spaceAccess: renderSpaceAccessProviderFor(
         this.#runtime,
         this.#spaceAccessRetries,

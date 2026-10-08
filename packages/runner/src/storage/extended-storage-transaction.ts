@@ -52,6 +52,7 @@ import {
   type CfcRecordAddress,
   cfcRecordPath,
   CfcRefusalDetail,
+  type CfcReleaseGateIntegrityMode,
   type CfcTriggerReadGating,
   type CfcTrustConfig,
   type CfcTxState,
@@ -66,6 +67,7 @@ import {
   DEFAULT_CFC_FLOW_LABELS_MODE,
   DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
   DEFAULT_CFC_POLICY_EVALUATION_MODE,
+  DEFAULT_CFC_RELEASE_GATE_INTEGRITY_MODE,
   DEFAULT_CFC_TRIGGER_READ_GATING,
   DEFAULT_CFC_WRITE_FLOOR_MODE,
   externalIngestStamp,
@@ -582,6 +584,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     policyEvaluationMode: DEFAULT_CFC_POLICY_EVALUATION_MODE,
     labelMetadataProtectionMode: DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
     declaredMonotonicityMode: DEFAULT_CFC_DECLARED_MONOTONICITY_MODE,
+    releaseGateIntegrityMode: DEFAULT_CFC_RELEASE_GATE_INTEGRITY_MODE,
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
@@ -631,6 +634,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #cfcPolicyEvaluationPinned = false;
   #cfcLabelMetadataProtectionPinned = false;
   #cfcDeclaredMonotonicityPinned = false;
+  #cfcReleaseGateIntegrityPinned = false;
 
   /**
    * Write-once pin for the deployment policy snapshot. Distinct from the slot's
@@ -934,6 +938,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       policyEvaluation: this.#cfcState.policyEvaluationMode,
       labelMetadataProtection: this.#cfcState.labelMetadataProtectionMode,
       declaredMonotonicity: this.#cfcState.declaredMonotonicityMode,
+      releaseGateIntegrity: this.#cfcState.releaseGateIntegrityMode,
     };
   }
 
@@ -1179,6 +1184,32 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#cfcState.declaredMonotonicityMode = mode;
     if (mode === "enforce") {
       this.#cfcDeclaredMonotonicityPinned = true;
+    }
+  }
+
+  setCfcReleaseGateIntegrityMode(mode: CfcReleaseGateIntegrityMode): void {
+    // Anti-downgrade pin (mirrors the write floor): once `enforce` is set, code
+    // that reaches the tx cannot weaken it so that one consumed value's
+    // integrity vouches for another's clause again (§5.3, §8.12.8).
+    if (this.#cfcReleaseGateIntegrityPinned && mode !== "enforce") {
+      throw new Error(
+        `CFC release-gate integrity mode cannot be weakened to "${mode}": ` +
+          `transaction is pinned at "enforce"`,
+      );
+    }
+    // The mode decides the release gates' reasons and diagnostics but is not
+    // part of PreparedDigestInput, so a real change after prepare invalidates
+    // the prepared decision; the Runtime's idempotent set at tx creation does
+    // not.
+    if (
+      this.#cfcState.releaseGateIntegrityMode !== mode &&
+      this.#cfcState.prepare.status === "prepared"
+    ) {
+      this.invalidateCfc("release-gate-integrity-mode-changed");
+    }
+    this.#cfcState.releaseGateIntegrityMode = mode;
+    if (mode === "enforce") {
+      this.#cfcReleaseGateIntegrityPinned = true;
     }
   }
 
@@ -4178,6 +4209,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   setCfcDeclaredMonotonicityMode(mode: CfcDeclaredMonotonicityMode): void {
     this.#wrapped.setCfcDeclaredMonotonicityMode(mode);
+  }
+
+  setCfcReleaseGateIntegrityMode(mode: CfcReleaseGateIntegrityMode): void {
+    this.#wrapped.setCfcReleaseGateIntegrityMode(mode);
   }
 
   setCfcDeclaredWideningExemption(

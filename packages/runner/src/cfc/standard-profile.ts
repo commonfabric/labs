@@ -28,8 +28,13 @@ export {
  *   another (cubic P1 on #4567 — the tx-wide-aggregation cross-value hole).
  * - `STANDARD_PROMPT_CAVEAT_POLICY` — the tier upgrades, the value-screened
  *   discharge, and the display/influence discharge, all SOURCE-bound (and, for
- *   influence, SINK-bound) so they are safe against tx-wide integrity
- *   aggregation. Deployments spread this into `RuntimeOptions.cfcPolicyRecords`
+ *   influence, SINK-bound), so evidence about one source's value cannot
+ *   discharge another source's caveat. Two values from ONE source carry the
+ *   same caveat, and the binding does not tell one's evidence from the
+ *   other's: where a boundary pools integrity across values, a screened
+ *   item discharges an unscreened sibling. The per-access join of
+ *   `cfcReleaseGateIntegrity: "enforce"` is what keeps each value to its own
+ *   evidence. Deployments spread this into `RuntimeOptions.cfcPolicyRecords`
  *   so it runs at real boundaries under `cfcPolicyEvaluation`. At a boundary a
  *   material-risk caveat is handled through the screening gradient
  *   (`CaveatScreened` evidence carries a `source`, so the tier rules correlate

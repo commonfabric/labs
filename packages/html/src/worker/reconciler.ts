@@ -425,6 +425,7 @@ export class WorkerReconciler {
       resolveConfidentiality: options.resolveRenderConfidentiality,
       membership: options.membershipProvider,
       modulePolicies: options.modulePolicySource,
+      releaseGateIntegrity: options.releaseGateIntegrity,
     };
     this.#spaceAccess = options.spaceAccess;
     // Security knob: a present-but-unknown value fails closed to "deny";

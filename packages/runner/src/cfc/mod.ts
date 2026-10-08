@@ -6,6 +6,11 @@ export type {
   ResolvedLabelReadOptions,
 } from "./label-view.ts";
 export {
+  accessIntegrity,
+  type ConsumedLocation,
+  type LocatedIntegrityAtom,
+} from "./access-integrity.ts";
+export {
   type CfcCellLinkRefPayload,
   linkCfcLabelView,
   stripSigilCfcLabelViews,
@@ -67,6 +72,7 @@ export type {
   CfcPreparationWork,
   CfcPrepareState,
   CfcRecordAddress,
+  CfcReleaseGateIntegrityMode,
   CfcSandboxDiagnostic,
   CfcSandboxExitCodeObservation,
   CfcSandboxJsonValue,
@@ -133,6 +139,7 @@ export {
   DEFAULT_CFC_FLOW_LABELS_MODE,
   DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
   DEFAULT_CFC_POLICY_EVALUATION_MODE,
+  DEFAULT_CFC_RELEASE_GATE_INTEGRITY_MODE,
   DEFAULT_CFC_TRIGGER_READ_GATING,
   DEFAULT_CFC_WRITE_FLOOR_MODE,
   isCfcEnforcementMode,
@@ -258,6 +265,7 @@ export {
   describeSinkReleaseRefusal,
   flowLabelWorkExists,
   gatedSinkRequestExists,
+  labelViewLocations,
   loadStoredCfcEnvelope,
   prepareBoundaryCommit,
   releaseMergeOptions,

@@ -52,6 +52,12 @@ question is what §8.12.8's join means when a component makes no integrity
 claim. Read literally, the join would drop every per-value claim wherever a
 policy is declared. That reading needs a ruling before anything changes.
 
+The standard prompt-caveat profile rides the sink's union too. Its rules bind
+a screening record to the caveat's source, which keeps one source's evidence
+off another source's caveat, but two items from one source carry the same
+caveat: sent together, the screened item's `CaveatScreened` discharges the
+unscreened item's caveat.
+
 ## Classification
 
 Removing the union across entries and across reads is a **conforming
@@ -67,6 +73,67 @@ carry. It is a draft, and lands only with its owner's approval.
 
 The join within one location is a **semantic gap** (see above), and stays as
 it is until ruled.
+
+## The per-access join as built
+
+The `cfcReleaseGateIntegrity` dial (`off`, `observe`, `enforce`) chooses the
+integrity each gate matches rule guards against. `access-integrity.ts` holds
+the join; `prepare.ts` resolves what an access consumed into locations.
+
+- **Locations.** A read's locations are its own path and, for a recursive
+  read, the path of every label-map entry beneath it, each resolved over the
+  entries that resolve there, as the input witnesses already resolve them.
+  Existence stamps are not evidence, and a `*` template's integrity witnesses
+  nothing.
+- **The join.** Over the access's confidential locations, a hereditary atom
+  survives when every location carries it. Any other atom survives only where
+  one label-map entry supplies it at every location. Locations resolving one
+  stamp are parts of the one value that stamp labels, and `carriedStampLabel`
+  withdraws a stamp's `TransformedBy` once another writer writes at, above or
+  below it. Without that rule, any read spanning a stamped value's children
+  would drop the stamp. Whether this is the §3.1.6.2 identity case or needs
+  the "what counts as one observation" ruling below is open.
+- **`requiredIntegrity` at the write input gate.** The floor needs a witness
+  every labeled location of every gated read carries, which is §8.10.3's
+  "shared witness key across all consumed observation labels". A location
+  that is provenance plumbing is exempt, as a read that is.
+- **Sink egress and display.** The locations of every read behind the
+  request, or behind the rendered value, are one access. At the display, a
+  cell's stored label is fitted the same way, over the locations of its label
+  view. A view's entries carry no origin, so each location resolves to its
+  most specific entries whatever their component.
+- **Other observations.** A label-metadata observation is a confidential
+  location with no integrity. An external content observation is one location,
+  vouched for by its flow join's integrity.
+- **Under `observe`**, a release the union admits and the join would refuse
+  is recorded as a `release-gate-integrity(observe)` diagnostic. The
+  diagnostic also says whether evaluating each confidential location on its
+  own integrity would admit it: per-location evaluation rescues the release
+  that value-intrinsic exchange at observation would preserve, and does not
+  rescue one value's evidence vouching for another.
+
+## Related leaks the gates do not close
+
+Adversarial review found integrity vouching across values outside the three
+gates. Each is a separate change; none is fixed here.
+
+- **The flow join's hereditary meet** meets each observation's union across
+  locations, so a value derived from `{a: PolicyCertified, b: uncertified}`
+  read whole is stamped `PolicyCertified`. A later single-location access then
+  releases it, so no gate fix reaches it. The meet wants the per-location
+  resolution the input witnesses use (§8.9.3: "MUST NOT attach unioned input
+  integrity").
+- **`carriedStampLabel` keeps an ancestor stamp's hereditary atoms** after
+  another writer writes beneath it; it withdraws only `TransformedBy`. At the
+  display, `rebaseCfcLabelView` folds the ancestor's entry in beside a child's
+  own, so a child cell inherits it too.
+- **An `ExternalIngest` mark survives an overwrite** by a writer that is not
+  an ingest. Nothing verifies its `valueDigest`.
+- **A wildcard `requiredIntegrity` floor goes unchecked on the write side**
+  (`verifyWriteFloor` skips `*` entries), and the read gate hands an empty
+  read prefix to it, so a literal written into a floored list passes.
+- **A link written at a payload field named `internal`** leaves the root
+  stamp's `TransformedBy` in place.
 
 ## Approach
 
@@ -89,14 +156,15 @@ it is until ruled.
 
 ## Plan
 
-- [ ] Write the regression tests:
+- [x] Write the regression tests:
   - the documented composition case, with the document existing before the
     endorsed write so that no root stamp masks it;
   - the across-reads cases at sink egress and display;
   - each asserts today's release, marked as the behavior to remove.
-- [ ] Add a dial (`off`, `observe`, `enforce`) in
+- [x] Add a dial (`off`, `observe`, `enforce`) in
       [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md).
-      Implement the observe arm at the three gates.
+      Implement the observe arm at the three gates, and the enforce arm
+      beside it. The dial rests at `observe`.
 - [ ] Run the pattern suite at `observe`, and list the divergences.
 - [ ] Decide with labs#8531's owner whether its carry lands first, or this
       lands first at `enforce` and accepts the refusals.
