@@ -229,6 +229,15 @@ describe("scheduler-remote-echo-breaker", () => {
     });
   });
 
+  describe("the constants", () => {
+    it("keeps the quiet reset longer than the backoff cap and the window", () => {
+      // A loop still running at the cap must never look quiet, and a lapsed
+      // window must never cancel a tripped pair's backoff.
+      expect(ECHO_QUIET_RESET_MS).toBeGreaterThan(ECHO_BACKOFF_MAX_MS);
+      expect(ECHO_QUIET_RESET_MS).toBeGreaterThan(ECHO_WINDOW_MS);
+    });
+  });
+
   describe("RemoteEchoBreaker", () => {
     describe("instance members", () => {
       describe("observe()", () => {
@@ -296,9 +305,10 @@ describe("scheduler-remote-echo-breaker", () => {
         it("keeps a tripped pair tripped across a lapsed window", () => {
           const breaker = new RemoteEchoBreaker();
           trip(breaker, "d");
-          // Longer than the window but shorter than the quiet reset: the echo
-          // renews the backoff rather than starting the count again.
-          const later = ECHO_WINDOW_MS * 2;
+          // Longer than the window but, by the whole backoff cap, shorter
+          // than the quiet reset: the echo renews the backoff rather than
+          // starting the count again.
+          const later = ECHO_WINDOW_MS + ECHO_BACKOFF_MAX_MS;
           expect(breaker.observe(ACTION, [echo("d")], later)).toBe(
             later + ECHO_BACKOFF_BASE_MS * 2,
           );
@@ -446,15 +456,20 @@ describe("scheduler-remote-echo-breaker", () => {
     /**
      * Subscribes an effect that reads the shared document and writes
      * `tag.value` to it on every run — a derivation whose output is the
-     * document it reads. Two sessions with different tags never agree.
+     * document it reads. Two sessions with different tags never agree. With
+     * `read: "implicit"` the effect only writes, and the reads the write path
+     * makes of its destination, the diff base among them, are its only
+     * dependency on the document, which is the shape the storm's derivations
+     * had.
      */
     function subscribeTagWriter(
       runtime: Runtime,
       tag: { value: string },
+      read: "explicit" | "implicit",
     ): Action {
       const action: Action = (tx) => {
         const cell = runtime.getCell<string>(space, DOC, anySchema);
-        cell.withTx(tx).get();
+        if (read === "explicit") cell.withTx(tx).get();
         cell.withTx(tx).set(tag.value);
       };
       runtime.scheduler.subscribe(
@@ -507,8 +522,8 @@ describe("scheduler-remote-echo-breaker", () => {
       const b = connect(true);
       try {
         await seed(a, b.runtime, DOC, "seed");
-        subscribeTagWriter(a.runtime, { value: "A" });
-        subscribeTagWriter(b.runtime, { value: "B" });
+        subscribeTagWriter(a.runtime, { value: "A" }, "explicit");
+        subscribeTagWriter(b.runtime, { value: "B" }, "explicit");
         await clock.settle();
 
         const sequence = await drive(ECHO_TRIP_THRESHOLD * 3);
@@ -528,13 +543,46 @@ describe("scheduler-remote-echo-breaker", () => {
       }
     });
 
+    it("trips when the looping effects only write the document", async () => {
+      // Neither effect reads the document itself; each only writes it. The
+      // write path reads the current value as its diff base, and that read is
+      // a scheduling dependency, so the other session's commit re-triggers
+      // the effect all the same. This is the loop as the storm ran it.
+
+      const a = connect(true);
+      const b = connect(true);
+      try {
+        await seed(a, b.runtime, DOC, "seed");
+        subscribeTagWriter(a.runtime, { value: "A" }, "implicit");
+        subscribeTagWriter(b.runtime, { value: "B" }, "implicit");
+        await clock.settle();
+
+        const sequence = await drive(ECHO_TRIP_THRESHOLD * 3);
+
+        expect(a.runtime.scheduler.getEchoBreakerStats().trips).toBe(1);
+        expect(b.runtime.scheduler.getEchoBreakerStats().trips).toBe(1);
+        const tail = sequence.slice(-ECHO_TRIP_THRESHOLD);
+        expect(tail[tail.length - 1]).toBe(tail[0]);
+      } finally {
+        await dispose(a, b);
+      }
+    });
+
     it("holds each session to one re-run per backoff while the loop continues", async () => {
       const a = connect(true);
       const b = connect(true);
       try {
         await seed(a, b.runtime, DOC, "seed");
-        const actionA = subscribeTagWriter(a.runtime, { value: "A" });
-        const actionB = subscribeTagWriter(b.runtime, { value: "B" });
+        const actionA = subscribeTagWriter(
+          a.runtime,
+          { value: "A" },
+          "explicit",
+        );
+        const actionB = subscribeTagWriter(
+          b.runtime,
+          { value: "B" },
+          "explicit",
+        );
         await clock.settle();
         await drive(ECHO_TRIP_THRESHOLD * 3);
 
@@ -573,8 +621,8 @@ describe("scheduler-remote-echo-breaker", () => {
         await seed(a, b.runtime, DOC, "seed");
         const tagA = { value: "A" };
         const tagB = { value: "B" };
-        subscribeTagWriter(a.runtime, tagA);
-        subscribeTagWriter(b.runtime, tagB);
+        subscribeTagWriter(a.runtime, tagA, "explicit");
+        subscribeTagWriter(b.runtime, tagB, "explicit");
         await clock.settle();
         await drive(ECHO_TRIP_THRESHOLD * 3);
         expect(pairCount(a.runtime) + pairCount(b.runtime)).toBe(2);
@@ -607,8 +655,8 @@ describe("scheduler-remote-echo-breaker", () => {
       const b = connect(false);
       try {
         await seed(a, b.runtime, DOC, "seed");
-        subscribeTagWriter(a.runtime, { value: "A" });
-        subscribeTagWriter(b.runtime, { value: "B" });
+        subscribeTagWriter(a.runtime, { value: "A" }, "explicit");
+        subscribeTagWriter(b.runtime, { value: "B" }, "explicit");
         await clock.settle();
 
         const sequence = await drive(ECHO_TRIP_THRESHOLD * 3);

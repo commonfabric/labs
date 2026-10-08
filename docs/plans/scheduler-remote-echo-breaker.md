@@ -100,8 +100,10 @@ and stay apart.
 ### Trip condition
 
 An untripped pair trips when its echo-step count reaches `ECHO_TRIP_THRESHOLD`
-within `ECHO_WINDOW_MS`. Before a trip, a convergence step clears the pair and a
-window that elapses with no echo step resets the count. The count is of
+within `ECHO_WINDOW_MS`. The window opens at the pair's first counted echo
+step, and once it has run out the next echo step opens a new one with the count
+at one, so a steady cadence trips only when it fits the threshold into one
+window. Before a trip, a convergence step clears the pair. The count is of
 sustained oscillation: an eventually-consistent derivation that writes `D` once
 or twice and then agrees resets long before it trips.
 
@@ -110,8 +112,15 @@ Proposed defaults, to be tuned against the health-route rate signal (Topic
 
 | Constant | Value | Why |
 | --- | --- | --- |
-| `ECHO_WINDOW_MS` | 10000 | Ten seconds. The storm ran near ten writes per second, so a real loop fills the window many times over; a human alternation does not. |
-| `ECHO_TRIP_THRESHOLD` | 12 | Twelve oscillation steps on one document inside the window. A convergent derivation reaches one or two and resets. |
+| `ECHO_WINDOW_MS` | 60000 | One minute. The pair counts one session's rewrites of one document, and a loop's cadence per session is set by its round trip through the server rather than by the space-wide rate: the Topics social space's loops ran between three and sixty echoes per session per ten seconds. Forty seconds is the shortest window that holds twelve of the slowest at the cadence it sustained for hours; a minute leaves margin for a window that opens between two of its echoes. A human alternation is a handler's writes, which are never counted. |
+| `ECHO_TRIP_THRESHOLD` | 12 | Twelve oscillation steps on one document inside the window. A convergent derivation reaches one or two and resets; in three quiet weeks of the Topics space no derivation changed one document more than five times in a minute. |
+
+The storm traces and the quiet weeks that set the window and the threshold are
+replayed through the detector by
+`packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts` against
+the fixture extracted from the space's 2026-08-18 export, so a change to either
+is held to every loop that space has run and to its busiest ordinary traffic.
+The backoff bounds and the quiet reset are not set by that replay.
 
 ### Telling it from legitimate work
 
@@ -158,13 +167,13 @@ that run echoes again the next backoff is already in place.
 | --- | --- |
 | `ECHO_BACKOFF_BASE_MS` | 500 |
 | `ECHO_BACKOFF_MAX_MS` | 30000 |
-| `ECHO_QUIET_RESET_MS` | 60000 |
+| `ECHO_QUIET_RESET_MS` | 120000 |
 
 At the cap, `A` re-runs at most once every thirty seconds in response to a
-remote echo, so the commit rate for the loop falls from the storm's ~10/s to
-~0.03/s per looping document. The system gets slower under a sustained loop
-rather than busy-looping — the same principle as committed-write backpressure,
-applied to a loop of *successful* commits.
+remote echo, so each looping pair's commit rate falls to ~0.03/s, against the
+0.3/s to 6/s per pair the Topics loops ran at. The system gets slower under a
+sustained loop rather than busy-looping — the same principle as committed-write
+backpressure, applied to a loop of *successful* commits.
 
 Distinct from the convergence backoff: `echoBackoffUntil` is a separate field
 so that clearing one does not clear the other, and so that the idle semantics
@@ -198,7 +207,7 @@ channel, naming the action, the document, the threshold, and the window:
 
 ```
 remote-echo-breaker-tripped action <id> rewrote document <space>/<scope>/<id>
-12 times within 10000ms against a remote writer; backing off its re-runs,
+12 times within 60000ms against a remote writer; backing off its re-runs,
 starting at 500ms
 ```
 
@@ -216,8 +225,8 @@ by:
 - `ECHO_QUIET_RESET_MS` with no echo step — the loop ended without a run that
   could observe it, for instance because the other session went away. The
   quiet stretch is longer than the backoff cap, so a loop still running at the
-  cap never looks quiet. The ten-second window does not reset a tripped pair,
-  since it would cancel a thirty-second backoff before its deadline;
+  cap never looks quiet, and longer than the window. The window does not
+  reset a tripped pair, since it would cancel a backoff before its deadline;
 - `A`'s registration being retired — the pair state is dropped, and the gate
   on the node record, which outlives the registration, is cleared so a later
   registration of the same action does not inherit it.
@@ -321,7 +330,10 @@ never a sleep or a poll, per
 - **Two sessions over one emulated server** with manual fan-out, each running
   an effect that reads a shared document and writes its own tag to it. The
   breaker trips on both sides and the commit sequence stops while logical time
-  is held. With time advanced through repeated backoffs, each session re-runs
+  is held. The same loop with the effect's explicit read removed, so that the
+  write's own diff-base read is the only dependency on the document, trips at
+  the same exchange: that implicit read is the self-referential shape the
+  storm had. With time advanced through repeated backoffs, each session re-runs
   at most once per cycle while the disagreement continues. Once the two agree,
   the session that reads the agreed value writes it again, storage drops the
   write, and that convergence step clears its pair; commits stop and nothing is
@@ -332,6 +344,20 @@ never a sleep or a poll, per
 
 Each of the renewal, convergence, identity, and unsubscribe behaviors has been
 checked to fail its test when reverted.
+
+`packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts` replays
+the Topics space's own history through the detector: two minutes of each of
+the five documents most rewritten in the July 2026 storms, the slow three at
+the cadence they sustained for hours, and every document written four or more
+times in the three quiet weeks that followed, from
+`fixtures/topics-echo-traces.json.gz`. Every storm document trips and no quiet
+space- or user-scoped document does.
+
+`packages/runner/test/scoped-output-convergence.test.ts` runs the October
+storm's own pattern shape, a derivation over a per-session input in two
+sessions, with the breaker on as well as off: with the placement fix in, the
+sessions converge, the commit sequence stops moving on each arm, and on the
+breaker's arm it counts no cycle.
 
 ## Stages
 

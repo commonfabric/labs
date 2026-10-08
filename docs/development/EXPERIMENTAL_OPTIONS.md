@@ -815,10 +815,12 @@ holds the measurements and the conditions for revisiting.
   that changes write cadence under a loop, enabled deliberately for dogfooding
   on a dev space before any default-on decision. The thresholds
   (`ECHO_WINDOW_MS`, `ECHO_TRIP_THRESHOLD`, the backoff bounds, and
-  `ECHO_QUIET_RESET_MS` in `packages/runner/src/scheduler/constants.ts`) await
-  tuning against the per-space rate signal of Topic 913. The end state is to
-  fold the breaker into base scheduler semantics and delete the flag once the
-  thresholds have soaked.
+  `ECHO_QUIET_RESET_MS` in `packages/runner/src/scheduler/constants.ts`)
+  await the per-space rate signal of Topic 913 for live tuning; the window and
+  the threshold are set against the Topics space's own loops and quiet weeks,
+  which `packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts`
+  replays. The end state is to fold the breaker into base scheduler semantics
+  and delete the flag once the thresholds have soaked.
 - **Status on 2026-10-08.** Implemented behind the flag; detection hooked at
   the reactive commit success path (`scheduler/run.ts`), backoff through the
   existing gate primitive (`scheduler/gates.ts`, the `echoBackoffUntil` field).
@@ -828,7 +830,9 @@ holds the measurements and the conditions for revisiting.
   drives a two-session loop over a shared emulated server: the trip, the
   sustained one-re-run-per-backoff bound, the reset once the sessions agree, a
   legitimate re-derivation that does not trip, and a re-registration that does
-  not inherit an old backoff.
+  not inherit an old backoff. `scoped-output-convergence.test.ts` runs the
+  October storm's pattern shape under the flag and shows nothing trips once
+  the sessions place their output the same way.
 - **Path to removal.** Tune the thresholds from live rate data, soak at a
   default-on posture, then make the breaker unconditional in
   `#createActionRunState`, remove the env mapping, the runtime option and its
