@@ -990,7 +990,18 @@ the type for more than the brand, as for the labels of a policy in the payload,
 `PerUser<Confidential<T, […]>>` or `PerUser<Confidential<A & B, […]>>`, whose
 CFC parts pass over the brand (`cfcCarriedParts`), and otherwise by the
 formatters after it (`formatStructure`). Such a payload that is a cell, as
-`Cell<A> & Cell<B>`, is read as the cell. The payload of a wrapper found by name is
+`Cell<A> & Cell<B>`, is read as the cell. Where a union of one scope's
+wrappers beside `null` or `undefined` is written as one, `PerUser<A> | null`,
+at the position or as the body of the alias the type is reached by, under that
+alias's arguments (`scopeOfWrittenScopedUnion`), the payload's type is read at
+the members written for it: the payload written in each wrapper, and each
+`null` or `undefined` (`GenerationContext.scopePayloadNodes`), as the members
+of `A | null` written in `PerUser<A | null>` are. So what only the syntax says,
+the binding `PolicyOf<typeof rules>` names in
+`type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null`,
+is kept, for a holder's values read by type too, and the two spellings read
+alike. The node-based analyzer hands such a union to the same reading. The
+payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
 the same walk that lowers a CFC alias reached through aliases (§11):

@@ -333,6 +333,76 @@ describe("PolicyOf label-time binding", () => {
     expect(typeof reference.policyDigest).toBe("string");
   });
 
+  it("persists the policy of a scoped alias whose body writes `null` outside the wrapper", async () => {
+    // A holder's values are read by type, so only the alias's declaration
+    // spells the policy, and its body is the wrapper beside `null`.
+    const program = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { toSchema, type Confidential, type PerUser } from "commonfabric";
+          import type { PolicyOf } from "commonfabric/cfc";
+          import {
+            cfcPattern, exchangeRule, exchangeRules, THIS_POLICY, v,
+          } from "commonfabric/cfc";
+          export const release = exchangeRule({
+            appliesTo: THIS_POLICY,
+            pre: { integrity: [cfcPattern.hasRole(v("user"), THIS_POLICY.subject, "reader")] },
+            post: { addAlternatives: [cfcPattern.user(v("user"))] },
+          });
+          export const rules = exchangeRules([release]);
+          interface Dict<U> { [key: string]: U }
+          type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null;
+          export const schema = toSchema<{ inner: Dict<Box<string>> }>();
+        `,
+      }],
+    };
+    const engine = runtime.harness as Engine;
+    const compiled = await engine.compileToRecordGraph(program);
+    for (const module of compiled.modules) {
+      runtime.registerCfcPolicyManifests(
+        space,
+        module.policyManifests ?? [],
+      );
+    }
+    const evaluated = engine.evaluateRecordGraph(
+      compiled.id,
+      compiled.graph,
+      compiled.mainSpecifier,
+      program,
+    );
+
+    const tx = runtime.edit();
+    const cell = runtime.getCell(
+      space,
+      "compiled-nullable-scoped-policy-of",
+      evaluated.main?.schema as JSONSchema,
+      tx,
+    );
+    cell.set({ inner: { held: "secret" } });
+    tx.prepareCfc();
+    await tx.commit().settled;
+
+    const readTx = runtime.edit();
+    const metadata = readStoredCfcMetadata(
+      readTx,
+      cell.getAsNormalizedFullLink(),
+    );
+    readTx.abort?.();
+    const held = metadata?.labelMap.entries.find((entry) =>
+      entry.path.join("/") === "inner/held"
+    );
+    expect(held?.label.confidentiality).toEqual([{
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module",
+      subject: space,
+      moduleIdentity: compiled.entryIdentity,
+      symbol: "rules",
+      policyDigest: expect.any(String),
+    }]);
+  });
+
   it("cold-loads the destination manifest without the producer module", async () => {
     const program = {
       main: "/main.tsx",

@@ -224,6 +224,60 @@ export default pattern<{ a: Outer<Secret> }>(({ a }) => ({
       }
     });
 
+    it("keeps the policy a scoped alias's declaration spells beside `null` written outside the wrapper, where a holder's values are read by type", async () => {
+      // The alias's body is the wrapper beside `null`, which is the wrapper
+      // around both, read at the payload its declaration writes.
+      const valuesFor = async (box: string) => {
+        const output = await transformFiles({
+          "/rules.ts":
+            `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
+export const rules = exchangeRules([exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: ["reader"] },
+  post: { dropClause: true },
+})]);`,
+          "/main.tsx":
+            `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+interface Secret { a: string }
+interface Dict<U> { [key: string]: U }
+type Box<T> = ${box};
+type Outer<T> = { inner: Dict<Box<T>> };
+export default pattern<{ a: Outer<Secret> }>(({ a }) => ({
+  out: computed(() => a.inner),
+}));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const module = parseModule(output["/main.tsx"]!);
+        return [patternSchemas(module).input, callSchemas(module, "lift")[0]!]
+          // deno-lint-ignore no-explicit-any
+          .map((schema: any) => schema.properties.a.properties.inner);
+      };
+      const outside = await valuesFor(
+        "PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null",
+      );
+
+      for (const values of outside) {
+        expect(values.additionalProperties).toMatchObject({
+          anyOf: [{
+            $ref: "#/$defs/Secret",
+            ifc: {
+              confidentiality: [{
+                policyRefKind: "module",
+                __ctPolicyIdentityOf: { file: "/rules.ts", path: ["rules"] },
+              }],
+            },
+          }, { type: "null" }],
+          scope: "user",
+        });
+      }
+      expect(outside).toEqual(
+        await valuesFor(
+          "PerUser<Confidential<T, [PolicyOf<typeof rules>]> | null>",
+        ),
+      );
+    });
+
     it("reads a wrapper around an intersection as the intersection in its scope", async () => {
       const { output } = patternSchemas(
         await transformed(

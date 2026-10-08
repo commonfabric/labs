@@ -25,6 +25,7 @@ import {
   lowersFromReferenceArguments,
   resolveScopeWrapperNode,
   scopeOfScopeWrapper,
+  scopeOfWrittenScopedUnion,
   scopesCellHandle,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
@@ -3410,6 +3411,20 @@ export class SchemaGenerator {
     // explicitly. Keyword types (string, number, boolean, undefined, null) are
     // resolved directly by the switch below, so they never cause widening.
     if (ts.isUnionTypeNode(typeNode)) {
+      // One scope's wrappers beside `null` or `undefined`, `PerUser<A> | null`,
+      // are the wrapper around their payloads, `PerUser<A | null>`, which the
+      // scope wrapper formatter reads from the union's type, at the payloads
+      // written in it.
+      const scoped = scopeOfWrittenScopedUnion(typeNode) !== undefined
+        ? typeRegistry?.get(typeNode) ?? checker.getTypeFromTypeNode(typeNode)
+        : undefined;
+      const scopedContext = { ...context, typeNode };
+      if (
+        scoped &&
+        this.#commonFabricFormatter.supportsType(scoped, scopedContext)
+      ) {
+        return this.#commonFabricFormatter.formatType(scoped, scopedContext);
+      }
       const defaultUnion = this.#unionFormatter.formatDefaultUnion(
         typeNode,
         context,

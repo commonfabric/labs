@@ -255,6 +255,19 @@ export interface GenerationContext {
   scopeBrandRead?: ReadonlySet<ts.Type>;
 
   /**
+   * The members written for `payload`, the payload of a union of scope
+   * wrappers beside `null` or `undefined` written as one, `PerUser<A> | null`:
+   * the payload written in each wrapper, and each `null` or `undefined`, as
+   * the members of `A | null` written in `PerUser<A | null>` are. The union
+   * formatter reads `payload` at these nodes, as it reads a union at the
+   * union node written for it.
+   */
+  scopePayloadNodes?: {
+    readonly payload: ts.Type;
+    readonly nodes: readonly ts.TypeNode[];
+  };
+
+  /**
    * Type parameters read as their arguments, for a node read from the
    * declaration that is written in them (`BoundTypeParameters`).
    */

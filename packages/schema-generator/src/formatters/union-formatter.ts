@@ -152,8 +152,29 @@ export function pairUnionMemberNodes(
   ordered: Array<ts.TypeNode | undefined>;
   wholeNodes: Map<ts.Type, WholeMemberNode[]>;
 } {
+  return pairWrittenMemberNodes(
+    members,
+    unionNode.types,
+    checker,
+    readsWhole,
+  );
+}
+
+/**
+ * Like `pairUnionMemberNodes()`, for the nodes `written` written as the
+ * members of a union.
+ */
+function pairWrittenMemberNodes(
+  members: readonly ts.Type[],
+  written: readonly ts.TypeNode[],
+  checker: ts.TypeChecker,
+  readsWhole: (type: ts.Type, node: ts.TypeNode) => boolean,
+): {
+  ordered: Array<ts.TypeNode | undefined>;
+  wholeNodes: Map<ts.Type, WholeMemberNode[]>;
+} {
   const read = new Set<ts.TypeNode>();
-  const memberNodes = unionNode.types.flatMap((node) =>
+  const memberNodes = written.flatMap((node) =>
     readUnionMemberNodes(node, checker, read)
   );
   const ordered = orderMemberNodesBySemanticType(members, memberNodes, checker);
@@ -255,18 +276,24 @@ export class UnionFormatter implements TypeFormatter {
 
   formatType(
     type: ts.Type,
-    context: GenerationContext,
+    outerContext: GenerationContext,
   ): MutableJSONSchema {
     const members = type.isUnion() ? type.types : [type];
-    const unionNode = this.#getUnionTypeNode(
+    // A scope wrapper's payload written as the members of a union outside it
+    // is read at those members (`GenerationContext.scopePayloadNodes`), here
+    // and nowhere below.
+    const { scopePayloadNodes, ...context } = outerContext;
+    const memberNodes = this.#getUnionTypeNode(
       context.typeNode,
       context.typeChecker,
-    );
-    const memberNodes = unionNode ? unionNode.types : undefined;
-    const paired = unionNode
-      ? pairUnionMemberNodes(
+    )?.types ??
+      (scopePayloadNodes?.payload === type
+        ? scopePayloadNodes.nodes
+        : undefined);
+    const paired = memberNodes
+      ? pairWrittenMemberNodes(
         members,
-        unionNode,
+        memberNodes,
         context.typeChecker,
         (union, node) => this.#readsWhole(union, node, context),
       )

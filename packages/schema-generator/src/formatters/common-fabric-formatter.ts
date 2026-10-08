@@ -282,6 +282,39 @@ const isNullishSchema = (schema: unknown): boolean =>
   ((schema as { type?: unknown }).type === "null" ||
     (schema as { type?: unknown }).type === "undefined");
 
+/** Whether `node`, through parentheses, is `null` or `undefined`. */
+const isNullishTypeNode = (node: ts.TypeNode): boolean => {
+  const unwrapped = unwrapTypeParentheses(node);
+  return unwrapped.kind === ts.SyntaxKind.UndefinedKeyword ||
+    (ts.isLiteralTypeNode(unwrapped) &&
+      unwrapped.literal.kind === ts.SyntaxKind.NullKeyword);
+};
+
+/**
+ * The scope of the wrappers `node`, a union, writes beside `null` or
+ * `undefined`, as `PerUser<A> | null` does, which is the scope wrapper around
+ * the union of their payloads, `PerUser<A | null>`: each member is `null`,
+ * `undefined`, or a wrapper of that one scope naming its payload, and at
+ * least one is a wrapper. `undefined` for any other union.
+ */
+export const scopeOfWrittenScopedUnion = (
+  node: ts.UnionTypeNode,
+): SchemaScope | undefined => {
+  let scope: SchemaScope | undefined;
+  for (const member of node.types) {
+    if (isNullishTypeNode(member)) continue;
+    const wrapper = resolveScopeWrapperNode(member);
+    if (
+      !wrapper?.node.typeArguments?.length ||
+      (scope !== undefined && wrapper.scope !== scope)
+    ) {
+      return undefined;
+    }
+    scope = wrapper.scope;
+  }
+  return scope;
+};
+
 /** The error for a scope wrapper nested in another with no cell between. */
 const nestedScopeError = (): Error =>
   new Error("Nested scope wrappers require a cell boundary between scopes.");
@@ -1386,11 +1419,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     // A scope wrapper that no alias names, as a type the checker narrowed or
-    // `PerUser<A> | null`, is named by its brand.
+    // `PerUser<A> | null`, is named by its brand. Its payload is read from a
+    // union node written for it where there is one.
     const brand = this.#scopeBrand(type, context);
     if (brand) {
       return this.#applyScopeWrapperSemantics(
-        this.#formatScopePayload(type, brand, context),
+        this.#formatWrittenScopedUnion(type, brand, context) ??
+          this.#formatScopePayload(type, brand, context),
         brand.scope,
         context,
       );
@@ -1875,6 +1910,147 @@ export class CommonFabricFormatter implements TypeFormatter {
     return this.supportsType(type, payloadContext)
       ? this.formatType(type, payloadContext)
       : this.#schemaGenerator.formatStructure(type, payloadContext);
+  }
+
+  /**
+   * The schema of the payload of `type`, a union of scope wrappers of
+   * `brand`'s scope beside `null` or `undefined` written as one, as
+   * `PerUser<A> | null`, or `undefined` where no such union is written for it
+   * (`#writtenUnion()`). The payload is read as `#formatScopePayload()` reads
+   * it, by its type, `A | null`, at the members written for it: the payload
+   * written in each wrapper and each `null` or `undefined`
+   * (`GenerationContext.scopePayloadNodes`), as `PerUser<A | null>` writes
+   * them. What only the syntax says, such as the binding
+   * `PolicyOf<typeof rules>` names, is read as written.
+   */
+  #formatWrittenScopedUnion(
+    type: ts.Type,
+    brand: ScopeBrand,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    const checker = context.typeChecker;
+    const written = type.isUnion()
+      ? this.#writtenUnion(type, context)
+      : undefined;
+    if (!written || scopeOfWrittenScopedUnion(written.node) !== brand.scope) {
+      return undefined;
+    }
+    // Each wrapper stands for the payload written in it, and a union written
+    // there has its members written beside the `null` or `undefined` outside.
+    const nodes = written.node.types.flatMap((member) => {
+      const payload = resolveScopeWrapperNode(member)?.node.typeArguments?.[0];
+      if (!payload) return [member];
+      const unwrapped = unwrapTypeParentheses(payload);
+      return ts.isUnionTypeNode(unwrapped) ? unwrapped.types : [payload];
+    });
+    // Read under bindings, the union is the declaration's own type, whose
+    // brand gives the payload as the declaration writes it.
+    const writtenBrand = written.type === type
+      ? brand
+      : getScopeBrand(written.type, checker);
+    if (writtenBrand?.scope !== brand.scope) return undefined;
+    const payload = scopePayloadType(written.type, writtenBrand, checker);
+    // The union's instantiation, where it is read under bindings, gives its
+    // payload's (`GenerationContext.instantiatedAs`).
+    const instantiatedType = written.type === type
+      ? context.instantiatedAs
+      : type;
+    const instantiatedBrand = instantiatedType &&
+      getScopeBrand(instantiatedType, checker);
+    const instantiated = instantiatedBrand?.scope === brand.scope
+      ? scopePayloadType(instantiatedType!, instantiatedBrand, checker)
+      : undefined;
+    const { typeNode: _, instantiatedAs: __, ...outer } = written.context;
+    return this.#schemaGenerator.formatChildType(
+      payload,
+      {
+        ...outer,
+        // An alternative of several members is the branded member itself
+        // (`scopePayloadType()`), read as its payload.
+        scopeBrandRead: new Set([
+          payload,
+          ...(payload.isUnion() ? payload.types : []),
+        ]),
+        scopePayloadNodes: { payload, nodes },
+      },
+      undefined,
+      instantiated,
+    );
+  }
+
+  /**
+   * The union node written for `type`, a union, with the type and the context
+   * to read it in: the node at this position, through parentheses and aliases
+   * that bind nothing, read as `type`; and otherwise the body of the alias the
+   * reference at this position names, or, with no node here, the one `type`
+   * is reached by. A generic alias's body is the declaration's own type, read
+   * with each parameter bound to the argument the reference writes for it, or
+   * to the type's argument where none is written, at `type`
+   * (`GenerationContext.instantiatedAs`).
+   */
+  #writtenUnion(
+    type: ts.UnionType,
+    context: GenerationContext,
+  ):
+    | {
+      readonly node: ts.UnionTypeNode;
+      readonly type: ts.Type;
+      readonly context: GenerationContext;
+    }
+    | undefined {
+    const checker = context.typeChecker;
+    const reference = context.typeNode &&
+      readThroughIdentityAliases(context.typeNode, checker);
+    if (reference && ts.isUnionTypeNode(reference)) {
+      return { node: reference, type, context };
+    }
+    if (reference && !ts.isTypeReferenceNode(reference)) return undefined;
+    const declaration = this.#getTypeAliasDeclarationForSymbol(
+      reference
+        ? checker.getSymbolAtLocation(reference.typeName)
+        : type.aliasSymbol,
+      context,
+    );
+    const body = declaration && unwrapTypeParentheses(declaration.type);
+    if (!declaration || !body || !ts.isUnionTypeNode(body)) return undefined;
+    const typeArguments = type.aliasSymbol &&
+        this.#getTypeAliasDeclarationForSymbol(type.aliasSymbol, context) ===
+          declaration
+      ? type.aliasTypeArguments
+      : undefined;
+    const written = reference?.typeArguments ?? [];
+    const bound = new Map<ts.TypeParameterDeclaration, BoundTypeArgument>();
+    for (
+      const [index, parameter] of (declaration.typeParameters ?? []).entries()
+    ) {
+      // An argument the reference leaves out is its parameter's default, read
+      // with the arguments before it.
+      const node = written[index] ?? (reference && parameter.default);
+      const argument = node &&
+        this.#bindWrittenArgument(
+          node,
+          written[index]
+            ? context.boundTypeParameters
+            : { arguments: new Map(bound), declaredNode: node },
+          context,
+        );
+      const argumentType = typeArguments?.[index];
+      const binding = argument || (argumentType && { type: argumentType });
+      if (!binding) return undefined;
+      bound.set(parameter, binding);
+    }
+    const { boundTypeParameters: _, ...outer } = context;
+    return {
+      node: body,
+      type: this.#writtenArgumentType(body, context),
+      context: bound.size > 0
+        ? {
+          ...outer,
+          boundTypeParameters: { arguments: bound, declaredNode: body },
+          instantiatedAs: type,
+        }
+        : outer,
+    };
   }
 
   /**
