@@ -625,13 +625,19 @@ loop's duty).
   fail-closed interim) is no load in flight. The read's scope and the
   runtime's serving posture decide it, so the same read from the same
   runtime is refused every time, and the storage manager registers no
-  pending load for it. A served event's preflight therefore never parks
-  on one: a handler whose declared inputs reach a user- or session-scoped
-  document in another space dispatches with that document unread, and a
-  read of it in the handler body finds it absent. The outcome is the same
-  whenever the refusal lands relative to the preflight. Where such a
-  refusal does reach a load failure, it is a permanent `protocol` verdict
-  in `dispatch-load`, never a retryable `connection` failure.
+  pending load for it, so a served event's preflight never parks on one.
+  What decides the event is what its run reads. A run that reads the
+  value of such a document, a user- or session-scoped document in
+  another space reached through its declared event or its bound state,
+  read an absence that is not the document's state: the run is withdrawn
+  and the event fails as a permanent `protocol` verdict in
+  `dispatch-load`, sealing its `needs-attention` notice at once, the same
+  every time. A run that passes a link to such a document along reads
+  only the document's CFC metadata and dispatches. So does a run whose
+  refused documents only the preflight reaches: the preflight's
+  dependency walk reads beyond the handler's declared schema, following a
+  linked piece's own fields (a profile's view and per-user state, for
+  example), and what it reads there decides nothing.
 - An event held only behind an earlier failed head preserves arrival
   order but records no checkpoint and spends no budget. A load-park
   observation neither increments nor clears the independent cold-view

@@ -2008,6 +2008,43 @@ export async function dispatchQueuedEvent(state: {
     };
 
     const finalize = (error?: unknown): void => {
+      // A served run that read a document this runtime refuses by
+      // construction read an absence that is not the document's state, so
+      // whatever it did with it — an `undefined` argument, a throw, a
+      // branch taken on nothing — is no consequence of the event. The read
+      // is refused the same way every time, so the entry fails permanently
+      // in `dispatch-load`, as a load that cannot succeed fails it. Only
+      // what the run itself read decides this: the preflight's dependency
+      // walk is a transaction of its own, and a refused document only it
+      // reaches leaves the run free to dispatch.
+      const refused = served === undefined
+        ? undefined
+        : refusedReadIn(state.runtime, tx);
+      if (refused !== undefined) {
+        if (tx.status().status === "ready") {
+          tx.abort(new Error(`served run read a refused document: ${refused}`));
+        }
+        reportServedEventFailure(served, {
+          kind: "deferred",
+          cause: "load-park",
+          role: "failed-head",
+          failure: {
+            failureClass: "protocol",
+            recoveryEpoch: `refused-read:${refused}`,
+            permanentEvidence: true,
+          },
+        });
+        deferLaterSameSpaceServedEvents(
+          state,
+          queuedEvent,
+          `whose served run read a refused document (${refused})`,
+        );
+        runFinalCommitCallback();
+        tx.abandonStagedWork(
+          eventAbandonError("served run read a refused document"),
+        );
+        return;
+      }
       const unavailable = validateLocalReadBasis(tx);
       if (unavailable !== undefined) {
         if (tx.status().status === "ready") tx.abort(unavailable);
@@ -2670,6 +2707,33 @@ export async function dispatchQueuedEvent(state: {
   } catch (error) {
     finalizeFailure(error);
   }
+}
+
+/**
+ * The first document whose value `tx` read that `runtime`'s storage manager
+ * refuses by construction, as `<space>/<scope>/<id>`, or `undefined` when it
+ * read none. Two kinds of read do not count, since neither takes the
+ * document's data: a read of its CFC metadata, which a run passing a link to
+ * the document along makes, and a check for a link at a path of its value,
+ * which resolving a link through the document makes, and which finds none in
+ * a document this runtime cannot read.
+ */
+function refusedReadIn(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+): string | undefined {
+  const manager = runtime.storageManager;
+  if (manager.refusesReadByConstruction === undefined) return undefined;
+  const log = txToReactivityLog(tx);
+  for (const read of [...log.reads, ...log.shallowReads]) {
+    if (
+      read.path[0] === "value" && !read.path.includes("/") &&
+      manager.refusesReadByConstruction(read)
+    ) {
+      return `${read.space}/${read.scope ?? "space"}/${read.id}`;
+    }
+  }
+  return undefined;
 }
 
 function formatEventCommitAddress(address: {

@@ -2288,6 +2288,192 @@ export default pattern<
     }
   });
 
+  /**
+   * Stands up `source` in the home space for Alice's client runtime, with
+   * `argument` as its argument, starts the serving host, and returns the
+   * pattern's result cell, its argument cell, and a reader of the home
+   * space's stored stream entries.
+   */
+  const standUpServed = async (
+    label: string,
+    source: string,
+    argument: (
+      client: Runtime,
+    ) => Promise<Record<string, unknown>> | Record<string, unknown>,
+  ) => {
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: source }],
+    }, { space: homeSpace });
+    const argumentCell = clientRuntime.getCell<Record<string, unknown>>(
+      homeSpace,
+      `${label}-argument`,
+    );
+    const result = clientRuntime.getCell<Record<string, unknown>>(
+      homeSpace,
+      `${label}-result`,
+      compiled.resultSchema,
+    );
+    await Promise.all([argumentCell.sync(), result.sync()]);
+    const value = await argument(clientRuntime);
+    const seed = clientRuntime.edit();
+    argumentCell.withTx(seed).set(value);
+    clientRuntime.run(seed, compiled, argumentCell, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+    const engine = await server.engineForSpace(homeSpace);
+    const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+      (engine.database.prepare(
+        "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+      ).all() as { id: string }[]).flatMap(({ id }) =>
+        (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ?? []
+      );
+    const stored = (): Record<string, unknown> | undefined =>
+      readDoc(engine, { id: argumentCell.getAsNormalizedFullLink().id })
+        ?.value as Record<string, unknown> | undefined;
+    return { result, entries, stored };
+  };
+
+  /**
+   * Writes `value` as Alice into a document named `name` in the foreign
+   * space, at `scope`, and returns the cell.
+   */
+  const foreignDocument = async (
+    client: Runtime,
+    name: string,
+    scope: "space" | "user",
+    value: unknown,
+  ) => {
+    const target = client.getCell(
+      foreignSpace,
+      name,
+      undefined,
+      undefined,
+      scope,
+    );
+    const tx = client.edit();
+    target.withTx(tx).set(value);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await client.storageManager.synced();
+    return target;
+  };
+
+  /** A pattern whose `add` takes a piece by value and records its count. */
+  const VALUE_EVENT_PATTERN = `
+import { action, pattern, type Writable, type Stream } from "commonfabric";
+type Piece = { count: number; items: string[] };
+export default pattern<
+  { counts: Writable<number[]> },
+  { add: Stream<{ piece: Piece }> }
+>(({ counts }) => ({
+  add: action(({ piece }: { piece: Piece }) => {
+    counts.push(piece.count);
+  }),
+}));`;
+
+  it("seals a permanent dispatch-load failure for a served event whose declared value is a foreign scoped document, and runs nothing", async () => {
+    let target: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "declared-value-foreign-scoped",
+      VALUE_EVENT_PATTERN,
+      async (client) => {
+        target = await foreignDocument(
+          client,
+          "declared-value-foreign-scoped-target",
+          "user",
+          { count: 5, items: ["keep"] },
+        );
+        return { counts: [] };
+      },
+    );
+
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0]).toMatchObject({
+      status: "needs-attention",
+      attention: {
+        phase: "dispatch-load",
+        failureClass: "protocol",
+        code: "permanent-delivery-failure",
+      },
+    });
+    expect(stored()?.counts).toEqual([]);
+  });
+
+  it("runs a served event whose declared value is a foreign space-scope document", async () => {
+    let target: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "declared-value-foreign-space",
+      VALUE_EVENT_PATTERN,
+      async (client) => {
+        target = await foreignDocument(
+          client,
+          "declared-value-foreign-space-target",
+          "space",
+          { count: 5, items: ["keep"] },
+        );
+        return { counts: [] };
+      },
+    );
+
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    expect(stored()?.counts).toEqual([5]);
+  });
+
+  it("seals a permanent dispatch-load failure for a served handler whose bound state is a foreign scoped document, and runs nothing", async () => {
+    // The shape of a handler that cancels a run record another space keeps
+    // per user: its state names the record as a value.
+    const { result, entries, stored } = await standUpServed(
+      "bound-state-foreign-scoped",
+      `
+import { handler, pattern, type Writable, type Stream } from "commonfabric";
+type Run = { status?: string };
+const cancel = handler<void, { run: Run; log: Writable<string[]> }>(
+  (_event, { run, log }) => {
+    log.push(run?.status ?? "none");
+  },
+);
+export default pattern<
+  { run: Run; log: Writable<string[]> },
+  { cancel: Stream<void> }
+>(({ run, log }) => ({ cancel: cancel({ run, log }) }));`,
+      async (client) => ({
+        run: await foreignDocument(
+          client,
+          "bound-state-foreign-scoped-run",
+          "user",
+          { status: "running" },
+        ),
+        log: [],
+      }),
+    );
+
+    result.key("cancel").send(undefined);
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0]).toMatchObject({
+      status: "needs-attention",
+      attention: { phase: "dispatch-load", failureClass: "protocol" },
+    });
+    expect(stored()?.log).toEqual([]);
+  });
+
   it("settles a served event whose declared argument reaches a foreign scoped document without a budgeted connection deferral, and runs the later event behind it", async () => {
     clientManager = SharedServerStorageManager.connectTo(server, {
       as: aliceSigner,

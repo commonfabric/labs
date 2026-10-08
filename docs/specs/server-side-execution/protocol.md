@@ -507,9 +507,13 @@ whose lease it does not hold — the shape that would silently resolve
 SPACE-scope state freely (§2b's free-read row) and foreign SCOPED
 state not at all; lifting that refusal is exactly the grant
 resolution above, never a lease-trust widening. Refusal (i) is no load
-for served delivery to wait on: a served event whose declared inputs
-reach such a document dispatches with it unread, and reads it as absent
-(events.md §5). Remote attestation stays anticipated future work.
+for served delivery to wait on, and it is never silently empty for the
+data a served run reads: a run that reads the value of a refused
+document — through its declared event or its bound state — fails
+permanently and terminalizes at once (events.md §5). A refused document
+that only the dispatch preflight's dependency walk reaches, or whose
+link a run passes along without reading it, does not stop dispatch.
+Remote attestation stays anticipated future work.
 
 **Run identity for a derivation (S1).** A derivation runs PER
 DEMANDED INSTANCE and the DEMAND supplies the identity — a

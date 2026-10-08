@@ -2473,12 +2473,7 @@ export class StorageManager implements IStorageManager {
       scopeKey?: ScopeKey;
     },
   ): (failure?: unknown) => void {
-    if (
-      normalizeCellScope(address.scope) !== "space" &&
-      this.#refusesForeignScopedReadsIn(address.space)
-    ) {
-      return () => {};
-    }
+    if (this.refusesReadByConstruction(address)) return () => {};
     const key = entityKey(address, this.scopeKeyIdentity());
     let entry = this.#pendingLoads.get(key);
     if (entry === undefined) {
@@ -2543,6 +2538,14 @@ export class StorageManager implements IStorageManager {
     scopeKey?: ScopeKey;
   }[] {
     return [...this.#pendingLoads.values()].map((entry) => entry.address);
+  }
+
+  /** @inheritDoc */
+  refusesReadByConstruction(
+    address: { space: MemorySpace; scope?: CellScope },
+  ): boolean {
+    return normalizeCellScope(address.scope) !== "space" &&
+      this.#refusesForeignScopedReadsIn(address.space);
   }
 
   pendingLoadGeneration(key: string): number | undefined {
@@ -5750,8 +5753,9 @@ export class SpaceReplica
     // a `ConnectionError`: it can never heal in this runtime. For the same
     // reason the manager registers no pending load for such a read
     // (`#registerPendingLoad()`), so a served event's preflight never parks
-    // on one: the event dispatches with the document unread, whenever the
-    // refusal lands relative to the preflight.
+    // on one, whenever the refusal lands relative to the preflight. A served
+    // run that reads the document's value is failed at dispatch instead
+    // (`refusesReadByConstruction()`).
     if (this.#refuseForeignScopedReads) {
       for (const [address] of normalizedEntries) {
         const scope = normalizeCellScope(address.scope) ?? "space";
