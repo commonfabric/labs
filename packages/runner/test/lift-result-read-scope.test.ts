@@ -270,5 +270,37 @@ describe("runner", () => {
       expect(held.getAsNormalizedFullLink().scope).toBe("user");
       expect(held.getRaw()).toBe("hello");
     });
+
+    it("stores at the space scope the result of a compiled lift reading a cell a mapped scoped dictionary holds", async () => {
+      // `Readonly<PerSpace<Record<string, Cell<string>>>>` is one object
+      // holding the scope's brand beside its index signature, read as the
+      // dictionary it maps.
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            "import { lift, pattern, type Cell, type PerSpace } from 'commonfabric';",
+            "type Dict = Readonly<PerSpace<Record<string, Cell<string>>>>;",
+            "const read = lift((dict: Dict) =>",
+            "  Object.values(dict)[0]?.get() ?? 'missing'",
+            ");",
+            "export default pattern<{ dict: Dict }, { out: string }>(",
+            "  ({ dict }) => ({ out: read(dict) }),",
+            ");",
+          ].join("\n"),
+        }],
+      }, { space });
+      const result = await run(
+        compiled,
+        { dict: { x: scopedCell("dictionary leaf", "hello", "space") } },
+        "mapped dictionary",
+      );
+
+      expect(storedAt(result.key("out"))).toEqual({
+        scope: "space",
+        value: "hello",
+      });
+    });
   });
 });

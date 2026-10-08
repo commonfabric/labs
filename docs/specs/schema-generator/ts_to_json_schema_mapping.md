@@ -979,7 +979,9 @@ deferred type, is read as `PerUser<T | null>` is. That deferred brand is the
 conditional `ScopeTag<T, S>`, named by its alias, so a generic wrapper no
 alias names, as the intersection `PerUser<T> & PerUser<T>`, is read by it:
 `<T extends string>` → `{ type: "string", scope: "user" }`. The brand with
-nothing beside it, as `PerUser<unknown>` resolves to once the checker drops
+nothing beside it (no other property, index signature or call signature, which
+a mapped type over a wrapper, as `Readonly<PerSpace<Record<string, A>>>`, holds
+beside the brand), as `PerUser<unknown>` resolves to once the checker drops
 `unknown` from its intersection, is the wrapper around `unknown`:
 `{ type: "unknown", scope: "user" }`, as a node naming the wrapper reads it.
 `PerUser<{}>` resolves to the same type, as `PerUser<NonNullable<unknown>>`

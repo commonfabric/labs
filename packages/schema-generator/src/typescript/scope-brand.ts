@@ -215,10 +215,13 @@ function brandOfWrapperAlias(
 
 /**
  * The scope that `member` declares when it is the brand member: the object
- * `{ readonly [SCOPE_BRAND]?: S }`, or, while the payload `T` holds a type
- * parameter, the conditional `ScopeTag<T, S>` the checker defers, which has no
- * members to read and is named by its alias alone. `undefined` for any other
- * type.
+ * `{ readonly [SCOPE_BRAND]?: S }`, with nothing else, or, while the payload
+ * `T` holds a type parameter, the conditional `ScopeTag<T, S>` the checker
+ * defers, which has no members to read and is named by its alias alone.
+ * `undefined` for any other type, among them an object holding the brand
+ * beside a payload, as a mapped type over a wrapper does:
+ * `Readonly<PerSpace<Record<string, A>>>` is one object with the brand and an
+ * index signature.
  */
 function scopeOfBrandMember(
   member: ts.Type,
@@ -234,7 +237,14 @@ function scopeOfBrandMember(
   }
   if ((member.flags & ts.TypeFlags.Object) === 0) return undefined;
   const properties = checker.getPropertiesOfType(member);
-  if (properties.length !== 1) return undefined;
+  if (
+    properties.length !== 1 ||
+    checker.getIndexInfosOfType(member).length > 0 ||
+    member.getCallSignatures().length > 0 ||
+    member.getConstructSignatures().length > 0
+  ) {
+    return undefined;
+  }
   const brand = properties[0]!;
   if (!isScopeBrandProperty(brand, checker)) return undefined;
   return scopeOfLiteral(checker.getTypeOfSymbol(brand), checker);

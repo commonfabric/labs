@@ -639,6 +639,28 @@ export default pattern<{ r: string }, { out: string }>(({ r }) => ({
       expect(result).toEqual({ type: "string" });
     });
 
+    it("keeps the values of a dictionary a mapped type over a scope wrapper types", async () => {
+      // `Readonly<PerSpace<Record<string, Cell<string>>>>` holds the brand
+      // beside its index signature, and is no wrapper around `unknown`, so
+      // its values keep their type, and the lift reads its `x` cell.
+      const [input] = callSchemas(
+        await transformed(
+          `import { lift, pattern, type Cell, type PerSpace } from "commonfabric";
+type Dict = Readonly<PerSpace<Record<string, Cell<string>>>>;
+const read = lift((dict: Dict) => dict.x?.get() ?? "missing");
+export default pattern<{ dict: Dict }, { out: string }>(({ dict }) => ({
+  out: read(dict),
+}));`,
+        ),
+        "lift",
+      );
+
+      expect(input).toEqual({
+        type: "object",
+        properties: { x: { type: "string", asCell: ["readonly"] } },
+      });
+    });
+
     it("reads a lift's parameter written as `PerUser<unknown>` as `unknown` in its scope", async () => {
       // A parameter type holding `unknown` is read from its node alone.
       const [input] = callSchemas(

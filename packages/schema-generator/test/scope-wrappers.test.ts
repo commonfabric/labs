@@ -157,6 +157,37 @@ interface SchemaRoot {
     });
   });
 
+  describe("a mapped type over a scope wrapper around an indexed object", () => {
+    // `Readonly<PerSpace<Record<string, A>>>` is one object holding the brand
+    // beside the index signature, which is not the brand alone.
+
+    for (
+      const [declaration, values] of [
+        [
+          "Readonly<PerSpace<Record<string, Cell<string>>>>",
+          { type: "string", asCell: ["cell"] },
+        ],
+        ["Partial<PerUser<Record<string, number>>>", {
+          type: ["number", "undefined"],
+        }],
+      ] as const
+    ) {
+      it(`keeps the values of \`${declaration}\``, async () => {
+        const { type, checker } = await getTypeFromCode(
+          `interface SchemaRoot { value: ${declaration}; }`,
+          "SchemaRoot",
+        );
+
+        expect(
+          asObjectSchema(
+            asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+              .properties?.value,
+          ).additionalProperties,
+        ).toEqual(values);
+      });
+    }
+  });
+
   describe("a scope wrapper around `unknown` read from its node alone", () => {
     // A node the checker has no type for, as a synthetic node, is read at the
     // wrapper's place as `unknown`, which the payload's `unknown` is too.
