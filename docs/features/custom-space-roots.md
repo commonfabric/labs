@@ -1,8 +1,9 @@
 # Custom roots at space genesis
 
 A publisher can reserve a custom default pattern while creating a space.
-`StorageManager.createSpace(acl, root)` (and `Runtime.createSpace({ root })`)
-commits the reservation in the space's genesis commit, beside its ACL. The
+`StorageManager.createSpace(acl, { root })` (and
+`Runtime.createSpace({ root })`) commits the reservation in the space's genesis
+commit, beside its ACL. The
 reservation contains a deployment-local `system:` source, a stable cause,
 optional pattern arguments, and optional `sourceRoots` naming attached test
 entries.
@@ -74,3 +75,7 @@ Only a space named by a string, or an anonymous one, can be created with
 `root`: a DID or a cell names a space that already exists, and `inSpace()`
 refuses `root` with either. It also refuses `root` for a pattern whose result
 is not space-scoped, since the reserved address is in the space scope.
+
+A genesis commit can also declare the space's kind, whether or not it reserves
+a root, as `inSpace(name, { spaceKind })` does. The kind is sealed by the same
+rules; [`space-kinds.md`](space-kinds.md) describes it.

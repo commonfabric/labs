@@ -16,15 +16,16 @@ either.
 
 Creating a space and opening a space are separate operations.
 
-- **Creating a space.** `StorageManager.createSpace(acl, root?)`
+- **Creating a space.** `StorageManager.createSpace(acl, genesis?)`
   ([`packages/runner/src/storage/v2.ts`](../../packages/runner/src/storage/v2.ts))
   generates a key pair from the platform random source, opens one session as
   that key through the same route every later session for the DID takes, and
   commits `acl` as the space's genesis document against a confirmed absent one,
-  with an optional reserved root. The memory client resubmits the identical
-  commit after a lost connection until the server confirms or refuses it. The
-  DID is returned only after confirmation, and the key is dropped when the call
-  returns. `Runtime.createSpace({ owner?, grants?, root? })` writes
+  with an optional reserved root and an optional declared kind. The memory
+  client resubmits the identical commit after a lost connection until the
+  server confirms or refuses it. The DID is returned only after confirmation,
+  and the key is dropped when the call returns.
+  `Runtime.createSpace({ owner?, grants?, root?, spaceKind? })` writes
   `{ ...grants, [owner]: "OWNER" }`, defaulting the owner to the runtime's
   identity; a serving runtime requires an owner. The client surfaces are
   `RuntimeClient.createSpace(label?)`, `PiecesController.createSpace(label?)`,

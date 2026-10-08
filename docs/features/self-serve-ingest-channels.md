@@ -85,10 +85,10 @@ space's owner?"
 *Correction worth recording:* a user's **home/identity** space genesises as
 `{ [signer]: "OWNER" }` on its first open (`#createInitializedSession` in
 `packages/runner/src/storage/v2.ts`), and every other new space is born through
-`StorageManager.createSpace(acl, root?)` with the genesis document its creator
-passes, which `Runtime.createSpace()` writes as `{ [creator]: "OWNER" }` plus
-any grants the creator chose. Opening a space that was never created writes
-nothing. Option B is sound for such a space as long as nobody but its owners
+`StorageManager.createSpace(acl, genesis?)` with the genesis document its
+creator passes, which `Runtime.createSpace()` writes as
+`{ [creator]: "OWNER" }` plus any grants the creator chose. Opening a space that
+was never created writes nothing. Option B is sound for such a space as long as nobody but its owners
 holds WRITE. It is unsound for every space where someone
 else does: a legacy named space carrying the wildcard, and any space whose owner
 granted WRITE to another identity or to `"*"`. A create primitive whose safety
