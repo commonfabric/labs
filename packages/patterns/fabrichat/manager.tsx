@@ -18,8 +18,8 @@
  * manager never changes it.
  *
  * A new room is offered to each other member whose profile the request names,
- * through the share inbox the profile points at, in the envelope a loom share
- * inbox takes. A notice is queued for every other member all the same, since
+ * through the share inbox the profile points at, in the envelope a share inbox
+ * takes. A notice is queued for every other member all the same, since
  * nothing tells the sender an offer arrived.
  */
 import {
@@ -306,6 +306,13 @@ const listRoom = (
       ...(since === undefined ? {} : { since }),
     });
   } else if (entry.state === "archived") {
+    // The restore names the revision this run just read, since no list was
+    // shown to observe one: the request, to start a chat or to accept a room,
+    // is the person's choice to have the room listed whatever its archive
+    // state. The read is in this transaction's reads, so a membership change
+    // committed meanwhile conflicts the commit, and on the re-run the restore
+    // wins over it, an archive from another device included, by choice: the
+    // person has just asked to open or accept the room.
     changeSharedSpaceMembershipIn(catalog, {
       space,
       id: eventKey(),
@@ -347,7 +354,7 @@ export interface OfferRoomEvent {
 
 /**
  * Offers a room to each person in the event's `profiles`, through the share
- * inbox each profile points at, in the envelope a loom share inbox takes; a
+ * inbox each profile points at, in the envelope a share inbox takes; a
  * profile pointing at no inbox is offered nothing. The offer names the room's
  * space and the host serving it, this pattern's own, and the principal
  * sending it as its sender.
@@ -412,6 +419,11 @@ function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
  */
 const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   (event) => {
+    // TODO(danfuzz): A stop-gap. A member whose catalog lists a room only
+    // because the share intake registered an offer of it is never sent here,
+    // so isn't on the room's roster, and is shown among its participants only
+    // as an author, once they write. Add them when their catalog admits the
+    // room, once something running for them sees that happen.
     const profile = event?.profile?.resolveAsCell();
     if (profile === undefined || profile.get() === undefined) return;
     joinStreamOf(event.room).key("addParticipant").send({ profile });
@@ -626,6 +638,8 @@ const performManagerAct = (
     const known = direct.key(counterpart).get();
     if (known !== undefined) {
       const space = spaceOf(known.room);
+      // Restores a forgotten entry at the revision just read, as `listRoom`
+      // says: starting the chat is the choice to have it listed.
       if (isWellFormedDID(space)) listRoom(catalog, space);
       recordOutcome(state, requestId, { status: "done", entry: known });
       return;
@@ -773,6 +787,9 @@ const performManagerAct = (
     ...(kind === "direct" ? { counterpart } : {}),
     since: epochNsecFromMsec(Date.now()),
   };
+  // Registers the room, or restores an archived entry at the revision just
+  // read, as `listRoom` says: accepting the room is the choice to have it
+  // listed.
   listRoom(catalog, space, {
     title: kind === "group" ? room.key("about").get()?.title : undefined,
   });

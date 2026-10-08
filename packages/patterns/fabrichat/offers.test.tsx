@@ -1,8 +1,8 @@
 /**
  * Offering a new FabriChat room through a member's share inbox. Bob starts a
  * direct chat with Alice naming her profile, which points at her private
- * inbox; the room is offered there, in the envelope a loom share inbox takes,
- * and a notice is queued for her all the same. A request naming a profile
+ * inbox; the room is offered there, in the envelope a share inbox takes, and
+ * a notice is queued for her all the same. A request naming a profile
  * other than the counterpart's is refused. Each person writes their own
  * profile here, so its label names them, as a Fabric profile's does.
  */

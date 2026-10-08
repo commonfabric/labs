@@ -7,8 +7,8 @@
  * Who may read and write is the business of the room's space: its access
  * list decides. A room a manager creates is its space's root, and keeps the
  * space's participants itself: the profiles of those who joined, each added
- * through `addParticipant` (`../loom/participants.tsx`), as a loom's root
- * keeps them. A room in some other social space, which isn't its space's root,
+ * through `addParticipant`, the roster's one writer
+ * (`../loom/participants.tsx`). A room in some other social space, which isn't its space's root,
  * lists that space's participants as the root lists them
  * (`wish("#default")`), and those who joined the room itself. The room shows
  * every author alongside them.
