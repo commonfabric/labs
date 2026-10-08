@@ -29,7 +29,7 @@ import {
   unwrapExpression,
 } from "../utils/expression.ts";
 import { decodePath, encodePath } from "../utils/path-serialization.ts";
-import { getKnownComputedKeyPathSegment } from "../utils/reactive-keys.ts";
+import { getCommonFabricKeyName } from "../utils/reactive-keys.ts";
 import {
   createMergeablePushClassifier,
   type MergeableCollectionSite,
@@ -583,19 +583,121 @@ function getLiteralElementText(
 }
 
 /**
- * Path segment an element access's key denotes, when the key is a literal or
- * an expression whose type fixes it (`const KEY = "k"`, a Common Fabric key).
- * Returns `undefined` for a key that can name any member, which makes the
- * access dynamic.
+ * Path segment a key expression denotes when the code fixes it, or
+ * `undefined` for a key that can name any member, which makes the access
+ * dynamic. A literal and a Common Fabric key (`NAME`) fix it, and so does a
+ * key whose declared type is a single string or number literal: a
+ * `const KEY = "k"`, an enum member, a parameter typed `"k"`
+ * (`getDeclaredKeyType()`). A type assertion is not taken for the key's value,
+ * whether at the key (`key as "k"`) or in the initializer of the variable it
+ * names.
+ */
+function getStaticPathKey(
+  expression: ts.Expression,
+  checker?: ts.TypeChecker,
+): string | undefined {
+  const key = skipKeyWrappers(expression);
+  if (isLiteralElement(key)) {
+    return getLiteralElementText(key);
+  }
+  const commonFabricKey = getCommonFabricKeyName(key, checker);
+  if (commonFabricKey) {
+    return `$${commonFabricKey}`;
+  }
+  if (!checker || isValueTypeAssertion(key)) {
+    return undefined;
+  }
+  const type = getDeclaredKeyType(key, checker);
+  if (type === undefined) {
+    return undefined;
+  }
+  if (type.flags & ts.TypeFlags.StringLiteral) {
+    return (type as ts.StringLiteralType).value;
+  }
+  if (type.flags & ts.TypeFlags.NumberLiteral) {
+    return String((type as ts.NumberLiteralType).value);
+  }
+  return undefined;
+}
+
+/**
+ * `expression` without the parentheses and `satisfies` around it, neither of
+ * which changes a key's value or the type it is judged by.
+ */
+function skipKeyWrappers(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) || ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * Whether `expression` asserts a type for a value (`value as T`, `<T>value`),
+ * as against `as const`, which states the type a literal already has.
+ */
+function isValueTypeAssertion(expression: ts.Expression): boolean {
+  return (ts.isAsExpression(expression) ||
+    ts.isTypeAssertionExpression(expression)) &&
+    !ts.isConstTypeReference(expression.type);
+}
+
+/**
+ * The type a key is judged by. A reference to a variable, parameter, enum
+ * member or property is judged by the type it is declared with, not the type
+ * flow narrowing gives it at this use, since a narrowing can go stale: a call
+ * between the test and the use can assign the variable again. A variable
+ * whose initializer asserts its type has none to judge by. A non-null
+ * assertion is judged by its operand, less `null` and `undefined`. An element
+ * access has none either, since its type at the use comes by the same
+ * narrowing a property's does. Anything else, a call or a literal-typed
+ * expression, is judged by its type at the use.
+ */
+function getDeclaredKeyType(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (ts.isNonNullExpression(expression)) {
+    const operand = skipKeyWrappers(expression.expression);
+    if (isValueTypeAssertion(operand)) return undefined;
+    const declared = getDeclaredKeyType(operand, checker);
+    return declared && checker.getNonNullableType(declared);
+  }
+  if (
+    ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)
+  ) {
+    const symbol = checker.getSymbolAtLocation(expression);
+    const declared = symbol && symbol.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(symbol)
+      : symbol;
+    if (!declared) return undefined;
+    const declaration = declared.valueDeclaration;
+    if (
+      declaration && ts.isVariableDeclaration(declaration) &&
+      declaration.initializer &&
+      isValueTypeAssertion(skipKeyWrappers(declaration.initializer))
+    ) {
+      return undefined;
+    }
+    return checker.getTypeOfSymbol(declared);
+  }
+  if (ts.isElementAccessExpression(expression)) {
+    return undefined;
+  }
+  return checker.getTypeAtLocation(expression);
+}
+
+/**
+ * Path segment an element access's key denotes, or `undefined` for a key that
+ * can name any member, which makes the access dynamic (`getStaticPathKey()`).
  */
 function getStaticElementKey(
   argument: ts.Expression | undefined,
   checker?: ts.TypeChecker,
 ): string | undefined {
-  if (isLiteralElement(argument)) {
-    return getLiteralElementText(argument);
-  }
-  return argument && getKnownComputedKeyPathSegment(argument, checker);
+  return argument && getStaticPathKey(argument, checker);
 }
 
 function extractLiteralPathArguments(
@@ -604,20 +706,11 @@ function extractLiteralPathArguments(
 ): { path: readonly string[]; dynamic: boolean } {
   const path: string[] = [];
   for (const arg of args) {
-    if (ts.isStringLiteral(arg) || ts.isNumericLiteral(arg)) {
-      path.push(arg.text);
-      continue;
+    const key = getStaticPathKey(arg, checker);
+    if (key === undefined) {
+      return { path, dynamic: true };
     }
-    if (ts.isNoSubstitutionTemplateLiteral(arg)) {
-      path.push(arg.text);
-      continue;
-    }
-    const knownKey = getKnownComputedKeyPathSegment(arg, checker);
-    if (knownKey) {
-      path.push(knownKey);
-      continue;
-    }
-    return { path, dynamic: true };
+    path.push(key);
   }
   return { path, dynamic: false };
 }
@@ -635,10 +728,7 @@ function getStaticPropertyKeyText(
   }
 
   if (ts.isComputedPropertyName(name)) {
-    return getKnownComputedKeyPathSegment(name.expression, checker) ??
-      (isLiteralElement(name.expression)
-        ? getLiteralElementText(name.expression)
-        : undefined);
+    return getStaticPathKey(name.expression, checker);
   }
 
   return undefined;

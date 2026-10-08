@@ -2043,15 +2043,21 @@ adjustments:
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
   than a blanket root read) and suppresses the redundant blanket `.get()` read.
-  An element access contributes a path segment when its key is a literal, an
-  expression of a single literal type (`offers[KEY]` with `const KEY = "k"`
-  records `["offers", "k"]`, as `offers.k` does), or a Common Fabric key such
-  as `NAME`. The key's literal type is trusted as its run-time value, so a key
-  whose type is wrong about it — an `as` cast, or a flow narrowing gone stale
-  after a closure reassigned the variable — narrows the schema to the key the
-  type names rather than the one read. A key that can name any member
-  (`offers[key.get()]`, a `string`-typed variable or a widened `let`, a
-  callback parameter, a union of literal types) leaves the chain unresolved.
+  An element access contributes a path segment when its key is a literal, a
+  Common Fabric key such as `NAME`, or an expression whose declared type is a
+  single literal (`offers[KEY]` with `const KEY = "k"` records
+  `["offers", "k"]`, as `offers.k` does; so do an enum member and a parameter
+  typed `"k"`). A reference is judged by the type it is declared with, not the
+  type flow narrowing gives it at the use, since a narrowing can go stale when
+  a call between the test and the use assigns the variable again. A type
+  assertion is not taken for the key's value, whether at the key
+  (`offers[key as "k"]`) or in the initializer of the variable the key names;
+  `as const` is. The same rule decides a `.key()` argument and a computed
+  property name (`policy/capability-analysis.ts`, `getStaticPathKey()`;
+  `test/policy/capability-analysis-static-keys.test.ts`). A key that can name
+  any member (`offers[key.get()]`, a `string`-typed variable or a widened
+  `let`, a callback parameter, a union of literal types, a key the rule above
+  does not fix) leaves the chain unresolved.
   The suppression applies only to the calls of a chain that resolves in full,
   including a chain nested in a fallback that resolves by its other operand
   (`a.get().p ?? x.get().offers[key].space`), so an unresolved chain keeps the
