@@ -877,6 +877,24 @@
             "tags": [
               "profile"
             ]
+          },
+          "refused": {
+            "description": "The host's refusal of the inbox the deciding profile advertises, for Home\nto record; absent when the host refused none.",
+            "properties": {
+              "inbox": {
+                "$ref": "#/$defs/ShareInboxPiece",
+                "description": "The inbox refused."
+              },
+              "reason": {
+                "description": "Why the host refused it, by its code.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "inbox"
+            ],
+            "type": "object"
           }
         },
         "type": "object"
@@ -1321,6 +1339,37 @@
           "piece": {
             "$ref": "#/$defs/ShareInboxPiece",
             "description": "The inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "PrivateInboxRefusal": {
+        "properties": {
+          "inbox": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The inbox refused, which the deciding profile points at."
+          },
+          "reason": {
+            "description": "The host's code for why it refused the inbox, as the event named it,\ntrimmed and cut to `REFUSAL_REASON_MAX_LENGTH`. Today the host sends one\nof `InboxAdoptionRefusal`'s codes, from\n`packages/piece/src/ops/private-inbox.ts`, such as\n`inbox-adoption-acl-mismatch`.",
+            "type": "string"
+          },
+          "refusedAt": {
+            "description": "When Home first recorded this refusal, of this inbox for this reason, in\nmilliseconds since the epoch. A handler's clock reads to the second.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "reason",
+          "inbox",
+          "refusedAt"
+        ],
+        "type": "object"
+      },
+      "PrivateInboxRefusalHolder": {
+        "properties": {
+          "refusal": {
+            "$ref": "#/$defs/PrivateInboxRefusal",
+            "description": "The refusal."
           }
         },
         "type": "object"
@@ -1929,6 +1978,10 @@
       "privateInbox": {
         "$ref": "#/$defs/PrivateInboxHolder"
       },
+      "privateInboxRefusal": {
+        "$ref": "#/$defs/PrivateInboxRefusalHolder",
+        "default": {}
+      },
       "profiles": {
         "$ref": "#/$defs/TrustedProfileList",
         "default": []
@@ -2014,6 +2067,7 @@
       "chatManager",
       "privateInbox",
       "retainedPrivateInboxes",
+      "privateInboxRefusal",
       "sharedSpaceCatalog",
       "registerSharedSpace",
       "changeSharedSpaceMembership",

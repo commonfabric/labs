@@ -54,11 +54,14 @@ find. A manager given no catalog keeps one of its own.
 `openDirect` (when there is no entry for the counterpart) and `createGroup`
 create a space for the conversation, with the room as its chat, in four steps:
 
-1. Create the conversation's space, with only this user granted (OWNER), and
-   instantiate `FabriChatRoom` there with its `about`, as the space's root
-   (`inSpace(undefined, { grants, root: true })`). The room is then a social
-   space in its own right: opening the space shows it, and it keeps the
-   space's participants.
+1. Create the conversation's space, with only this user granted (OWNER),
+   declaring the kind `fabrichat-room`, and instantiate `FabriChatRoom` there
+   with its `about`, as the space's root
+   (`inSpace(undefined, { grants, root: true, spaceKind: "fabrichat-room" })`).
+   The room is then a social space in its own right: opening the space shows
+   it, and it keeps the space's participants. The kind is what the share intake
+   reads to admit an offer of the room
+   ([space kinds](../../features/space-kinds.md)).
 2. Grant each other member OWNER on the room's space, by principal, so any
    member may add others.
 3. Add a notice for each other member to `outgoingNotices`, for a client to

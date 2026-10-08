@@ -10,12 +10,12 @@
  * room offered to the user is registered there by the host that vets the
  * offer. Forgetting a room archives its entry.
  *
- * It creates each room in a space of its own with `inSpace()`, as the space's
- * root, which grants its creator and each other member named at creation
- * OWNER, and no one else, except that a group made joinable by its link grants
- * everyone WRITE as well. After that, who is in the space is the space's
- * business: any OWNER may add someone from the room's own rendering, and the
- * manager never changes it.
+ * It creates each room with `inSpace()`, as the root of a space of its own
+ * declaring the kind `fabrichat-room`. The space grants its creator and each
+ * other member named at creation OWNER, and no one else, except that a group
+ * made joinable by its link grants everyone WRITE as well. After that, who is
+ * in the space is the space's business: any OWNER may add someone from the
+ * room's own rendering, and the manager never changes it.
  *
  * A new room is offered to each other member whose profile the request names,
  * through the share inbox the profile points at, in the envelope a share inbox
@@ -502,7 +502,11 @@ const createRoom = (
     ...(joinableByLink ? [["*", "WRITE"]] : []),
   ]) as InSpaceGrants;
   const room = roomLinkOf(
-    FabriChatRoom.inSpace(undefined, { grants, root: true })({
+    FabriChatRoom.inSpace(undefined, {
+      grants,
+      root: true,
+      spaceKind: CHAT_ROOM_OFFER_KIND,
+    })({
       about: {
         kind,
         createdAt,

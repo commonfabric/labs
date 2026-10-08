@@ -473,8 +473,9 @@ export type ChatRequestOutcome =
   };
 
 /**
- * The `kind` of a room, as its offer to a member's share inbox names it and
- * as a user's shared-space catalog records it.
+ * The `kind` of a room, as its offer to a member's share inbox names it, as
+ * a user's shared-space catalog records it, and as the space the manager
+ * creates for a room declares it.
  */
 export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
 

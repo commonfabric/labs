@@ -1,8 +1,8 @@
 /**
  * The real FabriChat manager, creating rooms in spaces of their own, each its
- * space's root. Which space a room lives in, and what that space's root is,
- * are things a pattern can't read, so they are checked here, against a
- * runtime and storage of the test's own;
+ * space's root. Which space a room lives in, what that space's root is, and
+ * what kind it declares are things a pattern can't read, so they are checked
+ * here, against a runtime and storage of the test's own;
  * `../fabrichat/creation.test.tsx` covers the rest of what the manager does
  * with the rooms it creates.
  */
@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
-import { ADMITTED_OFFER_KINDS } from "@commonfabric/piece/ops";
-import { isCell, readResultSchemaMeta, Runtime } from "@commonfabric/runner";
+import { ADMITTED_SPACE_KINDS } from "@commonfabric/piece/ops";
+import { Runtime } from "@commonfabric/runner";
 import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
@@ -181,29 +181,23 @@ describe("fabrichat-manager", () => {
     }
   });
 
-  it("declares, on each room it creates, every result member a host admits a room's space by", async () => {
+  it("declares each room's space the kind a host admits an offer of it by", async () => {
     const { send, rooms } = await startManager();
 
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
     await send("createGroup", {
       requestId: "g-1",
       title: "Team",
       members: [CAROL],
     });
-    const space = rooms()[0].room.getAsNormalizedFullLink().space;
-    // Read as a host vetting an offer of the room reads it: the space's root,
-    // and the result schema stored on it, with none of its result.
-    const root = await runtime.getSpaceCell(space).key("defaultPattern")
-      .pull();
-    if (!isCell(root)) throw new Error("The room's space has no root.");
-    await root.asSchema({ type: "object", properties: {} }).pull();
-    const declared = readResultSchemaMeta(root);
-    const members = ADMITTED_OFFER_KINDS["fabrichat-room"];
-    expect(members.length).toBeGreaterThan(0);
-    expect(
-      Object.keys(
-        typeof declared === "object" ? declared.properties ?? {} : {},
-      ),
-    ).toEqual(expect.arrayContaining([...members]));
+    const spaces = rooms().map((entry) =>
+      entry.room.getAsNormalizedFullLink().space
+    );
+    expect(spaces.length).toBe(2);
+    expect(ADMITTED_SPACE_KINDS.has("fabrichat-room")).toBe(true);
+    for (const space of spaces) {
+      expect(await runtime.spaceKind(space)).toBe("fabrichat-room");
+    }
   });
 
   it("creates each room in a space of its own that grants its members alone", async () => {
