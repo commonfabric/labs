@@ -653,6 +653,24 @@ describe("SchemaGenerator", () => {
         },
       ],
       [
+        "labels the arms a labeled folded union keeps beside another constituent",
+        `
+          type Folded = void | OpaqueCell<any>;
+          type M1 = Confidential<Folded, readonly ["s"]>;
+          type M2 = string;
+        `,
+        { asCell: ["opaque"], ifc: labelS },
+      ],
+      [
+        "labels the branded arms a labeled folded union keeps beside a primitive",
+        `
+          type Branded = (string & { a: 1 }) | (number & { b: 2 });
+          type M1 = Confidential<Branded, readonly ["s"]>;
+          type M2 = string;
+        `,
+        { ...UNSUPPORTED_NON_OBJECT as object, ifc: labelS },
+      ],
+      [
         "returns the cell a cell constituent declares beside an object",
         `type M1 = Cell<unknown>; type M2 = { y: number };`,
         { type: "unknown", asCell: ["cell"] },
@@ -681,6 +699,19 @@ describe("SchemaGenerator", () => {
       const { byType, byNode } = await schemasOfBothPaths(`
         type M1 = { a: PerUser<string> };
         type M2 = { a: PerSpace<string> };
+      `);
+      const message =
+        "The property `a` is declared in scope `user` by one member of an " +
+        "intersection and in scope `space` by another.";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    it("throws for a property two declarations of a named type put in different scopes", async () => {
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = { a: PerUser<Named> };
+        type M2 = { a: PerSpace<Named> };
       `);
       const message =
         "The property `a` is declared in scope `user` by one member of an " +
