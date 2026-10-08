@@ -24,11 +24,12 @@ type StandInProfile = AddIntegrity<
 >;
 
 export default pattern<FabriChatManagerInput, FabriChatManagerOutput>(
-  ({ rooms, direct, requests, outgoingNotices }) => {
+  ({ rooms, sharedSpaceCatalog, direct, requests, outgoingNotices }) => {
     const profile = Writable.of<StandInProfile>({ name: "Starter" });
     return FabriChatManagerCore({
       myProfile: profile,
       rooms,
+      sharedSpaceCatalog,
       direct,
       requests,
       outgoingNotices,
