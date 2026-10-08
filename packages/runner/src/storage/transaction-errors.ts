@@ -1,4 +1,5 @@
-import { debugStr } from "@commonfabric/data-model";
+import { debugStr, toCompactDebugString } from "@commonfabric/data-model";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type {
   IInvalidArrayLengthError,
   IMemoryAddress,
@@ -23,15 +24,47 @@ export const TransactionCompleteError = (): IStorageTransactionComplete => ({
   message: "Transaction is complete",
 });
 
+/**
+ * The message of a {@link TransactionAborted}, which names no cause: the cause
+ * rides its `reason`.
+ */
+const TRANSACTION_ABORTED_MESSAGE = "Transaction was aborted";
+
 /** The transaction was aborted, carrying the reason given to `abort()`. */
 export const TransactionAborted = (
   reason?: unknown,
 ): IStorageTransactionAborted => ({
   name: "StorageTransactionAborted",
-  message: "Transaction was aborted",
+  message: TRANSACTION_ABORTED_MESSAGE,
   abortedBeforeStorage: true,
   reason,
 });
+
+/**
+ * Returns the text that says why a transaction failed, given the error its
+ * status or commit reported. A message other than a {@link TransactionAborted}'s
+ * carries the cause itself, and is returned as it is, whether or not the error
+ * also has a `reason`. For that message, or none, the `reason`, when there is
+ * one, is read the same way, so the cause a handler threw is what is returned.
+ * An error with neither message nor reason is rendered whole.
+ */
+export const transactionFailureMessage = (error: unknown): string => {
+  if (typeof error === "string") return error;
+  const message = isObjectOrArray(error) &&
+      typeof (error as { message?: unknown }).message === "string"
+    ? (error as { message: string }).message
+    : "";
+  if (message !== "" && message !== TRANSACTION_ABORTED_MESSAGE) {
+    return message;
+  }
+  const reason = isObjectOrArray(error)
+    ? (error as { reason?: unknown }).reason
+    : undefined;
+  if (reason !== undefined && reason !== null) {
+    return transactionFailureMessage(reason);
+  }
+  return message !== "" ? message : toCompactDebugString(error);
+};
 
 /**
  * A writer was requested for one space while the transaction already holds a

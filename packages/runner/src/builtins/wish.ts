@@ -53,6 +53,7 @@ import { type Action, type ReactivityLog } from "../scheduler.ts";
 import { RetryImmediately } from "../scheduler/retry-immediately.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { transactionFailureMessage } from "../storage/transaction-errors.ts";
 import {
   isConflictRejection,
   isStorageTransactionInconsistent,
@@ -2016,27 +2017,6 @@ export function isSurfacableWishCommitFailure(
   return true;
 }
 
-/**
- * The text the wish surface shows for a settled commit failure: the
- * informative layer, not the debug dump. A plain abort's own message is the
- * generic "Transaction was aborted" — the cause rides `reason` — while a
- * CFC-modeled rejection carries everything in `message`.
- */
-export function wishCommitFailureMessage(
-  error: { message?: string; reason?: unknown },
-): string {
-  const message = typeof error.message === "string" ? error.message : "";
-  if (message !== "" && !message.startsWith("Transaction was aborted")) {
-    return message;
-  }
-  const reason = (error as { reason?: unknown }).reason;
-  if (reason instanceof Error && reason.message !== "") {
-    return reason.message;
-  }
-  if (message !== "") return message;
-  return toCompactDebugString(error);
-}
-
 export function wishTargetMayUseHomeSpace(
   query: unknown,
   scope?: ("~" | "." | "profile" | string)[],
@@ -2301,7 +2281,7 @@ export function wish(
     tx.addCommitCallback((_tx, result) => {
       if (!result.error) return;
       if (!isSurfacableWishCommitFailure(result.error)) return;
-      const message = wishCommitFailureMessage(result.error);
+      const message = transactionFailureMessage(result.error);
       // Keyed per scoped INSTANCE: scope and identity separate user/session
       // instances of one doc id, so one demander's in-flight report cannot
       // hide another's failure.
