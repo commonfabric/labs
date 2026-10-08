@@ -28,6 +28,13 @@ keep the two consistent: `direct` holds one entry per counterpart, including
 forgotten rooms, and `rooms` can also hold a second direct room with the same
 counterpart after crossing creations.
 
+Creating or accepting a room also registers the room's space in the user's
+shared-space catalog, Home's, which Home hands the manager
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), and
+finding a direct room again, or accepting a room, restores its entry there if
+it was archived. A manager given no catalog keeps one of its own. `rooms` is
+the manager's own list all the same.
+
 Creating or accepting a room also adds this user's profile to the room's
 participants, through the room's `addParticipant`, from an event of its own
 that follows; accepting a room is refused while the user has no profile.
@@ -48,10 +55,11 @@ create a space for the conversation, with the room as its root, in four steps:
 3. Add a notice for each other member to `outgoingNotices`, for a client to
    deliver, and offer the room to each member whose profile the request names,
    through the share inbox the profile points at.
-4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
-   request `done`. Adding this user to the room's participants follows, once
-   the space's name has resolved: the run that sees it pending is discarded and
-   run again, and its sends could still be delivered.
+4. Record the entry in `rooms`, and in `direct` for a direct room, register the
+   room's space in the user's catalog, and mark the request `done`. The
+   registration waits for the space's name to resolve, and adding this user to
+   the room's participants follows then: the run that sees the name pending is
+   discarded and run again, and its sends could still be delivered.
 
 Each step is recorded under the request's `requestId` as it completes, which is
 how a repeated request resumes where the last attempt stopped instead of

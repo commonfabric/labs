@@ -383,6 +383,14 @@ from this design, as below.
   And a room shows a viewer whose manager doesn't list it a control that asks
   the manager to `accept` it, so whoever opens the room's link can add it to
   their chats.
+- **The catalog.** Creating a room registers its space in the user's Home
+  shared-space catalog
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), in the
+  creating transaction once the space's name has resolved, and so does
+  accepting one. Finding a direct room again, or accepting a room, restores its
+  entry if it was archived. The manager's `rooms` is still its own list:
+  forgetting a room removes it from `rooms` and leaves its catalog entry
+  saved, and a room the share intake registers is not in `rooms`.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.
