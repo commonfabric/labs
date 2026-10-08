@@ -512,7 +512,8 @@ export class PiecesController<T = unknown> {
    * meanwhile fails the call rather than being replaced.
    *
    * @param defaultPatternCell - The cell representing the default pattern
-   * @throws Error when `options.replacing` no longer names the space's root.
+   * @throws Error when `options.replacing` no longer names the space's root,
+   *   and when the root it names no longer passes `options.stillReplaceable`.
    */
   async linkDefaultPattern(
     defaultPatternCell: Cell<any>,
@@ -528,10 +529,17 @@ export class PiecesController<T = unknown> {
         const current = slot.get() as Cell<unknown> | undefined;
         const unchanged = options.replacing === null
           ? slot.getRaw() === undefined
-          : current !== undefined && current.equalLinks(options.replacing) &&
-            (options.stillReplaceable?.(current.withTx(tx)) ?? true);
+          : current !== undefined && current.equalLinks(options.replacing);
         if (!unchanged) {
           throw new Error("The space's root changed since it was inspected");
+        }
+        if (
+          current !== undefined &&
+          options.stillReplaceable?.(current.withTx(tx)) === false
+        ) {
+          throw new Error(
+            "The space's root is still the one inspected, but no longer passes the check it was inspected under",
+          );
         }
       }
       // Read in the transaction, as the stored pointer: a retry reruns this

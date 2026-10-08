@@ -31,6 +31,13 @@ const admin = await Identity.fromPassphrase("profile space root admin");
 /** The default app's entry module, as the toolshed serves it. */
 const DEFAULT_APP_MAIN = "/api/patterns/system/default-app.tsx";
 
+/** A root that exports no `pieceRegistry` at all. */
+const NO_REGISTRY_ROOT = [
+  "import { pattern } from 'commonfabric';",
+  "export default pattern(() => ({ note: 'no registry here' }));",
+  "",
+].join("\n");
+
 /** A root the way an open of a space without one creates it, near enough. */
 const PLANTED_ROOT = [
   "import { pattern, Writable } from 'commonfabric';",
@@ -103,6 +110,7 @@ describe("profile-space-root", () => {
       registered?: string[];
       origin?: string;
       main?: string;
+      contents?: string;
     } = {},
   ): Promise<Cell<unknown>> => {
     const runtime = controller.runtime;
@@ -112,7 +120,7 @@ describe("profile-space-root", () => {
       main,
       files: [{
         name: main,
-        contents: PLANTED_ROOT.replace(
+        contents: options.contents ?? PLANTED_ROOT.replace(
           "REGISTERED",
           JSON.stringify(options.registered ?? []),
         ),
@@ -205,7 +213,7 @@ describe("profile-space-root", () => {
     };
 
     await expect(repairProfileSpaceRoot(controller, id, before.inspection))
-      .rejects.toThrow("changed since it was inspected");
+      .rejects.toThrow("no longer passes the check it was inspected under");
     expect(await rootAddressOf(controller.getSpace())).toBe(
       planted.getAsNormalizedFullLink().id,
     );
@@ -214,7 +222,13 @@ describe("profile-space-root", () => {
   describe("an occupied root", () => {
     const occupiedCases: [
       string,
-      { cause?: string; registered?: string[]; origin?: string; main?: string },
+      {
+        cause?: string;
+        registered?: string[];
+        origin?: string;
+        main?: string;
+        contents?: string;
+      },
     ][] = [
       ["holds something registered", { registered: ["a piece"] }],
       ["is at another address", { cause: "a root chosen on purpose" }],
@@ -224,6 +238,7 @@ describe("profile-space-root", () => {
       ["runs a pattern other than the default app", {
         main: "/hand-authored-root.tsx",
       }],
+      ["has no piece registry", { contents: NO_REGISTRY_ROOT }],
     ];
     for (const [condition, options] of occupiedCases) {
       it(`leaves a root alone that ${condition}`, async () => {
@@ -254,6 +269,19 @@ describe("profile-space-root", () => {
     expect(report.action).toBe("none");
     expect(report.owner).toBeUndefined();
     expect(await rootAddressOf(controller.getSpace())).toBe(plantedId);
+  });
+
+  it("reports an address that names no piece as not a profile", async () => {
+    const { controller } = await legacyProfile();
+    const nothing = controller.runtime.getCell(
+      controller.getSpace(),
+      "nothing was ever written here",
+    ).getAsNormalizedFullLink().id;
+    const report = await inspectProfileSpaceRoot(controller, nothing);
+    expect(report.status).toBe("not-a-profile");
+    expect(report.reason).toBe(
+      "the address names no piece in the profile's space",
+    );
   });
 
   it("refuses a receipt from before the space's root changed", async () => {
