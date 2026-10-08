@@ -140,8 +140,10 @@ gated on that surface and action commits as it would for a reviewed gesture on
 the pattern's rendered surface. It always waits for the handler's run, as
 `sendStrict()` does with `awaitHandling`, and rejects with the reason on the
 same refusals. The event is a trusted gesture, as a DOM event on the pattern's
-rendered surface is, so it also confirms a change to an access list. It mints
-trusted events, so it is for the host's own code alone;
+rendered surface is, so it meets what `grantSpaceAccess()` and
+`revokeSpaceAccess()` require of a handler's event; the change they stage is
+still held to every other check. It mints trusted events, so it is for the
+host's own code alone;
 [host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
 says what it owes in exchange.
 

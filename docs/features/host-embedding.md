@@ -534,8 +534,8 @@ runtime writes on the stream entry
 ([events, §2](../specs/server-side-execution/events.md#2-lifecycle-end-to-end)).
 A native event is a trusted gesture, as a DOM event on a rendered surface is:
 `isTrustedGesture()` admits a marked event of either origin, so a native
-control confirms whatever a gesture on the pattern's rendered surface would, a
-change to a space's access list among them. A host covering a pattern's
+control's event meets any requirement for a trusted gesture, such as the one
+`grantSpaceAccess()` and `revokeSpaceAccess()` put on a handler's event. A host covering a pattern's
 surface with a control of its own presents the act that surface presents, with
 every value the person is agreeing to in view.
 

@@ -644,8 +644,9 @@ export class CellHandle<T = unknown> {
    * and marks it renderer-trusted, so that it satisfies the UI contract of a
    * write gated on that surface and action, such as a `TrustedActionWrite`,
    * as a reviewed gesture on the pattern's rendered surface does. It is a
-   * trusted gesture, as that gesture is, so it also confirms a change to an
-   * access list. The write is held to every other check.
+   * trusted gesture, as that gesture is, so it meets what `grantSpaceAccess()`
+   * and `revokeSpaceAccess()` require of a handler's event. The write, and any
+   * change to an access list, is held to every other check.
    *
    * It resolves once the run of the stream's handler has committed, which
    * under server execution is the consequence the served run recorded, and

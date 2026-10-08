@@ -81,7 +81,7 @@ its event on to another stream does not pass the mark along, so the handler it
 reaches cannot change a list. The check does not follow the CFC enforcement
 dial: it holds in every mode.
 
-A gesture shows that a person acted on the pattern's surface, not what the
+A gesture shows that a person acted on a trusted surface, not what the
 pattern did with the act, since the principal and the level are the
 pattern's. A pattern with a button can grant someone its data on the next
 click, which is the same ceiling every write gated on a trusted gesture has.
