@@ -584,11 +584,14 @@ describe("share-intake", () => {
       expect(conflictsLogged() - before).toBe(1);
     });
 
-    it("is left unreported, and the intake settles, when the receipt of Home's handling cannot be read", async () => {
+    it("is left unreported, and `idle()` resolves, when reading the receipt of Home's handling fails", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       let receiptReads = 0;
+      const asked = Promise.withResolvers<void>();
+      const failure = Promise.withResolvers<never>();
       // The runtime, but for a read by link of anything in Home's space, which
-      // is where Home's handler writes the receipt of each handling.
+      // is where Home's handler writes the receipt of each handling. That read
+      // fails once `failure` is rejected.
       const unreadable = new Proxy(runtime, {
         get(target, name) {
           if (name === "getCellFromLink") {
@@ -597,9 +600,8 @@ describe("share-intake", () => {
                 return target.getCellFromLink(link as never, ...rest);
               }
               receiptReads++;
-              return {
-                pull: () => Promise.reject(new Error("receipt unreadable")),
-              };
+              asked.resolve();
+              return { pull: () => failure.promise };
             };
           }
           const value = Reflect.get(target, name, target);
@@ -615,8 +617,12 @@ describe("share-intake", () => {
       after = () => intake.stop();
       const before = conflictsLogged();
       await deliver([offerOf(space, "unread", { title: "Conflicting" })]);
-      await registeredThrough("unread");
-      await intake.idle();
+      await asked.promise;
+      // Waited on from before the read fails, so that a failure the intake let
+      // through would reject the wait.
+      const settled = intake.idle();
+      failure.reject(new Error("receipt unreadable"));
+      await settled;
 
       expect(receiptReads).toBe(1);
       expect(conflictsLogged() - before).toBe(0);
