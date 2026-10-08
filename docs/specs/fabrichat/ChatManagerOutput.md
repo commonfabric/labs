@@ -140,23 +140,27 @@ These rules hold for every stream:
 - An admitted request missing a key its stream needs is refused, with a reason
   that says which, rather than ignored.
 - Every stream changes only this user's own manager, except `openDirect` and
-  `createGroup`, which also create a room and grant other people access to it.
+  `createGroup`, which also create a room and grant other people access to it,
+  and `openDirect`, which can also offer the room to the other person.
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
-| [`openDirect`](#opendirectrequestid-string-counterpart-string) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
+| [`openDirect`](#opendirectrequestid-string-counterpart-string-profile-cellchatprofile) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
 | [`createGroup`](#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
 | [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput) | none | the entry removed from `rooms`; the room itself is untouched |
 | [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
 
-### `openDirect(requestId: string, counterpart: string)`
+### `openDirect(requestId: string, counterpart: string, profile?: Cell<ChatProfile>)`
 
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
   with it resumes the request rather than starting another.
 - `counterpart: string` — The DID of the other person. Must not be this user's
   own.
+- `profile?: Cell<ChatProfile>` — The other person's profile, whose
+  `represents-principal` label must name `counterpart`. A new room is offered
+  to them through the share inbox it points at (see [offers](#offers)).
 
 Finds the direct room this user shares with a person, or creates it. This is an
 outward act when it creates a room.
@@ -168,9 +172,10 @@ outward act when it creates a room.
   `requestId`, the manager MUST resume that creation rather than start another,
   and records its outcome under both ids. Otherwise, creates a direct room whose
   members are this user and `counterpart`, grants `counterpart` access, produces
-  a notice for them, and records the new entry in `rooms` and `direct`.
+  a notice for them, offers the room through `profile`'s inbox when there is
+  one, and records the new entry in `rooms` and `direct`.
 - **Outcome:** `done` with the entry, or `refused` if `counterpart` is this
-  user.
+  user, or `profile`'s label doesn't name `counterpart`.
 
 It is the only way a direct room is created, which is what keeps one person's
 conversation from splitting.
@@ -275,7 +280,7 @@ leaves a room in between. Until a creation's request is `done`:
   notice of it until the request is resumed.
 - The room is not yet in `rooms` or `direct`. A new `openDirect` for the same
   counterpart resumes the pending creation, whatever its `requestId` (see
-  [`openDirect`](#opendirectrequestid-string-counterpart-string)). A
+  [`openDirect`](#opendirectrequestid-string-counterpart-string-profile-cellchatprofile)). A
   `createGroup` has no such key, so a client MUST resume an interrupted request
   with its original `requestId`, and SHOULD do so for `openDirect` too.
 
@@ -300,6 +305,33 @@ so its claim of who sent it can be false. A recipient MUST NOT rely on that
 claim. Who created a room is what the room's `about` is labeled with (see
 [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), and a client checks a
 direct room's `counterpart` against that label before it sends `accept`.
+
+## Offers
+
+When a request names a member's profile, as `openDirect`'s `profile` does, the
+manager offers the new room to that member through the share inbox the
+profile's `inbox` points at
+([`private-inbox.md`](../../features/private-inbox.md)), once, after the room is
+created. A profile that points at no inbox is offered nothing. The offer is the
+envelope a share inbox takes:
+
+- `kind` — `fabrichat-room`.
+- `id` — the request's `requestId`. The inbox keeps one offer per sender and
+  `id`.
+- `space` — the DID of the room's space.
+- `host` and `ownerOrigin` — the origin of the host serving the manager, which
+  serves the room's space too.
+- `title` — a group room's title, or empty for a direct room.
+- `from` — this user's DID. The inbox keeps the offer only when it names the
+  principal sending it.
+- `sharedAt` — when the offer was sent, in milliseconds since the epoch.
+
+The recipient's host reads each offer in the inboxes their Home holds, vets it,
+and registers the room's space in their Home's shared-space catalog
+([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)).
+Nothing tells the sender that an offer arrived, and a member known only by
+their DID has no profile to reach an inbox through, so a notice is produced for
+every other member whether or not an offer was sent.
 
 ## Crossing creations
 

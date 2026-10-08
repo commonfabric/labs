@@ -246,10 +246,11 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Delivering a notice.** A room is to be offered to its recipient through
-  their profile share inbox, but no offer names a room yet and the manager
-  reads none, so nothing delivers a notice to a principal who shares no space
-  with the sender end to end (see
+- **Delivering a notice.** A room is offered to its recipient through the
+  share inbox their profile points at when the request that creates it names
+  their profile. A member whose profile the request doesn't name is reached by
+  nothing but a notice, and nothing delivers a notice to a principal who shares
+  no space with the sender end to end (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -352,8 +353,15 @@ from this design, as below.
   `hasOlder` and `hasNewer` are as of when the window was set. `commitWindow`
   writes the windows of the session that sent the event, wherever it runs; an
   event the server itself emitted has no session, and can't open one.
-- **Notices.** A manager's notice id is `[recipient, requestId]` as JSON.
-  Nothing delivers a notice yet (see
+- **Notices and offers.** A manager's notice id is `[recipient, requestId]` as
+  JSON, and an offer's `id` is the `requestId` alone. An offer reaches the
+  recipient's inbox, but their host's share intake admits a `fabrichat-room`
+  offer only when the room is its space's root
+  ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
+  which a manager's room isn't yet, so each offer stays in the inbox, refused.
+  And only an `openDirect` that names `profile` offers a room: the rendered
+  start controls name a counterpart by principal, and a group's members are
+  principals. Nothing delivers a notice yet (see
   [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
   creator to send on. And a room shows a viewer whose manager
