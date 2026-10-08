@@ -150,9 +150,8 @@ const setPresentation = handler<Presentation, State>(
 
 /**
  * Names `room` as the Loom's chat room, or clears it when the event names
- * none. The room must live in the Loom's own space, so that its members are
- * the Loom's: a room takes its access list and its participants from its
- * space.
+ * none. The room must live in the Loom's own space, so that its members, the
+ * principals its space's access list admits, are the Loom's.
  *
  * @throws When `room` lives in another space.
  */
