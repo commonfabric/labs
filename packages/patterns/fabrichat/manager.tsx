@@ -569,6 +569,12 @@ const performManagerAct = (
     const namedPrincipal = named === undefined
       ? undefined
       : principalOf(named, "represents-principal");
+    // A chip a room rendered before its control named a profile names the
+    // person by principal. Such a start finds or creates the room, but offers
+    // it to no one, since it carries no profile.
+    // TODO(danfuzz): Stop reading `target.dataset.counterpart` once no
+    // deployed room renders a chip that sends it, and record the contract
+    // break that removing the field from the event's type is.
     const counterpart = event?.counterpart ?? namedPrincipal ??
       event?.target?.dataset?.counterpart ?? typed;
     if (!isPrincipalDID(counterpart)) {
