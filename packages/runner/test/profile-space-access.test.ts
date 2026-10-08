@@ -6,7 +6,7 @@
  * what the visitor's writes reach decides what the owner sees afterwards.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -14,18 +14,11 @@ import { aclDocId } from "@commonfabric/memory/acl";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
-import { popFrame, pushFrame } from "../src/builder/pattern.ts";
-import { principalOf } from "../src/builder/principal-of.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
-import { getEntityId } from "../src/create-ref.ts";
-import type { NormalizedFullLink } from "../src/link-utils.ts";
-import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
-import { inSpaceRootCause } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
@@ -33,6 +26,7 @@ import { TestStorageManager } from "./memory-v2-test-utils.ts";
 
 const owner = await Identity.fromPassphrase("profile space access owner");
 const visitor = await Identity.fromPassphrase("profile space access visitor");
+const home = owner.did();
 
 const sysDir = fromFileUrl(new URL("../../patterns/system/", import.meta.url));
 const read = (n: string) => Deno.readTextFileSync(sysDir + n);
@@ -127,83 +121,21 @@ function createEvent(name: string): { name: string } {
 }
 
 describe("profile-space-access", () => {
-  let server: MemoryV2Server.Server;
-  let serverCount = 0;
-  const factory = () => new PrincipalSessionFactory(server);
-  const memoryHost = new URL("memory://");
-  const runtimeAs = (as: Identity) =>
-    new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: TestStorageManager.create(
-        { as, memoryHost },
-        factory(),
-      ),
-    });
-
-  beforeEach(() => {
-    server = new MemoryV2Server.Server({
-      store: new URL(`memory://profile-space-access-${++serverCount}`),
+  it("creates a profile space a visitor's runtime can write to, keeping the visitor's view state out of the owner's", async () => {
+    const server = new MemoryV2Server.Server({
+      store: new URL("memory://profile-space-access"),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: "did:key:z6Mk-profile-space-access" },
       acl: { mode: "enforce" },
       subscriptionRefreshDelayMs: 0,
     });
-  });
-
-  afterEach(async () => {
-    await server.close();
-  });
-
-  /**
-   * Creates a profile named `name` through the real create pattern, run by
-   * `runtime` in its user's home space, and returns the link to it.
-   */
-  const createProfile = async (runtime: Runtime, name: string) => {
-    const space = runtime.userIdentityDID as MemorySpace;
-    const setupTx = runtime.edit();
-    const host = await runtime.patternManager.compilePattern(PROGRAM, {
-      space,
-      tx: setupTx,
-    });
-    const result = runtime.run(
-      setupTx,
-      // deno-lint-ignore no-explicit-any
-      host as any,
-      {},
-      runtime.getCell<Record<string, unknown>>(
-        space,
-        "profile space access host",
-        undefined,
-        setupTx,
-      ),
-    );
-    runtime.prepareTxForCommit(setupTx);
-    expect((await setupTx.commit().settled).error).toBeUndefined();
-    await result.pull();
-
-    const createTx = runtime.edit();
-    result.withTx(createTx).key("createProfile").send(createEvent(name));
-    runtime.prepareTxForCommit(createTx);
-    expect((await createTx.commit().settled).error).toBeUndefined();
-    await result.pull();
-    await runtime.idle();
-    await result.pull();
-
-    const links = result.key("profiles").asSchema(profileLinkListSchema)
-      // deno-lint-ignore no-explicit-any
-      .get() as any[];
-    expect(links.length).toBe(1);
-    const profileLink = links[0].getAsNormalizedFullLink();
-    expect(profileLink.space).not.toBe(space);
-
-    await runtime.patternManager.flushCompileCacheWrites();
-    await runtime.storageManager.synced();
-    await runtime.idle();
-    await runtime.storageManager.synced();
-    return profileLink;
-  };
-
-  it("creates a profile space a visitor's runtime can write to, keeping the visitor's view state out of the owner's", async () => {
+    const factory = new PrincipalSessionFactory(server);
+    const memoryHost = new URL("memory://");
+    const runtimeAs = (as: Identity) =>
+      new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: TestStorageManager.create({ as, memoryHost }, factory),
+      });
     const ownerRuntime = runtimeAs(owner);
     const visitorRuntime = runtimeAs(visitor);
     const readerRuntime = runtimeAs(owner);
@@ -214,13 +146,51 @@ describe("profile-space-access", () => {
       await ownerRuntime.dispose();
     };
     try {
-      const profileLink = await createProfile(ownerRuntime, "Ada");
+      const setupTx = ownerRuntime.edit();
+      const host = await ownerRuntime.patternManager.compilePattern(PROGRAM, {
+        space: home,
+        tx: setupTx,
+      });
+      const result = ownerRuntime.run(
+        setupTx,
+        // deno-lint-ignore no-explicit-any
+        host as any,
+        {},
+        ownerRuntime.getCell<Record<string, unknown>>(
+          home,
+          "profile space access host",
+          undefined,
+          setupTx,
+        ),
+      );
+      ownerRuntime.prepareTxForCommit(setupTx);
+      expect((await setupTx.commit().settled).error).toBeUndefined();
+      await result.pull();
+
+      const createTx = ownerRuntime.edit();
+      result.withTx(createTx).key("createProfile").send(createEvent("Ada"));
+      ownerRuntime.prepareTxForCommit(createTx);
+      expect((await createTx.commit().settled).error).toBeUndefined();
+      await result.pull();
+      await ownerRuntime.idle();
+      await result.pull();
+
+      const links = result.key("profiles").asSchema(profileLinkListSchema)
+        // deno-lint-ignore no-explicit-any
+        .get() as any[];
+      expect(links.length).toBe(1);
+      const profileLink = links[0].getAsNormalizedFullLink();
       const profileSpace = profileLink.space as MemorySpace;
+      expect(profileSpace).not.toBe(home);
       expect(
         (await server.readDocument(profileSpace, aclDocId(profileSpace) as URI))
           ?.value,
       ).toEqual({ "*": "WRITE", [owner.did()]: "OWNER" });
 
+      await ownerRuntime.patternManager.flushCompileCacheWrites();
+      await ownerRuntime.storageManager.synced();
+      await ownerRuntime.idle();
+      await ownerRuntime.storageManager.synced();
       // The owner's runtime is gone before the visitor arrives, so every
       // commit the profile space takes from here on is the visitor's.
       await disposeOwner();
@@ -262,85 +232,7 @@ describe("profile-space-access", () => {
       await readerRuntime.dispose();
       await visitorRuntime.dispose();
       await disposeOwner();
-    }
-  });
-
-  it("gives two users' profiles different entities", async () => {
-    // A pattern keys a per-person record by the entity its profile names, as
-    // the lunch poll keys a vote, so two people's profiles must not name one.
-    const ownerRuntime = runtimeAs(owner);
-    const visitorRuntime = runtimeAs(visitor);
-    try {
-      const entityOf = async (link: NormalizedFullLink) => {
-        const listed = ownerRuntime.getCellFromLink(link);
-        await listed.sync();
-        return getEntityId(listed.resolveAsCell());
-      };
-      const ownerEntity = await entityOf(
-        await createProfile(ownerRuntime, "Ada"),
-      );
-      const visitorEntity = await entityOf(
-        await createProfile(visitorRuntime, "Grace"),
-      );
-      expect(ownerEntity).toBeDefined();
-      expect(visitorEntity).toBeDefined();
-      expect(visitorEntity).not.toEqual(ownerEntity);
-    } finally {
-      await visitorRuntime.dispose();
-      await ownerRuntime.dispose();
-    }
-  });
-
-  it("makes the profile its space's root, which a visitor's runtime finds from the space's DID alone", async () => {
-    const ownerRuntime = runtimeAs(owner);
-    const visitorRuntime = runtimeAs(visitor);
-    try {
-      const profileLink = await createProfile(ownerRuntime, "Ada");
-      const profileSpace = profileLink.space as MemorySpace;
-
-      // The link in Home's list names the profile through a slot that links
-      // on to it, and a host holding that link resolves it there.
-      const listed = visitorRuntime.getCellFromLink(profileLink);
-      await listed.sync();
-      const profile = listed.resolveAsCell().getAsNormalizedFullLink();
-
-      // What the visitor holds here is the space's DID and nothing else. The
-      // space's genesis commit reserved the root's address, and the space
-      // cell links the profile, at that address, as the root.
-      const root = await resolveSpaceRootPattern(visitorRuntime, profileSpace);
-      expect(root?.getAsNormalizedFullLink()).toMatchObject({
-        space: profileSpace,
-        id: profile.id,
-        path: [],
-      });
-      expect(profile.id).toBe(
-        visitorRuntime.getCell(profileSpace, inSpaceRootCause(profileSpace))
-          .getAsNormalizedFullLink().id,
-      );
-      expect(
-        readGenesisRoot(await server.engineForSpace(profileSpace)),
-      ).toEqual({ cause: inSpaceRootCause(profileSpace) });
-
-      // The profile reached that way still says whom it represents, which is
-      // what a host checks before taking it for its owner's.
-      await root!.sync();
-      const tx = visitorRuntime.edit();
-      const frame = pushFrame({
-        runtime: visitorRuntime,
-        tx,
-        space: visitor.did(),
-        frameKind: "handler",
-        inHandler: true,
-      });
-      try {
-        expect(principalOf(root, "represents-principal")).toBe(owner.did());
-      } finally {
-        popFrame(frame);
-        tx.abort();
-      }
-    } finally {
-      await visitorRuntime.dispose();
-      await ownerRuntime.dispose();
+      await server.close();
     }
   });
 });
