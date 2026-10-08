@@ -1326,11 +1326,12 @@ describe("console/server", () => {
         "  index:      https://index.test/api",
         "  skills:     https://skills.test",
       ]);
-      expect(banner.slice(-4)).toEqual([
+      expect(banner.slice(-5)).toEqual([
         "  results:    /console/.cf-harness-console/cfc/results",
         "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
         "  workspace:  /console/.cf-harness-console/workspace",
-        "  artifacts:  /console/.cf-harness-console/runs\n",
+        "  artifacts:  /console/.cf-harness-console/runs",
+        "  agent runs: /console/.cf-harness/agent-runs\n",
       ]);
     });
 
@@ -1343,15 +1344,43 @@ describe("console/server", () => {
         "  index:      (not configured)",
         "  skills:     (not configured)",
       ]);
-      expect(banner.slice(-6)).toEqual([
+      expect(banner.slice(-7)).toEqual([
         "  sandbox:    runsc, the direct driver (no Docker); named by CF_HARNESS_SANDBOX_RUNTIME",
         "  runsc:      /store/bin/runsc",
         "  rootfs:     /store/images/kitchensink",
         "  policy:     /store/policy.json",
         "  workspace:  /console/.cf-harness-console/workspace",
-        "  artifacts:  /console/.cf-harness-console/runs\n",
+        "  artifacts:  /console/.cf-harness-console/runs",
+        "  agent runs: /console/.cf-harness/agent-runs\n",
       ]);
       expect(banner.some((line) => line.startsWith("  results:"))).toBe(false);
+    });
+
+    it("reads the agent runner's runs from CF_HARNESS_HOME unless told another root, or none", async () => {
+      const agentRunsRoot = async (
+        args: readonly string[],
+        env: Record<string, string>,
+      ) =>
+        (await resolveConsoleConfig([...ARGS, ...args], env, "/console"))
+          .agentRunsRoot;
+      expect(await agentRunsRoot([], { HOME: "/home/a" })).toBe(
+        "/home/a/.cf-harness/agent-runs",
+      );
+      expect(await agentRunsRoot([], { CF_HARNESS_HOME: "/harness" })).toBe(
+        "/harness/agent-runs",
+      );
+      expect(
+        await agentRunsRoot([], {
+          CF_HARNESS_CONSOLE_AGENT_RUNS_ROOT: "runs-elsewhere",
+        }),
+      ).toBe("/console/runs-elsewhere");
+      expect(
+        await agentRunsRoot(["--agent-runs-root", "/flag"], {
+          CF_HARNESS_CONSOLE_AGENT_RUNS_ROOT: "/env",
+        }),
+      ).toBe("/flag");
+      expect(await agentRunsRoot(["--agent-runs-root", "none"], {}))
+        .toBeUndefined();
     });
 
     it("reports the runsc runtime's rows, and no Docker row, for a console on the runsc runtime", async () => {
@@ -3855,6 +3884,65 @@ describe("console/server", () => {
       expect((await response.json()).error).toBe(
         "pattern index recordEvent failed (404)",
       );
+    });
+  });
+
+  describe("GET /api/runs with the agent runner's work root", () => {
+    it("lists an /ask job's run and serves its detail, flow, graph and files", async () => {
+      const base = await Deno.makeTempDir();
+      try {
+        const agentRuns = join(base, "agent-runs");
+        const runDir = join(agentRuns, "local", "job-1", "artifacts", "asked");
+        await Deno.mkdir(runDir, { recursive: true });
+        await Deno.writeTextFile(
+          join(runDir, "run-state.json"),
+          JSON.stringify(createHarnessRunState({
+            runId: "asked",
+            cfcEnforcementMode: "observe",
+            currentDir: "/workspace",
+            now: "2026-01-01T00:00:00.000Z",
+          })),
+        );
+        await Deno.writeTextFile(join(runDir, "transcript.json"), "[]");
+        const reading = new ConsoleServer(
+          {
+            ...await config(),
+            artifactRoot: join(base, "console-runs"),
+            agentRunsRoot: agentRuns,
+          },
+          (onEvent) =>
+            new HarnessInteractiveChatService({
+              createPromptLoop: answeringLoop,
+              now: advancingClock(),
+              onEvent,
+            }),
+        );
+        const listed = await reading.handle(getRequest("/api/runs"));
+        expect(
+          (await listed.json()).runs.map((
+            run: { runId: string; source: string },
+          ) => [run.runId, run.source]),
+        ).toEqual([["asked", "ask"]]);
+        for (
+          const path of [
+            "/api/runs/asked",
+            "/api/runs/asked/flow",
+            "/api/runs/asked/graph",
+            "/api/runs/asked/artifacts/run-state.json",
+          ]
+        ) {
+          const response = await reading.handle(getRequest(path));
+          expect([path, response.status]).toEqual([path, 200]);
+          await response.body?.cancel();
+        }
+        const escaped = await reading.handle(
+          getRequest(`/api/runs/${encodeURIComponent("../asked")}`),
+        );
+        expect(escaped.status).toBe(404);
+        await escaped.body?.cancel();
+      } finally {
+        await Deno.remove(base, { recursive: true });
+      }
     });
   });
 

@@ -4,6 +4,12 @@
  * for the page: a run id and a tool-output name both arrive from a URL, so
  * both are checked against a path segment here rather than trusted into a
  * `join`.
+ *
+ * The console's own turns are not the only runs the harness makes on this
+ * machine: the agent runner runs `/ask` jobs and `agent()` built-ins, each
+ * under an artifact root of its own. {@link consoleArtifactRoots} names every
+ * root, and the per-run readers below each read the one root a run was found
+ * in.
  */
 
 import { join } from "@std/path";
@@ -248,11 +254,177 @@ const toolOutputNames = async (root: string): Promise<string[]> => {
   });
 };
 
-/** Every run under the artifact root, most recently touched first. */
+/**
+ * Who made a run. `console` is a turn this console ran; `ask` is a job the
+ * agent runner's local-jobs lane ran for `/ask`; `agent` is an `agent()`
+ * built-in's run that the runner's Fabric lane executed.
+ */
+export type ConsoleRunSource = "console" | "ask" | "agent";
+
+/** One row of the run list, with where the run came from. */
+export interface ConsoleListedRun extends ConsoleRunSummary {
+  source: ConsoleRunSource;
+}
+
+/**
+ * Where the console reads runs from: its own artifact root, and the agent
+ * runner's work root when there is one to read.
+ */
+export interface ConsoleRunRoots {
+  /** `<artifact-root>/<run-id>/`, which this console's own turns write. */
+  console: string;
+
+  /**
+   * The agent runner's work root, `$CF_HARNESS_HOME/agent-runs` unless the
+   * runner was told otherwise. Each job it runs writes its runs a level or two
+   * down: `<root>/local/<job-id>/artifacts/<run-id>/` for the local-jobs lane
+   * that `/ask` uses, `<root>/<run-key>/artifacts/<run-id>/` for the Fabric
+   * lane that executes `agent()`.
+   */
+  agentRuns?: string;
+}
+
+/** One artifact root to read, and who wrote the runs in it. */
+export interface ConsoleArtifactRoot {
+  source: ConsoleRunSource;
+  artifactRoot: string;
+}
+
+/** The directories directly under `root` that are safe to name, sorted. */
+const safeSubdirectories = async (root: string): Promise<string[]> => {
+  const names: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(root)) {
+      if (entry.isDirectory && isSafeSegment(entry.name)) {
+        names.push(entry.name);
+      }
+    }
+  } catch {
+    // A root nothing has run under yet is a root with no runs.
+  }
+  return names.sort();
+};
+
+/**
+ * The name of the agent runner's local-jobs lane under its work root. The
+ * runner puts that lane one level below the work root it shares with the
+ * Fabric lane (`packages/cli/commands/agent.ts`), so a Fabric run key can never
+ * be this name: the runner derives those keys from a hash.
+ */
+const LOCAL_JOBS_LANE = "local";
+
+/**
+ * Every artifact root the console reads, in precedence order: its own first,
+ * then each `/ask` job's, then each `agent()` run's, each group by directory
+ * name. A run id found in more than one is the first one's — run ids are
+ * random UUIDs, so this is a tie-break for an accident rather than a rule
+ * anyone relies on, and the list and the detail routes both apply it.
+ *
+ * Shortcut: this walks the runner's whole work root on every request, which is
+ * cheap at the hundreds of jobs a developer's machine holds. A runner that
+ * prunes nothing will make it slow; an index of run id to job, kept by the
+ * runner or cached here by the work root's mtime, is the way out.
+ */
+export const consoleArtifactRoots = async (
+  roots: ConsoleRunRoots,
+): Promise<readonly ConsoleArtifactRoot[]> => {
+  const found: ConsoleArtifactRoot[] = [
+    { source: "console", artifactRoot: roots.console },
+  ];
+  if (roots.agentRuns === undefined) {
+    return found;
+  }
+  const lanes = await safeSubdirectories(roots.agentRuns);
+  if (lanes.includes(LOCAL_JOBS_LANE)) {
+    const local = join(roots.agentRuns, LOCAL_JOBS_LANE);
+    for (const job of await safeSubdirectories(local)) {
+      found.push({
+        source: "ask",
+        artifactRoot: join(local, job, "artifacts"),
+      });
+    }
+  }
+  for (const lane of lanes) {
+    if (lane === LOCAL_JOBS_LANE) continue;
+    found.push({
+      source: "agent",
+      artifactRoot: join(roots.agentRuns, lane, "artifacts"),
+    });
+  }
+  return found;
+};
+
+/**
+ * Every run the console can read, from every root, most recently touched
+ * first. A run id that more than one root holds is listed once, from the root
+ * {@link consoleArtifactRoots} puts first.
+ */
+export const listAllConsoleRuns = async (
+  roots: ConsoleRunRoots,
+): Promise<readonly ConsoleListedRun[]> => {
+  const byId = new Map<string, ConsoleListedRun>();
+  for (const { source, artifactRoot } of await consoleArtifactRoots(roots)) {
+    for (const run of await listConsoleRuns(artifactRoot, source)) {
+      if (!byId.has(run.runId)) {
+        byId.set(run.runId, run);
+      }
+    }
+  }
+  return sortConsoleRuns([...byId.values()]);
+};
+
+/**
+ * The artifact root that holds `runId`, or `undefined` for a run no root holds
+ * or a name that is not a run id. Every per-run route resolves through this
+ * and then reads that one root, so a run's `delegate_task` children and the
+ * neighbours its handles resolve against are the ones its own job wrote.
+ *
+ * The first root whose run has a readable state wins, which is the root
+ * {@link listAllConsoleRuns} lists it from. A run directory with no state yet
+ * — one still being written, or a child whose tool outputs a route names
+ * directly — is still a run to read files from, so failing that the first
+ * root holding the directory at all answers.
+ */
+export const findConsoleRunRoot = async (
+  roots: ConsoleRunRoots,
+  runId: string,
+): Promise<ConsoleArtifactRoot | undefined> => {
+  if (!isSafeSegment(runId)) {
+    return undefined;
+  }
+  let holdsDirectory: ConsoleArtifactRoot | undefined;
+  for (const candidate of await consoleArtifactRoots(roots)) {
+    const runDir = join(candidate.artifactRoot, runId);
+    const runState = await readJson<HarnessRunState>(
+      join(runDir, "run-state.json"),
+    );
+    if (runState !== undefined) {
+      return candidate;
+    }
+    if (holdsDirectory === undefined && await isDirectory(runDir)) {
+      holdsDirectory = candidate;
+    }
+  }
+  return holdsDirectory;
+};
+
+const isDirectory = async (path: string): Promise<boolean> => {
+  try {
+    return (await Deno.stat(path)).isDirectory;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Every run under one artifact root, most recently touched first, each tagged
+ * with `source`.
+ */
 export const listConsoleRuns = async (
   artifactRoot: string,
-): Promise<readonly ConsoleRunSummary[]> => {
-  const summaries: ConsoleRunSummary[] = [];
+  source: ConsoleRunSource = "console",
+): Promise<readonly ConsoleListedRun[]> => {
+  const summaries: ConsoleListedRun[] = [];
   try {
     // `Deno.readDir` reports a missing directory on its first step rather than
     // at the call, so an artifact root that no run has been written to yet is
@@ -272,7 +444,7 @@ export const listConsoleRuns = async (
         join(root, "transcript.json"),
       ) ??
         [];
-      summaries.push(summarizeConsoleRun(runState, transcript));
+      summaries.push({ ...summarizeConsoleRun(runState, transcript), source });
     }
   } catch {
     // No run has been made yet, so there is no tree to list.

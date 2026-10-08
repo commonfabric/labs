@@ -341,6 +341,11 @@ button[disabled] {
   font-size: 0.78rem;
 }
 
+.run-source {
+  color: var(--accent);
+  font-family: ui-monospace, monospace;
+}
+
 .run-detail-head {
   border-bottom: 1px solid var(--line);
   padding-bottom: 0.75rem;
