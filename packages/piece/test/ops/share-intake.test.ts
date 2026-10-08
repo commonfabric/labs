@@ -584,6 +584,46 @@ describe("share-intake", () => {
       expect(conflictsLogged() - before).toBe(1);
     });
 
+    it("is left unreported, and the intake settles, when the receipt of Home's handling cannot be read", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let receiptReads = 0;
+      // The runtime, but for a read by link of anything in Home's space, which
+      // is where Home's handler writes the receipt of each handling.
+      const unreadable = new Proxy(runtime, {
+        get(target, name) {
+          if (name === "getCellFromLink") {
+            return (link: { space?: string }, ...rest: never[]) => {
+              if (link.space !== home.space) {
+                return target.getCellFromLink(link as never, ...rest);
+              }
+              receiptReads++;
+              return {
+                pull: () => Promise.reject(new Error("receipt unreadable")),
+              };
+            };
+          }
+          const value = Reflect.get(target, name, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const intake = startShareIntakeOf(
+        unreadable as never,
+        home,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      const before = conflictsLogged();
+      await deliver([offerOf(space, "unread", { title: "Conflicting" })]);
+      await registeredThrough("unread");
+      await intake.idle();
+
+      expect(receiptReads).toBe(1);
+      expect(conflictsLogged() - before).toBe(0);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "unread"))
+        .toEqual(["sent"]);
+    });
+
     it("is registered when its inbox next changes after sending it to Home failed", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       let sendable = false;
