@@ -214,7 +214,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [`compact-space`](compact-space.md) designs the operator tool that shrinks
   one space's revision history after a write storm: materialize a `set` at
   every selected head under one `system` compaction commit, keep every head's
-  address, drop the rows behind it, hollow the payloads of commits nothing
+  address but the ACL document's, which records the compaction, drop the
+  rows behind it, hollow the payloads of commits nothing
   references outside a retained window while keeping every commit's identity,
   and write the result out with `VACUUM INTO`. Options for what compaction
   means and what each breaks, the flags, the safety and rollback recipe for

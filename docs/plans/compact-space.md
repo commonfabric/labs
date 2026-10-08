@@ -33,7 +33,8 @@ compacted is never the one the server was serving, and the file that is
 compacted is a snapshot taken after the owning instance stopped. The operator
 selects documents by id prefix and bounds the cut by sequence, time, or a
 per-document count; a dry run reports rows and bytes before anything is
-written. Every head keeps its address, so nothing a client or the serving loop
+written. Every head keeps its address — the space's ACL document excepted,
+which gains one audit revision — so nothing a client or the serving loop
 holds goes stale; what changes is that a read older than the cut conflicts
 where it might once have been confirmed, and history below the cut is read
 from the pre-compaction archive rather than the live store. The tool is `cf space compact`, built on a module in
@@ -159,20 +160,37 @@ Each is something a reader relies on today, with the code that relies on it.
   commit-class annotation of a frame resolves through the head's seq. Moving
   a head to a new seq would make every one of those stale at once and hand the
   serving loop a full re-derivation on activation — a storm to end a storm.
+  The one exception is the space's ACL document, `of:<did>`, which the
+  compaction commit patches with [the audit marker](#what-a-user-sees) and
+  which is never itself selected for compaction; its head advances to the
+  compaction commit's seq, which every client re-reads on join anyway.
 - **I2 — every head has its revision row**, because the head read is a join.
 - **I3 — the first surviving row of every instance is a base**, a `set` or a
   `delete`, or a snapshot at or before it exists, because reconstruction
   starts from one or the other and otherwise starts from the empty document.
-- **I4 — a materialized row is nobody's write.** The `set` that replaces a
-  head folds in every session's writes since the base, so it must not be
-  attributed to the session whose patch it replaced: a pending read from that
-  session names its own layers, the conflict scan excludes rows carrying them,
-  and a foreign write folded into an own-attributed row would vanish from the
-  scan (Astra's review reproduced this on a store that kept every commit row).
-  The materialized row's `commit_seq` therefore points at one `system`-class
-  compaction commit the run inserts at the next free seq; its own `seq` and
-  `op_index` stay (I1), and `commitClassOfSeq`, which resolves by the row's
-  `seq`, still finds the original commit's class. The commit's
+- **I4 — every retained boundary row is nobody's write.** The boundary is
+  the oldest row an instance keeps: a materialized `set`, a head that was
+  already a `set` or `delete`, or the first row above a bounded cut. A
+  materialized `set` folds in every session's writes since the base, so it
+  must not be attributed to the session whose patch it replaced: a pending
+  read from that session names its own layers, the conflict scan excludes
+  rows carrying them, and a foreign write folded into an own-attributed row
+  would vanish from the scan (Astra's review reproduced this on a store that
+  kept every commit row). A boundary that was already a `set` has the other
+  problem: left under its original author, nothing in the store says that
+  history was deleted behind it, and a guard that infers "never compacted"
+  from an ordinary author accepts a stale basis as a genuine absence (Astra's
+  review reproduced that too, with a prototype of the guard). So the rule is
+  uniform: whatever its op, the boundary row's `commit_seq` is rewritten to
+  point at one `system`-class compaction commit the run inserts at the next
+  free seq. The row's own `seq` and `op_index` stay (I1), `commitClassOfSeq`,
+  which resolves by the row's `seq`, still finds the original commit's class,
+  and the original commit row survives under I6. The attribution is the
+  cutoff record: an instance was truncated if and only if its oldest row
+  points at a compaction commit, and nothing has to infer it from the
+  surviving operation. A per-instance cutoff table was the alternative; it
+  would need a new table the engine reads on every basis check, where the
+  attribution is a column the engine already joins. The commit's
   `(session_id, local_seq)` is unique per run — `compaction:<run id>` and
   `1`, where the run id is the run's UTC timestamp — because the `commit`
   table has a unique index on that pair and a second or resumed run inserts
@@ -244,11 +262,15 @@ Each is something a reader relies on today, with the code that relies on it.
   therefore distinguishes a compacted basis from a genuine absence and
   returns `known: false` before the identity proof, for confirmed and pending
   reads alike, so the staleness refusal stands and the client retries against
-  fresh state. The distinguishing fact is already in the store: an instance
-  whose oldest surviving row points at a compaction commit (`class =
-  'system'`, session `compaction:`) was compacted, and any basis older than
-  that row is unknown; an instance whose oldest row is an ordinary `set` was
-  never compacted, and a basis older than it is a genuine absence as today.
+  fresh state. The distinguishing fact is in the store because I4 puts it
+  there for every truncated instance, not only the patch-headed ones: an
+  instance whose oldest surviving row points at a compaction commit (`class
+  = 'system'`, session `compaction:`) lost history, and any basis older than
+  that row is unknown; an instance whose oldest row points at an ordinary
+  commit lost nothing, and a basis older than it is a genuine absence as
+  today. The guard reads the attribution and never the op: a boundary that
+  was a `set` before compaction and a boundary that became one are the same
+  case to it.
   Robin's framing — compaction is an operations event, and the restart that
   accompanies it drops every session — covers everything except this: a
   client's queued commit from before the restart carries its old basis into
@@ -259,10 +281,14 @@ Each is something a reader relies on today, with the code that relies on it.
 **(a) Materialize-and-truncate.** For each instance in the selection whose
 head is a `patch`, reconstruct the document at the head with the engine's own
 replay and rewrite that row in place as `op = 'set'` with the encoded
-document, at the same `(seq, op_index)` and with `commit_seq` pointing at the
-run's compaction commit (I4); update `head.op` to match. For every selected
-instance, delete the revision rows ordered before the head and every snapshot
-row (the `set` is now the base; a `set` head needs none). Then hollow the
+document, at the same `(seq, op_index)`; update `head.op` to match. For every
+selected instance that loses at least one row, point the retained boundary
+row's `commit_seq` at the run's compaction commit (I4) — the materialized
+`set`, a head that was already a `set` or `delete`, or under a bounded cut
+the oldest row kept, rewritten as a `set` if it was a patch — and delete the
+revision rows ordered before it and every snapshot row at or below it (the
+boundary is now the base). An instance that loses nothing is left exactly as
+it was, attribution included. Then hollow the
 `original` of every commit row that no surviving revision or `op_*` row
 references and that falls outside the retained window (I6). The compaction
 commit is inserted first, at `max(seq) + 1`, with the run's report as its
@@ -429,17 +455,23 @@ document's note that `/tmp` has no room applies here too.
 Each check fails differently and the order goes from cheap to expensive:
 
 1. `PRAGMA integrity_check` and `PRAGMA foreign_key_check` on the result.
-2. **Heads unchanged.** `SELECT branch, id, scope_key, seq, op_index FROM
-   head ORDER BY 1, 2, 3` hashed on backup and result must match; the count
-   of heads whose `op` changed from `patch` to `set` must equal the dry run's
-   rewritten count. Every head must still join to a revision row.
-3. **Every document reads back identical.** Reconstruct every selected
-   instance at its head on both files with the state inspector's replay
-   (`packages/state-inspector/reconstruct.ts`), which is a second
+2. **Heads unchanged, one excepted.** `SELECT branch, id, scope_key, seq,
+   op_index FROM head WHERE id <> '<of:did>' ORDER BY 1, 2, 3` hashed on
+   backup and result must match; the ACL document's head must be exactly the
+   compaction commit's seq at `op_index` 0 with op `patch`; the count of
+   heads whose `op` changed from `patch` to `set` must equal the dry run's
+   rewritten count; the count of boundary rows pointing at the compaction
+   commit must equal the dry run's truncated-instance count. Every head must
+   still join to a revision row.
+3. **Every document reads back identical, one excepted.** Reconstruct every
+   selected instance at its head on both files with the state inspector's
+   replay (`packages/state-inspector/reconstruct.ts`), which is a second
    implementation of the engine's rule, and compare canonical encodings. All
    of them, not a sample: it is offline and runs in minutes, and "every head
-   identical" is the claim the operator wants to make. `--verify-sample <n>`
-   exists for a quick pass during rehearsal.
+   identical" is the claim the operator wants to make. For the ACL document
+   the comparison is: `value` byte-identical, and the only root member that
+   differs is `compaction`, holding what the dry run said it would.
+   `--verify-sample <n>` exists for a quick pass during rehearsal.
 4. `cf space fingerprint` on both files must agree. The fingerprint excludes
    generated cells, so it is necessary rather than sufficient, and it is
    cheap.
@@ -490,12 +522,16 @@ will transform it, and run again in stage 4 against the tool's own output:
   reader's real basis yields `{x: 1, y: 3}`, not the stored `{x: 1}`. After
   compaction it must still be refused, not accepted with the operation
   elided because the patch on an absent basis happens to equal the stored
-  document.
+  document. The same case with the `set` as the head — no trailing patch, so
+  the boundary was already a `set` and only its attribution changed — must
+  also stay refused; so must the same case under a bounded cut that keeps
+  rows above the boundary.
 - **A pending read whose basis was compacted away cannot prove identity.**
   The same seed; session A's localSeq 1 adds `/value/x = 2`; session B does
   the replacement and the patch; compact. Session A's localSeq 2 submits the
   same final patch with a pending read at `basisSeq: 1` naming layer 1. Refused
-  before compaction; it must stay refused.
+  before compaction; it must stay refused, in the patch-headed, `set`-headed
+  and bounded-cut variants alike.
 
 ### What a user sees
 
@@ -507,10 +543,13 @@ changed nothing — to anyone reading the log. Robin's review asks for the
 equivalent of a browser's broken-key icon: something developers can wave
 past and a user of what looked like a safe space can see.
 
-So the compaction commit carries one revision of its own: a patch on the
+So the compaction commit carries one revision of its own: a `patch` on the
 space's ACL document (`of:<did>`, the one entity named by the space's DID,
 which every client reads to join) adding a `compaction` member beside
-`value` at the document root:
+`value` at the document root, at `op_index` 0 of the compaction commit's
+seq. The ACL document is never in a compaction's selection, whatever the
+prefix flags say: its history is the membership audit, and this revision is
+the one change compaction makes to it.
 
 ```json
 {
@@ -737,8 +776,8 @@ tracked on the storm's Topic, not this plan.
 **Amend the storage spec.** §7.1 of `02-storage.md` says revisions are not
 deleted during ordinary garbage collection, and that stays true. It gains one
 paragraph: an operator may compact a space's revision history offline with
-`cf space compact`, which keeps every head's address and materializes a base
-at the cut, and the compacted range is readable only from the archive the
+`cf space compact`, which keeps every head's address but the ACL
+document's, materializes a base at the cut, and the compacted range is readable only from the archive the
 operator took.
 
 ## What is deliberately left open
@@ -792,10 +831,11 @@ compacted until the engine can tell compacted history from absence.
    latency, or only for disk?" gets its answer.
 2. **The basis guard (I9).** `known: false` for a confirmed or pending read
    whose basis predates an instance's oldest surviving row when that row
-   points at a compaction commit. Tests: the last two protocol cases of §3,
-   against stores transformed by hand the way the tool will transform them,
-   red before and green after; an uncompacted instance's genuine absence
-   still proves identity as today.
+   points at a compaction commit. Tests: the last two protocol cases of §3
+   in all three variants — patch-headed, `set`-headed, bounded cut — against
+   stores transformed by hand the way the tool will transform them, red
+   before and green after; an uncompacted instance's genuine absence still
+   proves identity as today.
 3. **Dry run and report.** `packages/memory/v2/compact.ts` with the
    selection, the cut, and the report, read-only; `cf space compact --dry-run`
    over it. Exercised against the September Topics copy, whose numbers replace
@@ -804,9 +844,11 @@ compacted until the engine can tell compacted history from absence.
 4. **The write path.** The compaction commit with its per-run identity and
    its ACL-document marker, materialize, truncate, hollow (commit 1 exempt),
    `VACUUM INTO`, `--verify --against`. Tests: every head reads back identical
-   through both the engine and the inspector's replay; a confirmed read below
-   the cut conflicts; all four protocol cases of §3 against the tool's own
-   output; a resubmitted commit inside the payload window is answered from
+   through both the engine and the inspector's replay, with the ACL document
+   checked as step 3 states; a confirmed read below the cut conflicts; all
+   four protocol cases of §3, in every variant, against the tool's own
+   output; every truncated instance's boundary row points at the compaction
+   commit and no untouched instance's does; a resubmitted commit inside the payload window is answered from
    its stored result; the genesis root and space kind read the same on the
    reopened result; the feed's view of the compaction commit is as I4 states;
    a store with a second branch is refused; a run interrupted after the first
