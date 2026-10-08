@@ -136,25 +136,6 @@ const refusalOf = (serverExecution: boolean) =>
     serverExecution ? "event handling errored: " : ""
   }CFC enforcement rejected commit`;
 
-/**
- * Expects `handling`, the awaited handling of a send whose handler run throws,
- * to reject, with `reason` in its message under server execution, where the
- * reason is the one the served run recorded. A run in the worker that throws
- * rejects with its aborted transaction's own message, which does not carry the
- * reason.
- */
-const expectThrownRefusal = (
-  serverExecution: boolean,
-  handling: Promise<unknown>,
-  reason: string,
-): Promise<void> => {
-  const refused = expect(handling).rejects;
-  // TODO(danfuzz): Assert `reason` in the worker too, once the runtime
-  // processor's `#sendCellEvent()` rejects with an aborted run's `reason`
-  // rather than with the transaction's own message.
-  return serverExecution ? refused.toThrow(reason) : refused.toThrow();
-};
-
 type ChatOutput = { items: { body: string }[]; save: unknown };
 
 /**
@@ -570,15 +551,11 @@ describe("send-reviewed", () => {
             [carol.did()]: "OWNER",
             [signer.did()]: "WRITE",
           });
-          await expectThrownRefusal(
+          await expect(settled(
             serverExecution,
-            settled(
-              serverExecution,
-              room.grant.sendReviewed({ principal: bob.did() }, addMember),
-              "the non-owner's grant's handling",
-            ),
-            `which ${signer.did()} does not hold`,
-          );
+            room.grant.sendReviewed({ principal: bob.did() }, addMember),
+            "the non-owner's grant's handling",
+          )).rejects.toThrow(`which ${signer.did()} does not hold`);
 
           expect(await room.storedAcl()).toEqual({
             [carol.did()]: "OWNER",
@@ -590,19 +567,17 @@ describe("send-reviewed", () => {
           await using room = await membersRoom(serverExecution, {
             [signer.did()]: "OWNER",
           });
-          await expectThrownRefusal(
+          await expect(settled(
             serverExecution,
-            settled(
-              serverExecution,
-              room.grant.sendStrict(
-                {
-                  principal: bob.did(),
-                  provenance: nativeProvenance(addMember),
-                },
-                { awaitHandling: true },
-              ),
-              "the forged grant's handling",
+            room.grant.sendStrict(
+              {
+                principal: bob.did(),
+                provenance: nativeProvenance(addMember),
+              },
+              { awaitHandling: true },
             ),
+            "the forged grant's handling",
+          )).rejects.toThrow(
             "requires the handler's event to be a trusted gesture",
           );
 
