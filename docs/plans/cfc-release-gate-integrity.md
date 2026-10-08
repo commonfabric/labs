@@ -52,13 +52,18 @@ review of D5 (`cfc/13-11-decisions.md` in the specs repository) states the
 rule: an exchanged label wherever a label is consumed, carried forward by rule
 kind. §5.3 applies a value-intrinsic rule at observation, and §4.6.3 makes a
 whole read a traversal over primitive observations whose labels are joined.
-The gates take the literal form of each step, which refuses at least as much
-as any ruling that loosens it, and they store nothing new.
+The ceilings take the literal form of each step, which refuses at least as
+much as any ruling that loosens it, and they store nothing new.
 
-Three looser variants go to a specs ruling as proposals: one stamp speaking
-for every location it resolves at, a join over the confidential locations
-only, and a floor that counts each location as an observation. The join
-within one location is the separate gap above.
+The `requiredIntegrity` floor reads §8.10.3's "consumed observation labels" as
+the primitive observations of §4.6.3, one per location, which the witness key's
+ignoring of `scope.projection` presupposes. Read instead as one joined label per
+gated read, the floor refuses every read-modify-write of a structured value
+whose witness is value-bound: a handler that reads a registry whole and writes
+its list back joins two locations, and the join drops the witness. That
+reading needs a ruling. So do two looser variants of the ceilings: one stamp
+speaking for every location it resolves at, and a join over the confidential
+locations only. The join within one location is the separate gap above.
 
 ## How the gates evaluate
 
@@ -82,8 +87,8 @@ value:
 4. Every rule then runs over the joined label, with the gate's boundary
    context, and the ceiling is fitted.
 
-The `requiredIntegrity` floor needs a witness that the join of each gated
-read's locations keeps. A cell's stored label at the display is still fitted
+The `requiredIntegrity` floor needs one witness key shared by every location
+each gated read consumed and by the read's own label. A cell's stored label at the display is still fitted
 on its root's integrity: a label view carries no origin, so it cannot be
 resolved location by location yet.
 
@@ -121,9 +126,10 @@ gates. Each is a separate change; none is fixed here.
 - [x] Switch the three gates to exchange each observation, then join,
       unconditionally, with the value-intrinsic rule classifier copied from
       labs#8531.
-- [ ] File the specs ruling: the looser variants above as proposals, the
-      pseudocode that leaves out the observation step, and the within-location
-      component join. Mark the deciding site with `SPEC-PENDING` naming it.
+- [ ] File the specs ruling: what an observation label is at the floor, the
+      looser ceiling variants as proposals, the pseudocode that leaves out the
+      observation step, and the within-location component join. Mark the
+      deciding site with `SPEC-PENDING` naming it.
 - [ ] Resolve a cell's stored label at the display location by location, once
       label views carry each entry's origin.
 - [ ] Archive this plan.

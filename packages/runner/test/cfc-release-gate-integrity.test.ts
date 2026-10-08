@@ -674,8 +674,8 @@ describe("release-gate integrity", () => {
   });
 
   describe("at the requiredIntegrity floor", () => {
-    // A gated read is one materialized value, whose witness is what the join
-    // of the locations it consumed keeps (§8.10.1.1, §3.1.6.2, §8.10.3).
+    // The floor's witness is shared across every observation a gated read
+    // made, one per location it consumed (§8.10.3, §4.6.3).
 
     it("passes the floor on the tally for its output read on its own", async () => {
       await withRuntime(async (runtime) => {
@@ -706,15 +706,12 @@ describe("release-gate integrity", () => {
       });
     });
 
-    it("fails the floor on the tally for fields it wrote one at a time, read whole", async () => {
-      // The join of two values keeps no value-bound atom, however each was
-      // stamped.
-
+    it("passes the floor on the tally for fields it wrote one at a time, read whole", async () => {
       await withRuntime(async (runtime) => {
         await seedTalliedFields(runtime, "fields");
         expect(
-          refusedByFloor(publish(runtime, "fields", [], TALLIED_STORE_SCHEMA)),
-        ).toBe(true);
+          publish(runtime, "fields", [], TALLIED_STORE_SCHEMA).reasons,
+        ).toEqual([]);
       });
     });
 

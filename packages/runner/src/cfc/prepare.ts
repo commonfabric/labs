@@ -7242,11 +7242,17 @@ const verifyInputRequirements = (
       // is not "the inputs were screened". The single-read case reduces to
       // the plain floor. Quantifies over D4's per-write prefix `gating`, not
       // the transaction-global gate-visible read set.
-      // Each gated read is one materialized value, labeled by the join of
-      // the locations it consumed (§8.10.1.1, §3.1.6.2), so its witness is
-      // what that join keeps, not what some location of it carries.
+      // The witness is shared across every consumed observation label
+      // (§8.10.3), and a whole read is a traversal over primitive
+      // observations (§4.6.3), so each location a gated read consumed is
+      // one of those labels: a witness one location carries and another
+      // lacks is no witness for the object. The read's own label is held to
+      // it as well, so the floor admits no witness that label lacks.
       const ok = cfcIntegritySatisfiesFloorCoherently(
-        gating.map((read) => joinLocationIntegrity(read.locations())),
+        gating.flatMap((read) => [
+          read.label?.integrity ?? [],
+          ...read.locations().map((location) => location.integrity),
+        ]),
         requiredIntegrity,
         cfcFloorTrustContext(tx),
       );
