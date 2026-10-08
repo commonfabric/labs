@@ -145,7 +145,10 @@ export const seedProfileName = handler<
 // at the least, so the space grants anyone WRITE. What keeps a visitor from
 // changing the profile's data is the owner protection on its fields
 // (profile-home.tsx), not the space's access list; its view state is per
-// session. Existing profiles keep their already-baked concrete DID link.
+// session. The profile is the space's root (`root: true`), reserved in the
+// space's genesis commit, so a host holding only the space's DID reaches the
+// profile through the space's root. Existing profiles keep their
+// already-baked concrete DID link.
 export const submitProfileCreation = handler<
   CreateProfileEvent,
   {
@@ -181,7 +184,7 @@ export const submitProfileCreation = handler<
     const index = ((profiles as any).asSchema(profileLinkListSchema()).get() ??
       []).length as number;
     profiles.push(
-      ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
+      ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" }, root: true })({
         initialName: name,
         // The freshly created profile is current-vintage by construction — it
         // carries every stream and field, so the strict producer type is the
