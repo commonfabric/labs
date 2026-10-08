@@ -1401,6 +1401,11 @@ without taking the connection or the client's other commits with it. A failure
 to deliver a response is a failure of the connection instead, and closes it:
 the request may already have taken effect, a commit whose verdict was lost
 among them, so the client replays it and the server answers from its record.
+A request is answered once. A failure after its response has gone out, such as
+in delivering the self-revocation a commit defers until after its verdict, is
+not answered again on the same `requestId`; it closes the connection the same
+way, and the client learns on reconnecting what the lost message would have
+told it.
 
 ```typescript
 // Shown at module scope.

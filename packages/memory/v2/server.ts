@@ -986,6 +986,13 @@ class Connection {
   #pendingReceives = 0;
   #receiveIdle: PromiseWithResolvers<void> | null = null;
 
+  /**
+   * The request ids a response has gone out for, each kept until its frame's
+   * handling ends, so that a request is answered once: a failure after its
+   * response left is not answered again on the same id.
+   */
+  #answered = new Set<string>();
+
   readonly #server: Server;
   readonly #sendRaw: Send;
 
@@ -1001,6 +1008,7 @@ class Connection {
   }
 
   #send(message: ServerMessage): void {
+    if (message.type === "response") this.#answered.add(message.requestId);
     try {
       const schemaStart = performance.now();
       const prepared = this.#syncSchemaTable
@@ -1356,6 +1364,8 @@ class Connection {
         this.#receivePresence(parsed);
       } catch (error) {
         if (!this.#answerFailedRequest(parsed, error)) throw error;
+      } finally {
+        this.#answered.delete(parsed.requestId);
       }
       return;
     }
@@ -1378,6 +1388,8 @@ class Connection {
         } catch (error) {
           if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
+          const requestId = requestIdOf(parsed);
+          if (requestId !== undefined) this.#answered.delete(requestId);
           timing.time(startedAt, "memory", "frame", "handle");
         }
       });
@@ -1471,17 +1483,20 @@ class Connection {
    *
    * Returns whether it answered. A failure to deliver a response, an accepted
    * commit's verdict among them, is a `DeliveryError` and is left to the
-   * caller, as is a frame naming no request; the host then closes the
-   * connection, and the client replays what it was waiting for.
+   * caller, as is a frame naming no request and a failure after the request's
+   * response has already gone out, a commit's deferred self-revocation among
+   * them: a request is answered once. The host then closes the connection, and
+   * the client replays what it was waiting for, or learns on reconnecting what
+   * the lost message would have told it.
    */
   #answerFailedRequest(
     parsed: ClientMessage | OversizedClientMessage | null,
     error: unknown,
   ): boolean {
-    const requestId = (parsed as { requestId?: unknown } | null)?.requestId;
+    const requestId = requestIdOf(parsed);
     if (
       error instanceof DeliveryError || parsed === null ||
-      typeof requestId !== "string"
+      requestId === undefined || this.#answered.has(requestId)
     ) {
       return false;
     }
@@ -2119,6 +2134,17 @@ const spaceOfFrame = (
     return undefined;
   }
   return message.space;
+};
+
+/**
+ * The request a frame names, or `undefined` for one naming none: a frame that
+ * could not be read, or a `hello`.
+ */
+const requestIdOf = (
+  message: ClientMessage | OversizedClientMessage | null,
+): string | undefined => {
+  if (message === null || !("requestId" in message)) return undefined;
+  return typeof message.requestId === "string" ? message.requestId : undefined;
 };
 
 const isPresenceClientMessage = (

@@ -422,3 +422,80 @@ Deno.test("memory v2 server answers a presence request whose handling throws wit
     await server.close();
   }
 });
+
+Deno.test("memory v2 server answers a commit once when a step after its verdict throws, and leaves the failure to the host", async () => {
+  // The verdict has left by the time the step throws, so the request is
+  // already answered. A second response on the same request id would
+  // contradict the first; the host closes the connection instead, and the
+  // client learns on reconnecting what the lost step would have told it.
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://memory-v2-step-after-verdict-throws"),
+  });
+  const wire = hostLikeTransport(server);
+  const requestIds = new Map<number, string>();
+  const responses = new Map<string, string[]>();
+  const connectToServer = server.connect.bind(server);
+  using _connect = stub(
+    server,
+    "connect",
+    (send, ...rest) =>
+      connectToServer((message) => {
+        if (message.type === "response") {
+          const seen = responses.get(message.requestId) ?? [];
+          const error = "error" in message ? message.error : undefined;
+          seen.push(error === undefined ? "ok" : error.name);
+          responses.set(message.requestId, seen);
+        }
+        send(message);
+      }, ...rest),
+  );
+  const transport: Transport = {
+    ...wire.transport,
+    send(payload: string) {
+      const frame = decodeMemoryBoundary(payload) as {
+        type?: string;
+        requestId?: string;
+        commit?: { localSeq: number };
+      };
+      if (frame.type === "transact" && frame.requestId !== undefined) {
+        requestIds.set(frame.commit!.localSeq, frame.requestId);
+      }
+      return wire.transport.send(payload);
+    },
+  };
+  const client = await connect({ transport });
+  const session = await client.mount(
+    "did:key:z6Mk-memory-v2-step-after-verdict-throws",
+    {},
+    testSessionOpenAuthFactory,
+  );
+  let thrown = false;
+  using _revocation = stub(server, "deliverDeferredSelfRevocation", () => {
+    if (thrown) return;
+    thrown = true;
+    throw new Error("unexpected failure after the verdict");
+  });
+
+  try {
+    const applied = await session.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set", id: "of:answered", value: { value: 1 } }],
+    });
+    expect(applied.seq).toBe(1);
+    // The next commit lands on the connection that replaced the closed one,
+    // and its verdict means the handling of the first has finished.
+    await session.transact({
+      localSeq: 2,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set", id: "of:next", value: { value: 2 } }],
+    });
+
+    expect(responses.get(requestIds.get(1)!)).toEqual(["ok"]);
+    expect(wire.connections).toBe(2);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
