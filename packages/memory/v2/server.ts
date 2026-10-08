@@ -124,7 +124,11 @@ import {
   type InviteResult,
 } from "./invites.ts";
 import { SpaceInviteError } from "../space-invites.ts";
-import { isGenesisRoot, readGenesisRoot } from "./genesis-root.ts";
+import {
+  isGenesisRoot,
+  readGenesisRoot,
+  readSpaceKind,
+} from "./genesis-root.ts";
 import {
   executionLeaseHolder,
   liveExecutionLeaseHolder,
@@ -180,6 +184,7 @@ import {
 } from "./server-sync.ts";
 import { authorizationError } from "./session-open-auth.ts";
 import { SessionRegistry, type SessionState } from "./session-registry.ts";
+import { isSpaceKind } from "./space-kind.ts";
 import {
   columnOriginUnavailableReason,
   ensureColumnOriginAvailable,
@@ -612,6 +617,52 @@ const commitTouchesAclDoc = (
   );
 };
 
+/**
+ * The facts a space's genesis commit may declare beside its access list, each
+ * with the validator its value is held to and the words its refusals use. A
+ * session declares the same fact in its descriptor, and the commit carries it
+ * under the same name.
+ */
+const GENESIS_DECLARATIONS = [
+  {
+    field: "genesisRoot",
+    isValid: isGenesisRoot,
+    invalid: "Invalid genesis root reservation",
+    declared: "A root reservation",
+    sealed: "The genesis root",
+    intent: "root",
+  },
+  {
+    field: "spaceKind",
+    isValid: isSpaceKind,
+    invalid: "Invalid space kind",
+    declared: "A space kind",
+    sealed: "The space kind",
+    intent: "space kind",
+  },
+] as const;
+
+/**
+ * Whether `commit`, made as `principal`, is the genesis of `space` signed by
+ * the space's own key: the first commit the space holds, on the default
+ * branch, and nothing but a `set` of the space-scoped access list to a valid
+ * list naming a concrete owner.
+ */
+const isSpaceKeyAclGenesis = (
+  engine: Engine.Engine,
+  space: string,
+  principal: string | undefined,
+  commit: ClientCommit,
+): boolean =>
+  principal === space && Engine.serverSeq(engine) === 0 &&
+  commit.operations.length === 1 && commit.operations[0].op === "set" &&
+  commit.operations[0].id === aclDocId(space) &&
+  (commit.operations[0].scope === undefined ||
+    commit.operations[0].scope === "space") &&
+  (commit.branch === undefined || commit.branch === "") &&
+  isACL(commit.operations[0].value?.value) &&
+  hasConcreteOwner(commit.operations[0].value?.value);
+
 /** Deterministic, collision-resistant-enough token for a filename component
  *  (FNV-1a 32-bit + length). Used to derive cell-db file names from (space,id). */
 function hashToken(s: string): string {
@@ -934,6 +985,23 @@ const graphWatchRootQueries = (watches: readonly WatchSpec[]) =>
       }))
     );
 
+/**
+ * A failure to hand a message to the host's send, carrying what failed as its
+ * cause. It is a failure of the connection, not of whatever request the message
+ * answers: a commit whose verdict could not be delivered is already applied, so
+ * the connection closes and the client's replay is answered from the record.
+ */
+class DeliveryError extends Error {
+  /** Constructs an instance for the delivery failure `cause`. */
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error ? cause.message : "Memory message delivery failed",
+      { cause },
+    );
+    this.name = "DeliveryError";
+  }
+}
+
 class Connection {
   #ready = false;
   #closed = false;
@@ -969,6 +1037,14 @@ class Connection {
   #pendingReceives = 0;
   #receiveIdle: PromiseWithResolvers<void> | null = null;
 
+  /**
+   * The request ids a response has gone out for, each kept until its frame's
+   * handling ends, so that a request is answered once: a failure after its
+   * response left is not answered again on the same id. A frame whose failure
+   * is left to the host keeps its id, which no later request shares.
+   */
+  #answered = new Set<string>();
+
   readonly #server: Server;
   readonly #sendRaw: Send;
 
@@ -984,14 +1060,19 @@ class Connection {
   }
 
   #send(message: ServerMessage): void {
-    const schemaStart = performance.now();
-    const prepared = this.#syncSchemaTable
-      ? compressServerMessageSchemas(message)
-      : message;
-    timing.time(schemaStart, "memory", "response", "prepareSchemas");
-    const sendStart = performance.now();
-    this.#sendRaw(prepared);
-    timing.time(sendStart, "memory", "response", "sendRaw");
+    if (message.type === "response") this.#answered.add(message.requestId);
+    try {
+      const schemaStart = performance.now();
+      const prepared = this.#syncSchemaTable
+        ? compressServerMessageSchemas(message)
+        : message;
+      timing.time(schemaStart, "memory", "response", "prepareSchemas");
+      const sendStart = performance.now();
+      this.#sendRaw(prepared);
+      timing.time(sendStart, "memory", "response", "sendRaw");
+    } catch (cause) {
+      throw new DeliveryError(cause);
+    }
   }
 
   /** Whether the peer declared the expression result identity contract. */
@@ -1331,7 +1412,12 @@ class Connection {
     // behind them (04-protocol.md §4.13.4). Everything else keeps the
     // connection's order.
     if (parsed !== null && isPresenceClientMessage(parsed)) {
-      this.#receivePresence(parsed);
+      try {
+        this.#receivePresence(parsed);
+      } catch (error) {
+        if (!this.#answerFailedRequest(parsed, error)) throw error;
+      }
+      this.#answered.delete(parsed.requestId);
       return;
     }
     this.#pendingReceives += 1;
@@ -1350,9 +1436,13 @@ class Connection {
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
           await this.#receiveOrdered(parsed);
+        } catch (error) {
+          if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
           timing.time(startedAt, "memory", "frame", "handle");
         }
+        const requestId = requestIdOf(parsed);
+        if (requestId !== undefined) this.#answered.delete(requestId);
       });
     } finally {
       this.#pendingReceives = Math.max(0, this.#pendingReceives - 1);
@@ -1432,6 +1522,52 @@ class Connection {
       }
     });
     return current;
+  }
+
+  /**
+   * Helper for `receive()`, which answers a request whose handling threw with
+   * an error response on its own request id, so that the connection carries
+   * on: every error is returned in a response (04-protocol.md §4.7). A commit
+   * is answered with a `TransactionError` and any other request with a
+   * `QueryError`, while an engine `ProtocolError` keeps its own name, as the
+   * handlers name the failures they classify themselves.
+   *
+   * Returns whether it answered. A failure to deliver a response, an accepted
+   * commit's verdict among them, is a `DeliveryError` and is left to the
+   * caller, as is a frame naming no request and a failure after the request's
+   * response has already gone out, a commit's deferred self-revocation among
+   * them: a request is answered once. The host then closes the connection, and
+   * the client replays what it was waiting for, or learns on reconnecting what
+   * the lost message would have told it.
+   */
+  #answerFailedRequest(
+    parsed: ClientMessage | OversizedClientMessage | null,
+    error: unknown,
+  ): boolean {
+    const requestId = requestIdOf(parsed);
+    if (
+      error instanceof DeliveryError || parsed === null ||
+      requestId === undefined || this.#answered.has(requestId)
+    ) {
+      return false;
+    }
+    console.error(
+      `memory v2: handling a ${parsed.type} request failed; answering it with an error response`,
+      error,
+    );
+    this.#send({
+      type: "response",
+      requestId,
+      error: toError(
+        error instanceof Engine.ProtocolError
+          ? error.name
+          : parsed.type === "transact"
+          ? "TransactionError"
+          : "QueryError",
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+    return true;
   }
 
   #requireSession(
@@ -2051,6 +2187,17 @@ const spaceOfFrame = (
   return message.space;
 };
 
+/**
+ * The request a frame names, or `undefined` for one naming none: a frame that
+ * could not be read, or a `hello`.
+ */
+const requestIdOf = (
+  message: ClientMessage | OversizedClientMessage | null,
+): string | undefined => {
+  if (message === null || !("requestId" in message)) return undefined;
+  return typeof message.requestId === "string" ? message.requestId : undefined;
+};
+
 const isPresenceClientMessage = (
   message: ClientMessage | OversizedClientMessage,
 ): message is
@@ -2195,6 +2342,14 @@ export class Server {
 
   /** How many times `#buildSessionDemand()` has run, for a test to read. */
   #sessionDemandBuilds = 0;
+
+  /**
+   * The kind each space's genesis receipt declares, `undefined` included, as
+   * {@link #spaceKindOf} read it. The receipt never changes once written, so
+   * an entry never goes stale. Keyed by engine, so a store opened again is
+   * read afresh.
+   */
+  #spaceKinds = new WeakMap<Engine.Engine, string | undefined>();
 
   #store?: URL;
   #operationCodecs: OperationCodecRegistry;
@@ -2757,53 +2912,62 @@ export class Server {
     );
   }
 
+  /**
+   * The kind the genesis receipt of the space `engine` stores declares, or
+   * `undefined` when it declares none or the space has no history yet.
+   */
+  #spaceKindOf(engine: Engine.Engine): string | undefined {
+    // A space with no history has no receipt to read, and one yet to come.
+    if (Engine.serverSeq(engine) === 0) return undefined;
+    if (!this.#spaceKinds.has(engine)) {
+      this.#spaceKinds.set(engine, readSpaceKind(engine));
+    }
+    return this.#spaceKinds.get(engine);
+  }
+
   /** Enforce ACL document shape and fresh-space genesis in the `observe` and
    *  `enforce` modes alike, apart from the access decision those modes
    *  differ on. These are storage invariants: an invalid ACL or an ordinary
    *  first write would make later enforcement ambiguous or impossible. The
-   *  `off` mode skips them, and checks only a genesis root reservation.
-   *  `committer` is the principal the commit is made as, with the genesis
-   *  root its session declared: a session's own, or a served run's carried
-   *  actor, which declares none. */
+   *  `off` mode skips them, and checks only the facts a genesis commit
+   *  declares ({@link GENESIS_DECLARATIONS}), which every mode admits only
+   *  on a space-key genesis matching its session's intent. `committer` is
+   *  the principal the commit is made as, with the genesis facts its session
+   *  declared: a session's own, or a served run's carried actor, which
+   *  declares none. */
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
-    committer: Pick<SessionState, "principal" | "genesisRoot">,
+    committer: Pick<SessionState, "principal" | "genesisRoot" | "spaceKind">,
     commit: ClientCommit,
   ): V2Error | null {
     const principal = committer.principal;
-    if (commit.genesisRoot !== undefined) {
-      if (!isGenesisRoot(commit.genesisRoot)) {
-        return toError("ProtocolError", "Invalid genesis root reservation");
-      }
-      if (
-        principal !== space || Engine.serverSeq(engine) !== 0 ||
-        commit.operations.length !== 1 || commit.operations[0].op !== "set" ||
-        commit.operations[0].id !== aclDocId(space) ||
-        (commit.operations[0].scope !== undefined &&
-          commit.operations[0].scope !== "space") ||
-        (commit.branch !== undefined && commit.branch !== "") ||
-        !isACL(commit.operations[0].value?.value) ||
-        !hasConcreteOwner(commit.operations[0].value?.value)
-      ) {
+    for (const declaration of GENESIS_DECLARATIONS) {
+      const declared = commit[declaration.field];
+      const intended = committer[declaration.field];
+      if (declared !== undefined) {
+        if (!declaration.isValid(declared)) {
+          return toError("ProtocolError", declaration.invalid);
+        }
+        if (!isSpaceKeyAclGenesis(engine, space, principal, commit)) {
+          return toError(
+            "AuthorizationError",
+            `${declaration.declared} requires space-key ACL genesis`,
+          );
+        }
+        if (!valueEqual(declared, intended)) {
+          return toError(
+            "AuthorizationError",
+            `${declaration.sealed} must match the authenticated session intent`,
+          );
+        }
+      } else if (Engine.serverSeq(engine) === 0 && intended !== undefined) {
         return toError(
           "AuthorizationError",
-          "A root reservation requires space-key ACL genesis",
+          "The genesis commit must retain the authenticated " +
+            `${declaration.intent} intent`,
         );
       }
-      if (!valueEqual(commit.genesisRoot, committer.genesisRoot)) {
-        return toError(
-          "AuthorizationError",
-          "The genesis root must match the authenticated session intent",
-        );
-      }
-    } else if (
-      Engine.serverSeq(engine) === 0 && committer.genesisRoot !== undefined
-    ) {
-      return toError(
-        "AuthorizationError",
-        "The genesis commit must retain the authenticated root intent",
-      );
     }
     if (this.#aclMode() === "off") return null;
 
@@ -4512,6 +4676,21 @@ export class Server {
           ),
         );
       }
+      const spaceKind = this.#spaceKindOf(engine);
+      const requestedKind = message.session.spaceKind;
+      if (
+        requestedKind !== undefined &&
+        (!isSpaceKind(requestedKind) ||
+          (Engine.serverSeq(engine) > 0 && spaceKind !== requestedKind))
+      ) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError(
+            "ProtocolError",
+            "The requested space kind differs from the space's immutable genesis",
+          ),
+        );
+      }
       const priorOwner = message.session.sessionId === undefined
         ? undefined
         : this.#sessions.get(message.space, message.session.sessionId)
@@ -4618,6 +4797,7 @@ export class Server {
           caughtUpLocalSeq: opened.caughtUpLocalSeq,
           ...(opened.resumed === true ? { resumed: true } : {}),
           ...(catchup ? { sync: catchup.effect } : {}),
+          ...(spaceKind !== undefined ? { spaceKind } : {}),
           sessionOpen: nextSessionOpen,
         },
       };
@@ -9368,6 +9548,10 @@ export const parseClientMessage = (
       parsed.session.genesisRoot !== undefined &&
       !isGenesisRoot(parsed.session.genesisRoot)
     ) return null;
+    if (
+      parsed.session.spaceKind !== undefined &&
+      !isSpaceKind(parsed.session.spaceKind)
+    ) return null;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
@@ -9401,6 +9585,9 @@ export const parseClientMessage = (
         ...(readCeiling !== undefined ? { readCeiling } : {}),
         ...(isGenesisRoot(parsed.session.genesisRoot)
           ? { genesisRoot: parsed.session.genesisRoot }
+          : {}),
+        ...(isSpaceKind(parsed.session.spaceKind)
+          ? { spaceKind: parsed.session.spaceKind }
           : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)

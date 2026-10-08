@@ -1140,11 +1140,13 @@ describe("agent runner", () => {
   it("retries a failed scan through the scheduler without a queue write", async () => {
     const result = await submit();
     const own = connect(CLOUD);
+    const readiness: { state: string; reason: string | null }[] = [];
     let calls = 0;
     let wake: (() => void) | undefined;
     const runner = await startRunner(
       () => Promise.resolve({ outcome: "refused" }),
       {
+        readiness: (next) => readiness.push(next),
         runtimeForHost: () => {
           calls++;
           return calls === 2
@@ -1159,8 +1161,52 @@ describe("agent runner", () => {
     );
     await runner.idle();
     expect(recordOf(result).get()?.state).toBe("queued");
+    expect(readiness).toContainEqual({
+      state: "down",
+      reason: "transient queue read",
+    });
     wake!();
     await waitForState(result, "refused");
+    await runner.idle();
+    expect(readiness[readiness.length - 1]).toEqual({
+      state: "up",
+      reason: null,
+    });
+  });
+
+  it("reports a non-Error queue failure as readiness down, then recovers", async () => {
+    const result = await submit();
+    const own = connect(CLOUD);
+    const readiness: { state: string; reason: string | null }[] = [];
+    let calls = 0;
+    let wake: (() => void) | undefined;
+    const runner = await startRunner(
+      () => Promise.resolve({ outcome: "refused" }),
+      {
+        readiness: (next) => readiness.push(next),
+        runtimeForHost: () =>
+          ++calls === 2
+            ? Promise.reject("queue read refused")
+            : Promise.resolve(own),
+        scheduleAt: (_at, scheduled) => {
+          wake = scheduled;
+          return () => {};
+        },
+      },
+    );
+    await runner.idle();
+    expect(readiness).toContainEqual({
+      state: "down",
+      reason: "queue read refused",
+    });
+    expect(recordOf(result).get()?.state).toBe("queued");
+    wake!();
+    await waitForState(result, "refused");
+    await runner.idle();
+    expect(readiness[readiness.length - 1]).toEqual({
+      state: "up",
+      reason: null,
+    });
   });
 
   it("claims the older of two queued records first under a cap of one", async () => {

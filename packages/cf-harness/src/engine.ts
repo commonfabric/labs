@@ -14,6 +14,10 @@ import type {
 } from "./loom-retrieval.ts";
 import type { JSONSchema } from "@commonfabric/api";
 import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
+import {
+  createLoomCommandCatalogSource,
+  type LoomCommandCatalogSource,
+} from "./loom-commands.ts";
 import type {
   ListCommandsInput,
   ListCommandsOutput,
@@ -767,6 +771,9 @@ export class CfHarnessEngine {
   readonly #skillsShAcquisitionClientFactory?:
     HarnessSkillsShAcquisitionClientFactory;
   #docsCorpus?: Promise<HarnessDocsCorpus>;
+
+  /** The run's host command catalog, made on the first tool context. */
+  #loomCommandCatalog?: LoomCommandCatalogSource;
   #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
@@ -3167,6 +3174,15 @@ export class CfHarnessEngine {
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
       loomCommands: this.config.loomCommands,
+      ...(this.config.loomCommands !== undefined
+        ? {
+          loomCommandCatalog: this.#loomCommandCatalog ??=
+            createLoomCommandCatalogSource(
+              this.config.loomCommands,
+              this.hostProcessRunner,
+            ),
+        }
+        : {}),
       mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
         this.mintReferentHandle(referent),
       mintResearchHandle: (

@@ -20,7 +20,10 @@ export interface TileView {
   duration?: number; // a span in ms; rendered (humanSpan) in the chart's bottom-left corner
   alignChartBottom?: boolean; // keep the chart at the tile bottom when its grid row grows taller
   aside?: string; // trusted inline html minor header facet (e.g. an MTD or "running" badge)
-  href?: string; // if set, the whole tile becomes a link (external opens a new tab)
+  // If set, the tile becomes a link (external opens a new tab): the whole
+  // tile, or all of it but `extra` when `extra` holds links of its own.
+  // `value` and `aside` then hold no links.
+  href?: string;
   hint?: string; // drill arrow tooltip and accessible link description
 }
 

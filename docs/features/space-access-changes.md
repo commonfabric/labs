@@ -69,15 +69,19 @@ runtime do directly, outside the delegated carriage its served writes go
 through, is not settled, and a refusal at the memory server of an access list
 that names either kind is the way to close it.
 
-The trusted gesture is the renderer's mark on an event a person caused on a
-rendered surface, the test `commitSnapshotShare()` and `commitCustodySeal()`
-apply without their match on which surface. The runner records it on the handler's frame when the run
-starts, from the event object the renderer marked. A handler that sends its
-event on to another stream does not pass the mark along, so the handler it
+The trusted gesture is the renderer-trust mark on an event a person caused on
+a trusted surface: a DOM event on a pattern's rendered surface, which the
+renderer marks, or an action on a control a native host draws itself, which
+the host marks through `bindNativeUiControl()` or `sendReviewed()`
+([host embedding, §10](host-embedding.md#10-native-reviewed-controls)). It is
+the test `commitSnapshotShare()` and `commitCustodySeal()` apply without their
+match on which surface. The runner records it on the handler's frame when the
+run starts, from the event object that carries the mark. A handler that sends
+its event on to another stream does not pass the mark along, so the handler it
 reaches cannot change a list. The check does not follow the CFC enforcement
 dial: it holds in every mode.
 
-A gesture shows that a person acted on the pattern's surface, not what the
+A gesture shows that a person acted on a trusted surface, not what the
 pattern did with the act, since the principal and the level are the
 pattern's. A pattern with a button can grant someone its data on the next
 click, which is the same ceiling every write gated on a trusted gesture has.

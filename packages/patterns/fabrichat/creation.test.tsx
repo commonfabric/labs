@@ -8,6 +8,7 @@
  */
 import {
   action,
+  type AddIntegrity,
   assert,
   currentPrincipal,
   equals,
@@ -17,7 +18,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  clickButton,
+  countElements,
   findNode,
   findNodeById,
   findNodeByProp,
@@ -36,9 +37,17 @@ import {
   type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomLink,
+  type ProfileCell,
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
+// because a room's participants link only a document that carries a label.
+type TestProfile = AddIntegrity<
+  ChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
 
 /** The gesture a start takes, as a client's start control makes it. */
 const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
@@ -49,7 +58,7 @@ const CAROL = "did:key:z6MkCaro1";
 
 /** A room held apart from the index, which forgetting it changes. */
 interface HeldRoom {
-  room?: Writable<ChatRoomLink>;
+  room?: Writable<ChatRoomLink & { participants?: ProfileCell[] }>;
 }
 
 const statusOf = (
@@ -64,12 +73,6 @@ const displayOf = (root: unknown, id: string): unknown =>
       ?.display,
   );
 
-// Which of a manager's two parts it shows: the chosen room, or the prompt to
-// choose one.
-const shownPart = (root: unknown): string =>
-  `selected:${displayOf(root, "fabrichat-selected")} ` +
-  `unselected:${displayOf(root, "fabrichat-unselected")}`;
-
 // What a manager shows about the session's latest start: how its refusal is
 // displayed, and what it says.
 const shownRefusal = (root: unknown): string =>
@@ -77,7 +80,8 @@ const shownRefusal = (root: unknown): string =>
   textContent(findNodeById(root, "fabrichat-start-refusal"));
 
 // The cell the first `cf-cell-link` labeled `label` under `root` links: a
-// listed room's, labeled `Open`, or a notice's, which carries no label.
+// listed room's, labeled as its entry is, or a notice's, which carries no
+// label.
 const cellLinked = (
   root: unknown,
   label: string | undefined,
@@ -110,7 +114,7 @@ const recipientsOf = (notices: Writable<ChatManagerNotice[]>): string =>
   (notices.get() ?? []).map((notice) => notice.recipient).join(",");
 
 export default pattern(() => {
-  const profile = Writable.of<ChatProfile>({ name: "Tester" });
+  const profile = Writable.of<TestProfile>({ name: "Tester" });
 
   // A direct room: one per counterpart, found again after it is forgotten.
   const directRooms = Writable.of<ChatIndexEntry[]>([]);
@@ -245,30 +249,29 @@ export default pattern(() => {
         assertion: assert(() =>
           directRooms.get().length === 1 &&
           directRooms.get()[0]?.counterpart === BOB &&
+          // Its creator is listed among its participants without a step of
+          // their own.
+          (directHeld.key("room").get()?.get()?.participants ?? []).some((
+            known,
+          ) => equals(known, profile)) &&
           recipientsOf(directNotices) === BOB
         ),
       },
       // The notice offers the room's link, for its creator to send on, and
-      // so does the room's entry in the list, for whoever is added later.
+      // the room's entry in the list is a link to it, labeled with whom it is
+      // with, which opens it as a page of its own: the manager renders no
+      // room itself.
       {
         assertion: assert(() =>
           equals(
             cellLinked(direct[UI], undefined),
             directRooms.key(0).key("room"),
           ) &&
-          equals(cellLinked(direct[UI], "Open"), directRooms.key(0).key("room"))
-        ),
-      },
-      // Choosing the room shows it in place of the prompt to choose one.
-      {
-        assertion: assert(() =>
-          shownPart(direct[UI]) === "selected:none unselected:block"
-        ),
-      },
-      { action: action(() => clickButton(direct[UI], `With ${BOB}`)) },
-      {
-        assertion: assert(() =>
-          shownPart(direct[UI]) === "selected:block unselected:none"
+          equals(
+            cellLinked(direct[UI], `With ${BOB}`),
+            directRooms.key(0).key("room"),
+          ) &&
+          countElements(direct[UI], "cf-render") === 0
         ),
       },
       // The conversation with one person is always the same room.
@@ -411,6 +414,27 @@ export default pattern(() => {
             "A group's members must be principals." &&
           shownRefusal(group[UI]) ===
             'block:A group\'s members must be principals. Received: ["junk"]' &&
+          groupRooms.get().length === 1
+        ),
+      },
+      // A request missing what its stream needs is refused, with why, rather
+      // than dropped: an event's type doesn't refuse it.
+      { action: group.forget, event: { requestId: "f-none" } },
+      { action: group.accept, event: { requestId: "a-none" } },
+      { action: group.delivered, event: { requestId: "n-none" } },
+      {
+        action: group.createGroup,
+        event: { requestId: "g-none", title: "No members" },
+        trustedUi: startGesture,
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(groupRequests, "f-none") === "The request names no room." &&
+          reasonOf(groupRequests, "a-none") === "The request names no room." &&
+          reasonOf(groupRequests, "n-none") ===
+            "The request names no notice." &&
+          reasonOf(groupRequests, "g-none") ===
+            "A group's members must be listed." &&
           groupRooms.get().length === 1
         ),
       },

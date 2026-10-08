@@ -53,6 +53,7 @@ import {
   readPieceSourceMetadata,
   readPieceSourceRevision,
   readPieceSourceState,
+  type ShareIntake,
 } from "@commonfabric/piece/ops";
 import type { RuntimeOptions } from "@commonfabric/runner";
 import {
@@ -89,10 +90,12 @@ import {
   runtimePresets,
   RuntimeTelemetry,
   RuntimeTelemetryEvent,
+  sendEvent,
   setPatternEnvironment,
   type SigilLink,
   SlugResolutionError,
   SpaceHostValidationError,
+  transactionFailureMessage,
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForResolvedCell,
@@ -105,6 +108,7 @@ import {
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
+  spaceReaderRole,
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import {
@@ -121,6 +125,7 @@ import {
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   NameSchema,
   rendererVDOMSchema,
@@ -181,6 +186,7 @@ import {
   type CellResolveAsCellRequest,
   CellResponse,
   type CellSendRequest,
+  type CellSendReviewedRequest,
   type CellSetRequest,
   type CellSubscribeRequest,
   type CellUnsubscribeRequest,
@@ -259,7 +265,6 @@ import {
   type PresenceLeaveRequest,
   type PresencePublishRequest,
   type PresenceWireEvent,
-  type RecreateSpaceRootPatternRequest,
   type RegisterSpaceHostDetailedRequest,
   type RegisterSpaceHostRequest,
   RequestType,
@@ -290,6 +295,7 @@ import {
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
+  type SpaceRootPatternResponse,
   type SpaceSetAclEntryRequest,
   type SqliteExecRequest,
   type SqliteParams,
@@ -940,6 +946,10 @@ export class RuntimeProcessor {
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
   #privateInboxEnsured: Promise<void> | undefined;
+  #shareIntake: Promise<ShareIntake | undefined> | undefined;
+  // Aborted as disposal begins, so an inbox ensure still in flight sends
+  // nothing after it, and the share intake stops.
+  #disposal = new AbortController();
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -1074,8 +1084,8 @@ export class RuntimeProcessor {
    * The runtime and home context this processor was built over, the tables
    * it keeps by space, by client, and by session, the disposed flag, the
    * render policy and ceiling a mount inherits, the boot-time health check's
-   * verdict and whether `initialize()` waited for it, and the per-space
-   * context step, which a test drives directly.
+   * verdict and whether `initialize()` waited for it, the private inbox ensure
+   * in flight, and the per-space context step, which a test drives directly.
    */
   get accessForTestingOnly(): {
     runtime: Runtime;
@@ -1105,6 +1115,8 @@ export class RuntimeProcessor {
     readonly renderDeclassificationPolicy: RenderDeclassificationPolicy;
     readonly health: Promise<boolean>;
     readonly awaitedHealth: boolean;
+    readonly privateInboxEnsured: Promise<void> | undefined;
+    readonly shareIntake: Promise<ShareIntake | undefined> | undefined;
     getSpaceCtx(space: DID): PiecesController;
   } {
     // deno-lint-ignore no-this-alias
@@ -1121,6 +1133,12 @@ export class RuntimeProcessor {
       },
       get awaitedHealth() {
         return outerThis.#awaitedHealth;
+      },
+      get privateInboxEnsured() {
+        return outerThis.#privateInboxEnsured;
+      },
+      get shareIntake() {
+        return outerThis.#shareIntake;
       },
       cc: this.#cc,
       spaces: this.#spaces,
@@ -1321,6 +1339,7 @@ export class RuntimeProcessor {
   dispose(): Promise<void> {
     if (this.#disposingPromise) return this.#disposingPromise;
     this.#isDisposed = true;
+    this.#disposal.abort();
     this.#disposingPromise = (async () => {
       this.#telemetry.removeEventListener("telemetry", this.#onTelemetry);
       try {
@@ -1357,6 +1376,11 @@ export class RuntimeProcessor {
         }
         this.#vdomMounts.clear();
 
+        // A private inbox ensure still in flight is not waited for: a remote
+        // read it has stalled on must not hold disposal. Disposal aborted its
+        // signal above, so it sends nothing once its reads return; a read that
+        // fails against the disposed runtime is dropped unreported; and the
+        // next worker's first bring-up of Home starts the ensure again.
         await this.#runtime.storageManager.synced();
         await this.#runtime.dispose();
       } catch (e) {
@@ -2100,12 +2124,84 @@ export class RuntimeProcessor {
   }
 
   handleCellSend(request: CellSendRequest): void | Promise<void> {
+    const event = mapCellRefsToSigilLinks(request.event);
+    return this.#sendCellEvent(
+      request.cell,
+      (send) => send(event),
+      request.awaitHandling
+        ? "handling"
+        : request.awaitCommit
+        ? "commit"
+        : undefined,
+    );
+  }
+
+  /**
+   * Applies a `CellSendReviewedRequest`: sends the request's payload through
+   * a native control bound to the request's surface and action, which stamps
+   * the event with `native` provenance for them, replacing any `provenance`
+   * the payload carries, and marks it renderer-trusted, and waits for the
+   * event's handling. Reached only through a client of this worker, which a
+   * pattern the worker runs is not.
+   *
+   * @throws If the payload is not a record, or the surface or action is
+   *   blank, and when the event, or the run of the stream's handler, is
+   *   refused.
+   */
+  async handleCellSendReviewed(
+    request: CellSendReviewedRequest,
+  ): Promise<void> {
+    const payload = mapCellRefsToSigilLinks(request.event);
+    if (!isPlainObject(payload)) {
+      throw new Error("A reviewed action's event must be a record.");
+    }
+    if (
+      typeof request.surface !== "string" || typeof request.action !== "string"
+    ) {
+      throw new Error("A reviewed action requires a surface and an action.");
+    }
+    const control = { surface: request.surface, action: request.action };
+    await this.#sendCellEvent(
+      request.cell,
+      (send) => bindNativeUiControl({ send }, control)(payload),
+      "handling",
+    );
+  }
+
+  /**
+   * Helper for `handleCellSend()` and `handleCellSendReviewed()`, which sends
+   * an event to `ref` in a transaction of its own. `deliver` sends the event
+   * through the function it is given. With `wait` undefined the outcome is
+   * logged; `commit` waits for the transaction's commit, and `handling` for
+   * the commit of the handler's run as well, and either rejects with the
+   * refusal.
+   */
+  #sendCellEvent(
+    ref: CellRef,
+    deliver: (send: (event: unknown) => void) => void,
+    wait: "commit" | "handling" | undefined,
+  ): void | Promise<void> {
     const tx = this.#runtime.edit();
-    const cell = getCell(this.#runtime, request.cell);
-    cell.withTx(tx).send(mapCellRefsToSigilLinks(request.event));
+    const cell = getCell(this.#runtime, ref).withTx(tx);
+    const handled = wait === "handling"
+      ? Promise.withResolvers<IExtendedStorageTransaction>()
+      : undefined;
+    deliver(
+      handled === undefined
+        ? (event) => cell.send(event)
+        : (event) => sendEvent(cell, event, handled.resolve),
+    );
     this.#runtime.prepareTxForCommit(tx);
     const commit = tx.commit().settled;
-    if (request.awaitCommit) return this.#requireCellCommit(commit);
+    if (handled !== undefined) {
+      return this.#requireCellCommit(commit).then(async () => {
+        const handling = (await handled.promise).status();
+        if (handling.status === "error") {
+          throw new Error(transactionFailureMessage(handling.error));
+        }
+      });
+    }
+    if (wait === "commit") return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "send");
   }
 
@@ -2414,10 +2510,7 @@ export class RuntimeProcessor {
   ): Promise<CellFieldsResponse> {
     const cell = getCell(this.#runtime, request.cell);
     await cell.sync();
-    const storage = this.#runtime.storageManager;
-    const denied = storage.spaceAccessError?.(request.cell.space) ??
-      storage.authorizationError?.(request.cell.space);
-    if (denied !== undefined) throw denied;
+    this.#throwIfAccessRefused(request.cell.space);
     return this.#hostReadGate.fields(cell);
   }
 
@@ -2623,8 +2716,11 @@ export class RuntimeProcessor {
   /**
    * Ensures the user's Home pattern is running and returns its result cell.
    * The first time in this worker, it also adopts the Home space list's
-   * name-only entries (see `PiecesController.adoptLegacySpaces`), and has Home
-   * ensure the user's private inbox (see `PiecesController.ensurePrivateInbox`).
+   * name-only entries (see `PiecesController.adoptLegacySpaces`), and starts
+   * Home's ensure of the user's private inbox (see
+   * `PiecesController.ensurePrivateInbox`) and the share intake over Home's
+   * inboxes (see `PiecesController.startShareIntake`) without waiting for
+   * either.
    */
   async #ensureHomePattern(): Promise<Cell<unknown>> {
     const homeCC = this.#homeController();
@@ -2638,13 +2734,31 @@ export class RuntimeProcessor {
       console.warn("[RuntimeProcessor] Adopting legacy Home spaces:", error);
     });
     await this.#legacySpacesAdopted;
-    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox().catch(
+    // The ensure reads every profile's pointer and loads inbox documents in
+    // other spaces, so Home opens without waiting for it. A failure is
+    // reported unless the processor has been disposed, as `dispose()` says,
+    // and the next ensure of Home in this worker starts it again.
+    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox(
+      this.#disposal.signal,
+    ).catch(
       (error) => {
         this.#privateInboxEnsured = undefined;
+        if (this.#isDisposed) return;
         console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
       },
     );
-    await this.#privateInboxEnsured;
+    // The intake follows Home's inboxes until disposal aborts its signal. A
+    // failure to start it is reported unless the processor has been disposed,
+    // and the next ensure of Home in this worker starts it again.
+    this.#shareIntake ??= homeCC.startShareIntake(this.#disposal.signal).catch(
+      (error) => {
+        this.#shareIntake = undefined;
+        if (!this.#isDisposed) {
+          console.warn("[RuntimeProcessor] Starting the share intake:", error);
+        }
+        return undefined;
+      },
+    );
     return home;
   }
 
@@ -2808,21 +2922,37 @@ export class RuntimeProcessor {
     };
   }
 
+  /**
+   * Handles a `GetSpaceRootPatternRequest`. Returns no piece for a space with
+   * no root unless the request opens it (`start` true) and this runtime's
+   * identity owns the space, in which case the root is created. A read never
+   * writes, and a principal other than the owner never puts a root in
+   * someone else's space.
+   *
+   * @throws The server's refusal when this runtime's identity may not read
+   *   the space, whether or not a root is still held from before.
+   */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
-  ): Promise<PieceResponse> {
+  ): Promise<SpaceRootPatternResponse> {
     const cc = this.#getSpaceCtx(request.space);
     if (request.start === false) {
       // The caller reads the root's exports rather than rendering it, so
       // resolving what is stored answers it — reconciled, so what it reads
-      // is still healed against the root's origin. Only a space with no root
-      // yet falls through: a root has to exist before it can have exported
-      // anything, and creating one is not the cost this avoids.
+      // is still healed against the root's origin.
       const stored = await cc.getDefaultPattern({
         reconcile: true,
         start: false,
       });
-      if (stored) return { piece: createPieceRef(stored) };
+      // Checked whatever the lookup found, since a root this runtime read
+      // before losing the space is still in its replica.
+      this.#throwIfAccessRefused(request.space);
+      return stored ? { piece: createPieceRef(stored) } : {};
+    }
+    const existing = await cc.getDefaultPattern(false);
+    this.#throwIfAccessRefused(request.space);
+    if (existing === undefined && !(await this.#ownsSpace(request.space))) {
+      return {};
     }
     const piece = await cc.ensureDefaultPattern();
     return {
@@ -2830,14 +2960,32 @@ export class RuntimeProcessor {
     };
   }
 
-  async handleRecreateSpaceRootPattern(
-    request: RecreateSpaceRootPatternRequest,
-  ): Promise<PieceResponse> {
-    const cc = this.#getSpaceCtx(request.space);
-    const piece = await cc.recreateDefaultPattern();
-    return {
-      piece: createPieceRef(piece.getCell()),
-    };
+  /**
+   * Whether this runtime's identity owns `space`: the space is its Home, or
+   * the space's access list makes it an `OWNER`. A Home is its user's
+   * whatever its access list holds, since the Home's DID is the identity
+   * itself: its list is written when the Home is first mounted, and a Home
+   * populated before access lists existed has none. Only the identity's own
+   * runtime asks with that DID, so the shortcut creates a root in no one
+   * else's space.
+   */
+  async #ownsSpace(space: DID): Promise<boolean> {
+    const principal = this.#runtime.userIdentityDID;
+    if (space === principal) return true;
+    const acl = await new ACLManager(this.#runtime, space).get();
+    return acl !== null && spaceReaderRole(acl, principal) === "owner";
+  }
+
+  /**
+   * Throws the server's refusal of `space`, or of this runtime's session
+   * there, if it refused either. A refused read finds nothing, so a caller
+   * that would report what it found asks this first.
+   */
+  #throwIfAccessRefused(space: MemorySpace): void {
+    const storage = this.#runtime.storageManager;
+    const denied = storage.spaceAccessError?.(space) ??
+      storage.authorizationError?.(space);
+    if (denied !== undefined) throw denied;
   }
 
   /**
@@ -3572,6 +3720,8 @@ export class RuntimeProcessor {
         return this.handleCellPush(request);
       case RequestType.CellSend:
         return this.handleCellSend(request);
+      case RequestType.CellSendReviewed:
+        return await this.handleCellSendReviewed(request);
       case RequestType.CellSubscribe:
         return this.handleCellSubscribe(request, client);
       case RequestType.CellUnsubscribe:
@@ -3644,10 +3794,6 @@ export class RuntimeProcessor {
         );
       case RequestType.GetSpaceRootPattern:
         return await this.handleGetSpaceRootPattern(
-          request,
-        );
-      case RequestType.RecreateSpaceRootPattern:
-        return await this.handleRecreateSpaceRootPattern(
           request,
         );
       case RequestType.PieceGet:

@@ -29,15 +29,16 @@ import {
   minutePrecision,
   shortName,
 } from "./ci-jobs-page.ts";
-import { LOOM_REPO, RECENT_DISPLAY, REPO, REPOS_PATH } from "./config.ts";
+import { LOOM_REPO, RECENT_DISPLAY, REPO } from "./config.ts";
 import { median, pullRequestLinks, runDurationMs } from "./lib.ts";
 import { GREEN_STAR_RULES, greenStar, greenWords } from "./green-star.ts";
 import { type LivePageContent, livePageResponse } from "./live-page.ts";
 import { STATUS_EDGE, STATUS_WASH } from "./palette.ts";
 import { textureRules } from "./render.ts";
+import { repoPageHref, REPOS_PATH } from "./repo-page-href.ts";
 import { statusDotRules } from "./status-dot.ts";
 import { statusLayer } from "./theme.ts";
-import { chartBody, newTab } from "./tile-render.ts";
+import { chartBody, linkedBox, newTab } from "./tile-render.ts";
 import {
   compactSpan,
   escapeHtml,
@@ -91,9 +92,6 @@ const SCALE_PERCENTILE = 0.9;
 /** The least a chart's scale reaches, as a multiple of its passing median. */
 const MEDIAN_HEADROOM = 1.7;
 
-const hrefOf = (name: string): string =>
-  `${REPOS_PATH}?${new URLSearchParams({ name })}`;
-
 const github = (repo: Repository): string =>
   `https://github.com/${escapeHtml(repo.full)}`;
 
@@ -135,7 +133,16 @@ function repositories(board: Board, jobs: CiJobs | undefined): Repository[] {
       false,
     measures: board.tiles.filter((tile) =>
       tile.repo !== undefined && shortName(tile.repo) === name
-    ).map((tile) => ({ tile, view: board.view(tile) })),
+    ).map((tile) => {
+      // A tile that links to this page links nowhere from it.
+      const view = board.view(tile);
+      return {
+        tile,
+        view: view?.href === repoPageHref(name)
+          ? { ...view, href: undefined, hint: undefined }
+          : view,
+      };
+    }),
     runs: ordered.filter((source) => shortName(source.repo) === name).map((
       source,
     ) => ({
@@ -382,7 +389,7 @@ const STYLES = `
   /* The measures: every tile that reports on the repository alone, in a row. */
   .measures{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
   .card{position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:11px 13px;min-width:0}
-  a.card:hover{border-color:var(--border-hover)}
+  a.card:hover,.card:has(>.tile-head:hover){border-color:var(--border-hover)}
   .card .lbl{font-size:10px;margin-bottom:4px}
   /* A card's headline shrinks with the card, so a narrow one still says it
      whole. */
@@ -442,7 +449,7 @@ const SCRIPT = `
 
 function switcher(repos: readonly Repository[], current?: string): string {
   const options = repos.map((repo) =>
-    `<option value="${escapeHtml(hrefOf(repo.name))}"${
+    `<option value="${escapeHtml(repoPageHref(repo.name))}"${
       repo.name === current ? " selected" : ""
     }>${escapeHtml(repo.name)}</option>`
   ).join("");
@@ -737,20 +744,20 @@ function measureCard({ tile, view }: Repository["measures"][number]): string {
   const hint = view?.href === undefined
     ? ""
     : `<span class="drill" aria-hidden="true">↗</span>`;
-  const inner = `<div class="texture"></div><p class="lbl">${dot(status)} ${
-    escapeHtml(tile.label)
-  }<span class="spacer"></span>${view?.aside ?? ""}${hint}</p><p class="big said-${status}">${
-    view?.value ?? "—"
-  }</p><p class="sub">${
-    escapeHtml(view === undefined ? "not collected yet" : view.sub ?? "")
-  }</p><div class="card-plot">${
-    view === undefined ? "" : chartBody(view)
-  }</div>`;
-  return view?.href === undefined
-    ? `<div class="card ${status}" data-focus-key="${escapeHtml(tile.label)}">${inner}</div>`
-    : `<a class="card ${status}" data-focus-key="${escapeHtml(tile.label)}" href="${
-      escapeHtml(view.href)
-    }"${newTab(view.href)}>${inner}</a>`;
+  return linkedBox(
+    `class="card ${status}" data-focus-key="${escapeHtml(tile.label)}"`,
+    `<p class="lbl">${dot(status)} ${
+      escapeHtml(tile.label)
+    }<span class="spacer"></span>${view?.aside ?? ""}${hint}</p><p class="big said-${status}">${
+      view?.value ?? "—"
+    }</p><p class="sub">${
+      escapeHtml(view === undefined ? "not collected yet" : view.sub ?? "")
+    }</p>`,
+    `<div class="card-plot">${view === undefined ? "" : chartBody(view)}</div>`,
+    view?.href === undefined
+      ? undefined
+      : { href: view.href, hint: view.hint },
+  );
 }
 
 /**
@@ -861,7 +868,7 @@ function repoCard(repo: Repository, now: number): string {
       : `<span class="rc-worst">${escapeHtml(worst.subject)} · ${worst.detail}</span>`
   }`;
   return `<a class="repo-card ${status}" href="${
-    escapeHtml(hrefOf(repo.name))
+    escapeHtml(repoPageHref(repo.name))
   }"><div class="texture"></div><span class="rc-name">${dot(status)}${
     escapeHtml(repo.name)
   }</span>${trouble}<span class="rc-facts">${escapeHtml(facts)}</span></a>`;
@@ -886,7 +893,7 @@ function indexBody(repos: readonly Repository[], now: number): string {
   const names = (members: readonly Repository[], quiet: boolean) =>
     `<div class="names${quiet ? " quiet-names" : ""}">${
       members.map((repo) =>
-        `<a href="${escapeHtml(hrefOf(repo.name))}">${
+        `<a href="${escapeHtml(repoPageHref(repo.name))}">${
           quiet ? "" : dot(standing(repo))
         }${escapeHtml(repo.name)}</a>`
       ).join("")

@@ -67,6 +67,48 @@ Space can be queried and updated using [memory protocol], which describes state
 in terms of
 [entity document](../../development/runtime-glossary.md#entity-document)s.
 
+## Social space
+
+A [space] with more than one member or participant. A space says who those are
+in two ways:
+
+- **Its access list** admits principals to read or write. A pattern asks for
+  its own principal's level there with `spaceAccess()`.
+- **Its participants** are the profiles its root lists, as the system default
+  app does in `participants`, each added by someone joining the space. Any
+  participant can add any profile, so an entry is a claim, not a grant of
+  access.
+
+FabriChat rooms are the main example. A room is the chat of a social space and
+keeps no access list of its own: who is in the conversation is who is in the
+space ([FabriChat](../../specs/fabrichat/README.md)). A room can be the chat of
+any social space, such as a container that shows chats among other things. A
+standalone room, one that is not the chat of some other social space, has a
+space of its own: the chat manager creates each room it starts as the root of a
+new space, which declares itself a `fabrichat-room` and whose access list
+admits the members named at its creation. The room lists that space's
+participants itself. That space is a social space in its own right once it has
+more than one member, as a direct room's space has from its creation; a group
+room can start with its creator alone.
+
+The term is "social space", never "shared space". "Share" already names other
+things here, none of them about how many people a space has: the share inbox
+where a principal receives offers, share links, and a user's shared profiles.
+Home's shared-space catalog
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md)) is the
+collection of social spaces a person keeps; an entry in it grants no access.
+
+## Space kind
+
+What kind of [space] a space declares itself to be, such as `fabrichat-room`
+for a standalone FabriChat room's space. Its creator states it once, in the
+space's genesis commit beside its access list: a pattern with
+`inSpace(name, { spaceKind })`, and host code with
+`Runtime.createSpace({ spaceKind })`. Nothing changes it afterward. It is a fact
+about the space, not a list of what the space holds: a social space that hosts
+a chat among other things declares its own kind
+([`space-kinds.md`](../../features/space-kinds.md)).
+
 ## [did:key]
 
 A decentralized identifier derived from a keypair. Used to uniquely identify and

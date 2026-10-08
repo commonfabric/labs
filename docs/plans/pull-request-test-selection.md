@@ -4050,10 +4050,10 @@ pull request's own run could not have:
   merge commit its records name, and never the branch's tip. Where the report
   cannot establish that commit or its date, it says the run did not run the test
   and gives no reason. The same holds for a pull request whose run did not run
-  in lanes, since no manifest chose what it ran. The answer changes what to do. Not selected is the
-  expected cost of selection, and the failure will raise the test's score so the
-  next change in that area runs it. Ran and passing is a flake or an interaction
-  between changes, and it is a different conversation.
+  in lanes, since no manifest chose what it ran. The answer changes what to do.
+  Not run is the cost of selection, and the note says what the plan the lanes
+  computed records about leaving the test out. Ran and passing is a flake or an
+  interaction between changes, and it is a different conversation.
 - **A coverage debt increase above the threshold**, naming the source
   groups the change touched that rose as well, which is as near as this
   gets to saying where a test would go. Never as a failure — the run is
@@ -4108,9 +4108,10 @@ observation about it:
   team, or per anything. No history. The comment exists on the pull
   request and nowhere else, and no tile, report, or query rolls them up.
 - **It is not a judgement, because the system chose not to run the test.**
-  When a test was not selected, the honest statement is that this design
-  traded that coverage away, and the comment says so in those words. The
-  author did not miss anything; the selector did.
+  When a test was not selected, the comment says what the plan the lanes
+  computed says about leaving it out: its unit runs whole and holds a
+  withheld test, no lane can hold it, the tests that had to run left no
+  room for anything else, or the lanes filled the room with other tests. The author did not miss anything; the selector decided.
 - **It is accurate about flakes.** A test the store has seen disagreeing
   with itself is labelled as one, with the counts behind the label, so
   nobody is told they broke something that breaks on its own and nobody
@@ -4133,7 +4134,7 @@ selector did not pick will merge, and `main` will go red about 15 minutes
 later. That is the trade. What makes it bearable is that the blast radius
 is one commit, the full run names the test, the change that caused it gets
 told without anybody going looking, and the failure raises that test's
-score so the next change in that area runs it. If the rate turns out to be
+score, which makes later changes in that area more likely to run it. If the rate turns out to be
 intolerable, the escape hatch is a merge queue, which restores the
 guarantee at the cost of merge latency. This plan does not propose one; it
 notes that the option exists and that nothing here forecloses it.

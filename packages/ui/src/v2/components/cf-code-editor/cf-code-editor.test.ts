@@ -15,7 +15,7 @@ import {
   Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { NAME } from "@commonfabric/runner/shared";
 import { type CellHandle, type CellRef } from "@commonfabric/runtime-client";
 import {
@@ -34,6 +34,7 @@ import {
   refShortNames,
   setKnownRefKeys,
 } from "./features/mention-refs.ts";
+import { type CFTheme, defaultTheme } from "../theme-context.ts";
 import { CFCodeEditor, MimeType } from "./index.ts";
 
 describe("CFCodeEditor", () => {
@@ -2141,5 +2142,51 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
 
     expect(key).toBeNull();
     expect(writesSent(references)).toEqual([]);
+  });
+});
+
+describe("CFCodeEditor color scheme", () => {
+  // What `updated()` hands CodeMirror when the ambient theme or the `theme`
+  // property changes, read back as the `darkTheme` facet a state configured
+  // with it carries. The browser suite checks the colors that facet draws.
+  function darkAfterUpdate(
+    props: { theme: "light" | "dark"; ambientTheme?: CFTheme },
+    changed: string,
+  ): boolean {
+    const element = new CFCodeEditor();
+    element.theme = props.theme;
+    if (props.ambientTheme) element.ambientTheme = props.ambientTheme;
+    let dispatched: TransactionSpec | undefined;
+    (element as any)._editorView = {
+      dispatch: (spec: TransactionSpec) => (dispatched = spec),
+    };
+    (element as any).updated(new Map([[changed, undefined]]));
+    expect(dispatched).toBeDefined();
+    return EditorState.create({
+      extensions: (element as any)._themeComp.of([]),
+    })
+      .update(dispatched!).state.facet(EditorView.darkTheme);
+  }
+
+  it("is dark under a dark <cf-theme>", () => {
+    const ambientTheme = { ...defaultTheme, colorScheme: "dark" as const };
+    expect(darkAfterUpdate({ theme: "light", ambientTheme }, "ambientTheme"))
+      .toBe(true);
+  });
+
+  it("is light under a light <cf-theme>", () => {
+    const ambientTheme = { ...defaultTheme, colorScheme: "light" as const };
+    expect(darkAfterUpdate({ theme: "light", ambientTheme }, "ambientTheme"))
+      .toBe(false);
+  });
+
+  it("is light with no <cf-theme> above it", () => {
+    expect(darkAfterUpdate({ theme: "light" }, "theme")).toBe(false);
+  });
+
+  it("is oneDark's dark when theme is dark, whatever the <cf-theme>", () => {
+    const ambientTheme = { ...defaultTheme, colorScheme: "light" as const };
+    expect(darkAfterUpdate({ theme: "dark", ambientTheme }, "theme"))
+      .toBe(true);
   });
 });

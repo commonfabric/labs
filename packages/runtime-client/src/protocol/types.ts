@@ -155,9 +155,20 @@ export enum RequestType {
   /**
    * Sends an event to a cell in a transaction of its own. Local visibility
    * lands with the commit; remote confirmation is not waited for, so that a
-   * slow server cannot block cell IPC.
+   * slow server cannot block cell IPC, unless the request waits for the
+   * event's handling, which under server execution is the served run.
    */
   CellSend = "cell:send",
+
+  /**
+   * Sends a reviewed action from a control the host draws itself, as
+   * {@link CellSend} sends an event, except that the worker stamps the event
+   * with `native` provenance for the request's surface and action and marks
+   * it renderer-trusted, so that it satisfies a write's UI contract for that
+   * surface and action. Waits for the event's handling, and rejects with the
+   * reason when the event, or the run of the stream's handler, is refused.
+   */
+  CellSendReviewed = "cell:send-reviewed",
 
   /**
    * Starts notifying the client of a cell's changes, optionally including its
@@ -437,9 +448,6 @@ export enum RequestType {
    * Answers with a space's root pattern, creating it if the space has none.
    */
   GetSpaceRootPattern = "pattern:getSpaceRoot",
-
-  /** Replaces a space's root pattern with a freshly created one. */
-  RecreateSpaceRootPattern = "pattern:recreateSpaceRoot",
 
   /**
    * Creates a piece in a space from a URL or a program, optionally running it
@@ -1208,6 +1216,37 @@ export type CellSendRequest = BaseRequest & {
 
   /** Wait for commit confirmation and return a refusal to the caller. */
   awaitCommit?: boolean;
+
+  /**
+   * Wait for the event's handling as well as its commit, and return its
+   * refusal, such as a write the handler made that the runtime refused, to
+   * the caller.
+   */
+  awaitHandling?: boolean;
+};
+
+/**
+ * The {@link RequestType.CellSendReviewed} request. `event` is the payload
+ * the host's control displayed; the worker replaces any `provenance` field it
+ * carries.
+ */
+export type CellSendReviewedRequest = BaseRequest & {
+  type: RequestType.CellSendReviewed;
+
+  /** The stream to send to. */
+  cell: CellRef;
+
+  /** The payload, a record whose fields the sent event holds. */
+  event: FabricValue;
+
+  /**
+   * The trusted surface the host's control is bound to, matched against a UI
+   * contract's `trustedPattern` and `requiredEventIntegrity`.
+   */
+  surface: string;
+
+  /** The action the control takes, matched against a contract's `action`. */
+  action: string;
 };
 
 /**
@@ -2544,20 +2583,13 @@ export type GetSpaceRootPatternRequest = BaseRequest & {
    * A caller that only reads what the root exported passes false. Starting
    * a root materializes everything its result reaches, which on a space
    * whose root reaches a large piece is the dominant cost of opening
-   * anything; a stored export costs a read. Either way an absent root is
-   * still created, since a space needs one before it can have exports.
+   * anything; a stored export costs a read.
+   *
+   * A space with no root gets one only when this is true and the requesting
+   * identity owns the space. Otherwise the response names no piece, and
+   * nothing is written.
    */
   start?: boolean;
-};
-
-/** The {@link RequestType.RecreateSpaceRootPattern} request. */
-export type RecreateSpaceRootPatternRequest = BaseRequest & {
-  type: RequestType.RecreateSpaceRootPattern;
-
-  /**
-   * The space whose root pattern to replace.
-   */
-  space: DID;
 };
 
 /**
@@ -3263,6 +3295,7 @@ export type IPCClientRequest =
   | CellSetRequest
   | CellPushRequest
   | CellSendRequest
+  | CellSendReviewedRequest
   | CellSubscribeRequest
   | CellUnsubscribeRequest
   | CellResolveAsCellRequest
@@ -3317,7 +3350,6 @@ export type IPCClientRequest =
   | FlushCompileCacheWritesRequest
   | PieceCreateRequest
   | GetSpaceRootPatternRequest
-  | RecreateSpaceRootPatternRequest
   | PieceGetRequest
   | PieceGetSlugRequest
   | SlugResolveRequest
@@ -3571,6 +3603,14 @@ export type PieceResponse = {
    * The piece in question.
    */
   piece: PieceRef;
+};
+
+/** A reference to a space's root, which a space with no root lacks. */
+export type SpaceRootPatternResponse = {
+  /**
+   * The space's root, absent when the space has none.
+   */
+  piece?: PieceRef;
 };
 
 /**
@@ -4061,6 +4101,7 @@ export type RemoteResponse =
   | TriggerTraceResponse
   | WriteStackTraceResponse
   | PieceResponse
+  | SpaceRootPatternResponse
   | SlugReferenceResponse
   | PieceSourceResponse
   | PieceSourceRevisionResponse
@@ -4254,6 +4295,10 @@ export type Commands = {
     request: CellSendRequest;
     response: EmptyResponse;
   };
+  [RequestType.CellSendReviewed]: {
+    request: CellSendReviewedRequest;
+    response: EmptyResponse;
+  };
   [RequestType.CellSubscribe]: {
     request: CellSubscribeRequest;
     response: BooleanResponse;
@@ -4441,11 +4486,7 @@ export type Commands = {
   };
   [RequestType.GetSpaceRootPattern]: {
     request: GetSpaceRootPatternRequest;
-    response: PieceResponse;
-  };
-  [RequestType.RecreateSpaceRootPattern]: {
-    request: RecreateSpaceRootPatternRequest;
-    response: PieceResponse;
+    response: SpaceRootPatternResponse;
   };
   // Diagnosis requests
   [RequestType.DetectNonIdempotent]: {

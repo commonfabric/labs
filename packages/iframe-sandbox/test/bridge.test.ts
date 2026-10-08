@@ -1424,6 +1424,36 @@ describe("Fabric iframe bridge", () => {
     }
   });
 
+  it("describes a resource whose `methods` is present but `undefined` as having no named methods", async () => {
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(
+      createFabricBridge({
+        count: {
+          kind: "cell",
+          cell: { get: () => 1, pull: () => 1 },
+          methods: undefined,
+        },
+      }),
+      channel.port1,
+    );
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      await expect(client.describe()).resolves.toMatchObject({
+        resources: [{
+          name: "count",
+          operations: ["get", "pull"],
+          methods: [],
+        }],
+      });
+      await expect(client.cell<number>("count").pull()).resolves.toBe(1);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
   it("refuses non-callable named methods", async () => {
     const channel = new MessageChannel();
     const host = new FabricBridgeHost(

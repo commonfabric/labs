@@ -13,10 +13,13 @@
  */
 import {
   type Cell,
+  type DID,
   equals,
   FabricDurationNsec,
   FabricEpochNsec,
+  isWellFormedDID,
 } from "commonfabric";
+import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
 // Reviewed surfaces
@@ -63,6 +66,28 @@ export const CHAT_START_SURFACE = "ChatStartSurface";
 
 /** The reviewed action starting a conversation is, on `CHAT_START_SURFACE`. */
 export const CHAT_START_ACTION = "ChatStart";
+
+/** The reviewed surface a member is added to a room from. */
+export const CHAT_ADD_MEMBER_SURFACE = "ChatAddMemberSurface";
+
+/** The reviewed action adding a member is, on `CHAT_ADD_MEMBER_SURFACE`. */
+export const CHAT_ADD_MEMBER_ACTION = "ChatAddMember";
+
+//
+// Principals
+//
+
+/** A `did:key` whose key is base58btc multibase, as every principal's is. */
+const DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
+
+/**
+ * Whether `value` is a DID a principal can have: well formed, and, for a
+ * `did:key`, a base58btc key, so that a key a period or other punctuation
+ * follows is refused.
+ */
+export const isPrincipalDID = (value: unknown): value is DID =>
+  isWellFormedDID(value) &&
+  (!value.startsWith("did:key:") || DID_KEY.test(value));
 
 //
 // Times
@@ -115,6 +140,25 @@ export interface ChatProfile {
 
 /** A live link to a person's profile. */
 export type ProfileCell = Cell<ChatProfile>;
+
+/**
+ * The part of a person's profile a manager reads: what a room reads, and
+ * where to offer the person a room. Only a manager reads the inbox pointer,
+ * so the inbox's shape is part of no room's contract.
+ */
+export interface ChatManagerProfile extends ChatProfile {
+  /**
+   * Where the person's offers are delivered, as the profile types its pointer:
+   * a link naming nothing of the inbox but its name. An inbox labels its
+   * offers confidential to its owner, and a run reading the pointer as a link
+   * to more of the inbox, or untyped, takes that label on, which then refuses
+   * its sends.
+   */
+  inbox?: ProfileInbox;
+}
+
+/** A live link to a person's profile, as a manager reads it. */
+export type ManagerProfileCell = Cell<ChatManagerProfile>;
 
 //
 // Room records
@@ -420,6 +464,13 @@ export type ChatRequestOutcome =
     /** Why. */
     reason: string;
   };
+
+/**
+ * The `kind` of a room's own space, as the space declares it, and as an offer
+ * of the room to a member's share inbox and a user's shared-space catalog name
+ * it.
+ */
+export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
 
 /** A notice a manager's request produced, for a client to deliver. */
 export interface ChatManagerNotice {

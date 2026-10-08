@@ -582,9 +582,20 @@ cell's scope is not changed. This is the explicit path by which data can move
 from narrower scopes to wider scopes. The scope system itself permits this
 write; CFC/IFC policy may still record or restrict the flow separately.
 
-Transactions must track the narrowest scoped document read during a
-computation so the runtime can decide whether the output value must be replaced
-with a scoped link.
+Transactions must track the narrowest scope read during a computation so the
+runtime can decide whether the output value must be replaced with a scoped
+link. A read narrows that scope by the address it lands on, and a read that
+follows a link from a position declared narrower than the link's own scope
+narrows it to the declared scope whether or not an instance at that scope
+exists. The declaration is what every reader of the same documents shares: a
+reader holding an instance at the declared scope and one that does not must
+place the computation's output the same way, or each replaces the other's
+output and neither converges.
+
+A broad output location that already holds a link to its own narrower-scoped
+instance keeps that link. A computation whose reads did not narrow that far
+writes behind the link, into its own instance at the stored scope, rather than
+over it.
 
 ## Built-In Default Scope Rules
 

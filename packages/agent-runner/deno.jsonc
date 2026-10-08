@@ -8,6 +8,7 @@
     ".": "./src/agent-runner.ts",
     "./agent-run-harness": "./src/agent-run-harness.ts",
     "./harness-job": "./src/harness-job.ts",
+    "./local-jobs/readiness": "./src/local-jobs/readiness.ts",
     "./local-jobs/service": "./src/local-jobs/service.ts"
   },
   "imports": {

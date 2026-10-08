@@ -133,21 +133,38 @@ export const localJobSpecOf = (
 
 /**
  * The progress events one transcript event reports: a `step` for each tool
- * the model called, and a `command` for each `run_command` the host ran.
- * A child loop's events report nothing; the job's own loop is what a caller
- * watches.
+ * the model called, and a `command` for each command the host ran, one per
+ * executed call of a `run_command` batch. Children carry their profile, run
+ * id, parent call id and depth. Browser steps also name the action, so a
+ * reader can distinguish clicking from waiting without receiving arguments,
+ * URLs or page content.
  */
 export const localJobEventsOf = (
   event: HarnessTranscriptEvent,
 ): { kind: "step" | "command"; body: Record<string, unknown> }[] => {
-  if (event.subagent !== undefined) return [];
+  const child = event.subagent === undefined ? undefined : {
+    parentToolCallId: event.subagent.parentToolCallId,
+    childRunId: event.subagent.childRunId,
+    profile: event.subagent.profile,
+    // The harness admits one level of delegation: children cannot delegate.
+    // Extend its transcript context before admitting nested child loops.
+    depth: 1,
+  };
   const { message, transcript } = event;
   if (message.role === "assistant") {
     const turn = transcript.filter((entry) => entry.role === "assistant")
       .length;
     return (message.toolCalls ?? []).map((call) => ({
       kind: "step",
-      body: { turn, tool: call.function.name },
+      body: {
+        turn,
+        tool: call.function.name,
+        ...(child !== undefined ? { child } : {}),
+        ...(child !== undefined && call.function.name === "browser" &&
+            typeof argumentsOf(transcript, call.id).action === "string"
+          ? { action: argumentsOf(transcript, call.id).action }
+          : {}),
+      },
     }));
   }
   if (message.role !== "tool" || message.toolName !== "run_command") return [];
@@ -158,10 +175,38 @@ export const localJobEventsOf = (
     return [];
   }
   if (!isObjectNotArray(output)) return [];
-  const { status, outcome, entry } = output as Record<string, unknown>;
+  const asked = argumentsOf(transcript, message.toolCallId);
+  if (output.status !== "batch") {
+    return commandEventsOf(output, asked.command, child);
+  }
+  // A batch answers its calls in order, one result each.
+  const calls = Array.isArray(asked.calls) ? asked.calls : [];
+  const results = Array.isArray(output.results) ? output.results : [];
+  return results.flatMap((result, index) => {
+    const call: unknown = calls[index];
+    return isObjectNotArray(result)
+      ? commandEventsOf(
+        result,
+        isObjectNotArray(call) ? call.command : undefined,
+        child,
+      )
+      : [];
+  });
+};
+
+/**
+ * Helper for events, which reports one call's result: a `command` event when
+ * the host ran it, named by the outcome's id or else the name it was called
+ * by and carrying the child loop it ran in, and nothing otherwise.
+ */
+const commandEventsOf = (
+  result: Readonly<Record<string, unknown>>,
+  asked: unknown,
+  child: Record<string, unknown> | undefined,
+): { kind: "command"; body: Record<string, unknown> }[] => {
+  const { status, outcome, entry } = result;
   if (status !== "executed" || !isObjectNotArray(outcome)) return [];
   const { ok, id, code, hostCode } = outcome as Record<string, unknown>;
-  const asked = argumentsOf(transcript, message.toolCallId).command;
   const command = typeof id === "string" ? id : asked;
   if (typeof command !== "string" || typeof ok !== "boolean") return [];
   const value = isObjectNotArray(entry) &&
@@ -181,6 +226,7 @@ export const localJobEventsOf = (
     body: {
       command,
       ok,
+      ...(child !== undefined ? { child } : {}),
       ...(isObjectNotArray(answered.outputs)
         ? { outputs: answered.outputs }
         : {}),
@@ -326,6 +372,17 @@ export class LocalJobLane {
     const browserHost = narrowed.profile.browserHost === true
       ? this.browserHost(job.id)
       : undefined;
+    let parentStep: Record<string, unknown> | undefined;
+    const childSteps = new Map<string, Record<string, unknown>>();
+    let lastStep: string | undefined;
+    // A browse publishes transitions, not every repeated snapshot or click.
+    // Turn numbers alone are not a visible change. Commands are never reduced.
+    const reportStep = (body: Record<string, unknown>) => {
+      const key = JSON.stringify([body.tool, body.child, body.action]);
+      if (key === lastStep) return;
+      lastStep = key;
+      store.report(job.id, "step", body);
+    };
     let result: HarnessJobResult;
     // The host closes however the run ends, a report that throws included.
     try {
@@ -337,8 +394,42 @@ export class LocalJobLane {
             signal,
             ...(browserHost !== undefined ? { browserHost } : {}),
             onEvent: (event) => {
+              if (
+                event.subagent === undefined &&
+                event.message.role === "tool" &&
+                event.message.toolName === LOCAL_JOB_DELEGATE_TOOL &&
+                childSteps.delete(event.message.toolCallId)
+              ) {
+                const active = [...childSteps.values()].at(-1) ?? parentStep;
+                if (active !== undefined) reportStep(active);
+              }
               for (const { kind, body } of localJobEventsOf(event)) {
-                store.report(job.id, kind, body);
+                if (kind === "command") {
+                  if (event.subagent !== undefined) {
+                    const id = event.subagent.parentToolCallId;
+                    const step = childSteps.get(id);
+                    if (
+                      step !== undefined &&
+                      step !== [...childSteps.values()].at(-1)
+                    ) {
+                      childSteps.delete(id);
+                      childSteps.set(id, step);
+                      // Publish the promoted tool before its landed receipt.
+                      reportStep(step);
+                    }
+                  }
+                  lastStep = undefined;
+                  store.report(job.id, kind, body);
+                } else if (event.subagent !== undefined) {
+                  // Children have depth 1; among siblings, latest activity wins.
+                  const id = event.subagent.parentToolCallId;
+                  childSteps.delete(id);
+                  childSteps.set(id, body);
+                  reportStep(body);
+                } else {
+                  parentStep = body;
+                  if (childSteps.size === 0) reportStep(parentStep);
+                }
               }
             },
             ...(this.#options.harnessDeps !== undefined

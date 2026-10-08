@@ -235,7 +235,7 @@ for the rendered output so each viewer sees their own home profile projection.
 
 | Feature    | Favorites (`~`)            | Mentionables (`.`)              | Profile (`profile`)              |
 |------------|----------------------------|---------------------------------|----------------------------------|
-| Storage    | Home default pattern       | Current space                   | Profile default pattern          |
+| Storage    | Home default pattern       | Current space                   | Profile piece                    |
 | Scope      | Cross-space                | Per-space                       | Cross-space, per-user            |
 | Source     | User's favorites list      | Pattern's `mentionable` export  | User's profile element list      |
 | Tag source | Snapshotted when favorited | Computed from schema            | `userTags` first, then `tag`     |
@@ -326,7 +326,7 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
 | `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
 | `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
-| `#profile`          | Profile default pattern object                          |
+| `#profile`          | User's current profile piece                            |
 | `#profileName`      | User's profile display name                             |
 | `#profileAvatar`    | User's profile avatar                                   |
 | `#profileSpace`     | User's profile space cell                               |

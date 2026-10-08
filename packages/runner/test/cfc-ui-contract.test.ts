@@ -64,14 +64,15 @@ const rendererEvent = <T extends Record<string, unknown>>(event: T): T => {
 };
 
 describe("CFC UI contract matching", () => {
-  it("counts only a marked event of `dom` origin as a trusted gesture", () => {
+  it("counts a marked event of `dom` or `native` origin as a trusted gesture, and an unmarked one of neither", () => {
     const dom = { provenance: { origin: "dom", trusted: true, ui: {} } };
     const native = { provenance: { origin: "native", trusted: true, ui: {} } };
     expect(isTrustedGesture(dom)).toBe(false);
+    expect(isTrustedGesture(native)).toBe(false);
     markRendererTrustedEvent(dom);
     markRendererTrustedEvent(native);
     expect(isTrustedGesture(dom)).toBe(true);
-    expect(isTrustedGesture(native)).toBe(false);
+    expect(isTrustedGesture(native)).toBe(true);
   });
 
   it("matches UiAction contracts against trusted DOM dataset markers", () => {

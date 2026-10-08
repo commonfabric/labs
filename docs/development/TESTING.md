@@ -345,6 +345,25 @@ If a browser command did run inside the agent sandbox, disregard its
 browser-startup failure and rerun it outside the sandbox before interpreting
 the test result.
 
+### Starting Chrome without the launcher
+
+Astral's `launch()` and the integration browser launcher in
+`packages/integration/browser-process.ts` both build Chrome's arguments with
+Astral's `generateBinArgs`. Those arguments include `--use-mock-keychain`, which
+makes Chrome on macOS use an in-memory keychain in place of the login keychain,
+and `--password-store=basic`, which makes Chrome on Linux keep its secrets in
+the profile in place of the desktop keyring.
+
+Code that runs the Chrome binary itself, such as a script that spawns it with
+`Deno.Command`, builds its arguments with `generateBinArgs` or passes both
+flags. Without `--use-mock-keychain`, Chrome on macOS reads its "Chromium Safe
+Storage" item from the developer's login keychain when it starts. The item's
+access list names each browser binary it trusts by a hash of that binary's
+signed code, and each Chrome build has a different hash. When the binary being
+run is not on that list, as with a Chrome for Testing build other than the one
+that created the item, macOS shows a dialog asking the developer for their login
+keychain password.
+
 ### Browser process cleanup
 
 The integration browser launcher uses the installed Chrome selected by

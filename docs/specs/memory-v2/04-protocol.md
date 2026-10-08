@@ -304,6 +304,13 @@ client connected to an older server, or a server connected to an older client,
 leaves a refused principal to learn of a later grant by opening the session
 again.
 
+`spaceKind` advertises that the server seals the kind a space's genesis commit
+declares, and reports it in the result of every `session.open` it admits
+(sections 4.1.2 and 4.5.1). It is build-inherent and
+defaults to `false` when absent. A client connected to an older server neither
+declares a kind there, since that server would keep the field without holding
+it to the genesis rules, nor reads one, since that server reports none.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -329,6 +336,9 @@ interface SessionOpenRequest {
     // under (see the rules). Inside the signed descriptor: a bound on
     // what the session is served, declared by the session itself.
     readCeiling?: SessionReadCeiling;
+    // The kind the space declares in its genesis commit (see the rules).
+    // Inside the signed descriptor, like everything the session declares.
+    spaceKind?: string;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -396,6 +406,9 @@ interface SessionOpenResult {
   caughtUpLocalSeq?: number;
   resumed?: boolean;
   sync?: SessionSync;
+  // The kind the space's genesis commit declares; absent when it declares
+  // none, or the space has no history yet.
+  spaceKind?: string;
   sessionOpen: {
     challenge: {
       value: string;
@@ -427,6 +440,12 @@ Rules:
   re-declares reads under what it re-declared. The server records it on the
   session and the serving runtime reads it per run; a server may also assign
   a session a ceiling of its own, which lands in the same record
+- a session that declares a `spaceKind` asserts the kind the space's genesis
+  commit declares: the server refuses the open with a `ProtocolError` when the
+  space has a genesis commit that declares a different kind or none. A space
+  with no history admits the declaration, and its genesis commit must then
+  carry the same kind. Every open of a space with history is told the kind its
+  genesis declares, in `spaceKind`, whether the session declared one or not
 - the server rotates `sessionToken` on every successful `session.open`
 - at most one connection may own a given `(space, sessionId)` at a time
 - a successful resume transfers ownership to the new connection, invalidates the
@@ -502,6 +521,7 @@ interface HelloMessage {
     sessionClose?: boolean;
     connectionAuth?: boolean;
     admissionNotice?: boolean;
+    spaceKind?: boolean;
   };
 }
 
@@ -1276,11 +1296,22 @@ thing that writes one. A create action generates a fresh key pair from random
 data, opens one session authenticated as that key through the same route every
 later session for the DID takes, and commits the genesis document against a
 confirmed absent ACL: the creator as OWNER, together with any grants the
-creator chose (`StorageManager.createSpace(acl, root?)`, reached as
-`Runtime.createSpace()`). The key is used for nothing else, and is dropped once
-the commit is confirmed. The creator is the concrete owner, and can later grant
-access to other principals or to `"*"`. Opening a DID that has no history
-writes nothing: it is not a space, and stays that way.
+creator chose (`StorageManager.createSpace(acl, { root?, spaceKind? })`,
+reached as `Runtime.createSpace()`). The key is used for nothing else, and is
+dropped once the commit is confirmed. The creator is the concrete owner, and
+can later grant access to other principals or to `"*"`. Opening a DID that has
+no history writes nothing: it is not a space, and stays that way.
+
+The genesis commit may also declare the space's kind, in the commit's
+`spaceKind` field: a string of lowercase words joined by hyphens, at most 32
+characters. The server admits it only on the space's genesis commit, made by
+the space identity itself, on the default branch, holding nothing but the
+ACL-only `set`, and only when it equals the `spaceKind` the committing session
+declared. It refuses `spaceKind` on every other commit, in every ACL mode,
+whoever makes it, and so the kind never changes once sealed. A custom root
+reservation is held to the same rules
+([`custom-space-roots.md`](../../features/custom-space-roots.md));
+[`space-kinds.md`](../../features/space-kinds.md) describes the kind.
 
 The one space born on open is a Home space, whose DID is its user's own. When
 the active identity is the space DID and the space has no ACL document and no
@@ -1392,7 +1423,20 @@ The runtime-facing scheduler rules remain the same:
 
 ## 4.7 Error Responses
 
-All errors are returned in `response`.
+All errors are returned in `response`. That includes a failure the server did
+not anticipate while handling a request: the request is answered on its own
+`requestId` with a `TransactionError` for a commit and a `QueryError` for any
+other request, unless the failure is a protocol error with a name of its own.
+The connection carries on, so a commit the server cannot handle fails alone,
+without taking the connection or the client's other commits with it. A failure
+to deliver a response is a failure of the connection instead, and closes it:
+the request may already have taken effect, a commit whose verdict was lost
+among them, so the client replays it and the server answers from its record.
+A request is answered once. A failure after its response has gone out, such as
+in delivering the self-revocation a commit defers until after its verdict, is
+not answered again on the same `requestId`; it closes the connection the same
+way, and the client learns on reconnecting what the lost message would have
+told it.
 
 ```typescript
 // Shown at module scope.

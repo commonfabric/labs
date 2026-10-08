@@ -238,11 +238,80 @@ function membershipAction(
     boundedString(value.expectedRevision, 320) && membership(value.state);
 }
 
+/**
+ * Registers an admitted space in `catalog` without changing any existing
+ * membership, staging its writes in the transaction of the handler that calls
+ * it, so a handler can register a space in the same commit as its own writes.
+ * Insert-if-absent: an entry already present for the space keeps its title,
+ * membership and revision, and an archived one stays archived. A registration
+ * naming an offer records a receipt keyed by the offer's sender and ID, beside
+ * the entry, unless one is already there. Returns `conflict` without writing
+ * anything when the space is already registered with another host or kind, or
+ * the offer's receipt names another target. Call it only from a handler,
+ * since a new entry's revision names the handler's event.
+ *
+ * @throws When `input` is not a valid registration, or `catalog` holds
+ *   something other than a valid catalog.
+ */
+export function registerSharedSpaceIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  input: SharedSpaceRegistration,
+): SharedSpaceRegistrationResult {
+  const registration = normalizeRegistration(input);
+  const stored = readSharedSpaceCatalog(catalog);
+  const { space, host, kind, title, offer } = registration;
+  const current = stored.entries[space];
+  if (current && current.host !== host) {
+    return {
+      status: "conflict",
+      reason: "host",
+    };
+  }
+  if (current && current.kind !== kind) {
+    return {
+      status: "conflict",
+      reason: "kind",
+    };
+  }
+  const key = offer && sharedSpaceOfferKey(offer.from, offer.id);
+  const receipt = key && stored.offers[key];
+  if (
+    receipt &&
+    (receipt.space !== space || receipt.host !== host ||
+      receipt.kind !== kind)
+  ) return { status: "conflict", reason: "offer" };
+  if (!current) {
+    catalog.key("entries", space).set({
+      space,
+      host,
+      kind,
+      ...(title === undefined ? {} : { title }),
+      ...(offer === undefined ? {} : { from: offer.from }),
+      since: registration.since ?? Date.now(),
+      state: registration.initialState ?? "saved",
+      revision: revisionAt(1n),
+    });
+  }
+  if (key && offer && !receipt) {
+    catalog.key("offers", key).set({
+      from: offer.from,
+      id: offer.id,
+      space,
+      host,
+      kind,
+    });
+  }
+  return { status: current ? "existing" : "registered", space };
+}
+
 // Retain every event field for validation, including linked payloads whose
 // stored schema would otherwise omit a malformed optional field.
 const eventSchema = toSchema<Record<string, any>>();
 
-/** Registers an admitted space without changing any existing membership. */
+/**
+ * Registers an admitted space without changing any existing membership, as
+ * {@link registerSharedSpaceIn} does.
+ */
 export const registerSharedSpace = handler<
   SharedSpaceRegistration,
   SharedSpaceCatalogState,
@@ -250,56 +319,77 @@ export const registerSharedSpace = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (input, { catalog }) => {
-    const registration = normalizeRegistration(input);
-    const stored = readSharedSpaceCatalog(catalog);
-    const { space, host, kind, title, offer } = registration;
-    const current = stored.entries[space];
-    if (current && current.host !== host) {
-      return {
-        status: "conflict",
-        reason: "host",
-      };
-    }
-    if (current && current.kind !== kind) {
-      return {
-        status: "conflict",
-        reason: "kind",
-      };
-    }
-    const key = offer && sharedSpaceOfferKey(offer.from, offer.id);
-    const receipt = key && stored.offers[key];
-    if (
-      receipt &&
-      (receipt.space !== space || receipt.host !== host ||
-        receipt.kind !== kind)
-    ) return { status: "conflict", reason: "offer" };
-    if (!current) {
-      catalog.key("entries", space).set({
-        space,
-        host,
-        kind,
-        ...(title === undefined ? {} : { title }),
-        ...(offer === undefined ? {} : { from: offer.from }),
-        since: registration.since ?? Date.now(),
-        state: registration.initialState ?? "saved",
-        revision: revisionAt(1n),
-      });
-    }
-    if (key && offer && !receipt) {
-      catalog.key("offers", key).set({
-        from: offer.from,
-        id: offer.id,
-        space,
-        host,
-        kind,
-      });
-    }
-    return { status: current ? "existing" : "registered", space };
-  },
+  (input, { catalog }) => registerSharedSpaceIn(catalog, input),
 );
 
-/** Applies the user's choice only to the revision they observed. */
+/**
+ * Applies the user's membership choice in `catalog` only to the revision they
+ * observed, staging its writes in the transaction of the handler that calls
+ * it, so a handler can apply a choice in the same commit as its own writes.
+ * Returns `conflict` without writing anything when the space has no entry, the
+ * entry's state or action evidence is one this writer doesn't understand, the
+ * observed revision is not the current one, or the next revision would not
+ * fit. Repeating the last applied choice returns `confirmed`. Call it only
+ * from a handler, since a new revision names the handler's event.
+ *
+ * @throws When `change` is not a valid membership action, or `catalog` holds
+ *   something other than a valid catalog.
+ */
+export function changeSharedSpaceMembershipIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  change: SharedSpaceMembershipChange,
+): SharedSpaceMembershipResult {
+  if (
+    !plainObject(change) || !isWellFormedDID(change.space) ||
+    !membershipAction(change)
+  ) {
+    throw new TypeError("Invalid shared-space membership action.");
+  }
+  const current = readSharedSpaceCatalog(catalog).entries[change.space];
+  if (!current) return { status: "conflict", reason: "missing" };
+  if (!membership(current.state)) {
+    return {
+      status: "conflict",
+      reason: "unsupported-state",
+    };
+  }
+  const last = current.lastAction;
+  if (
+    last !== undefined &&
+    (!membershipAction(last) || last.state !== current.state)
+  ) {
+    return { status: "conflict", reason: "action" };
+  }
+  if (last?.id === change.id) {
+    return last.expectedRevision === change.expectedRevision &&
+        last.state === change.state
+      ? { status: "confirmed", space: change.space, id: change.id }
+      : { status: "conflict", reason: "action" };
+  }
+  if (current.revision !== change.expectedRevision) {
+    return {
+      status: "conflict",
+      reason: "revision",
+    };
+  }
+  const revision = nextRevision(current.revision);
+  if (revision === undefined) {
+    return { status: "conflict", reason: "unsupported-revision" };
+  }
+  catalog.key("entries", change.space, "state").set(change.state);
+  catalog.key("entries", change.space, "revision").set(revision);
+  catalog.key("entries", change.space, "lastAction").set({
+    id: change.id,
+    expectedRevision: change.expectedRevision,
+    state: change.state,
+  });
+  return { status: "applied", space: change.space, id: change.id };
+}
+
+/**
+ * Applies the user's choice only to the revision they observed, as
+ * {@link changeSharedSpaceMembershipIn} does.
+ */
 export const changeSharedSpaceMembership = handler<
   SharedSpaceMembershipChange,
   SharedSpaceCatalogState,
@@ -307,51 +397,5 @@ export const changeSharedSpaceMembership = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (change, { catalog }) => {
-    if (
-      !plainObject(change) || !isWellFormedDID(change.space) ||
-      !membershipAction(change)
-    ) {
-      throw new TypeError("Invalid shared-space membership action.");
-    }
-    const current = readSharedSpaceCatalog(catalog).entries[change.space];
-    if (!current) return { status: "conflict", reason: "missing" };
-    if (!membership(current.state)) {
-      return {
-        status: "conflict",
-        reason: "unsupported-state",
-      };
-    }
-    const last = current.lastAction;
-    if (
-      last !== undefined &&
-      (!membershipAction(last) || last.state !== current.state)
-    ) {
-      return { status: "conflict", reason: "action" };
-    }
-    if (last?.id === change.id) {
-      return last.expectedRevision === change.expectedRevision &&
-          last.state === change.state
-        ? { status: "confirmed", space: change.space, id: change.id }
-        : { status: "conflict", reason: "action" };
-    }
-    if (current.revision !== change.expectedRevision) {
-      return {
-        status: "conflict",
-        reason: "revision",
-      };
-    }
-    const revision = nextRevision(current.revision);
-    if (revision === undefined) {
-      return { status: "conflict", reason: "unsupported-revision" };
-    }
-    catalog.key("entries", change.space, "state").set(change.state);
-    catalog.key("entries", change.space, "revision").set(revision);
-    catalog.key("entries", change.space, "lastAction").set({
-      id: change.id,
-      expectedRevision: change.expectedRevision,
-      state: change.state,
-    });
-    return { status: "applied", space: change.space, id: change.id };
-  },
+  (change, { catalog }) => changeSharedSpaceMembershipIn(catalog, change),
 );

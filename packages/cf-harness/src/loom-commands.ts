@@ -29,6 +29,7 @@ import {
   HARNESS_COMMAND_SUMMARY_MAX_LENGTH,
   harnessCommandJsonBytes,
 } from "./contracts/client-command.ts";
+import { withoutSchemaExtensions } from "./loom-command-signature.ts";
 import type { ProcessRunner } from "./sandbox/process-runner.ts";
 import { createClearedHostProcessEnv } from "./tools/host-process-env.ts";
 
@@ -59,6 +60,12 @@ export interface LoomCommandEntry extends HarnessCallableDescriptor {
 
   /** The field names the command's answer declares among its outputs. */
   outputs?: string[];
+
+  /**
+   * Inputs the host fills from a call's context (`x-source` in the row's
+   * schema), which a call may leave out though the schema requires them.
+   */
+  hostFilled?: string[];
 }
 
 /** A host's command manifest, read as the entries an agent may call. */
@@ -223,9 +230,15 @@ export const loomCommandEntryOfRow = (
     row.help,
     HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
   );
-  const inputSchema = isRecord(inputs) &&
-      harnessCommandJsonBytes(inputs) <= HARNESS_COMMAND_SCHEMA_MAX_BYTES
-    ? inputs as JSONObject
+  // Extension keywords are the host's annotations for its own surfaces; no
+  // schema shown to the model carries them. The size bound applies to what
+  // is shown, so annotations alone never make a typed schema read as open.
+  const stripped = isRecord(inputs)
+    ? withoutSchemaExtensions(inputs as JSONObject)
+    : undefined;
+  const inputSchema = stripped !== undefined &&
+      harnessCommandJsonBytes(stripped) <= HARNESS_COMMAND_SCHEMA_MAX_BYTES
+    ? stripped
     : true;
   // A compacted entry keeps its target and output names, so both are cut
   // to an identifier's length and the names to a few dozen.
@@ -233,6 +246,13 @@ export const loomCommandEntryOfRow = (
     ? outputs.filter((name): name is string => typeof name === "string")
       .slice(0, LOOM_COMMAND_OUTPUTS_LIMIT)
       .map((name) => name.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH))
+    : [];
+  const hostFilled = isRecord(inputs) && isRecord(inputs.properties)
+    ? Object.entries(inputs.properties)
+      .filter(([, property]) =>
+        isRecord(property) && property["x-source"] !== undefined
+      )
+      .map(([name]) => name)
     : [];
   return {
     name: id,
@@ -246,6 +266,7 @@ export const loomCommandEntryOfRow = (
       ? scope.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
       : "global",
     ...(outputNames.length > 0 ? { outputs: outputNames } : {}),
+    ...(hostFilled.length > 0 && inputSchema !== true ? { hostFilled } : {}),
   };
 };
 
@@ -275,6 +296,49 @@ export const loomCommandCatalogOf = (
   }
   return { entries, hidden, malformed, omitted };
 };
+
+/** Most names a refused unknown command is offered in its place. */
+export const LOOM_COMMAND_SUGGESTION_LIMIT = 3;
+
+/** Helper for suggestions, which counts the edits between two names. */
+const editDistance = (left: string, right: string): number => {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row++) {
+    const current = [row];
+    for (let column = 1; column <= right.length; column++) {
+      current[column] = Math.min(
+        previous[column] + 1,
+        current[column - 1] + 1,
+        previous[column - 1] + (left[row - 1] === right[column - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length];
+};
+
+/**
+ * The catalog's names nearest `name`, nearest first and at most
+ * {@link LOOM_COMMAND_SUGGESTION_LIMIT}: a name that contains `name`, or
+ * that `name` contains, before any other, then by edit distance, then by
+ * name.
+ */
+export const nearestCommandNames = (
+  name: string,
+  names: readonly string[],
+): string[] =>
+  names
+    .map((candidate) => ({
+      candidate,
+      contained: candidate.includes(name) || name.includes(candidate) ? 0 : 1,
+      distance: editDistance(name, candidate),
+    }))
+    .sort((left, right) =>
+      left.contained - right.contained || left.distance - right.distance ||
+      (left.candidate < right.candidate ? -1 : 1)
+    )
+    .slice(0, LOOM_COMMAND_SUGGESTION_LIMIT)
+    .map(({ candidate }) => candidate);
 
 /** Helper for both commands, which runs the CLI over the broker queue. */
 const runCli = (
@@ -393,5 +457,54 @@ export const runLoomCommand = async (
     status: "ok",
     body: body as JSONObject,
     bodyBytes: harnessCommandJsonBytes(body),
+  };
+};
+
+/** The run's catalog as a caller reads it, or why it could not be read. */
+export type LoomCommandCatalogRead =
+  | { status: "ok"; catalog: LoomCommandCatalog }
+  | { status: "error"; code: LoomCommandHostErrorCode; message: string };
+
+/**
+ * The catalog one run reads its commands from. The host is asked on first
+ * use and the catalog held for the rest of the run, so a run of many
+ * commands lists once; `refresh` asks again and holds what it reads. A read
+ * that fails is not held, so the next use asks the host again.
+ */
+export interface LoomCommandCatalogSource {
+  /** The held catalog, read from the host when none is held yet. */
+  current(): Promise<LoomCommandCatalogRead>;
+
+  /** The host's catalog as it stands, held in place of the old one. */
+  refresh(): Promise<LoomCommandCatalogRead>;
+}
+
+/** A catalog source over the host's `loom command list --json`. */
+export const createLoomCommandCatalogSource = (
+  config: HarnessLoomCommandsConfig,
+  runner: ProcessRunner,
+): LoomCommandCatalogSource => {
+  let held: Promise<LoomCommandCatalogRead> | undefined;
+  const read = async (): Promise<LoomCommandCatalogRead> => {
+    const listed = await listLoomCommands(config, runner);
+    return listed.status === "ok"
+      ? { status: "ok", catalog: loomCommandCatalogOf(listed.commands) }
+      : listed;
+  };
+  // Concurrent callers share one read; a failed one is let go once it
+  // settles, unless a refresh has already replaced it.
+  const hold = (reading: Promise<LoomCommandCatalogRead>) => {
+    held = reading;
+    const release = () => {
+      if (held === reading) held = undefined;
+    };
+    reading.then((result) => {
+      if (result.status === "error") release();
+    }, release);
+    return reading;
+  };
+  return {
+    current: () => held ?? hold(read()),
+    refresh: () => hold(read()),
   };
 };

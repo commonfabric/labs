@@ -109,6 +109,7 @@ export {
   hasPresenceStorageCapability,
 } from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
+export { transactionFailureMessage } from "./storage/transaction-errors.ts";
 export type {
   EntityIdListOptions,
   EntityIdListResult,
@@ -216,6 +217,12 @@ export {
   SYSTEM_PATTERN_SOURCE_SCHEME,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
+export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
+export {
+  orderProfileCandidates,
+  profileCellIsValid,
+  type ProfileOrder,
+} from "./profile-order.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,
@@ -234,6 +241,7 @@ export {
   getPieceReconciliation,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
+  IN_SPACE_ROOT_CAUSE,
   isStoredArgumentSchemaRefusal,
   mergeSchemaDefaults,
   patternIdentityKey,

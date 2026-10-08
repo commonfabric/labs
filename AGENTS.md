@@ -256,6 +256,15 @@ Three obligations that are easy to miss:
 Working in `packages/ts-transformers` or `packages/schema-generator`? Start at
 that package's own `AGENTS.md`.
 
+#### Starting Chrome without the launcher
+
+A script that runs the Chrome binary itself, rather than through Astral or the
+integration browser launcher, passes `--use-mock-keychain` and
+`--password-store=basic`. Without `--use-mock-keychain`, Chrome on macOS can
+show the developer a dialog asking for their login keychain password. The
+details are in
+[`docs/development/TESTING.md`](docs/development/TESTING.md#starting-chrome-without-the-launcher).
+
 #### Adding New Packages
 
 A new workspace package needs three edits, and the second one bites hard when it

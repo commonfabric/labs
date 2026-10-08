@@ -63,6 +63,10 @@ a line for each new document to the index below.
 - [`custom-space-roots.md`](custom-space-roots.md) — seal a custom
   default-pattern reservation with the initial ACL, or one leaving the root to
   the space's creator, as `inSpace(..., { root: true })` does.
+- [`space-kinds.md`](space-kinds.md) — the kind a space declares in its genesis
+  commit, as `inSpace(..., { spaceKind })` does: how it is sealed so that only
+  its creator states it, once; who can read it; the known kinds; and what a
+  kind does not vouch for
 - [`lazy-cell-materialization.md`](lazy-cell-materialization.md) — the
   schema-observing view a marked transaction hands back from a read, what it
   checks and when, and the rules that keep it agreeing with an eager read
@@ -103,7 +107,8 @@ a line for each new document to the index below.
 - [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
   others deliver offers: where it lives, who creates it, what access its space
   grants, the offer envelope it shares with loom's share inbox, what `receive`
-  keeps, and what it does not keep private
+  keeps, how the host's share intake vets offers and registers them in Home's
+  catalog, and what it does not keep private
 - [`space-access-changes.md`](space-access-changes.md) — how a handler grants
   and revokes access to a space with `grantSpaceAccess()` and
   `revokeSpaceAccess()`: what a grant exposes, who may change the list and

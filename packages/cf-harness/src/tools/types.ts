@@ -49,7 +49,10 @@ import type {
 } from "../contracts/tool-descriptor.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
-import type { HarnessLoomCommandsConfig } from "../loom-commands.ts";
+import type {
+  HarnessLoomCommandsConfig,
+  LoomCommandCatalogSource,
+} from "../loom-commands.ts";
 import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
 import type { ProcessRunner } from "../sandbox/process-runner.ts";
 import type {
@@ -257,6 +260,15 @@ export interface HarnessToolContext {
 
   /** Host-owned command broker routing, absent when the run has no grant. */
   loomCommands?: HarnessLoomCommandsConfig;
+
+  /**
+   * The run's command catalog, read from the host on first use and held by
+   * the engine for the run, which both command tools share. Absent without
+   * {@link loomCommands}; a context built outside the engine may leave it
+   * out too, and the command tools then read the host's catalog for each
+   * call.
+   */
+  loomCommandCatalog?: LoomCommandCatalogSource;
 
   /**
    * Registers content a tool observed as a referent the run holds, and

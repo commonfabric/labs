@@ -1,10 +1,12 @@
 /**
  * Stands in for Home around the system private inbox: it holds the inbox and
- * the owner's profiles, and gives a sender and a stranger handlers of their
- * own that reach the inbox through a profile. Two more stand-ins,
- * `adoptingHome` and `refusingHome`, are Homes whose profiles already point at
- * inboxes when the host first ensures their own. Fixture for
- * `private-inbox-multi-runtime.test.ts`.
+ * the owner's profiles, and gives a sender and a stranger handlers of their own
+ * that reach the inbox through a profile. Four more stand-ins, `adoptingHome`,
+ * `refusingHome`, `curedHome` and `creatingHome`, are Homes whose profiles
+ * already point at inboxes when the host first ensures their own, and a fifth,
+ * `readoptingHome`, is one whose default profile is pointed elsewhere after it
+ * holds an inbox. `olderHome` stands in for a Home of the vintage whose ensure
+ * takes no refusal. Fixture for `private-inbox-multi-runtime.test.ts`.
  */
 
 import {
@@ -30,9 +32,12 @@ import PrivateInbox, {
   type Offer,
   type OfferEvent,
   pointProfilesAtPrivateInbox,
+  type PointTarget,
   type PrivateInboxHolder,
   type PrivateInboxOutput,
   type PrivateInboxPiece,
+  type PrivateInboxRefusalHolder,
+  type RetainedPrivateInboxes,
 } from "../../../system/private-inbox.tsx";
 
 /** The host origin every offer here names. */
@@ -168,11 +173,42 @@ const pointProfileAt = handler<
   });
 });
 
+/** Empties `profiles`. */
+const dropProfiles = handler<
+  void,
+  { profiles: Writable<ProfileHomeOutput[]> }
+>((_event, { profiles }) => {
+  profiles.set([]);
+});
+
+/** A Home's default profile, held under `profile` as Home's slot holds it. */
+export interface DefaultProfileSlot {
+  /** The default profile, absent while none is chosen. */
+  profile?: Cell<ProfileHomeOutput>;
+}
+
+/** Makes one of `profiles` the default, as Home's picker does. */
+const setDefaultProfile = handler<
+  PointElsewhereRequest,
+  {
+    profiles: Writable<ProfileHomeOutput[]>;
+    defaultProfile: Writable<DefaultProfileSlot>;
+  }
+>((event, { profiles, defaultProfile }) => {
+  defaultProfile.set({ profile: profiles.key(event.index).resolveAsCell() });
+});
+
 /** What the host reads of a Home, and sends it, and what a test drives. */
 export interface HomeStandInOutput {
   [NAME]: string;
   privateInbox: PrivateInboxHolder;
+  retainedPrivateInboxes: RetainedPrivateInboxes;
+  privateInboxRefusal: PrivateInboxRefusalHolder;
   profiles: ProfileHomeOutput[];
+  defaultProfile: DefaultProfileSlot;
+
+  /** Makes one of the Home's profiles its default. */
+  setDefaultProfile: Stream<PointElsewhereRequest>;
 
   /** Gives the Home a private inbox, as Home's own stream does. */
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
@@ -193,13 +229,26 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
     const privateInbox = new Writable<PrivateInboxHolder>({}).for(
       "privateInbox",
     );
+    const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
+      .for("retainedPrivateInboxes");
+    const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({})
+      .for("privateInboxRefusal");
     const profiles = new Writable<ProfileHomeOutput[]>([]).for("profiles");
+    const defaultProfile = new Writable<DefaultProfileSlot>({}).for(
+      "defaultProfileSlot",
+    );
     return {
       [NAME]: label,
       privateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
       profiles,
+      defaultProfile,
+      setDefaultProfile: setDefaultProfile({ profiles, defaultProfile }),
       ensurePrivateInbox: ensurePrivateInbox({
         privateInbox,
+        retainedPrivateInboxes,
+        privateInboxRefusal,
         // deno-lint-ignore no-explicit-any
         profiles: profiles as any,
         pointProfiles: pointProfilesAtPrivateInbox({
@@ -210,6 +259,74 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
       }),
       createProfile: createProfile({ profiles }),
       createEarlierProfile: createEarlierProfile({ profiles }),
+    };
+  },
+);
+
+/**
+ * The event a Home of the vintage before the refusal record takes: an inbox to
+ * adopt and the deciding profile, and nothing about a refusal.
+ */
+export type OlderEnsureEvent = {
+  /** The inbox to adopt. */
+  adopt?: Cell<PrivateInboxPiece>;
+
+  /** The deciding profile. */
+  from?: Cell<PointTarget>;
+};
+
+/**
+ * Records each event an older Home's ensure is delivered, and the fields
+ * delivered with it.
+ */
+const ensureAsOlderHome = handler<
+  OlderEnsureEvent,
+  { handled: Writable<number>; delivered: Writable<string[]> }
+>((event, { handled, delivered }) => {
+  handled.set(handled.get() + 1);
+  delivered.set(Object.keys(event ?? {}).sort());
+});
+
+/** What the host reads of an older Home, and what a test reads back. */
+export interface OlderHomeStandInOutput {
+  [NAME]: string;
+  privateInbox: PrivateInboxHolder;
+  profiles: ProfileHomeOutput[];
+
+  /** How many events its ensure has handled. */
+  handled: number;
+
+  /** The fields of the event its ensure last handled, sorted. */
+  delivered: string[];
+
+  /** Takes the event as a Home of that vintage typed it. */
+  ensurePrivateInbox: Stream<OlderEnsureEvent>;
+
+  /** Creates one of the Home's profiles. */
+  createProfile: Stream<void>;
+}
+
+/**
+ * Stands in for a Home of the vintage whose ensure takes no refusal: its event
+ * type names `adopt` and `from` alone, so the event's schema is what such a
+ * Home's is.
+ */
+const OlderHomeStandIn = pattern<Record<never, never>, OlderHomeStandInOutput>(
+  () => {
+    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "privateInbox",
+    );
+    const profiles = new Writable<ProfileHomeOutput[]>([]).for("profiles");
+    const handled = new Writable(0).for("handled");
+    const delivered = new Writable<string[]>([]).for("delivered");
+    return {
+      [NAME]: "Older Home",
+      privateInbox,
+      profiles,
+      handled,
+      delivered,
+      ensurePrivateInbox: ensureAsOlderHome({ handled, delivered }),
+      createProfile: createProfile({ profiles }),
     };
   },
 );
@@ -285,13 +402,21 @@ export interface MainOutput {
   otherInbox: PrivateInboxHolder;
   loomInbox: PrivateInboxHolder;
   strangerInbox: PrivateInboxHolder;
+  readoptLoomInbox: PrivateInboxHolder;
+  cureInbox: PrivateInboxHolder;
   adoptingHome: HomeStandInOutput;
   refusingHome: HomeStandInOutput;
+  curedHome: HomeStandInOutput;
+  creatingHome: HomeStandInOutput;
+  readoptingHome: HomeStandInOutput;
+  olderHome: OlderHomeStandInOutput;
   copiedOffers: CopiedOffer[];
+  retainedPrivateInboxes: RetainedPrivateInboxes;
+  privateInboxRefusal: PrivateInboxRefusalHolder;
 
   /**
-   * Gives the stand-in Home a private inbox if it holds none, and points
-   * profiles at it.
+   * Gives the stand-in Home the private inbox its profiles advertise, or one of
+   * its own, and points profiles at it.
    */
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
 
@@ -337,6 +462,54 @@ export interface MainOutput {
   /** Points one of `refusingHome`'s profiles at the stranger's inbox. */
   pointRefusingProfileAtStranger: Stream<PointElsewhereRequest>;
 
+  /** Creates an inbox as `createLoomInbox` does, kept in `cureInbox`. */
+  createCureInbox: Stream<void>;
+
+  /** Creates one of `curedHome`'s profiles. */
+  createCuredProfile: Stream<void>;
+
+  /** Points one of `curedHome`'s profiles at the stranger's inbox. */
+  pointCuredProfileAtStranger: Stream<PointElsewhereRequest>;
+
+  /** Points one of `curedHome`'s profiles at the inbox in `cureInbox`. */
+  pointCuredProfileAtCure: Stream<PointElsewhereRequest>;
+
+  /** Creates one of `creatingHome`'s profiles. */
+  createCreatingProfile: Stream<void>;
+
+  /** Points one of `creatingHome`'s profiles at the stranger's inbox. */
+  pointCreatingProfileAtStranger: Stream<PointElsewhereRequest>;
+
+  /** Empties `creatingHome`'s profile list. */
+  dropCreatingProfiles: Stream<void>;
+
+  /** Creates one of `olderHome`'s profiles. */
+  createOlderProfile: Stream<void>;
+
+  /** Points one of `olderHome`'s profiles at the stranger's inbox. */
+  pointOlderProfileAtStranger: Stream<PointElsewhereRequest>;
+
+  /**
+   * Creates an inbox as `createLoomInbox` does, kept in `readoptLoomInbox`.
+   */
+  createReadoptLoomInbox: Stream<void>;
+
+  /** Creates one of `readoptingHome`'s profiles. */
+  createReadoptingProfile: Stream<void>;
+
+  /**
+   * Points one of `readoptingHome`'s profiles at the inbox in
+   * `readoptLoomInbox`, through the profile's own `setInbox`, whatever it
+   * pointed at before, as a loom daemon points it.
+   */
+  pointReadoptingProfileAtLoom: Stream<PointElsewhereRequest>;
+
+  /** Sends an offer through `readoptingHome`'s first profile. */
+  offerToReadopting: Stream<OfferRequest>;
+
+  /** Makes one of `readoptingHome`'s profiles its default. */
+  setReadoptingDefault: Stream<PointElsewhereRequest>;
+
   /** Sends an offer through the owner's first profile. */
   offer: Stream<OfferRequest>;
 
@@ -363,8 +536,22 @@ export default pattern<MainInput, MainOutput>((
   const strangerInbox = new Writable<PrivateInboxHolder>({}).for(
     "strangerInbox",
   );
+  const readoptLoomInbox = new Writable<PrivateInboxHolder>({}).for(
+    "readoptLoomInbox",
+  );
+  const cureInbox = new Writable<PrivateInboxHolder>({}).for("cureInbox");
+  const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
+    "retainedPrivateInboxes",
+  );
+  const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
+    "privateInboxRefusal",
+  );
   const adoptingHome = HomeStandIn({ label: "Adopting Home" });
   const refusingHome = HomeStandIn({ label: "Refusing Home" });
+  const curedHome = HomeStandIn({ label: "Cured Home" });
+  const creatingHome = HomeStandIn({ label: "Creating Home" });
+  const olderHome = OlderHomeStandIn({});
+  const readoptingHome = HomeStandIn({ label: "Home adopting again" });
   return {
     [NAME]: "Private inbox fixture",
     [UI]: <div>private inbox fixture</div>,
@@ -373,11 +560,21 @@ export default pattern<MainInput, MainOutput>((
     otherInbox,
     loomInbox,
     strangerInbox,
+    readoptLoomInbox,
+    cureInbox,
     adoptingHome,
     refusingHome,
+    curedHome,
+    creatingHome,
+    readoptingHome,
+    olderHome,
     copiedOffers,
+    retainedPrivateInboxes,
+    privateInboxRefusal,
     ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
       pointProfiles: pointProfilesAtPrivateInbox({
@@ -407,6 +604,35 @@ export default pattern<MainInput, MainOutput>((
       profiles: refusingHome.profiles,
       inbox: strangerInbox,
     }),
+    createCureInbox: createSharedInbox({ inbox: cureInbox }),
+    createCuredProfile: curedHome.createProfile,
+    pointCuredProfileAtStranger: pointProfileAt({
+      profiles: curedHome.profiles,
+      inbox: strangerInbox,
+    }),
+    pointCuredProfileAtCure: pointProfileAt({
+      profiles: curedHome.profiles,
+      inbox: cureInbox,
+    }),
+    createCreatingProfile: creatingHome.createProfile,
+    pointCreatingProfileAtStranger: pointProfileAt({
+      profiles: creatingHome.profiles,
+      inbox: strangerInbox,
+    }),
+    dropCreatingProfiles: dropProfiles({ profiles: creatingHome.profiles }),
+    createOlderProfile: olderHome.createProfile,
+    pointOlderProfileAtStranger: pointProfileAt({
+      profiles: olderHome.profiles,
+      inbox: strangerInbox,
+    }),
+    createReadoptLoomInbox: createSharedInbox({ inbox: readoptLoomInbox }),
+    createReadoptingProfile: readoptingHome.createProfile,
+    pointReadoptingProfileAtLoom: pointProfileAt({
+      profiles: readoptingHome.profiles,
+      inbox: readoptLoomInbox,
+    }),
+    offerToReadopting: offer({ profiles: readoptingHome.profiles }),
+    setReadoptingDefault: readoptingHome.setDefaultProfile,
     offer: offer({ profiles }),
     queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
     copyOffers: copyOffers({ privateInbox, copiedOffers }),
