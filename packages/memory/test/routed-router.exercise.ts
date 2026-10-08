@@ -227,9 +227,20 @@ Deno.writeTextFileSync(
       : `${cgParent}/workers`,
     worker_uid_base: 100000,
     listener_uid: 990,
+    // Small limits, set explicitly, so the gates below reach them.
     max_workers: 32,
     max_unauthenticated: 8,
     max_per_source: 8,
+    max_unauthenticated_per_source: 7,
+    max_new_connections_per_second: 150,
+    max_new_connections_per_source_per_second: 6,
+    max_spaces_per_connection: 64,
+    max_principals_per_connection: 8,
+    max_principal_history: 64,
+    max_principals_per_challenge: 64,
+    max_watches_per_connection: 1024,
+    max_holdings_per_connection: 8192,
+    max_requests_per_connection: 256,
     modern_cell_rep: modernCellRep,
     development: false,
   }),
@@ -247,6 +258,43 @@ Deno.writeTextFileSync(
 await command(["nft", "-f", firewallPath]);
 const processes: Deno.ChildProcess[] = [];
 const listenerLogs: Promise<void>[] = [];
+/** The direct exercise's listener and spawner output, as it arrives. */
+const listenerOutput: string[] = [];
+/**
+ * Waits until the spawner logs a connection event with `verdict` (what
+ * happened) and `reason` (why) for `source`.
+ */
+async function logged(verdict: string, reason: string, source: string) {
+  const found = async () =>
+    (await listenerLog()).split("\n").some((line) => {
+      try {
+        const e = JSON.parse(line);
+        return e.event === "memory-router-connection" &&
+          e.verdict === verdict && e.reason === reason && e.source === source;
+      } catch {
+        return false;
+      }
+    });
+  for (const end = Date.now() + 10000; !(await found());) {
+    if (Date.now() >= end) {
+      throw new Error(`no ${verdict} ${reason} logged for ${source}`);
+    }
+    await pause(200);
+  }
+}
+/** What the listener and spawner have logged so far. */
+async function listenerLog(): Promise<string> {
+  return systemd
+    ? await command([
+      "journalctl",
+      "-u",
+      "memory-router-listener.service",
+      "-o",
+      "cat",
+      "--no-pager",
+    ])
+    : listenerOutput.join("");
+}
 /** A real toolshed in a child process, so gates can stall, stop and restart it. */
 class Toolshed {
   child?: Deno.ChildProcess;
@@ -373,6 +421,7 @@ async function listenerReady(child: Deno.ChildProcess) {
       const chunk of child.stderr.pipeThrough(new TextDecoderStream())
     ) {
       console.error(chunk.trimEnd());
+      listenerOutput.push(chunk);
       if (!seen) {
         initial += chunk;
         if (initial.length > 4096) {
@@ -1237,6 +1286,108 @@ finally:
     })).ok !== undefined,
   );
   pass("release blocks new opens while preserving the original session lease");
+  // One source at its connection limit is turned away, and the spawner logs
+  // the drop with its reason and the source it was counted under. This runs
+  // after the renewal gates, which need alice's 3 s lease renewed promptly.
+  const crowded = "127.0.0.60";
+  // A principal of its own, so these connections leave the other gates'
+  // principals and their leases alone.
+  const crowdSigner = await Identity.fromRaw(new Uint8Array(32).fill(61));
+  const crowd: Client[] = [];
+  for (let i = 0; i < 8; i++) {
+    const c = await new Client(crowded).start();
+    crowd.push(c);
+    clients.push(c);
+    await c.authenticate(crowdSigner, 60, true);
+    // Stays under the per-source admission rate.
+    await pause(300);
+  }
+  const turnedAway = new Client(crowded);
+  clients.push(turnedAway);
+  let dropped = false;
+  try {
+    await turnedAway.start();
+  } catch {
+    dropped = true;
+  }
+  assert(dropped, "a ninth connection from one source was admitted");
+  await logged("connection-dropped", "source-limit", `${crowded}/32`);
+  for (const c of crowd) c.close();
+  pass("a source over its connection limit is dropped, and the drop is logged");
+  // A connection at its principal limit is refused one authentication, and
+  // stays usable; the refusal is logged with its reason.
+  const crowdedPrincipals = new Client("127.0.0.61");
+  clients.push(crowdedPrincipals);
+  await crowdedPrincipals.start();
+  for (let i = 0; i < 8; i++) {
+    await crowdedPrincipals.authenticate(
+      await Identity.fromRaw(new Uint8Array(32).fill(70 + i)),
+      60,
+      i === 0,
+    );
+  }
+  const ninth = await Identity.fromRaw(new Uint8Array(32).fill(78));
+  const offer =
+    (await crowdedPrincipals.request({ type: "connection.challenge" }))
+      .ok as { challenge: { value: string } };
+  const iat = Math.floor(Date.now() / 1000);
+  const refusedAuth = await crowdedPrincipals.request({
+    type: "connection.auth",
+    statement: routedBase64(
+      await routedStatementPayload({
+        principal: ninth.did(),
+        router: router.did(),
+        deployment: "local-mode-a",
+        challenge: readRoutedHex(offer.challenge.value, 32),
+        iat,
+        exp: iat + 60,
+      }).sign(ninth),
+    ),
+  });
+  assert(refusedAuth.error !== undefined, "a ninth principal was admitted");
+  assert(
+    (await crowdedPrincipals.request({ type: "connection.challenge" })).ok !==
+      undefined,
+    "the connection closed with the refusal",
+  );
+  await logged("request-refused", "principal-limit", "127.0.0.61/32");
+  pass(
+    "a connection at its principal limit is refused one authentication and goes on",
+  );
+  // A connection at its session limit is refused one open, and goes on; the
+  // refusal is retriable, so the SDK holds the session rather than ending it.
+  const crowdedSessions = new Client("127.0.0.62");
+  clients.push(crowdedSessions);
+  await crowdedSessions.start();
+  await crowdedSessions.authenticate(alice, 120, true);
+  const openOne = () =>
+    crowdedSessions.request({
+      type: "session.open",
+      space: spaces[0],
+      principal: alice.did(),
+      session: {},
+    });
+  for (let i = 0; i < 64; i++) {
+    const opened = await openOne();
+    assert(opened.ok !== undefined, JSON.stringify(opened));
+  }
+  const overLimit = await openOne();
+  assert(
+    (overLimit.error as { retriable?: boolean } | undefined)?.retriable ===
+      true,
+    `a sixty-fifth session was not refused retriably: ${
+      JSON.stringify(overLimit)
+    }`,
+  );
+  assert(
+    (await crowdedSessions.request({ type: "connection.challenge" })).ok !==
+      undefined,
+    "the connection closed with the refusal",
+  );
+  await logged("request-refused", "session-limit", "127.0.0.62/32");
+  crowdedPrincipals.close();
+  crowdedSessions.close();
+  pass("a connection at its session limit is refused one open and goes on");
   const sdkAudiences: string[] = [];
   const socketFactory = (address: URL, localAddress = "127.0.0.7") => {
     const socket = new WebSocket(address, {
@@ -1455,6 +1606,9 @@ finally:
     bad.ws.send(malformed);
     await Promise.race([bad.closed.promise, deadline(6000)]);
   }
+  // Each worker's end is logged with a fixed reason, never its error's text.
+  await logged("worker-stopped", "client-protocol", "127.0.0.4/32");
+  await logged("worker-stopped", "incompatible-flags", "127.0.0.4/32");
   pass(
     "ambiguous JSON and incompatible flags close only the offending workers",
   );

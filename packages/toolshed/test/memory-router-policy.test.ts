@@ -68,6 +68,43 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
       write({ ...config, routers: { [router.did()]: [peer] } });
       assertThrows(() => new MemoryRouterPolicy(path));
     }
+    // Capacity is optional config over the defaults, with no code ceiling.
+    assertEquals(policy.config.limits.contextsPerLink, 512);
+    write({
+      ...config,
+      limits: { contextsPerLink: 4000, sockets: 9000, tickets: 4000 },
+    });
+    const sized = new MemoryRouterPolicy(path);
+    assertEquals(sized.config.limits.contextsPerLink, 4000);
+    assertEquals(sized.config.limits.sockets, 9000);
+    assertEquals(sized.config.limits.sessionsPerContext, 1200);
+    // The limits must fit every allowed router at once: the defaults fit
+    // two, and fewer sockets than two routers' contexts and links do not.
+    const second = (await Identity.fromRaw(new Uint8Array(32).fill(20))).did();
+    const two = { ...config.routers, [second]: ["10.0.0.3"] };
+    write({ ...config, routers: two });
+    assertEquals(new MemoryRouterPolicy(path).config.routers.size, 2);
+    write({ ...config, routers: two, limits: { sockets: 1025 } });
+    assertThrows(
+      () => new MemoryRouterPolicy(path),
+      Error,
+      "invalid routed limit: sockets",
+    );
+    for (
+      const limits of [
+        { unknownLimit: 1 },
+        { sockets: 0 },
+        { sessionsPerContext: "5" },
+        { sessionsPerContext: 5000, sessionsPerRouter: 4096 },
+        { contextsPerLink: 4000, sockets: 9000 },
+        { contextsPerLink: 2048, sockets: 2048 },
+        [],
+      ]
+    ) {
+      write({ ...config, limits });
+      assertThrows(() => new MemoryRouterPolicy(path), Error, undefined);
+    }
+    write(config);
     Deno.removeSync(directory);
     assertEquals(policy.ownership(space.did()), undefined);
     assertEquals(policy.available, false);

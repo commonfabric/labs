@@ -16,7 +16,13 @@ import {
 import { connect, type Transport } from "../v2/client.ts";
 import * as Engine from "../v2/engine.ts";
 import { RoutedEpochStore } from "../v2/routed-epochs.ts";
-import { RoutedMemoryHost } from "../v2/routed-host.ts";
+import {
+  DEFAULT_ROUTED_HOST_LIMITS,
+  type RoutedHostLimits,
+  routedHostLimits,
+  routedHostLimitsFor,
+  RoutedMemoryHost,
+} from "../v2/routed-host.ts";
 import { listenRoutedMemory } from "../v2/routed-listener.ts";
 import {
   decodeRoutedFrame,
@@ -95,7 +101,18 @@ async function fixture(
   {
     modernCellRep = true,
     clientModernCellRep = modernCellRep,
-  }: { modernCellRep?: boolean; clientModernCellRep?: boolean } = {},
+    limits,
+    clock,
+    otherRouters = 0,
+  }: {
+    modernCellRep?: boolean;
+    clientModernCellRep?: boolean;
+    limits?: Partial<RoutedHostLimits>;
+    /** The toolshed's time and the time proofs are made at, if not now. */
+    clock?: { now: number };
+    /** Routers the toolshed also allows, which never link. */
+    otherRouters?: number;
+  } = {},
 ) {
   setModernCellRepConfig(modernCellRep);
   const root = Deno.makeTempDirSync({ prefix: `routed-data-${name}-` });
@@ -125,7 +142,7 @@ async function fixture(
   });
   Engine.close(engine);
   let ownership = 1;
-  const now = Math.floor(Date.now() / 1000);
+  const at = () => clock?.now ?? Math.floor(Date.now() / 1000);
   const server = new Server({
     store,
     acl: { mode: "enforce" },
@@ -143,7 +160,18 @@ async function fixture(
     epochs,
     ownership: (did) =>
       did === space.did() && ownership > 0 ? ownership : undefined,
-    routers: new Map([[router.did(), new Set(["127.0.0.1"])]]),
+    routers: new Map([
+      [router.did(), new Set(["127.0.0.1"])],
+      ...await Promise.all(
+        Array.from({ length: otherRouters }, async (_, i) =>
+          [
+            (await Identity.fromRaw(new Uint8Array(32).fill(130 + i))).did(),
+            new Set([`127.0.0.${2 + i}`]),
+          ] as const),
+      ),
+    ]),
+    limits,
+    ...(clock === undefined ? {} : { now: () => clock.now }),
   });
   const flagObject = {
     ...server.memoryProtocolFlags(),
@@ -176,12 +204,14 @@ async function fixture(
     response.end();
     return { status, bytes };
   }
-  async function attest(statement: Uint8Array) {
+  /** Attests `statement` for context `ctx`, the fixture's own by default. */
+  async function attest(statement: Uint8Array, ctx = context) {
+    const now = at();
     const { challenge, principal } = await readRoutedStatement(statement);
     const issuance = await new RoutedWriter("mrc1").text("fixture").text(
       router.did(),
     )
-      .fixed(epoch).fixed(context).fixed(challenge).time(now).time(now + 60)
+      .fixed(epoch).fixed(ctx).fixed(challenge).time(now).time(now + 60)
       .sign(router);
     const receipt = await new RoutedWriter("mrr1").fixed(sha256(issuance)).text(
       principal,
@@ -190,17 +220,20 @@ async function fixture(
     return new RoutedWriter("mrp1").blob(statement).blob(issuance).blob(receipt)
       .bytes;
   }
-  async function proof(signer = principal, seconds = 600) {
-    const challenge = new Uint8Array(32).fill(++challengeNumber);
+  /** A fresh proof by `signer`, for context `ctx` if not the fixture's. */
+  async function proof(signer = principal, seconds = 600, ctx = context) {
+    const challenge = new Uint8Array(32).fill(++challengeNumber % 256);
+    challenge[0] = challengeNumber >> 8;
     return await attest(
       await routedStatementPayload({
         principal: signer.did(),
         router: router.did(),
         deployment: "fixture",
         challenge,
-        iat: now,
-        exp: now + seconds,
+        iat: at(),
+        exp: at() + seconds,
       }).sign(signer),
+      ctx,
     );
   }
   const issued = await control(
@@ -380,6 +413,497 @@ Deno.test("redeemed Mode A tickets are single use; control renews and releases a
   }
 });
 
+Deno.test("routed host limits are config over defaults, and must nest", () => {
+  assertEquals(routedHostLimits(), DEFAULT_ROUTED_HOST_LIMITS);
+  // No code ceiling: far above the old 256 contexts and 64 sessions.
+  assertEquals(
+    routedHostLimitsFor({
+      contextsPerLink: 100000,
+      sockets: 100001,
+      tickets: 100000,
+    }, 1).contextsPerLink,
+    100000,
+  );
+  for (
+    const overrides of [
+      { unknown: 1 } as unknown as Partial<RoutedHostLimits>,
+      { sockets: 0 },
+      { tickets: -1 },
+      { watchesPerContext: 1.5 },
+      { sessionsPerContext: 10000 },
+      { sessionsPerRouter: 20000 },
+      { holdingsPerPrincipal: 5000000 },
+      { principalsPerContext: 130, proofsPerContext: 300 },
+      // No proof left for a remembered principal or an active one's renewal.
+      { proofsPerContext: 143 },
+      // A context with no ticket to open its first space with.
+      { tickets: 511 },
+    ]
+  ) {
+    let refused = false;
+    try {
+      routedHostLimits(overrides);
+    } catch {
+      refused = true;
+    }
+    assert(refused, JSON.stringify(overrides));
+  }
+  // A limit that fails is named.
+  for (
+    const [overrides, field] of [
+      [{ proofsPerContext: 143 }, "proofsPerContext"],
+      [{ tickets: 511 }, "tickets"],
+      [{ sessionsPerRouter: 20000 }, "sessionsPerRouter"],
+      [{ unknownLimit: 1 }, "unknownLimit"],
+    ] as [Partial<RoutedHostLimits>, string][]
+  ) {
+    let message = "";
+    try {
+      routedHostLimits(overrides);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    assertEquals(message, `invalid routed limit: ${field}`);
+  }
+  let named = "";
+  try {
+    routedHostLimitsFor({ sockets: 2 * 513 - 1 }, 2);
+  } catch (error) {
+    named = (error as Error).message;
+  }
+  assertEquals(named, "invalid routed limit: sockets");
+  // The defaults fit three routers: their contexts' sockets, each link's own
+  // included, and tickets at once.
+  assertEquals(routedHostLimitsFor({}, 3), DEFAULT_ROUTED_HOST_LIMITS);
+  for (
+    const [overrides, routers] of [
+      [{}, 4],
+      [{}, 0],
+      [{ sockets: 2 * 513 - 1 }, 2],
+      [{ tickets: 2 * 512 - 1 }, 2],
+    ] as [Partial<RoutedHostLimits>, number][]
+  ) {
+    let refused = false;
+    try {
+      routedHostLimitsFor(overrides, routers);
+    } catch {
+      refused = true;
+    }
+    assert(refused, JSON.stringify({ overrides, routers }));
+  }
+});
+
+Deno.test("a request past a capacity limit is denied, and the context goes on", async () => {
+  const watches = (prefix: string, length = 1024) =>
+    Array.from(
+      { length },
+      (_, i) => ({ id: `${prefix}${i}`, kind: "graph", query: { roots: [] } }),
+    );
+  // The defaults admit more than the old 64 sessions and 1,024 watches.
+  let f = await fixture("default-limits");
+  try {
+    const sessions = [];
+    for (let i = 0; i < 70; i++) sessions.push(await f.open());
+    for (const [i, session] of sessions.slice(0, 2).entries()) {
+      const set = await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        watches: watches(`w${i}-`),
+      });
+      assert(set.ok !== undefined, JSON.stringify(set));
+    }
+  } finally {
+    await f.close();
+  }
+  f = await fixture("session-limit", { limits: { sessionsPerContext: 2 } });
+  try {
+    await f.open();
+    await f.open();
+    const third = await f.request({
+      type: "session.open",
+      space: f.space.did(),
+      principal: f.principal.did(),
+      session: {},
+    });
+    assertEquals(
+      (third.error as { message?: string }).message,
+      "Routed memory request denied",
+    );
+    // A capacity refusal passes, so the client holds the session.
+    assertEquals((third.error as { retriable?: boolean }).retriable, true);
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+  }
+  f = await fixture("watch-limit", { limits: { watchesPerContext: 1500 } });
+  try {
+    const first = await f.open();
+    const second = await f.open();
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: first.sessionId,
+        watches: watches("a"),
+      })).ok !== undefined,
+    );
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: second.sessionId,
+        watches: watches("b"),
+      })).error !== undefined,
+      "2,048 watches fit a context limited to 1,500",
+    );
+    // The refusal reserved nothing: 476 more still fit.
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: second.sessionId,
+        watches: watches("c", 476),
+      })).ok !== undefined,
+    );
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a request for a session revoked while it was in flight is denied, and the socket goes on", async () => {
+  const f = await fixture("revoked-in-flight");
+  try {
+    const session = await f.open();
+    // An ACL that omits the session's principal revokes the session, as a
+    // genesis ACL omitting the creating key does. The router learns of it
+    // from the notice, so a close it forwarded first reaches the toolshed
+    // after the toolshed has dropped the session.
+    const frames: Record<string, unknown>[] = [];
+    const until = async (requestId: string) => {
+      while (true) {
+        const message = decodeRoutedFrame(await f.socket.take(), true).body;
+        frames.push(message);
+        if (message.requestId === requestId) return message;
+      }
+    };
+    f.socket.receive(
+      encodeRoutedFrame(`fvj1:${
+        JSON.stringify({
+          type: "transact",
+          requestId: "handover",
+          space: f.space.did(),
+          sessionId: session.sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:${f.space.did()}`,
+              value: { value: { [f.outsider.did()]: "OWNER" } },
+            }],
+          },
+        })
+      }`),
+    );
+    const committed = await until("handover");
+    assert(committed.ok !== undefined, JSON.stringify(committed));
+    f.socket.receive(
+      encodeRoutedFrame(`fvj1:${
+        JSON.stringify({
+          type: "session.close",
+          requestId: "close",
+          space: f.space.did(),
+          sessionId: session.sessionId,
+        })
+      }`),
+    );
+    const closed = await until("close");
+    assert(
+      frames.some((frame) =>
+        frame.type === "session/revoked" &&
+        frame.sessionId === session.sessionId
+      ),
+      JSON.stringify(frames),
+    );
+    assertEquals(
+      (closed.error as { message?: string }).message,
+      "Routed memory request denied",
+    );
+    // The session is gone for good, so the denial is final.
+    assertEquals(
+      (closed.error as { retriable?: boolean }).retriable,
+      undefined,
+    );
+    assertEquals(f.socket.readyState, 1);
+    // The socket still opens sessions: the new owner's, once admitted.
+    assertEquals(
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(f.outsider),
+        ).bytes,
+      )).status,
+      0,
+    );
+    assert(
+      (await f.request({
+        type: "session.open",
+        space: f.space.did(),
+        principal: f.outsider.did(),
+        session: {},
+      })).ok !== undefined,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("more views than a session may hold are refused, and the socket goes on", async () => {
+  setServerExecutionConfig(true);
+  const f = await fixture("views");
+  try {
+    const session = await f.open();
+    const view = (i: number) => ({
+      id: `v${i}`,
+      revision: 0,
+      query: {
+        roots: [{ id: "of:visible", selector: { path: [], schema: false } }],
+      },
+      mode: "speculate",
+      componentContractVersion: "1",
+    });
+    const set = await f.request({
+      type: "session.watch.set",
+      space: f.space.did(),
+      sessionId: session.sessionId,
+      watches: [],
+      views: Array.from({ length: 65 }, (_, i) => view(i)),
+    });
+    // A fixed bound on one request: refused for good, the socket open.
+    assertEquals((set.error as { retriable?: boolean }).retriable, undefined);
+    assertEquals(f.socket.readyState, 1);
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        watches: [],
+        views: Array.from({ length: 64 }, (_, i) => view(i)),
+      })).ok !== undefined,
+    );
+  } finally {
+    await f.close();
+    resetServerExecutionConfig();
+  }
+});
+
+Deno.test("a refusal that cannot be answered closes only its socket", async () => {
+  const f = await fixture("refusal-output-bound");
+  try {
+    await f.open();
+    // The output queue is full, so the answer to a refused close cannot be
+    // queued: the socket closes, and nothing escapes as an unhandled error.
+    f.socket.bufferedAmount = 4 * 1024 * 1024;
+    f.socket.receive(
+      encodeRoutedFrame(`fvj1:${
+        JSON.stringify({
+          type: "session.close",
+          requestId: "gone",
+          space: f.space.did(),
+          sessionId: "no-such-session",
+        })
+      }`),
+    );
+    await f.socket.closed.promise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assertEquals(f.link.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("an open whose grant expired in flight is refused for now, a released principal's for good", async () => {
+  const clock = { now: Math.floor(Date.now() / 1000) };
+  const f = await fixture("grant-crossed", { clock });
+  try {
+    const open = () =>
+      f.request({
+        type: "session.open",
+        space: f.space.did(),
+        principal: f.principal.did(),
+        session: {},
+      });
+    clock.now += 601;
+    // Another principal's proof prunes the context's history; the expired
+    // principal was not released, so it stays, and its open waits for a new
+    // signature instead of being refused for good.
+    assertEquals(
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(f.outsider),
+        ).bytes,
+      )).status,
+      0,
+    );
+    const expired = await open();
+    assertEquals((expired.error as { retriable?: boolean }).retriable, true);
+    assertEquals(f.socket.readyState, 1);
+    // Signed again, the principal opens on the same socket.
+    assertEquals(
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(f.principal),
+        ).bytes,
+      )).status,
+      0,
+    );
+    assert((await open()).ok !== undefined);
+    assertEquals(
+      (await f.control(
+        4,
+        new RoutedWriter("mrl1").fixed(f.context).text(f.principal.did()).bytes,
+      )).status,
+      0,
+    );
+    const released = await open();
+    assert(released.error !== undefined);
+    assertEquals(
+      (released.error as { retriable?: boolean }).retriable,
+      undefined,
+    );
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a principal's session limit refuses one open and undoes its reservation", async () => {
+  const f = await fixture("principal-sessions", {
+    limits: { sessionsPerPrincipal: 2 },
+  });
+  try {
+    const first = await f.open();
+    await f.open();
+    const third = await f.request({
+      type: "session.open",
+      space: f.space.did(),
+      principal: f.principal.did(),
+      session: {},
+    });
+    assertEquals((third.error as { retriable?: boolean }).retriable, true);
+    // The refused open reserved nothing: once one session closes, another
+    // fits.
+    assert(
+      (await f.request({
+        type: "session.close",
+        space: f.space.did(),
+        sessionId: first.sessionId,
+      })).ok !== undefined,
+    );
+    await f.open();
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a released principal leaves the history once its statement expires", async () => {
+  const clock = { now: Math.floor(Date.now() / 1000) };
+  const f = await fixture("released-history", {
+    clock,
+    limits: {
+      principalsPerContext: 2,
+      principalHistoryPerContext: 2,
+      proofsPerContext: 4,
+    },
+  });
+  try {
+    const admit = async (signer: Identity, seconds = 600) =>
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(signer, seconds),
+        ).bytes,
+      )).status;
+    // The fixture's principal is released; the outsider fills the history.
+    assertEquals(
+      (await f.control(
+        4,
+        new RoutedWriter("mrl1").fixed(f.context).text(f.principal.did()).bytes,
+      )).status,
+      0,
+    );
+    // The outsider's statement outlives the released principal's.
+    clock.now += 300;
+    assertEquals(await admit(f.outsider), 0);
+    // Once the released principal's statement expires, it no longer counts.
+    clock.now += 301;
+    assertEquals(await admit(f.space), 0);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a closed context's tickets leave with it", async () => {
+  // Two tickets in all: the fixture's own holds one, so each passing context
+  // gets the other only if the one before it gave it back.
+  const f = await fixture("ticket-close", {
+    limits: { contextsPerLink: 2, sockets: 3, tickets: 2 },
+  });
+  try {
+    for (let i = 0; i < 4; i++) {
+      const ctx = new Uint8Array(16).fill(80 + i);
+      assertEquals(
+        (await f.control(
+          1,
+          new RoutedWriter("mat1").fixed(ctx).blob(f.flags).text(f.space.did())
+            .time(1).bytes,
+        )).status,
+        0,
+        `ticket ${i}`,
+      );
+      assertEquals((await f.control(3, ctx)).status, 0);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("one context holds at most its quota of unexpired proofs", async () => {
+  const f = await fixture("proof-quota", {
+    limits: {
+      principalsPerContext: 2,
+      principalHistoryPerContext: 2,
+      proofsPerContext: 4,
+      contextsPerLink: 2,
+      sockets: 3,
+    },
+  });
+  try {
+    const admit = (proof: Uint8Array) =>
+      new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(proof).bytes;
+    // The fixture's own proof is the first; a second principal and a renewal
+    // of each fill the context's four.
+    for (const signer of [f.outsider, f.principal, f.outsider]) {
+      assertEquals(
+        (await f.control(6, admit(await f.proof(signer)))).status,
+        0,
+      );
+    }
+    assertEquals(
+      (await f.control(6, admit(await f.proof(f.principal)))).status,
+      1,
+      "a fifth proof exceeded the context's four",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 Deno.test("a routed toolshed serves either cell representation, and refuses a client at the other", async () => {
   for (const modernCellRep of [false, true]) {
     for (const clientModernCellRep of [false, true]) {
@@ -517,7 +1041,10 @@ Deno.test("a routed connection is not sent session/admissible when a grant admit
 
 Deno.test("omitted views retain their quota across watch replacements and resume", async () => {
   setServerExecutionConfig(true);
-  const f = await fixture("retained-views");
+  // Sixteen sessions of 64 views fill a context limited to 1,024 watches.
+  const f = await fixture("retained-views", {
+    limits: { watchesPerContext: 1024 },
+  });
   const views = Array.from(
     { length: 64 },
     (_, i) => ({
@@ -566,20 +1093,19 @@ Deno.test("omitted views retain their quota across watch replacements and resume
         })).ok !== undefined,
       );
     }
+    // The retained views fill the context's watches, so one more set of
+    // them is denied while the socket and link go on.
     const overflow = await f.open();
-    f.socket.receive(
-      encodeRoutedFrame(`fvj1:${
-        JSON.stringify({
-          type: "session.watch.set",
-          requestId: "overflow",
-          space: f.space.did(),
-          sessionId: overflow.sessionId,
-          watches: [],
-          views,
-        })
-      }`),
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: overflow.sessionId,
+        watches: [],
+        views,
+      })).error !== undefined,
     );
-    await f.socket.closed.promise;
+    assertEquals(f.socket.readyState, 1);
     assertEquals(f.link.readyState, 1);
   } finally {
     await f.close();
@@ -1113,6 +1639,244 @@ Deno.test("private TLS listener accepts bounded binary links and rejects HTTP, O
     for (const socket of sockets) socket.terminate();
     client.close();
     await listener.close();
+    await f.close();
+  }
+});
+
+Deno.test("quota totals return to zero after sessions, watches and refusals come and go", async () => {
+  const watches = (prefix: string, length: number) =>
+    Array.from(
+      { length },
+      (_, i) => ({ id: `${prefix}${i}`, kind: "graph", query: { roots: [] } }),
+    );
+  const f = await fixture("quota-churn", {
+    limits: {
+      sessionsPerContext: 3,
+      sessionsPerRouter: 3,
+      sessionsPerToolshed: 3,
+      sessionsPerPrincipal: 3,
+      watchesPerContext: 10,
+      watchesPerRouter: 10,
+      watchesPerToolshed: 10,
+      watchesPerPrincipal: 10,
+    },
+  });
+  try {
+    const space = f.space.did();
+    const openRaw = () =>
+      f.request({
+        type: "session.open",
+        space,
+        principal: f.principal.did(),
+        session: {},
+      });
+    for (let round = 0; round < 5; round++) {
+      const a = await f.open(), b = await f.open(), c = await f.open();
+      // A fourth is refused at every scope's limit.
+      assert((await openRaw()).error !== undefined);
+      assert(
+        (await f.request({
+          type: "session.watch.set",
+          space,
+          sessionId: a.sessionId,
+          watches: watches(`a${round}-`, 6),
+        })).ok !== undefined,
+      );
+      // Refused: 6 + 5 > 10.
+      assert(
+        (await f.request({
+          type: "session.watch.set",
+          space,
+          sessionId: b.sessionId,
+          watches: watches(`b${round}-`, 5),
+        })).error !== undefined,
+      );
+      assert(
+        (await f.request({
+          type: "session.watch.add",
+          space,
+          sessionId: b.sessionId,
+          watches: watches(`c${round}-`, 4),
+        })).ok !== undefined,
+      );
+      // Resume an existing session (reservation on its own key).
+      const resumed = await f.request({
+        type: "session.open",
+        space,
+        principal: f.principal.did(),
+        session: { sessionId: c.sessionId, sessionToken: c.sessionToken },
+      });
+      assertEquals(resumed.type, "response");
+      for (const s of [a, b, c]) {
+        const closed = await f.request({
+          type: "session.close",
+          space,
+          sessionId: s.sessionId,
+        });
+        assert(closed.ok !== undefined, JSON.stringify(closed));
+      }
+    }
+    // Back to zero: exactly three sessions and ten watches fit again.
+    const a = await f.open(), b = await f.open(), c = await f.open();
+    assert(
+      (await openRaw()).error !== undefined,
+      "a leak would refuse earlier; a negative total admits a fourth",
+    );
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space,
+        sessionId: a.sessionId,
+        watches: watches("z", 10),
+      })).ok !== undefined,
+      "watches leaked",
+    );
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space,
+        sessionId: b.sessionId,
+        watches: watches("y", 1),
+      })).error !== undefined,
+      "watch total went negative",
+    );
+    void c;
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("quota totals return to zero across socket replacement and context close", async () => {
+  const f = await fixture("quota-churn-close", {
+    limits: {
+      sessionsPerContext: 3,
+      sessionsPerRouter: 3,
+      sessionsPerToolshed: 3,
+      sessionsPerPrincipal: 3,
+      watchesPerContext: 10,
+      watchesPerRouter: 10,
+      watchesPerToolshed: 10,
+      watchesPerPrincipal: 10,
+    },
+  });
+  const space = f.space.did();
+  const watches = (prefix: string, length: number) =>
+    Array.from(
+      { length },
+      (_, i) => ({ id: `${prefix}${i}`, kind: "graph", query: { roots: [] } }),
+    );
+  const flagObject = {
+    ...f.server.memoryProtocolFlags(),
+    modernCellRep: true,
+    connectionAuth: true,
+    routedAuthV1: true,
+  };
+  const epoch = new Uint8Array(16).fill(11);
+  async function socketFor(ctx: Uint8Array, ticket: Uint8Array) {
+    const socket = new FramedSocket();
+    f.host.accept(
+      socket as unknown as WebSocket,
+      "/memory/router-data",
+      "127.0.0.1",
+    );
+    const greeting = new RoutedReader(
+      (await socket.bytes()).slice(0, -64),
+      "mdh1",
+    );
+    greeting.text();
+    const nonce = greeting.fixed(32), issued = greeting.time();
+    greeting.end();
+    const binding = await new RoutedWriter("mdb1").text(f.router.did()).text(
+      "fixture",
+    )
+      .text(f.toolshed.did()).fixed(epoch).fixed(ctx).fixed(ticket).fixed(nonce)
+      .time(issued).fixed(sha256(f.flags)).sign(f.router);
+    socket.receive(`fvj1:${
+      JSON.stringify({
+        type: "hello",
+        protocol: "memory",
+        flags: flagObject,
+        routerTicket: routedHex(ticket),
+        routerBinding: routedBase64(binding),
+      })
+    }`);
+    assertEquals(
+      decodeRoutedFrame(await socket.take(), true).body.type,
+      "hello.ok",
+    );
+    let n = 0;
+    const request = async (body: Record<string, unknown>) => {
+      const requestId = `q${++n}`;
+      socket.receive(
+        encodeRoutedFrame(`fvj1:${JSON.stringify({ ...body, requestId })}`),
+      );
+      while (true) {
+        const m = decodeRoutedFrame(await socket.take(), true).body;
+        if (m.requestId === requestId) return m;
+      }
+    };
+    return { socket, request };
+  }
+  const ticketFor = async (ctx: Uint8Array) => {
+    const issued = await f.control(
+      1,
+      new RoutedWriter("mat1").fixed(ctx).blob(f.flags).text(space).time(1)
+        .bytes,
+    );
+    assertEquals(issued.status, 0);
+    return issued.bytes;
+  };
+  type Req = (b: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  const open = (request: Req) =>
+    request({
+      type: "session.open",
+      space,
+      principal: f.principal.did(),
+      session: {},
+    });
+  async function fill(request: Req) {
+    const ok = [];
+    for (let i = 0; i < 4; i++) ok.push((await open(request)).ok !== undefined);
+    return ok;
+  }
+  try {
+    // Socket 1 holds three sessions with watches, then is replaced.
+    const s1 = [await f.open(), await f.open(), await f.open()];
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space,
+        sessionId: s1[0].sessionId,
+        watches: watches("a", 9),
+      })).ok !== undefined,
+    );
+    const t2 = await ticketFor(f.context);
+    const second = await socketFor(f.context, t2);
+    assertEquals(await fill(second.request), [true, true, true, false]);
+    const sid = await second.request({
+      type: "session.open",
+      space,
+      principal: f.principal.did(),
+      session: {},
+    });
+    void sid;
+    // Close the context; a new one starts from zero at every shared scope.
+    assertEquals((await f.control(3, f.context)).status, 0);
+    const ctx2 = new Uint8Array(16).fill(90);
+    const t3 = await ticketFor(ctx2);
+    assertEquals(
+      (await f.control(
+        2,
+        new RoutedWriter("map1").fixed(t3).blob(
+          await f.proof(f.principal, 600, ctx2),
+        ).bytes,
+      )).status,
+      0,
+    );
+    const third = await socketFor(ctx2, t3);
+    assertEquals(await fill(third.request), [true, true, true, false]);
+  } finally {
     await f.close();
   }
 });

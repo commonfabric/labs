@@ -9,7 +9,11 @@ import {
   unlistedToolshed,
 } from "@commonfabric/memory/v2/routed-directory";
 import { RoutedEpochStore } from "@commonfabric/memory/v2/routed-epochs";
-import { RoutedMemoryHost } from "@commonfabric/memory/v2/routed-host";
+import {
+  type RoutedHostLimits,
+  routedHostLimitsFor,
+  RoutedMemoryHost,
+} from "@commonfabric/memory/v2/routed-host";
 import { listenRoutedMemory } from "@commonfabric/memory/v2/routed-listener";
 import {
   parseRoutedJson,
@@ -29,6 +33,8 @@ interface RouterConfig {
   directory: string;
   epochLedger: string;
   routers: Map<string, Set<string>>;
+  /** Capacity a toolshed admits from routers. */
+  limits: RoutedHostLimits;
 }
 
 /** Canonical IPv4 private/loopback addresses, never a wildcard or DNS lookup. */
@@ -46,8 +52,9 @@ export function isPrivateMemoryAddress(value: unknown): value is string {
 /** Denies malformed configuration before allocating a private listener. */
 function load(path: string): RouterConfig {
   const value = routedObject(parseRoutedJson(Deno.readTextFileSync(path)));
+  const { limits: configured, ...fields } = value;
   requireRouted(
-    Object.keys(value).sort().join(",") ===
+    Object.keys(fields).sort().join(",") ===
       "certificate,deployment,directory,epochLedger,hostname,key,port,routers,version",
   );
   requireRouted(
@@ -83,7 +90,15 @@ function load(path: string): RouterConfig {
     routers.set(did, new Set(peers as string[]));
   }
   requireRouted(routers.size > 0 && routers.size <= 16);
-  return { ...value, routers } as unknown as RouterConfig;
+  // Optional; absent fields take the proof-of-concept defaults, which must
+  // fit every allowed router at once.
+  const limits = routedHostLimitsFor(
+    configured === undefined
+      ? {}
+      : routedObject(configured) as Partial<RoutedHostLimits>,
+    routers.size,
+  );
+  return { ...fields, routers, limits } as unknown as RouterConfig;
 }
 
 /** Directory snapshot shared with the placement broker; no request supplies an address. */
@@ -307,6 +322,7 @@ export class MemoryRouterPolicy {
       epochs,
       routers: c.routers,
       ownership: (space) => this.ownership(space),
+      limits: c.limits,
     });
     try {
       const listener = await listenRoutedMemory({
