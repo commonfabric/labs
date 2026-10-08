@@ -156,7 +156,10 @@ describe("StorageManager.serverFlags()", () => {
     expect(host.stats().rootEnsure.runs).toBe(0);
 
     // The control: a session opened on the space is served, and its root is
-    // ensured.
+    // ensured. The root itself is the witness, not `rootEnsure.created`:
+    // the test clock can fire the ensure's deadline while its program
+    // resolution awaits work no timer stands for, counting the attempt as
+    // failed while the detached work goes on to create the root.
     const reader = runtimeAs(readerSigner);
     let root: Awaited<ReturnType<typeof resolveSpaceRootPattern>>;
     await awaitReplica(reader.storageManager, async () => {
