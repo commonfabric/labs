@@ -505,16 +505,21 @@ export class PiecesController<T = unknown> {
    *
    * With `options.replacing`, the link is made only while the space's root is
    * still the one a caller inspected: the cell given, or none at all when it
-   * is `null`, compared by the link the space cell stores. The check is read
-   * in the linking transaction, so a root another writer links meanwhile
-   * fails the call rather than being replaced.
+   * is `null`, compared by the link the space cell stores. With
+   * `options.stillReplaceable` as well, the root linked now must also pass
+   * that test, which reads it through the linking transaction. Both checks
+   * are read in that transaction, so a root another writer links or changes
+   * meanwhile fails the call rather than being replaced.
    *
    * @param defaultPatternCell - The cell representing the default pattern
    * @throws Error when `options.replacing` no longer names the space's root.
    */
   async linkDefaultPattern(
     defaultPatternCell: Cell<any>,
-    options: { replacing?: Cell<unknown> | null } = {},
+    options: {
+      replacing?: Cell<unknown> | null;
+      stillReplaceable?: (root: Cell<unknown>) => boolean;
+    } = {},
   ): Promise<void> {
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
@@ -523,7 +528,8 @@ export class PiecesController<T = unknown> {
         const current = slot.get() as Cell<unknown> | undefined;
         const unchanged = options.replacing === null
           ? slot.getRaw() === undefined
-          : current !== undefined && current.equalLinks(options.replacing);
+          : current !== undefined && current.equalLinks(options.replacing) &&
+            (options.stillReplaceable?.(current.withTx(tx)) ?? true);
         if (!unchanged) {
           throw new Error("The space's root changed since it was inspected");
         }
@@ -608,10 +614,12 @@ export class PiecesController<T = unknown> {
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
       // root HERE. Opening it already reconciled it against its origin, so a
       // start that still failed is not out of date; the one remaining rescue
-      // is for a root that records no origin at all, that no `inSpace()` call
-      // placed, and whose stored pattern this runtime cannot load. Roll that
-      // one forward to the space's official system root and retry the start
-      // ONCE. Every other failure rethrows untouched.
+      // is for a root that records no origin at all, that its creator's
+      // pattern did not place (no `inSpace()` call placed it, and its own
+      // label says it represents no principal), and whose stored pattern this
+      // runtime cannot load. Roll that one forward to the space's official
+      // system root and retry the start ONCE. Every other failure rethrows
+      // untouched.
       if (!start) throw error;
       let healed: Cell<NameSchema>;
       try {
@@ -2594,7 +2602,8 @@ export class PiecesController<T = unknown> {
         // for its kind. One that follows an origin keeps what its owner chose:
         // opening it already tried that origin, and replacing its source with
         // the system default would discard the choice rather than repair it.
-        // One an `inSpace()` call placed keeps its creator's pattern the same
+        // One its creator's pattern placed, an `inSpace()` root or one whose
+        // label says it represents a principal, keeps that pattern the same
         // way, and fails closed.
         if (!this.#rootNeedsRollForward(rootToStart)) throw startError;
         return new PieceController<NameSchema>(

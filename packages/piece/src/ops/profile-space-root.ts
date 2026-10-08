@@ -6,10 +6,10 @@
  * identity of its own with no special privilege: a profile space grants every
  * principal `WRITE`, so the link is an ordinary commit.
  *
- * What it replaces is a root that only an open of the space created: a
- * `DefaultPieceList` at the address the space-root ensure derives, following
- * the system default source or none, with nothing registered in it. Any other
- * root is reported as `occupied` and left alone. The genesis reservation a
+ * What it replaces is a root that only a space-root ensure created: at the
+ * address the ensure derives, running the default app by the evidence of its
+ * stored source, following the system default source or none, with nothing
+ * registered in it. Any other root is reported as `occupied` and left alone. The genesis reservation a
  * space was created without cannot be added afterward, so a repaired profile
  * is not at the reserved root address.
  */
@@ -23,6 +23,7 @@ import {
   type Cell,
   DEFAULT_APP_PATTERN_SOURCE,
   entityIdFrom,
+  getPatternIdentityRef,
   getPatternSource,
   type NormalizedFullLink,
   spaceRootPatternConfig,
@@ -35,8 +36,8 @@ import type { PiecesController } from "./pieces-controller.ts";
  *
  * - `root`: the space cell already links the profile as the space's root.
  * - `unrooted`: the space has no root, and linking the profile makes it one.
- * - `junk-root`: the root is one an open of the space created and nothing
- *   was added to, which linking the profile replaces.
+ * - `junk-root`: the root is one a space-root ensure created and nothing was
+ *   added to, which linking the profile replaces.
  * - `occupied`: some other root, which is left alone.
  * - `not-a-profile`: the piece does not read as a profile its space's owner
  *   holds, so nothing is changed.
@@ -181,22 +182,55 @@ async function readPlan(
     return decide("root", { owner });
   }
 
-  // The root an open of the space creates, at the address the ensure derives
-  // for a space that is not a Home.
+  // The root a space-root ensure creates for a space that is not a Home: at
+  // the address the ensure derives, running the default app, following its
+  // system source or none, with nothing registered in it. Each fact is
+  // established positively; a root the evidence does not reach is occupied.
   const ensured = runtime.getCell(space, spaceRootPatternConfig(false).cause);
   const origin = getPatternSource(root);
-  const registry = await root.key("pieceRegistry").asSchema({
-    type: "array",
-  }).pull() as unknown[] | undefined;
+  const identity = getPatternIdentityRef(root);
+  const program = identity === undefined
+    ? undefined
+    : await runtime.patternManager.getPatternSourceProgramByIdentity(
+      identity.identity,
+      space,
+    );
+  const registered = await registeredCount(root);
   const evidence = {
     origin: origin ?? null,
-    registered: registry?.length ?? 0,
+    identity: identity ?? null,
+    main: program?.main ?? null,
+    registered: registered ?? null,
   };
   return root.equalLinks(ensured) &&
       (origin === undefined || origin === DEFAULT_APP_PATTERN_SOURCE) &&
-      (registry === undefined || registry.length === 0)
+      program?.main.endsWith(DEFAULT_APP_MAIN) === true &&
+      registered === 0
     ? decide("junk-root", { owner, evidence })
     : decide("occupied", { owner, evidence });
+}
+
+/** How the default app's entry module's name ends, wherever it was compiled. */
+const DEFAULT_APP_MAIN = "/system/default-app.tsx";
+
+/**
+ * How many pieces `root`'s `pieceRegistry` holds, `0` when it has an empty
+ * one, and `undefined` when its result has no list there, which a default app
+ * always has.
+ */
+async function registeredCount(
+  root: Cell<unknown>,
+): Promise<number | undefined> {
+  const registry = await root.key("pieceRegistry").asSchema({
+    type: "array",
+  }).pull();
+  return Array.isArray(registry) ? registry.length : undefined;
+}
+
+/** Like {@link registeredCount}, except read through `root`'s transaction. */
+function registeredCountNow(root: Cell<unknown>): number | undefined {
+  const registry = root.key("pieceRegistry").asSchema({ type: "array" }).get();
+  return Array.isArray(registry) ? registry.length : undefined;
 }
 
 /**
@@ -231,8 +265,23 @@ export async function repairProfileSpaceRoot(
     );
   }
   if (plan.report.action === "none") return plan.report;
+  // A root replaced as junk must still be junk when the link is written:
+  // running the pattern it was inspected running, with nothing registered.
+  const inspected = plan.root === undefined
+    ? undefined
+    : getPatternIdentityRef(plan.root);
   await controller.linkDefaultPattern(plan.profile, {
     replacing: plan.root ?? null,
+    ...(plan.report.action === "replace"
+      ? {
+        stillReplaceable: (root: Cell<unknown>) => {
+          const now = getPatternIdentityRef(root);
+          return now?.identity === inspected?.identity &&
+            now?.symbol === inspected?.symbol &&
+            registeredCountNow(root) === 0;
+        },
+      }
+      : {}),
   });
   await controller.runtime.storageManager.synced();
   return await inspectProfileSpaceRoot(controller, id);

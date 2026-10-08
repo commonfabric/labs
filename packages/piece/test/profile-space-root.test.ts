@@ -28,6 +28,9 @@ import {
 const owner = await Identity.fromPassphrase("profile space root owner");
 const admin = await Identity.fromPassphrase("profile space root admin");
 
+/** The default app's entry module, as the toolshed serves it. */
+const DEFAULT_APP_MAIN = "/api/patterns/system/default-app.tsx";
+
 /** A root the way an open of a space without one creates it, near enough. */
 const PLANTED_ROOT = [
   "import { pattern, Writable } from 'commonfabric';",
@@ -90,19 +93,25 @@ describe("profile-space-root", () => {
 
   /**
    * Plants a root in the controller's space at `cause`, following `origin`
-   * or the system default source, with `registered` in its registry, as the
-   * admin.
+   * or the system default source, compiled as `main` or as the default app
+   * the toolshed serves, with `registered` in its registry, as the admin.
    */
   const plantRoot = async (
     controller: PiecesController,
-    options: { cause?: string; registered?: string[]; origin?: string } = {},
+    options: {
+      cause?: string;
+      registered?: string[];
+      origin?: string;
+      main?: string;
+    } = {},
   ): Promise<Cell<unknown>> => {
     const runtime = controller.runtime;
     const space = controller.getSpace();
+    const main = options.main ?? DEFAULT_APP_MAIN;
     const pattern = await runtime.patternManager.compilePattern({
-      main: "/planted.tsx",
+      main,
       files: [{
-        name: "/planted.tsx",
+        name: main,
         contents: PLANTED_ROOT.replace(
           "REGISTERED",
           JSON.stringify(options.registered ?? []),
@@ -177,15 +186,43 @@ describe("profile-space-root", () => {
     expect(await rootAddressOf(before.profile.space)).toBe(before.profile.id);
   });
 
+  it("refuses to replace a junk root something is registered in while the repair links", async () => {
+    const { controller, id } = await legacyProfile();
+    const planted = await plantRoot(controller);
+    const before = await inspectProfileSpaceRoot(controller, id);
+    expect(before.status).toBe("junk-root");
+
+    // Another writer registers a piece in the planted root after the repair's
+    // own inspection and before its link commits.
+    const link = controller.linkDefaultPattern.bind(controller);
+    controller.linkDefaultPattern = async (...args) => {
+      const runtime = controller.runtime;
+      const { error } = await runtime.editWithRetry((tx) => {
+        planted.withTx(tx).key("pieceRegistry").set(["registered meanwhile"]);
+      });
+      expect(error).toBeUndefined();
+      return await link(...args);
+    };
+
+    await expect(repairProfileSpaceRoot(controller, id, before.inspection))
+      .rejects.toThrow("changed since it was inspected");
+    expect(await rootAddressOf(controller.getSpace())).toBe(
+      planted.getAsNormalizedFullLink().id,
+    );
+  });
+
   describe("an occupied root", () => {
     const occupiedCases: [
       string,
-      { cause?: string; registered?: string[]; origin?: string },
+      { cause?: string; registered?: string[]; origin?: string; main?: string },
     ][] = [
       ["holds something registered", { registered: ["a piece"] }],
       ["is at another address", { cause: "a root chosen on purpose" }],
       ["follows another source", {
         origin: "https://example.test/root.tsx",
+      }],
+      ["runs a pattern other than the default app", {
+        main: "/hand-authored-root.tsx",
       }],
     ];
     for (const [condition, options] of occupiedCases) {
