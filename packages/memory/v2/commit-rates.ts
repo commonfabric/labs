@@ -372,11 +372,7 @@ export class CommitRateTracker {
   record(commit: RecordedCommit): { storm: boolean } {
     const now = this.#now();
     const space = this.#space(commit.space);
-    // A run over the threshold ends the moment expiry takes the minute
-    // under it, whether or not anything read the tracker then. Judging the
-    // minute as it stands before this commit ends such a run; judging it
-    // again after decides whether this commit starts or continues one.
-    this.#judgeStorm(space, now);
+    this.#endBrokenRun(space, now);
     const sequence = ++this.#sequence;
     space.lastRecorded = sequence;
     space.series.add(now, commit.accepted, commit.operations);
@@ -466,6 +462,18 @@ export class CommitRateTracker {
       space.writers.set(key, writer);
     }
     return writer;
+  }
+
+  /** Helper for `record()`, which ends the space's run over the threshold
+   * if expiry took the minute under it at any time before `now`, whether or
+   * not anything read the tracker then. The minute changes only at whole
+   * seconds, as commits leave it, so its count a millisecond before `now`
+   * is its count over the whole interval since the commit before this one;
+   * a commit landing on the very second its predecessor leaves keeps the
+   * run, since the count never stood under the threshold for any time. */
+  #endBrokenRun(space: SpaceWindow, now: number): void {
+    const before = totalCommits(space.series.counts(now - 1, MINUTE_MS));
+    if (before < this.#storm.commitsPerMinute) space.overSince = undefined;
   }
 
   /** Helper for `record()` and `report()`, which moves the space's run over

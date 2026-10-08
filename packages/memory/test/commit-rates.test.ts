@@ -410,6 +410,25 @@ describe("commit-rates", () => {
           expect(outcomes(true)).toEqual(expected);
         });
 
+        it("keeps a run going when a commit lands on the second its predecessor leaves the minute", () => {
+          // One commit every twenty seconds holds the minute at exactly the
+          // threshold of three once three are in: at sixty the first leaves
+          // on the instant the fourth lands, so the count never stood under
+          // the threshold and the run that began at forty carries on.
+          const time = clock();
+          const tracker = new CommitRateTracker({ now: time.now, storm });
+          commit(tracker);
+          time.advance(20_000);
+          commit(tracker);
+          time.advance(20_000);
+          expect(commit(tracker)).toEqual({ storm: false });
+          time.advance(20_000);
+          expect(commit(tracker)).toEqual({ storm: true });
+          expect(spaceOf(tracker.report(), space).storm).toEqual({
+            since: time.now() - 20_000,
+          });
+        });
+
         it("counts a storm in `storms` even when its space is not among the listed ones", () => {
           const time = clock();
           const tracker = new CommitRateTracker({

@@ -3788,22 +3788,32 @@ export const runAtomicCommit = <T>(
   const staged = new Map<string, DocumentCacheEntry>();
   engine.stagedDocumentCache = staged;
   // Every commit the operation applied, reported to the observer once the
-  // transaction has settled them all one way: durable, or rolled back.
-  const decided: ApplyCommitOptions[] = [];
+  // transaction has settled: one that threw is rejected either way, and one
+  // that applied is accepted only if the transaction then commits, since an
+  // operation may catch a failed apply and carry on.
+  const decided: { options: ApplyCommitOptions; applied: boolean }[] = [];
   try {
     let applied: T;
     try {
       applied = engine.database.transaction(() =>
         operation((options) => {
-          decided.push(options);
-          return applyCommitTransaction(engine, options);
+          try {
+            const result = applyCommitTransaction(engine, options);
+            decided.push({ options, applied: true });
+            return result;
+          } catch (error) {
+            decided.push({ options, applied: false });
+            throw error;
+          }
         })
       ).immediate();
     } catch (error) {
-      for (const options of decided) observeCommit(engine, options, false);
+      for (const { options } of decided) observeCommit(engine, options, false);
       throw error;
     }
-    for (const options of decided) observeCommit(engine, options, true);
+    for (const { options, applied } of decided) {
+      observeCommit(engine, options, applied);
+    }
     // Durable now, so what was read from those rows can be remembered. A
     // revision the cache already holds was served from it rather than
     // staged, so a present key here is not expected; skipping it keeps the

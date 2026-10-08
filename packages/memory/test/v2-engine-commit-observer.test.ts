@@ -121,6 +121,33 @@ describe("engine", () => {
       expect(decisions.every((decision) => decision.accepted)).toBe(true);
     });
 
+    it("reports a failed apply the operation caught as rejected, beside the ones that applied", () => {
+      applyCommit(engine, {
+        sessionId: "session:a",
+        commit: commit(1, ["of:one"]),
+      });
+      runAtomicCommit(engine, (apply) => {
+        try {
+          apply({
+            sessionId: "session:b",
+            commit: commit(1, ["of:two"], {
+              preconditions: [{ kind: "entity-absent", id: "of:one" }],
+            }),
+          });
+        } catch {
+          // The operation carries on past the refused apply.
+        }
+        apply({ sessionId: "session:c", commit: commit(1, ["of:three"]) });
+      });
+      expect(
+        decisions.map((decision) => [decision.sessionId, decision.accepted]),
+      ).toEqual([
+        ["session:a", true],
+        ["session:b", false],
+        ["session:c", true],
+      ]);
+    });
+
     it("reports every commit of an atomic operation that rolled back as rejected", () => {
       expect(() =>
         runAtomicCommit(engine, (apply) => {
