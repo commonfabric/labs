@@ -159,6 +159,19 @@ export interface GenerationContext {
     | { kind: "intersection" | "union"; parts: () => MutableJSONSchema[] }
   >;
 
+  /**
+   * The name of each intersection the node path met again inside itself while
+   * merging it, by the key `mergeParts()` gives the merge: the merge is
+   * written as a definition of that name, and each meeting as a reference.
+   */
+  mergedIntersectionNames: Map<string, string>;
+
+  /**
+   * A fresh name for an anonymous definition, `AnonymousType_` and a count
+   * the generator keeps for every name it gives one.
+   */
+  nameAnonymousDefinition: () => string;
+
   // Stack state (push/pop during recursion)
 
   /** Current recursion path for cycle detection */

@@ -185,7 +185,11 @@ between them, and defaults that differ leave none; its labels go on the
 members of the result it declares, or on the whole result where it declares
 all of them or none, and a union's labels go on the members any of its arms
 declares. A keyword written beside a reference is read in place of the
-definition's, through a chain of references. Where a schema alone no longer
+definition's, through a chain of references, except its labels, which join
+the definition's. A merge met again inside itself, as the members of two
+recursive definitions meet, is written where it starts and as a definition
+named as the type path names a recursive type (`AnonymousType_N`), and each
+meeting inside it is a reference to that definition. Where a schema alone no longer
 says what its type was, the generation context records where it came from
 (`schemaOrigins`): `void` lowers to the opaque marker `OpaqueCell<any>` also
 lowers to, and reduces as `undefined` does beside another primitive

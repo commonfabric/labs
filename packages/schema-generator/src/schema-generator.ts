@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type {
@@ -872,10 +873,12 @@ function wholeValueKeywordsOf(
 /**
  * `schema` read through local references with the keywords written beside
  * each reference in place of the definition's, as resolving a reference
- * reads them: a label beside one states the definition's labels as well as
- * its own (`ifc-labels.ts`). A definition that is itself a reference is read
- * the same way, and a reference to no definition reads as itself. A schema
- * that is no reference is returned as it came.
+ * reads them, except its labels, which join the definition's: while a schema
+ * is generated, the label beside a reference is that declaration's alone,
+ * and the definition's are those of the value it wraps (`declaredIfcLabels()`).
+ * A definition that is itself a reference is read the same way, and a
+ * reference to no definition reads as itself. A schema that is no reference
+ * is returned as it came.
  */
 function withBesideKeywords(
   schema: MutableJSONSchema,
@@ -890,11 +893,22 @@ function withBesideKeywords(
   }
   const resolved = resolveLocalRef(schema, context);
   followed.add(schema.$ref);
-  const { $ref: _, ...beside } = schema;
+  const { $ref: _, ifc, ...beside } = schema;
+  if (
+    !isObjectOrArray(resolved) ||
+    (Object.keys(beside).length === 0 && !isObjectOrArray(ifc))
+  ) {
+    return withBesideKeywords(resolved, context, followed);
+  }
+  const read = { ...resolved, ...beside };
   return withBesideKeywords(
-    Object.keys(beside).length > 0 && isObjectOrArray(resolved)
-      ? withOriginOf({ ...resolved, ...beside }, resolved, context)
-      : resolved,
+    withOriginOf(
+      isObjectOrArray(ifc)
+        ? withIfcLabels(read, ifc as Record<string, unknown>)
+        : read,
+      resolved,
+      context,
+    ),
     context,
     followed,
   );
@@ -1283,6 +1297,39 @@ function mergeParts(
   parts: MutableJSONSchemaObj[],
   context: GenerationContext,
   carried: readonly PartLabels[] = [],
+): MutableJSONSchema {
+  // A merge met again inside itself, as the members of recursive definitions
+  // meet, is the same merge: it is written as a definition, and each meeting
+  // as a reference to it, as the type path writes a recursive type.
+  const names = context.mergedIntersectionNames;
+  const key = `merge|${
+    hashStringOf([
+      parts.map((part) => [part, context.schemaOrigins?.get(part)?.kind ?? ""]),
+      carried.map(({ labels, members }) => [labels, members]),
+    ] as FabricValue)
+  }`;
+  if (context.definitionStack.has(key)) {
+    const named = names.get(key) ?? context.nameAnonymousDefinition();
+    names.set(key, named);
+    context.emittedRefs.add(named);
+    return { $ref: `#/$defs/${named}` };
+  }
+  context.definitionStack.add(key);
+  try {
+    const merged = mergeLabeledParts(parts, context, carried);
+    const named = names.get(key);
+    if (named !== undefined) context.definitions[named] = merged;
+    return merged;
+  } finally {
+    context.definitionStack.delete(key);
+  }
+}
+
+/** Helper for `mergeParts()`, which settles one merge. */
+function mergeLabeledParts(
+  parts: MutableJSONSchemaObj[],
+  context: GenerationContext,
+  carried: readonly PartLabels[],
 ): MutableJSONSchema {
   const keywords = wholeValueKeywordsOf(parts, context);
   const placed = [...carried, ...partLabelsOf(parts)];
@@ -1795,6 +1842,9 @@ export class SchemaGenerator {
       definitions: {},
       emittedRefs: new Set(),
       schemaOrigins: new WeakMap(),
+      mergedIntersectionNames: new Map(),
+      nameAnonymousDefinition: () =>
+        `AnonymousType_${++this.#anonymousNameCounter}`,
       uninterpretedTypeNodes: unread,
 
       // Stack state
@@ -3368,6 +3418,7 @@ export class SchemaGenerator {
       labelsOnly: true,
       definitions: {},
       emittedRefs: new Set(),
+      mergedIntersectionNames: new Map(),
       definitionStack: new Set(),
       inProgressNames: new Set(),
     });
