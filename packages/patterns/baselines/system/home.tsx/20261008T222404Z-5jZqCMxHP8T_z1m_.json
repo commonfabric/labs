@@ -1573,8 +1573,8 @@
       },
       "SharedSpaceMembership": {
         "enum": [
-          "saved",
-          "archived"
+          "archived",
+          "saved"
         ]
       },
       "SharedSpaceMembershipChange": {

@@ -246,6 +246,11 @@
           "maxOpenWindows"
         ],
         "type": "object"
+      },
+      "SharedSpaceCatalogStorage": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
       }
     },
     "description": "What a manager stores. Every field has a default.",
@@ -295,6 +300,17 @@
           "$ref": "#/$defs/ChatIndexEntry"
         },
         "type": "array"
+      },
+      "sharedSpaceCatalog": {
+        "$ref": "#/$defs/SharedSpaceCatalogStorage",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "entries": {},
+          "offers": {}
+        },
+        "description": "The user's shared-space catalog, where each room this manager creates or\naccepts is registered: in a user's home space, Home's. A manager given\nnone keeps one of its own."
       }
     },
     "type": "object"
