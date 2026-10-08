@@ -257,8 +257,10 @@ const descriptorForPartialCauseAlias = (
  * what every reader of the broad location follows to its own instance, and
  * replacing one with a plain value, or with a hop past an intermediate
  * instance, would make the next reader whose reads narrow put it back, with
- * no run ever converging. The reads here are an internal write-placement
- * decision: kept out of scheduling and CFC taint.
+ * no run ever converging. The probe's reads are an internal write-placement
+ * decision, kept out of scheduling and CFC taint; each link it accepts as a
+ * hop is then read once more as the steering read, so the slot's label
+ * reaches the write.
  */
 function storedOutputChain(
   tx: IExtendedStorageTransaction,
@@ -278,6 +280,10 @@ function storedOutputChain(
     ) {
       return chain;
     }
+    // A link accepted as a hop steers the write, so the slot is read again
+    // without the exclusion and its own label gates what the write carries
+    // behind it (cfc-write-destination-reads.md, the steering read).
+    tx.readValueOrThrow(at, { meta: ignoreReadForScheduling });
     chain.push(link.scope);
     at = { ...ref, scope: link.scope };
   }
@@ -402,10 +408,12 @@ function sendValueToBindingInner<T>(
         scopeRank(stored) >= scopeRank(outputScope))
     ) {
       // The chain of links already in place reaches an instance at least
-      // as narrow as this run's reads did. The result lands there, and every
-      // link of the chain stays as it is: the broad slot's hop, and any
-      // intermediate hop another principal follows, are what every reader
-      // uses to reach an instance of its own.
+      // as narrow as this run's reads did. The result lands there, and the
+      // links of the chain stay where they point: the broad slot's hop, and
+      // any intermediate hop another principal follows, are what every
+      // reader uses to reach an instance of its own. The one addition is
+      // below: a chain one hop deep gains the via-user hop under server
+      // execution.
       const storedRef = { ...ref, scope: stored };
       const valueLink = isCellLink(value) ? parseLink(value, ref) : undefined;
       if (
