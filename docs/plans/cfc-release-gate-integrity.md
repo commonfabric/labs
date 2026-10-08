@@ -83,8 +83,9 @@ the join; `prepare.ts` resolves what an access consumed into locations.
 - **Locations.** A read's locations are its own path and, for a recursive
   read, the path of every label-map entry beneath it, each resolved over the
   entries that resolve there, as the input witnesses already resolve them.
-  Existence stamps are not evidence, and a `*` template's integrity witnesses
-  nothing.
+  Existence stamps are not evidence. A `*` template's integrity counts at a
+  gate, where the template's clause and its integrity are one stamp's claims,
+  though it witnesses nothing for the input witnesses.
 - **The join.** Over the access's confidential locations, a hereditary atom
   survives when every location carries it. Any other atom survives only where
   one label-map entry supplies it at every location. Locations resolving one
@@ -103,8 +104,8 @@ the join; `prepare.ts` resolves what an access consumed into locations.
   view. A view's entries carry no origin, so each location resolves to its
   most specific entries whatever their component.
 - **Other observations.** A label-metadata observation is a confidential
-  location with no integrity. An external content observation is one location,
-  vouched for by its flow join's integrity.
+  location with no integrity. An external content observation carries the
+  locations its reads consumed.
 - **Under `observe`**, a release the union admits and the join would refuse
   is recorded as a `release-gate-integrity(observe)` diagnostic. The
   diagnostic also says whether evaluating each confidential location on its
@@ -165,11 +166,22 @@ gates. Each is a separate change; none is fixed here.
       [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md).
       Implement the observe arm at the three gates, and the enforce arm
       beside it. The dial rests at `observe`.
-- [ ] Run the pattern suite at `observe`, and list the divergences.
+- [x] Run the pattern suite at `observe`, and list the divergences. The
+      record is
+      [the measurement](../history/plans/cfc-release-gate-integrity-measurement-2026-10-08.md):
+      no divergence in the pattern suite or the runner's CFC tests at
+      `observe`, and no failure at `enforce`, but honest shapes neither suite
+      exercises (a pushed list, a `lift`'s object at a sink) are refused at
+      `enforce` and admitted per location.
 - [ ] Decide with labs#8531's owner whether its carry lands first, or this
-      lands first at `enforce` and accepts the refusals.
+      lands first at `enforce` and accepts the refusals. The carry rescues a
+      value derived from an endorsed output, never a direct read of it, so
+      keeping those shapes at a gate means evaluating value-intrinsic rules
+      per location there as well.
 - [ ] Enforce gate by gate. Update
       [input witnesses](../specs/cfc-transformed-by-input-witnesses.md) and the
       [conformance statement](../specs/cfc-conformance-statement.md).
-- [ ] File the within-location component join as a specs ruling question.
+- [ ] File the within-location component join as a specs ruling question
+      (drafted, not filed), with the question of what counts as one
+      observation beside it.
 - [ ] Archive this plan.
