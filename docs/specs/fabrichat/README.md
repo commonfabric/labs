@@ -292,11 +292,13 @@ from this design, as below.
   changes through the space's own tools, and through the room's add control,
   from which any OWNER admits someone as OWNER with `grantSpaceAccess()`.
   That control needs a DOM gesture, so a host drawing a room natively can't
-  offer it. A room in a space of its own keeps the space's participants: its rendering offers a viewer who isn't
-  listed a control that joins them, through `addParticipant`, the roster's one
-  writer (`packages/patterns/loom/participants.tsx`). A room in an existing
-  social space lists that space's participants, then those who joined the room.
-  Until someone joins, a room's participants are only its authors.
+  offer it. A room in a space of its own keeps the space's participants,
+  through `addParticipant`, the roster's one writer
+  (`packages/patterns/loom/participants.tsx`): the manager that creates or
+  accepts the room adds its user, from an event that follows. A member whose
+  manager has done neither, as when an offer registered the room, is shown
+  once they write, as an author. A room in an existing social space lists that
+  space's participants, then those who joined the room.
 - **Principals.** A handler learns the principal it acts for
   (`currentPrincipal()`), so a room keys its request memory by the sender's
   principal, and the manager refuses a direct room with the user themself and
@@ -373,8 +375,10 @@ from this design, as below.
   in the creating transaction once the space's name has resolved, and so does
   accepting one; forgetting a room archives its entry. A room offered to the
   user is registered there by the host that vets the offer. A direct room's
-  counterpart is the one `direct` holds the room under, or else the principal
-  who offered it, and `openDirect` finds only a room `direct` holds.
+  counterpart is the one `direct` holds the room under, or else the room's
+  labeled creator, and `openDirect` finds only a room `direct` holds. A room
+  tells whether the viewer's chats list it from the catalog itself, which the
+  manager offers as `sharedSpaceCatalog`.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

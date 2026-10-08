@@ -23,19 +23,25 @@ each, and a row in the built-in targets table of
 ## State
 
 The manager keeps `direct`, `requests`, and `outgoingNotices` in the home
-space. `rooms` it keeps nowhere: it is a view over Home's shared-space catalog
+space. `rooms` it keeps nowhere: it is drawn from Home's shared-space catalog
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), which
-Home hands the manager, and which lists the social spaces the user keeps. Each
-entry of kind `fabrichat-room` the catalog keeps as saved is a room, found as
-its space's root with `wish({ query: "#default", scope: [space] })`, whose
-`kind` its `about` gives and whose `since` is the entry's. A direct room's
-`counterpart` is the one `direct` holds the room under, or else the entry's
-`from`, the principal who offered it. A room appears in `rooms` once its root
-resolves and its `about` reads.
+Home hands the manager, and which lists the social spaces the user keeps. The
+manager draws its rooms from the entries of kind `fabrichat-room` the catalog
+keeps as saved, each the space of a room that is its space's root, found with
+`wish({ query: "#default", scope: [space] })`; a room in another social space,
+which isn't its space's root, isn't found that way yet. A room's `kind` is the
+one its `about` gives, and its `since` and `revision` are its entry's. A direct
+room's `counterpart` is the one `direct` holds the room under, for a room this
+manager created or accepted, or else the room's creator, as its `about.record`
+is labeled; a room whose label can't be read is listed with no counterpart. A
+room appears in `rooms` once its root resolves and its `about` reads.
 
 The handlers write the catalog: creating or accepting a room registers its
-space (`registerSharedSpaceIn()`), forgetting one archives its entry, and
-finding a forgotten one again restores it (`changeSharedSpaceMembershipIn()`).
+space (`registerSharedSpaceIn()`), forgetting one archives its entry, at the
+revision the request names, and finding a forgotten one again restores it
+(`changeSharedSpaceMembershipIn()`). Creating or accepting a room also adds this
+user's profile to the room's participants, through the room's
+`addParticipant`, from an event of its own that follows.
 A room offered to the user is registered by the host that vets the offer (see
 [first contact](#first-contact)). `direct` holds one entry per counterpart, for
 the direct rooms this manager created or accepted, including forgotten ones,

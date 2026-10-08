@@ -519,8 +519,8 @@ Adds a profile to those who joined the room, the participants a room in a
 space of its own keeps for its space. Like `addMember`, and unlike the streams
 in the table, it takes no `requestId`: a profile already listed is not added
 again, so a repeat changes nothing. Any participant may add any profile, so an
-entry is a claim, and the room's rendering offers a viewer whose profile isn't
-listed a control that adds their own.
+entry is a claim. A member's chat manager adds its user when it creates or
+accepts the room.
 
 - **Admitted:** without a reviewed gesture.
 - **Effect:** adds the profile to the room's participants, unless it is listed

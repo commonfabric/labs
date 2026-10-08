@@ -16,6 +16,9 @@ interface ChatIndexEntry {
 
   /** When this user's index admitted it. */
   since: FabricEpochNsec;
+
+  /** The revision of the room's entry in this user's index, if it has one. */
+  revision?: string;
 }
 ```
 
@@ -45,5 +48,9 @@ interface ChatIndexEntry {
   clock of the handler that admitted it, at whatever resolution the system
   provides (see the [timing side-channel
   mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)).
+
+- **`revision`** is the revision of the room's entry in the index the manager
+  lists it from, which a request to [`forget`](ChatManagerOutput.md) the room
+  names, so that a choice made since by another client is not overridden.
 
 An entry is private to its user, like everything in the home space.
