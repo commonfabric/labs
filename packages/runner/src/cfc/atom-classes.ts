@@ -38,21 +38,23 @@ const CLASS_BY_TYPE = new Map<string, PropagationClass>([
   // `valueRef` against the current value rather than trusting survival.
   [CFC_ATOM_TYPE.CaveatScreened, "value-bound"],
   [CFC_ATOM_TYPE.Resource, "value-bound"],
+  // Code identity and computation integrity describe the value they label,
+  // and each operation mints its own `TransformedBy` (spec §15.4, §3.1.6.2).
   [CFC_ATOM_TYPE.Builtin, "value-bound"],
-  // A production claim about the exact current value, minted fresh by each
-  // operation (§15.4, §3.1.6.2).
   [CFC_ATOM_TYPE.TransformedBy, "value-bound"],
-  // Bound to the digest of the exact entered value (§15.6).
+  // The registry's default for this example family (spec §15.6). No runtime
+  // code here mints it.
   [CFC_ATOM_TYPE.UserSurfaceInput, "value-bound"],
-  // §15.4 registers `ExternalIngest` value-bound through its `valueDigest`,
-  // which nothing here checks against the value it labels. Without that
-  // check, provenance is the fail-safe class: it keeps the admission claim
-  // off every derivative, projections included (§15.1.1).
+  // A deviation from spec §15.4, which makes this admission claim value-bound
+  // through its `valueDigest`. Nothing here verifies that digest against the
+  // value the atom labels, so the runtime keeps the claim off every
+  // derivative, projections included. Moving a family from value-bound to
+  // provenance only removes survival paths, which §15.1.1 holds sound.
   [CFC_ATOM_TYPE.ExternalIngest, "provenance"],
   [CFC_ATOM_TYPE.LlmDerived, "provenance"],
   [CFC_ATOM_TYPE.Origin, "provenance"],
-  // Evidence of one trusted binding event: slot authority must not reach a
-  // derivative (§15.4).
+  // Records a single binding of a value into a prompt slot; the authority
+  // that binding confers belongs to that value alone (spec §15.4).
   [CFC_ATOM_TYPE.PromptSlotBound, "provenance"],
   [CFC_ATOM_TYPE.PromptSlotInfluence, "provenance"],
   // Event/boundary/role evidence (spec §15.4): facts about a specific render,

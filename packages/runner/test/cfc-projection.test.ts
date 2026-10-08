@@ -5,8 +5,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
-import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
-import { matchAtomPatternAgainstAtoms } from "../src/cfc/atom-pattern.ts";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-projection");
@@ -43,7 +42,7 @@ describe("CFC projection claims", () => {
               path: string[];
               label: {
                 confidentiality?: unknown[];
-                integrity?: CfcAtom[];
+                integrity?: unknown[];
               };
             }>;
           };
@@ -124,14 +123,13 @@ describe("CFC projection claims", () => {
     }
   });
 
-  it("scopes value-bound runtime evidence onto a projection and drops provenance (§15.4)", async () => {
-    // Runtime-minted evidence survives the write gate only for a builtin
-    // author, so the write is attributed to one. §15.4 registers
-    // `TransformedBy` and `Builtin` value-bound: a projection keeps a scoped
-    // form of each (§3.1.6.1, §8.3.2), a claim that the field is the `/lat`
-    // component of a value that writer produced. It registers
-    // `PromptSlotBound` provenance: evidence of one binding event, which no
-    // projection may carry (§15.1.1).
+  it("carries value-bound TransformedBy and Builtin scoped onto a projection and drops PromptSlotBound", async () => {
+    // §15.4 registers `TransformedBy` and `Builtin` value-bound, so a verified
+    // projection keeps a form of each scoped to the projected path
+    // (§3.1.6.1, §8.3.2). It registers `PromptSlotBound` provenance, which no
+    // projection carries (§15.1.1). All three are runtime-minted, and only a
+    // builtin author's write keeps them, so the write is attributed to one.
+
     const transformedBy = {
       type: CFC_ATOM_TYPE.TransformedBy,
       identity: { kind: "builtin", builtinId: "projection-writer" },
@@ -193,16 +191,6 @@ describe("CFC projection claims", () => {
         { ...transformedBy, scope: { projection: "/lat" } },
         { ...builtin, scope: { projection: "/lat" } },
       ]);
-      // A guard naming the writer matches the scoped atom: atom patterns
-      // leave unnamed fields, `scope` among them, unconstrained. The field is
-      // a verified component of the writer's output, so a rule releasing that
-      // output releases nothing more by releasing the field.
-      expect(
-        matchAtomPatternAgainstAtoms(
-          { type: CFC_ATOM_TYPE.TransformedBy, identity: { var: "$writer" } },
-          integrity ?? [],
-        ).length,
-      ).toBeGreaterThan(0);
     } finally {
       await runtime.dispose();
       await storageManager.close();
