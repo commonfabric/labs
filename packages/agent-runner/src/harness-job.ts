@@ -11,11 +11,14 @@
  * The run goes through the harness's own batch entry point,
  * `runCfHarnessCli`, so the session is assembled the way every harness run
  * is. The arguments that entry point takes are built here and nowhere else,
- * so a caller never depends on them.
+ * so a caller never depends on them, and so is where under its run root a
+ * job's run leaves its artifacts, which `readHarnessJobTranscript` reads
+ * back for a later job to continue from.
  */
 
 import { join } from "@std/path";
 
+import { readHarnessTranscript } from "@commonfabric/cf-harness/artifacts";
 import {
   type CfHarnessStructuredResultValidation,
   runCfHarnessCli,
@@ -24,12 +27,20 @@ import {
 } from "@commonfabric/cf-harness/cli";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
-import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import type {
+  HarnessTranscriptEvent,
+  HarnessTranscriptMessage,
+} from "@commonfabric/cf-harness/contracts/transcript";
+import {
+  isHarnessTranscriptOmissions,
+  restoreHarnessTranscriptOmissions,
+} from "@commonfabric/cf-harness/contracts/transcript-omissions";
 import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
 import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
   type HarnessPromptLoopResult,
+  type RunHarnessPromptOptions,
 } from "@commonfabric/cf-harness/prompt-loop";
 import type { JSONSchema } from "@commonfabric/api";
 import {
@@ -44,6 +55,9 @@ import type { AgentRunReport } from "./agent-runner.ts";
 
 /** The workspace file the host writes when the model calls `submit_result`. */
 const RESULT_FILE = "agent-result.json";
+
+/** The directory under a job's run root the harness keeps its runs in. */
+const ARTIFACTS_DIR = "artifacts";
 
 /** What a job does in the fabric, when it does anything there. */
 export interface HarnessJobFabric {
@@ -94,6 +108,13 @@ export interface HarnessJobSpec {
 
   /** The job's system prompt: framing the task's author supplies. */
   instructions?: string;
+
+  /**
+   * History the job continues: an earlier run's messages, without its system
+   * prompt, which the model reads after this job's system prompt and before
+   * this job's context and task. Absent for a job that starts afresh.
+   */
+  priorTranscript?: readonly HarnessTranscriptMessage[];
 
   /** The most model turns the job may take; the harness's own when absent. */
   maxModelTurns?: number;
@@ -240,6 +261,33 @@ const argvOf = (
 ];
 
 /**
+ * Helper for the job, which lays out a continued job's transcript as the
+ * harness lays out a fresh one — system prompt, context, task — with the
+ * prior history after the system prompt, where interactive chat puts a
+ * session's earlier turns.
+ */
+const continuedTranscriptOf = (
+  prompt: RunHarnessPromptOptions,
+  prior: readonly HarnessTranscriptMessage[],
+): HarnessTranscriptMessage[] => [
+  ...(prompt.systemPrompt !== undefined
+    ? [{ role: "system", content: prompt.systemPrompt } as const]
+    : []),
+  ...prior,
+  ...(prompt.contextMessages ?? []).map((content) =>
+    ({ role: "user", content }) as const
+  ),
+  {
+    role: "user",
+    content: prompt.prompt,
+    ...(prompt.imageAttachments !== undefined &&
+        prompt.imageAttachments.length > 0
+      ? { imageAttachments: prompt.imageAttachments }
+      : {}),
+  },
+];
+
+/**
  * What every job is started with that decides its sandbox runtime. The
  * argument list is written here, so whoever runs a job selects the runtime
  * through the environment and never by a flag.
@@ -281,7 +329,7 @@ export const runHarnessJob = async (
   const argv = argvOf(
     spec,
     workspace,
-    join(options.runRoot, "artifacts"),
+    join(options.runRoot, ARTIFACTS_DIR),
     resultPath,
   );
 
@@ -318,15 +366,31 @@ export const runHarnessJob = async (
       const loop = createInnerLoop(loopOptions);
       return {
         runPrompt: async (promptOptions) => {
+          const prior = spec.priorTranscript;
+          // The loop replays the transcript it starts from as events. The
+          // prior history is an earlier job's activity, not this one's.
+          const seeded = new Set<HarnessTranscriptMessage>(prior);
+          const onTranscriptEvent = async (event: HarnessTranscriptEvent) => {
+            if (!seeded.has(event.message)) await options.onEvent?.(event);
+            await promptOptions.onTranscriptEvent?.(event);
+          };
           try {
-            loopResult = await loop.runPrompt({
-              ...promptOptions,
-              signal: options.signal,
-              onTranscriptEvent: async (event) => {
-                await options.onEvent?.(event);
-                await promptOptions.onTranscriptEvent?.(event);
-              },
-            });
+            loopResult = prior === undefined
+              ? await loop.runPrompt({
+                ...promptOptions,
+                signal: options.signal,
+                onTranscriptEvent,
+              })
+              : await loop.runTranscript({
+                transcript: continuedTranscriptOf(promptOptions, prior),
+                openingResearchTask: promptOptions.openingResearchTask,
+                model: promptOptions.model,
+                maxModelTurns: promptOptions.maxModelTurns,
+                promptSlotBinding: promptOptions.promptSlotBinding,
+                signal: options.signal,
+                onModelUsage: promptOptions.onModelUsage,
+                onTranscriptEvent,
+              });
             return loopResult;
           } catch (error) {
             loopError = error;
@@ -373,4 +437,66 @@ export const runHarnessJob = async (
       createHarnessHandleTable(loopResult.runState.runId),
     report,
   };
+};
+
+/**
+ * Reads the transcript the harness persisted for the job run under
+ * `runRoot` — the job's own run's, not a delegated child's — with the
+ * omission records persisted beside it restored onto its messages, as
+ * interactive chat restores a stored session's. The transcript is as the run
+ * last persisted it, which for a run that was stopped or cut off can end
+ * with a tool call nothing answered. `undefined` when the run persisted none.
+ *
+ * @throws when the transcript or its omission records cannot be read.
+ */
+export const readHarnessJobTranscript = async (
+  runRoot: string,
+): Promise<HarnessTranscriptMessage[] | undefined> => {
+  const artifacts = join(runRoot, ARTIFACTS_DIR);
+  // The harness names a delegated child's run after its parent's
+  // (`<run>.subagent.<n>`), and keeps the artifact root's own records under
+  // dot-named directories, so the job's run is the one other directory.
+  const runs: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(artifacts)) {
+      if (
+        entry.isDirectory && !entry.name.startsWith(".") &&
+        !entry.name.includes(".subagent.")
+      ) {
+        runs.push(entry.name);
+      }
+    }
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return undefined;
+    throw error;
+  }
+  if (runs.length === 0) return undefined;
+  if (runs.length > 1) {
+    throw new Error(`${artifacts} holds ${runs.length} runs, not one`);
+  }
+  const run = join(artifacts, runs[0]);
+  let transcript: HarnessTranscriptMessage[];
+  try {
+    transcript = await readHarnessTranscript(join(run, "transcript.json"));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return undefined;
+    throw error;
+  }
+  if (!Array.isArray(transcript)) {
+    throw new TypeError(`${run}/transcript.json holds no transcript`);
+  }
+  let omissions: unknown;
+  try {
+    omissions = JSON.parse(
+      await Deno.readTextFile(join(run, "transcript-omissions.json")),
+    );
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return transcript;
+    throw error;
+  }
+  if (!isHarnessTranscriptOmissions(omissions)) {
+    throw new TypeError(`${run}/transcript-omissions.json is not readable`);
+  }
+  restoreHarnessTranscriptOmissions(transcript, omissions);
+  return transcript;
 };

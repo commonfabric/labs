@@ -1,7 +1,12 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { join } from "@std/path";
 
-import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import type {
+  HarnessTranscriptEvent,
+  HarnessTranscriptMessage,
+} from "@commonfabric/cf-harness/contracts/transcript";
+import { createHarnessTranscriptOmissions } from "@commonfabric/cf-harness/contracts/transcript-omissions";
 
 import type {
   HarnessJobOptions,
@@ -20,6 +25,7 @@ import { browserChild, delegatedBrowse } from "./fixtures/delegated-browse.ts";
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
 import {
   type LocalJob,
+  type LocalJobRequest,
   type LocalJobState,
   LocalJobStore,
 } from "../../src/local-jobs/store.ts";
@@ -74,6 +80,7 @@ const laneWith = (
     profiles?: Map<string, LocalJobProfile>;
     maxConcurrent?: number;
     report?: (message: string) => void;
+    workRoot?: string;
   } = {},
 ) => {
   const store = LocalJobStore.open(":memory:");
@@ -83,7 +90,7 @@ const laneWith = (
     store,
     profiles: options.profiles ?? new Map([["ask", ASK]]),
     maxConcurrent: options.maxConcurrent ?? 2,
-    workRoot: "/work/local",
+    workRoot: options.workRoot ?? "/work/local",
     ...(options.report !== undefined ? { report: options.report } : {}),
     runJob: (spec, jobOptions) =>
       new Promise<HarnessJobResult>((resolve, reject) => {
@@ -102,7 +109,11 @@ const laneWith = (
     runs[index] !== undefined
       ? Promise.resolve(runs[index])
       : new Promise<HeldRun>((resolve) => started.push(resolve));
-  const enqueue = (key: string, request = REQUEST, profile = "ask") => {
+  const enqueue = (
+    key: string,
+    request: LocalJobRequest = REQUEST,
+    profile = "ask",
+  ) => {
     const enqueued = store.enqueue("cfs:weaver", profile, key, request);
     if ("conflict" in enqueued) throw new Error(enqueued.conflict);
     lane.kick();
@@ -233,6 +244,29 @@ describe("local-jobs/lane", () => {
       expect(
         localJobEventsOf(event({ role: "assistant", content: "Done." })),
       ).toEqual([]);
+    });
+
+    it("numbers a step by the job's own turns when its transcript starts with earlier history", () => {
+      const prior = [
+        { role: "user" as const, content: "Name a moon of Saturn." },
+        { role: "assistant" as const, content: "Titan." },
+      ];
+      const asked = calling("loom_search");
+      const child = {
+        parentToolCallId: "call-0",
+        childRunId: "run.subagent.1",
+        profile: "browser" as const,
+        goal: "Look.",
+      };
+
+      expect(localJobEventsOf(event(asked, prior), { priorTurns: 1 })).toEqual([
+        { kind: "step", body: { turn: 1, tool: "loom_search" } },
+      ]);
+      expect(
+        localJobEventsOf({ ...event(asked), subagent: child }, {
+          priorTurns: 1,
+        })[0].body.turn,
+      ).toBe(1);
     });
 
     it("reports a command for each executed call of a batch, in order, and nothing for one the host never ran", () => {
@@ -403,7 +437,9 @@ describe("local-jobs/lane", () => {
     });
 
     it("reports a delegated browse's tools with lineage and browser actions", () => {
-      const events = delegatedBrowse().flatMap(localJobEventsOf);
+      const events = delegatedBrowse().flatMap((event) =>
+        localJobEventsOf(event)
+      );
       const child = {
         parentToolCallId: browserChild.parentToolCallId,
         childRunId: browserChild.childRunId,
@@ -943,6 +979,337 @@ describe("local-jobs/lane", () => {
           errorCode: PROFILE_UNAVAILABLE,
         });
         expect(gone.browserHost(id)?.view().state).toBe("closed");
+      });
+    });
+
+    describe("continuing a job", () => {
+      let workRoot: string;
+
+      beforeEach(async () => {
+        workRoot = await Deno.makeTempDir({ prefix: "local-jobs-lane-" });
+      });
+
+      afterEach(async () => {
+        await Deno.remove(workRoot, { recursive: true });
+      });
+
+      /** The run id the harness gave a job's run. */
+      const RUN = "0b5c6f0e-5d2a-4f6e-9a57-1c2d3e4f5a6b";
+
+      /**
+       * Helper for tests, which writes what a job's run persists: its
+       * transcript, and its omission records when there are any.
+       */
+      const persist = async (
+        jobId: string,
+        transcript: readonly HarnessTranscriptMessage[] | string,
+        options: { run?: string; omissions?: unknown } = {},
+      ) => {
+        const run = join(workRoot, jobId, "artifacts", options.run ?? RUN);
+        await Deno.mkdir(run, { recursive: true });
+        await Deno.writeTextFile(
+          join(run, "transcript.json"),
+          typeof transcript === "string"
+            ? transcript
+            : JSON.stringify(transcript),
+        );
+        if (options.omissions !== undefined) {
+          await Deno.writeTextFile(
+            join(run, "transcript-omissions.json"),
+            JSON.stringify(options.omissions),
+          );
+        }
+      };
+
+      /** An assistant message calling `loom_search` as `id`. */
+      const searching = (id: string): HarnessTranscriptMessage => ({
+        role: "assistant",
+        content: "",
+        toolCalls: [{
+          id,
+          type: "function",
+          function: { name: "loom_search", arguments: "{}" },
+        }],
+      });
+
+      /** The tool message answering call `id`. */
+      const found = (id: string): HarnessTranscriptMessage => ({
+        role: "tool",
+        toolCallId: id,
+        toolName: "loom_search",
+        content: "Saturn — loom",
+      });
+
+      /** A finished parent's transcript: one search, then an answer. */
+      const ANSWERED: HarnessTranscriptMessage[] = [
+        { role: "system", content: "Answer briefly." },
+        { role: "user", content: REQUEST.task },
+        searching("c1"),
+        found("c1"),
+        { role: "assistant", content: "Made it." },
+      ];
+
+      /** A reply continuing `parent`. */
+      const reply = (parent: string, task = "Add Titan.") => ({
+        ...REQUEST,
+        task,
+        continues: parent,
+      });
+
+      /** Helper for tests, which ends run `run` completed with `answer`. */
+      const complete = (run: HeldRun, answer: unknown) =>
+        run.settle({
+          outcome: "completed",
+          structuredResult: answer,
+          handleTable: {} as never,
+          report: { modelTurns: 1 },
+        });
+
+      it("runs a reply with its parent's transcript, without the parent's system prompt or a delegated child's run, and records how", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const parent = enqueue("a");
+        await persist(parent, ANSWERED);
+        await persist(parent, [{ role: "user", content: "Look." }], {
+          run: `${RUN}.subagent.1`,
+        });
+        await Deno.mkdir(
+          join(workRoot, parent, "artifacts", ".acquired-skills"),
+        );
+        complete(await nextRun(0), { answer: "Made it." });
+        await reached(store, parent, "completed");
+
+        const id = enqueue("b", reply(parent));
+        const run = await nextRun(1);
+
+        expect(run.spec.task).toBe("Add Titan.");
+        expect(run.spec.priorTranscript).toEqual(ANSWERED.slice(1));
+        complete(run, { answer: "Added." });
+        expect((await reached(store, id, "completed")).report).toEqual({
+          modelTurns: 1,
+          continuation: { parent, seed: "transcript", messages: 4 },
+        });
+      });
+
+      it("cuts a stopped parent's transcript back to its last answered tool call", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const parent = enqueue("a");
+        await persist(parent, [...ANSWERED.slice(0, 4), searching("c2")]);
+        const stopped = await nextRun(0);
+        lane.cancel(parent);
+        stopped.settle({ outcome: "cancelled" });
+        await reached(store, parent, "cancelled");
+
+        const id = enqueue("b", reply(parent));
+        const run = await nextRun(1);
+
+        expect(run.spec.priorTranscript).toEqual(ANSWERED.slice(1, 4));
+        run.settle({ outcome: "cancelled" });
+        expect((await reached(store, id, "cancelled")).report).toEqual({
+          continuation: { parent, seed: "transcript", messages: 3 },
+        });
+      });
+
+      it("keeps the omission records the parent's run made on the messages it continues with", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const parent = enqueue("a");
+        const outputId = `${RUN}:loom_search:1`;
+        const result: HarnessTranscriptMessage = {
+          ...found("c1"),
+          resultRef: {
+            type: "cf-harness.tool-result-ref",
+            outputId,
+            toolId: "loom_search",
+            runId: RUN,
+          },
+        } as HarnessTranscriptMessage;
+        const rules = [{
+          rule: "model-context-truncation",
+          locations: [{
+            artifactPath: "tool-outputs/1.json",
+            jsonPointer: "/body",
+          }],
+        }];
+        await persist(
+          parent,
+          [...ANSWERED.slice(0, 3), result, ANSWERED[4]],
+          {
+            omissions: {
+              type: "cf-harness.transcript-omissions",
+              version: 1,
+              results: [{
+                transcriptIndex: 3,
+                toolCallId: "c1",
+                toolId: "loom_search",
+                outputId,
+                rules,
+              }],
+            },
+          },
+        );
+        complete(await nextRun(0), { answer: "Made it." });
+        await reached(store, parent, "completed");
+
+        enqueue("b", reply(parent));
+        const run = await nextRun(1);
+
+        expect(
+          createHarnessTranscriptOmissions(run.spec.priorTranscript!).results,
+        ).toEqual([{
+          transcriptIndex: 2,
+          toolCallId: "c1",
+          toolId: "loom_search",
+          outputId,
+          rules,
+        }]);
+      });
+
+      it("continues from the parent's task and result when its run left no transcript, and from its task alone when it has no result", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const answered = enqueue("a");
+        complete(await nextRun(0), { answer: "Made it." });
+        await reached(store, answered, "completed");
+        const failed = enqueue("b");
+        (await nextRun(1)).settle({
+          outcome: "failed",
+          errorCode: "PROVIDER_FAILURE",
+        });
+        await reached(store, failed, "failed");
+
+        const id = enqueue("c", reply(answered));
+        const first = await nextRun(2);
+        enqueue("d", reply(failed));
+        const second = await nextRun(3);
+
+        expect(first.spec.priorTranscript).toEqual([
+          { role: "user", content: REQUEST.task },
+          { role: "assistant", content: '{"answer":"Made it."}' },
+        ]);
+        expect(second.spec.priorTranscript).toEqual([
+          { role: "user", content: REQUEST.task },
+        ]);
+        complete(first, { answer: "Added." });
+        expect((await reached(store, id, "completed")).report).toMatchObject({
+          continuation: { parent: answered, seed: "request", messages: 2 },
+        });
+      });
+
+      it("continues from the parent's request, and tells the operator, when its transcript cannot be read", async () => {
+        const reported: string[] = [];
+        const { store, lane, nextRun, enqueue } = laneWith({
+          workRoot,
+          report: (message) => reported.push(message),
+        });
+        lane.start();
+        const parent = enqueue("a");
+        await persist(parent, "{ not json");
+        complete(await nextRun(0), "Made it.");
+        await reached(store, parent, "completed");
+
+        enqueue("b", reply(parent));
+        const run = await nextRun(1);
+
+        expect(run.spec.priorTranscript).toEqual([
+          { role: "user", content: REQUEST.task },
+          { role: "assistant", content: "Made it." },
+        ]);
+        expect(reported.join("\n")).toContain(
+          `the transcript of local job ${parent} could not be read`,
+        );
+      });
+
+      it("carries a chain's whole history into a reply to a reply", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const first = enqueue("a");
+        await persist(first, ANSWERED);
+        complete(await nextRun(0), { answer: "Made it." });
+        await reached(store, first, "completed");
+        const second = enqueue("b", reply(first));
+        const secondRun = await nextRun(1);
+        // What the harness persists for a continued run: the transcript it
+        // was started from, then the run's own messages.
+        const secondTurn: HarnessTranscriptMessage[] = [
+          { role: "user", content: "Add Titan." },
+          { role: "assistant", content: "Added." },
+        ];
+        await persist(second, [
+          { role: "system", content: "Answer briefly." },
+          ...secondRun.spec.priorTranscript!,
+          ...secondTurn,
+        ]);
+        complete(secondRun, { answer: "Added." });
+        await reached(store, second, "completed");
+
+        enqueue("c", reply(second, "Add Rhea."));
+        const third = await nextRun(2);
+
+        expect(third.spec.priorTranscript).toEqual([
+          ...ANSWERED.slice(1),
+          ...secondTurn,
+        ]);
+      });
+
+      it("carries the history a parent continued when the parent's own run left no transcript", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const first = enqueue("a");
+        await persist(first, ANSWERED);
+        complete(await nextRun(0), { answer: "Made it." });
+        await reached(store, first, "completed");
+        const second = enqueue("b", reply(first));
+        (await nextRun(1)).settle({
+          outcome: "failed",
+          errorCode: "PROVIDER_FAILURE",
+        });
+        await reached(store, second, "failed");
+
+        enqueue("c", reply(second, "Try again."));
+        const third = await nextRun(2);
+
+        expect(third.spec.priorTranscript).toEqual([
+          ...ANSWERED.slice(1),
+          { role: "user", content: "Add Titan." },
+        ]);
+      });
+
+      it("numbers a reply's steps by its own turns", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const parent = enqueue("a");
+        await persist(parent, ANSWERED);
+        complete(await nextRun(0), { answer: "Made it." });
+        await reached(store, parent, "completed");
+        const id = enqueue("b", reply(parent));
+        const run = await nextRun(1);
+        const asked = searching("c3");
+
+        await run.options.onEvent?.({
+          message: asked,
+          transcript: [
+            ...run.spec.priorTranscript!,
+            { role: "user", content: "Add Titan." },
+            asked,
+          ],
+        });
+
+        expect(store.get(id)?.step).toEqual({ turn: 1, tool: "loom_search" });
+      });
+
+      it("runs a job that continues nothing with no history and records no continuation", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({ workRoot });
+        lane.start();
+        const id = enqueue("a");
+        const run = await nextRun(0);
+
+        expect(run.spec).not.toHaveProperty("priorTranscript");
+        run.settle({ outcome: "cancelled" });
+        expect(await reached(store, id, "cancelled")).not.toHaveProperty(
+          "report",
+        );
       });
     });
 

@@ -7,7 +7,9 @@
  * events (each command the host ran for it). A job that declared a browser
  * host, under a profile that admits one, browses through it: the lane holds
  * the job's {@link LocalJobBrowserHost} from the first attach or the run's
- * start, whichever is first, until the job ends.
+ * start, whichever is first, until the job ends. A job that continues an
+ * earlier one runs with that job's history, which the lane loads from what
+ * the earlier run left under its own run root — never from the request.
  *
  * Nothing here waits on a timer. The lane looks for work when it starts,
  * when a job is enqueued, and when a job ends.
@@ -15,13 +17,18 @@
 
 import { join } from "@std/path";
 
-import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import {
+  type HarnessTranscriptEvent,
+  type HarnessTranscriptMessage,
+  inspectHarnessTranscriptPairing,
+} from "@commonfabric/cf-harness/contracts/transcript";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
   type HarnessJobOptions,
   type HarnessJobResult,
   type HarnessJobSpec,
+  readHarnessJobTranscript,
   runHarnessJob,
 } from "../harness-job.ts";
 import { LocalJobBrowserHost } from "./browser-host.ts";
@@ -131,16 +138,35 @@ export const localJobSpecOf = (
   };
 };
 
+/** How a continuing job's history was found, as its report records it. */
+export interface LocalJobContinuation {
+  /** The job it continues. */
+  parent: string;
+
+  /**
+   * `transcript` when the history is the parent's run's own transcript;
+   * `request` when the parent's run left none to read, and the history is
+   * what the parent continued, then the parent's task and its result.
+   */
+  seed: "transcript" | "request";
+
+  /** How many messages of history the job ran with. */
+  messages: number;
+}
+
 /**
  * The progress events one transcript event reports: a `step` for each tool
  * the model called, and a `command` for each command the host ran, one per
- * executed call of a `run_command` batch. Children carry their profile, run
+ * executed call of a `run_command` batch. A step's turn counts this job's
+ * own turns: `priorTurns` is how many assistant messages of earlier history
+ * the transcript starts with. Children carry their profile, run
  * id, parent call id and depth. Browser steps also name the action, so a
  * reader can distinguish clicking from waiting without receiving arguments,
  * URLs or page content.
  */
 export const localJobEventsOf = (
   event: HarnessTranscriptEvent,
+  { priorTurns = 0 }: { priorTurns?: number } = {},
 ): { kind: "step" | "command"; body: Record<string, unknown> }[] => {
   const child = event.subagent === undefined ? undefined : {
     parentToolCallId: event.subagent.parentToolCallId,
@@ -152,8 +178,9 @@ export const localJobEventsOf = (
   };
   const { message, transcript } = event;
   if (message.role === "assistant") {
+    // A child's transcript is its own, with no earlier history in it.
     const turn = transcript.filter((entry) => entry.role === "assistant")
-      .length;
+      .length - (child === undefined ? priorTurns : 0);
     return (message.toolCalls ?? []).map((call) => ({
       kind: "step",
       body: {
@@ -384,11 +411,31 @@ export class LocalJobLane {
       store.report(job.id, "step", body);
     };
     let result: HarnessJobResult;
+    let continuation: LocalJobContinuation | undefined;
     // The host closes however the run ends, a report that throws included.
     try {
       try {
+        const { continues } = job;
+        const history = continues === undefined
+          ? undefined
+          : await this.#historyOf(continues);
+        if (continues !== undefined && history !== undefined) {
+          continuation = {
+            parent: continues,
+            seed: history.seed,
+            messages: history.messages.length,
+          };
+        }
+        const priorTurns = history?.messages.filter((message) =>
+          message.role === "assistant"
+        ).length ?? 0;
         result = await (this.#options.runJob ?? runHarnessJob)(
-          localJobSpecOf(job, narrowed.profile, this.#options),
+          {
+            ...localJobSpecOf(job, narrowed.profile, this.#options),
+            ...(history !== undefined
+              ? { priorTranscript: history.messages }
+              : {}),
+          },
           {
             runRoot: join(this.#options.workRoot, job.id),
             signal,
@@ -403,7 +450,9 @@ export class LocalJobLane {
                 const active = [...childSteps.values()].at(-1) ?? parentStep;
                 if (active !== undefined) reportStep(active);
               }
-              for (const { kind, body } of localJobEventsOf(event)) {
+              for (
+                const { kind, body } of localJobEventsOf(event, { priorTurns })
+              ) {
                 if (kind === "command") {
                   if (event.subagent !== undefined) {
                     const id = event.subagent.parentToolCallId;
@@ -460,10 +509,83 @@ export class LocalJobLane {
         ? { result: result.structuredResult }
         : {}),
       ...(result.outcome === "failed" ? { errorCode: result.errorCode } : {}),
-      ...(result.report !== undefined
-        ? { report: { ...result.report } as Record<string, unknown> }
+      ...(result.report !== undefined || continuation !== undefined
+        ? {
+          report: {
+            ...result.report,
+            ...(continuation !== undefined ? { continuation } : {}),
+          } as Record<string, unknown>,
+        }
         : {}),
     });
+  }
+
+  /**
+   * Helper for `#run`, which loads the history a job continuing job
+   * `parentId` runs with. That is the parent's run's own transcript where it
+   * left one, without its system prompt — the continuing job brings its own
+   * — and cut back to the last point at which every tool call had its
+   * answer, so that a run stopped or cut off mid-call still leaves history a
+   * provider accepts. Where it left none, or none that can be read, it is
+   * whatever the parent itself continued, then the parent's task and the
+   * result it submitted.
+   *
+   * SHORTCUT (2026-10-07): a chain of continuations carries its whole
+   * history into every job, so its context grows without bound: the
+   * openai-codex provider refuses server-side compaction, and the harness has
+   * no summarizer. A chain that outgrows the model's window fails as any
+   * provider error does, and the job reports `PROVIDER_FAILURE`. To harden,
+   * seed a summary of the history in place of the history once it passes a
+   * size threshold.
+   */
+  async #historyOf(
+    parentId: string,
+  ): Promise<
+    { messages: HarnessTranscriptMessage[]; seed: "transcript" | "request" }
+  > {
+    // The store holds every job a job continues: it refuses to add one that
+    // continues a job it does not hold, and it removes none.
+    const parent = this.#options.store.get(parentId)!;
+    let transcript: HarnessTranscriptMessage[] | undefined;
+    try {
+      transcript = await readHarnessJobTranscript(
+        join(this.#options.workRoot, parent.id),
+      );
+    } catch (error) {
+      this.#options.report?.(
+        `agent runner: the transcript of local job ${parent.id} could not be read, so the job continuing it starts from its request: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (transcript !== undefined) {
+      const { safeBoundary } = inspectHarnessTranscriptPairing(transcript);
+      return {
+        messages: transcript.slice(0, safeBoundary).filter((message) =>
+          message.role !== "system"
+        ),
+        seed: "transcript",
+      };
+    }
+    const earlier = parent.continues === undefined
+      ? []
+      : (await this.#historyOf(parent.continues)).messages;
+    const { result } = parent;
+    return {
+      messages: [
+        ...earlier,
+        { role: "user", content: parent.request.task },
+        ...(parent.state === "completed"
+          ? [{
+            role: "assistant" as const,
+            content: typeof result === "string"
+              ? result
+              : JSON.stringify(result ?? null),
+          }]
+          : []),
+      ],
+      seed: "request",
+    };
   }
 
   /** Helper for a job's end, which closes and drops its browser host. */

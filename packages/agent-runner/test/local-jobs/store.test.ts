@@ -194,6 +194,57 @@ describe("local-jobs/store", () => {
 
       expect(other.created).toBe(true);
     });
+
+    it("records the job a request continues, and none for one that continues nothing", () => {
+      const store = openStore();
+      const parent = added(store.enqueue("cfs:weaver", "ask", "a", request()));
+
+      const child = added(store.enqueue("cfs:weaver", "ask", "b", {
+        ...request("And Titan?"),
+        continues: parent.job.id,
+      }));
+
+      expect(child.job.continues).toBe(parent.job.id);
+      expect(child.job.request.continues).toBe(parent.job.id);
+      expect(store.get(parent.job.id)).not.toHaveProperty("continues");
+      expect(store.list(10).map((job) => job.continues)).toEqual([
+        parent.job.id,
+        undefined,
+      ]);
+    });
+
+    it("throws, adding nothing, for a request continuing a job it does not hold", () => {
+      const store = openStore();
+
+      expect(() =>
+        store.enqueue("cfs:weaver", "ask", "a", {
+          ...request(),
+          continues: "job-missing",
+        })
+      ).toThrow();
+      expect(store.list(10)).toEqual([]);
+    });
+
+    it("compares what a request continues as part of the request", () => {
+      const store = openStore();
+      const first = added(store.enqueue("c", "ask", "p1", request())).job.id;
+      const second = added(store.enqueue("c", "ask", "p2", request())).job.id;
+      store.enqueue("c", "ask", "k", { ...request(), continues: first });
+
+      expect(
+        added(
+          store.enqueue("c", "ask", "k", { ...request(), continues: first }),
+        )
+          .created,
+      ).toBe(false);
+      expect(
+        store.enqueue("c", "ask", "k", { ...request(), continues: second }),
+      )
+        .toHaveProperty("conflict");
+      expect(store.enqueue("c", "ask", "k", request())).toHaveProperty(
+        "conflict",
+      );
+    });
   });
 
   describe("reading", () => {
@@ -473,6 +524,74 @@ describe("local-jobs/store", () => {
         ]);
         expect(second.list(10)[0].id).toMatch(/^job-/);
         second.close();
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("adds the lineage column to a store written before it existed, keeping its jobs", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "local-jobs-store-" });
+      try {
+        const path = join(dir, "jobs.sqlite");
+        const before = new Database(path, { create: true });
+        try {
+          before.exec(`
+            CREATE TABLE jobs (
+              id TEXT PRIMARY KEY,
+              caller TEXT NOT NULL,
+              profile TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_json TEXT NOT NULL,
+              state TEXT NOT NULL,
+              cancel_requested_at TEXT,
+              attempt INTEGER NOT NULL DEFAULT 0,
+              result_json TEXT,
+              error_code TEXT,
+              report_json TEXT,
+              created_at TEXT NOT NULL,
+              started_at TEXT,
+              finished_at TEXT,
+              UNIQUE (caller, idempotency_key)
+            );
+            INSERT INTO jobs (id, caller, profile, idempotency_key,
+              request_json, state, result_json, created_at, finished_at)
+            VALUES ('job-old', 'cfs:weaver', 'ask', 'a',
+              '{"task":"Name a moon.","resultSchema":true}', 'completed',
+              '{"answer":"Titan"}', '2026-10-01T00:00:00.000Z',
+              '2026-10-01T00:01:00.000Z');
+          `);
+        } finally {
+          before.close();
+        }
+
+        const store = LocalJobStore.open(path);
+        try {
+          const old = store.get("job-old");
+          expect(old).toMatchObject({
+            state: "completed",
+            result: {
+              answer: "Titan",
+            },
+          });
+          expect(old).not.toHaveProperty("continues");
+          const reply = added(store.enqueue("cfs:weaver", "ask", "b", {
+            ...request("And Rhea?"),
+            continues: "job-old",
+          }));
+          expect(reply.job.continues).toBe("job-old");
+        } finally {
+          store.close();
+        }
+
+        const reopened = LocalJobStore.open(path);
+        try {
+          expect(reopened.list(10).map((job) => job.continues)).toEqual([
+            "job-old",
+            undefined,
+          ]);
+        } finally {
+          reopened.close();
+        }
       } finally {
         await Deno.remove(dir, { recursive: true });
       }

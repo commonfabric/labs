@@ -15,6 +15,7 @@ import { readLocalJobProfiles } from "./profiles.ts";
 import {
   type LaneReadiness,
   type LaneTransition,
+  LOCAL_JOB_FEATURES,
   LOCAL_JOB_ROUTES,
   transitionLane,
 } from "./readiness.ts";
@@ -219,6 +220,7 @@ export const startLocalJobs = async (
         lanes: { local: ready, fabric: fabricReadiness.state === "up" },
         readiness: { local: localReadiness, fabric: fabricReadiness },
         routes: LOCAL_JOB_ROUTES,
+        features: LOCAL_JOB_FEATURES,
         profileFile: config.profilesPath,
         storePath,
         labsCommit: config.labsCommit ?? null,

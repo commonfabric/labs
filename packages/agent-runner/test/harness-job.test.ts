@@ -6,12 +6,16 @@ import type {
   CreateHarnessPromptLoopOptions,
   HarnessPromptLoopResult,
 } from "@commonfabric/cf-harness/prompt-loop";
-import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import type {
+  HarnessTranscriptEvent,
+  HarnessTranscriptMessage,
+} from "@commonfabric/cf-harness/contracts/transcript";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
 import {
   type HarnessJobSpec,
+  readHarnessJobTranscript,
   runHarnessJob,
   selectHarnessJobSandboxRuntime,
 } from "../src/harness-job.ts";
@@ -42,8 +46,14 @@ interface Seen {
   prompt?: string;
   role?: string;
   systemPrompt?: string;
+  contextMessages?: readonly string[];
   maxModelTurns?: number;
   signal?: AbortSignal;
+
+  /** The transcript the loop was started from, when it was given one. */
+  transcript?: readonly HarnessTranscriptMessage[];
+
+  openingResearchTask?: string;
 }
 
 /** The loop result a scripted job hands back. */
@@ -123,6 +133,7 @@ describe("runHarnessJob()", () => {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
               seen.systemPrompt = prompt.systemPrompt;
+              seen.contextMessages = prompt.contextMessages;
               seen.maxModelTurns = prompt.maxModelTurns ??
                 loopOptions.maxModelTurns;
               seen.role = prompt.promptSlotBinding?.role;
@@ -141,7 +152,33 @@ describe("runHarnessJob()", () => {
                 },
               });
             },
-            runTranscript: () => Promise.reject(new Error("not a resume")),
+            runTranscript: (run) => {
+              seen.transcript = run.transcript;
+              seen.openingResearchTask = run.openingResearchTask;
+              seen.maxModelTurns = run.maxModelTurns ??
+                loopOptions.maxModelTurns;
+              seen.role = run.promptSlotBinding?.role;
+              seen.signal = run.signal;
+              return script({
+                resultPath: join(runRoot, "workspace", "agent-result.json"),
+                // As the loop does: the transcript it starts from, replayed,
+                // then a message of its own.
+                emit: async () => {
+                  const message = {
+                    role: "assistant",
+                    content: "Looking.",
+                  } as HarnessTranscriptEvent["message"];
+                  const transcript = [...run.transcript, message];
+                  for (const replayed of run.transcript) {
+                    await run.onTranscriptEvent?.({
+                      message: replayed,
+                      transcript: run.transcript,
+                    });
+                  }
+                  await run.onTranscriptEvent?.({ message, transcript });
+                },
+              });
+            },
           };
         },
       },
@@ -503,6 +540,151 @@ describe("runHarnessJob()", () => {
 
       expect(result.outcome).toBe("failed");
     });
+  });
+
+  describe("continuing earlier history", () => {
+    /** An earlier job's history. */
+    const PRIOR: HarnessTranscriptMessage[] = [
+      { role: "user", content: "Name a moon of Saturn." },
+      { role: "assistant", content: "Titan." },
+    ];
+
+    it("starts the loop from a fresh job's system prompt, the history, then a fresh job's context and task, under the task's role and turn cap", async () => {
+      const controller = new AbortController();
+      const spec = plainSpec({
+        task: "And another?",
+        instructions: "Answer briefly.",
+        maxModelTurns: 6,
+      });
+      const fresh = (await runScripted(spec, answering("Titan"))).seen;
+      const { result, seen } = await runScripted(
+        { ...spec, priorTranscript: PRIOR },
+        answering("Rhea"),
+        { signal: controller.signal },
+      );
+
+      expect(result).toMatchObject({
+        outcome: "completed",
+        structuredResult: { answer: "Rhea" },
+      });
+      expect(seen.prompt).toBeUndefined();
+      const [system, ...rest] = seen.transcript!;
+      expect(system).toEqual({ role: "system", content: fresh.systemPrompt });
+      expect(fresh.systemPrompt).toContain("Answer briefly.");
+      expect(rest).toEqual([
+        ...PRIOR,
+        ...fresh.contextMessages!.map((content) => ({ role: "user", content })),
+        { role: "user", content: "And another?" },
+      ]);
+      // The history's own messages, so whatever the host recorded on them
+      // travels with them.
+      expect(rest[0]).toBe(PRIOR[0]);
+      expect(seen.openingResearchTask).toBe("And another?");
+      expect(seen.role).toBe("direct-command");
+      expect(seen.maxModelTurns).toBe(6);
+      expect(seen.signal).toBe(controller.signal);
+    });
+
+    it("tells the caller of the job's own transcript events and none of the history's", async () => {
+      const told: HarnessTranscriptMessage[] = [];
+      const { result } = await runScripted(
+        plainSpec({ priorTranscript: PRIOR }),
+        async (context) => {
+          await context.emit();
+          return await answering("Rhea")(context);
+        },
+        { onEvent: (event) => void told.push(event.message) },
+      );
+
+      expect(result.outcome).toBe("completed");
+      expect(told).not.toContain(PRIOR[0]);
+      expect(told).not.toContain(PRIOR[1]);
+      expect(told.map((message) => message.role)).toContain("system");
+      expect(told.slice(-2).map((message) => message.content)).toEqual([
+        plainSpec().task,
+        "Looking.",
+      ]);
+    });
+
+    it("starts a job with no history from its prompt, as before", async () => {
+      const { seen } = await runScripted(plainSpec(), answering("Titan"));
+
+      expect(seen.prompt).toBe(plainSpec().task);
+      expect(seen.transcript).toBeUndefined();
+    });
+  });
+});
+
+describe("readHarnessJobTranscript()", () => {
+  let runRoot: string;
+
+  beforeEach(async () => {
+    runRoot = await Deno.makeTempDir({ prefix: "harness-job-transcript-" });
+  });
+
+  afterEach(async () => {
+    await Deno.remove(runRoot, { recursive: true });
+  });
+
+  /** A run's transcript. */
+  const TRANSCRIPT: HarnessTranscriptMessage[] = [
+    { role: "system", content: "Answer briefly." },
+    { role: "user", content: "Name a moon of Saturn." },
+  ];
+
+  /** Helper for tests, which writes `files` under the job's artifacts. */
+  const write = async (files: Record<string, string>) => {
+    for (const [path, text] of Object.entries(files)) {
+      const full = join(runRoot, "artifacts", path);
+      await Deno.mkdir(join(full, ".."), { recursive: true });
+      await Deno.writeTextFile(full, text);
+    }
+  };
+
+  it("reads the job's own run's transcript, not a delegated child's", async () => {
+    await write({
+      "run-1/transcript.json": JSON.stringify(TRANSCRIPT),
+      "run-1.subagent.1/transcript.json": "[]",
+      ".acquired-skills/run-1/skill.json": "{}",
+    });
+
+    expect(await readHarnessJobTranscript(runRoot)).toEqual(TRANSCRIPT);
+  });
+
+  it("returns `undefined` for a job whose run left no artifacts, no run, or no transcript", async () => {
+    expect(await readHarnessJobTranscript(runRoot)).toBeUndefined();
+    await Deno.mkdir(join(runRoot, "artifacts"));
+    expect(await readHarnessJobTranscript(runRoot)).toBeUndefined();
+    await write({ "run-1/run-state.json": "{}" });
+    expect(await readHarnessJobTranscript(runRoot)).toBeUndefined();
+  });
+
+  it("throws for an artifacts directory it cannot list", async () => {
+    await Deno.writeTextFile(join(runRoot, "artifacts"), "");
+
+    await expect(readHarnessJobTranscript(runRoot)).rejects.toThrow();
+  });
+
+  it("throws for a transcript, or omission records, it cannot read, and for more than one run", async () => {
+    await write({ "run-1/transcript.json": "{}" });
+    await expect(readHarnessJobTranscript(runRoot)).rejects.toThrow(
+      "holds no transcript",
+    );
+    await write({
+      "run-1/transcript.json": JSON.stringify(TRANSCRIPT),
+      "run-1/transcript-omissions.json": '{"type":"other"}',
+    });
+    await expect(readHarnessJobTranscript(runRoot)).rejects.toThrow(
+      "transcript-omissions.json is not readable",
+    );
+    await write({ "run-1/transcript-omissions.json": "{ not json" });
+    await expect(readHarnessJobTranscript(runRoot)).rejects.toThrow(
+      SyntaxError,
+    );
+    await write({ "run-2/transcript.json": "[]" });
+    await expect(readHarnessJobTranscript(runRoot)).rejects.toThrow(
+      "holds 2 runs",
+    );
   });
 });
 

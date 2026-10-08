@@ -16,6 +16,7 @@ export interface RunnerHealth {
   lanes: { local: boolean; fabric: boolean };
   readiness: { local: LaneReadiness; fabric: LaneReadiness };
   routes: readonly { method: string; path: string }[];
+  features: readonly string[];
   profileFile: string;
   storePath: string;
   labsCommit: string | null;
@@ -32,6 +33,13 @@ export const LOCAL_JOB_ROUTES = [
   { method: "GET", path: "/jobs/:id/browser/stream" },
   { method: "POST", path: "/jobs/:id/browser/result" },
 ];
+
+/**
+ * A feature names a request field or behaviour a caller must not assume from
+ * the routes alone. `continues`: `POST /jobs` takes `continues`, and a runner
+ * without it would drop the field and start a plain job.
+ */
+export const LOCAL_JOB_FEATURES = ["continues"];
 
 /** Keeps the timestamp stable until a lane's state or reason changes. */
 export function transitionLane(

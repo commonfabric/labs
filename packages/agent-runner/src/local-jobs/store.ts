@@ -13,6 +13,10 @@
  * crash. It is ended `interrupted` and never run again: a job may already
  * have changed things through its commands, and running it twice could do
  * them twice.
+ *
+ * A job may continue an earlier one of the same caller and profile — a reply
+ * to a finished conversation — by naming it as `continues`. The job records
+ * that lineage; what history it runs with is the lane's to load.
  */
 
 import { hashStringOf } from "@commonfabric/data-model";
@@ -48,6 +52,13 @@ export interface LocalJobRequest {
   maxModelTurns?: number;
 
   /**
+   * The id of the job this one continues, which had ended when this one was
+   * asked for: it runs with that job's history before its own task. Absent
+   * for a job that starts afresh.
+   */
+  continues?: string;
+
+  /**
    * The caller can host the job's browser. Its contents are not read yet;
    * declaring it is what counts, as on the console's task route.
    */
@@ -69,6 +80,10 @@ export interface LocalJob {
   profile: string;
   idempotencyKey: string;
   request: LocalJobRequest;
+
+  /** The job this one continues, when it continues one. */
+  continues?: string;
+
   state: LocalJobState;
 
   /** The `seq` of the job's latest event. */
@@ -138,6 +153,17 @@ CREATE TABLE IF NOT EXISTS job_events (
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs (state, created_at);
 `;
 
+/**
+ * The columns `jobs` has gained since its shape in `INIT`, by name, with
+ * their declarations. `open` adds each one a store lacks, so a store created
+ * before a column existed and one created now end in the same shape. A
+ * column added this way is nullable, as `ALTER TABLE` requires, and a row
+ * written before it existed reads it as `NULL`.
+ */
+const ADDED_JOB_COLUMNS: Readonly<Record<string, string>> = {
+  parent_job_id: "TEXT REFERENCES jobs (id)",
+};
+
 /** A `jobs` row as SQLite returns it. */
 interface JobRow {
   id: string;
@@ -153,6 +179,7 @@ interface JobRow {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  parent_job_id: string | null;
 }
 
 /** An event row as SQLite returns it. */
@@ -195,6 +222,16 @@ export class LocalJobStore {
     try {
       database.exec(PRAGMAS);
       database.exec(INIT);
+      const present = new Set(
+        (database.prepare("PRAGMA table_info(jobs)").all() as {
+          name: string;
+        }[]).map(({ name }) => name),
+      );
+      for (const [name, declaration] of Object.entries(ADDED_JOB_COLUMNS)) {
+        if (!present.has(name)) {
+          database.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${declaration}`);
+        }
+      }
     } catch (error) {
       database.close();
       throw error;
@@ -218,11 +255,20 @@ export class LocalJobStore {
     return () => this.#listeners.delete(listener);
   }
 
+  /** Whether `caller` has already added a job under `idempotencyKey`. */
+  holdsKey(caller: string, idempotencyKey: string): boolean {
+    return this.#database.prepare(`
+      SELECT 1 FROM jobs WHERE caller = :caller AND idempotency_key = :key
+    `).get({ caller, key: idempotencyKey }) !== undefined;
+  }
+
   /**
    * Adds a job, or returns the one `caller` already added under
    * `idempotencyKey` when its request is the same; `created` says which. A
    * key that already names a different request is a `conflict`, and adds
    * nothing.
+   *
+   * @throws when `request.continues` names a job the store does not hold.
    */
   enqueue(
     caller: string,
@@ -252,8 +298,9 @@ export class LocalJobStore {
     const appended = this.#write(() => {
       this.#database.prepare(`
         INSERT INTO jobs (id, caller, profile, idempotency_key, request_json,
-          state, created_at)
-        VALUES (:id, :caller, :profile, :key, :request, 'queued', :at)
+          state, created_at, parent_job_id)
+        VALUES (:id, :caller, :profile, :key, :request, 'queued', :at,
+          :parent)
       `).run({
         id,
         caller,
@@ -261,6 +308,7 @@ export class LocalJobStore {
         key: idempotencyKey,
         request: requestJson,
         at,
+        parent: request.continues ?? null,
       });
       return [this.#append(id, "state", { state: "queued" }, at)];
     });
@@ -482,6 +530,7 @@ export class LocalJobStore {
       profile: row.profile,
       idempotencyKey: row.idempotency_key,
       request: JSON.parse(row.request_json),
+      ...(row.parent_job_id !== null ? { continues: row.parent_job_id } : {}),
       state: row.state,
       seq: events.at(-1)?.seq ?? 0,
       ...(steps.length > 0 ? { step: steps.at(-1)!.body } : {}),
