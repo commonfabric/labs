@@ -1410,10 +1410,10 @@ export type CustodySealPreview = {
   sources: CfcAtom[];
 
   /**
-   * The other people the value's label names beside the actor: it was made
-   * the actor's own from data held with them, such as a conversation.
+   * The people the value was drawn from data shared with, such as a
+   * conversation: one sorted group per clause naming them beside the actor.
    */
-  otherHolders: DID[];
+  heldWith: DID[][];
 
   /**
    * Whether every release rule of the room's policy requires the seal's input

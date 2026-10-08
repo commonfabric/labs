@@ -380,6 +380,9 @@ export class CFCustodySeal extends BaseElement {
   override render() {
     const preview = this.#preview;
     const summary = preview ? summarizeCustodyTerms(preview.terms) : undefined;
+    const heldWith = preview?.heldWith ?? [];
+    const readsRoom = (person: string) =>
+      (preview?.readers ?? []).some((reader) => reader.principal === person);
     // The bound on what an answer reveals is shown only when the worker found
     // the room's release witnessed. A preview that does not say so, including
     // one from a worker that predates the field, gets the warning instead.
@@ -422,19 +425,25 @@ export class CFCustodySeal extends BaseElement {
                 html`<li>${describeSource(source)}</li>`
               )
             }</ul>`
-            : (preview?.otherHolders ?? []).length > 0
-            ? "None of your sources is named."
+            : heldWith.length > 0
+            ? "None, beyond data you share with the people below."
             : "Nothing beyond what you entered yourself."}</dd>
-          ${(preview?.otherHolders ?? []).length > 0
+          ${heldWith.length > 0
             ? html`
-              <dt>Also held by</dt>
-              <dd class="other-holders">
-                <ul>${(preview?.otherHolders ?? []).map((holder) =>
-                  html`<li>${principal(holder)}</li>`
+              <dt>Drawn from data you share with</dt>
+              <dd class="held-with">
+                <ul>${heldWith.map((group) =>
+                  html`<li>${
+                    group.map((person, index) =>
+                      html`${index > 0 ? ", " : nothing}${principal(person)}${
+                        readsRoom(person)
+                          ? annotation("reads the room")
+                          : nothing
+                      }`
+                    )
+                  }</li>`
                 )}</ul>
-                <p class="note">The value was drawn from data you hold with
-                  them, such as a conversation. Only you can read it, and
-                  sealing it sends them nothing.</p>
+                <p class="note">For example, a conversation.</p>
               </dd>
             `
             : nothing}

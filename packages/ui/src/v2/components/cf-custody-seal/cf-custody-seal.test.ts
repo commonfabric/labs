@@ -82,7 +82,7 @@ const preview: Preview = {
     name: "calendar",
     subject: "did:key:actor",
   }],
-  otherHolders: [],
+  heldWith: [],
   witnessedRelease: true,
   stance: "sushi",
 };
@@ -245,28 +245,44 @@ describe("CFCustodySeal workflow", () => {
     expect(text).not.toContain("one answer at a time");
   });
 
-  it("names the other people a value is held with, and says nothing was added only when nothing was", async () => {
+  it("names the people a value was drawn from data shared with, and says nothing was added only when nothing was", async () => {
     {
       using state = setup({
         prepare: () =>
           Promise.resolve({
             ...preview,
             sources: [],
-            otherHolders: ["did:key:member", "did:key:outsider"],
+            heldWith: [["did:key:member", "did:key:outsider"], [
+              "did:key:other",
+            ]],
           }),
       });
       await state.element.accessForTestingOnly.prepare();
       const text = renderedText(state.element);
-      expect(text).toContain("Also held by");
-      expect(text).toContain("None of your sources is named.");
+      expect(text).toContain("Drawn from data you share with");
+      expect(text).toContain(
+        "None, beyond data you share with the people below.",
+      );
       expect(text).not.toContain("Nothing beyond what you entered yourself.");
-      expect(interpolatedInto(state.element, '<bdi class="principal"'))
-        .toContain("did:key:outsider");
+      const principals = interpolatedInto(
+        state.element,
+        '<bdi class="principal"',
+      );
+      for (
+        const person of ["did:key:member", "did:key:outsider", "did:key:other"]
+      ) {
+        expect(principals).toContain(person);
+      }
+      // The member who reads the room is marked; the others are not.
+      expect(interpolatedInto(state.element, '<span class="annotation"'))
+        .toEqual(["you", "you", "reads the room"]);
     }
     {
       using state = setup();
       await state.element.accessForTestingOnly.prepare();
-      expect(renderedText(state.element)).not.toContain("Also held by");
+      expect(renderedText(state.element)).not.toContain(
+        "Drawn from data you share with",
+      );
     }
     {
       using state = setup({
@@ -275,7 +291,7 @@ describe("CFCustodySeal workflow", () => {
       await state.element.accessForTestingOnly.prepare();
       const text = renderedText(state.element);
       expect(text).toContain("Nothing beyond what you entered yourself.");
-      expect(text).not.toContain("Also held by");
+      expect(text).not.toContain("Drawn from data you share with");
     }
   });
 

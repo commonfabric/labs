@@ -113,7 +113,11 @@ type Fixture = {
  */
 async function withFixture(
   body: (fixture: Fixture) => Promise<void>,
-  { sources = [] as unknown[], withAcl = true } = {},
+  {
+    sources = [] as unknown[],
+    withAcl = true,
+    draftLabel = undefined as unknown[] | undefined,
+  } = {},
 ) {
   const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
   const managers: EmulatedStorageManager[] = [];
@@ -160,8 +164,8 @@ async function withFixture(
     const draft = runtime.getCell<{ choice: string }>(home, "stance-draft", {
       type: "object",
       properties: { choice: { type: "string" } },
-      ifc: { confidentiality: [cfcAtom.user(home)] },
-    }, tx);
+      ifc: { confidentiality: draftLabel ?? [cfcAtom.user(home)] },
+    } as never, tx);
     draft.set({ choice: "sushi" });
     const policy = runtime.getCell(home, "room-policy", undefined, tx);
     policy.set(P as never);
@@ -260,9 +264,9 @@ describe("custody-seal", () => {
       }, first) as CustodySealPreview;
       expect(Object.keys(preview).sort()).toEqual([
         "actor",
+        "heldWith",
         "id",
         "instance",
-        "otherHolders",
         "policy",
         "readers",
         "room",
@@ -308,6 +312,23 @@ describe("custody-seal", () => {
       expect(Object.keys(box.getRaw() as object)).toEqual([
         (receipt.get() as { entryKey: string }).entryKey,
       ]);
+    });
+  });
+
+  it("hands the dialog the people a value was drawn from data shared with", async () => {
+    const home = alice.did();
+    await withFixture(async ({ processor, refs }) => {
+      const preview = await processor.handleRequest({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first) as CustodySealPreview;
+      expect(preview.heldWith).toEqual([[bob.did()]]);
+      expect(preview.sources).toEqual([]);
+    }, {
+      draftLabel: [
+        cfcAtom.user(home),
+        { anyOf: [home, cfcAtom.user(bob.did())] },
+      ],
     });
   });
 

@@ -2410,7 +2410,7 @@ export class RuntimeProcessor {
       instance: prepared.instance,
       policy: prepared.policy,
       sources: [...prepared.sources],
-      otherHolders: prepared.otherHolders.filter(isDID),
+      heldWith: prepared.heldWith.map((group) => [...group]),
       witnessedRelease: prepared.witnessedRelease,
       stance: prepared.stance,
     };
