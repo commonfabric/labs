@@ -549,3 +549,27 @@ check that cannot is a container to split, and the report's over-60s list
 is the work queue for that. The list is built from passing executions, so
 a failure that a wait's safety net ended at its bound does not put a test
 on it.
+
+A suite names the setup it needs in `needs`, from the capabilities in
+`tasks/ci-capabilities.ts`. A lane opens the union of what its batches need,
+each capability once, and every capability is idempotent. Several ways of
+providing one thing are separate capabilities, and a suite names the one it
+needs. `toolshed` runs a server from source, which serves the API and no shell,
+so it suits a suite that only talks to the server. A suite that drives the
+browser shell against a lane's server needs `toolshed-baked`, or
+`toolshed-baked-opposite` for the other server-execution posture, which run a
+compiled binary the lane restores from the Actions cache or builds. A suite
+whose own task brings up the whole local development stack names
+`local-dev-servers` instead. A capability that needs a GitHub Action is a fixed
+step of the lane job in `.github/workflows/deno.yml` that runs in every lane
+whatever the lane holds, as the cache restores are, because the steps of the
+lane job do not vary with what a lane runs.
+
+The packer charges a batch's tests the larger of what the suite's correction
+makes of them and the sum, over its passes, of each pass's longest unit. A pass
+takes no longer than that sum only when its longest unit starts first, since one
+that starts after the others adds its time to theirs. So a suite whose runner
+runs several units side by side is handed each unit's expected cost as `cost` on
+its `UnitRequest`, in `tasks/test-topology/suite.ts`, and starts the costliest
+first. `tasks/integration.ts` does this for the pattern test runner, and starts
+a file with no cost ahead of every file with one.

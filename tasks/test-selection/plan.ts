@@ -24,6 +24,7 @@ import {
   LANE_BOUND_SECONDS,
   LANE_BUDGET_SECONDS,
   LANES,
+  NAMED_UNSCHEDULABLE,
 } from "./policy.ts";
 import type {
   Calibration,
@@ -1431,9 +1432,6 @@ export function placedOnlyMandatory(laid: Pick<Plan, "lanes">): boolean {
 function excused(manifest: Manifest): Manifest["withheld"] {
   return manifest.withheld.filter((held) => held.reason === "flaky");
 }
-
-/** How many of the costliest identities no lane can hold a report names. */
-export const NAMED_UNSCHEDULABLE = 10;
 
 /**
  * The costliest identities no lane can hold, and the rest of them. A

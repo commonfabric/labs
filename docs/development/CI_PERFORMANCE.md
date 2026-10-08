@@ -244,6 +244,21 @@ pattern compile byte cache. Each binary has an entry of its own because a lane
 builds only the ones it needs, and one entry holding both would keep whichever
 the first lane to save happened to build.
 
+A lane uses a binary it restores without asking what it was built from, so the
+binary cache key has to cover everything a binary is made from. It is a SHA-256
+of `git ls-files --stage` over `BINARY_SOURCES` in `tasks/build-binaries.ts`,
+which gives the mode, object id and path of each tracked file, and of the JSON
+of what `cachedBinaries()` in `tasks/ci-capabilities.ts` returns, which names
+each cached binary's build and the variables baked into it. A path a build reads
+belongs in `BINARY_SOURCES`, and `tasks/build-binaries.test.ts` fails on a path
+the build reads, or a module or asset a binary embeds, that the list does not
+cover. A lane builds a binary it caches with a cleared environment. Only
+`BUILD_HOST_VARIABLES` pass through from the lane, and none of them may reach a
+binary; a test in the same file loads the shell's configuration with those
+variables denied. Every other variable is unset unless `cachedBinaries()` sets
+it, and no lane build sets `COMMIT_SHA`, since a cached binary serves every
+commit with the same sources.
+
 ### The Pattern Compile Cache Key
 
 The lane jobs restore a pattern compile byte cache from `.ci-cache/compile` in

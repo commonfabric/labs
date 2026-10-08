@@ -35,7 +35,6 @@ import {
 import { maxOf } from "@commonfabric/utils/math";
 import {
   DIALS,
-  dialValue,
   EXCLUDED_FROM_COVERAGE_GATE,
   LANE_BUDGET_SECONDS,
   LANES,
@@ -150,7 +149,7 @@ export function dialLines(): string[] {
   const width = maxOf(DIALS.map((dial) => dial.name.length));
   for (const dial of DIALS) {
     lines.push(
-      `${pad(dial.name, width)}  ${dialValue(dial)} ${dial.unit} ` +
+      `${pad(dial.name, width)}  ${dial.value} ${dial.unit} ` +
         `(${dial.setBy})`,
     );
     lines.push(`${" ".repeat(width)}  ${dial.why}`);

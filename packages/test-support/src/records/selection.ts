@@ -249,11 +249,12 @@ export interface UnschedulableEntry {
 }
 
 /**
- * What one suite's batches were fitted to cost beyond what its tests take:
- * the intercept, charged once per lane holding the suite; the slope on
- * what its own tests take; and what one more of its units costs a batch
- * already running others. What the suite's processes spend before their
- * units begin is spread through these three.
+ * What one suite's batches were fitted to cost beyond what its tests
+ * take: the intercept, charged once for each pass a lane makes over the
+ * suite; the slope on what its own tests take; and what one more of its
+ * units costs a batch already running others. What the suite's
+ * processes spend before their units begin is spread through these
+ * three.
  */
 export interface SuiteFit {
   overhead: number;
@@ -278,8 +279,9 @@ export interface ProcessFit {
   setup: number;
 
   /**
-   * Seconds charged once per lane holding the suite, for what its batches
-   * spent beyond their setup, their tests, and their units.
+   * Seconds charged once for each pass a lane makes over the suite, for
+   * what its batches spent beyond their setup, their tests, and their
+   * units.
    */
   overhead: number;
   correction: number;

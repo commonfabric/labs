@@ -28,7 +28,6 @@ import { alarms } from "./test-selection/health.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
   DIALS,
-  dialValue,
   EXCLUDED_FROM_COVERAGE_GATE,
   LANES,
 } from "./test-selection/policy.ts";
@@ -240,14 +239,10 @@ describe("test-selection", () => {
       DIALS.forEach((dial, index) => {
         expect(lines[index * 3]).toContain(dial.name);
         expect(lines[index * 3]).toContain(
-          `${dialValue(dial)} ${dial.unit} (${dial.setBy})`,
+          `${dial.value} ${dial.unit} (${dial.setBy})`,
         );
         expect(lines[index * 3 + 1]).toContain(dial.why);
       });
-    });
-
-    it("says a dial that is off is off rather than printing nothing", () => {
-      expect(dialLines().join("\n")).toContain("off");
     });
   });
 

@@ -1,3 +1,11 @@
+---
+status: historical
+created: 2026-08-21
+archived: 2026-10-08
+reason: "Executed plan; pull-request test selection went live on 2026-09-25, and its status line, figures and failure-modes table predate what shipped."
+superseded-by: docs/specs/test-selection.md
+---
+
 # Choosing which tests a pull request runs
 
 Status: in progress. All three parts are built, and `deno.yml` runs the lanes.
@@ -44,14 +52,14 @@ Mark a parent checkbox complete only after all its children pass. Keep
 this plan current in the same commits as the implementation. Once the work
 has landed, archive it under
 `docs/history/plans/` following
-[`../README.md`](../README.md).
+[`../README.md`](../../README.md).
 
 ## The vocabulary, briefly
 
 - An **identity** is the durable name of a test: the three required parts
   kind, scope, and name, plus an optional variant for a non-default
   configuration, defined by [the test-record
-  spec](../specs/test-records.md). Everything here is built on the complete
+  spec](../../specs/test-records.md). Everything here is built on the complete
   identity.
 - An **item** is the smallest thing a runner can be asked to run on its
   own. It holds one identity or many, depending on the suite. For a
@@ -331,7 +339,7 @@ identities; the runners take file paths and section names. For a pattern
 test the identity name is its path, while the suite supplies its record
 surface and variant. For a unit test `locate()` needs the file the identity
 came from, which the record carries as metadata; [the test-record
-spec](../specs/test-records.md) says where a producer gets it.
+spec](../../specs/test-records.md) says where a producer gets it.
 
 Most identities locate to an item and take part in scoring and item cost.
 An overlapping task-level record locates only to the suite. For example,
@@ -627,7 +635,7 @@ predate it.
 
 A test's identity is the name its runner reports, which for a file written
 with `describe` and `it` is [the describe chain joined with `" > "`
-](../specs/test-records.md#identity). Deno reports the container as a
+](../../specs/test-records.md#identity). Deno reports the container as a
 testcase too, and `dropContainerCases` in
 `packages/test-support/src/records/junit.ts` throws it away, so what
 reaches the store is one identity per `it`.
@@ -1416,7 +1424,7 @@ the later day. Measured on 2026-10-01, 1,334 object names from 26 runs
 each appear under two dates, and the publisher folds both copies because it
 keys on the object name. The relay now ships only the attempt that
 triggered it, dated by that attempt's own start, so no new copies arise.
-[The record spec](../specs/test-records.md#the-store) says how a reader
+[The record spec](../../specs/test-records.md#the-store) says how a reader
 recognizes an existing one.
 
 The rest of this paragraph is inference rather than measurement. Catches
@@ -1733,7 +1741,7 @@ looking for a pre-existing failure in their own diff.
 ### Two rules that force a test in
 
 **An identity with no records must run.** This is not a preference; [the
-test-record spec](../specs/test-records.md#trust-boundaries-for-consumers)
+test-record spec](../../specs/test-records.md#trust-boundaries-for-consumers)
 requires it of any consumer that selects which tests run, on the grounds
 that a selector which never runs the unselected starves its own data and
 that a renamed test is an unknown identity until an alias lands. The lane
@@ -1920,7 +1928,7 @@ go unexercised because its setup is expensive.
 
 ### Trust, and why local records now matter more
 
-[The spec](../specs/test-records.md#trust-boundaries-for-consumers) says a
+[The spec](../../specs/test-records.md#trust-boundaries-for-consumers) says a
 decision consumer reads `submissions/ci/` only. This design reads
 `submissions/local/` as well, and weighs a local catch double, so the
 spec has to be amended in the same change and the reasoning has to be
@@ -2067,7 +2075,7 @@ sharpens itself.
 commit.** Test runners here shuffle the order their tests run in, apart
 from the few whose order is the test, by a seed that is the Pacific day
 the commit under test was committed on
-([TESTING.md](../development/TESTING.md#every-test-run-shuffles-its-order)).
+([TESTING.md](../../development/TESTING.md#every-test-run-shuffles-its-order)).
 A test that depends on the order its siblings run in passes in one order
 and fails in another. That is a bug in the test, not chance, and counting
 it as a flake would withhold it from pull requests instead of getting it
@@ -2806,7 +2814,7 @@ files containing several tests.
 The manifest still carries an `unschedulable` list for new items that do
 not fit, and the report tool surfaces it. The general fix is the 60-second
 rule that
-[`tasks/test-records-report.ts`](../development/test-records.md#reading-the-data)
+[`tasks/test-records-report.ts`](../../development/test-records.md#reading-the-data)
 already ratchets. The identities that break it are what that tool's
 over-sixty-seconds list names. Getting them split is valuable
 independently of this plan and becomes more valuable with it.
@@ -2983,7 +2991,7 @@ that creates the object at the end, and a lane listing inside that gap
 would otherwise disagree with one listing after it. Every lane and every
 later attempt reads the same commit, and a manifest the store creates
 while the run is going is created after that date and cannot change the
-answer. [The specification](../specs/test-selection.md#determinism) says
+answer. [The specification](../../specs/test-selection.md#determinism) says
 what a commit dated ahead of the store's clock costs. What the answer does depend on is retention: the manifests a
 commit can resolve have to outlive the window in which that run may be
 re-run, which is a retention setting on the bucket rather than anything
@@ -3611,7 +3619,7 @@ Narrower measurements do still gate pull requests, and they are the
 subject of [the next section](#the-measured-set).
 
 It is a dashboard tile instead, and the tile follows [the dashboard's
-rules](../../packages/dashboard/README.md#philosophy-and-values). It shows
+rules](../../../packages/dashboard/README.md#philosophy-and-values). It shows
 the count of uncovered lines and, under it, what a median day does to that
 count, which is the part somebody can act on. It is not a percentage:
 a coverage percentage is exactly the kind of figure that stops meaning
@@ -4419,7 +4427,7 @@ those comments, and every manifest records the values it was built with,
 so a manifest is self-describing and a change in behavior can always be
 traced to a change in a dial.
 
-[Every dial](../development/test-selection.md#every-dial) in the
+[Every dial](../../development/test-selection.md#every-dial) in the
 test-selection guide tabulates them, one row each with its default, its
 unit, where its value comes from, and the reason to move it.
 
