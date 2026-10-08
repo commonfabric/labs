@@ -272,7 +272,8 @@ type SpaceWindow = Recency & {
   writers: Map<string, Writer>;
 
   /** When the space's commits per minute last rose to the threshold without
-   * having fallen below it since; `undefined` while under it. */
+   * having stood under it for any length of time since; `undefined` while
+   * no such run is under way. */
   overSince?: number;
 };
 
@@ -379,7 +380,8 @@ export class CommitRateTracker {
     const writer = this.#writer(space, commit);
     writer.lastRecorded = sequence;
     writer.series.add(now, commit.accepted, commit.operations);
-    return { storm: this.#judgeStorm(space, now) };
+    this.#startRun(space, now);
+    return { storm: this.#inStorm(space, now) };
   }
 
   /** The thresholds in effect and the busiest spaces, each with its busiest
@@ -407,7 +409,8 @@ export class CommitRateTracker {
           ...windowsOf(writer.series, now),
         });
       }
-      const storm = this.#judgeStorm(space, now);
+      this.#endBrokenRun(space, now);
+      const storm = this.#inStorm(space, now);
       if (storm) storms++;
       const since = space.overSince;
       spaces.push({
@@ -464,30 +467,30 @@ export class CommitRateTracker {
     return writer;
   }
 
-  /** Helper for `record()`, which ends the space's run over the threshold
-   * if expiry took the minute under it at any time before `now`, whether or
-   * not anything read the tracker then. The minute changes only at whole
-   * seconds, as commits leave it, so its count a millisecond before `now`
-   * is its count over the whole interval since the commit before this one;
-   * a commit landing on the very second its predecessor leaves keeps the
-   * run, since the count never stood under the threshold for any time. */
+  /** Helper for `record()` and `report()`, which ends the space's run over
+   * the threshold if the minute stood under it for any length of time
+   * before `now`, whether or not anything read the tracker then. The
+   * minute changes only at whole seconds, as commits leave it, so its count
+   * a millisecond before `now` is its count over the interval since the
+   * last change; a commit landing on the very instant its predecessor
+   * leaves, or a second commit at that instant restoring what the first
+   * left short, keeps the run, since the count never stood under the
+   * threshold for any time. This is the only thing that ends a run. */
   #endBrokenRun(space: SpaceWindow, now: number): void {
     const before = totalCommits(space.series.counts(now - 1, MINUTE_MS));
     if (before < this.#storm.commitsPerMinute) space.overSince = undefined;
   }
 
-  /** Helper for `record()` and `report()`, which moves the space's run over
-   * the threshold along by its commits in the last minute as of `now`, and
-   * returns whether that run has lasted the sustained window. A count under
-   * the threshold ends the run, and one at or over it begins one where none
-   * is under way. */
-  #judgeStorm(space: SpaceWindow, now: number): boolean {
-    const perMinute = totalCommits(space.series.counts(now, MINUTE_MS));
-    if (perMinute >= this.#storm.commitsPerMinute) {
-      space.overSince ??= now;
-    } else {
-      space.overSince = undefined;
-    }
+  /** Helper for `record()`, which begins a run at `now` where none is under
+   * way and the commit just recorded brings the minute to the threshold. */
+  #startRun(space: SpaceWindow, now: number): void {
+    const count = totalCommits(space.series.counts(now, MINUTE_MS));
+    if (count >= this.#storm.commitsPerMinute) space.overSince ??= now;
+  }
+
+  /** Helper for `record()` and `report()`: whether the space's run over the
+   * threshold has lasted the sustained window as of `now`. */
+  #inStorm(space: SpaceWindow, now: number): boolean {
     return space.overSince !== undefined &&
       now - space.overSince >= this.#storm.sustainedSeconds * 1000;
   }

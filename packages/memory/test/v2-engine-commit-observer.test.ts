@@ -148,6 +148,35 @@ describe("engine", () => {
       ]);
     });
 
+    it("reports each apply as it was at the time, when the operation reuses and edits its options", () => {
+      runAtomicCommit(engine, (apply) => {
+        const options = {
+          sessionId: "session:a",
+          principal: "did:key:z6Mk-alice",
+          commit: commit(1, ["of:one"]),
+        };
+        apply(options);
+        options.sessionId = "session:b";
+        options.principal = "did:key:z6Mk-bob";
+        options.commit = commit(1, ["of:two", "of:three"]);
+        apply(options);
+      });
+      expect(decisions).toStrictEqual([
+        {
+          sessionId: "session:a",
+          principal: "did:key:z6Mk-alice",
+          accepted: true,
+          operations: 1,
+        },
+        {
+          sessionId: "session:b",
+          principal: "did:key:z6Mk-bob",
+          accepted: true,
+          operations: 2,
+        },
+      ]);
+    });
+
     it("reports every commit of an atomic operation that rolled back as rejected", () => {
       expect(() =>
         runAtomicCommit(engine, (apply) => {

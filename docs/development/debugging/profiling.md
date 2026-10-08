@@ -716,9 +716,11 @@ alert on
 sum by ("space.did") (rate({"ct.memory.commits",storm="true"}[1m])) > 0
 ```
 
-fires for exactly the spaces the server has judged in a storm, and needs no
-sustain of its own because the server has applied one. A rule over the raw
-rate,
+fires for the spaces with a storm-labelled commit in the trailing minute, so
+it raises as soon as the first such commit is exported and can stay raised
+for up to a minute after the server clears the storm, plus the collector's
+export delay either way; it needs no sustain of its own because the server
+has applied one. A rule over the raw rate,
 
 ```promql
 sum by ("space.did") (rate({"ct.memory.commits"}[1m])) * 60

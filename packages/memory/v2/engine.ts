@@ -3721,30 +3721,39 @@ const transformEffectsDocOperation = <
 };
 
 /**
+ * Helper for the commit entry points, which takes down what the observer
+ * will be told about a commit at the moment it is applied, so a caller that
+ * reuses or edits its options afterwards changes nothing already recorded.
+ * A commit refused before validation may carry anything as its operations,
+ * which counts as none.
+ */
+const decisionOf = (
+  options: ApplyCommitOptions,
+  accepted: boolean,
+): CommitDecision => {
+  const operations = options.commit.operations;
+  return {
+    ...(options.space === undefined ? {} : { space: options.space }),
+    sessionId: options.sessionId,
+    ...(options.principal === undefined
+      ? {}
+      : { principal: options.principal }),
+    accepted,
+    operations: Array.isArray(operations) ? operations.length : 0,
+  };
+};
+
+/**
  * Helper for the commit entry points, which reports one decision to the
  * engine's observer. It runs after the decision is settled, so an error
  * the observer throws cannot undo a durable commit: it is reported and
- * otherwise ignored. A commit refused before validation may carry
- * anything as its operations, which counts as none.
+ * otherwise ignored.
  */
-const observeCommit = (
-  engine: Engine,
-  options: ApplyCommitOptions,
-  accepted: boolean,
-): void => {
+const observeCommit = (engine: Engine, decision: CommitDecision): void => {
   const observer = engine.commitObserver;
   if (observer === undefined) return;
-  const operations = options.commit.operations;
   try {
-    observer({
-      ...(options.space === undefined ? {} : { space: options.space }),
-      sessionId: options.sessionId,
-      ...(options.principal === undefined
-        ? {}
-        : { principal: options.principal }),
-      accepted,
-      operations: Array.isArray(operations) ? operations.length : 0,
-    });
+    observer(decision);
   } catch (error) {
     console.error("memory v2: commit observer threw", error);
   }
@@ -3787,11 +3796,11 @@ export const runAtomicCommit = <T>(
   }
   const staged = new Map<string, DocumentCacheEntry>();
   engine.stagedDocumentCache = staged;
-  // Every commit the operation applied, reported to the observer once the
-  // transaction has settled: one that threw is rejected either way, and one
-  // that applied is accepted only if the transaction then commits, since an
-  // operation may catch a failed apply and carry on.
-  const decided: { options: ApplyCommitOptions; applied: boolean }[] = [];
+  // Every commit the operation applied, as the observer will be told of it
+  // once the transaction has settled: one that threw is rejected either
+  // way, and one that applied is accepted only if the transaction then
+  // commits, since an operation may catch a failed apply and carry on.
+  const decided: CommitDecision[] = [];
   try {
     let applied: T;
     try {
@@ -3799,21 +3808,21 @@ export const runAtomicCommit = <T>(
         operation((options) => {
           try {
             const result = applyCommitTransaction(engine, options);
-            decided.push({ options, applied: true });
+            decided.push(decisionOf(options, true));
             return result;
           } catch (error) {
-            decided.push({ options, applied: false });
+            decided.push(decisionOf(options, false));
             throw error;
           }
         })
       ).immediate();
     } catch (error) {
-      for (const { options } of decided) observeCommit(engine, options, false);
+      for (const decision of decided) {
+        observeCommit(engine, { ...decision, accepted: false });
+      }
       throw error;
     }
-    for (const { options, applied } of decided) {
-      observeCommit(engine, options, applied);
-    }
+    for (const decision of decided) observeCommit(engine, decision);
     // Durable now, so what was read from those rows can be remembered. A
     // revision the cache already holds was served from it rather than
     // staged, so a present key here is not expected; skipping it keeps the
@@ -4332,14 +4341,15 @@ export const applyWaveCommit = (
       return applied;
     },
   );
+  const decision = decisionOf(options, true);
   let applied: AppliedCommit;
   try {
     applied = applyUnderTransaction.immediate(engine, options);
   } catch (error) {
-    observeCommit(engine, options, false);
+    observeCommit(engine, { ...decision, accepted: false });
     throw error;
   }
-  observeCommit(engine, options, true);
+  observeCommit(engine, decision);
   return applied;
 };
 

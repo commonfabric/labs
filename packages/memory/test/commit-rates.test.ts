@@ -429,6 +429,37 @@ describe("commit-rates", () => {
           });
         });
 
+        it("keeps a run going across several replacements at one instant, with or without a report before them", () => {
+          // Pairs of commits every twenty seconds hold the minute at the
+          // threshold of six once three pairs are in. At sixty the first
+          // pair leaves as the fourth lands: the first replacement leaves
+          // the minute one short and the second restores it, at one
+          // instant, so the run that began at forty carries on, whether
+          // or not a report read the tracker just before the pair.
+          const outcomes = (reportBeforeReplacement: boolean) => {
+            const time = clock();
+            const tracker = new CommitRateTracker({
+              now: time.now,
+              storm: { commitsPerMinute: 6, sustainedSeconds: 10 },
+            });
+            const pair = () => [commit(tracker).storm, commit(tracker).storm];
+            pair();
+            time.advance(20_000);
+            pair();
+            time.advance(20_000);
+            expect(pair()).toEqual([false, false]);
+            time.advance(20_000);
+            if (reportBeforeReplacement) {
+              expect(spaceOf(tracker.report(), space).storm).toEqual({
+                since: time.now() - 20_000,
+              });
+            }
+            return pair();
+          };
+          expect(outcomes(false)).toEqual([true, true]);
+          expect(outcomes(true)).toEqual([true, true]);
+        });
+
         it("counts a storm in `storms` even when its space is not among the listed ones", () => {
           const time = clock();
           const tracker = new CommitRateTracker({
