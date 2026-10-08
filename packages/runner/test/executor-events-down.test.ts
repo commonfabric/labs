@@ -28,6 +28,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -935,8 +936,10 @@ describe("Phase 3 events-down (serving side)", () => {
   });
 
   it("runs a served handler on an event whose payload links to a cell in another space through a content-addressed schema, reading the linked cell", async () => {
-    // The profile's schema document lives in the profile's space alone
-    // until the fire: the append is what owes it to the stream's space.
+    // The profile's schema says more than the handler's `Profile` does, so
+    // its document is none the pattern's own writes put in the stream's
+    // space: until the fire it lives in the profile's space alone, and the
+    // append is what owes it to the stream's.
 
     ({ manager: clientManager, runtime: clientRuntime } = openClient());
     const engine = await server.engineForSpace(space);
@@ -950,26 +953,27 @@ describe("Phase 3 events-down (serving side)", () => {
       "profile-age",
       {
         type: "object",
-        properties: { age: { type: "number" } },
+        properties: { name: { type: "string" }, age: { type: "number" } },
       } as const satisfies JSONSchema,
     );
     {
       const tx = clientRuntime.edit();
-      profile.withTx(tx).set({ age: 36 });
+      profile.withTx(tx).set({ name: "Ada", age: 36 });
       expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
+    const link = profile.getAsLink({ includeSchema: true });
+    const ref = (linkRefPayload(link).schema as { $ref?: string }).$ref!;
+    expect(ref).toMatch(/^cid:/);
+    expect(Engine.read(engine, { id: ref })).toBeNull();
 
     host = newHost();
     const appends = new ArrivalLog<{ delivered: boolean }>();
-    sendEvent(
-      result.key("bump"),
-      { target: { name: profile.getAsLink({ includeSchema: true }) } },
-      undefined,
-      { onAppended: appends.record },
-    );
+    sendEvent(result.key("bump"), { target: { name: link } }, undefined, {
+      onAppended: appends.record,
+    });
     await appends.reached(1);
     expect(appends.entries[0]).toEqual({ delivered: true });
 
