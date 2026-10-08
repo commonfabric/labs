@@ -693,6 +693,48 @@ describe("SchemaGenerator", () => {
         propertyA({ type: "string", ifc: { integrity: ["v"] } }),
       ],
       [
+        "keeps evidence off an array a constituent of no members does not hold",
+        `
+          type M1 = { a: string[] };
+          type M2 = { a: Cfc<unknown, { integrity: readonly ["v"] }> };
+        `,
+        propertyA({ type: "array", items: { type: "string" } }),
+      ],
+      [
+        "keeps evidence on an array a constituent holds whole",
+        `
+          type M1 = { a: unknown[] };
+          type M2 = { a: Cfc<string[], { integrity: readonly ["v"] }> };
+        `,
+        propertyA({
+          type: "array",
+          items: { type: "string" },
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "keeps evidence off a fallback whose members a constituent does not hold",
+        `
+          type M1 = { a: string & { b: 1 } };
+          type M2 = { a: Cfc<unknown, { integrity: readonly ["v"] }> };
+        `,
+        propertyA(UNSUPPORTED_NON_OBJECT),
+      ],
+      [
+        "keeps evidence on a fallback whose members a constituent holds",
+        `
+          type M1 = { a: { [key: string]: string } };
+          type M2 = { a: Cfc<{ x: string }, { integrity: readonly ["v"] }> };
+        `,
+        propertyA({
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signature on constituent",
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
         "keeps a union's evidence on the members of the arm the value is",
         `
           type M1 = { a: { z: number } };
