@@ -191,9 +191,10 @@ between them, and defaults that differ leave none; its labels are placed as
 the type path places a CFC carrier's (§11): a restriction goes on the
 members of the result it declares, or on the whole result where it declares
 all of them or none, and evidence (`integrity`, `addIntegrity`) goes on the
-members it declares, or, where it declares none, on the whole result only if
-that has no members either, as a member another constituent holds may hold
-data the labeled one never established; a union's restrictions go on the
+whole result only where the labeled constituent holds all of its data, every
+member any constituent declares and its items where one is an array, and
+otherwise on the members it declares, as data another constituent holds may
+be data the labeled one never established; a union's restrictions go on the
 members any of its arms declares, and its evidence on the members of the arm
 the value is. A keyword written beside a reference is read in place of the
 definition's, through a chain of references, except its labels, which join

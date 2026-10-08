@@ -985,6 +985,7 @@ function armsOfUnion(
             labels: evidence,
             members: declaredMembersOf(schema, context),
             reach: "must" as const,
+            items: holdsItems(schema, context),
           }]
           : []),
         ...labels,
@@ -1015,6 +1016,38 @@ function declaredMembersOf(
   return isObjectSchema(stated) && isObjectOrArray(stated.properties)
     ? Object.keys(stated.properties)
     : [];
+}
+
+/**
+ * Whether `schema`, read as `withBesideKeywords()` reads it, is an array,
+ * whose items are data of the value no property names.
+ */
+function holdsItems(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): boolean {
+  return isArraySchema(withBesideKeywords(schema, context));
+}
+
+/**
+ * The data of a merged value, which evidence must cover to go on the whole
+ * of it: the members its parts declare, and its items where a part is an
+ * array (`declaredMembersOf()`, `holdsItems()`).
+ */
+type ValueMembers = {
+  readonly names: ReadonlySet<string>;
+  readonly items: boolean;
+};
+
+/** The data of the value `parts` merge to (`ValueMembers`). */
+function valueMembersOf(
+  parts: readonly MutableJSONSchema[],
+  context: GenerationContext,
+): ValueMembers {
+  return {
+    names: new Set(parts.flatMap((part) => declaredMembersOf(part, context))),
+    items: parts.some((part) => holdsItems(part, context)),
+  };
 }
 
 /**
@@ -1085,19 +1118,21 @@ function withoutLabels(
 
 /**
  * Labels a part of an intersection states, the members of the part's value
- * they were written around, and how far into the merged value they reach, as
- * the type path places a CFC carrier's labels on its payload
- * (`placeCarriedLabels()`). A restriction reaches wherever the part's data
- * may be (`"may"`): the members it was written around, or the whole value
- * where those are none. Evidence (`EVIDENCE_LABELS`) reaches only where the
- * part's data must be (`"must"`): the members it was written around, or, where
- * those are none, the whole value only if that has no members either, as a
- * member of its own may hold data the part never established.
+ * they were written around and whether that value is an array (`items`), and
+ * how far into the merged value they reach, as the type path places a CFC
+ * carrier's labels on its payload (`placeCarriedLabels()`). A restriction
+ * reaches wherever the part's data may be (`"may"`): the members it was
+ * written around, or the whole value where those are none. Evidence
+ * (`EVIDENCE_LABELS`) reaches only where the part's data must be (`"must"`):
+ * the whole value where the part holds all of its data (`ValueMembers`), and
+ * otherwise the members it was written around, as data the value holds
+ * besides may be data the part never established.
  */
 type PartLabels = {
   readonly labels: Record<string, unknown>;
   readonly members: readonly string[];
   readonly reach: "may" | "must";
+  readonly items?: boolean;
 };
 
 /**
@@ -1117,28 +1152,35 @@ function partLabelsOf(
         ? [{ labels: restrictions, members, reach: "may" as const }]
         : []),
       ...(evidence
-        ? [{ labels: evidence, members, reach: "must" as const }]
+        ? [{
+          labels: evidence,
+          members,
+          reach: "must" as const,
+          items: holdsItems(part, context),
+        }]
         : []),
     ];
   });
 }
 
 /**
- * `schema`, a merged value, with each of `placed`'s labels where it reaches
- * (`PartLabels`): on the members it was written around, each alone, where
- * they are some but not all of the value's members; on the whole value where
- * they are all of them, or where the labels reach the whole value; and
- * nowhere where they are evidence that reaches none of it. A value accepting
+ * `schema`, the value parts holding `value`'s data merged to, with each of
+ * `placed`'s labels where it reaches (`PartLabels`): on the members it was
+ * written around, each alone, where they are some but not all of the value's
+ * members, and otherwise on the whole value, except evidence, which goes on
+ * the whole value only where its part holds all of the value's data, and
+ * nowhere where it reaches no member the value has. A value accepting
  * nothing needs none.
  */
 function withPartLabels(
   schema: MutableJSONSchema,
   placed: readonly PartLabels[],
+  value: ValueMembers,
   context: GenerationContext,
 ): MutableJSONSchema {
   if (schema === false || placed.length === 0) return schema;
   let result: MutableJSONSchema = schema;
-  for (const { labels, members, reach } of placed) {
+  for (const { labels, members, reach, items } of placed) {
     const properties: Record<string, MutableJSONSchema> | undefined =
       isObjectSchema(result) && isObjectOrArray(result.properties)
         ? result.properties as Record<string, MutableJSONSchema>
@@ -1147,13 +1189,13 @@ function withPartLabels(
     const reached = properties
       ? members.filter((member) => Object.hasOwn(properties, member))
       : [];
+    const holdsAll = [...value.names].every((name) => members.includes(name)) &&
+      (!value.items || items === true);
+    if (reach === "must" && !holdsAll && reached.length === 0) continue;
     if (
-      reach === "must" && reached.length === 0 &&
-      (members.length > 0 || count > 0)
+      properties && reached.length > 0 &&
+      (reach === "must" ? !holdsAll : reached.length < count)
     ) {
-      continue;
-    }
-    if (properties && reached.length > 0 && reached.length < count) {
       const labeled: Record<string, MutableJSONSchema> = { ...properties };
       for (const member of reached) {
         labeled[member] = withIfcLabels(properties[member]!, labels);
@@ -1326,6 +1368,7 @@ function intersectionOf(
           return withPartLabels(
             intersectionOf(expanded, context),
             labels,
+            valueMembersOf(expanded, context),
             context,
           );
         }
@@ -1388,7 +1431,12 @@ function mergeParts(
   const key = `merge|${
     hashStringOf([
       parts.map((part) => withOriginsNumbered(part, context)),
-      carried.map(({ labels, members, reach }) => [labels, members, reach]),
+      carried.map(({ labels, members, reach, items }) => [
+        labels,
+        members,
+        reach,
+        items === true,
+      ]),
     ] as FabricValue)
   }`;
   if (context.definitionStack.has(key)) {
@@ -1423,7 +1471,7 @@ function mergeLabeledParts(
     context,
   );
   return withWholeValueKeywords(
-    withPartLabels(settled, placed, context),
+    withPartLabels(settled, placed, valueMembersOf(parts, context), context),
     keywords,
     context,
   );
