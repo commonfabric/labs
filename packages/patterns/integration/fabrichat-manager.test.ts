@@ -13,6 +13,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import { Runtime } from "@commonfabric/runner";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   EmulatedStorageManager,
@@ -31,6 +35,26 @@ const MANAGER_PATH = fromFileUrl(
 );
 
 const RESULT_CAUSE = "fabrichat manager";
+
+// The reviewed action a start is admitted from, as
+// `../fabrichat/schemas.tsx` names it.
+const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
+
+/**
+ * `event` as a click on the manager's start control delivers it: carrying the
+ * reviewed action, and marked as the renderer marks a click it delivers.
+ */
+const startClick = (
+  event: Record<string, unknown>,
+): Record<string, unknown> => {
+  const click = {
+    type: "click",
+    ...event,
+    provenance: reviewedActionProvenance("dom", START_ACTION),
+  };
+  markRendererTrustedEvent(click);
+  return click;
+};
 
 // Reads an index entry with its room as a link, not a copy.
 const entryListSchema = {
@@ -112,7 +136,11 @@ describe("fabrichat-manager", () => {
     await manager.pull();
     const send = async (stream: string, event: Record<string, unknown>) => {
       const sendTx = runtime.edit();
-      manager.withTx(sendTx).key(stream).send(event);
+      manager.withTx(sendTx).key(stream).send(
+        stream === "openDirect" || stream === "createGroup"
+          ? startClick(event)
+          : event,
+      );
       expect((await sendTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await manager.pull();
@@ -139,7 +167,8 @@ describe("fabrichat-manager", () => {
     expect(spaces).not.toContain(home);
     expect(spaces[0]).not.toBe(spaces[1]);
 
-    // This user holds OWNER, each other member WRITE, and no one else.
+    // This user and each other member hold OWNER, and no one else holds
+    // anything.
     const aclOf = async (space: string) =>
       (await server.readDocument(
         space as Parameters<typeof server.readDocument>[0],
@@ -150,11 +179,11 @@ describe("fabrichat-manager", () => {
         .getAsNormalizedFullLink().space;
     expect(await aclOf(spaceOf("direct"))).toEqual({
       [home]: "OWNER",
-      [BOB]: "WRITE",
+      [BOB]: "OWNER",
     });
     expect(await aclOf(spaceOf("group"))).toEqual({
       [home]: "OWNER",
-      [CAROL]: "WRITE",
+      [CAROL]: "OWNER",
     });
   });
 
@@ -175,7 +204,7 @@ describe("fabrichat-manager", () => {
       ))?.value,
     ).toEqual({
       [home]: "OWNER",
-      [CAROL]: "WRITE",
+      [CAROL]: "OWNER",
       "*": "WRITE",
     });
   });

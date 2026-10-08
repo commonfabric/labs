@@ -43,7 +43,6 @@ const SUPERSEDED: readonly Spelling[] = [
   ["piece get-label", "cell get-label"],
   ["piece set-label", "cell set-label"],
   ["piece recreate-root", "space recreate-root"],
-  ["piece set-home", "space set-home"],
 ];
 
 /**
@@ -197,10 +196,12 @@ describe("integration-command-spellings", () => {
     });
 
     it("reports a spelling written as the literal command", () => {
-      expect(findSupersededSpellings("drill.sh", "cf piece set-home --reset"))
+      expect(
+        findSupersededSpellings("drill.sh", "cf piece recreate-root --space x"),
+      )
         .toEqual([
-          "drill.sh:1: 'cf piece set-home' is superseded; spell it " +
-          "'cf space set-home'",
+          "drill.sh:1: 'cf piece recreate-root' is superseded; spell it " +
+          "'cf space recreate-root'",
         ]);
     });
 
@@ -256,7 +257,6 @@ describe("integration-command-spellings", () => {
             "$CF cell set-label --piece board",
             "$CF piece call --piece board addItem '{}'",
             "$CF space recreate-root --space x",
-            "$CF space set-home --reset",
           ].join("\n"),
         ),
       ).toEqual([]);

@@ -76,7 +76,11 @@ import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { getLogger } from "@commonfabric/utils/logger";
 import { maxOf, minOf } from "@commonfabric/utils/math";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+  type ReadonlyRecord,
+} from "@commonfabric/utils/types";
 
 import {
   applyPatchToDocument,
@@ -940,56 +944,140 @@ const comparePath = (left: readonly string[], right: readonly string[]) => {
 const localSeqKey = (localSeq: number | number[]): string =>
   Array.isArray(localSeq) ? localSeq.join(",") : String(localSeq);
 
-/**
- * Orders paths segment by segment, a shorter path ahead of one it prefixes.
- * That puts an ancestor directly ahead of every path below it, which is what
- * lets `compactRecursiveReads()` drop the descendants in one pass.
- */
-const compareSegments = (
-  left: readonly string[],
-  right: readonly string[],
-): number => {
-  const limit = Math.min(left.length, right.length);
-  for (let index = 0; index < limit; index++) {
-    if (left[index] !== right[index]) {
-      return left[index] < right[index] ? -1 : 1;
-    }
-  }
-  return left.length - right.length;
+/** A node of a tree of the paths one dependency group's reads name. */
+type ReadPathNode<Read> = {
+  /** The recursive read at this path, if any. */
+  recursive?: Read;
+
+  /** The shallow read at this path, if any. */
+  shallow?: Read;
+
+  /** The nodes one segment below, by segment. */
+  children: Map<string, ReadPathNode<Read>>;
 };
 
-const isPathPrefix = (
-  prefix: readonly string[],
-  path: readonly string[],
-): boolean =>
-  prefix.length <= path.length &&
-  prefix.every((segment, index) => segment === path[index]);
+/** Member counts of frozen containers, which cannot change. */
+const frozenMemberCounts = new WeakMap<ReadonlyRecord, number>();
 
 /**
- * Helper for `compactCommitReads()`, which keeps the reads of one dependency
- * group that no other read of the group covers. A recursive read at a path
- * covers every path below it, so a read under another is dropped. Sorts
- * `reads` in place and returns the survivors in that order.
+ * Helper for `compactDependencyGroup()`, which returns how many members
+ * `container` holds: an array's length, or an object's enumerable own keys.
  */
-const compactRecursiveReads = <Read extends { path: readonly string[] }>(
-  reads: Read[],
-): Read[] => {
-  if (reads.length < 2) return reads;
-  reads.sort((left, right) => compareSegments(left.path, right.path));
-  const kept: Read[] = [];
-  let covering: readonly string[] | undefined;
-  for (const read of reads) {
-    if (covering !== undefined && isPathPrefix(covering, read.path)) continue;
-    kept.push(read);
-    covering = read.path;
+const memberCount = (container: ReadonlyRecord): number => {
+  if (Array.isArray(container)) return container.length;
+  if (!Object.isFrozen(container)) return Object.keys(container).length;
+  let count = frozenMemberCounts.get(container);
+  if (count === undefined) {
+    count = Object.keys(container).length;
+    frozenMemberCounts.set(container, count);
   }
-  return kept;
+  return count;
+};
+
+/**
+ * Helper for `compactCommitReads()`, which appends to `compacted` the reads of
+ * one dependency group that the commit needs. `observed` is the document the
+ * reads observed, or `undefined` where there is none.
+ *
+ * A recursive read covers the reads below it. A path is read in full when a
+ * recursive read names it, or when a read names it and every member its value
+ * holds in `observed` is read in full. The reads in a subtree read in full are
+ * stated as one recursive read at its root, plus one shallow read there when
+ * any of them was shallow; under a recursive ancestor, the shallow read alone.
+ * A shallow and a recursive read of one path are both kept. The recursive read conflicts with every write at,
+ * above, or below the root. The shallow read conflicts with every change to an
+ * ancestor's key set, which is all a shallow read below the root conflicts
+ * with that the recursive read does not. So the two conflict with every write
+ * the reads they replace conflict with, whatever document `observed` is.
+ * `observed` decides only how much is merged, and a document other than the
+ * observed one can only extend the recursive read over members nobody read.
+ *
+ * Without a document no subtree is merged, and only reads a recursive ancestor
+ * covers are dropped.
+ */
+const compactDependencyGroup = <
+  Read extends ConfirmedCommitRead | PendingCommitRead,
+>(
+  reads: readonly Read[],
+  observed: EntityDocument | undefined,
+  compacted: Read[],
+): void => {
+  const root: ReadPathNode<Read> = { children: new Map() };
+  for (const read of reads) {
+    let node = root;
+    for (const segment of read.path) {
+      let child = node.children.get(segment);
+      if (child === undefined) {
+        child = { children: new Map() };
+        node.children.set(segment, child);
+      }
+      node = child;
+    }
+    if (read.nonRecursive === true) {
+      node.shallow ??= read;
+    } else {
+      node.recursive ??= read;
+    }
+  }
+
+  // Appends the reads at and below `node` that the commit needs, and returns
+  // whether they read `value` in full.
+  const compact = (
+    node: ReadPathNode<Read>,
+    value: unknown,
+    recursiveAbove: boolean,
+  ): boolean => {
+    const start = compacted.length;
+    const recursive = node.recursive;
+    const container = isKeyableObjectOrArray(value) ? value : undefined;
+    let membersReadInFull = 0;
+    for (const [segment, child] of node.children) {
+      const isMember = container !== undefined &&
+        Object.prototype.propertyIsEnumerable.call(container, segment);
+      const member = isMember ? container[segment] : undefined;
+      if (
+        compact(child, member, recursiveAbove || recursive !== undefined) &&
+        isMember
+      ) {
+        membersReadInFull++;
+      }
+    }
+    const read = recursive ?? node.shallow;
+    if (read === undefined) return false;
+    const readInFull = recursive !== undefined ||
+      (observed !== undefined &&
+        (container === undefined ||
+          membersReadInFull === memberCount(container)));
+    if (readInFull && observed !== undefined && compacted.length > start) {
+      let shallow = node.shallow;
+      for (let index = start; index < compacted.length; index++) {
+        if (compacted[index].nonRecursive === true) {
+          shallow ??= { ...read, nonRecursive: true };
+        }
+      }
+      compacted.length = start;
+      if (shallow !== undefined) compacted.push(shallow);
+      if (!recursiveAbove) {
+        const statement = { ...read };
+        delete statement.nonRecursive;
+        compacted.push(statement);
+      }
+    } else {
+      if (recursive !== undefined && !recursiveAbove) compacted.push(recursive);
+      if (node.shallow !== undefined) compacted.push(node.shallow);
+    }
+    return readInFull;
+  };
+  compact(root, observed, false);
 };
 
 const compactCommitReads = <
   Read extends ConfirmedCommitRead | PendingCommitRead,
 >(
   reads: Read[],
+  // The document a dependency group's reads observed, where it is known.
+  observedDocument: (read: Read) => EntityDocument | undefined = () =>
+    undefined,
 ): Read[] => {
   const dependencyKeys = new Map<number | number[], string>();
   const dependencyKeyFor = (localSeq: number | number[]): string => {
@@ -1001,14 +1089,7 @@ const compactCommitReads = <
     return key;
   };
 
-  // Grouping reads the input in whatever order it arrives: a recursive read
-  // displaces a shallow one at its path whichever comes first, and two reads
-  // equal in every grouped field are interchangeable, so the order the groups
-  // settle in decides nothing. The sort at the end is the one that orders.
-  const grouped = new Map<string, {
-    recursiveByPath: Map<string, Read>;
-    nonRecursiveByPath: Map<string, Read>;
-  }>();
+  const grouped = new Map<string, Read[]>();
   for (const candidate of reads) {
     // The dependency key carries every admission-relevant field — seq for
     // confirmed reads, the layer set AND basisSeq for pending reads — so
@@ -1022,33 +1103,17 @@ const compactCommitReads = <
       : `pending:${normalizeCellScope(candidate.scope)}:${candidate.id}:${
         dependencyKeyFor(candidate.localSeq)
       }:${candidate.basisSeq}`;
-    let group = grouped.get(dependencyKey);
-    if (!group) {
-      group = {
-        recursiveByPath: new Map(),
-        nonRecursiveByPath: new Map(),
-      };
-      grouped.set(dependencyKey, group);
-    }
-    const pathKey = candidate.path.join("\0");
-    if (candidate.nonRecursive === true) {
-      if (group.recursiveByPath.has(pathKey)) {
-        continue;
-      }
-      group.nonRecursiveByPath.set(pathKey, candidate);
+    const group = grouped.get(dependencyKey);
+    if (group === undefined) {
+      grouped.set(dependencyKey, [candidate]);
     } else {
-      group.nonRecursiveByPath.delete(pathKey);
-      group.recursiveByPath.set(pathKey, candidate);
+      group.push(candidate);
     }
   }
 
   const compacted: Read[] = [];
   for (const group of grouped.values()) {
-    const recursive = compactRecursiveReads([
-      ...group.recursiveByPath.values(),
-    ]);
-    for (const read of recursive) compacted.push(read);
-    for (const read of group.nonRecursiveByPath.values()) compacted.push(read);
+    compactDependencyGroup(group, observedDocument(group[0]), compacted);
   }
 
   return compacted.toSorted((left, right) => {
@@ -1170,6 +1235,17 @@ export class StorageManager implements IStorageManager {
 
   #settings: IRemoteStorageProviderSettings;
   #providers = new Map<MemorySpace, Provider>();
+
+  /**
+   * The kind each space declares, as {@link spaceKind} read it in a session
+   * of its own, for a space whose provider's session opened before the space
+   * had history. A space with history keeps its kind, so an entry never goes
+   * stale.
+   */
+  #spaceKindsReadAfresh = new Map<
+    MemorySpace,
+    MemoryV2Client.DeclaredSpaceKind
+  >();
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
@@ -1375,6 +1451,18 @@ export class StorageManager implements IStorageManager {
     // caller mutating their map object must not desynchronize them.
     this.#seedHosts = Object.freeze({ ...(options.spaceHostMap ?? {}) });
     this.#memoryHost = String(options.memoryHost);
+    // The memory server says when a space that refused this principal would
+    // admit it. The notice is a hint, so it starts an ordinary retry, whose
+    // admission the server decides again.
+    sessionFactory.subscribeAdmissible?.((space, principal) => {
+      if (principal !== this.as.did()) return;
+      this.retrySpaceAccess(space).catch((error) =>
+        logger.warn("admission-notice-retry", () => [
+          `space ${space}: the retry a \`session/admissible\` started failed:`,
+          error,
+        ])
+      );
+    });
   }
 
   /**
@@ -1536,30 +1624,41 @@ export class StorageManager implements IStorageManager {
    * The space's key pair is generated here from random data. It opens one
    * session, as the space, through the same route every later session for
    * the DID takes, and signs one commit: `acl` as the space's access-control
-   * document, and `root` as its reserved root pattern when one is given. The
-   * commit reads the document at sequence zero, so it lands only on a space
-   * with no history. The memory client resubmits the identical commit after a
-   * lost connection until the server confirms or refuses it. The key is held
-   * by nothing but this call, and is dropped when the call returns.
+   * document, `genesis.root` as its reserved root pattern when one is given,
+   * and `genesis.spaceKind` as its declared kind when one is given. The
+   * session declares the same root and kind, which the server holds the
+   * commit to. The commit reads the document at sequence zero, so it lands
+   * only on a space with no history. The memory client resubmits the
+   * identical commit after a lost connection until the server confirms or
+   * refuses it. The key is held by nothing but this call, and is dropped when
+   * the call returns.
    */
-  async createSpace(acl: ACL, root?: GenesisRoot): Promise<MemorySpace> {
+  async createSpace(
+    acl: ACL,
+    genesis: { root?: GenesisRoot; spaceKind?: string } = {},
+  ): Promise<MemorySpace> {
+    const { root, spaceKind } = genesis;
+    const declarations = {
+      ...(root === undefined ? {} : { genesisRoot: root }),
+      ...(spaceKind === undefined ? {} : { spaceKind }),
+    };
     const key = await Identity.generate();
     const space = key.did() as MemorySpace;
     const aclId = aclDocId(space);
     const { client, session } = await this.#sessionFactory.create(
       space,
       key,
-      {
-        sessionId: crypto.randomUUID(),
-        ...(root === undefined ? {} : { genesisRoot: root }),
-      },
+      { sessionId: crypto.randomUUID(), ...declarations },
     );
     try {
       if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
         throw new Error("Host does not support genesis root reservations");
       }
+      if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
+        throw new Error("Host does not support declared space kinds");
+      }
       await session.transact({
-        ...(root === undefined ? {} : { genesisRoot: root }),
+        ...declarations,
         localSeq: 1,
         reads: {
           confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
@@ -1731,7 +1830,38 @@ export class StorageManager implements IStorageManager {
       0;
   }
 
+  /** @inheritDoc */
+  async spaceKind(space: MemorySpace): Promise<string | undefined> {
+    const declared = await this.#openProvider(space).declaredSpaceKind() ??
+      this.#spaceKindsReadAfresh.get(space);
+    if (declared !== undefined) return declared.kind;
+    // The space's session opened before the space had any history, so it was
+    // told nothing of the kind, and stays open without being told. A session
+    // of its own, opened now, is told the kind as the space stands, and is
+    // closed however the read ends.
+    const { client, session } = await this.#sessionFactory.create(
+      space,
+      this.as,
+      {
+        sessionId: crypto.randomUUID(),
+        ...this.#sessionDescriptorFields(),
+      },
+    );
+    try {
+      const afresh = session.declaredSpaceKind;
+      if (afresh !== undefined) this.#spaceKindsReadAfresh.set(space, afresh);
+      return afresh?.kind;
+    } finally {
+      await client.close();
+    }
+  }
+
   open(space: MemorySpace): IStorageProvider {
+    return this.#openProvider(space);
+  }
+
+  /** Helper for {@link open}, which returns the provider it opens. */
+  #openProvider(space: MemorySpace): Provider {
     // A manager reused after close() starts a new session; retention
     // follows it.
     this.#schemaRegistryLease ??= acquireSchemaRegistryLease();
@@ -3191,6 +3321,11 @@ class Provider
         throw error;
       },
     );
+  }
+
+  /** See `SpaceReplica.declaredSpaceKind()`. */
+  declaredSpaceKind(): Promise<MemoryV2Client.DeclaredSpaceKind | undefined> {
+    return this.#followReplacement((replica) => replica.declaredSpaceKind());
   }
 
   operationCodecs(): Promise<readonly string[]> {
@@ -4705,6 +4840,24 @@ export class SpaceReplica
   ): Promise<OperationFieldSnapshot> {
     const { session } = await this.#activeSessionHandle();
     return (await session.queryOperationField(query)).field;
+  }
+
+  /**
+   * What the memory server told this replica's session, when it last opened,
+   * of the kind the space declares in its genesis commit; see
+   * `SpaceSession.declaredSpaceKind`.
+   *
+   * @throws If the session cannot be opened, or if the memory server does not
+   *   advertise `spaceKind`.
+   */
+  async declaredSpaceKind(): Promise<
+    MemoryV2Client.DeclaredSpaceKind | undefined
+  > {
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.spaceKind !== true) {
+      throw new Error("memory server does not report a space's declared kind");
+    }
+    return session.declaredSpaceKind;
   }
 
   async operationCodecs(): Promise<readonly string[]> {
@@ -7739,7 +7892,13 @@ export class SpaceReplica
     // conflict granularity to nonRecursive reads (patchOverlapsNonRecursiveRead),
     // matching how the scheduler reader-dirty index already treats them.
     return {
-      confirmed: compactCommitReads(confirmed),
+      confirmed: compactCommitReads(
+        confirmed,
+        (read) =>
+          this.#docs.get(
+            docKey(read.id, this.instanceKey(read.scope, identity)),
+          )?.confirmed.value,
+      ),
       pending: compactCommitReads(pending),
     };
   }

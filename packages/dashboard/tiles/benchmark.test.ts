@@ -19,6 +19,7 @@ import {
 } from "@std/assert";
 import { expect } from "@std/expect";
 import { beforeEach, describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 
 import type { Ctx, TileView } from "../types.ts";
 import { BENCH_TREND_BUCKET_MS, REPO } from "../config.ts";
@@ -75,8 +76,8 @@ if (Deno.env.get("DASHBOARD_CACHE_DIR") === undefined) {
 Deno.env.delete("GH_TOKEN");
 Deno.env.delete("GITHUB_TOKEN");
 
-// The tiles refuse a run list whose newest run is older than one they already
-// hold, and the fixtures of different tests are dated independently. So every
+// The tiles hold the run list they read, and read only its top again while
+// they hold it. The fixtures of different tests are unrelated lists, so every
 // test starts from a tile holding no runs.
 Deno.test.beforeEach(forgetBenchmarkRunsForTest);
 
@@ -89,6 +90,10 @@ const COLLECTION_BUCKET = ciHistoryBucketMs(CI_HISTORY_MIN_DAYS);
 const SAMPLED_BASE = Math.floor(BASE / COLLECTION_BUCKET) *
     COLLECTION_BUCKET +
   COLLECTION_BUCKET * 0.75;
+// A collection reuses the run list another made moments before it. The tile
+// collects this often, and a collection this long after another reads the
+// list again.
+const NEXT_COLLECTION_MS = benchmark.intervalMs;
 
 function ctx(env: Record<string, string> = {}): Ctx {
   return {
@@ -144,6 +149,10 @@ const ghRun = (
 
 interface Api {
   pages?: Record<number, GhRun[]>;
+  // The answer to a run list filtered by branch, event, status, or creation
+  // time, which GitHub serves from an index that can be days behind. A test
+  // that does not give one has it name no runs.
+  filtered?: GhRun[];
   // runId -> its artifact listing, or an HTTP status to fail with.
   artifacts?: Record<
     number,
@@ -156,6 +165,15 @@ interface Api {
   // Answered to everything, standing in for a refused request.
   status?: number;
 }
+
+// Whether `url` asks for a benchmarks.yml run list narrowed by branch, event,
+// or status. The tile reads one only to find runs that were run again, and
+// reads which runs exist from the unfiltered list.
+const isFilteredRunList = (url: URL): boolean =>
+  url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs") &&
+  [...url.searchParams.keys()].some((key) =>
+    key !== "per_page" && key !== "page"
+  );
 
 // A stand-in GitHub Actions API answering exactly the three calls the tile makes.
 function serve(api: Api): (url: URL) => Response {
@@ -175,9 +193,24 @@ function serve(api: Api): (url: URL) => Response {
     if (api.throws) throw api.throws;
     if (api.status) return new Response("no", { status: api.status });
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
-      return Response.json({
-        workflow_runs: api.pages?.[Number(url.searchParams.get("page"))] ?? [],
-      });
+      if (isFilteredRunList(url)) {
+        return Response.json({ workflow_runs: api.filtered ?? [] });
+      }
+      // The pages are hundreds of one list, newest first, served in pages of
+      // the size asked for as GitHub serves it. A run's id is fixed when it is
+      // created, so the ids fall down the list too.
+      const runs = Object.entries(api.pages ?? {})
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .flatMap(([, listed]) => listed);
+      runs.slice(1).forEach((run, i) =>
+        assert(
+          run.id < runs[i].id && run.created_at <= runs[i].created_at,
+          `run ${run.id} is listed after run ${runs[i].id}`,
+        )
+      );
+      const size = Number(url.searchParams.get("per_page") ?? 30);
+      const from = (Number(url.searchParams.get("page") ?? 1) - 1) * size;
+      return Response.json({ workflow_runs: runs.slice(from, from + size) });
     }
     const runId = url.pathname.match(/\/actions\/runs\/(\d+)\/artifacts$/)?.[1];
     if (runId) {
@@ -225,6 +258,8 @@ const apiCalls = (calls: string[]) =>
   calls.filter((call) => !call.startsWith("/rate_limit"));
 const runListCalls = (calls: string[]) =>
   calls.filter((call) => call.startsWith(runsPath));
+// The request a collection makes for main's runs that were run again.
+const mainRecheck = `${runsPath}?branch=main&per_page=100&page=1`;
 
 //
 // bench json
@@ -368,6 +403,7 @@ Deno.test("dashboard and /bench benchmark refreshes keep separate request scopes
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     calls.push(url.pathname + url.search);
+    if (isFilteredRunList(url)) return Promise.resolve(handler(url));
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
       workflowCalls++;
       if (workflowCalls === 1) {
@@ -428,8 +464,10 @@ Deno.test("benchmark: GITHUB_TOKEN stands in for GH_TOKEN", async () => {
   await withApi({ pages: {} }, async (calls) => {
     const v = await benchmark.collect(ctx({ GITHUB_TOKEN: "t" }));
     assertEquals(v.sub, "no benchmark runs"); // it got past the token gate and asked
-    assertEquals(apiCalls(calls).length, 1);
-    assertStringIncludes(apiCalls(calls)[0], runsPath);
+    assertEquals(apiCalls(calls), [
+      `${runsPath}?per_page=20&page=1`,
+      mainRecheck,
+    ]);
     assertEquals(calls.includes("/rate_limit"), false);
   });
 });
@@ -443,7 +481,7 @@ Deno.test("benchmark: a fresh disk cache prevents artifact rediscovery after a r
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    calls.push(url.pathname);
+    calls.push(url.pathname + url.search);
     if (url.pathname === "/rate_limit") {
       return Promise.resolve(serve({})(url));
     }
@@ -456,7 +494,7 @@ Deno.test("benchmark: a fresh disk cache prevents artifact rediscovery after a r
   try {
     const first = await import(`./benchmark.ts?restart=${crypto.randomUUID()}`);
     await first.benchmark.collect(ctx({ GH_TOKEN: token }));
-    assert(calls.some((call) => call.endsWith("/benchmarks.yml/runs")));
+    assert(calls.some((call) => call.startsWith(runsPath)));
 
     calls.length = 0;
     const restarted = await import(
@@ -467,7 +505,7 @@ Deno.test("benchmark: a fresh disk cache prevents artifact rediscovery after a r
     }));
     // The tile still reads the run list to time the latest run, but the fresh
     // manifest keeps it from rediscovering artifacts.
-    assertEquals(calls, [`/repos/${REPO}/actions/workflows/benchmarks.yml/runs`]);
+    assertEquals(calls, [`${runsPath}?per_page=20&page=1`, mainRecheck]);
     assertEquals(restartedView.sub, "no benchmark runs");
   } finally {
     globalThis.fetch = originalFetch;
@@ -547,7 +585,10 @@ Deno.test("benchmark: a startup collection waits for the run list, then times it
   });
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
+    if (
+      url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs") &&
+      !isFilteredRunList(url)
+    ) {
       return discovery;
     }
     return Promise.resolve(handler(url));
@@ -871,14 +912,14 @@ Deno.test("/bench?view=ci serves CI job history through the same drill-down", as
 });
 
 Deno.test("benchmark: paging stops at the 45-day cutoff, and an out-of-window run is not sampled", async () => {
-  // One full page whose oldest run is past the window: the loop stops there rather
-  // than asking for page 2. The run that succeeded is out of the window.
+  // One full page whose oldest run is past the window: the reading stops there
+  // rather than asking for page 2. The run that succeeded is out of the window.
   const page1 = [
     ...Array.from(
       { length: 99 },
-      (_, i) => ghRun(1_000 + i, BASE - i * HOUR, "failure"),
+      (_, i) => ghRun(1_100 - i, BASE - i * HOUR, "failure"),
     ),
-    ghRun(1_099, BASE - 50 * DAY, "success"), // in date order last, and older than the cutoff
+    ghRun(1_001, BASE - 50 * DAY, "success"), // in date order last, and older than the cutoff
   ];
   await withApi({ pages: { 1: page1 } }, async (calls) => {
     const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
@@ -891,31 +932,53 @@ Deno.test("benchmark: paging stops at the 45-day cutoff, and an out-of-window ru
     assertMatch(v.sub ?? "", /^last good \d+ days ago · 99 runs failed$/);
     assertEquals(v.href, "/bench?view=runtime&repo=labs");
     assertEquals(v.hint, "metrics ↗");
-    assertEquals(runListCalls(calls).length, 1); // page 2 was never asked for
+    // The newest twenty, then the first hundred, which reaches the run past
+    // the cutoff. The second hundred was never asked for.
+    assertEquals(runListCalls(calls), [
+      `${runsPath}?per_page=20&page=1`,
+      mainRecheck,
+      `${runsPath}?per_page=100&page=1`,
+    ]);
     // A red run is read for its artifact like any other, because whether it
     // measured anything is the artifact's answer and not the conclusion's. The
     // run past the cutoff is not read at all.
     assertEquals(artifactCalls(calls).length, 99);
     assertEquals(
-      artifactCalls(calls).filter((call) => call.includes("/1099/")),
+      artifactCalls(calls).filter((call) => call.includes("/1001/")),
       [],
     );
   });
 });
 
-Deno.test("benchmark: an empty page ends the paging", async () => {
+Deno.test("benchmark: the end of the run list ends the paging", async () => {
+  using time = new FakeTime();
   const page1 = Array.from(
     { length: 100 },
-    (_, i) => ghRun(2_000 + i, BASE - i * HOUR, "failure"),
+    (_, i) => ghRun(2_100 - i, BASE - i * HOUR, "failure"),
   );
-  await withApi({ pages: { 1: page1, 2: [] } }, async (calls) => {
+  await withApi({ pages: { 1: page1 } }, async (calls) => {
     const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
     assertEquals(v.sub, "last 100 runs failed"); // every run in the window failed
-    // A full page still inside the window is followed; the empty page 2 stops it.
-    assertEquals(
-      runListCalls(calls).map((c) => c.match(/[?&]page=(\d+)/)![1]),
-      ["1", "2"],
-    );
+    // A full page still inside the window is followed. The page after it,
+    // which starts at the last run read, holds only that run, so the list
+    // ends there.
+    assertEquals(runListCalls(calls), [
+      `${runsPath}?per_page=20&page=1`,
+      mainRecheck,
+      `${runsPath}?per_page=100&page=1`,
+      `${runsPath}?per_page=99&page=2`,
+    ]);
+
+    // The next collection reads the top of the list, which reaches the runs
+    // held, and knows the list ends below them without reading its end again.
+    calls.length = 0;
+    time.tick(NEXT_COLLECTION_MS);
+    const next = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+    assertEquals(next.sub, "last 100 runs failed");
+    assertEquals(runListCalls(calls), [
+      `${runsPath}?per_page=20&page=1`,
+      mainRecheck,
+    ]);
   });
 });
 
@@ -1190,6 +1253,7 @@ Deno.test("benchmark: the headline considers CPUs measured in the last 12 hours"
 });
 
 Deno.test("benchmark: the tile reports when every CPU measurement is stale", async () => {
+  using time = new FakeTime();
   const measurements = Array.from({ length: 8 }, (_, day) => ({
     id: 95_000 + day,
     at: BASE - (8 - day) * DAY,
@@ -1204,6 +1268,7 @@ Deno.test("benchmark: the tile reports when every CPU measurement is stale", asy
       assertEquals(tile.sub, "no recent benchmark data");
     },
   );
+  time.tick(NEXT_COLLECTION_MS);
   await withTotals([
     ...measurements,
     { id: 95_008, at: BASE, conclusion: "failure" },
@@ -1456,6 +1521,7 @@ Deno.test("benchmark: returns a failed view after the run list settles", async (
   });
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    if (isFilteredRunList(url)) return Promise.resolve(serve({})(url));
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
       markRunsRequested();
       return heldRuns;
@@ -1615,6 +1681,7 @@ Deno.test("benchmark: a collection reads the run list every time and the artifac
     status: "queued",
     conclusion: null,
   };
+  using time = new FakeTime();
   try {
     const isolated = await import(`./benchmark.ts?cadence=${crypto.randomUUID()}`);
     await withApi({ pages: { 1: newestFirst }, artifacts, zips }, async (calls) => {
@@ -1624,6 +1691,7 @@ Deno.test("benchmark: a collection reads the run list every time and the artifac
       assert(firstArtifactReads > 0); // a cold cache reads them
       assert(firstListReads > 0);
 
+      time.tick(NEXT_COLLECTION_MS);
       const second = await isolated.benchmark.collect(ctx({ GH_TOKEN: "t" }));
       assertEquals(artifactCalls(calls).length, firstArtifactReads); // nothing new to read
       assert(apiCalls(calls).length - artifactCalls(calls).length > firstListReads);
@@ -1631,6 +1699,7 @@ Deno.test("benchmark: a collection reads the run list every time and the artifac
       assertEquals(second.status, "good");
     });
     // A run starts. The next collection sees it from the run list alone.
+    time.tick(NEXT_COLLECTION_MS);
     await withApi({ pages: { 1: [inFlight, ...newestFirst] }, artifacts, zips }, async (calls) => {
       const view = await isolated.benchmark.collect(ctx({ GH_TOKEN: "t" }));
       assertStringIncludes(view.aside ?? "", "running");
@@ -1717,6 +1786,7 @@ Deno.test("benchmark: the drill-down closes with a rerun hand-off to the failed 
 });
 
 Deno.test("benchmark: a run under way is a badge, not a verdict", async () => {
+  using time = new FakeTime();
   const at = (d: number) => SAMPLED_BASE - (7 - d) * DAY;
   const artifacts: Api["artifacts"] = {};
   const zips: Api["zips"] = {};
@@ -1738,6 +1808,7 @@ Deno.test("benchmark: a run under way is a badge, not a verdict", async () => {
     assertStringIncludes(v.aside ?? "", "running");
     assertEquals(v.status, "good"); // the runs that finished still set the color
   });
+  time.tick(NEXT_COLLECTION_MS);
   await withApi({ pages: { 1: newestFirst }, artifacts, zips }, async () => {
     const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
     assertEquals(v.aside, undefined); // nothing under way
@@ -1825,9 +1896,9 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
   // a different way. On a cold cache the sum has nothing to read, so the tile grays
   // out rather than inventing a number. The split is whether the answer can change
   // on a later try. 401 (only an expired artifact and the wrong one), 403 (a zip
-  // holding no report) and 405 (a report that will not parse) are settled: the
+  // holding no report) and 404 (a report that will not parse) are settled: the
   // bytes were read and a run attempt keeps the artifact it uploaded. 402 (the zip
-  // download failed) and 404 (the listing itself failed) reached no answer at all
+  // download failed) and 405 (the listing itself failed) reached no answer at all
   // and must be retried when the source recovers. An isolated cache keeps
   // the cold-start assertion honest — a shared cache would leak another test's runs.
   const directory = await Deno.makeTempDir({ prefix: "benchmark-unusable-" });
@@ -1838,8 +1909,8 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
     ghRun(401, BASE - 3 * DAY),
     ghRun(402, BASE - 2 * DAY),
     ghRun(403, BASE - 1 * DAY),
-    ghRun(405, BASE - HOUR),
-    ghRun(404, BASE),
+    ghRun(404, BASE - HOUR),
+    ghRun(405, BASE),
   ];
   const art = (id: number, name = "bench-results", expired = false) => ({
     id,
@@ -1853,8 +1924,8 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
       401: [art(4_010, "bench-results", true), art(4_011, "coverage")], // expired, and the wrong artifact
       402: [art(4_020)], // the zip download fails
       403: [art(4_030)], // the zip holds no json
-      405: [art(4_050)], // the zip holds a report that will not parse
-      404: 500, // the listing itself fails
+      404: [art(4_040)], // the zip holds a report that will not parse
+      405: 500, // the listing itself fails
     },
     zips: {
       4_020: 404,
@@ -1863,7 +1934,7 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
         method: 0,
         data: bytes("nothing useful"),
       }]),
-      4_050: await benchZip("this is not the report"),
+      4_040: await benchZip("this is not the report"),
     },
   });
   globalThis.fetch = ((input: RequestInfo | URL) => {
@@ -1891,9 +1962,9 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
       pages: { 1: [...runs].reverse() }, // newest first, as the API returns
       artifacts: {
         402: [{ id: 4_020, name: "bench-results", expired: false }],
-        404: [{ id: 4_040, name: "bench-results", expired: false }],
+        405: [{ id: 4_050, name: "bench-results", expired: false }],
       },
-      zips: { 4_020: await benchZip(json), 4_040: await benchZip(json) },
+      zips: { 4_020: await benchZip(json), 4_050: await benchZip(json) },
     });
     const warm = await isolated.benchmark.collect(ctx({ GH_TOKEN: "t" }));
     assertStringIncludes(warm.value ?? "", "new"); // two recovered runs is under a week
@@ -1902,7 +1973,7 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
       "the failed zip download is retried",
     );
     assert(
-      calls.some((c) => c.includes("/runs/404/artifacts")),
+      calls.some((c) => c.includes("/runs/405/artifacts")),
       "the failed listing is retried",
     );
     assert(
@@ -1914,7 +1985,7 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
       "a zip with no report is settled",
     );
     assert(
-      !calls.some((c) => c.includes("/runs/405/artifacts")),
+      !calls.some((c) => c.includes("/runs/404/artifacts")),
       "a report that will not parse is settled",
     );
   } finally {
@@ -1927,11 +1998,12 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
 });
 
 Deno.test("benchmark: a failed newer attempt stays stale and reports an error", async () => {
+  using time = new FakeTime();
   const firstRun = ghRun(40_101, BASE - DAY);
   const secondRun = ghRun(40_102, BASE);
   const key = "packages/a/rerun.bench.ts";
   await withApi({
-    pages: { 1: [firstRun, secondRun] },
+    pages: { 1: [secondRun, firstRun] },
     artifacts: {
       40_101: [{
         id: 401_010,
@@ -1970,12 +2042,9 @@ Deno.test("benchmark: a failed newer attempt stays stale and reports an error", 
       return Promise.resolve(serve({})(url));
     }
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [
-          ghRun(firstRun.id, BASE - DAY, "success", 2),
-          secondRun,
-        ],
-      }));
+      return Promise.resolve(serve({
+        pages: { 1: [secondRun, ghRun(firstRun.id, BASE - DAY, "success", 2)] },
+      })(url));
     }
     if (url.pathname.endsWith(`/actions/runs/${firstRun.id}/artifacts`)) {
       attemptRequested();
@@ -1985,6 +2054,7 @@ Deno.test("benchmark: a failed newer attempt stays stale and reports an error", 
   }) as typeof fetch;
 
   try {
+    time.tick(NEXT_COLLECTION_MS);
     const collection = benchmark.collect(ctx({ GH_TOKEN: "t" }));
     await sawAttempt;
     const check = await benchmarkHistoryCheckResponse(ctx({ GH_TOKEN: "t" }));
@@ -2012,10 +2082,11 @@ Deno.test("benchmark: a failed newer attempt stays stale and reports an error", 
     globalThis.fetch = ((input: RequestInfo | URL) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
-        return Promise.resolve(Response.json({ workflow_runs: [] }));
+        return Promise.resolve(serve({})(url));
       }
       throw new Error(`unexpected request ${url.pathname}`);
     }) as typeof fetch;
+    time.tick(NEXT_COLLECTION_MS);
     await benchmark.collect(ctx({ GH_TOKEN: "t" }));
     assertEquals(
       benchmarkHistoryProgressResponse(
@@ -2044,7 +2115,7 @@ Deno.test("benchmark: a collection keeps one artifact per bucket, and a later on
     const artifacts: Api["artifacts"] = {};
     const zips: Api["zips"] = {};
     for (let d = 0; d <= 11; d++) {
-      const id = 501 + d;
+      const id = 5_000 + 10 * d;
       runs.push(ghRun(id, at(d)));
       artifacts[id] = [{ id: id * 10, name: "bench-results", expired: false }];
       // No "version" key here: the report is parsed whole when there is no console
@@ -2056,10 +2127,11 @@ Deno.test("benchmark: a collection keeps one artifact per bucket, and a later on
         }),
       );
     }
-    // The stale twin, listed before its window's winner so the newer one displaces it.
-    runs.push(ghRun(599, at(11) - COLLECTION_BUCKET / 2));
-    artifacts[599] = [{ id: 5_990, name: "bench-results", expired: false }];
-    zips[5_990] = await benchZip(
+    // The stale twin, created earlier in its window than the winner and so
+    // listed after it.
+    runs.push(ghRun(5_105, at(11) - COLLECTION_BUCKET / 2));
+    artifacts[5_105] = [{ id: 51_050, name: "bench-results", expired: false }];
+    zips[51_050] = await benchZip(
       JSON.stringify({
         cpu: TEST_CPU,
         benches: [bench(key, null, "tick", timings(9_999_999))],
@@ -2067,9 +2139,7 @@ Deno.test("benchmark: a collection keeps one artifact per bucket, and a later on
     );
 
     await withApi({
-      pages: {
-        1: [ghRun(599, at(11) - COLLECTION_BUCKET / 2), ...runs.slice(0, 12)],
-      },
+      pages: { 1: runs.toSorted((a, b) => b.id - a.id) },
       artifacts,
       zips,
     }, async () => {
@@ -2089,9 +2159,9 @@ Deno.test("benchmark: a collection keeps one artifact per bucket, and a later on
 
   await t.step("a run's results are immutable, so a cached run is not refetched", async () => {
     const runs = [
-      ghRun(599, at(11) - COLLECTION_BUCKET / 2),
-      ...Array.from({ length: 12 }, (_, d) => ghRun(501 + d, at(d))),
-    ];
+      ...Array.from({ length: 12 }, (_, d) => ghRun(5_000 + 10 * d, at(d))),
+      ghRun(5_105, at(11) - COLLECTION_BUCKET / 2),
+    ].sort((a, b) => b.id - a.id);
     // Every artifact call would 500; the cache the step before filled answers instead.
     await withApi({ pages: { 1: runs } }, async (calls) => {
       const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
@@ -2169,7 +2239,7 @@ async function fillVaried(): Promise<Api> {
       report(benches, "running 7 benchmarks\ncpu: apple m2\n"),
     );
   }
-  return { pages: { 1: runs }, artifacts, zips };
+  return { pages: { 1: runs.reverse() }, artifacts, zips };
 }
 
 // Collects the varied history, which leaves it as the drill-down's snapshot for
@@ -2270,6 +2340,8 @@ Deno.test("benchmark: stale CPU trends stay out of the headline while their line
       at: BASE - (cpuIndex + 2) * COLLECTION_BUCKET,
     });
   }
+  // A run's id grows with its creation time.
+  samples.sort((a, b) => a.at - b.at);
   for (
     const [sample, { cpuIndex, at, avg: sampleAvg, day }] of samples.entries()
   ) {
@@ -3093,6 +3165,7 @@ Deno.test("benchmark: a rejected token grays out as an auth failure", async () =
 });
 
 Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async () => {
+  using time = new FakeTime();
   // Cache two runs older than the headline window, then make the source unreachable.
   // The tile keeps the cached trend and chart gray with the reason.
   const directory = await Deno.makeTempDir({ prefix: "benchmark-offline-" });
@@ -3102,7 +3175,7 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
   const key = "packages/a/x.bench.ts";
   const healthy = serve({
-    pages: { 1: [ghRun(7_701, BASE - 2 * DAY), ghRun(7_702, BASE - DAY)] },
+    pages: { 1: [ghRun(7_702, BASE - DAY), ghRun(7_701, BASE - 2 * DAY)] },
     artifacts: {
       7_701: [{ id: 77_010, name: "bench-results", expired: false }],
       7_702: [{ id: 77_020, name: "bench-results", expired: false }],
@@ -3125,6 +3198,7 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
     assertEquals(online.sub, "no recent benchmark data");
 
     // The source becomes unreachable on the next collection.
+    time.tick(NEXT_COLLECTION_MS);
     globalThis.fetch = (() =>
       Promise.reject(
         new TypeError("error sending request for url (https://api.github.com/...)"),
@@ -3143,88 +3217,51 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
   }
 });
 
-Deno.test("benchmark: a run list older than the runs collected keeps the trend gray", async () => {
-  // A list ending a day back stands in for GitHub serving an out-of-date view
-  // of the workflow. The tile refuses it while the process holds the current
-  // list, and again after a restart that holds only the history on disk.
-  const directory = await Deno.makeTempDir({ prefix: "benchmark-stale-list-" });
-  const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
-  const originalFetch = globalThis.fetch;
-  const token = `benchmark-stale-list-${crypto.randomUUID()}`;
-  Deno.env.set("DASHBOARD_CACHE_DIR", directory);
+Deno.test("benchmark: the tile reads the workflow's current run list, not a lagging filtered one", async () => {
+  // GitHub answers a run list filtered by branch, event, status, or creation
+  // time from an index that can be days behind the unfiltered list. Here such
+  // a list ends a day back, while the unfiltered one carries a newer run that
+  // failed. The tile reports that failure, and a run that lands after it shows
+  // on the next collection.
+  using time = new FakeTime();
   const key = "packages/a/x.bench.ts";
-  const older = ghRun(9_101, BASE - DAY);
-  const newest = ghRun(9_102, BASE);
-  const artifacts = {
-    9_101: [{ id: 91_010, name: "bench-results", expired: false }],
-    9_102: [{ id: 91_020, name: "bench-results", expired: false }],
-  };
-  const zips = {
-    91_010: await benchZip(report([bench(key, null, "b", timings(1_000))])),
-    91_020: await benchZip(report([bench(key, null, "b", timings(1_000))])),
-  };
-  const serving = (runs: GhRun[]) => {
-    const handler = serve({ pages: { 1: runs }, artifacts, zips });
-    globalThis.fetch = ((input: RequestInfo | URL) =>
-      Promise.resolve(
-        handler(new URL(input instanceof Request ? input.url : String(input))),
-      )) as typeof fetch;
-  };
-  try {
-    const running = await import(
-      `./benchmark.ts?stale-list=${crypto.randomUUID()}`
+  const older = ghRun(140_001, BASE - DAY);
+  const failed = ghRun(140_002, BASE - HOUR, "failure");
+  const recovered = ghRun(140_003, BASE);
+  const pages = { 1: [failed, older] };
+  const artifacts: Api["artifacts"] = { [failed.id]: [] };
+  const zips: Api["zips"] = {};
+  for (const run of [older, recovered]) {
+    artifacts[run.id] = [{
+      id: run.id * 10,
+      name: "bench-results",
+      expired: false,
+    }];
+    zips[run.id * 10] = await benchZip(
+      report([bench(key, null, "b", timings(1_000))]),
     );
-    serving([newest, older]);
-    const current = await running.benchmark.collect(ctx({ GH_TOKEN: token }));
-    expect(current).toMatchObject({ status: "good", sub: undefined });
-
-    serving([older]);
-    const stale = await running.benchmark.collect(ctx({ GH_TOKEN: token }));
-    expect(stale).toMatchObject({
-      status: "unknown",
-      sub: "run list out of date",
-    });
-    expect(stale.value).toBe(current.value);
-    expect(stale.extra).toContain("<svg");
-
-    const restarted = await import(
-      `./benchmark.ts?stale-list-restarted=${crypto.randomUUID()}`
-    );
-    const staleAfterRestart = await restarted.benchmark.collect(
-      ctx({ GH_TOKEN: token }),
-    );
-    expect(staleAfterRestart).toMatchObject({
-      status: "unknown",
-      sub: "run list out of date",
-      value: current.value,
-    });
-
-    serving([]);
-    expect(await restarted.benchmark.collect(ctx({ GH_TOKEN: token })))
-      .toMatchObject({
-        status: "unknown",
-        sub: "run list out of date",
-        value: current.value,
-      });
-    const saved = new BenchmarkHistoryStore(
-      `${directory}/fabric-wall-benchmark-history.json`,
-    );
-    await saved.load();
-    expect(saved.refresh?.runs.map((run) => run.runId)).toEqual([
-      9_101,
-      9_102,
+  }
+  const api = { pages, filtered: [older], artifacts, zips };
+  await withApi(api, async (calls) => {
+    const current = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+    expect(current.status).toBe("bad");
+    expect(current.sub).toMatch(/^last good .+ ago · 1 run failed$/);
+    expect(runListCalls(calls)).toEqual([
+      `${runsPath}?per_page=20&page=1`,
+      mainRecheck,
     ]);
 
-    serving([newest, older]);
-    expect(await restarted.benchmark.collect(ctx({ GH_TOKEN: token })))
-      .toMatchObject({ status: "good", sub: undefined, value: current.value });
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (previousCacheDirectory === undefined) {
-      Deno.env.delete("DASHBOARD_CACHE_DIR");
-    } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
-    await Deno.remove(directory, { recursive: true });
-  }
+    calls.length = 0;
+    pages[1].unshift(recovered);
+    time.tick(NEXT_COLLECTION_MS);
+    const next = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+    expect(next.status).toBe("good");
+    expect(next.sub).toBeUndefined();
+    expect(runListCalls(calls)).toEqual([
+      `${runsPath}?per_page=20&page=1`,
+      mainRecheck,
+    ]);
+  });
 });
 
 Deno.test("benchmark: a failed fetch with no cached history grays to a dash", async () => {
@@ -3295,7 +3332,7 @@ Deno.test("benchmark: a fresh marker then an unreachable direct read grays with 
 Deno.test("benchmark: the drill-down keeps one-sample benchmarks", async () => {
   // Each run reports a different benchmark. The tile still indexes both runs.
   // The drill-down shows each benchmark's one sample as a point.
-  const runs = [ghRun(801, BASE - DAY), ghRun(802, BASE)];
+  const runs = [ghRun(802, BASE), ghRun(801, BASE - DAY)];
   await withApi({
     pages: { 1: runs },
     artifacts: {
@@ -3529,8 +3566,10 @@ Deno.test("benchmark defaults a missing workflow run attempt to one", async () =
 Deno.test("benchmark reads the unfiltered run list and keeps only main's runs", async () => {
   const main = ghRun(80_011, BASE);
   const branch = { ...ghRun(80_012, BASE + HOUR), head_branch: "feature" };
+  // The list filtered to main lags, and has not caught up with main's run.
   await withApi({
     pages: { 1: [branch, main] },
+    filtered: [],
     artifacts: { [main.id]: [], [branch.id]: [] },
   }, async (calls) => {
     await benchmark.collect(ctx({ GH_TOKEN: "token" }));
@@ -3538,9 +3577,11 @@ Deno.test("benchmark reads the unfiltered run list and keeps only main's runs", 
     await store.load();
     assert(store.get(main.id, 1) !== undefined);
     assertEquals(store.get(branch.id, 1), undefined);
-    const listed = runListCalls(calls);
-    assert(listed.length > 0);
-    assert(listed.every((call) => !call.includes("branch=")), listed.join(" "));
+    // The list filtered to main is read only to find runs run again.
+    assertEquals(runListCalls(calls), [
+      `${runsPath}?per_page=20&page=1`,
+      mainRecheck,
+    ]);
   });
 });
 
@@ -3553,7 +3594,9 @@ Deno.test("runtime benchmark progress removes failed listeners and closes cleanl
   const runs = new Promise<Response>((resolve) => resolveRuns = resolve);
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.pathname === "/rate_limit") return Promise.resolve(serve({})(url));
+    if (url.pathname === "/rate_limit" || isFilteredRunList(url)) {
+      return Promise.resolve(serve({})(url));
+    }
     return runs;
   }) as typeof fetch;
   try {
@@ -3795,6 +3838,7 @@ Deno.test("a queued runtime history refresh reuses a dashboard refresh that just
       rateRequests++;
       return Promise.resolve(serve({})(url));
     }
+    if (isFilteredRunList(url)) return Promise.resolve(serve({})(url));
     workflowRequests++;
     return runs;
   }) as typeof fetch;
@@ -3833,6 +3877,7 @@ Deno.test("a queued runtime history refresh reuses a dashboard refresh that just
 });
 
 Deno.test("a queued dashboard refresh checks that the drill-down covers its runs", async () => {
+  using time = new FakeTime();
   const directory = await Deno.makeTempDir({
     prefix: "benchmark-queued-dashboard-",
   });
@@ -3862,16 +3907,15 @@ Deno.test("a queued dashboard refresh checks that the drill-down covers its runs
     if (url.pathname === "/rate_limit") {
       return Promise.resolve(serve({})(url));
     }
+    if (isFilteredRunList(url)) return Promise.resolve(serve({})(url));
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
       workflowRequests++;
       if (workflowRequests === 1) {
-        return Promise.resolve(Response.json({ workflow_runs: [oldRun] }));
+        return Promise.resolve(serve({ pages: { 1: [oldRun] } })(url));
       }
       if (workflowRequests === 2) {
         markDashboardRunsRequested();
-        return Promise.resolve(Response.json({
-          workflow_runs: [newRun, oldRun],
-        }));
+        return Promise.resolve(serve({ pages: { 1: [newRun, oldRun] } })(url));
       }
       throw new Error("unexpected third workflow request");
     }
@@ -3919,6 +3963,7 @@ Deno.test("a queued dashboard refresh checks that the drill-down covers its runs
     ).text();
     await oldArtifactRequested;
 
+    time.tick(NEXT_COLLECTION_MS);
     dashboard = isolated.benchmark.collect(tokenContext);
     await dashboardRunsRequested;
     releaseOldArtifact(Response.json({
@@ -4118,7 +4163,11 @@ describe("keyBenchmarks", () => {
         keyBenchmarks.collect(ctx({ GH_TOKEN: "t" })),
         benchmark.collect(ctx({ GH_TOKEN: "t" })),
       ]);
-      expect(runListCalls(calls)).toHaveLength(1);
+      // The two tiles share one reading of the list.
+      expect(runListCalls(calls)).toEqual([
+        `${runsPath}?per_page=20&page=1`,
+        mainRecheck,
+      ]);
       expect(selected.status).toBe("good");
       expect(selected.value).toBe("flat");
       expect(selected.extra).toContain(">2 benchmarks</div>");
@@ -4209,6 +4258,7 @@ describe("keyBenchmarks", () => {
   });
 
   it("reports a selected regression that the full benchmark set dilutes", async () => {
+    using time = new FakeTime();
     const api = await history(931_000, (day) =>
       report([
         bench(
@@ -4230,6 +4280,7 @@ describe("keyBenchmarks", () => {
       expect(all.status).toBe("good");
       expect(all.extra).toContain(">40 benchmarks</div>");
     });
+    time.tick(NEXT_COLLECTION_MS);
     await withApi({ throws: new Error("network offline") }, async () => {
       const selected = await keyBenchmarks.collect(ctx({ GH_TOKEN: "t" }));
       expect(selected.status).toBe("unknown");
@@ -4260,6 +4311,7 @@ describe("keyBenchmarks", () => {
   });
 
   it("reports missing selected data even when other benchmarks succeeded", async () => {
+    using time = new FakeTime();
     await withApi({ pages: { 1: [] } }, async () => {
       expect(await keyBenchmarks.collect(ctx({ GH_TOKEN: "t" })))
         .toMatchObject({
@@ -4268,6 +4320,7 @@ describe("keyBenchmarks", () => {
           sub: "no benchmark runs",
         });
     });
+    time.tick(NEXT_COLLECTION_MS);
     await withTotals(
       [{ id: 933_000, at: SAMPLED_BASE, total: 1e6 }],
       async () => {
@@ -4340,6 +4393,7 @@ describe("keyBenchmarks", () => {
   });
 
   it("gives an unreadable collection the count's line rather than a second one", async () => {
+    using time = new FakeTime();
     // The tile keeps each run's results by id, so a range another test reads
     // would carry this test's measurements into it.
     const api = await history(936_000, () =>
@@ -4355,6 +4409,7 @@ describe("keyBenchmarks", () => {
 
     // Every tile in a row is as tall as the tallest, so a reason standing
     // above the count rather than in its place grows the whole row.
+    time.tick(NEXT_COLLECTION_MS);
     await withApi({ throws: new Error("network offline") }, async () => {
       const offline = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
       expect(offline.status).toBe("unknown");

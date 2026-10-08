@@ -36,9 +36,10 @@ export interface NativeUiControl {
  * changes nothing the returned function sends. A `provenance` field in a
  * payload is replaced. The runtime still applies its ordinary checks to the
  * write the event leads to: the writer the contract names, the surface and
- * action, the actor, and the space's access list. The event satisfies a
- * write's UI contract and nothing more, since `isTrustedGesture()` admits
- * only events of `dom` origin.
+ * action, the actor, and the space's access list. The event is a trusted
+ * gesture, as `isTrustedGesture()` decides, so it meets any requirement for a
+ * trusted gesture, such as the one `grantSpaceAccess()` puts on a handler's
+ * event.
  *
  * The returned function mints trusted events, so the host keeps it away from
  * pattern code, loaded content, automation and agent interfaces, generic IPC,

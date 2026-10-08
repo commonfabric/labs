@@ -11,6 +11,12 @@ import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
 import {
+  type GitHubAccount,
+  type GitHubCredential,
+  GitHubCredentials,
+  type GitHubEnv,
+} from "./github-auth.ts";
+import {
   type GitHubPrimaryRateLimit,
   performanceGitHubRateLimit,
 } from "./github-rate-limit.ts";
@@ -54,13 +60,43 @@ export const serviceName = (env: (k: string) => string | undefined): string => {
   return s && /^[A-Za-z0-9._-]+$/.test(s) ? s : PROD_SERVICE;
 };
 
-// Call the GitHub REST API and return parsed JSON. Pass an explicit `token` (e.g.
-// a higher-privilege org-billing token); otherwise it reads GH_TOKEN or
-// GITHUB_TOKEN from the environment. One of those must be set.
-function githubToken(path: string, token?: string): string {
-  const t = token ?? Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN");
-  if (!t) throw new Error(`GitHub API ${path}: set GH_TOKEN or GITHUB_TOKEN`);
-  return t;
+/** The process environment, as a source of configuration. */
+export const PROCESS_ENV: GitHubEnv = { env: (key) => Deno.env.get(key) };
+
+/** The dashboard's GitHub credentials, one instance of each. */
+export const githubCredentials = new GitHubCredentials();
+
+/** The organization the dashboard's repositories belong to. */
+export const GITHUB_ORGANIZATION: GitHubAccount = {
+  kind: "organization",
+  name: REPO.split("/")[0],
+};
+
+/**
+ * Returns the credential for reading the dashboard's repositories and
+ * organization, or `undefined` when `source` configures none.
+ */
+export function dashboardGitHubCredential(
+  source: GitHubEnv,
+): GitHubCredential | undefined {
+  return githubCredentials.for(source, GITHUB_ORGANIZATION);
+}
+
+// The credential a GitHub API call carries: `credential` when the caller
+// names one (e.g. a higher-privilege billing credential), and otherwise the
+// dashboard's own, which the environment has to configure.
+function githubCredential(
+  path: string,
+  credential?: GitHubCredential,
+): GitHubCredential {
+  const resolved = credential ?? dashboardGitHubCredential(PROCESS_ENV);
+  if (!resolved) {
+    throw new Error(
+      `GitHub API ${path}: set GH_TOKEN or GITHUB_TOKEN, or ` +
+        `GH_APP_CLIENT_ID and GH_APP_PRIVATE_KEY`,
+    );
+  }
+  return resolved;
 }
 
 type GitHubOperationStage =
@@ -95,6 +131,55 @@ export interface GitHubRequestOptions {
 
   /** The REST API version required by an endpoint newer than the default. */
   apiVersion?: string;
+
+  /**
+   * Lets a request for a list of workflow runs through. `github-runs.ts` is
+   * the module that reads those lists, and the reasons it reads them as it
+   * does are given there; a run list requested without this is refused.
+   */
+  runListAccess?: typeof RUN_LIST_ACCESS;
+}
+
+/**
+ * The error a GitHub JSON request throws when GitHub answers it with a failure.
+ */
+export class GitHubStatusError extends Error {
+  #status: number;
+
+  /** Constructs an instance for a request GitHub answered with `status`. */
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "GitHubStatusError";
+    this.#status = status;
+  }
+
+  /** The HTTP status GitHub answered with. */
+  get status(): number {
+    return this.#status;
+  }
+}
+
+/** What `GitHubRequestOptions.runListAccess` is set to. */
+export const RUN_LIST_ACCESS: unique symbol = Symbol("run list access");
+
+/** The path of a list of a repository's or a workflow's runs. */
+const RUN_LIST_PATH =
+  /^\/repos\/[^/]+\/[^/]+\/actions\/(?:workflows\/[^/]+\/)?runs\/?$/i;
+
+/**
+ * Returns whether `path`, relative to the GitHub API, asks for a run list,
+ * however it is spelled: dot segments, escapes, and letter case are read as
+ * GitHub would read them.
+ */
+function isRunListPath(path: string): boolean {
+  const { pathname } = new URL(path, "https://api.github.com/");
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // A malformed escape is matched as written.
+  }
+  return RUN_LIST_PATH.test(decoded) || RUN_LIST_PATH.test(pathname);
 }
 
 export interface GitHubDownload {
@@ -295,10 +380,12 @@ function githubRequest(
 }
 
 async function githubPrimaryRateLimit(
-  token: string,
+  credential: GitHubCredential,
   operation: ActiveGitHubOperation,
 ): Promise<GitHubPrimaryRateLimit> {
+  const token = await credential.token();
   const response = await githubRequest("rate_limit", token, false);
+  if (response.status === 401) credential.refused(token);
   if (!response.ok) {
     discardGitHubErrorResponseBody(response, operation);
     throw new Error(
@@ -316,12 +403,21 @@ async function githubPrimaryRateLimit(
 
 async function githubResponse(
   path: string,
-  token: string,
+  credential: GitHubCredential,
   performance: boolean,
   withTimeout: boolean,
-  apiVersion?: string,
+  options: GitHubRequestOptions,
 ): Promise<GitHubResponseResult> {
   const normalizedPath = path.replace(/^\//, "");
+  if (
+    isRunListPath(normalizedPath) &&
+    options.runListAccess !== RUN_LIST_ACCESS
+  ) {
+    throw new Error(
+      `GitHub API \`${normalizedPath}\` is a workflow run list, which only ` +
+        "`github-runs.ts` may ask for: a filtered one can be days behind",
+    );
+  }
   const operation: ActiveGitHubOperation = {
     id: nextGitHubOperationId++,
     path: normalizedPath,
@@ -338,12 +434,19 @@ async function githubResponse(
   try {
     if (performance) {
       reservation = await performanceGitHubRateLimit.reserve(
-        token,
-        () => githubPrimaryRateLimit(token, operation),
+        credential.allowance,
+        () => githubPrimaryRateLimit(credential, operation),
       );
       operation.stage = "requesting GitHub";
     }
-    response = await githubRequest(path, token, withTimeout, apiVersion);
+    const token = await credential.token();
+    response = await githubRequest(
+      path,
+      token,
+      withTimeout,
+      options.apiVersion,
+    );
+    if (response.status === 401) credential.refused(token);
   } catch (error) {
     failed = true;
     operationError = error;
@@ -367,18 +470,38 @@ async function githubResponse(
   return { response: response!, operation };
 }
 
+/** A page of a GitHub response, and the path of the page after it, if any. */
+export interface GitHubPage<T> {
+  /** The page's JSON. */
+  readonly value: T;
+
+  /** The path of the next page, relative to the GitHub API, if any. */
+  readonly next: string | undefined;
+}
+
+/**
+ * The path, relative to the GitHub API, of the page that a `Link` header names
+ * as the next one.
+ */
+function nextPagePath(link: string | null): string | undefined {
+  const next = link?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+  if (next === undefined) return undefined;
+  const { pathname, search } = new URL(next);
+  return `${pathname}${search}`;
+}
+
 async function githubJson<T>(
   path: string,
-  token: string,
+  credential: GitHubCredential,
   performance: boolean,
   options: GitHubRequestOptions,
-): Promise<T> {
+): Promise<GitHubPage<T>> {
   const { response: res, operation } = await githubResponse(
     path,
-    token,
+    credential,
     performance,
     true,
-    options.apiVersion,
+    options,
   );
   if (!res.ok) {
     const reportHttpError = !options.ignoreStatuses?.includes(res.status);
@@ -402,14 +525,15 @@ async function githubJson<T>(
       );
     }
     finishGitHubOperation(operation, res, true);
-    throw new Error(
+    throw new GitHubStatusError(
       `GitHub API ${path} failed: HTTP ${res.status}${detail}`,
+      res.status,
     );
   }
   try {
     const value = await res.json() as T;
     finishGitHubOperation(operation, res, false);
-    return value;
+    return { value, next: nextPagePath(res.headers.get("link")) };
   } catch (error) {
     console.error(
       `GitHub API operation ${operation.id} for ${operation.path} could not read valid JSON ` +
@@ -423,19 +547,37 @@ async function githubJson<T>(
 
 export async function github<T = unknown>(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<T> {
-  const t = githubToken(path, token);
-  return await githubJson<T>(path, t, false, options);
+  const t = githubCredential(path, credential);
+  return (await githubJson<T>(path, t, false, options)).value;
+}
+
+/**
+ * Like `github()`, except that it also returns the path of the next page, for
+ * a list GitHub pages through a cursor in the `Link` header rather than by
+ * page number.
+ */
+export async function githubPage<T = unknown>(
+  path: string,
+  credential?: GitHubCredential,
+  options: GitHubRequestOptions = {},
+): Promise<GitHubPage<T>> {
+  return await githubJson<T>(
+    path,
+    githubCredential(path, credential),
+    false,
+    options,
+  );
 }
 
 export async function githubDownload(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<GitHubDownload> {
-  const t = githubToken(path, token);
+  const t = githubCredential(path, credential);
   return await githubDownloadResponse(
     path,
     t,
@@ -446,19 +588,19 @@ export async function githubDownload(
 
 export async function performanceGithub<T = unknown>(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<T> {
-  const t = githubToken(path, token);
-  return await githubJson<T>(path, t, true, options);
+  const t = githubCredential(path, credential);
+  return (await githubJson<T>(path, t, true, options)).value;
 }
 
 export async function performanceGithubDownload(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<GitHubDownload> {
-  const t = githubToken(path, token);
+  const t = githubCredential(path, credential);
   return await githubDownloadResponse(
     path,
     t,
@@ -469,16 +611,16 @@ export async function performanceGithubDownload(
 
 async function githubDownloadResponse(
   path: string,
-  token: string,
+  credential: GitHubCredential,
   performance: boolean,
   options: GitHubRequestOptions,
 ): Promise<GitHubDownload> {
   const { response, operation } = await githubResponse(
     path,
-    token,
+    credential,
     performance,
     false,
-    options.apiVersion,
+    options,
   );
   if (!response.ok) {
     const reportHttpError = !options.ignoreStatuses?.includes(response.status);
@@ -510,7 +652,11 @@ async function githubDownloadResponse(
 
 /** The GitHub JSON call a collection makes, so a test can supply its own. */
 export interface GitHubJson {
-  json<T>(path: string, token: string): Promise<T>;
+  json<T>(
+    path: string,
+    credential: GitHubCredential,
+    options?: GitHubRequestOptions,
+  ): Promise<T>;
 }
 
 /**
@@ -527,13 +673,13 @@ export async function runArtifactId(options: {
   github: GitHubJson;
   runId: number;
   name: string;
-  token: string;
+  credential: GitHubCredential;
 }): Promise<number | undefined> {
-  const { github, runId, name, token } = options;
+  const { github, runId, name, credential } = options;
   const params = new URLSearchParams({ name, per_page: "100" });
   const listed = await github.json<{
     artifacts?: { id: number; name: string; expired: boolean }[];
-  }>(`repos/${REPO}/actions/runs/${runId}/artifacts?${params}`, token);
+  }>(`repos/${REPO}/actions/runs/${runId}/artifacts?${params}`, credential);
   const ids = (listed.artifacts ?? [])
     .filter((artifact) => artifact.name === name && !artifact.expired)
     .map((artifact) => artifact.id);
@@ -571,72 +717,10 @@ export function clampInt(v: string | null, def: number, lo: number, hi: number):
   return Math.max(lo, Math.min(hi, Math.floor(n)));
 }
 
-/**
- * The error a run list is refused with when it is behind the workflow's newest
- * runs: its newest run is older than one already collected, or a search does
- * not reach the runs on the workflow's newest page.
- */
-export const STALE_RUNS_ERROR = "run list behind the workflow's newest runs";
-
-/** A workflow run as far as telling which of two runs was created last. */
-export interface DatedRun {
-  id: number;
-  created_at: string;
-}
-
-/**
- * Whether `fetched`, a run list read from `source`, has a newest run older than
- * the newest run of `held`, the list already collected from it. A workflow's
- * newest run only ever moves forward, so only a stale view of the workflow can
- * list that. A stale list is logged with how many runs each list holds and
- * their newest runs, which tells an empty reply from a lagging one.
- */
-export function isStaleRunList(
-  source: string,
-  fetched: readonly DatedRun[],
-  held: readonly DatedRun[] | undefined,
-): boolean {
-  if (createdAt(newestRun(fetched)) >= createdAt(newestRun(held))) return false;
-  console.error(
-    `run source ${source} stale, ${STALE_RUNS_ERROR}. Fetched ` +
-      `${describeRuns(fetched)}; held ${describeRuns(held)}.`,
-  );
-  return true;
-}
-
-/**
- * The run in `runs` created last, or `undefined` when none has a readable
- * creation time.
- */
-function newestRun(runs: readonly DatedRun[] | undefined): DatedRun | undefined {
-  let newest: DatedRun | undefined;
-  for (const run of runs ?? []) {
-    if (createdAt(run) > createdAt(newest)) newest = run;
-  }
-  return newest;
-}
-
-/**
- * When `run` was created, or `-Infinity` for no run or an unreadable time, so
- * a list without a dated run is older than any list with one.
- */
-function createdAt(run: DatedRun | undefined): number {
-  const at = run ? Date.parse(run.created_at) : NaN;
-  return Number.isFinite(at) ? at : -Infinity;
-}
-
-/** Names the size of `runs` and its newest run. */
-function describeRuns(runs: readonly DatedRun[] | undefined): string {
-  const run = newestRun(runs);
-  const count = `${runs?.length ?? 0} run${runs?.length === 1 ? "" : "s"}`;
-  return `${count}, ${run ? `newest run ${run.id} created ${run.created_at}` : "none dated"}`;
-}
-
 // Turn a raw collector error into a short, calm tile message. The full error is
 // still logged; the dashboard shows a human phrase, not a stack trace or API
 // path.
 export function friendlyError(msg: string): string {
-  if (msg === STALE_RUNS_ERROR) return "run list out of date";
   const m = msg.toLowerCase();
   if (/connect|sending request|network|dns|refused|unreachable|timed ?out|timeout|econn/.test(m)) {
     return "source unreachable";
@@ -645,6 +729,8 @@ export function friendlyError(msg: string): string {
   if (/\b404\b|not found/.test(m)) return "not found";
   if (/\b401\b|\b403\b|unauthor|forbidden|bad credentials/.test(m)) return "auth failed";
   if (/gh_token|github_token/.test(m)) return "set GH_TOKEN";
+  const appVariable = /\bset (GH_APP_[A-Z_]+)\b/.exec(msg);
+  if (appVariable) return `set ${appVariable[1]}`;
   return "temporarily unavailable";
 }
 
@@ -811,8 +897,12 @@ export function sparkline(
 // fraction of the chart. `showSinglePoint` draws explicit markers for a
 // one-sample series and for points isolated by those breaks. All overlays are
 // HTML or gradients, so preserveAspectRatio="none" cannot distort them. The
-// span it covers is drawn separately by a tile's `duration` slot. `opts.scale`
-// has the same trimming behavior as `sparkline`.
+// span it covers is drawn separately by a tile's `duration` slot. The vertical
+// scale has the same 25% headroom as `sparkline`, and `opts.scale` has the
+// same trimming behavior. With `opts.scale.highlighted`,
+// a line that draws a highlight contributes only its highlighted points to the
+// vertical scale, so its older extremes can extend outside the chart. A line
+// that draws no highlight contributes all of its points.
 export function multiSparkline(
   series: {
     vals: number[];
@@ -827,7 +917,7 @@ export function multiSparkline(
   opts: {
     fade?: boolean;
     highlight?: { count: number };
-    scale?: { trim?: number; minValues?: number };
+    scale?: { trim?: number; minValues?: number; highlighted?: boolean };
   } = {},
 ): string {
   const drawable = series.filter((line) =>
@@ -836,10 +926,24 @@ export function multiSparkline(
   );
   const all = drawable.flatMap((line) => line.vals);
   if (!all.length) return "";
-  const scaled = scaleValues(all, opts.scale);
+  const highlightCount = (
+    line: (typeof series)[number],
+  ): number => line.highlightCount ?? opts.highlight?.count ?? 0;
+  const highlightStartIndex = (
+    line: (typeof series)[number],
+    pointCount: number,
+  ): number | undefined => {
+    const count = Math.min(highlightCount(line), pointCount);
+    return count >= 2 && count < pointCount ? pointCount - count : undefined;
+  };
+  const basis = opts.scale?.highlighted
+    ? drawable.flatMap((line) =>
+      line.vals.slice(highlightStartIndex(line, line.vals.length) ?? 0)
+    )
+    : all;
+  const scaled = scaleValues(basis, opts.scale);
   const lo = minOf(scaled), hi = maxOf(scaled);
-  // Match sparkline's centered flat range when trimming leaves two equal values.
-  const pad = scaled === all || lo !== hi ? 0 : 0.5;
+  const pad = (hi - lo) * 0.125 || 0.5; // as in sparkline
   const w = 220, h = 34, min = lo - pad, max = hi + pad, rng = (max - min) || 1;
   const yv = (v: number) => h - 3 - ((v - min) / rng) * (h - 6);
 
@@ -849,9 +953,6 @@ export function multiSparkline(
   // userSpaceOnUse keeps the transition at the same screen x for every line and
   // avoids the zero-bbox quirk when a line is flat.
   const defs: string[] = [];
-  const highlightCount = (
-    line: (typeof series)[number],
-  ): number => line.highlightCount ?? opts.highlight?.count ?? 0;
   const highlightEdge = (line: (typeof series)[number]): number => {
     const count = highlightCount(line);
     if (count < 2) return 1;
@@ -878,13 +979,6 @@ export function multiSparkline(
       );
     }
     return `url(#${id})`;
-  };
-  const highlightStartIndex = (
-    line: (typeof series)[number],
-    pointCount: number,
-  ): number | undefined => {
-    const count = Math.min(highlightCount(line), pointCount);
-    return count >= 2 && count < pointCount ? pointCount - count : undefined;
   };
   type SparkPoint = { index: number; x: number; px: number; py: number };
   const splitPoints = (
@@ -1113,6 +1207,23 @@ export function strip(
   ).join("");
   const className = labelSpace ? "cells labeled" : "cells";
   return `<div class="${className}">${html}</div>`;
+}
+
+/**
+ * A title as links: each "(#N)" in it links to pull request N of `repo`, with
+ * the class "pr", and the text around them links to `href`. With a
+ * `focusKey`, each link carries that key followed by its position.
+ */
+export function pullRequestLinks(title: string, repo: string, href: string, focusKey?: string): string {
+  const link = (to: string, text: string, index: number, className = "") =>
+    `<a${className}${
+      focusKey === undefined ? "" : ` data-focus-key="${escapeHtml(`${focusKey}-${index}`)}"`
+    } href="${escapeHtml(to)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
+  return title.split(/(\(#\d+\))/).map((part, index) =>
+    index % 2 === 1
+      ? link(`https://github.com/${repo}/pull/${part.slice(2, -1)}`, part, index, ' class="pr"')
+      : part && link(href, part, index)
+  ).join("");
 }
 
 // The PR that landed a commit: squash titles end "(#123)", merge commits start

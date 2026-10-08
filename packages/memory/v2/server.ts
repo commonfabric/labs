@@ -13,6 +13,7 @@ import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
+  type ACL,
   aclDocId,
   ANYONE_USER,
   type Capability,
@@ -114,6 +115,7 @@ import {
   type WatchSpec,
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
+import { AdmissionWaiters } from "./admission-waiters.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
 import * as Engine from "./engine.ts";
 import {
@@ -122,7 +124,11 @@ import {
   type InviteResult,
 } from "./invites.ts";
 import { SpaceInviteError } from "../space-invites.ts";
-import { isGenesisRoot, readGenesisRoot } from "./genesis-root.ts";
+import {
+  isGenesisRoot,
+  readGenesisRoot,
+  readSpaceKind,
+} from "./genesis-root.ts";
 import {
   executionLeaseHolder,
   liveExecutionLeaseHolder,
@@ -178,6 +184,7 @@ import {
 } from "./server-sync.ts";
 import { authorizationError } from "./session-open-auth.ts";
 import { SessionRegistry, type SessionState } from "./session-registry.ts";
+import { isSpaceKind } from "./space-kind.ts";
 import {
   columnOriginUnavailableReason,
   ensureColumnOriginAvailable,
@@ -610,6 +617,52 @@ const commitTouchesAclDoc = (
   );
 };
 
+/**
+ * The facts a space's genesis commit may declare beside its access list, each
+ * with the validator its value is held to and the words its refusals use. A
+ * session declares the same fact in its descriptor, and the commit carries it
+ * under the same name.
+ */
+const GENESIS_DECLARATIONS = [
+  {
+    field: "genesisRoot",
+    isValid: isGenesisRoot,
+    invalid: "Invalid genesis root reservation",
+    declared: "A root reservation",
+    sealed: "The genesis root",
+    intent: "root",
+  },
+  {
+    field: "spaceKind",
+    isValid: isSpaceKind,
+    invalid: "Invalid space kind",
+    declared: "A space kind",
+    sealed: "The space kind",
+    intent: "space kind",
+  },
+] as const;
+
+/**
+ * Whether `commit`, made as `principal`, is the genesis of `space` signed by
+ * the space's own key: the first commit the space holds, on the default
+ * branch, and nothing but a `set` of the space-scoped access list to a valid
+ * list naming a concrete owner.
+ */
+const isSpaceKeyAclGenesis = (
+  engine: Engine.Engine,
+  space: string,
+  principal: string | undefined,
+  commit: ClientCommit,
+): boolean =>
+  principal === space && Engine.serverSeq(engine) === 0 &&
+  commit.operations.length === 1 && commit.operations[0].op === "set" &&
+  commit.operations[0].id === aclDocId(space) &&
+  (commit.operations[0].scope === undefined ||
+    commit.operations[0].scope === "space") &&
+  (commit.branch === undefined || commit.branch === "") &&
+  isACL(commit.operations[0].value?.value) &&
+  hasConcreteOwner(commit.operations[0].value?.value);
+
 /** Deterministic, collision-resistant-enough token for a filename component
  *  (FNV-1a 32-bit + length). Used to derive cell-db file names from (space,id). */
 function hashToken(s: string): string {
@@ -769,6 +822,45 @@ export type AdmittedCommitNotice = {
 };
 
 /**
+ * A served run's change to a space's access list, as the serving loop hands
+ * it to {@link Server.checkServedAclChange} and
+ * {@link Server.commitServedAclChange}. The run is a handler run delivering a
+ * durable stream entry, and the change is made under its delegated carriage
+ * (protocol.md §2's delegated row).
+ */
+export type ServedAclChange = {
+  /** The space whose access list changes. */
+  space: string;
+
+  /** The carried actor: the event's actor, whom the change is made as. */
+  actingPrincipal: string;
+
+  /** The carried actor's session, where the event names one. */
+  actingSession?: string;
+
+  /**
+   * The grant the change is admitted under, which names the event:
+   * `event-consequence:<eventId>`.
+   */
+  capabilityRef: string;
+
+  /** The durable stream entry the run delivers, which `capabilityRef` names. */
+  sourceEvent: { space: string; sidecarId: string; eventId: string };
+
+  /**
+   * Returns the access list the change leaves, given the stored list's value
+   * (`undefined` for a space with no list). It throws to refuse the change,
+   * and the refusal names what it threw.
+   */
+  change: (stored: unknown) => ACL;
+};
+
+/** What {@link Server.checkServedAclChange} and its commit decide. */
+export type ServedAclChangeVerdict =
+  | { readonly refused: string }
+  | { readonly admitted: true; readonly seq?: number };
+
+/**
  * The ExecutorHost's in-process observer (serving-loop.md §1's wiring):
  * plane (b) — `commitAdmitted` is the admission-side activation hook (an
  * authored admission into a space with no live SpaceServer notifies the
@@ -898,6 +990,7 @@ class Connection {
   #closed = false;
   #syncSchemaTable = false;
   #stableExpressionResultIds = false;
+  #admissionNotice = false;
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #routedOwns: ((space: string) => boolean) | undefined;
@@ -955,6 +1048,11 @@ class Connection {
   /** Whether the peer declared the expression result identity contract. */
   get stableExpressionResultIds(): boolean {
     return this.#stableExpressionResultIds;
+  }
+
+  /** Whether both peers advertised `admissionNotice`. */
+  get admissionNotice(): boolean {
+    return this.#admissionNotice;
   }
 
   hasSession(space: string, sessionId: string): boolean {
@@ -1034,6 +1132,11 @@ class Connection {
     });
   }
 
+  /** Tells the peer that `principal` would now be admitted to `space`. */
+  sendAdmissible(space: string, principal: string): void {
+    this.#send({ type: "session/admissible", space, principal });
+  }
+
   issueSessionOpenAuth(): SessionOpenAuthMetadata {
     const sessionOpen = this.#server.sessionOpenHandshake();
     this.#sessionOpenChallenge = {
@@ -1067,6 +1170,7 @@ class Connection {
   /** Ends the authentication of `principal`, if it has one. */
   releasePrincipal(principal: string): void {
     this.#principals.delete(principal);
+    this.#server.forgetAdmissionWaits(this.id, principal);
   }
 
   /** Whether this connection is bound to a verified Mode A context. */
@@ -1537,6 +1641,8 @@ class Connection {
       const serverFlags = parseMemoryProtocolFlags(response.flags);
       this.#stableExpressionResultIds =
         clientFlags?.stableExpressionResultIds === true;
+      this.#admissionNotice = clientFlags?.admissionNotice === true &&
+        serverFlags?.admissionNotice === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
         serverFlags?.syncSchemaTableV2 === true;
       this.#ready = true;
@@ -2030,6 +2136,9 @@ export class Server {
   #sessions: SessionRegistry;
   #connections = new Map<string, Connection>();
 
+  /** The principals refused a space, by the connection to tell on a grant. */
+  #admissionWaiters = new AdmissionWaiters();
+
   /** Whole-evaluation caches, one per space (see QueryEvaluationCache in
    * query.ts for the sharing, purity, and seq-rotation rules), held for at
    * most QUERY_EVALUATION_CACHE_MAX_SPACES spaces in LRU order. */
@@ -2137,6 +2246,14 @@ export class Server {
 
   /** How many times `#buildSessionDemand()` has run, for a test to read. */
   #sessionDemandBuilds = 0;
+
+  /**
+   * The kind each space's genesis receipt declares, `undefined` included, as
+   * {@link #spaceKindOf} read it. The receipt never changes once written, so
+   * an entry never goes stale. Keyed by engine, so a store opened again is
+   * read afresh.
+   */
+  #spaceKinds = new WeakMap<Engine.Engine, string | undefined>();
 
   #store?: URL;
   #operationCodecs: OperationCodecRegistry;
@@ -2699,50 +2816,62 @@ export class Server {
     );
   }
 
+  /**
+   * The kind the genesis receipt of the space `engine` stores declares, or
+   * `undefined` when it declares none or the space has no history yet.
+   */
+  #spaceKindOf(engine: Engine.Engine): string | undefined {
+    // A space with no history has no receipt to read, and one yet to come.
+    if (Engine.serverSeq(engine) === 0) return undefined;
+    if (!this.#spaceKinds.has(engine)) {
+      this.#spaceKinds.set(engine, readSpaceKind(engine));
+    }
+    return this.#spaceKinds.get(engine);
+  }
+
   /** Enforce ACL document shape and fresh-space genesis in the `observe` and
    *  `enforce` modes alike, apart from the access decision those modes
    *  differ on. These are storage invariants: an invalid ACL or an ordinary
    *  first write would make later enforcement ambiguous or impossible. The
-   *  `off` mode skips them, and checks only a genesis root reservation. */
+   *  `off` mode skips them, and checks only the facts a genesis commit
+   *  declares ({@link GENESIS_DECLARATIONS}), which every mode admits only
+   *  on a space-key genesis matching its session's intent. `committer` is
+   *  the principal the commit is made as, with the genesis facts its session
+   *  declared: a session's own, or a served run's carried actor, which
+   *  declares none. */
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
-    session: SessionState,
+    committer: Pick<SessionState, "principal" | "genesisRoot" | "spaceKind">,
     commit: ClientCommit,
   ): V2Error | null {
-    const principal = session.principal;
-    if (commit.genesisRoot !== undefined) {
-      if (!isGenesisRoot(commit.genesisRoot)) {
-        return toError("ProtocolError", "Invalid genesis root reservation");
-      }
-      if (
-        principal !== space || Engine.serverSeq(engine) !== 0 ||
-        commit.operations.length !== 1 || commit.operations[0].op !== "set" ||
-        commit.operations[0].id !== aclDocId(space) ||
-        (commit.operations[0].scope !== undefined &&
-          commit.operations[0].scope !== "space") ||
-        (commit.branch !== undefined && commit.branch !== "") ||
-        !isACL(commit.operations[0].value?.value) ||
-        !hasConcreteOwner(commit.operations[0].value?.value)
-      ) {
+    const principal = committer.principal;
+    for (const declaration of GENESIS_DECLARATIONS) {
+      const declared = commit[declaration.field];
+      const intended = committer[declaration.field];
+      if (declared !== undefined) {
+        if (!declaration.isValid(declared)) {
+          return toError("ProtocolError", declaration.invalid);
+        }
+        if (!isSpaceKeyAclGenesis(engine, space, principal, commit)) {
+          return toError(
+            "AuthorizationError",
+            `${declaration.declared} requires space-key ACL genesis`,
+          );
+        }
+        if (!valueEqual(declared, intended)) {
+          return toError(
+            "AuthorizationError",
+            `${declaration.sealed} must match the authenticated session intent`,
+          );
+        }
+      } else if (Engine.serverSeq(engine) === 0 && intended !== undefined) {
         return toError(
           "AuthorizationError",
-          "A root reservation requires space-key ACL genesis",
+          "The genesis commit must retain the authenticated " +
+            `${declaration.intent} intent`,
         );
       }
-      if (!valueEqual(commit.genesisRoot, session.genesisRoot)) {
-        return toError(
-          "AuthorizationError",
-          "The genesis root must match the authenticated session intent",
-        );
-      }
-    } else if (
-      Engine.serverSeq(engine) === 0 && session.genesisRoot !== undefined
-    ) {
-      return toError(
-        "AuthorizationError",
-        "The genesis commit must retain the authenticated root intent",
-      );
     }
     if (this.#aclMode() === "off") return null;
 
@@ -2800,6 +2929,36 @@ export class Server {
       );
     }
     return null;
+  }
+
+  /**
+   * The capability check of `commit`, made as `principal` to `space`, whose
+   * shape {@link #validateAclCommit} admitted. A commit that leaves the ACL
+   * document alone needs `WRITE`. One that writes it changes who may access
+   * the space, so it needs `OWNER`, with one exception: a member removing its
+   * own entry and nothing else ({@link #isSelfRemoval}, INV-12) needs only
+   * `READ`, which any entry grants. That holds in `observe` mode as in
+   * `enforce`. A session's transact and a served run's access-list change
+   * are both admitted through this check.
+   */
+  #authorizeCommitWithEngine(
+    engine: Engine.Engine,
+    space: string,
+    principal: string | undefined,
+    commit: ClientCommit,
+  ): V2Error | null {
+    const requirement: Capability =
+      !commitTouchesAclDoc(commit.operations, space)
+        ? "WRITE"
+        : this.#isSelfRemoval(engine, space, principal, commit)
+        ? "READ"
+        : "OWNER";
+    return this.#authorizeMessageWithEngine(
+      engine,
+      space,
+      principal,
+      requirement,
+    );
   }
 
   /**
@@ -2904,6 +3063,13 @@ export class Server {
         session.actingPrincipal ?? session.principal,
       );
       if (capability !== null && isCapable(capability, "READ")) continue;
+      if (session.actingPrincipal === undefined) {
+        this.#awaitAdmission(
+          session.ownerConnectionId,
+          space,
+          session.principal,
+        );
+      }
       // Drop the de-authorized session from the registry: the refresh loop
       // iterates registered sessions, so removal stops all further watch
       // pushes, and its next message fails closed (Unknown session).
@@ -2929,6 +3095,50 @@ export class Server {
           "unauthorized",
         );
       }
+    }
+  }
+
+  /**
+   * Records that `principal` was refused `space` on `connectionId`, so that
+   * an access-list change admitting it tells that connection
+   * (`#noticeAdmissions()`). A routed connection records nothing, and
+   * neither does one whose peer did not advertise `admissionNotice`.
+   *
+   * The callers in this file record nothing for a session opened
+   * `actingAs: "space-owner"`. Only a co-hosted serving runtime opens one,
+   * and it already hears of every access-list commit in process
+   * (`noteSpaceAclChanged()`), after which its next load of the space opens
+   * the session again through ordinary admission.
+   */
+  #awaitAdmission(
+    connectionId: string | null,
+    space: string,
+    principal: string | undefined,
+  ): void {
+    if (connectionId === null || principal === undefined) return;
+    const connection = this.#connections.get(connectionId);
+    if (
+      connection === undefined || connection.routed ||
+      !connection.admissionNotice
+    ) {
+      return;
+    }
+    this.#admissionWaiters.add(connectionId, space, principal);
+  }
+
+  /**
+   * After an access-list change, sends `session/admissible` to each
+   * connection that was refused `space` for a principal that now holds
+   * `READ` there. Each refusal is told once.
+   */
+  #noticeAdmissions(engine: Engine.Engine, space: string): void {
+    if (!this.isAclActive()) return;
+    const admitted = this.#admissionWaiters.take(space, (principal) => {
+      const capability = this.#capabilityFor(engine, space, principal);
+      return capability !== null && isCapable(capability, "READ");
+    });
+    for (const { connectionId, principal } of admitted) {
+      this.#connections.get(connectionId)?.sendAdmissible(space, principal);
     }
   }
 
@@ -2965,9 +3175,15 @@ export class Server {
 
   disconnect(connection: Connection): void {
     this.#connections.delete(connection.id);
+    this.#admissionWaiters.removeConnection(connection.id);
     if (this.#connections.size === 0) {
       this.#cancelScheduledRefresh();
     }
+  }
+
+  /** Forgets every refusal of `principal` on `connectionId`. */
+  forgetAdmissionWaits(connectionId: string, principal: string): void {
+    this.#admissionWaiters.removePrincipal(connectionId, principal);
   }
 
   detachSession(
@@ -3175,6 +3391,7 @@ export class Server {
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#revokeDeauthorizedSessions(engine, request.space);
+        this.#noticeAdmissions(engine, request.space);
         this.markSpaceDirty(request.space, [
           toDirtyKey(aclDocId(request.space)),
         ]);
@@ -3820,6 +4037,146 @@ export class Server {
     return { seq: applied.seq, deduped: false };
   }
 
+  /**
+   * Decides `request`, a served run's change to an access list, as
+   * {@link commitServedAclChange} would against the store as it stands, and
+   * commits nothing. The serving loop asks this when the run seals, so that a
+   * refusal fails that run alone, before anything of it reaches the wave.
+   */
+  async checkServedAclChange(
+    request: ServedAclChange,
+  ): Promise<ServedAclChangeVerdict> {
+    const engine = await this.#openEngine(request.space);
+    const sourceEngine = await this.#openEngine(request.sourceEvent.space);
+    const prepared = this.#prepareServedAclChange(
+      engine,
+      sourceEngine,
+      request,
+      0,
+    );
+    return "refused" in prepared ? prepared : { admitted: true };
+  }
+
+  /**
+   * Commits `request`, a served run's change to an access list, as one
+   * authored commit holding a single whole-document `set` of the list, under
+   * the run's delegated carriage (protocol.md §2's delegated row), with the
+   * delegating SpaceServer's session `sessionId` as its envelope (LT5) and
+   * `localSeq` from that host's process-lifetime counter, as for
+   * {@link commitDelegatedAppend}. A change that leaves the list as it is
+   * commits nothing.
+   *
+   * The change is admitted as a session's transact is, with the carried actor
+   * as the principal: INV-12's shape and the genesis rule
+   * ({@link #validateAclCommit}), then the capability check
+   * ({@link #authorizeCommitWithEngine}), on the same mode dial. The actor is
+   * never the space, so a space with no list refuses. The grant is resolved
+   * too: `capabilityRef` must name the entry the run delivers, and that entry
+   * must have been fired by the carried actor. The list is read, changed and
+   * written with no wait between, so nothing lands in between. On admission
+   * the commit is published as a transact writing the list is.
+   */
+  async commitServedAclChange(
+    request: ServedAclChange & { sessionId: string; localSeq: number },
+  ): Promise<ServedAclChangeVerdict> {
+    return await this.#withSpacePublicationLock(request.space, async () => {
+      const engine = await this.#openEngine(request.space);
+      const sourceEngine = await this.#openEngine(request.sourceEvent.space);
+      const prepared = this.#prepareServedAclChange(
+        engine,
+        sourceEngine,
+        request,
+        request.localSeq,
+      );
+      if ("refused" in prepared) return prepared;
+      if (prepared.commit === undefined) return { admitted: true };
+      const applied = Engine.applyCommit(engine, {
+        sessionId: request.sessionId,
+        space: request.space,
+        commit: prepared.commit,
+        commitClass: "authored",
+        delegated: {
+          actingPrincipal: request.actingPrincipal,
+          ...(request.actingSession === undefined
+            ? {}
+            : { actingSession: request.actingSession }),
+          capabilityRef: request.capabilityRef,
+        },
+      });
+      const aclId = aclDocId(request.space);
+      this.#invalidateAclCapabilities(request.space);
+      this.#revokeDeauthorizedSessions(engine, request.space);
+      this.#noticeAdmissions(engine, request.space);
+      this.markSpaceDirty(request.space, [toDirtyKey(aclId)]);
+      this.#notifyCommitAdmitted({
+        space: request.space,
+        seq: applied.seq,
+        class: "authored",
+        sessionId: request.sessionId,
+        writes: [{ id: aclId, scopeKey: "space" }],
+      });
+      return { admitted: true, seq: applied.seq };
+    });
+  }
+
+  /**
+   * Helper for {@link checkServedAclChange} and {@link commitServedAclChange},
+   * which returns the commit `request` makes against `engine`, the store of
+   * `request.space`, numbered `localSeq`: `undefined` when the change leaves
+   * the list as it is, or why it is refused. `sourceEngine` is the store of
+   * the space whose stream holds the entry the run delivers.
+   */
+  #prepareServedAclChange(
+    engine: Engine.Engine,
+    sourceEngine: Engine.Engine,
+    request: ServedAclChange,
+    localSeq: number,
+  ): { refused: string } | { commit: ClientCommit | undefined } {
+    const { space, actingPrincipal, sourceEvent } = request;
+    if (request.capabilityRef !== `event-consequence:${sourceEvent.eventId}`) {
+      return {
+        refused: `The grant ${request.capabilityRef} does not name the ` +
+          `event ${sourceEvent.eventId} the run delivers.`,
+      };
+    }
+    const sidecar = Engine.read(sourceEngine, { id: sourceEvent.sidecarId })
+      ?.value as StreamEventsDocValue | undefined;
+    const entry = (Array.isArray(sidecar?.entries) ? sidecar.entries : [])
+      .find((candidate) => candidate?.eventId === sourceEvent.eventId);
+    if (entry?.firedAt?.user !== actingPrincipal) {
+      return {
+        refused: `The event ${sourceEvent.eventId} was not fired by ` +
+          `${actingPrincipal}, the actor the change is made as.`,
+      };
+    }
+    const aclId = aclDocId(space);
+    const stored = Engine.read(engine, { id: aclId });
+    let next: ACL;
+    try {
+      next = request.change(stored?.value);
+    } catch (error) {
+      return {
+        refused: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (stored !== null && valueEqual(stored.value as FabricValue, next)) {
+      return { commit: undefined };
+    }
+    const commit: ClientCommit = {
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: aclId,
+        value: { ...(stored ?? {}), value: next } as EntityDocument,
+      }],
+    };
+    const committer = { principal: actingPrincipal };
+    const invalid = this.#validateAclCommit(engine, space, committer, commit) ??
+      this.#authorizeCommitWithEngine(engine, space, actingPrincipal, commit);
+    return invalid === null ? { commit } : { refused: invalid.message };
+  }
+
   async sqliteQuery(
     message: SqliteQueryRequest,
   ): Promise<ResponseMessage<SqliteQueryWireResult>> {
@@ -4203,6 +4560,9 @@ export class Server {
         "READ",
       );
       if (deny) {
+        if (actingAs === undefined) {
+          this.#awaitAdmission(connection.id, message.space, principal);
+        }
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
       }
       const requestedRoot = message.session.genesisRoot;
@@ -4217,6 +4577,21 @@ export class Server {
           toError(
             "ProtocolError",
             "The requested root intent differs from the space's immutable genesis",
+          ),
+        );
+      }
+      const spaceKind = this.#spaceKindOf(engine);
+      const requestedKind = message.session.spaceKind;
+      if (
+        requestedKind !== undefined &&
+        (!isSpaceKind(requestedKind) ||
+          (Engine.serverSeq(engine) > 0 && spaceKind !== requestedKind))
+      ) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError(
+            "ProtocolError",
+            "The requested space kind differs from the space's immutable genesis",
           ),
         );
       }
@@ -4309,6 +4684,9 @@ export class Server {
           ),
         );
       }
+      if (principal !== undefined) {
+        this.#admissionWaiters.remove(connection.id, message.space, principal);
+      }
       const nextSessionOpen = connection.issueSessionOpenAuth();
       // Activation trigger (serving-loop.md §1): session open makes the
       // space ACTIVE-eligible; notify the host after the open succeeded.
@@ -4323,6 +4701,7 @@ export class Server {
           caughtUpLocalSeq: opened.caughtUpLocalSeq,
           ...(opened.resumed === true ? { resumed: true } : {}),
           ...(catchup ? { sync: catchup.effect } : {}),
+          ...(spaceKind !== undefined ? { spaceKind } : {}),
           sessionOpen: nextSessionOpen,
         },
       };
@@ -4867,32 +5246,18 @@ export class Server {
               invalid,
             );
           }
-          // ACL-document writes change who may access the space, so they need
-          // OWNER, with one exception: a member removing its own entry and
-          // nothing else (`#isSelfRemoval()`, INV-12) needs only READ, which
-          // any entry grants. That holds in `observe` mode as in `enforce`.
           const aclTouched = commitTouchesAclDoc(
             message.commit.operations,
             message.space,
           );
-          const requirement: Capability = !aclTouched
-            ? "WRITE"
-            : this.#isSelfRemoval(
-                engine,
-                message.space,
-                session.principal,
-                message.commit,
-              )
-            ? "READ"
-            : "OWNER";
           const routedDeny = session.routedAuthority?.() === false
             ? toError("SessionRevokedError", "Routed memory authority ended")
             : null;
-          const deny = routedDeny ?? this.#authorizeMessageWithEngine(
+          const deny = routedDeny ?? this.#authorizeCommitWithEngine(
             engine,
             message.space,
             session.principal,
-            requirement,
+            message.commit,
           );
           if (deny) {
             return respondTypedError<Engine.AppliedCommit>(
@@ -5063,6 +5428,7 @@ export class Server {
               message.space,
               message.sessionId,
             );
+            this.#noticeAdmissions(engine, message.space);
           }
           span.setAttribute("commit.seq", commit.seq);
           return {
@@ -9086,6 +9452,10 @@ export const parseClientMessage = (
       parsed.session.genesisRoot !== undefined &&
       !isGenesisRoot(parsed.session.genesisRoot)
     ) return null;
+    if (
+      parsed.session.spaceKind !== undefined &&
+      !isSpaceKind(parsed.session.spaceKind)
+    ) return null;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
@@ -9119,6 +9489,9 @@ export const parseClientMessage = (
         ...(readCeiling !== undefined ? { readCeiling } : {}),
         ...(isGenesisRoot(parsed.session.genesisRoot)
           ? { genesisRoot: parsed.session.genesisRoot }
+          : {}),
+        ...(isSpaceKind(parsed.session.spaceKind)
+          ? { spaceKind: parsed.session.spaceKind }
           : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)

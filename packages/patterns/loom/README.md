@@ -4,7 +4,8 @@
 `schemas.tsx` defines its public contract and re-exports the participant
 roster's types from `participants.tsx`, which also holds the roster's one
 writer, `addParticipant`. The shared inputs are `title`, `panels`,
-`presentation`, and `participants`; `viewerState` belongs to one session.
+`presentation`, `participants`, and `chatRoom`; `viewerState` belongs to one
+session.
 
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
@@ -177,7 +178,30 @@ and drops a removed member without deleting their entry. The root does not
 render the list: it holds claims, and only a consumer that can read the access
 list can say which are participants.
 
-Run and attach all seven tests when deploying or updating source:
+`chatRoom` links the Loom's chat room, so every member finds it in the Loom's
+shared state. It is a link to a room piece in the Loom's own space, typed as
+`LinkedChatRoom`, which declares only the room's name: a reader of the Loom
+loads nothing of the conversation, and a client opens the room through the link
+under its own access. A Loom that names no room, including a root whose state
+holds no `chatRoom` field, reads the link's value as `undefined`.
+`setChatRoom({room?})` names the room, or clears it when `room` is omitted;
+sending the same event again leaves the same state. It refuses a room in another
+space. A FabriChat room's members are the principals its space's access list
+admits, so a room in the Loom's space has the Loom's members. The participants
+it shows are the profiles its space's default pattern lists, which in the Loom's
+space is this root's `participants`, a set of claims as described above, plus
+the author profile of any of its messages that records one the list leaves out.
+Whoever may change the Loom's panels may change `chatRoom`: the space's access
+list decides both. Of the root's handlers, only `setChatRoom` changes it. The
+designation is a fact about the Loom, not about its layout, so it persists
+through every panel change: removing the room's panels leaves it named, and
+adding one back changes nothing. A reader that needs to know whether the room is
+shown looks for a piece panel whose piece `equals()` the room. A deleted room
+stays named until `setChatRoom` clears it, as any link does. The input holds the
+link in a record, `{ room? }`, because a handler's cell for a field holding a
+link writes through it, so replacing the link there would write into the room.
+
+Run and attach all eight tests when deploying or updating source:
 
 ```sh
 deno task cf test packages/patterns/loom/main.test.tsx
@@ -187,6 +211,7 @@ deno task cf test packages/patterns/loom/participant-labels.test.tsx
 deno task cf test packages/patterns/loom/url-view.test.tsx
 deno task cf test packages/patterns/loom/adder-profile.test.tsx
 deno task cf test packages/patterns/loom/actor-attribution.test.tsx
+deno task cf test packages/patterns/loom/chat-room.test.tsx
 
 deno task cf piece new packages/patterns/loom/main.tsx \
   --root packages/patterns \
@@ -196,7 +221,8 @@ deno task cf piece new packages/patterns/loom/main.tsx \
   --test packages/patterns/loom/participant-labels.test.tsx \
   --test packages/patterns/loom/url-view.test.tsx \
   --test packages/patterns/loom/adder-profile.test.tsx \
-  --test packages/patterns/loom/actor-attribution.test.tsx
+  --test packages/patterns/loom/actor-attribution.test.tsx \
+  --test packages/patterns/loom/chat-room.test.tsx
 ```
 
 Repeat all `--test` arguments with every `piece setsrc`. A source closure for

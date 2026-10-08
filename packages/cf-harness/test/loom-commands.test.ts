@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { parseCfHarnessCliArgs } from "../src/cli.ts";
+import { parseCfHarnessCliArgs } from "./support/on-linux.ts";
 import {
   HARNESS_COMMAND_CATALOG_LIMIT,
   HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
@@ -10,12 +10,14 @@ import {
   HARNESS_COMMAND_SUMMARY_MAX_LENGTH,
 } from "../src/contracts/client-command.ts";
 import {
+  createLoomCommandCatalogSource,
   type HarnessLoomCommandsConfig,
   isHiddenFromAgents,
   listLoomCommands,
   LOOM_COMMAND_OUTPUTS_LIMIT,
   loomCommandCatalogOf,
   loomCommandEntryOfRow,
+  nearestCommandNames,
   readLoomCommandsConfig,
   runLoomCommand,
   validateLoomCommandsConfig,
@@ -322,6 +324,53 @@ describe("loom-commands", () => {
       }
     });
 
+    it("removes the `x-*` extension keywords from the argument schema", () => {
+      expect(
+        loomCommandEntryOfRow({
+          id: "a.b",
+          inputs: {
+            type: "object",
+            "x-surface": "pill",
+            properties: { title: { type: "string", "x-widget": "text" } },
+          },
+        })?.inputSchema,
+      ).toEqual({
+        type: "object",
+        properties: { title: { type: "string" } },
+      });
+    });
+
+    it("names the inputs the host fills from context, which the shown schema no longer marks", () => {
+      const entry = loomCommandEntryOfRow({
+        id: "pane.rename",
+        inputs: {
+          type: "object",
+          required: ["pane", "title"],
+          properties: {
+            pane: { type: "string", "x-source": "context.pane" },
+            title: { type: "string" },
+          },
+        },
+      });
+      expect(entry?.hostFilled).toEqual(["pane"]);
+      expect(JSON.stringify(entry?.inputSchema)).not.toContain("x-source");
+      expect(loomCommandEntryOfRow({ id: "a.b", inputs: { type: "object" } }))
+        .not.toHaveProperty("hostFilled");
+    });
+
+    it("keeps a schema typed whose `x-*` annotations alone pass the size bound", () => {
+      expect(
+        loomCommandEntryOfRow({
+          id: "a.b",
+          inputs: {
+            type: "object",
+            "x-help": "x".repeat(HARNESS_COMMAND_SCHEMA_MAX_BYTES),
+            properties: { title: { type: "string" } },
+          },
+        })?.inputSchema,
+      ).toEqual({ type: "object", properties: { title: { type: "string" } } });
+    });
+
     it("shows an argument schema that is not an object, or is too large, as open", () => {
       expect(loomCommandEntryOfRow({ id: "a.b", inputs: [1] })?.inputSchema)
         .toBe(true);
@@ -358,6 +407,73 @@ describe("loom-commands", () => {
       const catalog = loomCommandCatalogOf(rows);
       expect(catalog.entries).toHaveLength(HARNESS_COMMAND_CATALOG_LIMIT);
       expect(catalog.omitted).toBe(2);
+    });
+  });
+
+  describe("nearestCommandNames()", () => {
+    const names = [
+      "loom.compose",
+      "loom.inspect",
+      "people-discovery.dossier",
+      "calendar.list",
+      "share.invite",
+    ];
+
+    it("returns a name containing the one called before nearer misspellings", () => {
+      expect(nearestCommandNames("dossier", names)[0]).toBe(
+        "people-discovery.dossier",
+      );
+    });
+
+    it("returns at most three names, nearest by edit distance first", () => {
+      expect(nearestCommandNames("loom.compse", names)).toEqual([
+        "loom.compose",
+        "loom.inspect",
+        "share.invite",
+      ]);
+    });
+
+    it("returns no names from an empty catalog", () => {
+      expect(nearestCommandNames("loom.compose", [])).toEqual([]);
+    });
+  });
+
+  describe("createLoomCommandCatalogSource()", () => {
+    /** A manifest of one visible command. */
+    const manifest = JSON.stringify({ commands: [{ id: "loom.compose" }] });
+
+    it("reads the host once for any number of uses, concurrent ones included", async () => {
+      const { runner, calls } = runnerAnswering(manifest);
+      const source = createLoomCommandCatalogSource(config, runner);
+      const reads = await Promise.all([source.current(), source.current()]);
+      await source.current();
+      expect(calls).toHaveLength(1);
+      for (const read of reads) {
+        expect(read).toMatchObject({
+          status: "ok",
+          catalog: { entries: [{ name: "loom.compose" }] },
+        });
+      }
+    });
+
+    it("reads the host again on refresh and holds what it read", async () => {
+      const { runner, calls } = runnerAnswering(manifest);
+      const source = createLoomCommandCatalogSource(config, runner);
+      await source.current();
+      await source.refresh();
+      await source.current();
+      expect(calls).toHaveLength(2);
+    });
+
+    it("does not hold a read that failed, so the next use asks again", async () => {
+      const { runner, calls } = runnerAnswering("Error: no broker");
+      const source = createLoomCommandCatalogSource(config, runner);
+      expect(await source.current()).toMatchObject({
+        status: "error",
+        code: "command_failed",
+      });
+      await source.current();
+      expect(calls).toHaveLength(2);
     });
   });
 

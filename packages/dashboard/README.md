@@ -13,9 +13,10 @@ deno task dashboard      # = deno run … packages/dashboard/server.ts
 ```
 
 Tiles that read GitHub need `GH_TOKEN` (or `GITHUB_TOKEN`) set in the
-environment. The GitHub spend tile can use a separate `GH_BILLING_TOKEN` when
-billing needs broader account access. The other token-gated tiles gray out
-cleanly until their env vars are set (see below).
+environment, or a GitHub App configured with `GH_APP_CLIENT_ID` and
+`GH_APP_PRIVATE_KEY`. The GitHub spend tile can use a separate
+`GH_BILLING_TOKEN` when billing needs broader account access. The other
+token-gated tiles gray out cleanly until their env vars are set (see below).
 
 The root `deno task dashboard` command starts the server once. Watch mode and
 dashboard-specific tests are package tasks:
@@ -39,6 +40,8 @@ dashboard/
   config.ts     port, repo, tunable status thresholds
   palette.ts    THE ONE PLACE status colors and washes are chosen
   status-dot.ts THE ONE PLACE the status dot's shapes are chosen
+  green-star.ts THE ONE PLACE the green branch's star is drawn
+  green-branch.ts the commits each repository's green branch is at and was at
   detail-list.ts  the row list a tile's body is built from
   theme.ts      light/dark surface colors, theme switch markup and browser behavior
   lib.ts        shared helpers (github, memo, escapeHtml, sparkline, strip, …)
@@ -53,6 +56,7 @@ dashboard/
   live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
   live-page-client.ts  the browser half: puts the changed parts of a fresh rendering on the page
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
+  repo-page.ts  the page for each repository, and the index of them all
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
   registry.ts   THE ONE REGISTRATION POINT — the array of tiles
   tiles/*.ts     one tile per file
@@ -118,54 +122,45 @@ It then shares the source's next fetch with the other tiles, rather than
 falling due on its own and fetching the source for itself, which would leave it
 describing different runs from its neighbours from then on.
 
-A workflow snapshot is joined from three reads of the workflow's runs. The
-newest page of the unfiltered listing, whatever branch or event its runs were
-for, is current; GitHub serves that listing from the moment of the request, and
-fetches of a workflow's two snapshots within twenty seconds of each other share
-one read of it. The filtered listing, narrowed to the snapshot's branch or
-event, carries the rest of the window, but GitHub serves it from an index that
-is often hours or days behind. The third read is the window the snapshot held
-before. Either the held window or the filtered listing has to join the newest
-page, so that no run falls between them. The held window joins it when the page
-still carries the newest run, of any branch or event, of the page the held
-window was joined to, which it does unless a hundred runs start between two
-refreshes.
-The filtered listing joins it when it carries the oldest of the snapshot's runs
-on the page. When neither joins, which is what a dashboard that has just
-started sees while the filtered listing is behind, the unfiltered listing is
-read on, page by page, until it reaches a run the filtered listing carries,
-holds the most runs a window holds, or reaches the age cutoff; for labs' main
-runs that is at most about eight pages. A workflow's two snapshots share the
-pages they both read within twenty seconds. The server log names the run
-nothing reached, the filtered listing's newest run, and how many runs the
-unfiltered listing gave. Each run is taken from whichever read last saw it
-updated, so a lagging read never turns a finished run back into a running one,
-and a run a lagging read missed joins the window once a current listing carries
-it. A filtered listing that fails is logged.
+A workflow snapshot is read through the run-list reader described under
+[Reading GitHub's run lists](#reading-githubs-run-lists). Each refresh reads the
+top hundred runs of the workflow's list, of every branch and event, and reads
+further down only as far as the snapshot's window reaches past the runs already
+held. A workflow's two snapshots, of its main runs and of its pull request runs,
+share one read of the top of the list when they are fetched within twenty
+seconds of each other. Each snapshot names the list filtered to its branch or
+event as the one through which runs started again further down are found.
 
-The filtered listing is read a page at a time, and the pages have to describe
-one moment. A page after the first asks GitHub for the runs created at or
-before the run the page before it ended on, rather than for an offset into a
-list that shifts as runs land. That run is one the window already holds, so the
-page has to carry it; a page that comes back without it was cut from a moment
-that never held that run, and the listing is refused rather than joining the
-two. This reads the same whichever side went stale. The cost is the one run
-each page repeats, which is why the window is up to the configured maximum
-rather than exactly it. The runs that do come back are ordered newest-first by
-the collection, not by the order the pages arrived in.
-
-A fetch fails only when a read of the unfiltered listing fails. The scheduler
-then keeps the snapshot it has, and each tile reading it turns gray and names
-the problem, apart from the ci tile, which marks the affected build
-unreadable. The next fetch that succeeds clears the gray. Together these keep a
-stale read from putting a run from weeks back at the head of a window, where
-every CI tile takes the state of the tree from.
+A fetch fails when a read of the unfiltered list, or of a run by its id, fails;
+a filtered list that cannot be read is logged and passed over. The scheduler
+then keeps the snapshot
+it has, and each tile reading it turns gray and names the problem, apart from
+the ci tile, which marks the affected build unreadable. The next fetch that
+succeeds clears the gray.
 
 The recent-main-runs tile reads both the Labs and Loom snapshots. It rebuilds
 and sorts the combined list whenever either snapshot arrives. If one snapshot
 has not arrived yet, it shows the runs from the available snapshot in gray and
 names the pending source. If a later refresh fails, it keeps the last good
 snapshot for that source and shows the combined list in gray with the error.
+
+A repository can have a green branch: a branch its own CI moves to the newest
+commit of main whose tests passed. `GREEN_BRANCHES` in `config.ts` names it by
+repository; loom's is `main-green`. Each fetch of a repository's main snapshot
+also reads the updates of its green branch from GitHub's activity record for the
+repository, which lists every update of a branch, the ones CI makes through the
+API included. The first fetch reads back as far as the snapshot's age cutoff,
+each later one reads only the updates made since, and updates older than the
+cutoff are forgotten. A read that fails is logged and changes nothing, so the
+next one reads what it missed, and the snapshot is unaffected. Each run in the
+snapshot carries what the branch says of its commit. Every view that draws a run
+on main large enough to carry it marks such a commit with a green star: solid
+while the branch is at the commit, and hollow once the branch has moved past it.
+A commit the branch moved past without stopping at gets no star, although the
+branch contains it. The views are the rows of the recent main runs tile, the
+bars of a repository page's main-branch chart and the runs listed under it, and
+the heading of the commit CI Gantt page. The star's tooltip names the branch and
+says whether it is or was at the commit.
 
 Each event connection receives the current tile snapshot before it waits for new
 collections. The browser matches each tile in that snapshot with the tile of the
@@ -231,7 +226,8 @@ regaining the network as well as on its own tick.
 
 A drill-down page can be kept current the same way. A route that declares
 `live: true` serves a page built by `livePage` in `live-page.ts`, which carries
-the client script and keeps everything that changes inside its `<main>` element.
+the client script and keeps everything that changes inside its `<main>` element,
+apart from the tab's favicon.
 The page opens `/events?page=<its path and query>`. On every serving tick the
 server sends a heartbeat down that stream and renders the page again by calling
 the route's handler, and it sends the new markup when that differs from what it
@@ -251,9 +247,9 @@ version reloads instead. The page follows its stream with the dashboard's own
 code (`followUpdates` in `stream-client.ts`), reopens it once it has heard
 nothing for three heartbeat periods, and its badge reads OFFLINE while it cannot
 hear the server. A page is rendered only while some browser is showing it. The
-test selection page and the CI jobs page are live, so a screen left on either
-follows the manifests as the publisher writes them, or the ci tile's collections
-as it makes them.
+test selection page, the CI jobs page, and the repository pages are live, so a
+screen left on one follows the manifests as the publisher writes them, or the
+tiles' collections as they make them.
 
 The tab favicon follows the most urgent visible tile. It is red when any tile is
 red, orange when there are no red tiles but at least one orange tile, and green
@@ -268,6 +264,15 @@ becomes a crying face after the dashboard stays red for one continuous hour. The
 server retains the elapsed time across reloads. Returning below red resets it
 once every collector due in the same pass has finished.
 
+A repository's page and the CI jobs page show a status in their favicons the
+same way. A repository's page shows the repository's standing. The CI jobs page
+shows the color of the ci tile's latest collection. A live page takes its
+favicon from each rendering the server sends, so the favicon changes when the
+status does. While the status is gray, and on a live page with no status, the
+favicon is empty. These pages use the green, orange, and red faces. The crying
+face, which measures how long the whole dashboard has stayed red, appears only
+on the dashboard.
+
 After changing `favicon-artwork.ts`, regenerate the embedded PNGs and their
 content-based cache version from the dashboard package directory:
 
@@ -276,6 +281,82 @@ cd packages/dashboard
 deno task regenerate-favicons
 deno test --allow-all favicon-raster.test.ts regenerate-favicons.test.ts
 ```
+
+### Reading GitHub's run lists
+
+Every list of workflow runs the dashboard reads comes through `github-runs.ts`.
+The dashboard's GitHub client refuses a request for a run list made anywhere
+else, so a tile cannot read one any other way by accident.
+
+GitHub serves a workflow's unfiltered run list current. A list narrowed by
+branch, event, status, actor, creation time, commit, or check suite comes from
+an index that is often hours or days behind, and sometimes weeks or months
+behind. Such a list leaves out runs that exist, and shows the runs it does list
+as they stood when the index last caught up. On 2026-10-06 the list of
+gvisor's Go runs filtered to its default branch began with a failure nineteen
+days old, and left out the eight passing runs created after it. So the reader
+takes which runs exist, and their order, only from the unfiltered list. A
+filtered list only names runs that may have changed: a held run the reader
+wants, which it shows updated after the copy held, is then read by its id.
+
+The unfiltered list carries every run, whatever it ran for, so a reader that
+wants one branch's runs may have to read a long way down it. Each reader says
+which runs it wants, how many of them it needs at most, and which run is the
+last it needs, and it is given only the runs it wants. A `RunLists` keeps the
+head of each workflow's list: its runs from the newest down, with none missing
+between them. Each reading brings the head up to date by reading the top of the
+list, twenty runs unless the reader asks for up to a hundred, and following it
+down the list until it reaches a run the head holds. If it passes the newest
+run held without reaching any, every held run in its way was deleted, and the
+head starts again from what it read. A read of the top that leaves out the
+newest run held is rejected as behind, unless reading that run by its id shows
+it deleted. Readings made within twenty seconds of
+each other share one read of the top. A reading that needs runs below the head
+reads on down the list. The head is kept as deep as the deepest of its readers
+last read, and a reader that has not read for a day stops holding it. Each part
+of the dashboard that reads runs keeps its own `RunLists`, and so do CI
+history and its Gantt, and the benchmarks tile and its drill-down, so that a
+deep reading, such as CI history's after a restart, never holds up a shallower
+one of the same workflow.
+
+GitHub lists runs newest first, and a newer run has the larger id. Runs land at
+the top of the list and can be deleted from anywhere in it between two
+requests, so a page asked for by its number can start some way from where it
+was expected to. Runs from a page are added after the last run held only when
+that one page also holds that run, since each page is a view of the list at one
+moment. The reader asks for a page that holds where the run is expected and as
+many runs after it as it can, choosing a page size between 51 and 100 to make
+that so. A page that holds only newer runs sends it on down the list a page at
+a time, and one that holds only older runs sends it back up a page at a time;
+once it has turned round, it asks for pages that hold the expected place in
+their middle. A page that holds runs on both sides of the last run, but not the
+run itself, shows that run deleted, and it is dropped. The head remembers how
+far from its expected place the last run was found, which deleted runs still
+held above it make more than zero, and starts the next walk there. A page whose
+runs are not in order of falling id is rejected.
+
+A run changes after it is listed: it finishes, or someone starts it again, which
+leaves it in its place in the list. The runs at the top of the list are read
+anew on every reading that cannot share a read made in the last twenty seconds.
+Below them, a held run the reader wants that had not finished is read again by
+its id before the reader is given it. A run that had finished and has been
+started again is found through filtered lists every reader names, usually the
+list filtered to the reader's branch or event. Each such list is read down to
+the oldest run held, or to runs created more than thirty days ago, since GitHub
+allows a run to be started again for thirty days after it was created, and
+readings within twenty seconds of each other share one read of it. A held run
+the reader wants, which such a list shows updated after the copy held, is read
+again by its id before the reader is given any run. A lagging filtered list
+therefore delays the news of a run started again, and cannot hide a run or turn
+one back. A filtered list that cannot be read is logged, and the reading goes on
+without it. A run that is gone when it is read again by its id is dropped. A
+held run deleted without being read again stays held until the head is cut back
+past it.
+
+A reader whose answer rests on one run, as the ci tile's verdict rests on the
+run that decides a job, can ask for the run it stops at to be read again by its
+id when the reading did not read it from the list. The reading then goes on past
+that run when, read again, it no longer settles the question.
 
 ## Add a tile
 
@@ -290,6 +371,7 @@ export const myTile: Tile = {
   // wide: true,           // optional full-width placement
   // runSources: [runSource("owner/repo", "ci.yml", "main")], // or "pull requests"
   // reportsSourceProblems: true, // read ctx.runSourceProblem(); never grayed
+  // repo: "owner/repo",   // the one repository it reports on; its page shows the tile
   async collect(ctx): Promise<TileView> {
     // ctx.runs() -> shared CI runs; ctx.env("KEY") -> env var.
     // If a required env var is missing, return a gray "unknown" view — don't throw.
@@ -398,6 +480,85 @@ the benchmark and duration tiles, and `/test-selection` holds the manifest behin
 the two test tiles. A page has the width to spell a test's whole name, so nothing
 on one has to be abbreviated.
 
+### Repository pages
+
+The **Repositories** button at the bottom left of the dashboard opens
+`/repos`, the index of every repository the dashboard knows. It opens on one
+sentence counting them, then groups them. Those not passing come first, as
+cards on the status wash and texture a tile of their color wears, each naming
+its standing and the worst thing wrong with it. Those passing follow as names
+with a green dot, and those with nothing to report as names alone. A repository
+is known once a tile names it, as the one repository it reports on (the tile's
+`repo`) or as the repository of one of its run sources, or once the ci tile's
+sweep has read it. It is named without its owner, as the ci tile names it, so
+two repositories of one name under different owners would share a page. A
+switch at the top of every page moves to any repository, and the heading beside
+it leads back to the index.
+
+A repository's page, `/repos?name=<name>`, puts everything the dashboard holds
+about it on one screen. On a window at least 1000 pixels wide and 620 tall the
+page is laid on a grid as tall as the window. A panel with more than its room
+scrolls within itself. The middle row keeps at least 280 pixels, so a window
+too short for that scrolls the page rather than crushing the runs. On a smaller
+window the same parts follow one another down the page.
+
+- Across the top, its name, set large on the wash and texture of its standing,
+  the way a tile wears its status, with links to its code, pull requests, and
+  actions on GitHub and how long ago its workflows were read. Beside the name
+  is its standing: `N failing` when any of its jobs is failing, and otherwise
+  `Passing`, `Worth watching`, or `Needs attention`, from the worst color
+  among its jobs with a verdict and its tiles. A gray tile is left out of
+  that, as it is left out of the favicon, since a source that could not be
+  read says nothing about the repository. A repository with nothing that has a
+  color reads `No verdict`, and one whose workflows could not be listed is
+  orange and reads `Unreadable` unless one of its jobs is failing or something
+  about it is red. Under the
+  standing, a sentence says how the newest finished run on main went, unless
+  those runs are out of date. At the right are its key figures: how many of
+  its workflows with a verdict pass, how many fail, how many runs are going in
+  it now across its jobs and its run snapshots, and the median time of the
+  main runs that passed among those the chart shows.
+- On the left, for each of its run sources, main before pull requests, a chart
+  of its newest runs, as many as the recent main runs tile shows: a bar for
+  each run, oldest on the left, as tall as the run took and colored by what it
+  concluded, with the dashboard's diamond over each failure and the green
+  branch's star over each commit it is or was at. The charts share
+  the panel's height, so a taller window draws taller bars. A dashed line marks
+  the median of the runs that passed. The chart's scale reaches the longest run
+  but one in ten, and at least 1.7 times that median, so one run that hung does
+  not flatten the rest; a bar past the top is cut square. The chart is only as
+  wide as its bars, and the ages under its ends are those of its oldest and
+  newest runs. Each bar links to its run for a pointer; the keyboard passes over
+  the bars, since the workflow's name in the heading links every run of it on
+  GitHub. Under the chart, the three newest runs are listed: what each was for,
+  what it concluded, how long it ran (linked to the commit's CI Gantt for labs
+  and loom), and when it started. A run on main is named by its commit, and a
+  pull request's run by its title; either name links to the run, except that a
+  pull request number in it, such as "(#1234)", links to that pull request. A
+  snapshot that has not been read yet, or could not be brought up to date, says
+  so.
+- On the right, what needs attention: every job and tile that is not green,
+  gray ones included, worst first, one to a line, each linked where its job or
+  tile links unless that is this page, or a line saying nothing needs
+  attention. Under it, its workflows in columns, worst first and those with no
+  verdict last. Each has how long ago its deciding run started, or, with no
+  verdict, why; a link to the run in progress when there is one; and, as its
+  tooltip, what started that run, what it concluded, and how long it ran.
+- Across the foot, its measures: every tile whose `repo` is this repository, as
+  a card at most the width a tile has, in one row, with its label, headline, sub
+  line, and chart, linked where the tile links unless that is this page, with
+  the tile's hint as the link's tooltip. A card's headline shrinks with the
+  card, so a narrow one still says it whole.
+
+A repository card or a measure takes its status's wash and texture, and a
+workflow its wash, only when it is orange or red, so that a page of passing
+parts stays quiet and what is wrong stands out; the opening of a repository's
+page takes them for every status, as a tile does.
+
+The pages render what the server already holds, the latest view of each tile,
+the latest snapshot of each run source, and the ci tile's latest collection,
+so opening one costs no requests and never disagrees with the dashboard.
+
 Where a tile has more than one candidate for its sub line, the one that explains
 the color it is wearing wins. The test selection tile carries the count of the
 corpus a pull request would run under its headline share, and gives that line
@@ -421,20 +582,24 @@ to the next; a view supplies everything under it.
 | `extra` | trusted inline HTML under the value (sparkline / strip / list) |
 | `duration` | a span in milliseconds, rendered (via `humanSpan`) in the chart's bottom-left corner |
 | `aside` | trusted inline HTML minor header facet (e.g. an MTD or a "running" badge) |
-| `href` | makes the whole tile a link (an `http…` link opens a new tab) |
+| `href` | makes the whole tile a link (an `http…` link opens a new tab). An anchor cannot hold another, so when `extra` holds links of its own, the whole tile but `extra` is the link, and the links in `extra` go where they point. `value` and `aside` hold no links when there is an `href` |
 | `hint` | tooltip for the top-right `↗` drill arrow and accessible link description, e.g. `"commits ↗"` |
 
 ## Tiles
 
+Where the table names `GH_TOKEN` or `GH_BILLING_TOKEN`, a GitHub App configured
+with `GH_APP_CLIENT_ID` and `GH_APP_PRIVATE_KEY` serves instead, through its
+installation with the same permissions; see [Credentials](#credentials).
+
 | tile | source | needs |
 |---|---|---|
-| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
-| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. A workflow with a run in progress on its default branch carries a blue dot after its name, which links to that run, and the summary above the table counts them. Only a run in progress carries one: a queued run, or one waiting for approval, does not. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows, running dots included: a run that starts or ends between collections shows at the next one. The page is live: an open copy shows each collection within a serving tick of the tile finishing it, without reloading, and in whatever order the reader sorted it | none |
-| labs ci trust, labs ci duration | GitHub Actions (`deno.yml` in `commonfabric/labs`), via the REST API. Trust reads the runs on main; duration reads the pull request runs | `GH_TOKEN` (or `GITHUB_TOKEN`) |
+| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it, among the workflow's newest thousand runs of any branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
+| CI jobs → `/ci` | every job the ci tile read, at full width: the repository, linked to its page, and the workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read, each linked to its page and to its actions on GitHub. A workflow with a run in progress on its default branch carries a blue dot after its name, which links to that run, and the summary above the table counts them. Only a run in progress carries one: a queued run, or one waiting for approval, does not. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows, running dots included: a run that starts or ends between collections shows at the next one. The page is live: an open copy shows each collection within a serving tick of the tile finishing it, without reloading, and in whatever order the reader sorted it | none |
+| labs ci trust, labs ci duration | GitHub Actions (`deno.yml` in `commonfabric/labs`), via the REST API. Trust reads the runs on main; duration reads the pull request runs. Each trust tile opens its repository's page, and each cell of its strip opens its run | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml`) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
 | weaver ci trust, weaver ci duration | the same two tiles for `commonfabric/commonfabric-weaver` (`ci.yml`). The duration tile is not a link, because the history views cover only labs and loom | `GH_TOKEN` (read access to weaver); optional `DASHBOARD_WEAVER_REPO` |
-| recent main runs | Labs and Loom main-run snapshots, refreshed independently and merged chronologically whenever either arrives; each row is tagged with its repo | `GH_TOKEN` |
-| commit CI Gantt → `/ci-gantt` | job and step timing for every successful main workflow run attached to one commit, linked from run durations in recent main runs | `GH_TOKEN` |
+| recent main runs | Labs and Loom main-run snapshots, refreshed independently and merged chronologically whenever either arrives; each row is tagged with its repo and links to its run, except that a pull request number in its title, such as "(#1234)", links to that pull request, and its arrow links to the pull request that landed the commit, or to the commit when its title names none; a row whose commit the repository's green branch is or was at opens with a star, read from GitHub's activity record for the repository | `GH_TOKEN` |
+| commit CI Gantt → `/ci-gantt` | job and step timing for every successful main workflow run attached to one commit, linked from run durations in recent main runs; the commit wears the green branch's star when the branch is or was at it | `GH_TOKEN` |
 | CI duration history → `/bench?view=ci` | labs and loom job, shard-group, and end-to-end workflow duration trends. The labs and loom duration tiles open their repository's view, which charts runs on main rather than the pull request runs the tiles measure | `GH_TOKEN` |
 | CI run Gantt → `/bench?view=gantt` | detailed labs or loom job phases from `scripts/ci-gantt.ts`, backed by the CI history cache | `GH_TOKEN` |
 | flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it. Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |
@@ -443,12 +608,12 @@ to the next; a view supplies everything under it.
 | labs coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store, the newest of a day's that measured it (`docs/development/COVERAGE.md`). The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday when none has happened; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | none |
 | production | a direct synthetic HTTP check of the public commonfabric.com site, synthetic HTTP checks of `/_health` on estuary and rapids, plus a name or reachability check for all three and for the bastion, the production and staging shells, the LLM gateway, and the sandbox service. When every host is well the headline counts them up. When a host has nothing behind it at all, the headline names that host, as in `bastion down`, and counts them when there is more than one, as in `2 hosts down`. Otherwise it names the worst condition seen, such as a response time or an HTTP status. Estuary and rapids keep their response times in the body while the tile is green or orange. Commonfabric.com stays out of the body while it is good. Hosts without a health request stay out for as long as they answer, and a red tile drops all the green hosts. Red means the tile found nothing at the other end — a name with no A or AAAA record, a tailnet host the proxy cannot reach, or an HTTP request that never connected — and it also means a server health response other than 200, a health response over 1000 ms, or a commonfabric.com 5xx response. Orange means a health response over 500 ms, a commonfabric.com 4xx response or response over 2500 ms, or a resolver that failed, which leaves the tile unable to say either way. Hosts outside the tailnet are looked up by the dashboard itself. Tailnet hosts go through `PROD_PROXY`, because a dashboard that needs that proxy has no view of Tailscale's MagicDNS. Estuary and rapids are covered there by their health requests. The bastion has no health endpoint, so it gets a SOCKS5 connect that leaves the name for the proxy to resolve. The bastion records that connect in its own logs, so a bastion that answers is left alone for an hour and counts as reachable in between. One that does not answer is asked again on the next refresh, since a connect that reaches nothing leaves nothing behind. With no `PROD_PROXY` set, every host is looked up locally | optional `COMMON_FABRIC_URL`, `ESTUARY_URL`, `RAPIDS_URL`, `BASTION_HOST`, `PROD_PROXY`; `PROD_URL` remains an alias for `ESTUARY_URL` |
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
-| cloud spend | BigQuery billing export, after credits, projected to month-end from the available part of a 14-day daily-cost window early in the month. The header shows actual MTD spend. The highlighted part of the 45-day chart shows the days used for the estimate | `GCP_BILLING_TABLE` (+ Workload Identity, or `GCP_SA_KEY` locally), optional `GCP_DAILY_BUDGET` |
-| github spend | the selected organization's or enterprise's whole metered GitHub bill, projected to month-end in USD: every product its billing report carries, added into one figure. Enterprise collection includes usage without a cost center and usage assigned to every cost center. The 45-day chart labels the line with MTD spend, and the header shows the same total. The report carries rows for days GitHub is still billing, today included, so the chart and the rate behind the projection stop two days back, once GitHub has had time to finish those days; a partial day at the end of the chart would read as spend falling away. A report that stopped being written more than four days ago is unavailable rather than a run of $0 days. A month whose report cannot be read breaks the line across those days rather than charting them as $0. "What the GitHub figure covers" below says which spend reaches the API | `GH_BILLING_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; optional `GH_BILLING_ENTERPRISE`, `GH_BILLING_ORG` |
+| cloud spend | BigQuery billing export, after credits, projected to month-end from the available part of a 14-day daily-cost window early in the month. The header shows actual MTD spend. The highlighted part of the 45-day chart shows the days used for the estimate. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart | `GCP_BILLING_TABLE` (+ Workload Identity, or `GCP_SA_KEY` locally), optional `GCP_DAILY_BUDGET` |
+| github spend | the selected organization's or enterprise's whole metered GitHub bill, projected to month-end in USD: every product its billing report carries, added into one figure. Enterprise collection includes usage without a cost center and usage assigned to every cost center. The 45-day chart labels the line with MTD spend, and the header shows the same total. When two or more days are behind the projection, the chart highlights them and its vertical scale uses those days alone, so older extremes can extend outside the chart. The report carries rows for days GitHub is still billing, today included, so the chart and the rate behind the projection stop two days back, once GitHub has had time to finish those days; a partial day at the end of the chart would read as spend falling away. A report that stopped being written more than four days ago is unavailable rather than a run of $0 days. A month whose report cannot be read breaks the line across those days rather than charting them as $0. "What the GitHub figure covers" below says which spend reaches the API | `GH_BILLING_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; optional `GH_BILLING_ENTERPRISE`, `GH_BILLING_ORG` |
 | all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history | `GH_TOKEN` |
 | key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey` and `topic board scale/100`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
 | performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
-| model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
+| model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The vertical scale uses the highlighted days, so older extremes can extend outside the chart. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
 | discord online | Discord gateway presence, team vs visitors over time | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` (Server Members + Presence intents) |
 | dau | distinct identities active per UTC day on one named service, counted from the `user.did` attribute on the `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has no such spans — which is the resting state until a deployment's tracing is switched on. It counts keypairs rather than people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `DAU_EXCLUDE_DIDS`, `SIGNOZ_UI_URL` |
 | github users | organization members plus outside collaborators, with each roster's size charted over about two months. The headline counts unique users across both rosters | `GH_TOKEN` (with org Members read) |
@@ -478,7 +643,8 @@ No other conclusion takes that request.
 
 The **ci** tile reads each workflow's runs on the default branch, of any
 status, newest first, and decides the job from the newest completed one
-carrying a verdict, however many runs after it carry none. A run still going
+carrying a verdict, however many runs after it carry none, among its newest
+thousand runs of any branch. A run still going
 carries none. A run concluded `success` passes; a run
 concluded `failure`, `timed_out`, or `startup_failure` fails. A `cancelled` run
 judges nothing when a newer run of the same workflow was created while it was
@@ -496,17 +662,17 @@ off with an `if:` that is never true on the default branch goes on reading
 green behind every skipped run, and so does a job whose runs are all still
 going.
 
-The runs are read a page of twenty at a time, until a page reaches a run that
-concluded `success` or failed outright. The tile keeps, for each workflow, how
-far down it has already settled the verdict, so the next collection stops as
-soon as it reaches those runs. A run started again keeps its place among the
-runs, so the tile checks whether the run that decided the job has been run again
-since, asking GitHub for it when the pages read did not reach it. One that has
-been run again sends the pages on as though nothing had been settled. A verdict far back therefore costs its pages
-once, when the tile first reads the workflow, and after that one page and one
-run on each collection. GitHub lists at most a thousand runs of a workflow
-filtered by branch, so that first read is at most fifty pages, and a workflow
-with no verdict in them has none.
+The runs are read through the run-list reader, newest first, down to the first
+run on the default branch, started by something other than a pull request, that
+concluded `success` or failed outright. That run is read again by its id when
+the reading did not read it from the list, so a run started again since it was
+held is judged as it stands now, and while it runs again the run before it
+decides the job. The reader holds each workflow's runs between sweeps, so a
+verdict far back costs its pages once, when the tile first reads the workflow,
+and after that usually one page and the list filtered to the default branch on
+each sweep, and one read of the deciding run when it lies below that page. The
+reading stops after a thousand runs of any branch or event, so a workflow with
+no verdict among its newest thousand runs has none.
 
 A job with no run carrying a verdict is one the
 tile cannot speak for, so it is left out of both the headline and the job count
@@ -642,13 +808,14 @@ without hiding readable measurements. The headline is published as soon as the
 latest manifest is readable, before historical collection finishes.
 
 Both tiles refresh their measurements and activity independently every 30 seconds.
-With `GH_TOKEN` or `GITHUB_TOKEN` set, a
+With a GitHub credential configured, a
 **running** badge lights while the Test Selection workflow on main is queued or
-running, including reruns of older workflow runs. Runs on the workflow's
-newest page are read from its unfiltered run list, which GitHub serves current.
-Reruns of older runs are found by status, which GitHub answers from an index
-that can be days behind, so each one counts only once a read of the run itself
-says it has not finished. The tiles share the workflow
+running, including reruns of older workflow runs. The tiles read the
+workflow's runs through the run-list reader, back to the oldest run GitHub
+would still let someone start again. A run below the top of the list that is
+started again is found through the lists of unfinished runs on main, which
+GitHub answers from an index that can be days behind, and counts once a read of
+the run itself says it has not finished. The tiles share the workflow
 lookup and keep the last known badge while that lookup is pending. A failed
 lookup shows **activity unknown** alongside the available measurements. Public
 manifest reads work without GitHub credentials. Each refresh checks for newly
@@ -723,7 +890,8 @@ to before treating it as the whole bill.
 
 Every tile that reads a private source is gated on its own env var(s) and grays
 out until they are set. The GitHub tiles use `GH_TOKEN`, except that
-**github spend** can use `GH_BILLING_TOKEN` instead; every other
+**github spend** can use `GH_BILLING_TOKEN` instead, and a GitHub App can stand
+in for both; every other
 private-source tile is independently optional — set only the ones you want,
 and the rest stay gray without breaking the board. Each key below lists what
 it powers, the rights it needs, and how to mint it. (`commonfabric.com` and
@@ -731,6 +899,58 @@ it powers, the rights it needs, and how to mint it. (`commonfabric.com` and
 
 Almost every credential is shown only once at creation — copy it immediately;
 if you lose it you have to regenerate.
+
+### `GH_APP_CLIENT_ID` + `GH_APP_PRIVATE_KEY`
+
+Configure a GitHub App, and every GitHub tile authenticates as one of its
+installations, with no person's token involved. The app takes precedence over
+`GH_TOKEN` and `GITHUB_TOKEN`. `GH_BILLING_TOKEN` still takes precedence over
+the app for **github spend**, for an account the app cannot read. With only
+one of the two variables set, every GitHub tile that would use the app is gray
+and names the one that is missing.
+
+The dashboard picks the installation by the account each request is about. The
+repository and organization reads use the installation on the owner of
+`DASHBOARD_REPO`. **github spend** uses the installation on the enterprise
+named by `GH_BILLING_ENTERPRISE`. GitHub refuses an app's tokens for an
+organization's billing, so with `GH_BILLING_ENTERPRISE` unset, **github
+spend** reads the organization's billing with `GH_BILLING_TOKEN`, `GH_TOKEN`,
+or `GITHUB_TOKEN`, as it does without an app. It finds each installation among the app's own on
+first use, and mints a token for it. A token is used until it is five minutes
+from expiring, and the request after that mints the next one, so a collection
+that runs longer than a token lasts carries on without a restart. A token
+GitHub refuses, and an installation that cannot mint one, are dropped, and the
+next request looks the installation up again, so reinstalling the app needs no
+restart either.
+
+GitHub counts an installation's requests separately from any person's. An
+installation in a GitHub Enterprise Cloud organization is allowed 15,000
+requests an hour, where a personal access token is allowed 5,000.
+
+1. Create the app under the enterprise, at
+   `https://github.com/enterprises/<enterprise>/settings/apps` → **New GitHub
+   App**. An app the enterprise owns can be installed only on the enterprise
+   and its organizations, which are the two installations the dashboard uses.
+   Give it any homepage URL and clear **Webhook** → **Active**.
+2. **Repository permissions**: **Actions** and **Contents**, both
+   **Read-only**. **Metadata** becomes read-only automatically.
+3. **Organization permissions**: **Members** **Read-only** for **github
+   users**. GitHub refuses an app's tokens for an organization's billing
+   ("Resource not accessible by integration"), so **github spend** reads
+   through the app only with `GH_BILLING_ENTERPRISE` set. For an
+   organization's billing, set `GH_BILLING_TOKEN` as well.
+4. **Enterprise permissions**: **Enterprise billing** **Read-only**, for
+   **github spend** with `GH_BILLING_ENTERPRISE` set.
+5. **Create GitHub App**. Copy the **Client ID** (`Iv23…`) into
+   `GH_APP_CLIENT_ID`. Under **Private keys**, **Generate a private key**; the
+   downloaded `.pem` file's whole contents, PKCS#1 as GitHub issues it, go in
+   `GH_APP_PRIVATE_KEY`. PKCS#8 works as well.
+6. **Install App** on the organization, with **All repositories** so the **ci**
+   tile covers the whole organization. For enterprise billing, install it on
+   the enterprise too. An enterprise installation receives only the app's
+   enterprise permissions, and the organization installation only its
+   repository and organization permissions, which is why the dashboard keeps
+   one per account.
 
 ### `GH_TOKEN` (or `GITHUB_TOKEN`)
 
@@ -791,11 +1011,10 @@ that organization selected as its resource owner and organization
 - A classic personal access token with `manage_billing:enterprise`, owned by an
   enterprise owner or billing manager. GitHub does not offer a read-only
   classic scope for enterprise billing.
-- A GitHub App user or installation access token with enterprise
-  **Enterprise billing: read**. This is the least-privilege enterprise option.
-  Installation access tokens expire after one hour, so a long-running
-  deployment must arrange renewal and restart the dashboard with the renewed
-  value.
+- A GitHub App with enterprise **Enterprise billing: read**, installed on the
+  enterprise. This is the least-privilege enterprise option. Configure it with
+  `GH_APP_CLIENT_ID` and `GH_APP_PRIVATE_KEY` rather than here, and the
+  dashboard renews its tokens itself.
 
 Enterprise billing endpoints do not accept fine-grained personal access
 tokens. The tile reads the enterprise-wide usage summary and budgets, so the
@@ -1087,7 +1306,9 @@ off. It needs no second change to light up once that deployment starts exporting
 Notes:
 
 - **GitHub billing token:** every GitHub tile uses `GH_TOKEN` except that
-  **github spend** prefers `GH_BILLING_TOKEN` when it is set. An organization
+  **github spend** prefers `GH_BILLING_TOKEN` when it is set. A configured
+  GitHub App takes the place of `GH_TOKEN`, through its installation on each
+  account. An organization
   deployment can keep one token with organization billing read. Enterprise
   billing needs different credentials, so the separate variable keeps the
   ordinary GitHub token free of enterprise billing access. The **github users**
@@ -1177,16 +1398,9 @@ Notes:
   settles. A completed fetch whose runs carry no readable data shows
   **benchmark data unavailable**, and one with no runs at all shows **no
   benchmark runs**.
-  The tile reads the workflow's unfiltered run list and keeps the runs on main
-  itself, since GitHub answers a list filtered by branch from an index that is
-  often days behind; nearly every run of this workflow is on main, so this
-  reads no more pages.
-  A run list whose newest run is older than the newest run already collected,
-  an empty list included, comes from a stale view of the workflow. The tile
-  refuses it, keeps its last trends gray, and reads **run list out of date**
-  until a current list arrives. Until the server has kept a list since it started, the
-  runs recorded in the benchmark history cache on disk count as collected, so
-  a stale list is refused after a restart as well.
+  The tile reads the workflow's runs through the run-list reader and keeps the
+  runs on main itself. Nearly every run of this workflow is on main, so this
+  reads no more pages than a list filtered to main would.
   Adding or removing a benchmark does not move an index. The benchmark is
   absent from one side of that adjacent comparison, so it drops out of the
   geometric mean. When two runs share no selected positive measurements, the
@@ -1331,17 +1545,14 @@ Notes:
     checks wait through the same window after GitHub rejects a collection.
     Moving the window slider starts or joins the matching collection without
     cancelling wider-window work already in progress.
-    CI history finds its builds by searching the workflow's successful pushes
-    to main over the window, and then reads the newest page of the workflow's
-    unfiltered run list. GitHub serves that list current, and answers a search
-    from an index that is often hours or days behind it. The search has to
-    reach the oldest successful first attempt of a main push in the window on
-    that page, so that no build falls between the search and the page; a
-    collection whose search does not is refused and reads **run list out of
-    date**. The builds on the newest page
-    are taken from it. A Gantt of every run, or of every main push whatever it
-    concluded, walks the unfiltered list and picks the runs out itself,
-    stopping at 150 runs or at the start of the 45-day window.
+    CI history reads the workflow's runs through the run-list reader, back to
+    the first run created a day before the window opens, and takes the
+    successful pushes to main from them. For labs that is around a hundred pages
+    the first time after the dashboard starts, and after that only the runs
+    that landed since the last collection. A Gantt of every run, or of every
+    main push whatever it concluded, reads the same runs, stopping at 150 runs
+    or at the first run created a day before the 45-day window, and charts the
+    runs that started inside it.
   - Every GitHub API request made by the three performance views reserves rate
     capacity before it starts. Each guarded request batch reads GitHub's current
     rate-limit status before reserving. Collection stops before projected
@@ -1440,9 +1651,10 @@ Local-first: no build step, no deployment, a single process on `localhost`.
 
 Env knobs for the dev loop:
 
-- `GH_TOKEN` (or `GITHUB_TOKEN`) — required for the GitHub tiles. GitHub spend
-  also needs Administration read. GitHub users also needs Members read. Without
-  the token, those tiles stay gray.
+- `GH_TOKEN` (or `GITHUB_TOKEN`) — required for the GitHub tiles unless
+  `GH_APP_CLIENT_ID` and `GH_APP_PRIVATE_KEY` configure a GitHub App. GitHub
+  spend also needs Administration read. GitHub users also needs Members read.
+  Without either, those tiles stay gray.
 - `DASHBOARD_PORT` — run several instances at once (e.g. one per branch) without clashing.
 - `DASHBOARD_REPO` — point the CI tiles at any repo. Its owner selects the
   organization for GitHub users.
@@ -1457,7 +1669,8 @@ Env knobs for the dev loop:
   `OPENAI_ADMIN_KEY`/`ANTHROPIC_ADMIN_KEY`/`OPENROUTER_KEY`, `DISCORD_*`) — set
   one to develop that gated tile against its real backend.
 
-It never crashes on a missing credential: the GitHub tiles need `GH_TOKEN` and
+It never crashes on a missing credential: the GitHub tiles need `GH_TOKEN` (or
+the GitHub App) and
 the other private-source tiles each need their own env var, and any tile whose
 `collect()` throws (missing token, offline) just shows a gray "unknown" while the
 rest of the board keeps working — so you can develop against whatever you happen
@@ -1514,14 +1727,16 @@ its embedded tsnet).
    also needs MagicDNS and HTTPS certificates enabled — `tailscale serve`
    fetches a cert for `dashboard.<tailnet>.ts.net` and can't without them.
 2. `tofu apply` in `infra/tofu/gke` creates the dev-dashboard Secret Manager
-   containers and Workload Identity/BigQuery grants. Store the required GitHub
-   token (and each provider credential you want to enable):
+   containers and Workload Identity/BigQuery grants. Create the GitHub App and
+   its two installations as described under `GH_APP_CLIENT_ID` +
+   `GH_APP_PRIVATE_KEY` above, then store its private key (and each provider
+   credential you want to enable):
    ```bash
-   printf %s "github_pat_…" | gcloud secrets versions add k8s-stage-dashboard-github-token --data-file=-
+   gcloud secrets versions add k8s-stage-dashboard-github-app-private-key --data-file=path/to/private-key.pem
    ```
-   The GitHub token is fine-grained and read-only. It has Actions read for the
-   dashboard repositories. The GitHub users tile also needs org Members read;
-   GitHub spend also needs org Administration read.
+   with the path of the app's downloaded `.pem` file in place of
+   `path/to/private-key.pem`. The app's client ID is public and sits in the infra stage overlay, which also
+   names the enterprise github spend reads.
 3. The infra manifests create separate 1 Gi `standard-rwo` PVCs for the Discord
    history file and Tailscale node state. The dashboard remains a one-replica
    `Recreate` Deployment; pod replacement reuses the same non-ephemeral
@@ -1540,7 +1755,11 @@ the stage deployment follows. That step runs before anything from the named ref
 is checked out.
 
 The workflow runs the dashboard tests, then builds the amd64 image and pushes
-it under both the immutable `dev-dashboard:<full-sha>` tag and `latest`. Once a
+it under both the immutable `dev-dashboard:<full-sha>` tag and `latest`. The
+image carries labels naming the repository, the ref, the event, the workflow,
+the run, and the commit it was built from. The infra repository's
+`k8s/scripts/verify-image-provenance.sh` reads those labels back and checks them
+against GitHub before the image's digest is deployed. Once a
 SHA tag exists, a rerun of that commit reuses its digest: it moves `latest` onto
 the image already there rather than rebuilding it or repushing the immutable
 tag.
@@ -1565,21 +1784,14 @@ The publish job authenticates with GitHub OIDC and GCP Workload Identity
 Federation. It emits the immutable `sha256:` image reference in the workflow
 summary; no service-account JSON key is used.
 
-The manual trigger publishes whatever `main` currently points at. To publish
-some other commit, build and push it by hand:
+The manual trigger publishes whatever `main` currently points at. Stage runs
+only an image this workflow published from `main`, because the infra
+repository deploys a first-party image only when its build metadata shows
+such a publish. A commit that has not landed on `main` therefore cannot be deployed
+there.
 
-```bash
-SHA=$(git rev-parse HEAD)
-IMG=us-central1-docker.pkg.dev/commontools-core/containers/dev-dashboard
-docker build --platform=linux/amd64 \
-  --build-arg DASHBOARD_GIT_COMMIT="$SHA" \
-  -f Dockerfile.dashboard -t "$IMG:$SHA" .
-docker push "$IMG:$SHA"
-```
-
-Copy the published digest — from the workflow summary, or from `docker push`'s
-output for a hand build — into the infra stage overlay's `images[].digest`,
-commit that immutable pin, then run
+Copy the published digest from the workflow summary into the infra stage
+overlay's `images[].digest`, commit that immutable pin, then run
 `make apply-dev-dashboard-stage` from `infra/k8s`. The node then appears in the
 Tailscale console as `tag:dashboard`; open
 `https://dashboard.<tailnet>.ts.net/`. (The sidecar image is already pinned by
@@ -1593,7 +1805,7 @@ during Google's initial export backfill it reports `no billing data yet` rather
 than a false zero.
 
 Every backend is reached over HTTP, so the image carries no cloud CLI. The
-GitHub tiles use `GH_TOKEN`. The cloud-spend tile queries BigQuery as the pod's
+GitHub tiles authenticate as the GitHub App. The cloud-spend tile queries BigQuery as the pod's
 own service account through Workload Identity. The infra repo's
 `tofu/gke/dashboard.tf` provisions that account, the Workload Identity binding,
 and its BigQuery Job User and Data Viewer grants, so no key is stored in the

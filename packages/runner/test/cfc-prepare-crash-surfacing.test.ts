@@ -38,10 +38,8 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
-import {
-  isSurfacableWishCommitFailure,
-  wishCommitFailureMessage,
-} from "../src/builtins/wish.ts";
+import { isSurfacableWishCommitFailure } from "../src/builtins/wish.ts";
+import { transactionFailureMessage } from "../src/storage/transaction-errors.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -586,7 +584,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
 
     it("surfaces the informative layer, not the debug dump", () => {
       // A plain abort's own message is generic; the cause rides `reason`.
-      expect(wishCommitFailureMessage({
+      expect(transactionFailureMessage({
         message: "Transaction was aborted",
         reason: new Error("synthetic prep crash"),
       })).toBe("synthetic prep crash");
@@ -594,7 +592,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       const modeled = "CFC enforcement rejected commit: relevant transaction " +
         "was not prepared: CFC commit-prep crashed: ifc inside divergent " +
         "anyOf branches is unsupported at /result";
-      expect(wishCommitFailureMessage({ message: modeled })).toBe(modeled);
+      expect(transactionFailureMessage({ message: modeled })).toBe(modeled);
     });
   });
 

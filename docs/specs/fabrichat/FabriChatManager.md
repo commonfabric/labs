@@ -36,7 +36,8 @@ create a space for the conversation, with the room as its chat, in four steps:
 1. Create the conversation's space, with only this user granted (OWNER), and
    instantiate `FabriChatRoom` there with its `about`. The space's root, its
    default pattern, comes from its host the first time someone opens it.
-2. Grant each other member WRITE on the room's space, by principal.
+2. Grant each other member OWNER on the room's space, by principal, so any
+   member may add others.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
    deliver.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
@@ -59,20 +60,23 @@ is what labels it `authored-by` this user.
   `represents-principal` label, which
   `principalOf(profile, "represents-principal")` reads
   ([reading the principal a label attests](../../features/principal-of.md)).
-  A shared space's member set pairs each principal with a profile (see [shared
-  spaces](README.md#shared-spaces)), so starting a conversation with someone
+  A social space's member set pairs each principal with a profile (see [social
+  spaces](README.md#social-spaces)), so starting a conversation with someone
   found in one needs nothing more.
 
 ### First contact
 
 A notice has to reach a principal who may share no space with the sender. Its
 route is the recipient's profile share inbox: a profile's `inbox` field
-(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at a piece
-in a space of its own that any writer may post to and only its owner reads. The
-sender offers the room there, and the recipient's manager reads its offers, is
-readmitted to the room's space, and accepts the room. Nothing delivers one end
-to end today: no offer names a room yet, the manager reads none, and an inbox
-exists only where a host outside this repository creates one. A space's access
+(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
+piece in a space of its own. That is either the private inbox the recipient's
+Home creates ([the private inbox](../../features/private-inbox.md)) or one a
+loom daemon created, and both take the same offer envelope. Any principal may
+write to the inbox's space, and its offers are labeled readable by the owner
+alone, a label that binds only an honest runtime. The sender offers the room
+there, and the recipient's manager reads its offers, is readmitted to the
+room's space, and accepts the room. Nothing delivers one end to end today: no
+offer names a room yet, and the manager reads none. A space's access
 list can admit any writer, but that is the `"*"` grant a room has only when its
 creator makes a group joinable by its link, and then its address, sent some
 other way, is the notice.

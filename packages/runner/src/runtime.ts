@@ -141,6 +141,7 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "./reader-schema-precedence-config.ts";
 import {
+  IN_SPACE_ROOT_CAUSE,
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
@@ -1036,22 +1037,43 @@ const inSpaceAllocationSchema = {
 } as const satisfies JSONSchema;
 
 /**
+ * What a `PatternFactory.inSpace(name)` target asks of the space it creates:
+ * the grants beside its owner, whether its genesis reserves the space's root,
+ * and the kind its genesis declares.
+ */
+export interface InSpaceCreationRequest {
+  /** Access the created space grants beyond its owner. */
+  grants?: ACL;
+
+  /**
+   * Whether the genesis commit reserves the root at
+   * {@link IN_SPACE_ROOT_CAUSE}.
+   */
+  root?: boolean;
+
+  /** The kind the genesis commit declares. */
+  spaceKind?: string;
+}
+
+/**
  * The key under which a space created for the `inSpace` name `name` of the
  * space `space` is remembered: the name, together with the owner and the
- * grants the space was created with, so that only a request for the same
- * access-control document finds it. Grants are keyed in principal order.
+ * request the space was created with, so that only a request for the same
+ * genesis commit finds it. Grants are keyed in principal order.
  */
 const inSpaceCreationKey = (
   space: MemorySpace,
   name: string,
   owner: DID,
-  grants: ACL = {},
+  { grants = {}, root = false, spaceKind }: InSpaceCreationRequest,
 ): string =>
   JSON.stringify([
     space,
     name,
     owner,
     Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+    root,
+    spaceKind ?? null,
   ]);
 
 export interface SpaceCellContents {
@@ -4289,21 +4311,27 @@ export class Runtime {
 
   /**
    * Creates a space and returns its DID. The space's key is generated from
-   * random data, signs one genesis commit whose access-control document makes
-   * `owner` its only OWNER alongside `grants`, and is dropped once that commit
-   * is confirmed. The DID is returned only after that confirmation.
+   * random data, signs one genesis commit whose access-control document holds
+   * `grants` and makes `owner` an OWNER whatever `grants` names it, and is
+   * dropped once that commit is confirmed. The DID is returned only after that
+   * confirmation.
    *
    * `owner` defaults to the identity this runtime acts as. A serving runtime
    * acts as a service, and a space it creates on a user's behalf must be
    * owned by that user, so a serving runtime requires `owner`. `root`
-   * reserves the space's root pattern in the same commit; see
-   * `IStorageManager.createSpace`.
+   * reserves the space's root pattern in the same commit, and `spaceKind`
+   * declares the space's kind there; see `IStorageManager.createSpace`.
    *
    * @throws If the storage manager cannot create spaces, if the memory server
    *   refuses the genesis commit, or if a serving runtime supplies no owner.
    */
   async createSpace(
-    options: { owner?: DID; grants?: ACL; root?: GenesisRoot } = {},
+    options: {
+      owner?: DID;
+      grants?: ACL;
+      root?: GenesisRoot;
+      spaceKind?: string;
+    } = {},
   ): Promise<MemorySpace> {
     if (this.servingPosture && options.owner === undefined) {
       throw new Error(
@@ -4315,10 +4343,29 @@ export class Runtime {
       throw new Error("This storage manager cannot create spaces");
     }
     const owner = options.owner ?? this.userIdentityDID;
+    const { root, spaceKind } = options;
     return await this.storageManager.createSpace(
       { ...options.grants, [owner]: "OWNER" },
-      options.root,
+      {
+        ...(root === undefined ? {} : { root }),
+        ...(spaceKind === undefined ? {} : { spaceKind }),
+      },
     );
+  }
+
+  /**
+   * The kind `space` declares in its genesis commit, or `undefined` when it
+   * declares none; see `docs/features/space-kinds.md`. The kind is read as
+   * the identity this runtime acts as, so the space must admit that identity.
+   *
+   * @throws If the storage manager cannot read a space's kind, if the space
+   *   cannot be opened, or if the memory server does not report kinds.
+   */
+  async spaceKind(space: MemorySpace): Promise<string | undefined> {
+    if (this.storageManager.spaceKind === undefined) {
+      throw new Error("This storage manager cannot read a space's kind");
+    }
+    return await this.storageManager.spaceKind(space);
   }
 
   /**
@@ -4404,9 +4451,9 @@ export class Runtime {
    * {@link resolveInSpaceName} created a space for the same request, that DID
    * is the answer and the record is written in `tx`: the record then commits
    * in the same commit as the writes that refer to the space, or not at all.
-   * The request is `grants` and the owner {@link actingPrincipalFor} gives
-   * `tx`, so the space a run records was created with the access-control
-   * document that run asked for. `tx` reads the absent record, so a
+   * The request is `request` and the owner {@link actingPrincipalFor} gives
+   * `tx`, so the space a run records was created with the genesis commit that
+   * run asked for. `tx` reads the absent record, so a
    * concurrent writer of the same record makes this commit conflict, and the
    * run that follows reads the record it wrote.
    *
@@ -4419,14 +4466,14 @@ export class Runtime {
     space: MemorySpace,
     name: string,
     tx: IExtendedStorageTransaction,
-    grants?: ACL,
+    request: InSpaceCreationRequest = {},
   ): MemorySpace | undefined {
     const record = this.#inSpaceAllocationCell(space, name, tx);
     const recorded = record.get()?.did;
     if (isDID(recorded)) return recorded;
     const owner = this.actingPrincipalFor(tx);
     const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
-      inSpaceCreationKey(space, name, owner, grants),
+      inSpaceCreationKey(space, name, owner, request),
     );
     if (created !== undefined) record.set({ did: created });
     return created;
@@ -4439,15 +4486,22 @@ export class Runtime {
    *
    * The calling space's allocation record decides when it exists. Otherwise
    * this creates a space owned by `options.owner` with `options.grants`, whose
-   * DID the next run making the same request records. A record naming a DID
-   * that has no history is reported rather than replaced: the record is
-   * immutable, and replacing the space it names would move whatever the
-   * name's writers expect to find.
+   * DID the next run making the same request records. With `options.root`,
+   * the space's genesis commit reserves its root at
+   * {@link IN_SPACE_ROOT_CAUSE}, for the run that records it to place there,
+   * and with `options.spaceKind` it declares the space's kind. A record
+   * naming an existing space is the answer whatever the request, so a space
+   * created before a request named a kind keeps the kind it was created
+   * with.
+   * A record naming a DID that has no history is reported rather than
+   * replaced: the record is immutable, and replacing the space it names would
+   * move whatever the name's writers expect to find.
    *
    * The record is written after the space is created, and only one of the
    * runs racing to write it commits. The space another run created is then
-   * named by nothing, and holds nothing but its access-control document,
-   * which names its owner.
+   * named by nothing, and holds nothing but its genesis commit: its
+   * access-control document, which names its owner, and with
+   * `options.root` its root reservation, which nothing places a root for.
    *
    * @throws If the record names a DID that is not a space, if loading what
    *   decides that fails, or if creating a space fails.
@@ -4455,14 +4509,10 @@ export class Runtime {
   async resolveInSpaceName(
     space: MemorySpace,
     name: string,
-    options: { owner?: DID; grants?: ACL } = {},
+    options: InSpaceCreationRequest & { owner?: DID } = {},
   ): Promise<MemorySpace> {
-    const creationKey = inSpaceCreationKey(
-      space,
-      name,
-      options.owner ?? this.userIdentityDID,
-      options.grants,
-    );
+    const { owner = this.userIdentityDID, ...request } = options;
+    const creationKey = inSpaceCreationKey(space, name, owner, request);
     const inFlight = this.#inSpaceResolutions.get(creationKey);
     if (inFlight !== undefined) return await inFlight;
     const resolution = (async (): Promise<MemorySpace> => {
@@ -4478,8 +4528,12 @@ export class Runtime {
         }
         return recorded;
       }
+      const { root, ...access } = options;
       const created = this.#inSpaceCreated.get(creationKey) ??
-        await this.createSpace(options);
+        await this.createSpace({
+          ...access,
+          ...(root ? { root: { cause: IN_SPACE_ROOT_CAUSE } } : {}),
+        });
       this.#inSpaceCreated.set(creationKey, created);
       return created;
     })();

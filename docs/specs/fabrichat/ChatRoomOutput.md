@@ -59,16 +59,16 @@ interface ChatRoomOutput {
 
 ## Where a room lives
 
-A room is the chat of a shared space (see [shared
-spaces](README.md#shared-spaces)): a piece in that space, and a space has at
+A room is the chat of a social space (see [social
+spaces](README.md#social-spaces)): a piece in that space, and a space has at
 most one. A conversation the user starts, direct or group, gets a space of its
 own, which the user's chat manager ([`ChatManagerOutput`](ChatManagerOutput.md))
 creates with the room as its chat, and never a placement, an adapter, or a
-container. An existing shared space's chat is created in it by whatever sets the
+container. An existing social space's chat is created in it by whatever sets the
 space up. Either way the space's default pattern, not the room, is its root.
 
-When the manager creates a space for a conversation, the creator holds OWNER,
-and each other member WRITE. Its access list MUST NOT contain the `"*"`
+When the manager creates a space for a conversation, the creator and each
+other member hold OWNER. Its access list MUST NOT contain the `"*"`
 wildcard, so a room is not open to principals its space hasn't admitted,
 except for a group room its creator makes joinable by its link (see
 [`createGroup`](ChatManagerOutput.md#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean)):
@@ -87,7 +87,9 @@ which needs no event, but can't open other windows, send, or react.
 
 A room keeps no membership of its own. Who is in its space, and with what
 access, is the space's business: its access list changes through the space's
-own tools, such as the CLI's `cf acl`, and its default pattern lists its
+own tools, such as the CLI's `cf acl`, and, for a room in a space of its own,
+through the room's [`addMember`](#addmembertarget--value-string-), from
+which any OWNER admits someone else as OWNER. Its default pattern lists its
 participants' profiles, claims each member contributes by joining the space
 (`participants`, through `wish({ query: "#default" })`). The two can disagree:
 a member who has never joined has no entry, and an entry whose principal has
@@ -478,6 +480,24 @@ Removes the sender's reaction to a message.
 
 A client never toggles: it sends whichever of the two the person asked for, so a
 repeated or delayed event can't undo what the person meant.
+
+### `addMember(target: { value: string })`
+
+- `target.value: string` — The chat address of the person to admit: a
+  principal's DID, as the room's add control holds it.
+
+Admits someone to a room's space. Unlike the streams above, it is on the room's
+output but not in `[VIEWS]`.
+
+- **Admitted:** as a trusted gesture on `ChatAddMemberSurface`, from the room's
+  rendered add control or from a client's own control through the sanctioned
+  issuing path (see [`clients.md`](clients.md#the-sanctioned-issuing-path)),
+  from an OWNER of the room's space, for a room in a space of its own.
+- **Effect:** grants the principal OWNER on the room's space, so they too may
+  add others. Granting someone the OWNER they already hold changes nothing.
+- **Refused:** an address that is not a principal's DID, a sender without
+  OWNER, a room that shares an existing space, and anything the space's access
+  list refuses. The rendering tells the session what came of its add.
 
 ## Renderings
 

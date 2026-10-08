@@ -113,12 +113,10 @@ import {
   PieceVerbReadError,
   recreateSpaceRootPattern,
   removePiece,
-  resetHomePattern,
   savePiecePattern,
   searchPieces,
   setCellCfcLabel,
   setCellValue,
-  setHomePattern,
   setPiecePattern,
   setPieceSlug,
   SpaceConfig,
@@ -2057,14 +2055,13 @@ function refuseJsonOutput(spelling: string, options: { json?: boolean }): void {
 }
 
 /**
- * The shared target options, plus the flags the two space-level commands add.
+ * The shared target options, plus the flags the space-level commands add.
  *
- * `quiet` and `reset` reach an action from Cliffy's parse rather than from
+ * `quiet` and `label` reach an action from Cliffy's parse rather than from
  * {@link PieceCLIOptions}, which describes only what a target is named with.
  */
 interface SpaceCommandCLIOptions extends PieceCLIOptions {
   quiet?: boolean;
-  reset?: boolean;
   label?: string;
 }
 
@@ -2118,118 +2115,56 @@ export function buildRecreateRootCommand(
 }
 
 /**
- * `set-home`, which initializes an absent identity Home with custom or
- * system source. Existing Home roots require an in-place source update.
+ * The last day `cf space set-home` and its superseded `cf piece set-home`
+ * mount answer at all.
  *
- * `spelling` and `replacedBy` carry the meanings they have in
- * {@link buildRecreateRootCommand}.
+ * A literal, fixed when the retirement reaches main, for the reason
+ * `COMMAND_SPELLING_END_DATE` gives: a caller who reads the refusal today and
+ * acts on it next week has to be told the same day both times. Nothing
+ * consults it at run time; what removes the mounts is a later change that
+ * deletes them with this constant.
+ */
+export const SET_HOME_RETIRED_END_DATE = "2026-10-21";
+
+/**
+ * What a run of the retired command is told, on its help page and in the
+ * refusal: what creates a Home, and what changes one.
+ */
+const SET_HOME_RETIREMENT = "A Home is created on its user's first open, " +
+  "and its source is changed in place: " +
+  "cf piece setsrc --cell <home-root> ./my-home.tsx, where the root is the " +
+  "link cf wish '#default' --select @ answers with in the Home space. " +
+  "This spelling stops answering after " + SET_HOME_RETIRED_END_DATE + ".";
+
+/**
+ * `set-home`, retired.
+ *
+ * A Home is created on its user's first open and changed only by an in-place
+ * source update, which retains the account data its root owns, so there is
+ * nothing for a command that installs a Home root to do. Both mounts stay,
+ * hidden, through {@link SET_HOME_RETIRED_END_DATE}, so a script that still
+ * writes the command meets the replacement instead of an unknown command.
+ * Options are not parsed: every line written for the command is answered the
+ * same way.
  */
 // deno-lint-ignore no-explicit-any
-export function buildSetHomeCommand(
-  spelling: string,
-  replacedBy?: string,
-): Command<any> {
-  const notice = mountNotice(spelling, replacedBy);
-  const act = async (options: SpaceCommandCLIOptions, main?: string) => {
-    refuseJsonOutput(spelling, options);
-    setQuietMode(!!options.quiet);
-
-    if (!options.reset && !main) {
+export function buildRetiredSetHomeCommand(spelling: string): Command<any> {
+  return new Command()
+    .description(`Retired. ${SET_HOME_RETIREMENT}`)
+    .useRawArgs()
+    // Raw arguments reach the action unparsed, `--help` among them, so the
+    // page a caller asks for is rendered here rather than by the parser.
+    // deno-lint-ignore no-explicit-any
+    .action(function (this: Command<any>, _options, ...args: string[]) {
+      if (args.some((word) => word === "--help" || word === "-h")) {
+        this.showHelp();
+        return;
+      }
       throw new ValidationError(
-        "Provide a pattern file path or use --reset.",
+        `'cf ${spelling}' is retired. ${SET_HOME_RETIREMENT}`,
         { exitCode: 1 },
       );
-    }
-    if (options.reset && main) {
-      throw new ValidationError(
-        "Cannot use --reset with a pattern file path.",
-        { exitCode: 1 },
-      );
-    }
-    if (options.reset && options.repository !== undefined) {
-      throw new ValidationError(
-        "Cannot use --repository with --reset.",
-        { exitCode: 1 },
-      );
-    }
-    if (options.reset && options.test !== undefined) {
-      throw new ValidationError(
-        "Cannot use --test with --reset.",
-        { exitCode: 1 },
-      );
-    }
-    if (options.reset && options.datafile !== undefined) {
-      throw new ValidationError(
-        "Cannot use --datafile with --reset.",
-        { exitCode: 1 },
-      );
-    }
-
-    const baseConfig = parseSetHomeOptions(options);
-
-    if (options.reset) {
-      await resetHomePattern(baseConfig);
-      render("Initialized home with the system default pattern.");
-    } else {
-      await setHomePattern(baseConfig, localPatternEntry(main!, options));
-      render("Deployed custom home pattern.");
-    }
-
-    // The hint names the spelling to write next, which is the blessed one
-    // even when this run arrived through the superseded mount: a next step
-    // that teaches the spelling the notice just told the caller to stop
-    // writing is the notice arguing with itself.
-    hint(cliText(`NEXT STEPS:
-  → Open home in browser: ${baseConfig.apiUrl}
-  → Update this root:     cf piece setsrc --cell <home-root> ...`));
-  };
-  // deno-lint-ignore no-explicit-any
-  const command: Command<any> = new Command()
-    .description(
-      "Initialize an absent identity Home with custom or system source. Update an existing Home in place with piece setsrc.",
-    )
-    .example(
-      cliText(
-        `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} ./my-home.tsx`,
-      ),
-      `Initialize the identity's Home with a custom pattern.`,
-    )
-    .example(
-      cliText(
-        `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} --reset`,
-      ),
-      `Initialize an absent Home with the system default pattern.`,
-    )
-    .option(
-      "--reset",
-      "Initialize an absent Home with the system default pattern",
-    )
-    .option(
-      "--main-export <export:string>",
-      'Named export from entry for pattern definition. Defaults to "default".',
-    )
-    .option(
-      "--root <path:string>",
-      "Root directory for imports and authored source paths. Use a repository root to preserve repository-relative paths.",
-    )
-    .option(
-      "--repository <repository:string>",
-      "Repository locator associated with the authored source (stored exactly as supplied).",
-    )
-    .option(
-      "--test <path:string>",
-      "Attach a test pattern source file to the deployed source package. Repeatable.",
-      { collect: true },
-    )
-    .option(
-      "--datafile <path:string>",
-      "Attach a data file to the deployed source package. Repeatable.",
-      { collect: true },
-    )
-    .arguments("[main:string]");
-  return notice.helpPage(
-    targetOptions(command.action(notice.action(act)), { global: false }),
-  );
+    });
 }
 
 /**
@@ -2241,7 +2176,7 @@ export function buildCreateSpaceCommand(spelling: string): Command<any> {
   const act = async (options: SpaceCommandCLIOptions) => {
     refuseJsonOutput(spelling, options);
     setQuietMode(!!options.quiet);
-    const baseConfig = parseSetHomeOptions(options);
+    const baseConfig = parseIdentityTargetOptions(options);
     const space = await createSpace(baseConfig, options.label);
     render(space);
     hint(cliText(`NEXT STEPS:
@@ -3302,11 +3237,8 @@ well-known IDs. See docs/common/concepts/well-known-ids.md for IDs and usage.`,
     buildRecreateRootCommand("piece recreate-root", "space recreate-root")
       .hidden(),
   )
-  /* piece set-home — moved to `cf space set-home` */
-  .command(
-    "set-home",
-    buildSetHomeCommand("piece set-home", "space set-home").hidden(),
-  );
+  /* piece set-home — retired, with `cf space set-home` */
+  .command("set-home", buildRetiredSetHomeCommand("piece set-home").hidden());
 
 /** Shared flags accepted by piece commands that resolve a target or source. */
 export interface PieceCLIOptions {
@@ -5269,7 +5201,11 @@ function parseScopedId(id: string): { id: string; scope?: CellScope } {
   }
 }
 
-function parseSetHomeOptions(
+/**
+ * The target of a command that acts on the identity's own Home space: the
+ * identity and the server, with no space to name.
+ */
+function parseIdentityTargetOptions(
   input: PieceCLIOptions,
 ): Omit<SpaceConfig, "space"> {
   if (!input.identity) {

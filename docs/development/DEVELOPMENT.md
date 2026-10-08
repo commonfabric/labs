@@ -434,8 +434,34 @@ come up.
   what the verb selects for. And `meet` is the lattice operation the Contextual
   Flow Control code is built on, a technical term with test files named after it,
   where a stray prose use costs a search.
+- **`social space`**, not `shared space`, for a space with more than one member
+  or participant, as [the glossary](../common/concepts/glossary.md#social-space)
+  defines it. `share` already names other things here — the share inbox where a
+  principal receives offers, share links, a user's shared profiles — and none of
+  them is about how many people a space has. As with spelling, an identifier
+  named for shared spaces, `sharedSpaceCatalog` among them, keeps its name:
+  changing it is a rename, not a word-choice fix.
 
 ## Code Design & Principles
+
+### General principles
+
+- Prefer general solutions to special cases, and less code to more. A refactor
+  aims to reduce the total amount of code, not counting new documentation and
+  tests.
+- Design formats and protocols without version numbers. Build a format or
+  protocol so that a reader handles data from older and newer writers alike,
+  rather than marking each change with a version.
+- A function given input that violates its contract throws. It does not
+  discard the input.
+- When code you are changing has a limitation, fix it rather than documenting
+  it as a known limitation.
+- Do not rely on a prompt to keep an operation safe. People approve prompts
+  without reading them, and an attacker can make a dangerous operation look
+  safe. Enforce the boundary in code. A confirmation is still right where the
+  person's decision is the input, such as consent to release their own data in
+  CFC declassification, or where it guards against a mistake, such as deleting
+  a document.
 
 ### Error Handling
 
@@ -453,6 +479,12 @@ come up.
 
 - Export types explicitly using `export type { ... }`.
 - Prefer strong typing with interfaces or types instead of `any`.
+- Do not use a type assertion (`as T`, `as unknown as T`, or a detour through
+  `any`) to make types line up; change the APIs so that they line up. A test
+  stand-in may be asserted where it is passed in, as "Making a private member
+  reachable from a test" describes. A value that arrives untyped at a
+  serialization boundary is validated, as "Validating a value that arrived
+  through a decode" describes, not asserted.
 - Update package-level README.md files.
 
 ### Async only when you await
@@ -924,16 +956,12 @@ async function main() {
 }
 ```
 
-Sometimes a low-level try/catch is appropriate, of course:
-
-- `getData()` could have its own try/catch to e.g. retry on failure, throwing
-  after 3 failed attempts.
-- Exposing a `isFeatureSupported(): boolean` function that based on if some
-  other function throws, determines if "feature" is supported. If we can handle
-  both scenarios and translate the error into a boolean (e.g. are all of the
-  ED25519 features we need supported natively for this platform? if not use a
-  polyfill), then this is not a fatal error, and we explicitly do not want to
-  throw and handle it elsewhere.
+A low-level try/catch is appropriate where the error is an answer rather than a
+failure. An `isFeatureSupported(): boolean` function, for example, can call
+something that throws when a feature is missing and translate the error into
+`false` (are all of the ED25519 features we need supported natively on this
+platform? if not, use a polyfill). Neither outcome is fatal, so the error is
+not thrown on to be handled elsewhere.
 
 ### Avoid Singletons
 

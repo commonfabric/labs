@@ -10,20 +10,29 @@
 import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
+import {
+  AgentRunner,
+  type AgentRunnerEntry,
+  type AgentRunnerOptions,
+} from "@commonfabric/agent-runner";
+import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
+import type { LaneTransition } from "@commonfabric/agent-runner/local-jobs/readiness";
+import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
+import {
+  type LocalJobsConfig,
+  type LocalJobsService,
+  startLocalJobs,
+} from "@commonfabric/agent-runner/local-jobs/service";
 import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
+import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
   agentQueueIndexCell,
 } from "@commonfabric/runner/agent-run";
+import { getAcl } from "../lib/acl.ts";
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
 
-import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
-import {
-  type LocalJobsConfig,
-  type LocalJobsService,
-  startLocalJobs,
-} from "../lib/local-jobs/service.ts";
 import {
   type AgentRunInspection,
   cancelAgentRun,
@@ -32,13 +41,10 @@ import {
 } from "../lib/agent-inspection.ts";
 import { render } from "../lib/render.ts";
 
-import {
-  AgentRunner,
-  type AgentRunnerEntry,
-  type AgentRunnerOptions,
-} from "../lib/agent-runner.ts";
+import { createAgentStatusCommand } from "./agent-status.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { cliText } from "../lib/cli-name.ts";
+import { resolveCliGitSha } from "../lib/build-info.ts";
 import { loadIdentity } from "../lib/identity.ts";
 import { loadPieces } from "../lib/piece.ts";
 import { absPath } from "../lib/utils.ts";
@@ -117,10 +123,17 @@ export interface AgentRunnerCommandDeps {
   env: (name: string) => string | undefined;
   loadIdentity: (path: string) => Promise<{ did(): string }>;
 
+  /**
+   * Derives the sandbox runtime the harness would give this runner's runs,
+   * and rejects with a `HarnessControlError` where it would refuse them.
+   */
+  selectSandboxRuntime: () => Promise<unknown>;
+
   /** Connects, registers, and starts following the queue. */
   start: (
     config: AgentRunnerCommandConfig,
     report: (message: string) => void,
+    readiness?: (next: LaneTransition) => void,
   ) => Promise<{ stop(): Promise<void> }>;
 
   /** Resolves when the process is asked to stop. */
@@ -128,11 +141,16 @@ export interface AgentRunnerCommandDeps {
 
   report: (message: string) => void;
 
+  /** Labs revision of this running CLI, captured once at startup. */
+  labsCommit?: () => Promise<string | null>;
+
   /** Starts serving local jobs; `startLocalJobs` unless a test replaces it. */
   startLocal?: (
     config: LocalJobsConfig,
     report: (message: string) => void,
-  ) => Promise<Pick<LocalJobsService, "setFabricLane" | "stop">>;
+  ) => Promise<
+    Pick<LocalJobsService, "setFabricLane" | "setFabricReadiness" | "stop">
+  >;
 }
 
 /** Helper for the config, which reads an API URL option as an origin. */
@@ -271,6 +289,7 @@ export async function startAgentRunner(
   report: (message: string) => void,
   connections: AgentRunnerConnections = deployedConnections,
   execute?: AgentRunnerOptions["execute"],
+  readiness?: (next: LaneTransition) => void,
 ): Promise<{ stop(): Promise<void> }> {
   const { home, homeHost, identityPath } = config;
   const homeSpace = home as `did:${string}:${string}`;
@@ -335,6 +354,8 @@ export async function startAgentRunner(
         requester: home,
         workRoot: config.workRoot,
         allowedTools: config.tools,
+        readSpaceAcl: (host, space) =>
+          getAcl({ apiUrl: host, space, identity: identityPath }),
         ...(config.loomRetrievalConfigPath !== undefined
           ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
           : {}),
@@ -342,6 +363,7 @@ export async function startAgentRunner(
         report,
       }),
       report,
+      readiness,
     });
     await runner.start();
     return {
@@ -389,7 +411,10 @@ async function untilSignalled(): Promise<void> {
 export const defaultAgentRunnerCommandDeps: AgentRunnerCommandDeps = {
   env: (name) => Deno.env.get(name),
   loadIdentity,
-  start: startAgentRunner,
+  selectSandboxRuntime: () => selectHarnessJobSandboxRuntime(),
+  start: (config, report, readiness) =>
+    startAgentRunner(config, report, undefined, undefined, readiness),
+  labsCommit: resolveCliGitSha,
   untilStopped: untilSignalled,
   report: (message) => console.error(message),
 };
@@ -460,35 +485,71 @@ export function resolveLocalJobsConfig(
 
 /**
  * Runs a runner until the process is asked to stop. With local jobs, they
- * are served first; the Fabric lane then starts unless `--local-only` says
- * not to, and a Fabric lane that fails to start leaves the local jobs
- * served rather than stopping the runner.
+ * are served first; a local startup failure falls back to the Fabric lane,
+ * and a Fabric startup failure leaves the local jobs served.
+ * With `--local-only`, a local startup failure is fatal.
  */
 export async function agentRunnerAction(
   options: AgentRunnerCommandOptions,
   deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
 ): Promise<void> {
   const localConfig = resolveLocalJobsConfig(options, deps);
+  // Every job of either lane goes to the harness's sandbox. A runtime
+  // selection the harness would refuse each of them for refuses the runner
+  // here, with the harness's own message, before either lane connects to
+  // anything, listens or registers.
+  await deps.selectSandboxRuntime().catch((error: unknown) => {
+    throw error instanceof HarnessControlError
+      ? new ValidationError(error.message, { exitCode: 1 })
+      : error;
+  });
   if (localConfig === undefined) return await runFabricLane(options, deps);
-  const local = await (deps.startLocal ?? startLocalJobs)(
-    localConfig,
-    deps.report,
-  );
+  let local: Pick<
+    LocalJobsService,
+    "setFabricLane" | "setFabricReadiness" | "stop"
+  >;
+  try {
+    local = await (deps.startLocal ?? startLocalJobs)({
+      ...localConfig,
+      ...(deps.labsCommit ? { labsCommit: await deps.labsCommit() } : {}),
+    }, deps.report);
+  } catch (error) {
+    if (options.localOnly) throw error;
+    deps.report(
+      `agent runner: the local lane did not start, continuing with the Fabric lane: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return await runFabricLane(options, deps);
+  }
   let fabric: { stop(): Promise<void> } | undefined;
   try {
     if (options.localOnly) {
+      local.setFabricReadiness({
+        state: "down",
+        reason: "Fabric lane disabled by --local-only",
+      });
       deps.report("agent runner: serving local jobs only (--local-only)");
     } else {
       const config = await resolveAgentRunnerConfig(options, deps);
       try {
-        fabric = await deps.start(config, deps.report);
-        local.setFabricLane(true);
+        fabric = await deps.start(
+          config,
+          deps.report,
+          (next) => {
+            local.setFabricReadiness(next);
+          },
+        );
         deps.report(
           `agent runner: following ${config.home} on ${config.homeHost}, offering ${
             config.tools.join(", ")
           }`,
         );
       } catch (error) {
+        local.setFabricReadiness({
+          state: "refused",
+          reason: error instanceof Error ? error.message : String(error),
+        });
         deps.report(
           `agent runner: the Fabric lane did not start, so this runner serves local jobs only: ${
             error instanceof Error ? error.message : String(error)
@@ -772,6 +833,7 @@ export const createAgentCommand = (
     .description("Run and inspect agent requests.")
     .default("help")
     .command("runner", runnerCommand)
+    .command("status", createAgentStatusCommand())
     .command("ls", listCommand)
     .command("show", showCommand)
     .command("cancel", cancelCommand).reset();

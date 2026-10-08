@@ -51,8 +51,8 @@ conversations. So the conversation, the index that finds it, and the places that
 show it become four patterns:
 
 - **The room** ([`FabriChatRoom.md`](FabriChatRoom.md)) is the conversation. It
-  is the chat of a shared space whose members are the conversation's members:
-  a space created for the conversation, or an existing shared space. It holds
+  is the chat of a social space whose members are the conversation's members:
+  a space created for the conversation, or an existing social space. It holds
   the attested history, messages and reactions, and keeps no membership of its
   own: who is in the space is the space's business.
 - **The manager** ([`FabriChatManager.md`](FabriChatManager.md)) is a singleton
@@ -124,26 +124,28 @@ provide, the document says so, under the heading "Prerequisites".
 
 ## Terms
 
-- **Room.** One conversation: a `FabriChatRoom` piece, the chat of a shared
+- **Room.** One conversation: a `FabriChatRoom` piece, the chat of a social
   space, which is either created for it or an existing one.
 - **Member.** A principal the room space's access list admits. A member with
   READ reads only the newest messages; WRITE or OWNER is needed to act. Who is
   a member changes through the space's own tools, such as the CLI's `cf acl`,
-  never through the room.
+  and, for a room in a space of its own, through the room's add control.
 - **Direct room.** A room created for exactly two members, found by the manager
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
 - **Container.** A space that shows chats among other things, such as a space
-  whose root is the `loom` pattern (`packages/patterns/loom/`).
+  whose root is the `loom` pattern (`packages/patterns/loom/`). A container
+  may name its own chat, a room in its space, as the `loom` pattern's root
+  does with its `chatRoom` link.
 - **Placement.** One room placed in a container: a `FabriChatPlacement` piece in
   the container's space, holding a link to the room. It has no rendering.
 - **Adapter.** A `FabriChatAdapter` piece that renders one placement for hosts
   that render VDOM. A container holds the adapter.
-- **Shared space.** A space whose access list admits more than one principal,
-  and whose default pattern lists its **participants**: the profiles members
-  contributed by joining the space. A room's space is a shared space, and so is
-  a container that more than one person uses. See
-  [Shared spaces](#shared-spaces).
+- **Social space.** A space with more than one member or participant
+  ([glossary](../../common/concepts/glossary.md#social-space)), whose default
+  pattern lists its **participants**: the profiles members contributed by
+  joining the space. A room's space is a social space, and so is a container
+  that more than one person uses. See [Social spaces](#social-spaces).
 - **Client.** A program that reads and writes FabriChat on a person's behalf:
   the shell, or a separate application embedding the runtime.
 - **Reviewed surface.** The part of a rendering whose gestures the runtime
@@ -152,7 +154,7 @@ provide, the document says so, under the heading "Prerequisites".
 
 ## Decisions
 
-1. **A conversation lives in a shared space**, as that space's chat (decision
+1. **A conversation lives in a social space**, as that space's chat (decision
    7). A container shows a room by linking to it, never by copying it. A link
    carries its target's label across the space boundary, and copied bytes do not
    ([cross-space integrity](../cfc-cross-space-integrity.md), §1).
@@ -188,7 +190,7 @@ provide, the document says so, under the heading "Prerequisites".
    to whatever draws the chat. A client's requests to read, such as its windows,
    are part of the protocol.
 
-## Shared spaces
+## Social spaces
 
 Several parts of this design need to know who a space's members are. They need
 to know it for the room's own space, which decides who is in a conversation, and
@@ -210,7 +212,7 @@ a space offers one, a reader shows the participants as claims.
 
 With a member set:
 
-- Starting a conversation from a shared space's members yields principals
+- Starting a conversation from a social space's members yields principals
   directly (see [`FabriChatManager.md`](FabriChatManager.md#prerequisites)).
 - A client can tell whether a container admits anyone besides a direct room's
   two members, which it must know before placing that room there (see
@@ -238,8 +240,8 @@ With a member set:
 The design depends on runtime capabilities that don't exist yet. Each document
 names the ones it needs, and they are gathered here:
 
-- **A member set for a shared space**, readable by the space's members and by
-  patterns running there (see [Shared spaces](#shared-spaces)).
+- **A member set for a social space**, readable by the space's members and by
+  patterns running there (see [Social spaces](#social-spaces)).
 - **Creating a private space from a pattern.** `Factory.inSpace()` creates a
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
@@ -253,11 +255,13 @@ names the ones it needs, and they are gathered here:
   room's handler writing the sending session's own windows, and one message
   document written by two sets of writers (see
   [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
-- **Host-issued trusted gestures.** A client that draws natively needs a
-  sanctioned way to issue a reviewed gesture without a DOM. That is the
-  "sanctioned headless issuance path" in the [host embedding policy
-  record](../../features/host-embedding.md#6-policy-record-trusted-mark-threat-model)
-  (see [`clients.md`](clients.md)).
+- **Native reviewed acts as trusted gestures.** A client that draws natively
+  issues a reviewed act through the sanctioned path
+  ([host embedding](../../features/host-embedding.md#10-native-reviewed-controls),
+  §10), and a native reviewed act counts wherever a trusted gesture does
+  ([§11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)),
+  adding a member included (see
+  [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 
 ## Implementation status
 
@@ -268,9 +272,9 @@ in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
 home pattern holds a manager, and `#chatManager` resolves to it (see
 [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)), but
 home renders it nowhere of its own: a page shows it at its path in home's
-result, with the user's rooms, the room chosen among them, the controls that
-start a direct or a group chat, and, when the session's latest start was
-refused, the reason. A refusal of text that isn't a principal
+result, with the user's rooms, each a link that opens the room as a page of its
+own, the controls that start a direct or a group chat, and, when the session's
+latest start was refused, the reason. A refusal of text that isn't a principal
 also shows the text. Where the runtime lacks a prerequisite, the patterns depart
 from this design, as below.
 
@@ -278,11 +282,15 @@ from this design, as below.
 
 - **Membership is set at creation, then the space's.** The manager creates a
   space for a conversation with `FabriChatRoom.inSpace()`, naming grants: the
-  creator OWNER, each other member WRITE, and everyone WRITE for a group made
-  joinable by its link. After that, who is in it changes only
-  through the space's own tools. The room's participants come from the space's
-  default pattern, which a host creates the first time someone opens the
-  space, so until then they are only the room's authors.
+  creator and each other member OWNER, and everyone WRITE for a group made
+  joinable by its link. After that, who is in it changes through the space's
+  own tools, and through the room's add control, from which any OWNER admits
+  someone as OWNER with `grantSpaceAccess()`. A client that draws natively can
+  offer it too, through the sanctioned issuing path (see
+  [`clients.md`](clients.md#the-sanctioned-issuing-path)). The room's
+  participants come from the space's default pattern, which a host creates the
+  first time someone opens the space, so until then they are only the room's
+  authors.
 - **Principals.** A handler learns the principal it acts for
   (`currentPrincipal()`), so a room keys its request memory by the sender's
   principal, and the manager refuses a direct room with the user themself and
@@ -310,16 +318,23 @@ from this design, as below.
   times, activity and its numbering, and each session's windows) has a write
   policy listing the handlers that write it (`WritePolicyAnyOf`), so no other
   code can write it, even code a member runs in the room's space.
-- **Starts are not gesture-checked.** `openDirect` and `createGroup` are sent
-  from controls marked `ChatStartSurface`, but no write policy requires the
-  gesture, since the manager's records are also written by acts with none.
-  One handler, `commitManager`, writes the manager's records, and each of its
-  streams is a binding of it.
+- **A start is checked where it creates a room.** `openDirect` and
+  `createGroup` are performed by a handler of their own, `commitStart`, and the
+  record a manager-created room keeps about itself names that handler and
+  `ChatStart` on `ChatStartSurface` as its only writer, so a start that creates
+  a room commits only from that reviewed gesture; without it, its run is
+  refused whole, and records no outcome. A start that creates none,
+  `openDirect` finding a direct room already shared or a start that is
+  refused, commits without one, and grants no one access. The manager's other
+  acts are performed by `commitManager`, with no gesture. A participant's chip
+  in a room sends its click to the viewer's manager's `openDirect` itself,
+  naming the participant's principal as `target.dataset.counterpart`, since a
+  reviewed gesture does not carry across a `send` from another handler.
 - **Labels without a gesture.** Messages and reactions are labeled
-  `authored-by` under a reviewed gesture, as the design says. A
-  `recentActivity` entry and `about.record` are labeled too, by writers that
-  name no gesture (each handler appending an entry, and the manager's
-  `commitManager`), so their label says whose run wrote them, not that the
+  `authored-by` under a reviewed gesture, as the design says, and so is
+  `about.record`, under the start that created the room. A `recentActivity`
+  entry is labeled too, by a writer that names no gesture (each handler
+  appending an entry), so its label says whose run wrote it, not that the
   person made a gesture. `about` is the room's own view, with its `policy`, a
   document the room writes when it starts, and `about.record` links the stored
   record.

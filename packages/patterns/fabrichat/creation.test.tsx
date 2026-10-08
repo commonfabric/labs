@@ -17,7 +17,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  clickButton,
+  countElements,
   findNode,
   findNodeById,
   findNodeByProp,
@@ -28,15 +28,20 @@ import {
   textContent,
 } from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
-import type {
-  ChatIndexEntry,
-  ChatManagerNotice,
-  ChatProfile,
-  ChatRequestOutcome,
-  ChatRoomLink,
+import {
+  CHAT_START_ACTION,
+  CHAT_START_SURFACE,
+  type ChatIndexEntry,
+  type ChatManagerNotice,
+  type ChatProfile,
+  type ChatRequestOutcome,
+  type ChatRoomLink,
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+/** The gesture a start takes, as a client's start control makes it. */
+const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 
 // Stand-ins for principals, each a base58btc key as a principal's is.
 const BOB = "did:key:z6MkBob";
@@ -59,12 +64,6 @@ const displayOf = (root: unknown, id: string): unknown =>
       ?.display,
   );
 
-// Which of a manager's two parts it shows: the chosen room, or the prompt to
-// choose one.
-const shownPart = (root: unknown): string =>
-  `selected:${displayOf(root, "fabrichat-selected")} ` +
-  `unselected:${displayOf(root, "fabrichat-unselected")}`;
-
 // What a manager shows about the session's latest start: how its refusal is
 // displayed, and what it says.
 const shownRefusal = (root: unknown): string =>
@@ -72,7 +71,8 @@ const shownRefusal = (root: unknown): string =>
   textContent(findNodeById(root, "fabrichat-start-refusal"));
 
 // The cell the first `cf-cell-link` labeled `label` under `root` links: a
-// listed room's, labeled `Open`, or a notice's, which carries no label.
+// listed room's, labeled as its entry is, or a notice's, which carries no
+// label.
 const cellLinked = (
   root: unknown,
   label: string | undefined,
@@ -140,13 +140,9 @@ export default pattern(() => {
     requests: groupRequests,
     outgoingNotices: groupNotices,
   } as ManagerArg);
-  const action_create_group = action(() =>
-    group.createGroup.send({
-      requestId: "g-1",
-      title: "Team",
-      members: [CAROL, CAROL, currentPrincipal() ?? ""],
-    })
-  );
+  // This user's own principal, which the group's members name as well.
+  const self = Writable.of<string>("");
+  const action_note_self = action(() => self.set(currentPrincipal() ?? ""));
   const action_open_direct_with_self = action(() =>
     group.openDirect.send({
       requestId: "d-self",
@@ -237,6 +233,7 @@ export default pattern(() => {
       {
         action: direct.openDirect,
         event: { requestId: "d-1", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { action: action_hold_direct },
       {
@@ -247,32 +244,27 @@ export default pattern(() => {
         ),
       },
       // The notice offers the room's link, for its creator to send on, and
-      // so does the room's entry in the list, for whoever is added later.
+      // the room's entry in the list is a link to it, labeled with whom it is
+      // with, which opens it as a page of its own: the manager renders no
+      // room itself.
       {
         assertion: assert(() =>
           equals(
             cellLinked(direct[UI], undefined),
             directRooms.key(0).key("room"),
           ) &&
-          equals(cellLinked(direct[UI], "Open"), directRooms.key(0).key("room"))
-        ),
-      },
-      // Choosing the room shows it in place of the prompt to choose one.
-      {
-        assertion: assert(() =>
-          shownPart(direct[UI]) === "selected:none unselected:block"
-        ),
-      },
-      { action: action(() => clickButton(direct[UI], `With ${BOB}`)) },
-      {
-        assertion: assert(() =>
-          shownPart(direct[UI]) === "selected:block unselected:none"
+          equals(
+            cellLinked(direct[UI], `With ${BOB}`),
+            directRooms.key(0).key("room"),
+          ) &&
+          countElements(direct[UI], "cf-render") === 0
         ),
       },
       // The conversation with one person is always the same room.
       {
         action: direct.openDirect,
         event: { requestId: "d-2", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => directRooms.get().length === 1) },
       // Forgetting it keeps it in `direct`; finding it again puts it back.
@@ -281,6 +273,7 @@ export default pattern(() => {
       {
         action: direct.openDirect,
         event: { requestId: "d-3", counterpart: BOB },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -290,7 +283,16 @@ export default pattern(() => {
       },
 
       // A group room.
-      { action: action_create_group },
+      { action: action_note_self },
+      {
+        action: group.createGroup,
+        event: {
+          requestId: "g-1",
+          title: "Team",
+          members: [CAROL, CAROL, self],
+        },
+        trustedUi: startGesture,
+      },
       {
         assertion: assert(() =>
           groupRooms.get().length === 1 &&
@@ -311,6 +313,7 @@ export default pattern(() => {
       {
         action: group.createGroup,
         event: { requestId: "g-1", title: "Team", members: [] },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => groupRooms.get().length === 1) },
       // The start controls are enabled, and a start the manager can't act on
@@ -334,10 +337,12 @@ export default pattern(() => {
       {
         action: group.openDirect,
         event: { requestId: "d-junk", counterpart: "not a principal" },
+        trustedUi: startGesture,
       },
       {
         action: group.createGroup,
         event: { requestId: "g-blank", title: "  ", members: [CAROL] },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -371,6 +376,7 @@ export default pattern(() => {
       {
         action: group.openDirect,
         event: { requestId: "d-period", counterpart: `${BOB}.` },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -386,6 +392,7 @@ export default pattern(() => {
       {
         action: group.createGroup,
         event: { requestId: "g-junk", title: "Team", members: [CAROL, "junk"] },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -393,6 +400,27 @@ export default pattern(() => {
             "A group's members must be principals." &&
           shownRefusal(group[UI]) ===
             'block:A group\'s members must be principals. Received: ["junk"]' &&
+          groupRooms.get().length === 1
+        ),
+      },
+      // A request missing what its stream needs is refused, with why, rather
+      // than dropped: an event's type doesn't refuse it.
+      { action: group.forget, event: { requestId: "f-none" } },
+      { action: group.accept, event: { requestId: "a-none" } },
+      { action: group.delivered, event: { requestId: "n-none" } },
+      {
+        action: group.createGroup,
+        event: { requestId: "g-none", title: "No members" },
+        trustedUi: startGesture,
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(groupRequests, "f-none") === "The request names no room." &&
+          reasonOf(groupRequests, "a-none") === "The request names no room." &&
+          reasonOf(groupRequests, "n-none") ===
+            "The request names no notice." &&
+          reasonOf(groupRequests, "g-none") ===
+            "A group's members must be listed." &&
           groupRooms.get().length === 1
         ),
       },
@@ -406,6 +434,7 @@ export default pattern(() => {
       {
         action: group.openDirect,
         event: { requestId: "d-carol", counterpart: CAROL },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => shownRefusal(group[UI]) === "none:") },
 
@@ -413,6 +442,7 @@ export default pattern(() => {
       {
         action: accepting.createGroup,
         event: { requestId: "g-1", title: "Team", members: [] },
+        trustedUi: startGesture,
       },
       { action: action_hold_accepted },
       { action: action_forget_accepted_group },
@@ -434,6 +464,7 @@ export default pattern(() => {
       {
         action: accepting.openDirect,
         event: { requestId: "d-1", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { action: action_hold_accepted },
       { action: action_forget_accepted_direct },
@@ -453,6 +484,7 @@ export default pattern(() => {
       {
         action: delivering.openDirect,
         event: { requestId: "d-1", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => deliveredNotices.get().length === 1) },
       { action: action_report_delivered },

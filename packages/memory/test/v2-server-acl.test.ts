@@ -4,7 +4,7 @@
  * revoked when its grant goes away, the genesis and shape rules an ACL
  * document is held to, the delegated READ binding a delegating principal
  * opens with `actingAs: "space-owner"`, the serving plane's
- * `foreignWriteAuthorityFor()`, and `sameAcl()`.
+ * `foreignWriteAuthorityFor()` and its access-list changes, and `sameAcl()`.
  */
 
 import { expect } from "@std/expect";
@@ -13,7 +13,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
-import { readGenesisRoot } from "../v2/genesis-root.ts";
+import { readGenesisRoot, readSpaceKind } from "../v2/genesis-root.ts";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import { sameAcl } from "../acl.ts";
 import {
@@ -348,6 +348,45 @@ describe("v2-server-acl", () => {
       }
     });
 
+    it("seals a creator-placed root reservation, which names no source, at genesis", async () => {
+      const server = createAclServer("memory://creator-root-genesis", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-creator-root-space";
+      const root = { cause: "in-space-root" };
+      try {
+        const authority = await connect(server);
+        const opened = await openSession(authority, space, space, {
+          genesisRoot: root,
+        });
+        expectExists(opened.ok);
+        await authority.connection.receive(
+          encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("creator-root"),
+            space,
+            sessionId: opened.ok.sessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              genesisRoot: root,
+              operations: [{
+                op: "set" as const,
+                id: `of:${space}`,
+                value: { value: { [ALICE]: "OWNER" } },
+              }],
+            },
+          }),
+        );
+        expect(nextResponse(authority.messages).error).toBeUndefined();
+        expect(readGenesisRoot(await server.engineForSpace(space))).toEqual(
+          root,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
     it("refuses a genesis transaction that differs from its authenticated root intent", async () => {
       const root = { source: "system:loom/main.tsx", cause: "signed-intent" };
       for (const variant of ["undeclared", "changed", "omitted"] as const) {
@@ -439,6 +478,269 @@ describe("v2-server-acl", () => {
       } finally {
         await server.close();
       }
+    });
+
+    describe("a declared space kind", () => {
+      const kind = "fabrichat-room";
+
+      /** The genesis commit of `space`, granting ALICE OWNER and BOB WRITE. */
+      const genesisOf = (space: string, spaceKind?: string) => ({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        ...(spaceKind === undefined ? {} : { spaceKind }),
+        operations: [{
+          op: "set" as const,
+          id: `of:${space}`,
+          value: { value: { [ALICE]: "OWNER", [BOB]: "WRITE" } },
+        }],
+      });
+
+      /**
+       * Opens a session on `space` as its own key declaring {@link kind},
+       * which the open reports no kind for, and commits the space's genesis
+       * declaring the same kind.
+       */
+      const createKindedSpace = async (server: Server, space: string) => {
+        const authority = await connect(server);
+        const opened = await openSession(authority, space, space, {
+          spaceKind: kind,
+        });
+        expectExists(opened.ok);
+        expect(opened.ok.spaceKind).toBeUndefined();
+        await authority.connection.receive(encodeMemoryBoundary({
+          type: "transact",
+          requestId: nextRequestId("kind-genesis"),
+          space,
+          sessionId: opened.ok.sessionId,
+          commit: genesisOf(space, kind),
+        }));
+        expect(nextResponse(authority.messages).error).toBeUndefined();
+      };
+
+      it("seals the kind at genesis and reports it to a later `session.open`", async () => {
+        const server = createAclServer("memory://space-kind-genesis", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-space-kind-space";
+        try {
+          await createKindedSpace(server, space);
+          expect(readSpaceKind(await server.engineForSpace(space))).toBe(kind);
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          expect(opened.ok.spaceKind).toBe(kind);
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("reports no kind to a `session.open` of a space whose genesis declares none", async () => {
+        const server = createAclServer("memory://space-kind-none", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-space-kind-none";
+        try {
+          const authority = await connect(server);
+          const created = await openSession(authority, space, space);
+          expectExists(created.ok);
+          await authority.connection.receive(encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("kindless-genesis"),
+            space,
+            sessionId: created.ok.sessionId,
+            commit: genesisOf(space),
+          }));
+          expect(nextResponse(authority.messages).error).toBeUndefined();
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          expect(opened.ok.serverSeq).toBe(1);
+          expect(Object.hasOwn(opened.ok, "spaceKind")).toBe(false);
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("opens a space whose first commit's receipt holds no commit, and reports no kind", async () => {
+        const server = createAclServer("memory://space-kind-no-commit", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-space-kind-no-commit";
+        try {
+          await createKindedSpace(server, space);
+          (await server.engineForSpace(space)).database.prepare(
+            'UPDATE "commit" SET original = ? WHERE seq = 1',
+          ).run(encodeMemoryBoundary({ localSeq: 1, spaceKind: kind }));
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          expect(opened.ok.serverSeq).toBe(1);
+          expect(Object.hasOwn(opened.ok, "spaceKind")).toBe(false);
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("returns an error for a `session.open` whose kind intent differs from the sealed kind, and opens one whose intent matches", async () => {
+        const server = createAclServer("memory://space-kind-open-intent", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-space-kind-open-intent";
+        try {
+          await createKindedSpace(server, space);
+          const differing = await openSession(
+            await connect(server),
+            space,
+            BOB,
+            { spaceKind: "notebook" },
+          );
+          expect(differing.error?.name).toBe("ProtocolError");
+          expect(differing.error?.message).toBe(
+            "The requested space kind differs from the space's immutable genesis",
+          );
+          const matching = await openSession(
+            await connect(server),
+            space,
+            BOB,
+            { spaceKind: kind },
+          );
+          expectExists(matching.ok);
+          expect(matching.ok.spaceKind).toBe(kind);
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("returns an `AuthorizationError` for a kind on any commit but the space-key genesis, and writes nothing", async () => {
+        const server = createAclServer("memory://space-kind-later", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-space-kind-later";
+        try {
+          await createKindedSpace(server, space);
+          const bob = await connect(server);
+          const bobSession = await openSession(bob, space, BOB);
+          expectExists(bobSession.ok);
+          const alice = await connect(server);
+          const aliceSession = await openSession(alice, space, ALICE);
+          expectExists(aliceSession.ok);
+          const attempts = [
+            {
+              who: "a WRITE member's ordinary write",
+              harness: bob,
+              sessionId: bobSession.ok.sessionId,
+              operation: {
+                op: "set" as const,
+                id: "of:doc:bob",
+                value: { value: { from: "bob" } },
+              },
+            },
+            {
+              who: "an OWNER's access-list change",
+              harness: alice,
+              sessionId: aliceSession.ok.sessionId,
+              operation: {
+                op: "set" as const,
+                id: `of:${space}`,
+                value: { value: { [ALICE]: "OWNER" } },
+              },
+            },
+          ];
+          for (const attempt of attempts) {
+            await attempt.harness.connection.receive(encodeMemoryBoundary({
+              type: "transact",
+              requestId: nextRequestId("kind-later"),
+              space,
+              sessionId: attempt.sessionId,
+              commit: {
+                localSeq: 2,
+                reads: { confirmed: [], pending: [] },
+                spaceKind: "notebook",
+                operations: [attempt.operation],
+              },
+            }));
+            const response = nextResponse(attempt.harness.messages);
+            expect(response.error?.name, attempt.who).toBe(
+              "AuthorizationError",
+            );
+            expect(response.error?.message, attempt.who).toBe(
+              "A space kind requires space-key ACL genesis",
+            );
+          }
+          expect(readSpaceKind(await server.engineForSpace(space))).toBe(kind);
+          expect(await server.readDocument(space, "of:doc:bob")).toBeNull();
+          expect((await server.readDocument(space, `of:${space}`))?.value)
+            .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE" });
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("returns an `AuthorizationError` for a genesis commit that differs from its authenticated kind intent", async () => {
+        for (const variant of ["undeclared", "changed", "omitted"] as const) {
+          const server = createAclServer(`memory://kind-intent-${variant}`, {
+            mode: "enforce",
+          });
+          const space = `did:key:z6Mk-kind-intent-${variant}`;
+          try {
+            const authority = await connect(server);
+            const opened = await openSession(
+              authority,
+              space,
+              space,
+              variant === "undeclared" ? {} : { spaceKind: kind },
+            );
+            expectExists(opened.ok);
+            await authority.connection.receive(encodeMemoryBoundary({
+              type: "transact",
+              requestId: nextRequestId("kind-intent"),
+              space,
+              sessionId: opened.ok.sessionId,
+              commit: genesisOf(
+                space,
+                variant === "omitted"
+                  ? undefined
+                  : variant === "changed"
+                  ? "notebook"
+                  : kind,
+              ),
+            }));
+            expect(nextResponse(authority.messages).error?.name, variant)
+              .toBe("AuthorizationError");
+            expect(readSpaceKind(await server.engineForSpace(space)), variant)
+              .toBeUndefined();
+            expect(await server.readDocument(space, `of:${space}`), variant)
+              .toBeNull();
+          } finally {
+            await server.close();
+          }
+        }
+      });
+
+      it("returns a `ProtocolError` for a genesis commit declaring a kind that is not well formed", async () => {
+        const server = createAclServer("memory://space-kind-malformed", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-space-kind-malformed";
+        try {
+          const authority = await connect(server);
+          const opened = await openSession(authority, space, space);
+          expectExists(opened.ok);
+          await authority.connection.receive(encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("kind-malformed"),
+            space,
+            sessionId: opened.ok.sessionId,
+            commit: genesisOf(space, "Fabrichat Room"),
+          }));
+          const response = nextResponse(authority.messages);
+          expect(response.error?.name).toBe("ProtocolError");
+          expect(response.error?.message).toBe("Invalid space kind");
+          expect(await server.readDocument(space, `of:${space}`)).toBeNull();
+        } finally {
+          await server.close();
+        }
+      });
     });
 
     it("accepts the space identity's genesis ACL, then admits the granted owner and refuses everyone else", async () => {
@@ -2616,6 +2918,45 @@ describe("v2-server-acl", () => {
     });
   });
 
+  describe("`off` mode, for a declared space kind", () => {
+    it("returns an `AuthorizationError` for a kind on a first commit not made by the space's own key", async () => {
+      const server = createAclServer("memory://space-kind-off", {
+        mode: "off",
+      });
+      const space = "did:key:z6Mk-space-kind-off";
+      try {
+        const bob = await connect(server);
+        const opened = await openSession(bob, space, BOB, {
+          spaceKind: "fabrichat-room",
+        });
+        expectExists(opened.ok);
+        await bob.connection.receive(encodeMemoryBoundary({
+          type: "transact",
+          requestId: nextRequestId("kind-off"),
+          space,
+          sessionId: opened.ok.sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            spaceKind: "fabrichat-room",
+            operations: [{
+              op: "set",
+              id: `of:${space}`,
+              value: { value: { [BOB]: "OWNER" } },
+            }],
+          },
+        }));
+        expect(nextResponse(bob.messages).error?.message).toBe(
+          "A space kind requires space-key ACL genesis",
+        );
+        expect(readSpaceKind(await server.engineForSpace(space)))
+          .toBeUndefined();
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
   describe("no `acl` option", () => {
     it("opens a new space without seeding a commit, as `off` mode does", async () => {
       const server = createAclServer("memory://acl-default");
@@ -3068,6 +3409,258 @@ describe("v2-server-acl", () => {
         expect(await server.foreignWriteAuthorityFor(home, home)).toEqual({
           granted: true,
         });
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
+  describe("checkServedAclChange() and commitServedAclChange()", () => {
+    // Each case serves a change of the access list of `space`, which alice
+    // owns and bob may write, made by a run delivering an event on a stream
+    // of `home`. The change functions here apply no check of their own, so
+    // what refuses a change is the server's.
+
+    const space = "did:key:z6Mk-served-acl-space";
+    const home = "did:key:z6Mk-served-acl-home";
+    const sidecarId = "of:stream-events:served-acl";
+
+    /**
+     * Returns a server in `mode` holding `space`'s list, and an entry for each
+     * of `fired`'s events on `home`'s stream, each fired by its user.
+     */
+    const servedAclServer = async (
+      label: string,
+      mode: "off" | "enforce",
+      fired: Record<string, string>,
+    ): Promise<Server> => {
+      const server = createAclServer(`memory://served-acl-${label}`, { mode });
+      await initializeSpaceAcl(server, space, {
+        [ALICE]: "OWNER",
+        [BOB]: "WRITE",
+      });
+      await initializeSpaceAcl(server, home, { [home]: "OWNER" });
+      await server.writeDocument(home, sidecarId, {
+        entries: Object.entries(fired).map(([eventId, user]) => ({
+          eventId,
+          stream: { id: "of:served-acl-stream", path: [] },
+          firedAt: { user, session: `${user}-session` },
+        })),
+      });
+      return server;
+    };
+
+    /** A change made as `actor`, for its event `eventId`, adding `entry`. */
+    const served = (
+      actor: string,
+      eventId: string,
+      entry: Record<string, "READ" | "WRITE" | "OWNER">,
+    ) => ({
+      space,
+      actingPrincipal: actor,
+      actingSession: `${actor}-session`,
+      capabilityRef: `event-consequence:${eventId}`,
+      sourceEvent: { space: home, sidecarId, eventId },
+      change: (stored: unknown) =>
+        ({ ...(stored as Record<string, string>), ...entry }) as never,
+    });
+
+    /** The envelope the serving loop's sink commits under. */
+    const envelope = (localSeq: number) => ({
+      sessionId: "served-acl-holder",
+      localSeq,
+    });
+
+    it("commits an `OWNER`'s change as an authored commit of the list alone, under the delegated carriage", async () => {
+      const server = await servedAclServer("owner", "enforce", { e1: ALICE });
+      try {
+        const verdict = await server.commitServedAclChange({
+          ...served(ALICE, "e1", { [CAROL]: "WRITE" }),
+          ...envelope(1),
+        });
+
+        expect(verdict).toEqual({ admitted: true, seq: 2 });
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE", [CAROL]: "WRITE" });
+        const engine = await server.engineForSpace(space);
+        expect(
+          engine.database.prepare(
+            `SELECT class, session_id, acting_principal, acting_session, ` +
+              `capability_ref FROM "commit" WHERE seq = 2`,
+          ).get(),
+        ).toEqual({
+          class: "authored",
+          session_id: "served-acl-holder",
+          acting_principal: ALICE,
+          acting_session: `${ALICE}-session`,
+          capability_ref: "event-consequence:e1",
+        });
+        expect(
+          engine.database.prepare(
+            `SELECT id FROM revision WHERE commit_seq = 2`,
+          ).all(),
+        ).toEqual([{ id: `of:${space}` }]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a `WRITE` member's change, as a transact of the same list from that member is refused", async () => {
+      const server = await servedAclServer("write-member", "enforce", {
+        e1: BOB,
+      });
+      try {
+        const refusal = {
+          refused: `Principal ${BOB} lacks OWNER on space ${space}`,
+        };
+        const change = served(BOB, "e1", { [BOB]: "OWNER" });
+
+        expect(await server.checkServedAclChange(change)).toEqual(refusal);
+        expect(
+          await server.commitServedAclChange({ ...change, ...envelope(1) }),
+        ).toEqual(refusal);
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("admits a member's removal of its own entry and nothing else", async () => {
+      const server = await servedAclServer("self-removal", "enforce", {
+        e1: BOB,
+      });
+      try {
+        const change = {
+          ...served(BOB, "e1", {}),
+          change: () => ({ [ALICE]: "OWNER" as const }),
+        };
+
+        expect(
+          await server.commitServedAclChange({ ...change, ...envelope(1) }),
+        ).toEqual({ admitted: true, seq: 2 });
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a change leaving no concrete `OWNER`, and whatever the change itself throws", async () => {
+      const server = await servedAclServer("shape", "enforce", { e1: ALICE });
+      try {
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e1", {}),
+            change: () => ({ "*": "OWNER" as const }),
+          }),
+        ).toEqual({
+          refused: "ACL must be valid and retain at least one concrete OWNER",
+        });
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e1", {}),
+            change: () => {
+              throw new Error("the change refuses");
+            },
+          }),
+        ).toEqual({ refused: "the change refuses" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a change to a space with no list, which only its own DID may create", async () => {
+      const server = await servedAclServer("genesis", "enforce", { e1: ALICE });
+      const fresh = "did:key:z6Mk-served-acl-fresh";
+      try {
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e1", {}),
+            space: fresh,
+            change: () => ({ [ALICE]: "OWNER" as const }),
+          }),
+        ).toEqual({
+          refused:
+            `Only the space identity or a service DID may initialize ${fresh}`,
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a grant naming an event the carried actor did not fire, or naming another event than the one delivered", async () => {
+      const server = await servedAclServer("grant", "enforce", {
+        e1: BOB,
+        e2: ALICE,
+      });
+      try {
+        expect(
+          await server.checkServedAclChange(
+            served(ALICE, "e1", { [CAROL]: "READ" }),
+          ),
+        ).toEqual({
+          refused: `The event e1 was not fired by ${ALICE}, the actor the ` +
+            "change is made as.",
+        });
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e2", { [CAROL]: "READ" }),
+            capabilityRef: "event-consequence:e1",
+          }),
+        ).toEqual({
+          refused: "The grant event-consequence:e1 does not name the event " +
+            "e2 the run delivers.",
+        });
+        expect(
+          await server.checkServedAclChange(
+            served(ALICE, "e2", { [CAROL]: "READ" }),
+          ),
+        ).toEqual({ admitted: true });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns admission from the check and commits nothing, and commits nothing for a change leaving the list as it is", async () => {
+      const server = await servedAclServer("no-op", "enforce", { e1: ALICE });
+      try {
+        const engine = await server.engineForSpace(space);
+        const seqBefore = engine.database.prepare(
+          `SELECT MAX(seq) AS seq FROM "commit"`,
+        ).get();
+
+        expect(
+          await server.checkServedAclChange(
+            served(ALICE, "e1", { [CAROL]: "READ" }),
+          ),
+        ).toEqual({ admitted: true });
+        expect(
+          await server.commitServedAclChange({
+            ...served(ALICE, "e1", { [BOB]: "WRITE" }),
+            ...envelope(1),
+          }),
+        ).toEqual({ admitted: true });
+        expect(
+          engine.database.prepare(`SELECT MAX(seq) AS seq FROM "commit"`)
+            .get(),
+        ).toEqual(seqBefore);
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("admits a `WRITE` member's change in `off` mode, as a transact is admitted there", async () => {
+      const server = await servedAclServer("off", "off", { e1: BOB });
+      try {
+        expect(
+          await server.commitServedAclChange({
+            ...served(BOB, "e1", { [BOB]: "OWNER" }),
+            ...envelope(1),
+          }),
+        ).toEqual({ admitted: true, seq: 2 });
       } finally {
         await server.close();
       }

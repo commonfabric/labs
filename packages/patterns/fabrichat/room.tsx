@@ -19,12 +19,14 @@ import {
   computed,
   equals,
   type FabricEpochNsec,
+  grantSpaceAccess,
   handler,
   NAME,
   pattern,
   type PerSession,
   principalOf,
   SELF,
+  spaceAccess,
   Stream,
   UI,
   VIEWS,
@@ -67,6 +69,8 @@ import {
 import { bodyText, FabriChatMessageRow } from "./message-row.tsx";
 import {
   type AboutRecord,
+  CHAT_ADD_MEMBER_ACTION,
+  CHAT_ADD_MEMBER_SURFACE,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
@@ -79,6 +83,7 @@ import {
   type ChatRoomKind,
   type ChatRoomLink,
   type ChatRoomPolicy,
+  isPrincipalDID,
   type ProfileCell,
 } from "./schemas.tsx";
 
@@ -102,25 +107,14 @@ export const participantsOf = (
     [...listed],
   );
 
-/** What starting a direct chat asks of a manager: who to chat with. */
-export interface StartDirectEvent {
-  /** The other person's principal. */
-  counterpart: string;
-}
-
 /**
- * Asks the viewer's manager for a direct chat with the person `participant`
- * stands for, by the principal its `represents-principal` label attests. A
- * profile whose label names no single principal starts nothing.
+ * What a participant's chip sends its viewer's manager's `openDirect`: the
+ * click on its chat control, whose target names the person to chat with.
  */
-const startDirectWith = handler<unknown, {
-  participant: ProfileCell;
-  startDirect?: Stream<StartDirectEvent>;
-}>((_event, { participant, startDirect }) => {
-  const counterpart = principalOf(participant, "represents-principal");
-  if (counterpart === undefined) return;
-  startDirect?.send({ counterpart });
-});
+export interface StartDirectEvent {
+  /** The chat control, naming the other person's principal. */
+  readonly target?: { readonly dataset?: { readonly counterpart?: string } };
+}
 
 /** What a participant's chip needs. */
 export interface ParticipantChipInput {
@@ -136,7 +130,11 @@ export interface ParticipantChipInput {
    */
   startsDirect?: boolean;
 
-  /** The viewer's manager's `openDirect`, when `startsDirect` holds. */
+  /**
+   * The viewer's manager's `openDirect`, when `startsDirect` holds. The
+   * control sends its click there itself, so that the manager receives the
+   * viewer's reviewed `ChatStart`.
+   */
   startDirect?: Stream<StartDirectEvent>;
 }
 
@@ -144,28 +142,27 @@ export interface ParticipantChipInput {
 export interface ParticipantChipOutput {
   /** The participant's badge, and the control that starts a chat with them. */
   [UI]: VNode;
-
-  /** Starts a direct chat with the participant. */
-  chat: Stream<unknown>;
 }
 
 /**
  * One participant, shown by their profile, with a control that starts a direct
  * chat with them. The control shows only where it can start one: for someone
  * other than the viewer, whose profile attests a principal, to a viewer who
- * has a manager.
+ * has a manager. It names the participant to the manager by the principal
+ * their profile's `represents-principal` label attests.
  */
 export const ParticipantChip = pattern<
   ParticipantChipInput,
   ParticipantChipOutput
 >(({ participant, myProfile, startsDirect, startDirect }) => {
-  const chat = startDirectWith({ participant, startDirect });
+  const counterpart = computed(() =>
+    principalOf(participant, "represents-principal") ?? ""
+  );
   // Who may start a chat differs by viewer, so the control is hidden by a
   // prop rather than built as a different tree (see `FabriChatMessageRow`).
   const chatDisplay = computed((): ChatDisplay =>
     startsDirect === true && myProfile?.get() !== undefined &&
-      !equals(participant, myProfile) &&
-      principalOf(participant, "represents-principal") !== undefined
+      !equals(participant, myProfile) && counterpart !== ""
       ? "inline-flex"
       : "none"
   );
@@ -182,16 +179,16 @@ export const ParticipantChip = pattern<
         >
           <cf-button
             data-ui-action={CHAT_START_ACTION}
+            data-counterpart={counterpart}
             size="sm"
             variant="ghost"
-            onClick={chat}
+            onClick={startDirect}
           >
             Chat
           </cf-button>
         </span>
       </span>
     ),
-    chat,
   };
 });
 
@@ -264,6 +261,141 @@ export const AddToChats = pattern<AddToChatsInput, AddToChatsOutput>(
           </cf-text>
           <cf-button size="sm" onClick={add}>Add to my chats</cf-button>
         </cf-hstack>
+      ),
+      add,
+    };
+  },
+);
+
+/** What adding a member asks of a room: the control's text. */
+export interface AddMemberEvent {
+  /** The control, holding the new member's chat address. */
+  readonly target?: { readonly value?: string };
+}
+
+/** What adding a member is bound to. */
+interface AddMemberState {
+  /** One of the room's records, which names the room's space. */
+  room: MessagesCell;
+
+  /** Whether the room is one a manager created in a space of its own. */
+  ownSpace: boolean;
+
+  /** What the session's latest add came to, which the control shows. */
+  outcome: Writable<string>;
+}
+
+/**
+ * Admits the person whose chat address the control holds to the room's space,
+ * with OWNER, so that they too may add others, from a trusted gesture on
+ * `ChatAddMemberSurface`. Only an OWNER of the space may admit someone, and
+ * the session is shown what came of it.
+ */
+const commitAddMember = handler<AddMemberEvent, AddMemberState>(
+  (event, { room, ownSpace, outcome }) => {
+    // A space's own chat shares its space, whose members are its own
+    // business, whatever a rendering shows.
+    if (!ownSpace) {
+      outcome.set("Members of this chat are added by its space.");
+      return;
+    }
+    const member = event?.target?.value?.trim() ?? "";
+    if (!isPrincipalDID(member)) {
+      outcome.set("That isn't a chat address.");
+      return;
+    }
+    try {
+      grantSpaceAccess(room, member, "OWNER");
+    } catch (error) {
+      // A refusal the call can see throws before anything is staged, so the
+      // session is told, and nothing else changes.
+      outcome.set(
+        `They couldn't be added: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
+    }
+    outcome.set(`Added ${member}. Send them this chat's link.`);
+  },
+);
+
+/** What the control adding a member to a room needs. */
+export interface AddMemberInput {
+  /** One of the room's records, which names the room's space. */
+  room: MessagesCell;
+
+  /** The viewer's profile, which holds no value while it is unknown. */
+  myProfile: ProfileCell | undefined;
+
+  /**
+   * Whether the room is one a manager created in a space of its own. A
+   * space's own chat shares its space, whose members are its own business.
+   */
+  ownSpace: boolean;
+}
+
+/** What the control adding a member to a room provides. */
+export interface AddMemberOutput {
+  /**
+   * The control, shown only to an OWNER of a room in a space of its own whose
+   * profile has resolved, as the room's other controls are.
+   */
+  [UI]: VNode;
+
+  /** Admits the person the event's control names, from a trusted gesture. */
+  add: Stream<AddMemberEvent>;
+}
+
+/**
+ * Offers an OWNER of a room's space a way to admit someone else to it, by
+ * their chat address.
+ */
+export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
+  ({ room, myProfile, ownSpace }) => {
+    const outcome = new Writable.perSession<string>("");
+    const add = commitAddMember({ room, ownSpace, outcome });
+    // Who may add differs by viewer, and what came of an add by session, so
+    // both are hidden by a prop rather than built as a different tree (see
+    // `FabriChatMessageRow`).
+    const addDisplay = computed((): ChatDisplay =>
+      ownSpace && myProfile?.get() !== undefined &&
+        spaceAccess(room) === "OWNER"
+        ? "flex"
+        : "none"
+    );
+    const outcomeDisplay = computed((): ChatDisplay =>
+      (outcome.get() ?? "") === "" ? "none" : "block"
+    );
+
+    return {
+      [UI]: (
+        <cf-vstack
+          id="fabrichat-add-member"
+          gap="1"
+          hidden
+          style={{ display: addDisplay }}
+        >
+          <div
+            data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
+            data-ui-event-integrity={CHAT_ADD_MEMBER_SURFACE}
+          >
+            <cf-submit-input
+              data-ui-action={CHAT_ADD_MEMBER_ACTION}
+              inputId="fabrichat-add-member-address"
+              placeholder="Their chat address (did:key:…)"
+              buttonText="Add"
+              onClick={add}
+            />
+          </div>
+          <div
+            id="fabrichat-add-member-outcome"
+            hidden
+            style={{ display: outcomeDisplay }}
+          >
+            <cf-text variant="caption">{outcome}</cf-text>
+          </div>
+        </cf-vstack>
       ),
       add,
     };
@@ -352,6 +484,14 @@ export interface ChatRoomOutput extends ChatRoomView {
 
   /** The room's data face, as one group. */
   [VIEWS]: { room: ChatRoomView };
+
+  /**
+   * Admits someone to the room's space, with OWNER, from a trusted gesture on
+   * the rendering's `ChatAddMemberSurface`: the stream its add control sends
+   * to, which nothing else can use. Only an OWNER of a room in a space of its
+   * own may admit someone.
+   */
+  addMember: Stream<AddMemberEvent>;
 }
 
 /** What a room stores, and who is looking at it. */
@@ -467,6 +607,13 @@ export const FabriChatRoomCore = pattern<
     participantsOf(spaceParticipants, entries)
   );
   const canSend = computed(() => canActIn(messages, myProfile));
+  // A room the manager created has `about`; a space's own chat, sharing its
+  // space, has none.
+  const addMember = AddMember({
+    room: messages,
+    myProfile,
+    ownSpace: computed(() => about?.get() !== undefined),
+  });
   const cannotSend = computed(() => !canSend);
   // The policy is a document of its own, which `about` links.
   const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);
@@ -589,6 +736,7 @@ export const FabriChatRoomCore = pattern<
             />
           ))}
         </div>
+        {addMember[UI]}
 
         <cf-vstack
           id="fabrichat-messages"
@@ -692,6 +840,7 @@ export const FabriChatRoomCore = pattern<
     ),
     [VIEWS]: { room: view },
     ...view,
+    addMember: addMember.add,
     composerSend: composeSend,
     threadComposerSend: sendThreadReply,
   };
@@ -788,6 +937,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       obliterateMessage: room.obliterateMessage,
       sendReaction: room.sendReaction,
       deleteReaction: room.deleteReaction,
+      addMember: room.addMember,
       [UI]: (
         <cf-screen>
           <AddToChats

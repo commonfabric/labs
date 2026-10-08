@@ -6,12 +6,15 @@ import { fromFileUrl } from "@std/path";
 import {
   type BatchResult,
   classifyImportedPattern,
+  compareConfigurations,
+  configurationReadings,
   ConsoleClient,
   indexChangeOf,
   type IndexPreflight,
   type IndexSnapshot,
   main,
   parseMeasurementSuite,
+  parseRecordedConfigurations,
   preflightCellSpec,
   preflightPosture,
   readAncestry,
@@ -21,6 +24,7 @@ import {
   renderBatchReport as renderBatchReportImpl,
   resolveImportedPatternOrigins,
   runTask,
+  type SessionConfiguration,
 } from "../scripts/run-measurement-batch.ts";
 import { emptyTotals as emptyMeasurementTotals } from "../scripts/measure-runs.ts";
 import observedStatus from "./support/measurement-console-status.json" with {
@@ -124,6 +128,10 @@ interface FakeConsoleOptions {
   runId?: string;
   artifactRoot?: string;
   touchRunState?: boolean;
+
+  /** Fields written into the run's state as `touchRunState` stamps it. */
+  runState?: Readonly<Record<string, unknown>>;
+
   statusArtifactRoot?: unknown;
   statusSessions?: unknown;
   patterns?: readonly Record<string, unknown>[];
@@ -189,7 +197,11 @@ const startFakeConsole = (options: FakeConsoleOptions): FakeConsole => {
         const state = JSON.parse(await Deno.readTextFile(path));
         await Deno.writeTextFile(
           path,
-          JSON.stringify({ ...state, createdAt: new Date().toISOString() }),
+          JSON.stringify({
+            ...state,
+            ...options.runState,
+            createdAt: new Date().toISOString(),
+          }),
         );
       }
       return Response.json({
@@ -377,6 +389,33 @@ const writeRunCandidate = async (
     `${root}/transcript.json`,
     JSON.stringify([{ role: "user", content: firstUserMessage }]),
   );
+};
+
+/** The run state of a run on the macOS default, the native runtime. */
+const ON_THE_NATIVE_DEFAULT = {
+  sandboxRuntime: "runsc",
+  sandboxRuntimeChoice: {
+    runtime: "runsc",
+    source: "default",
+    platform: "darwin",
+    nativeStore: "/Users/someone/Library/Application Support/cfc-vm",
+  },
+};
+
+/** The run state of a run on Docker, named by the environment. */
+const ON_DOCKER_NAMED = {
+  sandboxRuntime: "docker",
+  sandboxRuntimeChoice: { runtime: "docker", source: "environment" },
+};
+
+/** A console configuration as a batch records it, on the native default. */
+const NATIVE_CONFIGURATION: SessionConfiguration = {
+  model: "gpt-5.6-terra",
+  cfcEnforcementMode: "observe",
+  skillsRoot: "/repo/skills",
+  skillsFound: 2,
+  sandboxRuntime: "runsc",
+  sandboxRuntimeChosen: "default on darwin",
 };
 
 describe("run-measurement-batch", () => {
@@ -1763,6 +1802,92 @@ describe("run-measurement-batch", () => {
       }
     });
 
+    describe("the sandbox runtime", () => {
+      /** The configuration `runTask` records for a run whose state holds `fields`. */
+      const recordedFor = async (
+        fields: Readonly<Record<string, unknown>>,
+      ): Promise<SessionConfiguration> => {
+        const dir = await Deno.makeTempDir();
+        try {
+          await writeRunCandidate(
+            dir,
+            "fixture-run",
+            "2026-08-28T21:00:01.000Z",
+            "do a thing",
+          );
+          await Deno.writeTextFile(
+            `${dir}/fixture-run/run-state.json`,
+            JSON.stringify({
+              runId: "fixture-run",
+              createdAt: "2026-08-28T21:00:01.000Z",
+              ...fields,
+            }),
+          );
+          const console_ = startFakeConsole({
+            streams: [completedStream()],
+            runId: "fixture-run",
+            artifactRoot: dir,
+          });
+          try {
+            const client = await ConsoleClient.open(console_.url);
+            return (await runTask(
+              client,
+              { id: "a", text: "do a thing" },
+              () => {},
+              RUN_TASK_OPTIONS,
+            )).configuration;
+          } finally {
+            await console_.close();
+          }
+        } finally {
+          await Deno.remove(dir, { recursive: true });
+        }
+      };
+
+      it("records the runtime the run's state names, and that it was the platform's default", async () => {
+        expect(await recordedFor(ON_THE_NATIVE_DEFAULT)).toMatchObject({
+          sandboxRuntime: "runsc",
+          sandboxRuntimeChosen: "default on darwin",
+        });
+      });
+
+      it("records a runtime named by the environment as named", async () => {
+        expect(await recordedFor(ON_DOCKER_NAMED)).toMatchObject({
+          sandboxRuntime: "docker",
+          sandboxRuntimeChosen: "named",
+        });
+      });
+
+      it("records a runtime named by a flag as named", async () => {
+        expect(
+          await recordedFor({
+            sandboxRuntime: "runsc",
+            sandboxRuntimeChoice: { runtime: "runsc", source: "flag" },
+          }),
+        ).toMatchObject({
+          sandboxRuntime: "runsc",
+          sandboxRuntimeChosen: "named",
+        });
+      });
+
+      it("records no runtime for a run whose state holds none, as one written before runs recorded it", async () => {
+        const configuration = await recordedFor({});
+
+        expect(configuration.sandboxRuntime).toBeUndefined();
+        expect(configuration.sandboxRuntimeChosen).toBeUndefined();
+      });
+
+      it("records the runtime alone for a run whose state holds no choice it can read", async () => {
+        const configuration = await recordedFor({
+          sandboxRuntime: "docker",
+          sandboxRuntimeChoice: { runtime: "docker", source: "default" },
+        });
+
+        expect(configuration.sandboxRuntime).toBe("docker");
+        expect(configuration.sandboxRuntimeChosen).toBeUndefined();
+      });
+    });
+
     it("counts no skills for a registry whose skills field is not a list", async () => {
       const dir = await Deno.makeTempDir();
       try {
@@ -2157,6 +2282,106 @@ describe("run-measurement-batch", () => {
       } finally {
         // the directory is removed by this block's afterEach
       }
+    });
+
+    describe("compared with an earlier batch", () => {
+      /** Runs a batch whose run records `runState`, and returns its directory. */
+      const batchOn = async (
+        runState: Readonly<Record<string, unknown>>,
+        extraArgs: readonly string[] = [],
+      ) =>
+        await runMain(
+          {
+            streams: [completedStream()],
+            runId: "fixture-run",
+            artifactRoot: FIXTURE_ROOT,
+            runState,
+          },
+          ONE_TASK,
+          extraArgs,
+        );
+
+      it("reports two batches that differ only in their sandbox runtime as not comparable", async () => {
+        const earlier = await batchOn(ON_DOCKER_NAMED);
+        const earlierRecord = `${earlier.dir}/out/report.json`;
+
+        const later = await batchOn(ON_THE_NATIVE_DEFAULT, [
+          `--compare-with=${earlierRecord}`,
+        ]);
+
+        expect(later.code).toBe(0);
+        const report = await Deno.readTextFile(`${later.dir}/out/report.md`);
+        expect(report).toContain(
+          `**Not comparable with \`${earlierRecord}\`.**`,
+        );
+        expect(report).toContain(
+          "- Sandbox runtime: docker (named) there, runsc (default on darwin) here",
+        );
+        const record = JSON.parse(
+          await Deno.readTextFile(`${later.dir}/out/report.json`),
+        );
+        expect(record.comparedWith).toEqual({
+          report: earlierRecord,
+          differences: [{
+            factor: "Sandbox runtime",
+            earlier: "docker (named)",
+            later: "runsc (default on darwin)",
+          }],
+          // The captured console reports no CFC posture in its sessions.
+          unrecorded: ["CFC enforcement"],
+        });
+      });
+
+      it("reports two batches on the same runtime, chosen the same way, as reading the same", async () => {
+        const earlier = await batchOn(ON_THE_NATIVE_DEFAULT);
+        const earlierRecord = `${earlier.dir}/out/report.json`;
+
+        const later = await batchOn(ON_THE_NATIVE_DEFAULT, [
+          `--compare-with=${earlierRecord}`,
+        ]);
+
+        const report = await Deno.readTextFile(`${later.dir}/out/report.md`);
+        expect(report).toContain(
+          `Every line of the console's configuration above reads the same in \`${earlierRecord}\`.`,
+        );
+        expect(report).not.toContain("Not comparable");
+        expect(report).toContain(
+          "Neither batch recorded CFC enforcement, so nothing shows the two agree there.",
+        );
+      });
+
+      it("reads an earlier record written before batches recorded the sandbox runtime, and reports it not comparable on that line", async () => {
+        const earlier = await batchOn(ON_THE_NATIVE_DEFAULT);
+        const earlierRecord = `${earlier.dir}/out/report.json`;
+        const record = JSON.parse(await Deno.readTextFile(earlierRecord));
+        delete record.results[0].configuration.sandboxRuntime;
+        delete record.results[0].configuration.sandboxRuntimeChosen;
+        await Deno.writeTextFile(earlierRecord, JSON.stringify(record));
+
+        const later = await batchOn(ON_THE_NATIVE_DEFAULT, [
+          `--compare-with=${earlierRecord}`,
+        ]);
+
+        expect(later.code).toBe(0);
+        expect(await Deno.readTextFile(`${later.dir}/out/report.md`))
+          .toContain(
+            "- Sandbox runtime: NOT RECORDED — no run recorded one there, runsc (default on darwin) here",
+          );
+      });
+
+      it("throws for an earlier record that is not a batch report, before it asks the console anything", async () => {
+        const dir = await Deno.makeTempDir();
+        temporaryDirectories.push(dir);
+        await Deno.writeTextFile(`${dir}/report.json`, "{}");
+
+        await expect(
+          runMain(
+            { streams: [], eventStatus: 500 },
+            ONE_TASK,
+            [`--compare-with=${dir}/report.json`],
+          ),
+        ).rejects.toThrow("the earlier batch record holds no `results` list");
+      });
     });
 
     it("returns 2 naming an undeclared flag, dotted or not, before it reads the suite", async () => {
@@ -2610,6 +2835,159 @@ describe("run-measurement-batch", () => {
     });
   });
 
+  describe("configurationReadings()", () => {
+    const runtimeOf = (configurations: readonly SessionConfiguration[]) =>
+      configurationReadings(configurations).find((reading) =>
+        reading.factor === "Sandbox runtime"
+      );
+
+    it("reads the runtime and how it was chosen as one recorded line", () => {
+      expect(runtimeOf([NATIVE_CONFIGURATION])).toEqual({
+        factor: "Sandbox runtime",
+        reading: "runsc (default on darwin)",
+        recorded: true,
+      });
+    });
+
+    it("lists each runtime the runs ran on, and how each was chosen", () => {
+      expect(
+        runtimeOf([NATIVE_CONFIGURATION, {
+          ...NATIVE_CONFIGURATION,
+          sandboxRuntime: "docker",
+          sandboxRuntimeChosen: "named",
+        }])?.reading,
+      ).toBe("docker (named), runsc (default on darwin)");
+    });
+
+    it("says how it was chosen is not recorded for a run that records the runtime alone", () => {
+      expect(runtimeOf([{ sandboxRuntime: "docker" }])).toEqual({
+        factor: "Sandbox runtime",
+        reading: "docker (how it was chosen NOT RECORDED)",
+        recorded: false,
+      });
+    });
+
+    it("says how many runs recorded none, where others did", () => {
+      expect(runtimeOf([NATIVE_CONFIGURATION, {}])).toEqual({
+        factor: "Sandbox runtime",
+        reading: "runsc (default on darwin); 1 of 2 runs recorded none",
+        recorded: false,
+      });
+    });
+
+    it("says no run recorded one, for runs that recorded none and for no runs", () => {
+      for (const configurations of [[{}], []]) {
+        expect(runtimeOf(configurations)).toEqual({
+          factor: "Sandbox runtime",
+          reading: "NOT RECORDED — no run recorded one",
+          recorded: false,
+        });
+      }
+    });
+  });
+
+  describe("compareConfigurations()", () => {
+    it("reports two batches that differ only in their sandbox runtime as differing on that line alone", () => {
+      expect(
+        compareConfigurations("earlier/report.json", [{
+          ...NATIVE_CONFIGURATION,
+          sandboxRuntime: "docker",
+          sandboxRuntimeChosen: "named",
+        }], [NATIVE_CONFIGURATION]),
+      ).toEqual({
+        report: "earlier/report.json",
+        differences: [{
+          factor: "Sandbox runtime",
+          earlier: "docker (named)",
+          later: "runsc (default on darwin)",
+        }],
+        unrecorded: [],
+      });
+    });
+
+    it("reports two batches on the same runtime, chosen differently, as differing", () => {
+      expect(
+        compareConfigurations("earlier/report.json", [{
+          ...NATIVE_CONFIGURATION,
+          sandboxRuntimeChosen: "named",
+        }], [NATIVE_CONFIGURATION]).differences,
+      ).toEqual([{
+        factor: "Sandbox runtime",
+        earlier: "runsc (named)",
+        later: "runsc (default on darwin)",
+      }]);
+    });
+
+    it("reports no difference for batches whose every line was recorded and agrees", () => {
+      expect(
+        compareConfigurations("earlier/report.json", [NATIVE_CONFIGURATION], [
+          NATIVE_CONFIGURATION,
+        ]),
+      ).toEqual({
+        report: "earlier/report.json",
+        differences: [],
+        unrecorded: [],
+      });
+    });
+
+    it("reports a line neither batch recorded apart from the differences", () => {
+      const unrecorded = { ...NATIVE_CONFIGURATION };
+      delete unrecorded.sandboxRuntime;
+      delete unrecorded.sandboxRuntimeChosen;
+
+      expect(
+        compareConfigurations("earlier/report.json", [unrecorded], [
+          unrecorded,
+        ]),
+      ).toEqual({
+        report: "earlier/report.json",
+        differences: [],
+        unrecorded: ["Sandbox runtime"],
+      });
+    });
+  });
+
+  describe("parseRecordedConfigurations()", () => {
+    it("reads each line a record holds, and leaves out what it does not", () => {
+      expect(
+        parseRecordedConfigurations({
+          results: [
+            {
+              configuration: {
+                ...NATIVE_CONFIGURATION,
+                skillsUnread: "one child scanned none",
+                runsInFamily: 2,
+              },
+            },
+            // Written before batches recorded the runtime, with a field of a
+            // shape no batch writes.
+            { configuration: { model: 5, cfcEnforcementMode: "enforce" } },
+          ],
+        }),
+      ).toEqual([
+        { ...NATIVE_CONFIGURATION, skillsUnread: "one child scanned none" },
+        { cfcEnforcementMode: "enforce" },
+      ]);
+    });
+
+    it("throws for a record that holds no results list", () => {
+      for (const record of [null, [], {}, { results: "none" }]) {
+        expect(() => parseRecordedConfigurations(record)).toThrow(
+          "the earlier batch record holds no `results` list",
+        );
+      }
+    });
+
+    it("throws for a result that holds no configuration", () => {
+      for (const result of [null, {}, { configuration: [] }]) {
+        expect(() => parseRecordedConfigurations({ results: [result] }))
+          .toThrow(
+            "result 0 of the earlier batch record holds no `configuration`",
+          );
+      }
+    });
+  });
+
   describe("renderBatchReport()", () => {
     const reportOf = async (): Promise<string> => {
       const console_ = startFakeConsole({
@@ -3029,6 +3407,83 @@ describe("run-measurement-batch", () => {
     it("names the skills tree the runs scanned and how many skills it held", async () => {
       expect(await reportOf()).toContain(
         "- Skills root: /repo/skills (2 skills)",
+      );
+    });
+
+    /** A report of one measured-free task, with `extra` in its batch. */
+    const reportWith = (
+      configuration: SessionConfiguration,
+      extra: Partial<BatchResult> = {},
+    ): string =>
+      renderBatchReport({
+        suite: { label: "l", tasks: [{ id: "a", text: "do a thing" }] },
+        consoleUrl: "http://127.0.0.1:1",
+        indexUrl: null,
+        startedAt: "2026-08-28T21:00:00.000Z",
+        endedAt: "2026-08-28T21:00:01.000Z",
+        preflight: { kind: "answered", results: 1 },
+        posture: POSTURE,
+        importedPatternOrigins: {},
+        indexBefore: { kind: "unread", reason: "no index configured" },
+        indexAfter: { kind: "unread", reason: "no index configured" },
+        results: [{
+          task: { id: "a", text: "do a thing" },
+          sessionId: "s",
+          turnId: "t",
+          outcome: { kind: "unwitnessed", reason: "the stream went away" },
+          configuration,
+          measurementUnread: "the console named no run",
+        }],
+        ...extra,
+      });
+
+    it("names the sandbox runtime the runs ran on, and how it was chosen", () => {
+      expect(reportWith(NATIVE_CONFIGURATION)).toContain(
+        "- Sandbox runtime: runsc (default on darwin)",
+      );
+    });
+
+    it("names the sandbox runtime as not recorded for runs that recorded none", () => {
+      expect(reportWith({})).toContain(
+        "- Sandbox runtime: NOT RECORDED — no run recorded one",
+      );
+    });
+
+    it("says the batch is not comparable with an earlier one, naming each line that differs and each neither recorded", () => {
+      const report = reportWith(NATIVE_CONFIGURATION, {
+        comparedWith: {
+          report: "tonight/report.json",
+          differences: [{
+            factor: "Sandbox runtime",
+            earlier: "docker (named)",
+            later: "runsc (default on darwin)",
+          }],
+          unrecorded: ["CFC enforcement"],
+        },
+      });
+
+      expect(report).toContain(
+        "## Compared with an earlier batch\n\n**Not comparable with `tonight/report.json`.** These lines of the console's configuration read differently there and here:\n\n- Sandbox runtime: docker (named) there, runsc (default on darwin) here\n\nNeither batch recorded CFC enforcement, so nothing shows the two agree there.\n",
+      );
+    });
+
+    it("says every line reads the same as an earlier batch's, where none differs", () => {
+      const report = reportWith(NATIVE_CONFIGURATION, {
+        comparedWith: {
+          report: "tonight/report.json",
+          differences: [],
+          unrecorded: [],
+        },
+      });
+
+      expect(report).toContain(
+        "## Compared with an earlier batch\n\nEvery line of the console's configuration above reads the same in `tonight/report.json`. This compares those lines alone: the tasks, the index readings and the fabric server are for a reader to hold against that record.\n\n## Batch totals",
+      );
+    });
+
+    it("says nothing of an earlier batch where none was named", () => {
+      expect(reportWith(NATIVE_CONFIGURATION)).not.toContain(
+        "Compared with an earlier batch",
       );
     });
 

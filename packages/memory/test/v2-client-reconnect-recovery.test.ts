@@ -2,8 +2,18 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
-import { connect, type Transport } from "../v2/client.ts";
+import {
+  decodeMemoryBoundary,
+  encodeMemoryBoundary,
+  toDocumentPath,
+} from "../v2.ts";
+import {
+  connect,
+  connectionError,
+  loopback,
+  type Transport,
+  writeFailedError,
+} from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
   testSessionOpenAuthFactory,
@@ -13,7 +23,11 @@ import {
 /** A reconnectable transport using the real server's handshake and sessions. */
 function reconnectableTransport(
   server: Server,
-  options: { holdFirstTransact?: boolean } = {},
+  options: {
+    holdFirstTransact?: boolean;
+    loseFirstTransact?: boolean;
+    refuseWritesOf?: { localSeq: number; cause: unknown };
+  } = {},
 ) {
   let connection: ReturnType<Server["connect"]> | undefined;
   let receiver = (_payload: string) => {};
@@ -24,6 +38,8 @@ function reconnectableTransport(
   const transactSent = Promise.withResolvers<void>();
   let heldOnce = false;
   let holding = false;
+  let lostOnce = false;
+  let refusedWrites = 0;
   const reset = () => {
     connection?.close();
     connection = undefined;
@@ -46,7 +62,39 @@ function reconnectableTransport(
         });
         connection = opened;
       }
-      const message = decodeMemoryBoundary(payload) as { type: string };
+      const message = decodeMemoryBoundary(payload) as {
+        type: string;
+        commit?: { localSeq: number };
+      };
+      const refusal = options.refuseWritesOf;
+      if (
+        refusal && message.type === "transact" &&
+        message.commit?.localSeq === refusal.localSeq
+      ) {
+        // The socket refuses this commit's own write on an open connection,
+        // and the transport tears the connection down, as a socket transport
+        // does: the loss reported first, then the send rejected.
+        refusedWrites++;
+        const error = writeFailedError(
+          refusal.cause instanceof Error
+            ? refusal.cause.message
+            : "Memory websocket write failed",
+          refusal.cause,
+        );
+        reset();
+        closeReceiver(error);
+        throw error;
+      }
+      if (
+        options.loseFirstTransact && !lostOnce && message.type === "transact"
+      ) {
+        // The connection drops while this frame waits to be written, as a
+        // socket transport reports it: the close first, then the send.
+        lostOnce = true;
+        reset();
+        closeReceiver(new Error("test connection dropped"));
+        throw connectionError("Memory websocket changed before send");
+      }
       const held = options.holdFirstTransact && !heldOnce &&
         message.type === "transact";
       if (held) {
@@ -79,6 +127,9 @@ function reconnectableTransport(
     transactSent: transactSent.promise,
     get connections() {
       return connections;
+    },
+    get refusedWrites() {
+      return refusedWrites;
     },
     drop() {
       reset();
@@ -353,6 +404,197 @@ describe("v2-client-reconnect-recovery", () => {
       await expect(pending).resolves.toMatchObject({ seq: 1 });
       expect(attempts).toBe(2);
       expect(wire.connections).toBe(3);
+    } finally {
+      await client.close();
+      await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+
+  it("retains a commit whose send rejects with a `ConnectionError` as its connection drops", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-lost-send"),
+    });
+    const wire = reconnectableTransport(server, { loseFirstTransact: true });
+    const client = await connect({ transport: wire.transport });
+    const session = await client.mount(
+      "did:key:z6Mk-reconnect-lost-send",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    let pending: ReturnType<typeof session.transact> | undefined;
+    try {
+      pending = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:lost-send", value: { value: 1 } }],
+      });
+      pending.catch(() => {});
+      await expect(pending).resolves.toMatchObject({ seq: 1 });
+      expect(wire.connections).toBe(2);
+    } finally {
+      await client.close();
+      await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+  it("returns the stored verdict for an exact replay without overwriting a later write, and refuses an altered one", async () => {
+    // A retained commit can reach the server twice: its write can fail after
+    // its bytes have left, or its response can be lost after the server
+    // applied it. Replaying it is safe only because the server answers a
+    // repeated commit from its record.
+
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://replay-cannot-overwrite"),
+    });
+    const first = await connect({ transport: loopback(server) });
+    const second = await connect({ transport: loopback(server) });
+    const space = "did:key:z6Mk-replay-cannot-overwrite";
+    const setX = (localSeq: number, value: string) => ({
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set" as const, id: "of:x", value: { value } }],
+    });
+    try {
+      const writer = await first.mount(space, {}, testSessionOpenAuthFactory);
+      const other = await second.mount(space, {}, testSessionOpenAuthFactory);
+      expect((await writer.transact(setX(1, "A"))).seq).toBe(1);
+
+      // The same session and `localSeq` with different content is refused.
+      await expect(writer.transact(setX(1, "ALTERED"))).rejects.toThrow(
+        "commit replay mismatch",
+      );
+
+      // Another session overwrites the document with a commit of its own.
+      expect((await other.transact(setX(1, "B"))).seq).toBe(2);
+
+      // The exact original again gets its stored verdict and writes nothing.
+      expect(await writer.transact(setX(1, "A"))).toMatchObject({
+        seq: 1,
+        replayed: true,
+      });
+      const view = await other.watchSet([{
+        id: "x",
+        kind: "graph",
+        query: {
+          roots: [{ id: "of:x", selector: { path: [], schema: false } }],
+        },
+      }]);
+      expect(view.entities.find((entity) => entity.id === "of:x"))
+        .toMatchObject({ seq: 2, document: { value: "B" } });
+    } finally {
+      await first.close();
+      await second.close();
+      await server.close();
+    }
+  });
+  it("rejects a commit with the server's verdict when the verdict's message mentions a disconnect", async () => {
+    // A server verdict carries client-chosen text, here the name of the
+    // document whose read went stale. It is a verdict however it is worded, so
+    // the commit is rejected with it rather than kept for a replay.
+
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://verdict-mentions-disconnect"),
+    });
+    const first = await connect({ transport: loopback(server) });
+    const second = await connect({ transport: loopback(server) });
+    const space = "did:key:z6Mk-verdict-mentions-disconnect";
+    const id = "of:disconnect-button";
+    const setDocument = (
+      localSeq: number,
+      value: string,
+      readSeq?: number,
+    ) => ({
+      localSeq,
+      reads: {
+        confirmed: readSeq === undefined
+          ? []
+          : [{ id, path: toDocumentPath([]), seq: readSeq }],
+        pending: [],
+      },
+      operations: [{ op: "set" as const, id, value: { value } }],
+    });
+    try {
+      const writer = await first.mount(space, {}, testSessionOpenAuthFactory);
+      const other = await second.mount(space, {}, testSessionOpenAuthFactory);
+      await writer.transact(setDocument(1, "A"));
+      await other.transact(setDocument(1, "B"));
+
+      await expect(writer.transact(setDocument(2, "C", 1))).rejects.toThrow(
+        `stale confirmed read: ${id} at seq 1 conflicted with seq 2`,
+      );
+    } finally {
+      await first.close();
+      await second.close();
+      await server.close();
+    }
+  });
+  it("rejects a commit with its own write's error once that write has failed five times", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-refused-write"),
+    });
+    const writeFailure = new Error("frame refused by socket");
+    const wire = reconnectableTransport(server, {
+      refuseWritesOf: { localSeq: 1, cause: writeFailure },
+    });
+    const client = await connect({ transport: wire.transport });
+    const session = await client.mount(
+      "did:key:z6Mk-reconnect-refused-write",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    let pending: ReturnType<typeof session.transact> | undefined;
+    try {
+      pending = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:refused", value: { value: 1 } }],
+      });
+      await expect(pending).rejects.toBe(writeFailure);
+      expect(wire.refusedWrites).toBe(5);
+      await client.restoreConnection();
+      expect(client.isConnected()).toBe(true);
+    } finally {
+      await client.close();
+      await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+
+  it("rejects a commit whose own write fails five times with a value other than an `Error`, carrying that value as the cause", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-refused-write-value"),
+    });
+    const wire = reconnectableTransport(server, {
+      refuseWritesOf: { localSeq: 1, cause: "frame refused" },
+    });
+    const client = await connect({ transport: wire.transport });
+    const session = await client.mount(
+      "did:key:z6Mk-reconnect-refused-write-value",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    let pending: ReturnType<typeof session.transact> | undefined;
+    try {
+      pending = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:refused", value: { value: 1 } }],
+      });
+      const failure = await pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("Error");
+      expect((failure as Error).message).toBe("Memory websocket write failed");
+      expect((failure as Error).cause).toBe("frame refused");
+      expect(wire.refusedWrites).toBe(5);
     } finally {
       await client.close();
       await pending?.catch(() => {});

@@ -2570,19 +2570,44 @@ export type NodeFactory<T, R> =
 
 /**
  * Access a space created by `PatternFactory.inSpace()` grants beyond its
- * owner, by principal DID, or `"*"` for anyone. The grants
+ * creator, by principal DID, or `"*"` for anyone. A principal DID may be
+ * granted `OWNER`, and `"*"` may not. The identity the run acts for is an
+ * OWNER of the space whatever the grants name it. The grants
  * apply when the space is created, and the first call to name a space in a
  * run is the one that creates it; a space that already exists keeps its own
  * access-control document.
  */
 export type InSpaceGrants = Readonly<
-  { [principal in DID | "*"]?: "READ" | "WRITE" }
+  & { [principal in DID]?: "READ" | "WRITE" | "OWNER" }
+  & { "*"?: "READ" | "WRITE" }
 >;
 
 /** Options for `PatternFactory.inSpace()`. */
 export interface InSpaceOptions {
-  /** Access the created space grants beyond its owner. */
+  /** Access the created space grants beyond its creator. */
   grants?: InSpaceGrants;
+
+  /**
+   * Whether the pattern's result is the root of the space, the piece that
+   * opening the space shows. The call that creates the space reserves the
+   * root in the space's genesis commit, and the commit placing the result
+   * links it as the space's root unless one is linked already. A DID or a
+   * cell names a space that already exists, so `inSpace()` refuses `root`
+   * with either. A space's root is shared by everyone the space admits, so
+   * `inSpace()` also refuses `root` for a pattern whose result is not
+   * space-scoped.
+   */
+  root?: boolean;
+
+  /**
+   * The kind the space declares, sealed in the genesis commit of the space
+   * the call creates and never changed afterward, as `fabrichat-room` is. A
+   * kind is a lowercase word, or several joined by single hyphens, of at most
+   * 32 characters. A DID or a cell names a space that already exists, so
+   * `inSpace()` refuses `spaceKind` with either, and it refuses a kind of
+   * any other form.
+   */
+  spaceKind?: string;
 }
 
 export type PatternFactory<T, R> =
@@ -4879,6 +4904,31 @@ export type SpaceAccessOfFunction = (
 
 export declare const spaceAccessOf: SpaceAccessOfFunction;
 
+/**
+ * Returns the DID of the space `target`'s value lives in, after following any
+ * links it holds: so a pattern can name a space it holds a cell of, such as
+ * one a handler just created with `PatternFactory.inSpace()`, in data such as
+ * an invitation to it. A cell in the pattern's own space returns that space's
+ * DID.
+ *
+ * `undefined` means the answer is not known yet: `target` is `undefined`,
+ * which is what a value that cannot be read yet reads as, or the run has named
+ * an `inSpace()` target whose space is not resolved yet. The runtime resolves
+ * that space once the run ends, and runs the handler or computation again,
+ * discarding what the first run wrote. The run after it returns the new
+ * space's DID.
+ *
+ * Call it in a handler or a reactive computation (`computed()`, `lift()`).
+ * Calling it in a pattern body throws, since a pattern body's references name
+ * no space yet: wrap it in `computed()` instead. The answer does not depend on
+ * who asks, and carries no label of its own.
+ */
+export type SpaceOfFunction = (
+  target: AnyCell<unknown> | undefined,
+) => DID | undefined;
+
+export declare const spaceOf: SpaceOfFunction;
+
 /** The level `grantSpaceAccess()` sets an access-list entry to. */
 export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
 
@@ -4892,21 +4942,28 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * what is written after it, since adding a member changes no value's label.
  *
  * The acting principal, the event's actor, must hold `OWNER` in the space, and
- * the event must be a trusted gesture: a person's action on a rendered UI.
- * `principal` must be a DID other than the actor's own, the space's own, and
- * `"*"`. The space may not be the actor's own Home space. Lowering the space's
- * last concrete `OWNER` is refused. A runtime
+ * the event must be a trusted gesture: a person's action on a rendered UI or
+ * on a native host's reviewed control. `principal` must be a DID other than
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Lowering the space's last concrete `OWNER` is
+ * refused. A runtime
  * cannot know the deployment's service DIDs, or the identities its serving
  * runtimes act through, so it does not refuse one of those as `principal`.
  *
  * The change commits as a commit of its own, before the handler's other
- * writes commit. If the handler's writes then fail, the change stands.
+ * writes commit. If the handler's writes then fail, the change stands. On a
+ * serving runtime it commits when the serving loop commits the handler's run,
+ * still ahead of the run's writes; a run the serving loop withdraws before
+ * that commit changes nothing, and its event runs again. A client's
+ * speculative echo of a handler the serving loop runs changes nothing.
  *
- * Available only in a handler on a client runtime, and throws anywhere else:
- * a serving runtime cannot yet check that the event's actor holds `OWNER`.
- * Every refusal throws. One the handler lets escape drops its whole
- * transaction; the call throws before staging anything, so one the handler
- * catches leaves nothing staged for that call.
+ * Available only in a handler, on a client or a serving runtime alike, and
+ * throws anywhere else. Every refusal the call can see throws. One the
+ * handler lets escape drops its whole transaction; the call throws before
+ * staging anything, so one the handler catches leaves nothing staged for that
+ * call. A refusal found only once the handler returns fails its whole run,
+ * but for one caused by a concurrent change to the list, after which the
+ * handler runs again for the same event.
  */
 export declare function grantSpaceAccess(
   target: AnyCell<unknown>,
@@ -4927,13 +4984,19 @@ export declare function grantSpaceAccess(
  * refused.
  *
  * The change commits as a commit of its own, before the handler's other
- * writes commit. If the handler's writes then fail, the change stands.
+ * writes commit. If the handler's writes then fail, the change stands. On a
+ * serving runtime it commits when the serving loop commits the handler's run,
+ * still ahead of the run's writes; a run the serving loop withdraws before
+ * that commit changes nothing, and its event runs again. A client's
+ * speculative echo of a handler the serving loop runs changes nothing.
  *
- * Available only in a handler on a client runtime, and throws anywhere else:
- * a serving runtime cannot yet check that the event's actor holds `OWNER`.
- * Every refusal throws. One the handler lets escape drops its whole
- * transaction; the call throws before staging anything, so one the handler
- * catches leaves nothing staged for that call.
+ * Available only in a handler, on a client or a serving runtime alike, and
+ * throws anywhere else. Every refusal the call can see throws. One the
+ * handler lets escape drops its whole transaction; the call throws before
+ * staging anything, so one the handler catches leaves nothing staged for that
+ * call. A refusal found only once the handler returns fails its whole run,
+ * but for one caused by a concurrent change to the list, after which the
+ * handler runs again for the same event.
  */
 export declare function revokeSpaceAccess(
   target: AnyCell<unknown>,

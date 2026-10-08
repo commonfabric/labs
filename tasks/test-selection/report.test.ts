@@ -329,15 +329,26 @@ describe("report", () => {
     });
 
     it("separates each reason a run did not reach a test", () => {
-      const view = knows(["bakes"], {
+      const view = knows(["bakes", "slices", "proves"], {
         withheld: new Map([[key("kneads"), "flaky" as const]]),
+        heldWithUnit: new Set([key("proves")]),
+        unschedulable: new Set([key("slices")]),
         flakes: new Map([
           [key("kneads"), undefined],
           [key("bakes"), undefined],
+          [key("slices"), undefined],
+          [key("proves"), undefined],
         ]),
       });
       expect(selectionOf(view, key("kneads"))).toBe("withheld-flaky");
+      expect(selectionOf(view, key("proves"))).toBe("withheld-unit");
       expect(selectionOf(view, key("bakes"))).toBe("not-selected");
+      expect(selectionOf(view, key("slices"))).toBe("unschedulable");
+      const crowded = { ...view, crowded: true };
+      expect(selectionOf(crowded, key("bakes"))).toBe("crowded-out");
+      expect(selectionOf(crowded, key("slices"))).toBe("unschedulable");
+      expect(selectionOf(crowded, key("kneads"))).toBe("withheld-flaky");
+      expect(selectionOf(crowded, key("proves"))).toBe("withheld-unit");
     });
 
     // Saying the selector passed over a test needs a manifest that holds
@@ -1245,7 +1256,7 @@ describe("report", () => {
       expect(buildReport(everything())).toEqual(first);
     });
 
-    it("says the selector traded the coverage away, not that it was missed", () => {
+    it("says the lanes ran other tests, not that it was missed", () => {
       // It is not a judgement, because the system chose not to run the
       // test.
 
@@ -1257,9 +1268,58 @@ describe("report", () => {
         })),
         context,
       )!;
-      expect(body).toContain("Test selection traded that coverage away");
-      expect(body).toContain("nothing here was missed");
+      expect(body).toContain(
+        "filled the rest of their budget with other tests, and this was not " +
+          "one of them",
+      );
+      expect(body).not.toContain("no room");
+      expect(body).not.toMatch(/\bscore\b/);
       expect(body).not.toMatch(/\b(should have|failed to|forgot)\b/i);
+    });
+
+    it("says the mandatory tests left no room, where they took the budget", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], { crowded: true }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("nothing about this test decided that");
+      expect(body).toContain("left no room in the lanes for anything else");
+      expect(body).not.toContain("other tests, and this was not one");
+    });
+
+    it("says a test was held back with its unit", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], {
+            heldWithUnit: new Set([key("proves")]),
+            crowded: true,
+          }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("holds back another test in that unit");
+      expect(body).not.toContain("no room");
+    });
+
+    it("says no lane can hold a test the packing found too costly", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], {
+            unschedulable: new Set([key("proves")]),
+          }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("no lane can hold it");
+      expect(body).not.toContain("other tests, and this was not one");
     });
 
     it("labels a test the store knows disagrees with itself", () => {
@@ -1459,7 +1519,7 @@ describe("report", () => {
         context,
       )!;
       expect(body).toContain("This pull request ran it, and it passed there");
-      expect(body).not.toContain("traded that coverage away");
+      expect(body).not.toContain("this was not one of them");
     });
 
     it("says so when the pull request's own run could not be read", () => {

@@ -119,6 +119,37 @@ the handle, and the room once its last handle is gone.
 A server that does not advertise `presenceV1` makes the join reject; nothing is
 sent to it.
 
+## Sending events
+
+`CellHandle.send()` sends an event to the stream a handle names and logs a
+refusal; `sendStrict()` rejects with it. Either resolves once the runtime has
+taken the event, which says nothing of its handling: a write the stream's
+handler makes that the runtime refuses, such as one whose UI contract the event
+does not satisfy, resolves `sendStrict()` all the same.
+`sendStrict(event, { awaitHandling: true })` waits for the handler's run as
+well, and rejects with the reason when that run's commit is refused, when it
+throws, and when the event is dropped or refused admission. Under server
+execution the run it waits for is the served one, whose outcome reaches the
+worker as the consequence the serving loop recorded for the event.
+
+`CellHandle.sendReviewed(event, { surface, action })` sends a reviewed action
+from a control the host draws itself, bound to one trusted surface and one
+action. The worker stamps the event with `native` provenance for them, replacing
+any `provenance` the payload carries, and marks it renderer-trusted, so a write
+gated on that surface and action commits as it would for a reviewed gesture on
+the pattern's rendered surface. It always waits for the handler's run, as
+`sendStrict()` does with `awaitHandling`, and rejects with the reason on the
+same refusals. The event is a trusted gesture, as a DOM event on the pattern's
+rendered surface is, so it meets what `grantSpaceAccess()` and
+`revokeSpaceAccess()` require of a handler's event; the change they stage is
+still held to every other check.
+[Host embedding, §11](../../docs/features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)
+records the principle that a native reviewed act counts wherever a trusted
+gesture does. `sendReviewed()` mints trusted events, so it is for the host's own
+code alone;
+[host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
+says what it owes in exchange.
+
 ## Refused event admission
 
 The `eventintentoutcome` event reports a refused event admission to every
@@ -137,18 +168,21 @@ attention details.
 `RuntimeClient.retrySpaceAccess(space)` asks the memory server once more for a
 space it refused the runtime, and resolves once the server has decided. It is
 for a host with word that the runtime's principal was granted access, such as a
-notice naming the space: the runtime never asks again on its own, since the
-refusal turns on an access list it cannot read. The retry goes through the
-memory server's ordinary session admission, so it can admit only what that
-admission would. An admission clears the refusal, tells the render boundaries
-and every `spaceAccess(target)` computation that read it, and repeats the loads
-the refusal failed. A refusal leaves the space refused, and the call resolves
-all the same; any other failure rejects it. A space the runtime has not opened
-is left alone. A call made while a retry of the same space is in flight shares
-that retry rather than asking again, and so does the Retry button the renderer
-puts on a refused space's "Access unavailable" placeholder, which reaches the
-same retry from inside the worker; its placeholder reads "Retrying…" while any
-retry of its space is in flight. The shell calls it when the person navigates
-into a space `spaceaccesslost` named, and when the page regains focus or becomes
-visible. [`docs/features/space-access.md`](../../docs/features/space-access.md)
-says how the answer is kept current.
+notice naming the space. The runtime asks again on its own only when the memory
+server tells it, with `session/admissible`, that a grant may admit it, since the
+refusal otherwise turns on an access list it cannot read; a routed connection,
+and a connection the runtime closed on its first refusal of a space, hear no
+such word. The retry goes through the memory server's ordinary session
+admission, so it can admit only what that admission would. An admission clears
+the refusal, tells the render boundaries and every `spaceAccess(target)`
+computation that read it, and repeats the loads the refusal failed. A refusal
+leaves the space refused, and the call resolves all the same; any other failure
+rejects it. A space the runtime has not opened is left alone. A call made while
+a retry of the same space is in flight shares that retry rather than asking
+again, and so does the Retry button the renderer puts on a refused space's
+"Access unavailable" placeholder, which reaches the same retry from inside the
+worker; its placeholder reads "Retrying…" while any retry of its space is in
+flight. The shell calls it when the person navigates into a space
+`spaceaccesslost` named, and when the page regains focus or becomes visible.
+[`docs/features/space-access.md`](../../docs/features/space-access.md) says how
+the answer is kept current.

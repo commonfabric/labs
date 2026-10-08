@@ -143,6 +143,7 @@ describe("memory v2 flags", () => {
 
     assertEquals(getMemoryProtocolFlags(), {
       genesisRoot: true,
+      spaceKind: true,
       modernCellRep: false,
       stableExpressionResultIds: true,
       commitPreconditions: false,
@@ -163,6 +164,7 @@ describe("memory v2 flags", () => {
       presenceV1: true,
       sessionClose: true,
       connectionAuth: true,
+      admissionNotice: true,
       routedAuthV1: false,
       syncSchemaTableV2: false,
     });
@@ -174,6 +176,7 @@ describe("memory v2 flags", () => {
 
     assertEquals(getMemoryProtocolFlags(), {
       genesisRoot: true,
+      spaceKind: true,
       modernCellRep: true,
       stableExpressionResultIds: true,
       commitPreconditions: true,
@@ -193,6 +196,7 @@ describe("memory v2 flags", () => {
       presenceV1: true,
       sessionClose: true,
       connectionAuth: true,
+      admissionNotice: true,
       routedAuthV1: false,
       syncSchemaTableV2: true,
     });
@@ -226,6 +230,7 @@ describe("memory v2 flags", () => {
         presenceV1: true,
         sessionClose: true,
         connectionAuth: true,
+        admissionNotice: true,
         routedAuthV1: false,
       },
       {
@@ -253,6 +258,7 @@ describe("memory v2 flags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     ));
@@ -267,6 +273,14 @@ describe("parseMemoryProtocolFlags", () => {
       true,
     );
     assertEquals(parseMemoryProtocolFlags({ genesisRoot: "true" }), null);
+  });
+  it("requires an explicit space-kind capability", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.spaceKind, false);
+    assertEquals(
+      parseMemoryProtocolFlags({ spaceKind: true })?.spaceKind,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({ spaceKind: "true" }), null);
   });
   it("negotiates view replication as an optional server-execution capability", () => {
     try {
@@ -315,6 +329,7 @@ describe("parseMemoryProtocolFlags", () => {
   it("accepts the modernCellRep key", () => {
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: true }), {
       genesisRoot: false,
+      spaceKind: false,
       modernCellRep: true,
       stableExpressionResultIds: false,
       commitPreconditions: false,
@@ -334,10 +349,12 @@ describe("parseMemoryProtocolFlags", () => {
       presenceV1: false,
       sessionClose: false,
       connectionAuth: false,
+      admissionNotice: false,
       routedAuthV1: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
+      spaceKind: false,
       modernCellRep: false,
       stableExpressionResultIds: false,
       commitPreconditions: false,
@@ -357,6 +374,7 @@ describe("parseMemoryProtocolFlags", () => {
       presenceV1: false,
       sessionClose: false,
       connectionAuth: false,
+      admissionNotice: false,
       routedAuthV1: false,
     });
   });
@@ -368,6 +386,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: true,
@@ -387,6 +406,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -417,6 +437,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -429,6 +450,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -446,6 +468,7 @@ describe("parseMemoryProtocolFlags", () => {
       parseMemoryProtocolFlags({ messageCompressionV1: true }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -465,6 +488,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -477,6 +501,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -496,6 +521,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -516,6 +542,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -535,6 +562,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -548,6 +576,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -567,6 +596,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -577,6 +607,7 @@ describe("parseMemoryProtocolFlags", () => {
       parseMemoryProtocolFlags({ entityIdListing: true }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -596,6 +627,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -612,10 +644,12 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       }),
       {
         genesisRoot: false,
+        spaceKind: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -635,9 +669,19 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
+  });
+
+  it("accepts the admissionNotice capability key", () => {
+    assertEquals(
+      parseMemoryProtocolFlags({ admissionNotice: true })?.admissionNotice,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({})?.admissionNotice, false);
+    assertEquals(parseMemoryProtocolFlags({ admissionNotice: "true" }), null);
   });
 
   it("rejects values that are not a recognizable flags shape", () => {

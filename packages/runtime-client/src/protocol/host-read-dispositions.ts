@@ -53,6 +53,12 @@ const write = {
   kind: "no-cell-value",
   why: "a write or an event the host sends; the answer carries no value",
 } as const;
+const send = {
+  kind: "ungated",
+  why: "an event the host sends; the refusal of a handling it waits for " +
+    "carries the reason, which can quote a value, as an error report's " +
+    "message can",
+} as const;
 const setting = {
   kind: "no-cell-value",
   why: "a diagnostic setting or counter",
@@ -72,7 +78,8 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.CellInitialize]: DECIDED,
   [RequestType.CellSet]: write,
   [RequestType.CellPush]: write,
-  [RequestType.CellSend]: write,
+  [RequestType.CellSend]: send,
+  [RequestType.CellSendReviewed]: send,
   [RequestType.CellSubscribe]: {
     kind: "no-cell-value",
     why: "whether a subscription opened; its values arrive as cell updates",
@@ -193,7 +200,6 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.SetBreakpoints]: setting,
   [RequestType.UploadBlob]: write,
   [RequestType.GetSpaceRootPattern]: reference,
-  [RequestType.RecreateSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
   [RequestType.PieceGet]: reference,
   [RequestType.PieceGetSlug]: {

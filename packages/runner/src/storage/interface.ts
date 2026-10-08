@@ -374,19 +374,37 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * Creates a space and returns its DID, once the space's genesis commit is
    * confirmed. The space's key is generated from random data, and signs one
    * commit that writes `acl` as the space's access-control document and, when
-   * `root` is given, reserves the space's root pattern. The key is used for
-   * nothing else, and is never stored, returned, or logged.
+   * `genesis.root` is given, reserves the space's root pattern, and when
+   * `genesis.spaceKind` is given, declares the space's kind. The key is used
+   * for nothing else, and is never stored, returned, or logged.
    *
    * `acl` must name a concrete OWNER, and must grant this manager's signer at
-   * least READ if this manager will open the space. `root` requires a host
-   * that supports root reservations; its complete source, cause, arguments,
-   * and attached source roots are snapshotted in the genesis receipt, and a
-   * later mount that declares a root intent must match it.
+   * least READ if this manager will open the space. `genesis.root` requires a
+   * host that supports root reservations; its complete source, cause,
+   * arguments, and attached source roots are snapshotted in the genesis
+   * receipt, and a later mount that declares a root intent must match it.
+   * `genesis.spaceKind` requires a host that advertises `spaceKind`, and is
+   * sealed the same way (`docs/features/space-kinds.md`).
    *
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
-  createSpace?(acl: ACL, root?: GenesisRoot): Promise<MemorySpace>;
+  createSpace?(
+    acl: ACL,
+    genesis?: { root?: GenesisRoot; spaceKind?: string },
+  ): Promise<MemorySpace>;
+
+  /**
+   * The kind `space` declares in its genesis commit, or `undefined` when it
+   * declares none (`docs/features/space-kinds.md`). Opens the space, so it
+   * resolves once the memory server has admitted this manager's signer to
+   * it. Optional: emulated/test managers may omit it.
+   *
+   * @throws If the space cannot be opened, as when its access list admits
+   *   this manager's signer to nothing, or if the memory server does not
+   *   advertise `spaceKind`, which leaves the kind unknown rather than absent.
+   */
+  spaceKind?(space: MemorySpace): Promise<string | undefined>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
@@ -656,7 +674,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * that the principal was granted access. The other trigger of the session
    * remount besides `noteSpaceAclChanged()`: it opens the session again
    * through the same `session.open` admission the first attempt went
-   * through, so it can admit only what that admission would.
+   * through, so it can admit only what that admission would. The v2
+   * StorageManager also calls it itself, on a `session/admissible` naming its
+   * principal.
    *
    * Resolves once the server has decided. An admission clears
    * `spaceAccessError()`, notifies `subscribeSpaceAccessChange()` observers,

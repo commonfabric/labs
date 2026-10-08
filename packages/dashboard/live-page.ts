@@ -5,14 +5,16 @@
  *
  * A route marked `live` serves a page built by `livePage`, which carries
  * `LIVE_PAGE_CLIENT` and keeps everything that changes inside its `<main>`
- * element. The page opens an event stream naming itself,
+ * element, apart from the tab's favicon. The page opens an event stream naming itself,
  * `/events?page=<its path and query>`. On every serving tick the server sends
  * a heartbeat down that stream and renders the page again, and it sends the
  * new markup whenever that differs from what it sent before. The page brings
  * its `<main>` up to date with the one in the new markup (`updateMain`). Every
  * page event also names the version the server is serving, and a page built
  * by a different version reloads instead, so the styles and script outside
- * `<main>` follow a deployment too.
+ * `<main>` follow a deployment too. A page whose subject has a status shows
+ * it in the tab's favicon, which the page takes from each new rendering
+ * (`updateIcon`).
  *
  * The page reopens its stream the way the dashboard does (`stream-client.ts`),
  * and its badge says whether it can hear the server.
@@ -20,6 +22,7 @@
 
 import { TICK_MS } from "./config.ts";
 import { DETAIL_PAGE_STYLES } from "./detail-page.ts";
+import { faviconHref } from "./favicon.ts";
 import {
   DASHBOARD_THEME_CLIENT,
   DASHBOARD_THEME_HEAD,
@@ -29,10 +32,11 @@ import {
 import {
   LIVE_PAGE_UPDATE,
   reconcileMain,
+  updateIcon,
   updateMain,
 } from "./live-page-client.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
-import type { Route } from "./types.ts";
+import type { Route, Status } from "./types.ts";
 import { SERVING_VERSION } from "./version.ts";
 
 /**
@@ -190,6 +194,7 @@ export const LIVE_PAGE_CLIENT = `<script>{
   const followUpdates = ${followUpdates.toString()};
   const reconcileMain = ${reconcileMain.toString()};
   const updateMain = ${updateMain.toString()};
+  const updateIcon = ${updateIcon.toString()};
   const paint = () => {
     const hearing = updates.check(Date.now());
     const badge = document.getElementById('live-badge');
@@ -206,10 +211,11 @@ export const LIVE_PAGE_CLIENT = `<script>{
       page: (data) => {
         const page = JSON.parse(data);
         if (page.version !== VERSION) { location.reload(); return; }
-        const next = new DOMParser().parseFromString(page.html, 'text/html')
-          .querySelector('main');
+        const fresh = new DOMParser().parseFromString(page.html, 'text/html');
+        const next = fresh.querySelector('main');
         const main = document.querySelector('main');
         if (next && main) updateMain(main, next);
+        updateIcon(document, fresh);
       },
     },
   );
@@ -221,8 +227,10 @@ export const LIVE_PAGE_CLIENT = `<script>{
 
 /** What one rendering of a live page shows, which `livePage` frames. */
 export interface LivePageContent {
-  /** The page's name, in its tab and at its top. */
+  /** The page's name, in its tab and, unless `heading` names it, at its top. */
   title: string;
+  /** The name at the top of the page, when it is not the page's own. */
+  heading?: string;
   /** The styles the page needs beyond those every drill-down page has. */
   styles: string;
   /** The markup beside the name: what the page shows, and its age. */
@@ -231,25 +239,35 @@ export interface LivePageContent {
   body: string;
   /** The page's own script, as source, run before it follows updates. */
   script?: string;
+  /**
+   * How the page's subject stands, which the tab's favicon shows as the
+   * dashboard's does. A page with no status, or a gray one, shows an empty
+   * favicon.
+   */
+  status?: Status;
 }
 
 /**
  * The whole of a live page: the drill-down page's frame and theme, the name
  * and the badge at the top, and `content`, with everything that changes from
- * one rendering to the next inside `<main>`.
+ * one rendering to the next inside `<main>` apart from the favicon.
  */
 export function livePage(content: LivePageContent): string {
   const script = content.script === undefined
     ? ""
     : `<script>{${content.script}}</script>\n`;
+  const icon = content.status === undefined || content.status === "unknown"
+    ? "data:,"
+    : faviconHref(content.status);
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${content.title}</title>
+<link rel="icon" href="${icon}">
 ${DASHBOARD_THEME_HEAD}
 <style>
 ${DETAIL_PAGE_STYLES}
 ${LIVE_PAGE_STYLES}
 ${content.styles}
 </style></head><body><main>
-  <div class="top"><a class="back" href="/">← dashboard</a><b>${content.title}</b>${LIVE_PAGE_BADGE}<span>${content.head}</span></div>
+  <div class="top"><a class="back" href="/">← dashboard</a><b>${content.heading ?? content.title}</b>${LIVE_PAGE_BADGE}<span>${content.head}</span></div>
   ${content.body}
 </main>
 ${dashboardThemeToggle()}

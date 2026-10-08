@@ -624,22 +624,20 @@ function pieceNewMain(commandWords: string[]): string | undefined {
  * verb under it.
  *
  * A pair rather than a verb, because a verb alone does not name a command:
- * `set` acts on a cell and `set-home` on a space, so a hook matching a verb
- * under whichever noun precedes it advises on `cf space set` and `cf cell
- * new`, neither of which the CLI accepts. A pair joins this set when it gains
- * a branch below.
+ * `set` acts on a cell and `new` on a piece, so a hook matching a verb under
+ * whichever noun precedes it advises on `cf piece set` and `cf cell new`,
+ * neither of which the CLI accepts. A pair joins this set when it gains a
+ * branch below.
  *
- * The bare `set` and `piece set-home` are superseded spellings that still
- * answer, and the guidance is the same one their blessed spellings get. `get`
- * and `call` are spelled two ways too but carry no guidance, so listing them
- * would widen what the hook accepts without changing what it answers.
+ * The bare `set` is a superseded spelling that still answers, and the guidance
+ * is the same one its blessed spelling gets. `get` and `call` are spelled two
+ * ways too but carry no guidance, so listing them would widen what the hook
+ * accepts without changing what it answers.
  */
 const GUIDED_COMMANDS = new Set([
   "piece new",
   "piece setsrc",
   "piece inspect",
-  "piece set-home",
-  "space set-home",
   "cell set",
   "set",
 ]);
@@ -702,9 +700,6 @@ function suggestionForCommandSegment(words: string[]): string {
   }
   if (verb === "setsrc") {
     return `${testSuggestion} Next, use 'cf piece step' to trigger re-evaluation, then 'cf piece inspect' to verify.`;
-  }
-  if (verb === "set-home" && !commandWords.includes("--reset")) {
-    return `${testSuggestion} Next, open the home space and verify the custom home pattern.`;
   }
   if (verb === "set") {
     return "State set. Run 'cf piece step' to trigger re-evaluation before reading computed values.";

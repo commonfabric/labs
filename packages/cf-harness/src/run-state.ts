@@ -50,6 +50,10 @@ import type {
 } from "./diagnostics.ts";
 import { selectPrimaryHarnessFailure } from "./diagnostics.ts";
 import type {
+  SandboxRuntimeChoice,
+  SandboxRuntimeKind,
+} from "./sandbox/types.ts";
+import type {
   HarnessFabricCfcFlowLabelsSource,
   HarnessModelAuthSource,
   HarnessModelProviderId,
@@ -181,6 +185,25 @@ export interface HarnessRunState {
   cancelReason?: string;
 
   cfcEnforcementMode: CfcEnforcementMode;
+
+  /**
+   * The sandbox runtime the run executes on, written as its engine is built,
+   * before anything runs in a sandbox, so that a resume can be held to it
+   * whatever became of the run afterwards. Absent from a record written
+   * before runs recorded it; such a run's runtime is the kind its capability
+   * snapshot describes, where it has one.
+   */
+  sandboxRuntime?: SandboxRuntimeKind;
+
+  /**
+   * How an entrypoint chose that runtime when the run started: named, and by
+   * what, or its platform's default, written beside it, so that a run refused
+   * before its sandbox is described still says. Absent for a run whose engine
+   * was given no choice, and from a record written before runs recorded it,
+   * which takes the choice of the engine that next resumes it.
+   */
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
+
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
   currentDir: string;
@@ -297,6 +320,8 @@ export interface CreateHarnessRunStateOptions {
   cancelReason?: string;
 
   cfcEnforcementMode: CfcEnforcementMode;
+  sandboxRuntime?: SandboxRuntimeKind;
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
   currentDir: string;
@@ -379,6 +404,12 @@ export const createHarnessRunState = (
       ? { cancelReason: options.cancelReason }
       : {}),
     cfcEnforcementMode: options.cfcEnforcementMode,
+    ...(options.sandboxRuntime !== undefined
+      ? { sandboxRuntime: options.sandboxRuntime }
+      : {}),
+    ...(options.sandboxRuntimeChoice !== undefined
+      ? { sandboxRuntimeChoice: structuredClone(options.sandboxRuntimeChoice) }
+      : {}),
     ...(options.fabricSessionCfc !== undefined
       ? { fabricSessionCfc: options.fabricSessionCfc }
       : {}),

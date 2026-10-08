@@ -1075,18 +1075,6 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return response.space;
   }
 
-  async recreateSpaceRootPattern(
-    space: DID,
-  ): Promise<PieceHandle<NameSchema>> {
-    const response = await this.#conn.request<
-      RequestType.RecreateSpaceRootPattern
-    >({
-      type: RequestType.RecreateSpaceRootPattern,
-      space,
-    });
-    return new PieceHandle<NameSchema>(this, response.piece);
-  }
-
   async getPiece<T = unknown>(
     pieceId: string,
     space: DID,

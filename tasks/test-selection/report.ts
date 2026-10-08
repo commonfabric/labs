@@ -18,10 +18,10 @@
  * observation about it. The comment's subject is a commit and a test,
  * and no author is named. Nothing is counted per author, per team, or
  * per anything, and no history is kept anywhere. A test the selector
- * declined to run is described as coverage this design traded away,
- * because the author did not miss it. A test the store has seen
- * disagreeing with itself is labelled as one, with the evidence
- * behind the label. And every note says what to do, in a comment that
+ * declined to run is described by what the plan the lanes computed says
+ * about leaving it out, which is never something the author missed. A
+ * test the store has seen disagreeing with itself is labelled as one,
+ * with the evidence behind the label. And every note says what to do, in a comment that
  * is edited in place rather than repeated.
  */
 
@@ -177,6 +177,18 @@ export interface PullRequestView {
   withheld: ReadonlyMap<string, WithheldReason>;
 
   /**
+   * The identities the packing held back because their unit runs whole
+   * and holds a test that manifest withholds.
+   */
+  heldWithUnit: ReadonlySet<string>;
+
+  /** The identities the packing found no lane could hold. */
+  unschedulable: ReadonlySet<string>;
+
+  /** Whether the packing placed nothing beyond the tests that had to run. */
+  crowded: boolean;
+
+  /**
    * How often the store saw each identity disagree with itself, and over
    * how many runs. Every identity the manifest holds is a key here, so
    * membership is also the answer to whether the store has ever seen a
@@ -204,6 +216,9 @@ export function unknownPullRequest(): PullRequestView {
     manifest: false,
     selected: new Set(),
     withheld: new Map(),
+    heldWithUnit: new Set(),
+    unschedulable: new Set(),
+    crowded: false,
     flakes: new Map(),
     catches: new Map(),
     units: new Map(),
@@ -216,6 +231,9 @@ export type Selection =
   | "failed-there"
   | "skipped-there"
   | "withheld-flaky"
+  | "withheld-unit"
+  | "unschedulable"
+  | "crowded-out"
   | "not-selected"
   | "unrecorded"
   | "did-not-run"
@@ -418,11 +436,13 @@ export function selectionOf(
   // not say either way.
   const withheld = view.withheld.get(key);
   if (withheld === "flaky") return "withheld-flaky";
+  if (view.heldWithUnit.has(key)) return "withheld-unit";
   // With a manifest, the packing says whether the test was to have run:
   // an identity the packing reached, and one the store has never seen,
   // are both identities that run.
   if (view.manifest && view.flakes.has(key) && !view.selected.has(key)) {
-    return "not-selected";
+    if (view.unschedulable.has(key)) return "unschedulable";
+    return view.crowded ? "crowded-out" : "not-selected";
   }
   if (there === "skip") return "skipped-there";
   return view.manifest ? "unrecorded" : "did-not-run";
@@ -856,10 +876,22 @@ const SELECTION_PROSE: Record<ReportedSelection, string> = {
   "skipped-there": "This pull request's own run reached it and skipped " +
     "it, and no manifest says selection is why, so the test skips itself " +
     "under some condition that held there and not here.",
-  "not-selected": "This pull request did not run it. Test selection traded " +
-    "that coverage away deliberately: the test was not worth its time " +
-    "against the budget, so nothing here was missed. This failure raises " +
-    "its score, so the next change in this area will run it.",
+  "not-selected": "This pull request did not run it. The lanes ran the " +
+    "tests that had to run and filled the rest of their budget with other " +
+    "tests, and this was not one of them.",
+  "crowded-out": "This pull request did not run it, and nothing about " +
+    "this test decided that. The tests that had to run, which are the " +
+    "ones the change's edits reach, the ones the coverage gate forces, and " +
+    "the ones the store has never seen, left no room in the lanes for " +
+    "anything else.",
+  "withheld-unit": "This pull request did not run it: its unit runs as " +
+    "a whole, and the store holds back another test in that unit as too " +
+    "flaky to judge a change by, so a pull request runs the unit only " +
+    "where it is one that must run.",
+  unschedulable: "This pull request did not run it: no lane can hold it, " +
+    "because what a lane running nothing else would pay for it, its " +
+    "suite's and unit's fixed charges included, is past the bound a lane " +
+    "is packed to finish inside.",
   "withheld-flaky": "This pull request could not have run it: the store " +
     "holds it back as too flaky to judge a change by. It runs on the " +
     "default branch anyway, where no execution of it passed at this " +

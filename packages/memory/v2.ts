@@ -1061,16 +1061,45 @@ export type CommitPrecondition =
     valueHash: string | null;
   };
 
-/** A generic root reserved atomically with a fresh space's ACL. */
-export type GenesisRoot = {
+/**
+ * A generic root reserved atomically with a fresh space's ACL. The root lives
+ * at the address `cause` derives in the space. Whether the reservation names a
+ * `source` says who creates it.
+ */
+export type GenesisRoot = SourcedGenesisRoot | CreatorPlacedGenesisRoot;
+
+/**
+ * A root reservation whoever ensures the space's root creates from a
+ * deployment-local `system:` source.
+ */
+export type SourcedGenesisRoot = {
   source: string;
   sourceRoots?: string[];
   cause: string;
   argument?: Record<string, FabricValue>;
 };
 
+/**
+ * A root reservation the space's creator places itself, so it names nothing to
+ * create the root from.
+ */
+export type CreatorPlacedGenesisRoot = {
+  source?: undefined;
+  sourceRoots?: undefined;
+  cause: string;
+  argument?: undefined;
+};
+
 export type ClientCommit = {
   genesisRoot?: GenesisRoot;
+
+  /**
+   * The kind the space declares, sealed with its access list. Admitted only
+   * on a space's genesis commit, as `genesisRoot` is; see
+   * `docs/features/space-kinds.md`.
+   */
+  spaceKind?: string;
+
   localSeq: number;
   reads: {
     confirmed: ConfirmedRead[];
@@ -1103,12 +1132,24 @@ export type SessionOpenResult = {
   resumed?: boolean;
   sync?: SessionSync;
 
+  /** The kind the space's genesis commit declares, when it declares one. */
+  spaceKind?: string;
+
   /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
 };
 
 export type MemoryProtocolFlags = {
   genesisRoot?: boolean;
+
+  /**
+   * The server seals a kind a space declares in its genesis commit, and
+   * reports it in every `session.open` result. Build-inherent, so a peer of
+   * this version always advertises it. Absent (an older server) parses to
+   * false, and a client then neither declares a kind nor reads one there.
+   */
+  spaceKind?: boolean;
+
   modernCellRep: boolean;
 
   /**
@@ -1243,6 +1284,17 @@ export type MemoryProtocolFlags = {
    * false, and a client then signs each `session.open`.
    */
   connectionAuth?: boolean;
+
+  /**
+   * The peer takes part in `session/admissible` (04-protocol.md §4.2.2). A
+   * client advertising it may be sent the notice; a server advertising it
+   * sends one to such a client, on any connection but a routed one.
+   * Build-inherent, so a peer of this version always advertises it. Absent
+   * (an older peer) parses to false, and the server then sends that
+   * connection none.
+   */
+  admissionNotice?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 };
@@ -1252,6 +1304,7 @@ export type MemoryProtocolFlags = {
  */
 export type WireMemoryProtocolFlags = {
   genesisRoot?: boolean;
+  spaceKind?: boolean;
   modernCellRep?: boolean;
 
   /** Expression result identity contract required for session admission. */
@@ -1275,6 +1328,7 @@ export type WireMemoryProtocolFlags = {
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
+  admissionNotice?: boolean;
   routedAuthV1?: boolean;
 };
 
@@ -1306,6 +1360,10 @@ export type SessionOpenAuthMetadata = {
 export type SessionDescriptor = {
   /** Assert the immutable custom-root reservation when mounting or resuming. */
   genesisRoot?: GenesisRoot;
+
+  /** Assert the immutable declared kind when mounting or resuming. */
+  spaceKind?: string;
+
   sessionId?: SessionId;
   seenSeq?: number;
   sessionToken?: SessionToken;
@@ -2088,6 +2146,17 @@ export type SessionRevokedMessage = {
   reason: "taken-over" | "unauthorized";
 };
 
+/**
+ * Tells a connection that `principal`, refused `space` on it, now holds `READ`
+ * there, so that a `session.open` would be admitted. A hint only: the
+ * recipient opens the session through ordinary admission.
+ */
+export type SessionAdmissibleMessage = {
+  type: "session/admissible";
+  space: string;
+  principal: string;
+};
+
 export type V2Error = {
   name: string;
   message: string;
@@ -2150,6 +2219,7 @@ export type ServerMessage =
   | ResponseMessage<FabricValue>
   | SessionEffectMessage
   | SessionRevokedMessage
+  | SessionAdmissibleMessage
   | PresenceUpsertMessage
   | PresenceRemoveMessage;
 
@@ -2332,6 +2402,7 @@ export function resetOwnWriteEchoConfig(): void {
 
 export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   genesisRoot: true,
+  spaceKind: true,
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
   commitPreconditions: getCommitPreconditionsConfig(),
@@ -2371,6 +2442,11 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // What this build can do. A server advertises it only when its host
   // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
   connectionAuth: true,
+  // Build-inherent: this build's server tells a connection it refused a
+  // space once a grant admits the refused principal, and its client acts on
+  // the notice. A routed connection records no refusal, so it is told
+  // nothing whatever both peers advertise.
+  admissionNotice: true,
   routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
@@ -2402,6 +2478,10 @@ export const parseMemoryProtocolFlags = (
 
   const genesisRoot = value.genesisRoot;
   if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
+    return null;
+  }
+  const spaceKind = value.spaceKind;
+  if (spaceKind !== undefined && typeof spaceKind !== "boolean") {
     return null;
   }
   const stableExpressionResultIds = value.stableExpressionResultIds;
@@ -2554,9 +2634,15 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const admissionNotice = value.admissionNotice;
+  if (admissionNotice !== undefined && typeof admissionNotice !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
+    spaceKind: spaceKind === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
     applyOp: applyOp === true,
@@ -2596,6 +2682,9 @@ export const parseMemoryProtocolFlags = (
     sessionClose: sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
     connectionAuth: connectionAuth === true,
+    // Absent (an older peer) parses to false: a server then sends that
+    // client no `session/admissible`.
+    admissionNotice: admissionNotice === true,
     routedAuthV1: value.routedAuthV1 === true,
   };
 };
@@ -2607,6 +2696,7 @@ export const wireMemoryProtocolFlags = (
   flags: MemoryProtocolFlags,
 ): WireMemoryProtocolFlags => ({
   genesisRoot: flags.genesisRoot,
+  spaceKind: flags.spaceKind,
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,
@@ -2629,6 +2719,7 @@ export const wireMemoryProtocolFlags = (
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
+  admissionNotice: flags.admissionNotice,
   routedAuthV1: flags.routedAuthV1,
 });
 

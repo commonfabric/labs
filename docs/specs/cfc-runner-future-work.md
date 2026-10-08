@@ -20,35 +20,45 @@ avoids throwaway work.
 
 ## Where the runner stands
 
-The runner soundly implements the **flat "ceiling + required-integrity" fragment**
-of CFC, and enforces all 8 of its own commit-gate invariants (relevant⇒prepared,
-digest-invalidation, verifier-read exclusion, fail-closed on missing
-schema/metadata/unsupported claim, commit-gated side effects, fresh-retry, system-
-controlled metadata, coarse `classification` summary). Its remit — the reactive
-commit boundary — is well covered.
+[`cfc-conformance-statement.md`](./cfc-conformance-statement.md) is the
+statement of what this runtime implements against the specification and in
+which direction each known gap errs; read it before this list, which is the
+backlog behind it. The theme that organizes the backlog: the runtime holds a
+label as `IFCLabel` in
+[`label-view-core.ts`](../../packages/runner/src/cfc/label-view-core.ts), joins by
+union and matches against static allow-lists, where the spec's algebra is CNF
+clauses, exchange-rule evaluation, pattern matching, trust closure and
+observation-class refinement. Most of the distance is fail-closed (the runtime
+over-restricts); the edges that are soundness holes are called out below.
 
-**The organizing theme.** The runtime represents a label as a *flat set* —
-`IFCLabel = { confidentiality?: unknown[]; integrity?: unknown[] }`
-([`label-view-core.ts:5`](../../packages/runner/src/cfc/label-view-core.ts)) — with
-union join and exact-`deepEqual` matching against static allow-lists
-([`prepare.ts:2481`,`:2497`](../../packages/runner/src/cfc/prepare.ts)). The spec's
-algebra is **CNF clauses (AND-of-ORs) + exchange-rule evaluation + pattern-matching
-+ trust-closure + observation-class refinement**. Almost every big gap below is a
-facet of that one representational distance. Most of the flat model's narrowness is
-*fail-closed* (it over-restricts — safe), but a few edges are genuine soundness
-holes, called out explicitly.
+The epic bodies below were written on 2026-07-01, before Epics A to E and H shipped, and several of their claims about the runner (that it has no exchange-rule machinery, that `cfcFlowLabels` defaults to `off`, that `cfcTriggerReadGating` is `false`) are no longer true. Where a body and the conformance statement disagree, the statement is current; re-deriving the bodies against it is a stage 2 follow-up of the correspondence plan.
 
-**Default posture.** The commit gate is on by default: the Runtime constructor
-defaults `cfcEnforcementMode` to `enforce-strict`
-(`RUNTIME_CFC_DIAL_DEFAULTS` in
-[`posture-report.ts`](../../packages/runner/src/cfc/posture-report.ts)), as does lib-shell's
-`createRuntimeClientOptions` — the types-level
-`DEFAULT_CFC_ENFORCEMENT_MODE = "disabled"`
-([`types.ts`](../../packages/runner/src/cfc/types.ts)) is only the
-bare-transaction fallback. Flow labels persist and the render confidentiality
-ceiling is built by default, so the one reject the strict rung adds — the
-writer-fit misfit — is exercised in deployment rather than dormant. A host that
-wants less states it.
+## Conformance statement follow-ups
+
+Each item the conformance statement marks "not established" is a question a
+test or a code reading settles, listed here so it has a tracker. The section
+numbers are the statement's.
+
+1. §1: whether every write to a labeled document by a path other than `Cell`
+   and `data-updating.ts` is marked relevant under `cfcFlowLabels: off`.
+2. §2: whether a module load lands a source read in a handler's journal; the
+   write-set residual by observer level; whether pattern code can read the
+   SQLite `requestHash` untyped; a test that verifier reads stay freshness
+   dependencies.
+3. §3: whether a declared covering `ifc` entry at a reference slot reaches the
+   dereferencing transaction's flow join; whether non-`followRef`
+   derived-selection entries exist at slots; the remaining §18.7 rows at every
+   boundary.
+4. §4: whether the release-gate composition under a witnessed guard
+   under-taints.
+5. §5: whether write floor, policy evaluation and label-metadata protection
+   each passed through `observe` in deployment; a check refusing
+   `enforce-strict` with flow labels below `persist`.
+6. §6: a test that a skipped envelope produces no version advance and no
+   replication.
+7. §7: whether every non-scheduler entry point carries its gating reads.
+8. §8: whether an explicit `undefined` write at a recorded deleted path counts
+   as a re-creation, and so whether the un-minted join under-taints.
 
 ---
 
@@ -281,9 +291,9 @@ Each is bounded and mostly independent. Several are fail-safe today.
   keys reject list*, so a spec-conformant author is **rejected**, not honored.
   Reconcile the spelling and honor §8.7.3 boundary-verified transformer-minted
   semantics. (audit 3.6.)
-- **`propagationClass` registry drift.** Working hand-maintained 12-atom map with a
-  fail-safe `value-bound` default, but it diverges from §15 (`PromptSlotBound`
-  classed value-bound vs spec provenance; `IntegritySummary` absent). Code-generate
+- **`propagationClass` registry drift.** Working hand-maintained atom map with a
+  fail-safe `value-bound` default, but it diverges from §15 (`IntegritySummary`
+  absent). Code-generate
   the map from a shared registry, or add a parity test that fails when §15 gains a
   hereditary family absent from `CLASS_BY_TYPE`. (SC-10/15/17.)
 - **`classification: string[]` shorthand not lowered.** No `classificationToAtoms`

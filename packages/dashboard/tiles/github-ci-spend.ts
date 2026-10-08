@@ -38,8 +38,10 @@ import {
   escapeHtml,
   friendlyError,
   github,
+  githubCredentials,
   usd,
 } from "../lib.ts";
+import type { GitHubCredential } from "../github-auth.ts";
 import { REPO } from "../config.ts";
 import {
   calendarMonth,
@@ -332,7 +334,7 @@ function readBudgets(
 /** Reads every page of product budgets at the selected account scope. */
 async function accountBudgets(
   target: BillingTarget,
-  token: string,
+  credential: GitHubCredential,
 ): Promise<AccountBudget> {
   const budgets: Budget[] = [];
   let page = 1;
@@ -341,7 +343,7 @@ async function accountBudgets(
     const response = await github<{
       budgets?: Budget[];
       has_next_page?: boolean;
-    }>(budgetsPath(target, page), token, BILLING_REQUEST);
+    }>(budgetsPath(target, page), credential, BILLING_REQUEST);
     if (Array.isArray(response.budgets)) {
       for (const budget of response.budgets) budgets.push(budget);
     }
@@ -360,7 +362,7 @@ async function accountBudgets(
  */
 async function usageForMonth(
   target: BillingTarget,
-  token: string,
+  credential: GitHubCredential,
   year: number,
   month: number,
   throughDay = new Date(Date.UTC(year, month, 0)).getUTCDate(),
@@ -368,7 +370,7 @@ async function usageForMonth(
   if (target.kind === "organization") {
     const report = await github<{ usageItems?: UsageItem[] }>(
       usagePath(target, year, month),
-      token,
+      credential,
       BILLING_REQUEST,
     );
     if (!Array.isArray(report.usageItems)) {
@@ -385,7 +387,7 @@ async function usageForMonth(
             usageItems?: Omit<UsageItem, "date">[];
           }>(
             usageSummaryPath(target, year, month, day),
-            token,
+            credential,
             BILLING_REQUEST,
           );
           return {
@@ -417,7 +419,7 @@ async function usageForMonth(
 }
 
 async function githubDollarSpend(
-  token: string,
+  credential: GitHubCredential,
   target: BillingTarget,
   now: Date,
 ): Promise<GitHubDollarSpend> {
@@ -428,13 +430,13 @@ async function githubDollarSpend(
   // rows are split as they are read.
   let budgets = NO_BUDGET;
   try {
-    budgets = await accountBudgets(target, token);
+    budgets = await accountBudgets(target, credential);
   } catch {
     // An unset GitHub budget leaves the spend projection uncompared.
   }
   const currentReport = await usageForMonth(
     target,
-    token,
+    credential,
     year,
     month0 + 1,
     dayOfMonth,
@@ -503,7 +505,7 @@ async function githubDollarSpend(
     try {
       const previous = await usageForMonth(
         target,
-        token,
+        credential,
         previousYear,
         previousMonth + 1,
       );
@@ -579,12 +581,12 @@ async function githubDollarSpend(
 }
 
 async function githubSpend(
-  token: string,
+  credential: GitHubCredential,
   target: BillingTarget,
   now: Date,
 ): Promise<GitHubSpend> {
   try {
-    return await githubDollarSpend(token, target, now);
+    return await githubDollarSpend(credential, target, now);
   } catch (error) {
     // The classic endpoint answers for an org without the enhanced billing
     // platform. A report that is there but unreadable, or there but no longer
@@ -598,7 +600,7 @@ async function githubSpend(
     }
     const billing = await github<ActionsBilling>(
       `orgs/${encodeURIComponent(target.slug)}/settings/billing/actions`,
-      token,
+      credential,
     );
     return {
       kind: "minutes",
@@ -656,16 +658,6 @@ export const githubCiSpend: Tile = {
   label: "github spend",
   intervalMs: 3_600_000,
   async collect(ctx): Promise<TileView> {
-    const token = ctx.env("GH_BILLING_TOKEN") ?? ctx.env("GH_TOKEN") ??
-      ctx.env("GITHUB_TOKEN");
-    if (!token) {
-      return {
-        status: "unknown",
-        value: "—",
-        sub: "set GH_BILLING_TOKEN or GH_TOKEN",
-      };
-    }
-
     const enterprise = ctx.env("GH_BILLING_ENTERPRISE")?.trim();
     const target = enterprise
       ? targetFor("enterprise", enterprise)
@@ -673,13 +665,33 @@ export const githubCiSpend: Tile = {
         "organization",
         ctx.env("GH_BILLING_ORG") ?? REPO.split("/")[0],
       );
+    // GitHub refuses a GitHub App's tokens for an organization's billing, so
+    // only an enterprise's billing is read through the app.
+    const credential = target.kind === "enterprise"
+      ? githubCredentials.for(
+        ctx,
+        { kind: "enterprise", name: target.slug },
+        ["GH_BILLING_TOKEN"],
+      )
+      : githubCredentials.fromTokens(ctx, [
+        "GH_BILLING_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+      ]);
+    if (!credential) {
+      return {
+        status: "unknown",
+        value: "—",
+        sub: "set GH_BILLING_TOKEN or GH_TOKEN",
+      };
+    }
     const drill = {
       href: target.href,
       hint: "billing ↗",
     };
     const now = new Date();
     try {
-      const spend = await githubSpend(token, target, now);
+      const spend = await githubSpend(credential, target, now);
       if (spend.kind === "minutes") return minutesView(target, spend);
 
       const budget = spend.budget;

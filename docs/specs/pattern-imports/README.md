@@ -178,12 +178,10 @@ separate fields:
   place be checked again?"; `source.ref` answers "which exact bytes are
   running?"
 
-`cf piece new`, `cf piece setsrc`, and custom `cf space set-home` accept
-`--repository <locator>` alongside `--root`. `new` and custom `set-home` stamp
-the locator on the new piece. `setsrc` replaces it when the flag is present and
-preserves the existing locator when the flag is omitted. `set-home --reset`
-rejects the flag because the system pattern was not deployed from the caller's
-repository. No Git remote or revision is inferred automatically.
+`cf piece new` and `cf piece setsrc` accept `--repository <locator>` alongside
+`--root`. `new` stamps the locator on the new piece. `setsrc` replaces it when
+the flag is present and preserves the existing locator when the flag is
+omitted. No Git remote or revision is inferred automatically.
 
 The same three local deployment commands accept a repeatable
 `--test <path>` flag. When `--root` is omitted, the CLI uses the common
@@ -196,8 +194,7 @@ execute it. Repeat the complete set of `--test` flags on every `setsrc` because
 each update defines a complete source revision.
 The source-document cache retains the test roots through its synthetic
 retention links. Source recovery and `cf piece getsrc` therefore return the
-executable source and its attached tests together. `set-home --reset` rejects
-`--test` because a reset deploys no local source package.
+executable source and its attached tests together.
 
 Attached test entry points participate in the deployed source revision's
 identity without becoming runtime imports. Changing, adding, or removing a test
@@ -236,8 +233,7 @@ unchanged, and each revision stays independently recoverable with its own
 bytes. Source recovery and `cf piece getsrc` return the executable source, its
 attached tests, and its data files together, and report which files are data.
 Repeat the complete set of `--datafile` flags on every `setsrc` because each
-update defines a complete source revision. `set-home --reset` rejects
-`--datafile` because a reset deploys no local source package.
+update defines a complete source revision.
 
 A pattern reads an attached data file with `dataFile(path)` from
 `commonfabric`. The path resolves against the module that reads it, as an

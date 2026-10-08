@@ -341,6 +341,7 @@ export function spendChart(
     chart: multiSparkline(lines, {
       fade: true,
       highlight: { count: highlightCount },
+      scale: { highlighted: true },
     }),
     duration: end - start + DAY_MS,
   };

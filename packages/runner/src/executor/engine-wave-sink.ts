@@ -39,7 +39,9 @@
 // ACL mode (INV-12 on the served plane, serving-loop.md §3d): the wave's
 // seal refuses the run that writes one, the engine's derived admission
 // refuses one in a home batch, and `commitWave` below refuses one in a
-// foreign batch, each naming the operation.
+// foreign batch, each naming the operation. A served run's access-list
+// change goes through `commitSpaceAccessChange` instead, which hands it to
+// the memory server to admit and commit on its own.
 
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { Engine } from "@commonfabric/memory/v2/engine";
@@ -58,6 +60,10 @@ import {
 } from "@commonfabric/memory/v2/engine";
 import type { CellScope } from "@commonfabric/api";
 import type { Operation } from "@commonfabric/memory/v2";
+import type {
+  ServedAclChange,
+  ServedAclChangeVerdict,
+} from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import type {
   WaveCommitRejection,
@@ -127,6 +133,12 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     ) => { attachments: Map<string, string>; detach: () => void })
     | undefined;
   readonly #onHomeRefused: (() => void) | undefined;
+  readonly #commitServedAclChange:
+    | ((
+      change: ServedAclChange,
+      envelope: { sessionId: string; localSeq: number },
+    ) => Promise<ServedAclChangeVerdict>)
+    | undefined;
 
   /**
    * Replay keying — the stage-F choice, made and enforced here: the
@@ -186,6 +198,17 @@ export class EngineWaveCommitSink implements WaveCommitSink {
      * returns the refusal, so that whatever the refusal changes is in
      * place by the time the caller reads it. */
     onHomeRefused?: () => void;
+
+    /**
+     * The access-list hook (the memory server's `commitServedAclChange()`):
+     * admit and commit a served run's access-list change under `envelope`,
+     * this sink's session and the next number of its counter. Without it,
+     * {@link commitSpaceAccessChange} refuses every change.
+     */
+    commitServedAclChange?: (
+      change: ServedAclChange,
+      envelope: { sessionId: string; localSeq: number },
+    ) => Promise<ServedAclChangeVerdict>;
   }) {
     this.#engineFor = options.engineFor;
     this.#sessionId = options.sessionId;
@@ -193,6 +216,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     this.#localSeq = options.localSeqRef ?? { value: 0 };
     this.#sqliteAttachmentsFor = options.sqliteAttachmentsFor;
     this.#onHomeRefused = options.onHomeRefused;
+    this.#commitServedAclChange = options.commitServedAclChange;
   }
 
   currentHeads(
@@ -234,6 +258,40 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       sinceSeq,
       ...(holder === undefined ? {} : { holder }),
     }));
+  }
+
+  /** @inheritDoc */
+  async commitSpaceAccessChange(
+    change: ServedAclChange,
+  ): Promise<Result<{ seq?: number }, WaveCommitRejection>> {
+    if (this.#commitServedAclChange === undefined) {
+      return {
+        error: {
+          name: "AclDocumentWriteRefused",
+          message: `access-list change to ${change.space} refused: this ` +
+            "sink has no access-list hook (the memory server's " +
+            "`commitServedAclChange()`)",
+        },
+      };
+    }
+    try {
+      const verdict = await this.#commitServedAclChange(change, {
+        sessionId: this.#sessionId,
+        localSeq: ++this.#localSeq.value,
+      });
+      if ("refused" in verdict) {
+        return {
+          error: {
+            name: "AclDocumentWriteRefused",
+            message: `access-list change to ${change.space} refused: ` +
+              verdict.refused,
+          },
+        };
+      }
+      return { ok: verdict.seq === undefined ? {} : { seq: verdict.seq } };
+    } catch (error) {
+      return waveCommitFailureResult(error);
+    }
   }
 
   commitWave(

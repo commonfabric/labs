@@ -453,8 +453,8 @@ const uiContractsFromSchemaInternal = (
     for (const entry of branchEntries) entries.push(entry);
   }
 
-  // `items` keeps its `*` entry even beside prefixItems, mirroring
-  // walkIfcSchema (PR #4969 review): the `*` over-enforces the rest
+  // `items` keeps its `*` entry even beside prefixItems, as
+  // `cfcSchemaEntries` does: the `*` over-enforces the rest
   // contract on tuple slots, but minting nothing would silently drop the
   // tail elements' declared contract — fail-open, strictly worse. A
   // precise "past the slots" representation needs a path grammar beyond
@@ -672,17 +672,16 @@ const trustedEventMatchCandidates = (event: unknown): unknown[] => {
 };
 
 /**
- * Whether `event` is a trusted gesture: an event the renderer marked, whose
- * provenance says the browser trusted a DOM event on a UI surface. This is
- * the test `commitSnapshotShare()` and `commitCustodySeal()` apply, without
- * their match on which surface it was, so it shows that a person acted and
- * not on what. An event from a native host's control satisfies a write's UI
- * contract but is not a trusted gesture.
+ * Whether `event` is a trusted gesture: an event carrying the renderer-trust
+ * mark, whose provenance names a UI surface a person acted on, either a DOM
+ * event the browser trusted on a rendered surface or a native host's reviewed
+ * control. This is the test `commitSnapshotShare()` and `commitCustodySeal()`
+ * apply, without their match on which surface it was, so it shows that a
+ * person acted and not on what.
  */
 export const isTrustedGesture = (event: unknown): boolean =>
   isRendererTrustedEvent(event) && isObjectNotArray(event) &&
   isTrustedUiProvenance(event.provenance) &&
-  event.provenance.origin === "dom" &&
   isObjectNotArray(event.provenance.ui);
 
 const pathsEqual = (

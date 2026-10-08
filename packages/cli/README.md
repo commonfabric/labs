@@ -1262,6 +1262,12 @@ home directory. The Fabric lane uses the `context` prompt role, so the default
 `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
+A run's sandbox, and a local job's, is the one `cf-harness` selects from the
+environment: `CF_HARNESS_SANDBOX_RUNTIME` names `docker` or `runsc`, and with
+none named a Mac runs on its native runtime and every other platform on Docker.
+The runner derives that selection as it starts, before either lane serves, and
+exits with the harness's refusal where the harness would refuse its jobs.
+
 What the Fabric lane does, in order:
 
 1. Connects to the home toolshed as the identity, creates the home pattern if
@@ -1312,7 +1318,9 @@ With `--local-jobs-socket` and `--local-job-profiles`, the runner also runs
 local jobs: work a local caller hands it directly, which never enters the
 fabric. It serves them first and on its own, so they run whether or not the
 Fabric lane starts; a Fabric lane that fails to start is reported and leaves the
-local jobs served. With `--local-only` there is no Fabric lane.
+local jobs served. A local lane that fails to start is reported with its reason,
+and the Fabric lane still starts. With `--local-only` there is no Fabric lane,
+and a local startup failure stops the runner.
 
 The service exclusively locks both its socket and store for its lifetime. An
 active listener is refused; a socket whose listener is gone is reclaimed.
@@ -1327,18 +1335,60 @@ The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
-instructions?, context?, resultSchema, tools?, maxModelTurns?}`
+instructions?, context?, resultSchema, tools?, maxModelTurns?, browserHost?}`
 with `POST /jobs`, reads a job with `GET /jobs/<id>` or the newest with
 `GET /jobs?limit=n`, stops one with `POST /jobs/<id>/cancel`, and watches one
 with `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that
-ends after the job's terminal state. `GET /health` says which lanes run.
+ends after the job's terminal state. `GET /health` keeps `lanes.local` and
+`lanes.fabric` as booleans and adds `readiness.local` and `readiness.fabric`,
+each `{state, since, reason}`. States are `starting`, `up`, `down`, or
+`refused`; `since` is an ISO timestamp of the last state or reason change.
+`reason` is null for an up lane. Fabric remains `starting` until its first
+successful queue scan; `--local-only` leaves it `down` with that reason, and a
+failed start leaves it `refused` with the error. Observed queue scan or
+record-follow failures mark it `down`; a successful scan marks it `up`. An idle
+queue is healthy: this does not detect a subscription that silently stops
+delivering changes.
+
+Health also lists `routes` as `{method, path}` entries (`:id` is a path
+parameter), the loaded `profileFile`, the resolved SQLite `storePath`, and
+`labsCommit` captured at startup (null when no build or checkout identity is
+available). The browser stream route serves server-sent events. Route
+availability does not imply that every profile permits a browser host.
+
+`cf agent status --local-jobs-socket /path/to/jobs.sock` reads authenticated
+health using the token beside the socket and prints the whole JSON record. It
+never submits a job or probes a browser route. During local initialization,
+authenticated health returns HTTP 503 with the readiness record, which this
+command prints. Other HTTP errors, transport and parsing failures exit with an
+error.
 
 A profile, named in the host's file, is the authority a job runs with: its
-tools, its host Loom files, its model-turn cap, and the prompt-slot role its
-task binds as. A request may name fewer tools and fewer turns, and nothing else.
-A job runs through the same `cf-harness` path as an agent run, with no fabric
-session, and reports a `step` event for each tool its loop calls and a `command`
-event for each command the host ran for it.
+tools, its host Loom files, its model-turn cap, the prompt-slot role its task
+binds as, and whether a job may bring a browser host (`browserHost: true`). A
+request may name fewer tools and fewer turns, and, under a profile that admits
+one, declare a browser host (below); leaving it out declines the browser. It may
+set nothing else. A job runs through the same `cf-harness` path as an agent run,
+with no fabric session. Every tool call, including delegated calls, counts as
+progress; prose, reasoning and ordinary tool results do not. A `step` carries
+`{turn, tool}`, and a `command` records each command the host ran for it.
+Children add `child: {profile, childRunId, parentToolCallId, depth}` to either
+body. The harness admits one level of delegation, so depth is `1`. Only a
+child's `browser` tool steps carry `action` (such as `click` or `snapshot`),
+without the operation's arguments or page content. Other child tool steps, such
+as `submit_result`, omit `action`.
+
+The lane coalesces consecutive steps with the same tool, child and browser
+action, ignoring turn numbers. Thus N identical browser operations publish one
+step; changing action or child publishes a new one. Commands are never
+coalesced, and a command breaks the step's repetition. Volume is bounded by
+these visible transitions plus command receipts, rather than transcript size.
+The job snapshot's `step` names the active child's tool until the parent's
+`delegate_task` result arrives. Among pending siblings the latest activity wins,
+including command receipts; a returning child reveals its sibling's last step,
+and the parent's step resumes when no child remains. Children cannot delegate
+further; nested progress needs lineage in the harness's transcript contract
+before that restriction is widened.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an
@@ -1351,6 +1401,24 @@ configuration may name `jobIdEnvVar`; command discovery and execution then
 receive that job id in the named variable of their cleared host environment. The
 request and model tool arguments cannot select the identity, and concurrent jobs
 have separate bindings.
+
+A caller that can show a browser declares `browserHost: {}` on enqueue, under a
+profile that admits one, and the job browses through it: the lane adds
+`delegate_task` and the `browser` subagent profile to that job alone, as the
+console's `--allow-browser-host` does for a turn. The caller holds
+`GET /jobs/<id>/browser/stream` open, a stream of server-sent
+`request {id,
+operation}`, `withdraw {id}` and `close` events, and answers each
+operation with `POST /jobs/<id>/browser/result {id, result}` (the operations and
+results are cf-harness's `contracts/browser-host.ts`). The semantics are the
+console host's: every operation is answered, one withdrawn while the host holds
+it is acknowledged by its answer before the next is sent, and the job's end says
+`close` and settles anything outstanding as `session-ended`. Unlike the
+console's, the stream is resumable, since the caller is usually a relay: a
+dropped stream leaves the host open, a new attach replaces the old and is sent
+every operation still unanswered and every withdrawal still unacknowledged
+first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
+host as `browser {state, attached, outstanding, withdrawn}`.
 
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
@@ -2161,11 +2229,22 @@ removes them, and nothing holds them open past that date.
 | `cf cell set-label`      | `cf piece set-label`     |
 | `cf piece call`          | `cf call`                |
 | `cf space recreate-root` | `cf piece recreate-root` |
-| `cf space set-home`      | `cf piece set-home`      |
 
 This is a migration aid rather than a second surface: nothing here teaches the
 right column as an alternative spelling to keep using. `--piece` is a different
 case — a deprecated name for `--cell` that carries no end date and no notice.
+
+### Retired: `cf space set-home`
+
+A Home is created on its user's first open and changed only in place, so a
+command that installs a Home root has no job. `cf space set-home` and its
+`cf piece set-home` mount are retired: both are hidden, and a run of either
+refuses and says what does each half of the work — first open for creation,
+`cf piece setsrc --cell <home-root> ./my-home.tsx` for the source, where the
+root is the link `cf wish '#default' --select @` answers with in the Home space.
+**The spelling stops answering after 2026-10-21**, when a later change removes
+the mounts. See
+[Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern).
 
 ## Evaluating patterns from another tool
 

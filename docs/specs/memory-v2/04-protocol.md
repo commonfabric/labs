@@ -63,7 +63,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "sessionHoldings": true,
     "sessionReadCeiling": true,
     "presenceV1": true,
-    "sessionClose": true
+    "sessionClose": true,
+    "admissionNotice": true
   }
 }
 ```
@@ -86,7 +87,8 @@ If the server accepts the protocol, it returns:
     "sessionHoldings": true,
     "sessionReadCeiling": true,
     "presenceV1": true,
-    "sessionClose": true
+    "sessionClose": true,
+    "admissionNotice": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -295,6 +297,20 @@ its host verifies `connection.auth`; toolshed does under the
 absent: a client then signs each `session.open`, one at a time, since each
 uses the connection's current challenge and receives the next.
 
+`admissionNotice` advertises that the peer takes part in `session/admissible`
+(section 4.2.2). It is build-inherent and defaults to `false` when absent. A
+server sends the notice only on a connection where both peers advertise it: a
+client connected to an older server, or a server connected to an older client,
+leaves a refused principal to learn of a later grant by opening the session
+again.
+
+`spaceKind` advertises that the server seals the kind a space's genesis commit
+declares, and reports it in the result of every `session.open` it admits
+(sections 4.1.2 and 4.5.1). It is build-inherent and
+defaults to `false` when absent. A client connected to an older server neither
+declares a kind there, since that server would keep the field without holding
+it to the genesis rules, nor reads one, since that server reports none.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -320,6 +336,9 @@ interface SessionOpenRequest {
     // under (see the rules). Inside the signed descriptor: a bound on
     // what the session is served, declared by the session itself.
     readCeiling?: SessionReadCeiling;
+    // The kind the space declares in its genesis commit (see the rules).
+    // Inside the signed descriptor, like everything the session declares.
+    spaceKind?: string;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -387,6 +406,9 @@ interface SessionOpenResult {
   caughtUpLocalSeq?: number;
   resumed?: boolean;
   sync?: SessionSync;
+  // The kind the space's genesis commit declares; absent when it declares
+  // none, or the space has no history yet.
+  spaceKind?: string;
   sessionOpen: {
     challenge: {
       value: string;
@@ -418,6 +440,12 @@ Rules:
   re-declares reads under what it re-declared. The server records it on the
   session and the serving runtime reads it per run; a server may also assign
   a session a ceiling of its own, which lands in the same record
+- a session that declares a `spaceKind` asserts the kind the space's genesis
+  commit declares: the server refuses the open with a `ProtocolError` when the
+  space has a genesis commit that declares a different kind or none. A space
+  with no history admits the declaration, and its genesis commit must then
+  carry the same kind. Every open of a space with history is told the kind its
+  genesis declares, in `spaceKind`, whether the session declared one or not
 - the server rotates `sessionToken` on every successful `session.open`
 - at most one connection may own a given `(space, sessionId)` at a time
 - a successful resume transfers ownership to the new connection, invalidates the
@@ -492,6 +520,8 @@ interface HelloMessage {
     presenceV1?: boolean;
     sessionClose?: boolean;
     connectionAuth?: boolean;
+    admissionNotice?: boolean;
+    spaceKind?: boolean;
   };
 }
 
@@ -599,6 +629,8 @@ The server sends:
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
 - `session/revoked` when a session loses ownership to a newer connection
+- `session/admissible` when an access-list change admits a principal this
+  connection was refused a space for
 - `presence/upsert` and `presence/remove` for the presence rooms the
   session has joined (section 4.13)
 
@@ -641,7 +673,38 @@ interface SessionRevoked {
   sessionId: SessionId;
   reason: "taken-over";
 }
+
+interface SessionAdmissible {
+  type: "session/admissible";
+  space: SpaceId;
+  principal: string;
+}
 ```
+
+`session/admissible` names a space and a principal that the server refused
+that space on this connection, and that the space's access list now grants
+`READ`. The server records a refusal when it denies a `session.open` for want
+of `READ`, and when an access-list change revokes a session for the same
+reason. An access-list commit that gives a recorded principal `READ` sends the
+notice to the connection the refusal was recorded on, and removes the record,
+so each refusal is told at most once. A change that leaves the principal
+without `READ` sends nothing, and the notice reaches no other connection.
+
+The notice is a hint and grants nothing. A client that acts on it opens the
+session again through ordinary admission, which decides on the access list as
+it then stands. It tells the principal only that its own access changed, and
+when, which opening the session again would also tell it.
+
+A record lives as long as its connection, and ends with an admitted
+`session.open` of the same space and principal, or with a `connection.release`
+of the principal. A connection holds at most 1024 records, and the oldest is
+dropped past that; its principal then learns of a grant only by opening the
+session again. A connection whose peer did not advertise `admissionNotice`
+records nothing, and neither does a routed connection
+([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor
+does a session opened `actingAs: "space-owner"`: only a co-hosted serving
+runtime opens one, and it hears of every access-list commit in process, after
+which its next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -1123,7 +1186,7 @@ interface ConnectionAuthRequest {
 
 /** `ok` of the response. */
 interface ConnectionAuthResult {
-  principal: DID;
+  principal: string;
   /** Unix second the authentication runs out at. */
   expiresAt: number;
 }
@@ -1141,7 +1204,7 @@ interface ConnectionChallengeResult {
 interface ConnectionReleaseRequest {
   type: "connection.release";
   requestId: string;
-  principal: DID;
+  principal: string;
 }
 ```
 
@@ -1233,11 +1296,22 @@ thing that writes one. A create action generates a fresh key pair from random
 data, opens one session authenticated as that key through the same route every
 later session for the DID takes, and commits the genesis document against a
 confirmed absent ACL: the creator as OWNER, together with any grants the
-creator chose (`StorageManager.createSpace(acl, root?)`, reached as
-`Runtime.createSpace()`). The key is used for nothing else, and is dropped once
-the commit is confirmed. The creator is the concrete owner, and can later grant
-access to other principals or to `"*"`. Opening a DID that has no history
-writes nothing: it is not a space, and stays that way.
+creator chose (`StorageManager.createSpace(acl, { root?, spaceKind? })`,
+reached as `Runtime.createSpace()`). The key is used for nothing else, and is
+dropped once the commit is confirmed. The creator is the concrete owner, and
+can later grant access to other principals or to `"*"`. Opening a DID that has
+no history writes nothing: it is not a space, and stays that way.
+
+The genesis commit may also declare the space's kind, in the commit's
+`spaceKind` field: a string of lowercase words joined by hyphens, at most 32
+characters. The server admits it only on the space's genesis commit, made by
+the space identity itself, on the default branch, holding nothing but the
+ACL-only `set`, and only when it equals the `spaceKind` the committing session
+declared. It refuses `spaceKind` on every other commit, in every ACL mode,
+whoever makes it, and so the kind never changes once sealed. A custom root
+reservation is held to the same rules
+([`custom-space-roots.md`](../../features/custom-space-roots.md));
+[`space-kinds.md`](../../features/space-kinds.md) describes the kind.
 
 The one space born on open is a Home space, whose DID is its user's own. When
 the active identity is the space DID and the space has no ACL document and no

@@ -12,8 +12,10 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { resolveConsoleConfig } from "../console/server.ts";
-import { parseCfHarnessCliArgs } from "../src/cli.ts";
+import {
+  parseCfHarnessCliArgs,
+  resolveConsoleConfig,
+} from "./support/on-linux.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import {
   harnessSessionChatPolicy,

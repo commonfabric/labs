@@ -84,26 +84,22 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
 /**
  * A host that records each operation it is sent and answers from a script,
- * `ok` on the page above once the script runs out.
+ * `ok` on the page above once the script runs out. An `Error` in the script
+ * stands for a host that could not be reached.
  */
 class FakeBrowserHost implements HarnessBrowserHost {
   readonly operations: BrowserHostOperation[] = [];
 
-  readonly #answers: unknown[];
+  readonly #answers: (BrowserHostResult | Error)[];
 
-  constructor(answers: unknown[] = []) {
+  constructor(answers: (BrowserHostResult | Error)[] = []) {
     this.#answers = answers;
   }
 
   perform(operation: BrowserHostOperation): Promise<BrowserHostResult> {
     this.operations.push(operation);
     const next = this.#answers.shift() ?? { status: "ok", page: PAGE };
-    if (next instanceof Error) {
-      return Promise.reject(next);
-    }
-    // The fake answers whatever the script holds, results or not, so a test
-    // can hand the tool something a real host would never send.
-    return Promise.resolve(next as BrowserHostResult);
+    return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
   }
 }
 
@@ -167,6 +163,28 @@ describe("browser-host-backend", () => {
       ]);
     });
 
+    it("sends a wait for a pattern that names a host on the open web", async () => {
+      const host = new FakeBrowserHost();
+      const engine = createEngine(host);
+      const patterns = [
+        "https://shop.example/**",
+        "*://SHOP.example./**",
+        "https://*.shop.example/**",
+        "https://u@shop.example:8443/**",
+        "https://home.arpa.example/**",
+        "https://*.home.arpa.example/**",
+        "https://*.com/**",
+      ];
+
+      for (const urlPattern of patterns) {
+        await invoke(engine, { action: "wait", urlPattern });
+      }
+
+      expect(host.operations).toEqual(
+        patterns.map((urlPattern) => ({ action: "wait", urlPattern })),
+      );
+    });
+
     it("returns the host's text with the page the host committed", async () => {
       const host = new FakeBrowserHost([
         { status: "ok", page: PAGE, text: '- button "Buy" [@e3]' },
@@ -210,7 +228,12 @@ describe("browser-host-backend", () => {
         timeoutMs: 5_000,
       });
 
-      expect(wait).toMatchObject({ status: "error", code: "invalid_input" });
+      expect(wait).toMatchObject({
+        status: "error",
+        code: "invalid_input",
+        message:
+          "this run's browser waits for something to happen rather than for a time: wait for a ref, a loadState, or a urlPattern",
+      });
       expect(timeout).toMatchObject({ status: "error", code: "invalid_input" });
       expect(host.operations).toEqual([]);
     });
@@ -246,6 +269,10 @@ describe("browser-host-backend", () => {
           "open only allows http(s) URLs",
         ],
         [
+          { action: "open", url: " https://shop.example/" },
+          "open only allows http(s) URLs",
+        ],
+        [
           { action: "scroll", direction: "sideways" },
           "scroll requires a direction: up, down, left, right",
         ],
@@ -267,7 +294,7 @@ describe("browser-host-backend", () => {
         ],
         [
           { action: "wait", ref: "@e1", loadState: "load" },
-          "wait requires exactly one of ref, loadState, or urlPattern",
+          "wait requires exactly one of ms, ref, loadState, or urlPattern",
         ],
         [
           { action: "wait", ref: "e1" },
@@ -314,11 +341,11 @@ describe("browser-host-backend", () => {
         ],
         [
           { action: "fill", ref: "@e2", valueHandle: "cfh:a:aaaaa" },
-          "valueHandle takes a return referent (cfh:v:) on this run's browser: a browser host enters no value from the owner's space",
+          "valueHandle takes a return referent (cfh:v:) on this run's browser: a browser host takes no handle to the owner's space",
         ],
         [
           { action: "open", urlHandle: "cfh:a:aaaaa" },
-          "urlHandle takes a return referent (cfh:v:) on this run's browser: a browser host enters no value from the owner's space",
+          "urlHandle takes a return referent (cfh:v:) on this run's browser: a browser host takes no handle to the owner's space",
         ],
         ...[
           "http://127.0.0.1:8100/api/sessions",
@@ -332,6 +359,7 @@ describe("browser-host-backend", () => {
           "http://0x7f.1/",
           "https://mac.tail1234.ts.net/",
           "http://host.docker.internal/",
+          "http://home.arpa/",
         ].map((url): [BrowserToolInput, string] => [
           { action: "open", url },
           "open only reaches the open web: not this device, its network, or an IP address",
@@ -344,7 +372,26 @@ describe("browser-host-backend", () => {
           { action: "wait", urlPattern: "https://u@[::1]:8/*" },
           "wait urlPattern names the open web only: not this device, its network, or an IP address",
         ],
-        ...["**://localhost/**", "http*://127.0.0.1/**"].map((
+        ...[
+          "**://localhost/**",
+          "http*://127.0.0.1/**",
+          "http?://127.0.0.1/**",
+          "**//127.0.0.1/**",
+          "*//127.0.0.1/**",
+          "http://0x7f.1/*",
+          "https://%31%32%37.0.0.1/**",
+          "https://2130706433/**",
+          "*://ＬＯＣＡＬＨＯＳＴ/**",
+          "http://127.0.0.*/**",
+          "https://*.*/**",
+          "https://*.1/**",
+          "https://*.0x7f/**",
+          "https://*.local/**",
+          "https://*.home.arpa/**",
+          "https://192.168.{0,1}.1/**",
+          "https://shop.example:*/**",
+          "https://exa mple.com/**",
+        ].map((
           urlPattern,
         ): [BrowserToolInput, string] => [
           { action: "wait", urlPattern },
@@ -388,25 +435,33 @@ describe("browser-host-backend", () => {
     it("refuses to open a returned string that is not a web address", async () => {
       const host = new FakeBrowserHost();
       const engine = createEngine(host);
-      const { table, token } = await mintReferentHandle(
-        createHarnessHandleTable(engine.getRunState().runId),
-        {
+      let table = createHarnessHandleTable(engine.getRunState().runId);
+      const tokens = [];
+      for (const value of ["javascript:alert(1)", " https://shop.example/"]) {
+        const minted = await mintReferentHandle(table, {
           kind: "return",
           source: "delegate_task:child",
           label: {},
           labelSource: "child",
-          value: "javascript:alert(1)",
-        },
-      );
+          value,
+        });
+        table = minted.table;
+        tokens.push(minted.token);
+      }
       await engine.recordHandleTable(table);
 
-      const output = await invoke(engine, { action: "open", urlHandle: token });
+      for (const token of tokens) {
+        const output = await invoke(engine, {
+          action: "open",
+          urlHandle: token,
+        });
 
-      expect(output).toMatchObject({
-        status: "error",
-        code: "invalid_input",
-        message: "open only allows http(s) URLs",
-      });
+        expect(output).toMatchObject({
+          status: "error",
+          code: "invalid_input",
+          message: "open only allows http(s) URLs",
+        });
+      }
       expect(host.operations).toEqual([]);
     });
 
@@ -543,7 +598,7 @@ describe("browser-host-backend", () => {
       await invoke(engine, {
         action: "fill",
         ref: "@e1",
-        valueHandle: quantity.token,
+        valueHandle: ` ${quantity.token} `,
       });
       const echoed = await invoke(engine, { action: "snapshot" });
       const later = await invoke(engine, { action: "snapshot" });
@@ -1009,29 +1064,6 @@ describe("browser-host-backend", () => {
         "session_ended",
         "command_failed",
       ]);
-    });
-
-    it("returns host_unavailable for an answer that is not a result", async () => {
-      const host = new FakeBrowserHost([
-        { status: "ok" },
-        "ok",
-        { status: "ok", page: { url: "https://shop.example/", title: 7 } },
-      ]);
-      const engine = createEngine(host);
-
-      const outputs = [];
-      for (let index = 0; index < 3; index++) {
-        outputs.push(await invoke(engine, { action: "reload" }));
-      }
-
-      for (const output of outputs) {
-        expect(output).toMatchObject({
-          status: "error",
-          code: "host_unavailable",
-          message:
-            "the browser host answered with something that is not a result",
-        });
-      }
     });
 
     it("returns host_unavailable, with the reason, for a host that cannot be reached", async () => {

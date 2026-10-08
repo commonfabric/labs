@@ -123,6 +123,11 @@ revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
 admission restores the content.
 
+A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
+placeholder as revoked content shown directly, while its binding is withheld,
+and the binding is made again, mounting the content, once the space is in reach
+again.
+
 ## CLI: surface the denial for the space it was asked to reach
 
 The CLI reads `storageManager.authorizationError(space)` for the one space it
@@ -164,21 +169,32 @@ recover from that error.
 
 Two properties follow from terminating rather than looping:
 
-- **No in-process auto-heal after a later grant.** A terminated session does not
-  reopen on its own. A holder that wants to pick up an ACL granted later asks
-  once, on an event saying the grant may have happened:
+- **A later grant heals only on an event.** A terminated session does not reopen
+  on its own. A holder that wants to pick up an ACL granted later asks once, on
+  an event saying the grant may have happened:
   `StorageManager.retrySpaceAccess(space)`, which `Runtime` and `RuntimeClient`
   pass through, opens the session again through the same admission. If it is
   admitted, it repeats the loads the refusal failed; if it is refused, the
-  refusal is recorded where the first one was. The shell asks on events a grant
-  may lie behind: the person pressing the renderer's Retry button, navigating
-  into a refused space, or coming back to the page.
-  [`space-access.md`](space-access.md) lists them. Retrying a denied reopen on a
-  schedule until an administrator acts is the retry-loop the engineering
-  principles forbid; the CLI reports the error and exits. A genuinely transient
-  or recoverable condition — a token-refresh window, a challenge race, a
-  transport blip — can heal on a fresh connection when the transport supports
-  reset. Classification as retriable does not supply that transport capability.
+  refusal is recorded where the first one was. The memory server supplies one
+  such event itself, on a connection where both peers advertise
+  `admissionNotice`. When an access-list change gives `READ` to a principal it
+  refused a space on such a connection, it sends that connection
+  `session/admissible` ([`04-protocol.md`](../specs/memory-v2/04-protocol.md)
+  §4.2.2), and the storage manager answers a notice naming its own principal
+  with that retry, which the server may still refuse. The notice reaches a
+  connection that is still open: a shared connection, or the connection of a
+  session the change revoked. A routed connection is told nothing, and a
+  connection-per-space client closes the connection its first refusal of a
+  space arrived on, so in those cases the event has to come from the host. The
+  shell asks on events a grant may lie behind: the person pressing the
+  renderer's Retry button, navigating into a refused space, or coming back to
+  the page. [`space-access.md`](space-access.md) lists them. Retrying a denied
+  reopen on a schedule until an administrator acts is the retry-loop the
+  engineering principles forbid; the CLI reports the error and exits. A
+  genuinely transient or recoverable condition — a token-refresh window, a
+  challenge race, a transport blip — can heal on a fresh connection when the
+  transport supports reset. Classification as retriable does not supply that
+  transport capability.
 - **A wedged-but-reachable backend still waits.** With no wall-clock guard, a
   backend that completes the handshake but then never answers the authenticated
   sync (and never closes the transport) leaves `synced()` waiting with no event
