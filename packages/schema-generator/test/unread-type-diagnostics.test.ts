@@ -264,6 +264,30 @@ describe("unread-type-diagnostics", () => {
       expect(warnings).toEqual([]);
     });
 
+    it("reports nothing for an intersection whose labeled constituent accepts nothing", async () => {
+      // A labeled `never` reads as `{ not: true }` with its labels, which
+      // accepts nothing as `false` does.
+
+      const source = `
+        type Cfc<T, Meta> =
+          T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+        type Confidential<T, X extends readonly unknown[]> =
+          Cfc<T, { confidentiality: X }>;
+      `;
+      const written = ts.createSourceFile(
+        "synthetic.ts",
+        `type Result = Confidential<never, readonly ["s"]>;`,
+        ts.ScriptTarget.Latest,
+        true,
+      ).statements[0] as ts.TypeAliasDeclaration;
+      const warnings = await warningsFor(
+        f.createIntersectionTypeNode([unresolvable("Moot"), written.type]),
+        source,
+      );
+
+      expect(warnings).toEqual([]);
+    });
+
     it("reports an unread constituent of an intersection that accepts values", async () => {
       const warnings = await warningsFor(
         f.createIntersectionTypeNode([

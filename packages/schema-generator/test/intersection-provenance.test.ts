@@ -636,6 +636,92 @@ describe("SchemaGenerator", () => {
         propertyA({ ifc: labelS, scope: "user" }),
       ],
       [
+        "keeps the default declarations beside `any` agree on",
+        `type M1 = { a: Default<string, "x"> }; type M2 = { a: any };`,
+        propertyA({ default: "x" }),
+      ],
+      [
+        "keeps evidence off a value whose members a constituent of none does not hold",
+        `
+          type M1 = { a: { x: string } };
+          type M2 = { a: Cfc<unknown, { integrity: readonly ["v"] }> };
+        `,
+        propertyA(objectX),
+      ],
+      [
+        "keeps added integrity off a value whose members a constituent of none does not hold",
+        `
+          type M1 = { a: { x: string } };
+          type M2 = { a: Cfc<unknown, { addIntegrity: readonly ["v"] }> };
+        `,
+        propertyA(objectX),
+      ],
+      [
+        "keeps a restriction on the whole value where it keeps evidence off it",
+        `
+          type M1 = { a: { x: string } };
+          type M2 = {
+            a: Cfc<unknown, {
+              confidentiality: readonly ["s"];
+              integrity: readonly ["v"];
+            }>;
+          };
+        `,
+        propertyA({ ...objectX, ifc: labelS }),
+      ],
+      [
+        "keeps evidence on the members a constituent declares",
+        `
+          type M1 = { a: { x: string; y: number } };
+          type M2 = { a: Cfc<{ x: string }, { integrity: readonly ["v"] }> };
+        `,
+        propertyA({
+          type: "object",
+          properties: {
+            x: { type: "string", ifc: { integrity: ["v"] } },
+            y: { type: "number" },
+          },
+          required: ["x", "y"],
+        }),
+      ],
+      [
+        "keeps evidence on a value with no members of its own",
+        `
+          type M1 = { a: string };
+          type M2 = { a: Cfc<unknown, { integrity: readonly ["v"] }> };
+        `,
+        propertyA({ type: "string", ifc: { integrity: ["v"] } }),
+      ],
+      [
+        "keeps a union's evidence on the members of the arm the value is",
+        `
+          type M1 = { a: { z: number } };
+          type M2 = {
+            a: Cfc<{ x: string } | { z: number }, {
+              integrity: readonly ["v"];
+            }>;
+          };
+        `,
+        propertyA({
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                z: { type: "number" },
+                x: { type: "string", ifc: { integrity: ["v"] } },
+              },
+              required: ["z", "x"],
+            },
+            {
+              type: "object",
+              properties: { z: { type: "number" } },
+              required: ["z"],
+              ifc: { integrity: ["v"] },
+            },
+          ],
+        }),
+      ],
+      [
         "keeps the cap of a cell beside `any` as the value's scope",
         `type M1 = { a: PerUser<Cell<string>> }; type M2 = { a: any };`,
         propertyA({ scope: "user" }),
@@ -879,6 +965,57 @@ describe("SchemaGenerator", () => {
       expect(byNode).toThrow(
         "Nested scope wrappers require a cell boundary between scopes.",
       );
+    });
+
+    it("throws where `any` meets a definition whose labels it cannot read yet", async () => {
+      // `Node` is still being generated where its own member meets `any`,
+      // so the labels it states are read once generation is done.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          interface Node {
+            secret: Confidential<string, readonly ["s"]>;
+            child?: { c: Node } & { c: any };
+          }
+        `,
+        "Node",
+      );
+      const message = "it meets `Node` inside the definition of `Node`";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    it("keeps a value where `any` meets a definition before it is written with its labels", async () => {
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          interface Node {
+            secret: Confidential<string, readonly ["s"]>;
+            child?: { c: Node } & { c: Confidential<any, readonly ["s"]> };
+          }
+        `,
+        "Node",
+      );
+      const expected: JSONSchema = {
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              secret: { type: "string", ifc: labelS },
+              child: {
+                type: "object",
+                properties: { c: { ifc: labelS } },
+                required: ["c"],
+              },
+            },
+            required: ["secret"],
+          },
+        },
+      };
+
+      expect(byType()).toEqual(expected);
+      expect(byNode()).toEqual(expected);
     });
 
     it("throws for a property two declarations cap in different scopes", async () => {

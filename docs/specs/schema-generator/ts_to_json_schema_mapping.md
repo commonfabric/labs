@@ -187,10 +187,15 @@ besides which values it holds is set aside while the values are settled and
 stated of what they settle to, as the type path reads it from the checker's
 type: its scope and its default belong to the whole value, so two scopes
 refuse the intersection, as a scope wrapper nested in another with no cell
-between them, and defaults that differ leave none; its labels go on the
+between them, and defaults that differ leave none; its labels are placed as
+the type path places a CFC carrier's (§11): a restriction goes on the
 members of the result it declares, or on the whole result where it declares
-all of them or none, and a union's labels go on the members any of its arms
-declares. A keyword written beside a reference is read in place of the
+all of them or none, and evidence (`integrity`, `addIntegrity`) goes on the
+members it declares, or, where it declares none, on the whole result only if
+that has no members either, as a member another constituent holds may hold
+data the labeled one never established; a union's restrictions go on the
+members any of its arms declares, and its evidence on the members of the arm
+the value is. A keyword written beside a reference is read in place of the
 definition's, through a chain of references, except its labels, which join
 the definition's. A merge met again inside itself, as the members of two
 recursive definitions meet, is written where it starts and as a definition
@@ -1023,7 +1028,15 @@ Default paths of §7:
   gives it `{ scope: "user" }`, `{ a: Integrity<string, I> } & { a: any }`
   gives it `true`, and `{ a: Integrity<any, I> } & { a: string }` gives it
   `{ ifc: { integrity: I } }`. A declaration accepting nothing (`never`)
-  leaves the property that declaration's schema, labels included.
+  leaves the property that declaration's schema, labels included. The default
+  the declarations agree on is kept as well. Where `any` meets a reference to
+  a definition still being generated, as a recursive type's own member does,
+  that definition's labels cannot be read there; once generation is done, a
+  value that kept fewer of them than the definition states is refused ("A
+  value intersected with `any` keeps the labels of what it is intersected
+  with, but it meets `Node` inside the definition of `Node`, where those
+  labels cannot be read yet."), and a declaration of `any` stating them is
+  kept.
 - The property's description, the tags drawn from it, and its deprecation
   mark are the first declaration's where it has them, and otherwise those of
   the schema it takes. A later declaration's differing description is noted

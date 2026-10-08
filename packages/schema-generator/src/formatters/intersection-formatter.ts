@@ -3,6 +3,7 @@ import type {
   MutableJSONSchemaObj,
   SchemaScope,
 } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
@@ -12,6 +13,7 @@ import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import { labelsBesideAnyValue } from "../ifc-labels.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { withOriginOf } from "../schema-origins.ts";
+import { dedupeByValueEqual } from "../value-equality.ts";
 import {
   cloneSchemaDefinition,
   getNativeTypeSchema,
@@ -156,19 +158,37 @@ export function sharedPropertySchema(
 /**
  * The schema of an intersection the checker gives `any`, of constituents
  * with these schemas: any value, with the labels kept of them
- * (`labelsBesideAnyValue()`) and the scope they are declared in. `any` keeps
- * nothing of a constituent beside it, so a restriction or a scope stated
- * there would otherwise fail open.
+ * (`labelsBesideAnyValue()`), and the scope they are declared in and the
+ * default they agree on (`stated`). `any` keeps nothing of a constituent
+ * beside it, so a restriction or a scope stated there would otherwise fail
+ * open. A definition met before it is written is checked once generation is
+ * done (`anyValuesBesideUnwritten`).
  */
 export function anyValueSchema(
   constituents: readonly MutableJSONSchema[],
-  scope: SchemaScope | undefined,
+  stated: {
+    readonly scope?: SchemaScope | undefined;
+    readonly default?: MutableJSONSchemaObj["default"] | undefined;
+  },
   context: GenerationContext,
 ): MutableJSONSchema {
-  const labels = labelsBesideAnyValue(constituents, context.definitions);
+  const unwritten = new Set<string>();
+  const labels = labelsBesideAnyValue(
+    constituents,
+    context.definitions,
+    unwritten,
+  );
+  if (unwritten.size > 0) {
+    context.anyValuesBesideUnwritten.push({
+      definitions: context.definitions,
+      unwritten: [...unwritten],
+      kept: labels,
+    });
+  }
   const schema: MutableJSONSchemaObj = {
     ...(labels !== undefined ? { ifc: labels } : {}),
-    ...(scope !== undefined ? { scope } : {}),
+    ...(stated.scope !== undefined ? { scope: stated.scope } : {}),
+    ...(stated.default !== undefined ? { default: stated.default } : {}),
   };
   return Object.keys(schema).length > 0 ? schema : true;
 }
@@ -459,9 +479,21 @@ export class IntersectionFormatter implements TypeFormatter {
     ];
     if (scopes.length > 1) throw propertyScopesError(key, scopes);
     if ((type.flags & ts.TypeFlags.Any) !== 0) {
+      const defaults = dedupeByValueEqual(
+        schemas.flatMap((schema) =>
+          isObjectOrArray(schema) && schema.default !== undefined
+            ? [schema.default as FabricValue]
+            : []
+        ),
+      );
       return sharedPropertySchema(
         key,
-        anyValueSchema(schemas, scopes[0], context),
+        anyValueSchema(schemas, {
+          scope: scopes[0],
+          ...(defaults.length === 1
+            ? { default: defaults[0] as MutableJSONSchemaObj["default"] }
+            : {}),
+        }, context),
         schemas,
         context,
       );
