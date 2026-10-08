@@ -386,11 +386,13 @@ from this design, as below.
 - **The catalog.** Creating a room registers its space in the user's Home
   shared-space catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), in the
-  creating transaction once the space's name has resolved, and so does
-  accepting one. Finding a direct room again, or accepting a room, restores its
-  entry if it was archived. The manager's `rooms` is still its own list:
-  forgetting a room removes it from `rooms` and leaves its catalog entry
-  saved, and a room the share intake registers is not in `rooms`.
+  creating transaction once the space's name has resolved, and so does accepting
+  a room a manager created. Each room registered is registered under the
+  manager's own host, since a pattern can't read which host serves a space.
+  Finding a direct room again, or accepting a room, restores its entry if it was
+  archived. The manager's `rooms` is still its own list: forgetting a room
+  removes it from `rooms` and leaves its catalog entry saved, and a room the
+  share intake registers is not in `rooms`.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

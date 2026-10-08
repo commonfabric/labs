@@ -28,12 +28,14 @@ keep the two consistent: `direct` holds one entry per counterpart, including
 forgotten rooms, and `rooms` can also hold a second direct room with the same
 counterpart after crossing creations.
 
-Creating or accepting a room also registers the room's space in the user's
-shared-space catalog, Home's, which Home hands the manager
+Creating a room, or accepting one a manager created, also registers the room's
+space in the user's shared-space catalog, Home's, which Home hands the manager
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), and
-finding a direct room again, or accepting a room, restores its entry there if
-it was archived. A manager given no catalog keeps one of its own. `rooms` is
-the manager's own list all the same.
+finding a direct room again, or accepting a room, restores its entry there if it
+was archived. A space's own chat, which no manager created, is accepted into
+`rooms`, and nothing is registered, since its space is the social space it
+belongs to. A manager given no catalog keeps one of its own. `rooms` is the
+manager's own list all the same.
 
 Creating or accepting a room also adds this user's profile to the room's
 participants, through the room's `addParticipant`, from an event of its own

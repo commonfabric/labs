@@ -281,10 +281,10 @@ nobody opens, and the wish does not open it; a custom home pattern
 Until then `wish({ query: "#chatManager" })` reports an error naming both
 remedies, rather than resolving to nothing.
 
-Home hands the manager its shared-space catalog
-([Shared-space catalog](../../features/shared-space-catalog.md)), and the
-manager registers there each room it creates or accepts, as a
-`fabrichat-room` entry.
+Home hands the manager its shared-space catalog ([Shared-space
+catalog](../../features/shared-space-catalog.md)), and the manager registers
+there each room it creates, and each room a manager created that it accepts, as
+a `fabrichat-room` entry.
 
 ## Custom Home Pattern
 
