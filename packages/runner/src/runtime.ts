@@ -156,6 +156,7 @@ import {
   resolveCommitBackpressure,
 } from "./scheduler/backpressure.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
+import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   getContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
@@ -4462,6 +4463,10 @@ export class Runtime {
    * space while it constructs the graph. On `undefined` the caller records the
    * name as pending, and the runner resolves it with
    * {@link resolveInSpaceName} before running the handler or action again.
+   * Under server execution a client leaves a name with no record unresolved
+   * instead: a handler's speculative echo withdraws rather than running again,
+   * and a reactive action runs again only a bounded number of times (see
+   * {@link InSpaceTargetUnresolved}).
    */
   resolveInSpaceNameSync(
     space: MemorySpace,
@@ -4486,13 +4491,19 @@ export class Runtime {
    * same request.
    *
    * The calling space's allocation record decides when it exists. Otherwise
-   * this creates a space owned by `options.owner` with `options.grants`, whose
-   * DID the next run making the same request records. With `options.root`,
-   * the space's genesis commit reserves its root at the address
-   * {@link inSpaceRootCause} derives there, for the run that records it to
-   * place there, and with `options.spaceKind` it declares the space's kind. A
-   * record naming an existing space is the answer whatever the request, so a
-   * space created before a request named a kind keeps the kind it was created
+   * a runtime that creates spaces for names creates one owned by
+   * `options.owner` with `options.grants`, whose DID the next run making the
+   * same request records. Under server execution only the serving runtime
+   * creates them: the run a client makes of the same handler is a
+   * speculative echo of the serving runtime's, and a space it created would
+   * be one no record ever names, so a client leaves a name with no record
+   * unresolved, and throws {@link InSpaceTargetUnresolved}. With
+   * `options.root`, the space's genesis commit reserves its root at the
+   * address {@link inSpaceRootCause} derives there, for the run that records
+   * it to place there, and with `options.spaceKind` it declares the space's
+   * kind. A record naming an existing space is the answer whatever the
+   * request, so a space created before a request named a kind keeps the kind
+   * it was created
    * with.
    * A record naming a DID that has no history is reported rather than
    * replaced: the record is immutable, and replacing the space it names would
@@ -4504,6 +4515,8 @@ export class Runtime {
    * access-control document, which names its owner, and with
    * `options.root` its root reservation, which nothing places a root for.
    *
+   * @throws {InSpaceTargetUnresolved} Under server execution, on a client,
+   *   if no record names the space.
    * @throws If the record names a DID that is not a space, if loading what
    *   decides that fails, or if creating a space fails.
    */
@@ -4528,6 +4541,9 @@ export class Runtime {
           );
         }
         return recorded;
+      }
+      if (this.experimental.serverExecution === true && !this.servingPosture) {
+        throw new InSpaceTargetUnresolved([name]);
       }
       const { root, ...access } = options;
       const created = this.#inSpaceCreated.get(creationKey) ??

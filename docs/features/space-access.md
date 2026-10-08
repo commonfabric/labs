@@ -214,6 +214,14 @@ could reach a document either way. The run after it returns the new space's
 DID, for the child and for anything linking to it, and a later handler reading
 the child from the data that run wrote gets the same DID.
 
+With server execution on, a client creates no space for a name, since only the
+serving runtime does. A client's run of a handler naming a space that has no
+allocation record yet is a speculative echo of the serving runtime's run, and
+withdraws instead of running again; a client's reactive computation is run
+again a bounded number of times. So on a client, `spaceOf(target)` returns the
+new space's DID only once the record has arrived. See
+[client speculation](../specs/server-side-execution/speculation.md).
+
 The DID carries no label. A space's DID is an address rather than a principal,
 and a stored reference to a cell in another space already records that space's
 DID, so it is in data anyone holding the reference can read.

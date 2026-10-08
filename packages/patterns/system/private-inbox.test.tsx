@@ -524,12 +524,22 @@ export default pattern(() => {
   // that profile is in its list and still points at it, retaining an inbox it
   // held, and otherwise keeps what it holds, or holds none. A profile pointing
   // at another inbox keeps its pointer, and the seed step points a new profile
-  // at the adopted inbox. Creating an inbox when no profile points at one is
-  // covered by `integration/private-inbox-multi-runtime.test.ts`.
+  // at the adopted inbox. A Home holding none creates one when no profile
+  // points at an inbox.
   const third = new Writable<PrivateInboxHolder>({});
   const holdThirdInbox = holdNewInbox({ holder: third });
 
   // Homes holding no inbox.
+  const creatingUnpointed = ProfileHome({ initialName: "Creating unpointed" });
+  const creatingEarlier = EarlierVintageProfile({});
+  const creating = new Writable<PrivateInboxHolder>({});
+  const creatingRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureCreating = EnsuringHome({
+    privateInbox: creating,
+    retainedPrivateInboxes: creatingRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [creatingUnpointed, creatingEarlier] as any,
+  });
   const loneUnpointed = ProfileHome({ initialName: "Lone unpointed" });
   const loneAdvertising = EarlierVintageProfile({});
   const adoptingOne = new Writable<PrivateInboxHolder>({});
@@ -772,6 +782,7 @@ export default pattern(() => {
     const vetted = elsewhere.get().piece?.resolveAsCell();
     const another = third.get().piece?.resolveAsCell();
     const homeInbox = home.get().piece?.resolveAsCell();
+    ensureCreating.ensure.send({});
     ensureAdoptingOne.ensure.send({ adopt: vetted, from: loneAdvertising });
     ensureAdoptingAmongOthers.ensure.send({
       adopt: vetted,
@@ -806,6 +817,19 @@ export default pattern(() => {
       from: aliasAdvertising,
     });
   });
+  // The created inbox is none of the others. Asserted again after the second
+  // ensure, where a Home that created another inbox would hold one its
+  // profiles do not point at.
+  const assert_an_inbox_is_created_when_none_is_advertised = assert(() =>
+    creating.get().piece !== undefined &&
+    !equals(creating.get().piece, home.get().piece) &&
+    !equals(creating.get().piece, elsewhere.get().piece) &&
+    !equals(creating.get().piece, third.get().piece) &&
+    equals(creatingUnpointed.inbox?.piece, creating.get().piece) &&
+    equals(creatingEarlier.inbox?.piece, creating.get().piece) &&
+    creatingRetained.get().length === 0 &&
+    ensureCreating.refusal.refusal === undefined
+  );
   const assert_the_named_inbox_is_adopted = assert(() =>
     equals(adoptingOne.get().piece, elsewhere.get().piece) &&
     equals(loneUnpointed.inbox?.piece, elsewhere.get().piece) &&
@@ -1341,6 +1365,7 @@ export default pattern(() => {
       { action: action_advertise_inboxes },
       { action: action_advertise_a_second_inbox },
       { action: action_ensure_inboxes },
+      { assertion: assert_an_inbox_is_created_when_none_is_advertised },
       { assertion: assert_the_named_inbox_is_adopted },
       { assertion: assert_another_advertised_inbox_is_left_as_it_was },
       {
@@ -1371,6 +1396,7 @@ export default pattern(() => {
       { assertion: assert_a_held_inbox_reached_through_another_link_is_kept },
       // Ensuring again changes nothing, and retains nothing more.
       { action: action_ensure_inboxes },
+      { assertion: assert_an_inbox_is_created_when_none_is_advertised },
       { assertion: assert_the_named_inbox_is_adopted },
       { assertion: assert_another_advertised_inbox_is_left_as_it_was },
       {
