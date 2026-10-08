@@ -15,7 +15,8 @@
  *   names for the same request. `continues` names an ended job of the same
  *   caller and profile whose history the new job runs with: a job no such
  *   caller and profile hold answers `404` (`not_found`), and one that has not
- *   ended answers `409` (`parent_running`).
+ *   ended answers `409` (`parent_running`). A key already used is judged
+ *   first, as a replay or a conflict, whatever parent it names.
  * - `GET /jobs?limit=n` — the newest jobs, newest first.
  * - `GET /jobs/<id>` — one job.
  * - `POST /jobs/<id>/cancel` — ask a job to stop.
@@ -468,7 +469,12 @@ async (request: Request): Promise<Response> => {
         return refuse(400, "beyond_profile", narrowed.refusal);
       }
       const { continues } = read.request;
-      if (continues !== undefined) {
+      // A key already used is a replay or a conflict, which `enqueue`
+      // answers; only a new job's parent is judged.
+      if (
+        continues !== undefined &&
+        !store.holdsKey(read.caller, read.idempotencyKey)
+      ) {
         const parent = store.get(continues);
         // Another caller's or profile's job is answered as no job at all,
         // so a request learns nothing of a lane it does not run in.

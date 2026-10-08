@@ -255,6 +255,13 @@ export class LocalJobStore {
     return () => this.#listeners.delete(listener);
   }
 
+  /** Whether `caller` has already added a job under `idempotencyKey`. */
+  holdsKey(caller: string, idempotencyKey: string): boolean {
+    return this.#database.prepare(`
+      SELECT 1 FROM jobs WHERE caller = :caller AND idempotency_key = :key
+    `).get({ caller, key: idempotencyKey }) !== undefined;
+  }
+
   /**
    * Adds a job, or returns the one `caller` already added under
    * `idempotencyKey` when its request is the same; `created` says which. A

@@ -280,6 +280,23 @@ describe("local-jobs/api", () => {
       expect((await response.json()).code).toBe("idempotency_conflict");
     });
 
+    it("answers a used key as a conflict before judging the parent it names", async () => {
+      const { post, parent, store } = await withParent();
+      await post("/jobs", reply(parent));
+      const live = (await (await post("/jobs", {
+        ...BODY,
+        idempotencyKey: "weaver-ask:3",
+      })).json()).job.id;
+
+      for (const named of ["job-missing", live]) {
+        const response = await post("/jobs", reply(named));
+
+        expect(response.status).toBe(409);
+        expect((await response.json()).code).toBe("idempotency_conflict");
+      }
+      expect(store.list(10)).toHaveLength(3);
+    });
+
     it("returns 404, adding nothing, for a job no caller holds", async () => {
       const { post, store } = await withParent();
 
