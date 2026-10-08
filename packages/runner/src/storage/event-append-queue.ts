@@ -1,10 +1,12 @@
 // The client-side event-append queue (server-execution v2 Phase 3;
 // events.md §5, speculation.md §5, LT9). Under the flag a client's
 // handler fire commits ONLY the event — an authored append to the
-// stream's sidecar doc (events.md §1, §7) — and this queue owns that
-// commit's delivery: fired-order discharge, retry across transport
-// loss and session replacement, and the duplicate-as-delivered
-// classification the dedupe horizon makes sound.
+// stream's sidecar doc (events.md §1, §7), installing alongside it the
+// schema documents its payload's links reference and the space was not
+// known to hold — and this queue owns that commit's delivery:
+// fired-order discharge, retry across transport loss and session
+// replacement, and the duplicate-as-delivered classification the dedupe
+// horizon makes sound.
 //
 // Why a queue and not a bare transact: events are INTENTS. Unlike an
 // ordinary authored write — whose CAS staleness needs application-level
