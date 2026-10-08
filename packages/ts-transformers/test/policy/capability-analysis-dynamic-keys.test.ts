@@ -8,7 +8,9 @@
  * the identity markings under the prefix, since the unknown member can be a
  * compared one. A key that reads a capture is a read of its own, wherever the
  * access sits. A use the analysis cannot bound, such as `.key()` with a key
- * that can name any member, stays a wildcard.
+ * that can name any member, stays a wildcard, and a write through such a key
+ * is a wildcard that also records a write of the prefix, so the prefix's
+ * capability says it is written.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -17,6 +19,8 @@ import ts from "typescript";
 
 import { analyzeFunctionCapabilities } from "../../src/policy/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { callSchemas, parseModule } from "../transformed-ast.ts";
+import { transformSource } from "../utils.ts";
 
 const PRELUDE = `import { type Cell, equals } from "commonfabric";
 type Entry = { space: string; tags: Record<string, string> };
@@ -34,12 +38,13 @@ declare const otherKey: string;
 /**
  * How the function `read` declared in `source`, after `PRELUDE` and compiled
  * beside the commonfabric types, uses its single parameter: the paths it
- * reads and reads in full, the identity paths it keeps, all dot-joined, and
- * whether the use is a wildcard.
+ * reads, reads in full and writes, the identity paths it keeps, all
+ * dot-joined, and whether the use is a wildcard.
  */
 function usage(source: string): {
   readPaths: string[];
   fullShapePaths: string[];
+  writePaths: string[];
   identityPaths: string[];
   wildcard: boolean;
 } {
@@ -108,6 +113,7 @@ function usage(source: string): {
   return {
     readPaths: join(param.readPaths),
     fullShapePaths: join(param.fullShapePaths),
+    writePaths: join(param.writePaths),
     identityPaths: join(param.identityPaths),
     wildcard: param.wildcard,
   };
@@ -243,6 +249,58 @@ describe("capability-analysis-dynamic-keys", () => {
   catalog.key("offers").key(anyKey).get().space;`);
 
       expect(read.wildcard).toBe(true);
+    });
+  });
+
+  describe("a write through a key that can name any member", () => {
+    it("records a write of the prefix beside a read through `.key()`", () => {
+      const write = usage(
+        `const read = ({ counts, idx }: { counts: Cell<number[]>; idx: Cell<number> }) => {
+  const i = idx.get();
+  counts.key(i).set(counts.key(i).get() + 1);
+};`,
+      );
+
+      expect(write.writePaths).toContain("counts");
+      expect(write.wildcard).toBe(true);
+    });
+
+    it("records a write of the prefix beside a read through `.get()`", () => {
+      const write = usage(
+        `const read = ({ counts, idx }: { counts: Cell<number[]>; idx: Cell<number> }) => {
+  const i = idx.get();
+  counts.key(i).set(counts.get()[i] + 1);
+};`,
+      );
+
+      expect(write.writePaths).toContain("counts");
+      expect(write.wildcard).toBe(true);
+    });
+
+    it("keeps a handler's state cell writable when it is written through such a key", async () => {
+      const output = await transformSource(
+        `import { handler, pattern, Writable } from "commonfabric";
+
+export const bump = handler<
+  void,
+  { counts: Writable<number[]>; idx: Writable<number> }
+>((_, { counts, idx }) => {
+  const i = idx.get();
+  counts.key(i).set(counts.key(i).get() + 1);
+});
+
+export default pattern(() => ({}));
+`,
+        { types: COMMONFABRIC_TYPES },
+      );
+      const state = callSchemas(parseModule(output), "handler").find((schema) =>
+        (schema.properties as Record<string, unknown> | undefined)?.counts
+      );
+
+      expect(
+        (state?.properties as Record<string, { asCell?: string[] }>).counts
+          .asCell,
+      ).toEqual(["cell"]);
     });
   });
 });

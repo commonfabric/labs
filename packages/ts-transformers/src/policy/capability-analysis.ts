@@ -2831,7 +2831,11 @@ export function analyzeFunctionCapabilities(
 
     const trackWriteRef = (ref: SourceRef): void => {
       if (ref.dynamic) {
+        // Which member is written is known only at run time, so the write
+        // stays a wildcard, and it is a write of the prefix above the key,
+        // so the prefix's capability says that it is written.
         markWildcard(ref.root, ref.path);
+        trackWrite(ref.root, ref.path);
         return;
       }
       trackWrite(ref.root, ref.path);
@@ -2957,7 +2961,6 @@ export function analyzeFunctionCapabilities(
       if (!ref) return;
       if (ref.dynamic) {
         markWildcard(ref.root, ref.path);
-        return;
       }
       marker(ref.root, ref.path);
     };

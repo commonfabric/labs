@@ -2068,9 +2068,11 @@ adjustments:
   is not a wildcard: the rest of the root still shrinks, and the
   scheduler-scope marker is kept. A key that reads a capture
   (`items[selected.get()]`) is a read of its own wherever the access sits. A
-  write through such a key, a `.key()` call with one, and an argument passed to
-  a callee whose signature or summary gives it a capability stay wildcards, as
-  does a destructuring by a computed key (`const { [key]: value } = x`).
+  write through such a key (`counts.key(i).set(v)`) stays a wildcard and is
+  also recorded as a write of the prefix, so the prefix's capability says it
+  is written. A `.key()` call with such a key, an argument passed to a callee
+  whose signature or summary gives it a capability, and a destructuring by a
+  computed key (`const { [key]: value } = x`) stay wildcards.
   The suppression applies only to the calls of a chain that resolves in full,
   judged for each operand of a fallback on its own, so a chain that does not
   resolve keeps the blanket read: its `.get()` receiver is read in full
