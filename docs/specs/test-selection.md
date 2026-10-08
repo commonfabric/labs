@@ -863,9 +863,13 @@ crediting the selector with a decision nothing made. Where the manifest says the
 test was to have run — the packing reached it, or the store has never seen it,
 which makes it mandatory — a run with no record of it recorded less than it ran,
 and that is a different statement from a run that did not reach it. A test the
-packing did not reach is coverage this design traded away rather than something
-the change missed, and it must be described that way. The failure raises the
-test's score, so the next change in that area runs it.
+packing did not reach is something the change did not miss, and it must be
+described by what the plan the lanes computed says about leaving it out: its
+unit runs whole and holds a withheld test, or no lane can hold it, or the tests
+that had to run left no room in the lanes for anything else, or the lanes filled
+what those tests left with other tests. A report must
+not say more than the plan records, and in particular must not attribute the
+choice to the test's score.
 
 A report addresses the change and never a person. No author is named, no
 figure is counted per author or per team, and no history of such reports
