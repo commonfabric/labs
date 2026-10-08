@@ -565,9 +565,84 @@ describe("SchemaGenerator", () => {
         { ...UNSUPPORTED_NON_OBJECT as object, ifc: labelS },
       ],
       [
-        "returns `true` for a property one declaration types as `any`",
+        "keeps the scope of a declaration beside one typed as `any`",
         `type M1 = { a: any }; type M2 = { a: PerUser<string> };`,
-        propertyA(true),
+        propertyA({ scope: "user" }),
+      ],
+      [
+        "keeps the labels of a declaration beside one typed as `any`",
+        `
+          type M1 = { a: Confidential<string, readonly ["s"]> };
+          type M2 = { a: any };
+        `,
+        propertyA({ ifc: labelS }),
+      ],
+      [
+        "keeps a member's labels on the whole value beside `any`",
+        `
+          type M1 = { a: Confidential<{ x: string }, readonly ["s"]> };
+          type M2 = { a: any };
+        `,
+        propertyA({ ifc: labelS }),
+      ],
+      [
+        "keeps the labels a named definition holds beside `any`",
+        `
+          interface Secret { x: Confidential<string, readonly ["s"]> }
+          type M1 = { a: Secret };
+          type M2 = { a: any };
+        `,
+        propertyA({ ifc: labelS }),
+      ],
+      [
+        "keeps an integrity floor beside `any`",
+        `
+          type M1 = { a: Cfc<string, { requiredIntegrity: readonly ["r"] }> };
+          type M2 = { a: any };
+        `,
+        propertyA({ ifc: { requiredIntegrity: ["r"] } }),
+      ],
+      [
+        "drops the integrity a declaration beside `any` claims",
+        `
+          type M1 = {
+            a: Cfc<string, {
+              confidentiality: readonly ["s"];
+              integrity: readonly ["i"];
+            }>;
+          };
+          type M2 = { a: any };
+        `,
+        propertyA({ ifc: labelS }),
+      ],
+      [
+        "keeps the integrity a declaration typed as `any` claims",
+        `
+          type M1 = { a: Cfc<any, { integrity: readonly ["i"] }> };
+          type M2 = { a: string };
+        `,
+        propertyA({ ifc: { integrity: ["i"] } }),
+      ],
+      [
+        "keeps the labels and scope of a declaration of `any` beside a primitive",
+        `
+          type M1 = { a: string };
+          type M2 = { a: PerUser<Confidential<any, readonly ["s"]>> };
+        `,
+        propertyA({ ifc: labelS, scope: "user" }),
+      ],
+      [
+        "keeps the cap of a cell beside `any` as the value's scope",
+        `type M1 = { a: PerUser<Cell<string>> }; type M2 = { a: any };`,
+        propertyA({ scope: "user" }),
+      ],
+      [
+        "returns the labeled `never` a declaration states beside a primitive",
+        `
+          type M1 = { a: string };
+          type M2 = { a: Confidential<never, readonly ["s"]> };
+        `,
+        propertyA({ not: true, ifc: labelS }),
       ],
       [
         "returns `false` for a property a named `never` type declares",
@@ -758,6 +833,32 @@ describe("SchemaGenerator", () => {
 
       expect(byType).toThrow(message);
       expect(byNode).toThrow(message);
+    });
+
+    it("throws for a property a declaration of `any` puts in another scope", async () => {
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = { a: PerUser<any> };
+        type M2 = { a: PerSpace<string> };
+      `);
+      const message =
+        "The property `a` is declared in scope `user` by one member of an " +
+        "intersection and in scope `space` by another.";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    it("keeps the labels of a whole intersection with `any` by the node path alone", async () => {
+      // The checker gives the type path `any` itself, which holds nothing of
+      // the constituent beside it; the node path reads both.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = Confidential<string, readonly ["s"]>;
+        type M2 = any;
+      `);
+
+      expect(byType()).toEqual(true);
+      expect(byNode()).toEqual({ ifc: labelS });
     });
 
     it("throws for a property two declarations cap in different scopes", async () => {

@@ -35,6 +35,46 @@ type IfcLabels = Readonly<Record<string, unknown>>;
 const LOCAL_DEFINITION_PREFIX = "#/$defs/";
 
 /**
+ * The labels that are evidence a value carries, which a part of a value may
+ * carry only where it provably came from the policy's payload. Every other
+ * label restricts what may happen to the value or is a claim the runtime
+ * verifies at the write, and is safe wherever the payload's data may be.
+ */
+export const EVIDENCE_LABELS: ReadonlySet<string> = new Set([
+  "integrity",
+  "addIntegrity",
+]);
+
+/**
+ * The keywords a schema accepting any value may carry: what it states about
+ * the whole value (`scope`, `default`), its labels, and its documentation.
+ */
+const BESIDE_ANY_VALUE: ReadonlySet<string> = new Set([
+  "ifc",
+  "scope",
+  "default",
+  "description",
+  "tags",
+  "deprecated",
+  "$comment",
+]);
+
+/** Whether `schema` accepts any value, whatever it states beside that. */
+export const acceptsAnyValue = (schema: MutableJSONSchema): boolean =>
+  schema === true ||
+  (isObjectOrArray(schema) && !Array.isArray(schema) &&
+    Object.keys(schema).every((key) => BESIDE_ANY_VALUE.has(key)));
+
+/** Whether `schema` accepts no value, whatever it states beside that. */
+export const acceptsNoValue = (schema: MutableJSONSchema): boolean =>
+  schema === false ||
+  (isObjectOrArray(schema) && !Array.isArray(schema) &&
+    schema.not === true &&
+    Object.keys(schema).every((key) =>
+      key === "not" || BESIDE_ANY_VALUE.has(key)
+    ));
+
+/**
  * The labels of one value that `inner` and then `outer` both declared:
  * confidentiality joined, every other key declared by one of them or alike by
  * both. A key declared as `undefined` (a label the lowering could not read)
@@ -262,4 +302,62 @@ export const stateReferencedIfcLabels = (schema: MutableJSONSchema): void => {
     }, { includeDefs: true, includeUnused: true });
   };
   visit(schema);
+};
+
+/**
+ * The labels an intersection keeps of `constituents` where the checker gives
+ * it `any`, combined, or `undefined` where it keeps none. A constituent that
+ * itself accepts any value is the whole value, and keeps every label it
+ * states. Of any other, the value may hold that constituent's data anywhere
+ * and is not provably its value: its restrictions, wherever in its value they
+ * are written and through the definitions in `definitions` its references
+ * reach, go on the whole value, and its evidence (`EVIDENCE_LABELS`) goes
+ * nowhere.
+ */
+export const labelsBesideAnyValue = (
+  constituents: readonly MutableJSONSchema[],
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): Record<string, unknown> | undefined => {
+  let kept: Record<string, unknown> | undefined;
+  const keep = (labels: IfcLabels) => {
+    if (Object.keys(labels).length > 0) {
+      kept = combineIfcLabels(kept ?? {}, labels);
+    }
+  };
+  for (const constituent of constituents) {
+    if (acceptsAnyValue(constituent)) {
+      if (isObjectOrArray(constituent) && isObjectOrArray(constituent.ifc)) {
+        keep(constituent.ifc);
+      }
+      continue;
+    }
+    const visited = new Set<MutableJSONSchema>();
+    const visit = (node: MutableJSONSchema): void => {
+      if (!isObjectOrArray(node) || visited.has(node)) return;
+      visited.add(node);
+      if (isObjectOrArray(node.ifc)) {
+        keep(
+          Object.fromEntries(
+            Object.entries(node.ifc).filter(([key]) =>
+              !EVIDENCE_LABELS.has(key)
+            ),
+          ),
+        );
+      }
+      if (
+        typeof node.$ref === "string" &&
+        node.$ref.startsWith(LOCAL_DEFINITION_PREFIX)
+      ) {
+        const definition =
+          definitions[node.$ref.slice(LOCAL_DEFINITION_PREFIX.length)];
+        if (definition !== undefined) visit(definition);
+      }
+      forEachSubschema(node, (child) => {
+        visit(child as MutableJSONSchema);
+        return false;
+      }, { includeUnused: true });
+    };
+    visit(constituent);
+  }
+  return kept;
 };

@@ -40,6 +40,7 @@ import {
   UnionFormatter,
 } from "./formatters/union-formatter.ts";
 import {
+  anyValueSchema,
   IntersectionFormatter,
   propertyScopesError,
   sharedPropertySchema,
@@ -91,6 +92,8 @@ import {
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
+  acceptsAnyValue,
+  acceptsNoValue,
   declaredIfcLabels,
   holdsIfcLabels,
   joinMemberIfcLabels,
@@ -841,8 +844,9 @@ type WholeValueKeywords = {
  * What `schemas` state about their whole value (`WholeValueKeywords`), each
  * read as `withBesideKeywords()` reads it. Their scopes must agree: one value
  * stored in two scopes is a scope wrapper nested in another with no cell
- * between them, which generation refuses (`nestedScopeError()`). Defaults that differ
- * leave none, as two `Default` brands that differ leave the checker none.
+ * between them, which generation refuses (`nestedScopeError()`). Defaults
+ * that differ leave none, as two `Default` brands that differ leave the
+ * checker none.
  */
 function wholeValueKeywordsOf(
   schemas: readonly MutableJSONSchema[],
@@ -1192,15 +1196,17 @@ function isPlainArraySchema(schema: MutableJSONSchema): boolean {
  * The schema of an intersection whose constituents have these schemas, as
  * the checker settles one. Nested fallbacks expose their source constituents
  * before reduction, and identical constituents fold. A constituent
- * accepting nothing (`never`) leaves nothing. One accepting anything (`any`)
- * makes the whole accept anything — unless the constituents beside it that
- * are no union already contradict each other, which is as far as the checker
- * looks before `any` wins: it never distributes a union beside `any`, so
- * `any & null & (string | number)` is `any` where `any & null & string` is
- * nothing. Otherwise a union constituent distributes, and every combination
- * of arms is merged on its own (`mergeParts`). What a constituent states
- * about its whole value is set aside while it is settled (`valueOf()`) and
- * stated of what it settles to (`withWholeValueKeywords()`).
+ * accepting nothing (`never`), whatever it states beside that, is what the
+ * whole accepts. One accepting anything (`any`) makes the whole accept
+ * anything, with what `anyValueSchema()` keeps of the constituents — unless
+ * the constituents beside it that are no union already contradict each
+ * other, which is as far as the checker looks before `any` wins: it never
+ * distributes a union beside `any`, so `any & null & (string | number)` is
+ * `any` where `any & null & string` is nothing. Otherwise a union constituent
+ * distributes, and every combination of arms is merged on its own
+ * (`mergeParts`). What a constituent states about its whole value is set
+ * aside while it is settled (`valueOf()`) and stated of what it settles to
+ * (`withWholeValueKeywords()`).
  */
 function intersectionOf(
   constituents: MutableJSONSchema[],
@@ -1219,10 +1225,11 @@ function intersectionOf(
     constituents.flatMap(expand),
     context,
   );
-  if (distinct.some((constituent) => constituent === false)) return false;
   const values = distinct.map((constituent) => valueOf(constituent, context));
+  const nothing = values.find(acceptsNoValue);
+  if (nothing !== undefined) return nothing;
   const arms = values
-    .filter((constituent) => constituent !== true)
+    .filter((constituent) => !acceptsAnyValue(constituent))
     .map((constituent) => {
       const resolved = resolveLocalRef(constituent, context);
       const origin = isObjectOrArray(resolved)
@@ -1241,7 +1248,16 @@ function intersectionOf(
         return domain === undefined ||
           (domain.types.length === 1 && (domain.values?.length ?? 1) === 1);
       });
-    return contradictory(direct, context) ? false : true;
+    if (contradictory(direct, context)) return false;
+    // A cell's cap is its scope here, as the value is no cell to cap.
+    const scopes = new Set(
+      distinct.flatMap((constituent) => {
+        const scope = declaredScopeOf(withBesideKeywords(constituent, context));
+        return scope ? [scope] : [];
+      }),
+    );
+    if (scopes.size > 1) throw nestedScopeError();
+    return anyValueSchema(values, [...scopes][0], context);
   }
   const keywords = wholeValueKeywordsOf(distinct, context);
   const combinations = arms.reduce<LabeledArm[][]>(

@@ -1,6 +1,7 @@
 import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
+  SchemaScope,
 } from "@commonfabric/api";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -8,6 +9,7 @@ import ts from "typescript";
 
 import { attachDocTags, extractDocFromType } from "../doc-utils.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import { labelsBesideAnyValue } from "../ifc-labels.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { withOriginOf } from "../schema-origins.ts";
 import {
@@ -149,6 +151,26 @@ export function sharedPropertySchema(
     value,
     context,
   );
+}
+
+/**
+ * The schema of an intersection the checker gives `any`, of constituents
+ * with these schemas: any value, with the labels kept of them
+ * (`labelsBesideAnyValue()`) and the scope they are declared in. `any` keeps
+ * nothing of a constituent beside it, so a restriction or a scope stated
+ * there would otherwise fail open.
+ */
+export function anyValueSchema(
+  constituents: readonly MutableJSONSchema[],
+  scope: SchemaScope | undefined,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const labels = labelsBesideAnyValue(constituents, context.definitions);
+  const schema: MutableJSONSchemaObj = {
+    ...(labels !== undefined ? { ifc: labels } : {}),
+    ...(scope !== undefined ? { scope } : {}),
+  };
+  return Object.keys(schema).length > 0 ? schema : true;
 }
 
 export class IntersectionFormatter implements TypeFormatter {
@@ -402,6 +424,8 @@ export class IntersectionFormatter implements TypeFormatter {
    * written with. Any other type is formatted as the property's, so what the
    * checker keeps of each declaration, a scope wrapper's brand and a CFC
    * carrier among it, is read from the type, whichever declaration wrote it.
+   * `any` keeps nothing of the declarations beside it, so a property the
+   * checker gives `any` keeps what `anyValueSchema()` says of their schemas.
    * Declarations in different scopes are refused (`propertyScopesError()`),
    * except where the schema declares no scope.
    */
@@ -419,14 +443,28 @@ export class IntersectionFormatter implements TypeFormatter {
     const types = declared.map(({ part }) =>
       checker.getTypeOfSymbol(checker.getPropertyOfType(part, key)!)
     );
-    if (!context.declaresNoScope) {
-      const scopes = new Set(
-        types.flatMap((declaredType) => {
-          const scope = scopeOfScopeWrapper(declaredType, checker);
+    // A declaration's scope is read from the brand on its type, or from its
+    // schema, which alone keeps it where the type is `any`.
+    const scopes = context.declaresNoScope ? [] : [
+      ...new Set(
+        types.flatMap((declaredType, index) => {
+          const schema = schemas[index];
+          const scope = scopeOfScopeWrapper(declaredType, checker) ??
+            (isObjectOrArray(schema)
+              ? schema.scope as SchemaScope | undefined
+              : undefined);
           return scope ? [scope] : [];
         }),
+      ),
+    ];
+    if (scopes.length > 1) throw propertyScopesError(key, scopes);
+    if ((type.flags & ts.TypeFlags.Any) !== 0) {
+      return sharedPropertySchema(
+        key,
+        anyValueSchema(schemas, scopes[0], context),
+        schemas,
+        context,
       );
-      if (scopes.size > 1) throw propertyScopesError(key, [...scopes]);
     }
     const own = types.indexOf(type);
     if (own !== -1) {
