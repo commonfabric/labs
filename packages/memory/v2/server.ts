@@ -989,7 +989,8 @@ class Connection {
   /**
    * The request ids a response has gone out for, each kept until its frame's
    * handling ends, so that a request is answered once: a failure after its
-   * response left is not answered again on the same id.
+   * response left is not answered again on the same id. A frame whose failure
+   * is left to the host keeps its id, which no later request shares.
    */
   #answered = new Set<string>();
 
@@ -1364,9 +1365,8 @@ class Connection {
         this.#receivePresence(parsed);
       } catch (error) {
         if (!this.#answerFailedRequest(parsed, error)) throw error;
-      } finally {
-        this.#answered.delete(parsed.requestId);
       }
+      this.#answered.delete(parsed.requestId);
       return;
     }
     this.#pendingReceives += 1;
@@ -1388,10 +1388,10 @@ class Connection {
         } catch (error) {
           if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
-          const requestId = requestIdOf(parsed);
-          if (requestId !== undefined) this.#answered.delete(requestId);
           timing.time(startedAt, "memory", "frame", "handle");
         }
+        const requestId = requestIdOf(parsed);
+        if (requestId !== undefined) this.#answered.delete(requestId);
       });
     } finally {
       this.#pendingReceives = Math.max(0, this.#pendingReceives - 1);
