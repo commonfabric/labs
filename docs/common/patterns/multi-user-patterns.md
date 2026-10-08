@@ -723,8 +723,8 @@ const addMember = handler<
 ```
 
 Both calls work only in a handler whose event is a trusted gesture, a person's
-action on a rendered surface; anywhere else, or for an event without one, they
-throw. The person who sent the event must hold `OWNER` in the space, which
+action on a rendered surface or on a native host's reviewed control; anywhere
+else, or for an event without one, they throw. The person who sent the event must hold `OWNER` in the space, which
 may not be their own Home space, and `principal` must be a DID other than
 theirs, the space's own, and `"*"`. A change that would leave the space with
 no concrete `OWNER` is refused. Every refusal throws. A throw the handler lets

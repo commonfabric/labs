@@ -531,9 +531,13 @@ The runtime's ordinary checks still apply: the writer the contract names, the
 surface and action, the actor, and the space's access list. The mark reaches a
 served handler the way a DOM event's does, through the attestation the firing
 runtime writes on the stream entry
-([events, §2](../specs/server-side-execution/events.md#2-lifecycle-end-to-end)). A native event is not a trusted gesture: `isTrustedGesture()` admits only
-events of `dom` origin, so a native control cannot confirm a snapshot share, a
-custody seal, a reviewed intent, or a change to a space's access list.
+([events, §2](../specs/server-side-execution/events.md#2-lifecycle-end-to-end)).
+A native event is a trusted gesture, as a DOM event on a rendered surface is:
+`isTrustedGesture()` admits a marked event of either origin, so a native
+control confirms whatever a gesture on the pattern's rendered surface would, a
+change to a space's access list among them. A host covering a pattern's
+surface with a control of its own presents the act that surface presents, with
+every value the person is agreeing to in view.
 
 This is a trusted host capability that mints trusted events. The host calls the
 returned function, or `sendReviewed()`, only from the control's real user-input
@@ -542,7 +546,8 @@ from the control's own definition, and keeps it away from pattern code, loaded
 web content, automation and agent interfaces, generic IPC, URL handlers, and
 restored state. The worker answers `cell:send-reviewed` from any client
 attached to it, so the host's runtime connection, and any relay carrying it, is
-part of the host, held to the same boundary. A host that cannot hold that
+part of the host, held to the same boundary: anything attached to the worker
+can grant `OWNER` in any space but the user's Home where the user holds it. A host that cannot hold that
 boundary renders the pattern's reviewed surface for the write instead. The
 generic `cell:send` request marks nothing. Pattern code reaches neither door:
 pattern source cannot import the module or the runtime client, and no module it
@@ -562,14 +567,19 @@ channels, URL handlers, and restored state."
 committing through a real handler and one bound to another action being
 refused, the provenance and payload sent, capture of the descriptor, a
 replaced payload `provenance`, an unmarked copy matching nothing, the event
-not counting as a trusted gesture, and the binding being out of a pattern's
-reach. `packages/runtime-client/test/send-reviewed.test.ts` drives
+counting as a trusted gesture and its copy not, and the binding being out of a
+pattern's reach. `packages/runtime-client/test/send-reviewed.test.ts` drives
 `sendReviewed()` from a real `RuntimeClient`, with the handler run in the
 worker and under server execution: a gated write committing, one bound to
 another surface or action refused with its reason, a payload `provenance`
 deciding nothing, the same payload refused through `sendStrict()`, a refused
-handling resolving `sendStrict()` without `awaitHandling`, the event the
+handling resolving `sendStrict()` without `awaitHandling`, a reviewed grant
+changing a space's access list for an `OWNER` and refused for a member without
+one, the same grant changing nothing through `sendStrict()`, the event the
 worker delivers, and the requests it refuses.
+`packages/runner/test/builder/space-access-change.test.ts` and
+`packages/runner/test/executor-space-access-change.test.ts` cover a native
+control's grant and revoke on a client and on a serving runtime.
 
 ---
 

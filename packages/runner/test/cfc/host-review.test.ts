@@ -9,9 +9,9 @@ import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
 
 describe("host-review", () => {
   describe("hostGestureProvenance()", () => {
-    it("returns `dom` provenance naming the surface", () => {
+    it("returns `native` provenance naming the surface", () => {
       expect(hostGestureProvenance("ShareSnapshot")).toStrictEqual({
-        origin: "dom",
+        origin: "native",
         trusted: true,
         ui: { pattern: "ShareSnapshot" },
       });

@@ -222,7 +222,7 @@ describe("native-ui", () => {
       ).toBe(false);
     });
 
-    it("sends an event that matches no contract once copied, and is not a trusted gesture", () => {
+    it("sends an event that is a trusted gesture and matches the bound contract, where a copy of it is neither", () => {
       const { send, submit } = bindToSpy({
         surface: "ChatSendSurface",
         action: "ChatSend",
@@ -231,9 +231,10 @@ describe("native-ui", () => {
 
       const event = sentEvent(send) as Record<string, unknown>;
       expect(trustedEventMatchesUiContract(event, chatSendPolicy)).toBe(true);
-      expect(trustedEventMatchesUiContract({ ...event }, chatSendPolicy))
-        .toBe(false);
-      expect(isTrustedGesture(event)).toBe(false);
+      expect(isTrustedGesture(event)).toBe(true);
+      const copy = { ...event };
+      expect(trustedEventMatchesUiContract(copy, chatSendPolicy)).toBe(false);
+      expect(isTrustedGesture(copy)).toBe(false);
     });
 
     it("throws given a blank surface or action, and sends nothing", () => {

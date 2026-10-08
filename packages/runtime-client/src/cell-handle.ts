@@ -643,10 +643,9 @@ export class CellHandle<T = unknown> {
    * provenance for them, replacing any `provenance` field `event` carries,
    * and marks it renderer-trusted, so that it satisfies the UI contract of a
    * write gated on that surface and action, such as a `TrustedActionWrite`,
-   * as a reviewed gesture on the pattern's rendered surface does. It is not a
-   * trusted gesture, so it confirms no snapshot share, custody seal, reviewed
-   * intent, or change to an access list. The write is held to every other
-   * check.
+   * as a reviewed gesture on the pattern's rendered surface does. It is a
+   * trusted gesture, as that gesture is, so it also confirms a change to an
+   * access list. The write is held to every other check.
    *
    * It resolves once the run of the stream's handler has committed, which
    * under server execution is the consequence the served run recorded, and

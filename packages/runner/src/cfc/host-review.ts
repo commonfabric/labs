@@ -152,8 +152,11 @@ export const isTrustedGestureOn = (event: unknown, surface: string): boolean =>
 
 /** The provenance a trusted gesture on a host surface carries. */
 export type HostGestureProvenance = {
-  /** Always `dom`, the one origin `isTrustedGesture()` admits. */
-  origin: "dom";
+  /**
+   * Always `native`: host code, not the renderer, attests the gesture, as it
+   * does for a control it draws itself.
+   */
+  origin: "native";
 
   /** Always `true`: the event came from a trusted surface. */
   trusted: true;
@@ -174,7 +177,7 @@ export type HostGestureProvenance = {
 export const hostGestureProvenance = (
   surface: string,
 ): HostGestureProvenance => ({
-  origin: "dom",
+  origin: "native",
   trusted: true,
   ui: { pattern: surface },
 });
