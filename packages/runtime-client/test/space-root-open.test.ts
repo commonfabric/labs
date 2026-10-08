@@ -179,7 +179,7 @@ describe("space-root-open", () => {
         start: false,
       });
 
-      expect(root).toBeNull();
+      expect(root).toBeUndefined();
       expect(await room.storedSpaceCell()).toBeUndefined();
       expect(room.fetched).toEqual([]);
     });
@@ -190,7 +190,7 @@ describe("space-root-open", () => {
 
       const root = await room.visitor.getSpaceRootPattern(room.space);
 
-      expect(root).toBeNull();
+      expect(root).toBeUndefined();
       expect(await room.storedSpaceCell()).toBeUndefined();
       expect(room.fetched).toEqual([]);
     });
@@ -225,7 +225,7 @@ describe("space-root-open", () => {
 
       const root = await room.owner.getSpaceRootPattern(room.space);
 
-      expect(root).not.toBeNull();
+      expect(root).toBeDefined();
       expect(room.fetched).toContain(defaultAppRoute);
       const stored = await room.storedSpaceCell() as
         | Record<string, unknown>
@@ -240,7 +240,7 @@ describe("space-root-open", () => {
         start: false,
       });
 
-      expect(root).toBeNull();
+      expect(root).toBeUndefined();
       expect(await room.storedSpaceCell()).toBeUndefined();
       expect(room.fetched).toEqual([]);
     });

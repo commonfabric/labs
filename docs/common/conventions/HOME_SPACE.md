@@ -425,7 +425,7 @@ Both the home pattern and the default app pattern follow the same mechanism:
    a space with no root gets one only from an open that runs the root (`start`
    true) by an identity that owns the space, as its Home or as an `OWNER` in
    its access list. Any other principal's open, and any read with `start`
-   false, returns `null` for such a space and writes nothing, so a visitor
+   false, returns `undefined` for such a space and writes nothing, so a visitor
    never puts a root in someone else's space
 2. If not, it creates one:
    - **Home space** (`space === userIdentityDID`): uses

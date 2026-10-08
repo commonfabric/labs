@@ -371,7 +371,7 @@ describe("RuntimeInternals", () => {
     it("asks again after a lookup returns no root", async () => {
       const client = new MockRuntimeClient();
       const rootPattern = { id: "root-pattern" };
-      const answers = [null, rootPattern];
+      const answers = [undefined, rootPattern];
       client.getSpaceRootPattern = (space: DID) => {
         client.spaceRootCalls.push(space);
         return Promise.resolve(answers.shift() as never);
@@ -380,7 +380,8 @@ describe("RuntimeInternals", () => {
       const space = "did:key:z6Mk-root-absent" as DID;
 
       try {
-        await expect(runtime.getSpaceRootPattern(space)).resolves.toBeNull();
+        await expect(runtime.getSpaceRootPattern(space)).resolves
+          .toBeUndefined();
         await expect(runtime.getSpaceRootPattern(space)).resolves.toBe(
           rootPattern,
         );

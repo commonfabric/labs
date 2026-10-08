@@ -4449,7 +4449,7 @@ describe("runtime-processor", () => {
           type: RequestType.GetSpaceRootPattern,
           space: "did:key:test-space",
         });
-        expect(result?.piece.cell).toEqual(ref);
+        expect(result.piece?.cell).toEqual(ref);
       });
 
       it("resolves the stored root without starting it when `start` is `false`", async () => {
@@ -4483,7 +4483,7 @@ describe("runtime-processor", () => {
           start: false,
         });
 
-        expect(result?.piece.cell).toEqual(ref);
+        expect(result.piece?.cell).toEqual(ref);
         // Reconciled but not started: a read of what the root exported still
         // heals a stale root, and never boots it.
         expect(calls).toEqual([
@@ -4491,7 +4491,7 @@ describe("runtime-processor", () => {
         ]);
       });
 
-      it("returns `null` without creating a root for a space that has none when `start` is `false`", async () => {
+      it("returns no piece, and creates no root, for a space that has none when `start` is `false`", async () => {
         const calls: string[] = [];
         const cc = {
           // A space whose root has never existed has nothing stored to read.
@@ -4521,7 +4521,7 @@ describe("runtime-processor", () => {
           start: false,
         });
 
-        expect(result).toBeNull();
+        expect(result).toStrictEqual({});
         expect(calls).toEqual(["getDefaultPattern"]);
       });
     });

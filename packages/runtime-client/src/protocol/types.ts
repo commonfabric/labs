@@ -2586,8 +2586,8 @@ export type GetSpaceRootPatternRequest = BaseRequest & {
    * anything; a stored export costs a read.
    *
    * A space with no root gets one only when this is true and the requesting
-   * identity owns the space. Otherwise the response is `null`, and nothing
-   * is written.
+   * identity owns the space. Otherwise the response names no piece, and
+   * nothing is written.
    */
   start?: boolean;
 };
@@ -3605,6 +3605,14 @@ export type PieceResponse = {
   piece: PieceRef;
 };
 
+/** A reference to a space's root, which a space with no root lacks. */
+export type SpaceRootPatternResponse = {
+  /**
+   * The space's root, absent when the space has none.
+   */
+  piece?: PieceRef;
+};
+
 /**
  * Why a slug reference reached nothing. This is an outcome, not a failure:
  * a name nobody has bound, or a member a collection does not hold, is what a
@@ -4093,6 +4101,7 @@ export type RemoteResponse =
   | TriggerTraceResponse
   | WriteStackTraceResponse
   | PieceResponse
+  | SpaceRootPatternResponse
   | SlugReferenceResponse
   | PieceSourceResponse
   | PieceSourceRevisionResponse
@@ -4477,7 +4486,7 @@ export type Commands = {
   };
   [RequestType.GetSpaceRootPattern]: {
     request: GetSpaceRootPatternRequest;
-    response: PieceResponse | NullResponse;
+    response: SpaceRootPatternResponse;
   };
   // Diagnosis requests
   [RequestType.DetectNonIdempotent]: {

@@ -1040,7 +1040,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   // connection.
 
   /**
-   * The space's root pattern, or `null` when the space has none.
+   * The space's root pattern, or `undefined` when the space has none.
    *
    * `start` defaults to true, which is what a view that renders the root
    * needs. Pass false to read what the root exported without running it —
@@ -1054,7 +1054,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   async getSpaceRootPattern(
     space: DID,
     options: { start?: boolean } = {},
-  ): Promise<PieceHandle<NameSchema> | null> {
+  ): Promise<PieceHandle<NameSchema> | undefined> {
     const response = await this.#conn.request<
       RequestType.GetSpaceRootPattern
     >({
@@ -1062,7 +1062,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space,
       ...(options.start === undefined ? {} : { start: options.start }),
     });
-    if (!response) return null;
+    if (response.piece === undefined) return undefined;
     return new PieceHandle<NameSchema>(this, response.piece);
   }
 

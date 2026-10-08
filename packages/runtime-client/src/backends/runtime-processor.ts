@@ -231,7 +231,6 @@ import {
   type LoggerMetadata,
   type LogLevel,
   NotificationType,
-  type NullResponse,
   type OperationApplyRequest,
   type OperationApplyResponse,
   type OperationCapabilitiesRequest,
@@ -296,6 +295,7 @@ import {
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
+  type SpaceRootPatternResponse,
   type SpaceSetAclEntryRequest,
   type SqliteExecRequest,
   type SqliteParams,
@@ -2923,8 +2923,8 @@ export class RuntimeProcessor {
   }
 
   /**
-   * Handles a `GetSpaceRootPatternRequest`. Returns `null` for a space with no
-   * root unless the request opens it (`start` true) and this runtime's
+   * Handles a `GetSpaceRootPatternRequest`. Returns no piece for a space with
+   * no root unless the request opens it (`start` true) and this runtime's
    * identity owns the space, in which case the root is created. A read never
    * writes, and a principal other than the owner never puts a root in
    * someone else's space.
@@ -2934,7 +2934,7 @@ export class RuntimeProcessor {
    */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
-  ): Promise<PieceResponse | NullResponse> {
+  ): Promise<SpaceRootPatternResponse> {
     const cc = this.#getSpaceCtx(request.space);
     if (request.start === false) {
       // The caller reads the root's exports rather than rendering it, so
@@ -2946,11 +2946,11 @@ export class RuntimeProcessor {
       });
       if (stored) return { piece: createPieceRef(stored) };
       this.#throwIfAccessRefused(request.space);
-      return null;
+      return {};
     }
     if ((await cc.getDefaultPattern(false)) === undefined) {
       this.#throwIfAccessRefused(request.space);
-      if (!(await this.#ownsSpace(request.space))) return null;
+      if (!(await this.#ownsSpace(request.space))) return {};
     }
     const piece = await cc.ensureDefaultPattern();
     return {
