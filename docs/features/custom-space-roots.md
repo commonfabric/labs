@@ -66,10 +66,12 @@ its access-control document and the reservation. If that run never commits,
 the space is named by nothing: its DID reaches no allocation record, and the
 serving loop leaves it rootless. A later run in the same runtime resolving the
 same name with the same request reaches the same space, and places the root
-there. A client opening the
-space by its DID still creates the default root, since the reservation is not
-readable from a client, and the serving loop then reports that root as a
-conflict.
+there. The creator's own client opening the space by its DID in that window
+still creates the default root, since the reservation is not readable from a
+client, and the serving loop then reports that root as a conflict. So does the
+client of any other principal the access list makes an `OWNER`, since opening
+a space creates its root only for an `OWNER`. A client without `OWNER` creates
+nothing there.
 
 Only a space named by a string, or an anonymous one, can be created with
 `root`: a DID or a cell names a space that already exists, and `inSpace()`

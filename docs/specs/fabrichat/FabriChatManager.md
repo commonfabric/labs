@@ -46,7 +46,8 @@ create a space for the conversation, with the room as its root, in four steps:
 2. Grant each other member OWNER on the room's space, by principal, so any
    member may add others.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
-   deliver.
+   deliver, and offer the room to each member whose profile the request names,
+   through the share inbox the profile points at.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
    request `done`. Adding this user to the room's participants follows, once
    the space's name has resolved: the run that sees it pending is discarded and
@@ -79,17 +80,23 @@ A notice has to reach a principal who may share no space with the sender. Its
 route is the recipient's profile share inbox: a profile's `inbox` field
 (`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
 piece in a space of its own. That is either the private inbox the recipient's
-Home creates ([the private inbox](../../features/private-inbox.md)) or one a
-loom daemon created, and both take the same offer envelope. Any principal may
-write to the inbox's space, and its offers are labeled readable by the owner
-alone, a label that binds only an honest runtime. The sender offers the room
-there, and the recipient's manager reads its offers, is readmitted to the
-room's space, and accepts the room. Nothing delivers one end to end today: no
-offer names a room yet, and the manager reads none. A space's access
-list can admit any writer, but that is the `"*"` grant a room has only when its
-creator makes a group joinable by its link, and then its address, sent some
-other way, is the notice.
+Home creates ([the private inbox](../../features/private-inbox.md)) or another
+share inbox the profile points at, and both take the same offer envelope. Any
+principal may write to the inbox's space, and its offers are labeled readable
+by the owner alone, a label that binds only an honest runtime. When a request
+names a member's profile, as `openDirect` does with its `profile`, step 3
+offers the room there, in that envelope, from an event of its own that follows
+the room's creation, since the offer names the room's space (see
+[`ChatManagerOutput`](ChatManagerOutput.md#offers)). The recipient's host reads
+the offer and vets it before it registers the room's space in the recipient's
+Home catalog ([the share intake](../../features/private-inbox.md#the-share-intake)).
+A member the request names only by principal is offered nothing, since the
+manager has no profile to reach their inbox through. A space's access list can
+admit any writer, but that is the `"*"` grant a room has only when its creator
+makes a group joinable by its link, and then its address, sent some other way,
+is the notice.
 
-That is why step 3 hands notices to a client through `outgoingNotices` (see
+That is why step 3 also hands a notice for every other member to a client
+through `outgoingNotices` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers
 deliver end to end, the manager can deliver notices itself.

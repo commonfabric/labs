@@ -442,7 +442,10 @@ export class RuntimeInternals extends EventTarget {
    * running. */
   #spaceRootPatterns: Map<
     DID,
-    { pattern: Promise<PieceHandle<NameSchema>>; started: boolean }
+    {
+      pattern: Promise<PieceHandle<NameSchema> | undefined>;
+      started: boolean;
+    }
   > = new Map();
   /**
    * Loaded pieces, nested space → scope → id: a piece's whole address, held
@@ -549,14 +552,15 @@ export class RuntimeInternals extends EventTarget {
   }
 
   /**
-   * The space's root pattern. `start` defaults to true, which a view that
-   * renders the root needs; pass false to read its exports without running
-   * it.
+   * The space's root pattern, or `undefined` when the space has none. `start`
+   * defaults to true, which a view that renders the root needs; pass false to
+   * read its exports without running it. See
+   * `RuntimeClient.getSpaceRootPattern` for when asking creates the root.
    */
   getSpaceRootPattern(
     space: DID,
     options: { start?: boolean } = {},
-  ): Promise<PieceHandle<NameSchema>> {
+  ): Promise<PieceHandle<NameSchema> | undefined> {
     this.#check();
     const start = options.start ?? true;
     const cached = this.#spaceRootPatterns.get(space);
@@ -565,12 +569,16 @@ export class RuntimeInternals extends EventTarget {
     const entry = { pattern, started: start };
     this.#spaceRootPatterns.set(space, entry);
     // Evict on rejection: a transient failure (unreachable host, authz)
-    // must not poison the space for the runtime's lifetime.
-    pattern.catch(() => {
+    // must not poison the space for the runtime's lifetime. Evict on no root
+    // too, since the space's owner can create its root at any time.
+    const evict = () => {
       if (this.#spaceRootPatterns.get(space) === entry) {
         this.#spaceRootPatterns.delete(space);
       }
-    });
+    };
+    pattern.then((root) => {
+      if (root === undefined) evict();
+    }, evict);
     return pattern;
   }
 

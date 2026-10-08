@@ -4431,10 +4431,16 @@ describe("runtime-processor", () => {
         };
         const rootCell = { getAsLink: () => cellRefToSigilLink(ref) };
         const cc = {
+          getDefaultPattern: () => Promise.resolve(undefined),
           ensureDefaultPattern: () =>
             Promise.resolve({ getCell: () => rootCell }),
         };
+        // The space is the identity's Home, which is the identity's own.
         const processor = buildProcessor({
+          runtime: {
+            userIdentityDID: "did:key:test-space",
+            storageManager: {},
+          },
           cc,
           space: "did:key:test-space",
         });
@@ -4443,7 +4449,7 @@ describe("runtime-processor", () => {
           type: RequestType.GetSpaceRootPattern,
           space: "did:key:test-space",
         });
-        expect(result.piece.cell).toEqual(ref);
+        expect(result.piece?.cell).toEqual(ref);
       });
 
       it("resolves the stored root without starting it when `start` is `false`", async () => {
@@ -4467,6 +4473,7 @@ describe("runtime-processor", () => {
           },
         };
         const processor = buildProcessor({
+          runtime: { storageManager: {} },
           cc,
           space: "did:key:test-space",
         });
@@ -4477,7 +4484,7 @@ describe("runtime-processor", () => {
           start: false,
         });
 
-        expect(result.piece.cell).toEqual(ref);
+        expect(result.piece?.cell).toEqual(ref);
         // Reconciled but not started: a read of what the root exported still
         // heals a stale root, and never boots it.
         expect(calls).toEqual([
@@ -4485,13 +4492,7 @@ describe("runtime-processor", () => {
         ]);
       });
 
-      it("creates the root for a space that has none, even when `start` is `false`", async () => {
-        const ref: CellRef = {
-          id: "of:created-root" as CellRef["id"],
-          space: "did:key:test-space" as CellRef["space"],
-          scope: "space",
-          path: [],
-        };
+      it("returns no piece, and creates no root, for a space that has none when `start` is `false`", async () => {
         const calls: string[] = [];
         const cc = {
           // A space whose root has never existed has nothing stored to read.
@@ -4501,12 +4502,16 @@ describe("runtime-processor", () => {
           },
           ensureDefaultPattern: () => {
             calls.push("ensureDefaultPattern");
-            return Promise.resolve({
-              getCell: () => ({ getAsLink: () => cellRefToSigilLink(ref) }),
-            });
+            return Promise.reject(new Error("must not create the root"));
           },
         };
+        // The space is the identity's Home, so only the read keeps the root
+        // from being created.
         const processor = buildProcessor({
+          runtime: {
+            userIdentityDID: "did:key:test-space",
+            storageManager: {},
+          },
           cc,
           space: "did:key:test-space",
         });
@@ -4517,8 +4522,8 @@ describe("runtime-processor", () => {
           start: false,
         });
 
-        expect(result.piece.cell).toEqual(ref);
-        expect(calls).toEqual(["getDefaultPattern", "ensureDefaultPattern"]);
+        expect(result).toStrictEqual({});
+        expect(calls).toEqual(["getDefaultPattern"]);
       });
     });
   });

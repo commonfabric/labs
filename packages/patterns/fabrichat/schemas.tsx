@@ -19,6 +19,7 @@ import {
   FabricEpochNsec,
   isWellFormedDID,
 } from "commonfabric";
+import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
 // Reviewed surfaces
@@ -139,6 +140,25 @@ export interface ChatProfile {
 
 /** A live link to a person's profile. */
 export type ProfileCell = Cell<ChatProfile>;
+
+/**
+ * The part of a person's profile a manager reads: what a room reads, and
+ * where to offer the person a room. Only a manager reads the inbox pointer,
+ * so the inbox's shape is part of no room's contract.
+ */
+export interface ChatManagerProfile extends ChatProfile {
+  /**
+   * Where the person's offers are delivered, as the profile types its pointer:
+   * a link naming nothing of the inbox but its name. An inbox labels its
+   * offers confidential to its owner, and a run reading the pointer as a link
+   * to more of the inbox, or untyped, takes that label on, which then refuses
+   * its sends.
+   */
+  inbox?: ProfileInbox;
+}
+
+/** A live link to a person's profile, as a manager reads it. */
+export type ManagerProfileCell = Cell<ChatManagerProfile>;
 
 //
 // Room records

@@ -254,10 +254,11 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Delivering a notice.** A room is to be offered to its recipient through
-  their profile share inbox, but no offer names a room yet and the manager
-  reads none, so nothing delivers a notice to a principal who shares no space
-  with the sender end to end (see
+- **Delivering a notice.** A room is offered to its recipient through the
+  share inbox their profile points at when the request that creates it names
+  their profile. A member whose profile the request doesn't name is reached by
+  nothing but a notice, and nothing delivers a notice to a principal who shares
+  no space with the sender end to end (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -366,13 +367,21 @@ from this design, as below.
   `hasOlder` and `hasNewer` are as of when the window was set. `commitWindow`
   writes the windows of the session that sent the event, wherever it runs; an
   event the server itself emitted has no session, and can't open one.
-- **Notices.** A manager's notice id is `[recipient, requestId]` as JSON.
-  Nothing delivers a notice yet (see
-  [first contact](FabriChatManager.md#first-contact)), so the manager's
-  rendering shows each queued notice with a link to its room, for the room's
-  creator to send on. And a room shows a viewer whose manager
-  doesn't list it a control that asks the manager to `accept` it, so
-  whoever opens the room's link can add it to their chats.
+- **Notices and offers.** A manager's notice id is `[recipient, requestId]` as
+  JSON, and an offer's `id` is the `requestId` alone. An offer reaches the
+  recipient's inbox, and their host's share intake vets it and registers the
+  room's space in their Home's shared-space catalog
+  ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)), but
+  the manager lists only the rooms it records itself, not the catalog's, so the
+  offered room reaches the recipient's chats only as a notice's room does,
+  through `accept`. And only an `openDirect` that names `profile` offers a room:
+  the rendered start controls name a counterpart by principal, and a group's
+  members are principals. Nothing delivers a notice yet (see [first
+  contact](FabriChatManager.md#first-contact)), so the manager's rendering shows
+  each queued notice with a link to its room, for the room's creator to send on.
+  And a room shows a viewer whose manager doesn't list it a control that asks
+  the manager to `accept` it, so whoever opens the room's link can add it to
+  their chats.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

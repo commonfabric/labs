@@ -108,6 +108,7 @@ import {
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
+  spaceReaderRole,
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import {
@@ -294,6 +295,7 @@ import {
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
+  type SpaceRootPatternResponse,
   type SpaceSetAclEntryRequest,
   type SqliteExecRequest,
   type SqliteParams,
@@ -2508,10 +2510,7 @@ export class RuntimeProcessor {
   ): Promise<CellFieldsResponse> {
     const cell = getCell(this.#runtime, request.cell);
     await cell.sync();
-    const storage = this.#runtime.storageManager;
-    const denied = storage.spaceAccessError?.(request.cell.space) ??
-      storage.authorizationError?.(request.cell.space);
-    if (denied !== undefined) throw denied;
+    this.#throwIfAccessRefused(request.cell.space);
     return this.#hostReadGate.fields(cell);
   }
 
@@ -2923,26 +2922,70 @@ export class RuntimeProcessor {
     };
   }
 
+  /**
+   * Handles a `GetSpaceRootPatternRequest`. Returns no piece for a space with
+   * no root unless the request opens it (`start` true) and this runtime's
+   * identity owns the space, in which case the root is created. A read never
+   * writes, and a principal other than the owner never puts a root in
+   * someone else's space.
+   *
+   * @throws The server's refusal when this runtime's identity may not read
+   *   the space, whether or not a root is still held from before.
+   */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
-  ): Promise<PieceResponse> {
+  ): Promise<SpaceRootPatternResponse> {
     const cc = this.#getSpaceCtx(request.space);
     if (request.start === false) {
       // The caller reads the root's exports rather than rendering it, so
       // resolving what is stored answers it — reconciled, so what it reads
-      // is still healed against the root's origin. Only a space with no root
-      // yet falls through: a root has to exist before it can have exported
-      // anything, and creating one is not the cost this avoids.
+      // is still healed against the root's origin.
       const stored = await cc.getDefaultPattern({
         reconcile: true,
         start: false,
       });
-      if (stored) return { piece: createPieceRef(stored) };
+      // Checked whatever the lookup found, since a root this runtime read
+      // before losing the space is still in its replica.
+      this.#throwIfAccessRefused(request.space);
+      return stored ? { piece: createPieceRef(stored) } : {};
+    }
+    const existing = await cc.getDefaultPattern(false);
+    this.#throwIfAccessRefused(request.space);
+    if (existing === undefined && !(await this.#ownsSpace(request.space))) {
+      return {};
     }
     const piece = await cc.ensureDefaultPattern();
     return {
       piece: createPieceRef(piece.getCell()),
     };
+  }
+
+  /**
+   * Whether this runtime's identity owns `space`: the space is its Home, or
+   * the space's access list makes it an `OWNER`. A Home is its user's
+   * whatever its access list holds, since the Home's DID is the identity
+   * itself: its list is written when the Home is first mounted, and a Home
+   * populated before access lists existed has none. Only the identity's own
+   * runtime asks with that DID, so the shortcut creates a root in no one
+   * else's space.
+   */
+  async #ownsSpace(space: DID): Promise<boolean> {
+    const principal = this.#runtime.userIdentityDID;
+    if (space === principal) return true;
+    const acl = await new ACLManager(this.#runtime, space).get();
+    return acl !== null && spaceReaderRole(acl, principal) === "owner";
+  }
+
+  /**
+   * Throws the server's refusal of `space`, or of this runtime's session
+   * there, if it refused either. A refused read finds nothing, so a caller
+   * that would report what it found asks this first.
+   */
+  #throwIfAccessRefused(space: MemorySpace): void {
+    const storage = this.#runtime.storageManager;
+    const denied = storage.spaceAccessError?.(space) ??
+      storage.authorizationError?.(space);
+    if (denied !== undefined) throw denied;
   }
 
   /**

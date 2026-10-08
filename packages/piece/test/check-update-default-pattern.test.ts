@@ -6,6 +6,7 @@ import {
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceSourceRevisions,
+  IN_SPACE_ROOT_CAUSE,
   parseLink,
   resolveEntryIdentity,
   resolveSystemPatternSource,
@@ -1093,6 +1094,118 @@ describe("opening a space root", () => {
     expect(getPatternIdentityRef(root)).toEqual(staleRef);
   });
 
+  describe("a root an `inSpace()` call placed", () => {
+    // A root at the address the space's genesis reserves for an `inSpace()`
+    // root was placed by its creator's pattern, and records no origin. The space's system root is no replacement for it, so each
+    // heal that would roll a root forward to that system root leaves this one
+    // as it is and surfaces the failure.
+
+    /** Installs `contents` as the root, at the reserved address. */
+    const installInSpaceRoot = async (contents: string) => {
+      const root = await installCustomRoot(runtime, controller, {
+        main: "/in-space-root.tsx",
+        files: [{ name: "/in-space-root.tsx", contents }],
+      }, { cause: IN_SPACE_ROOT_CAUSE });
+      expect(root.equalLinks(runtime.getCell(
+        controller.getSpace(),
+        IN_SPACE_ROOT_CAUSE,
+      ))).toBe(true);
+      expect(getPatternSource(root)).toBeUndefined();
+      return root;
+    };
+
+    it("rethrows a start failure on open when its pattern cannot load", async () => {
+      await setup();
+      const root = await installInSpaceRoot(SOURCE_V1);
+      await controller.stopPiece(root);
+      const staleRef = getPatternIdentityRef(root)!;
+
+      const restore = shadowLoadProbe(staleRef.identity, "undefined");
+      try {
+        await expect(controller.getDefaultPattern(true)).rejects.toThrow(
+          "Could not load pattern",
+        );
+      } finally {
+        restore();
+      }
+      expect(getPatternIdentityRef(root)).toEqual(staleRef);
+    });
+
+    it("rethrows a start failure on ensure when its pattern cannot load", async () => {
+      await setup();
+      const root = await installInSpaceRoot(SOURCE_V1);
+      await controller.stopPiece(root);
+      const staleRef = getPatternIdentityRef(root)!;
+
+      const restore = shadowLoadProbe(staleRef.identity, "undefined");
+      try {
+        await expect(controller.ensureDefaultPattern()).rejects.toThrow(
+          "Could not load pattern",
+        );
+      } finally {
+        restore();
+      }
+      expect(getPatternIdentityRef(root)).toEqual(staleRef);
+    });
+
+    it("rethrows a start failure on ensure when CFC migration rejects its setup repair", async () => {
+      await setup();
+      expect(runtime.cfcEnforcementMode).not.toBe("disabled");
+      const root = await installInSpaceRoot(SOURCE_V1);
+      await controller.stopPiece(root);
+
+      // Pin the root to another loadable pattern without running its setup,
+      // so the start refuses the stored setup and the repair takes it up.
+      const pinned = await runtime.patternManager.compilePattern({
+        main: "/in-space-root.tsx",
+        files: [{ name: "/in-space-root.tsx", contents: SOURCE_V2 }],
+      }, { space: controller.getSpace() });
+      const pinnedRef = runtime.patternManager.getArtifactEntryRef(pinned)!;
+      const { error: pinError } = await runtime.editWithRetry((tx) => {
+        root.withTx(tx).setMetaRaw("patternIdentity", {
+          identity: pinnedRef.identity,
+          symbol: pinnedRef.symbol,
+        }, rawMetaWriteAuthorization);
+      });
+      expect(pinError).toBeUndefined();
+
+      const rt = runtime as unknown as {
+        runSynced: (...args: unknown[]) => Promise<unknown>;
+      };
+      const realRunSynced = rt.runSynced.bind(runtime);
+      let repairsRejected = 0;
+      rt.runSynced = (...args: unknown[]) => {
+        const opts = args[3] as
+          | { expectedPatternIdentity?: { identity?: string } }
+          | undefined;
+        if (opts?.expectedPatternIdentity?.identity === pinnedRef.identity) {
+          repairsRejected++;
+          return Promise.reject(
+            new Error(
+              "CFC enforcement rejected commit: relevant transaction was not " +
+                `prepared: ${CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON}: ` +
+                "required field marker needs a default to preserve old documents",
+            ),
+          );
+        }
+        return realRunSynced(...args);
+      };
+      try {
+        await expect(controller.ensureDefaultPattern()).rejects.toThrow();
+      } finally {
+        rt.runSynced = realRunSynced;
+      }
+      await runtime.idle();
+
+      expect(repairsRejected).toBe(1);
+      const after = (await controller.getDefaultPattern(false))!;
+      expect(getPatternIdentityRef(after)).toEqual({
+        identity: pinnedRef.identity,
+        symbol: pinnedRef.symbol,
+      });
+    });
+  });
+
   it("rethrows a start failure whose pinned pattern still loads", async () => {
     await setup();
     // The rescue is for a root whose stored pattern is gone. One that loads
@@ -1899,6 +2012,55 @@ describe("opening a space root", () => {
     const after = (await controller.getDefaultPattern(false))!;
     expect(getPatternIdentityRef(after)?.identity).toBe(targetId);
     expect(after.key("count").get()).toBe(0);
+    (after.key("bump") as unknown as { send: (e: unknown) => void }).send({});
+    await runtime.idle();
+    await (after as unknown as { pull: () => Promise<unknown> }).pull();
+    const afterEvent = (await controller.getDefaultPattern(false))!;
+    expect(afterEvent.key("count").get()).toBe(1);
+  });
+
+  it("ensure repairs a root with no setup marker whose manifest misses a handler's stream", async () => {
+    // A root that records no origin is not re-staged before its start, and a
+    // stored setup naming no pattern is not refused as stale, so its start is
+    // what repairs a manifest that misses one of its pattern's cells.
+    await setup();
+    const root = await installCustomRoot(runtime, controller, {
+      main: "/custom-root.tsx",
+      files: [{ name: "/custom-root.tsx", contents: SOURCE_V1 }],
+    });
+    await controller.stopPiece(root);
+    const handlerPattern = await runtime.patternManager.compilePattern({
+      main: "/custom-root.tsx",
+      files: [{ name: "/custom-root.tsx", contents: SOURCE_V3_HANDLER }],
+    }, { space: controller.getSpace() });
+    const handlerRef = runtime.patternManager.getArtifactEntryRef(
+      handlerPattern,
+    )!;
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw("patternIdentity", {
+        identity: handlerRef.identity,
+        symbol: handlerRef.symbol,
+      }, rawMetaWriteAuthorization);
+      root.withTx(tx).setMetaRaw(
+        "patternSetupIdentity",
+        undefined,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    const manifestOf = (cell: unknown) =>
+      (cell as { getMetaRaw: (key: string) => unknown }).getMetaRaw(
+        "internal",
+      );
+    const manifest = manifestOf(root);
+
+    await controller.ensureDefaultPattern();
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(handlerRef.identity);
+    // The repair added the stream `bump` registers on.
+    expect(manifestOf(after)).not.toEqual(manifest);
     (after.key("bump") as unknown as { send: (e: unknown) => void }).send({});
     await runtime.idle();
     await (after as unknown as { pull: () => Promise<unknown> }).pull();

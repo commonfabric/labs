@@ -13,6 +13,11 @@
  *
  * The room keeps its space's participants itself, and the manager adds its
  * user to them when it creates or accepts a room.
+ *
+ * A new room is offered to each other member whose profile the request names,
+ * through the share inbox the profile points at, in the envelope a share inbox
+ * takes. A notice is queued for every other member all the same, since
+ * nothing tells the sender an offer arrived.
  */
 import {
   type Cell,
@@ -23,6 +28,7 @@ import {
   type DID,
   equals,
   eventKey,
+  getPatternEnvironment,
   handler,
   type InSpaceGrants,
   isWellFormedDID,
@@ -38,6 +44,12 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import {
+  OFFER_TITLE_MAX_LENGTH,
+  type OfferEvent,
+  type PrivateInboxOutput,
+} from "../system/private-inbox.tsx";
+import type { ShareInboxPiece } from "../system/profile-home.tsx";
 import FabriChatRoom from "./room.tsx";
 import {
   type AboutRecord,
@@ -47,14 +59,15 @@ import {
   type ChatDisplay,
   type ChatIndexEntry,
   type ChatManagerNotice,
+  type ChatManagerProfile,
   type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
   epochNsecFromMsec,
   isPrincipalDID,
+  type ManagerProfileCell,
   nsecOf,
-  type ProfileCell,
 } from "./schemas.tsx";
 
 /** The manager's rooms, in the order it recorded them. */
@@ -106,6 +119,15 @@ export interface ManagerStreamEvent {
   /** The DID of a direct room's other member. */
   counterpart?: string;
 
+  /**
+   * A direct room's other member's profile, through whose share inbox a new
+   * room is offered to them.
+   */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  profile?: Cell<ChatManagerProfile>;
+
   /** The DIDs of a new group room's other members. */
   members?: string[];
 
@@ -156,7 +178,7 @@ export interface ManagerActState {
   act: ManagerAct;
 
   /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
+  myProfile: ManagerProfileCell | undefined;
 
   /** The rooms this user belongs to. */
   rooms: RoomsCell;
@@ -169,6 +191,9 @@ export interface ManagerActState {
 
   /** Notices waiting for a client to deliver them. */
   outgoingNotices: NoticesCell;
+
+  /** Offers a newly created room to the members a request named profiles of. */
+  offerRooms: Stream<OfferRoomEvent>;
 
   /** Adds this user's profile to a room's participants. */
   joinRooms: Stream<JoinRoomsEvent>;
@@ -234,6 +259,77 @@ const lists = (rooms: RoomsCell, room: Cell<ChatRoomLink>): boolean =>
   ((rooms.get() ?? []) as ChatIndexEntry[]).some((entry) =>
     equals(entry.room, room)
   );
+
+/** The origin of the host serving this pattern, and so the rooms it creates. */
+const hostOrigin = (): string => new URL(getPatternEnvironment().apiUrl).origin;
+
+/**
+ * A share inbox a profile's pointer reaches, as the cell of its result, whose
+ * `receive` takes an offer. The pointer is typed as a link naming the piece
+ * alone, and a link's target is reached as a cell.
+ */
+function inboxOf(
+  pointer: Cell<ShareInboxPiece>,
+): Cell<Pick<PrivateInboxOutput, "receive">>;
+function inboxOf(pointer: Cell<ShareInboxPiece>): unknown {
+  return pointer;
+}
+
+/** What offering a new room asks: the room, and whom to offer it to. */
+export interface OfferRoomEvent {
+  /** The room offered. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  room: Cell<ChatRoomLink>;
+
+  /** The id of the request that created the room, which keys the offer. */
+  id: string;
+
+  /** A group room's title, or empty for a direct room. */
+  title: string;
+
+  /** The profiles of the members to offer it to. */
+  profiles: Cell<ChatManagerProfile>[];
+}
+
+/**
+ * Offers a room to each person in the event's `profiles`, through the share
+ * inbox each profile points at, in the envelope a share inbox takes; a
+ * profile pointing at no inbox is offered nothing. The offer names the room's
+ * space and the host serving it, this pattern's own, and the principal
+ * sending it as its sender.
+ *
+ * It runs as an event of its own, queued by the one that creates the room, so
+ * that it reads the room's space once the room's creation has committed, and
+ * the members' profiles are read apart from that creation. While the space is
+ * not known, nothing is sent.
+ */
+const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
+  (event) => {
+    const space = spaceOf(event?.room);
+    const from = currentPrincipal();
+    if (!isWellFormedDID(space) || from === undefined) return;
+    const origin = hostOrigin();
+    const offer: OfferEvent = {
+      kind: CHAT_ROOM_OFFER_KIND,
+      id: event.id,
+      space,
+      host: origin,
+      ownerOrigin: origin,
+      title: (event.title ?? "").slice(0, OFFER_TITLE_MAX_LENGTH),
+      from,
+      sharedAt: Date.now(),
+    };
+    for (const profile of event.profiles ?? []) {
+      // The pointer is read through its parent: a link-typed field read on
+      // its own is a cell whether or not anything is stored there.
+      const pointer = profile?.key("inbox").get()?.piece;
+      if (pointer === undefined) continue;
+      inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
+    }
+  },
+);
 
 /** What joining a room asks: the room, and the profile to join it as. */
 export interface JoinRoomsEvent {
@@ -308,6 +404,9 @@ interface RoomOptions {
    * address is then all that keeps it private.
    */
   joinableByLink?: boolean;
+
+  /** The profiles of the other members to offer the room to. */
+  offerTo?: readonly Cell<ChatManagerProfile>[];
 }
 
 /**
@@ -315,7 +414,8 @@ interface RoomOptions {
  * and records its entry, all in one transaction: the space's grants and its
  * declared kind are part of creating it, so nothing has to commit apart. A
  * notice for each other member is queued for a client to deliver, and adding
- * this user to the room's participants is queued to follow.
+ * this user to the room's participants, and offering the room to each profile
+ * in `offerTo`, are queued to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
  * runs again with the name resolved. Nothing is sent until the name resolves,
@@ -326,7 +426,8 @@ const createRoom = (
   requestId: string,
   kind: ChatRoomKind,
   members: readonly DID[],
-  { title, counterpart, joinableByLink = false }: RoomOptions = {},
+  { title, counterpart, joinableByLink = false, offerTo = [] }: RoomOptions =
+    {},
 ): ChatIndexEntry => {
   const createdAt = epochNsecFromMsec(Date.now());
   // The room's space grants this user and each other member OWNER, so any
@@ -356,8 +457,18 @@ const createRoom = (
       recipient,
     });
   });
-  if (isWellFormedDID(spaceOf(room)) && state.myProfile !== undefined) {
-    state.joinRooms.send({ room, profile: state.myProfile });
+  if (isWellFormedDID(spaceOf(room))) {
+    if (state.myProfile !== undefined) {
+      state.joinRooms.send({ room, profile: state.myProfile });
+    }
+    if (offerTo.length > 0) {
+      state.offerRooms.send({
+        room,
+        id: requestId,
+        title: title ?? "",
+        profiles: [...offerTo],
+      });
+    }
   }
   const entry: ChatIndexEntry = {
     room,
@@ -465,6 +576,19 @@ const performManagerAct = (
       });
       return;
     }
+    // The room is offered through the profile's inbox, so the profile has to
+    // be the counterpart's own.
+    const profile = event?.profile;
+    if (
+      profile !== undefined &&
+      principalOf(profile, "represents-principal") !== counterpart
+    ) {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The profile is not the counterpart's.",
+      });
+      return;
+    }
     const known = direct.key(counterpart).get();
     if (known !== undefined) {
       if (!lists(rooms, known.room)) {
@@ -475,6 +599,7 @@ const performManagerAct = (
     }
     const entry = createRoom(state, requestId, "direct", [counterpart], {
       counterpart,
+      offerTo: profile === undefined ? [] : [profile],
     });
     direct.key(counterpart).set(entry);
     recordOutcome(state, requestId, { status: "done", entry });
@@ -695,7 +820,7 @@ interface ShownEntry {
 export interface FabriChatManagerCoreInput
   extends Required<FabriChatManagerInput> {
   /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
+  myProfile: ManagerProfileCell | undefined;
 }
 
 /**
@@ -715,6 +840,7 @@ export const FabriChatManagerCore = pattern<
       direct,
       requests,
       outgoingNotices,
+      offerRooms: offerRooms({}),
       joinRooms: joinRooms({}),
       draft,
       startRefusal,
@@ -888,7 +1014,7 @@ const FabriChatManager = pattern<
   FabriChatManagerInput,
   FabriChatManagerOutput
 >((input) => {
-  const profileWish = wish<ChatProfile>({ query: "#profile" });
+  const profileWish = wish<ChatManagerProfile>({ query: "#profile" });
   const core = FabriChatManagerCore(
     {
       myProfile: profileWish.result,
