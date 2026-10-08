@@ -1052,4 +1052,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's `about` record now requires a reviewed start to write it, a write policy the recorded label, naming a writer with no gesture, differs from",
     record: "docs/history/fabrichat-start-reviewed-break.md",
   },
+  {
+    // A manager's index entry gained `revision`, the revision of the room's
+    // entry in the user's catalog, which forgetting the room names. The
+    // recorded entry left extra fields open, so a stored request outcome's
+    // entry admitted a `revision` of any type; the candidate types it as a
+    // string. No recorded outcome holds one.
+    pattern: "fabrichat/manager.tsx",
+    baselines: [
+      "20261005T182129Z-yX4jdpH1wLhIowBh",
+      "20261006T233809Z-8LxrZWka1s7az21n",
+    ],
+    paths: ["argument.requests.*"],
+    reason:
+      "a manager's index entry now types `revision`, which the recorded entry left open; no stored request outcome holds one",
+    record: "docs/history/fabrichat-rooms-as-roots-break.md",
+  },
 ];

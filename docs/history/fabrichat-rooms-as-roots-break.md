@@ -28,10 +28,19 @@ made the root a requirement.
 
 ## What the gate reports
 
-Nothing. The pattern-update proof applies the new contracts of the manager, the
-room and Home over every recorded baseline, so no entry in
-`tasks/pattern-compat-accepted-breaks.ts` was needed. The break is in what the
-data a manager and a room already hold now means.
+Against two of the manager's recorded baselines,
+`20261005T182129Z-yX4jdpH1wLhIowBh` and `20261006T233809Z-8LxrZWka1s7az21n`,
+the pattern-update proof reports `argument.requests.*: a schema alternative
+accepted previously is not accepted by the candidate`. A manager's index entry
+gained `revision`, the revision of the room's entry in the user's catalog,
+which a request to forget the room names so that a choice made since by another
+client is not overridden. The recorded entry left extra fields open, so a
+stored request outcome's entry admitted a `revision` of any type, and the
+candidate types it as a string. No recorded outcome holds one. The entry in
+`tasks/pattern-compat-accepted-breaks.ts` forgives only `argument.requests.*`,
+and only against those two baselines. The room and Home apply over their
+baselines unchanged; the rest of the break is in what the data a manager and a
+room already hold now means.
 
 ## What happens to what exists
 
