@@ -22,7 +22,13 @@ import {
   Runtime,
   spaceRootPatternConfig,
 } from "@commonfabric/runner";
-import { discoverSpaceDbs } from "@commonfabric/state-inspector";
+import {
+  contentFingerprint,
+  diffFingerprints,
+  discoverSpaceDbs,
+  getValueAt,
+  openSpace,
+} from "@commonfabric/state-inspector";
 
 import { TestStorageManager } from "../../runner/test/memory-v2-test-utils.ts";
 import {
@@ -235,6 +241,77 @@ describe("profileSpaceRoot()", () => {
 
     const again = await profileSpaceRoot(config(), { load });
     expect(again.summary).toEqual({ root: 3, unlisted: 1 });
+  });
+
+  describe("what a run writes", () => {
+    /**
+     * Applies the plan unless `inspectOnly`, then returns, per repaired
+     * space, the entities that differ from the snapshot, with each one's
+     * value, and the space cell's id.
+     */
+    const written = async (inspectOnly: boolean) => {
+      const plan = await profileSpaceRoot(config(), { load });
+      if (!inspectOnly) {
+        await profileSpaceRoot(
+          config({ expectedInspection: plan.inspection }),
+          { load },
+        );
+      }
+      const spaceCells = Object.fromEntries(
+        [unrooted, planted].map((listed) => [
+          listed.space,
+          runtimeAs(admin).getSpaceCell(listed.space as MemorySpace)
+            .getAsNormalizedFullLink().id,
+        ]),
+      );
+      await stop();
+      const out: Record<string, { spaceCell: string; differ: unknown[] }> = {};
+      for (const listed of [unrooted, planted]) {
+        const live = discoverSpaceDbs({ dirs: [storeDir], defaultRoots: false })
+          .find((d) => d.did === listed.space)!;
+        const before = openSpace(`${snapshotDir}/${listed.space}.sqlite`);
+        const after = openSpace(live.path);
+        try {
+          const diff = diffFingerprints(
+            contentFingerprint(before),
+            contentFingerprint(after),
+          );
+          expect(diff.removed).toEqual([]);
+          out[listed.space] = {
+            spaceCell: spaceCells[listed.space],
+            differ: [...diff.added, ...diff.changed].map((entity) => ({
+              id: entity.id,
+              value: getValueAt(after, { id: entity.id }).value,
+            })),
+          };
+        } finally {
+          before.close();
+          after.close();
+        }
+      }
+      return out;
+    };
+
+    it("writes nothing when it only inspects", async () => {
+      const out = await written(true);
+      expect(out[unrooted.space].differ).toEqual([]);
+      expect(out[planted.space].differ).toEqual([]);
+    });
+
+    it("writes the space cell of a space it repairs, and one empty content-addressed document", async () => {
+      const out = await written(false);
+      for (const listed of [unrooted, planted]) {
+        const { spaceCell, differ } = out[listed.space];
+        const ids = differ.map((entity) => (entity as { id: string }).id);
+        expect(ids).toContain(spaceCell);
+        const others = differ.filter((entity) =>
+          (entity as { id: string }).id !== spaceCell
+        );
+        expect(others).toHaveLength(1);
+        expect((others[0] as { id: string }).id.startsWith("cid:")).toBe(true);
+        expect((others[0] as { value: unknown }).value).toEqual({});
+      }
+    });
   });
 
   it("repairs an unlisted profile it is given by address", async () => {

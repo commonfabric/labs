@@ -63,9 +63,32 @@ It inspects every profile again, applies nothing unless the run's receipt is the
 one given, and then links profile by profile, each only while its own receipt
 still holds and while its space's root is still the one it inspected. A profile
 that changed in between is reported as `failed` and left alone. A second run
-finds a repaired profile as `root` and writes nothing. Rehearse it on a writable
-clone of a real profile space and its owner's Home before running it against a
-store with real data.
+finds a repaired profile as `root` and writes nothing.
+
+Rehearse it before running it against a store with real data. The live part of a
+repair reads and writes the profile's own space and nothing else, so a rehearsal
+clones one real profile space, as
+[the space clone procedure](../../docs/development/space-clone-rehearsal.md)
+does, and repairs that profile alone against the clone's server, naming it with
+`--cell` and taking the profile list from the snapshot:
+
+```bash
+deno task cf space clone <profile-space> --from <snapshot>/<profile-space>.sqlite \
+  --to ~/clones/profile-root
+# Serve the clone as the procedure says, then:
+deno task cf profile repair-root --from-snapshot <snapshot> \
+  --cell <listed-address> -i <admin.key> -a http://localhost:8010
+deno task cf profile repair-root --from-snapshot <snapshot> \
+  --cell <listed-address> -i <admin.key> -a http://localhost:8010 \
+  --apply --expect <inspection>
+deno task cf space verify ~/clones/profile-root --expect-migration
+```
+
+Then compare the clone's pristine and working fingerprints entity by entity, as
+"Checking authored content" in that procedure shows. An inspection writes
+nothing. A repair writes the space cell, whose `defaultPattern` now links the
+profile, adding it where the space had none, and one empty content-addressed
+document beside it; any other changed entity means stop.
 
 ## Following a piece source
 
