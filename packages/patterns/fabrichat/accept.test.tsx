@@ -8,19 +8,25 @@
  */
 import {
   action,
+  type AddIntegrity,
   assert,
   type Cell,
   currentPrincipal,
   type DID,
+  equals,
   handler,
   multiUserTest,
   pattern,
   principalOf,
+  spaceOf,
   TESTS,
   UI,
   Writable,
 } from "commonfabric";
-import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
+import {
+  registerSharedSpace,
+  type SharedSpaceCatalogStorage,
+} from "../system/shared-space-catalog.ts";
 import {
   clickButton,
   findNodeById,
@@ -30,6 +36,7 @@ import {
 import { FabriChatManagerCore } from "./manager.tsx";
 import { AddToChats } from "./room.tsx";
 import {
+  CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
@@ -37,9 +44,17 @@ import {
   type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomLink,
+  type ProfileCell,
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+// A stand-in for a person's `#profile`, labeled, as a Fabric profile is,
+// because a room's participants link only a document that carries a label.
+type TestProfile = AddIntegrity<
+  ChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
 type AddArg = Parameters<typeof AddToChats>[0];
 
 /** The gesture a start takes, as a client's start control makes it. */
@@ -50,6 +65,9 @@ const CAROL = "did:key:z6MkiT3dKXX5dqUcbnpf1Ejp8hFVuMM9MN9eftydT9T4uurE";
 /** A DID a participant has written, or `""` before it has. */
 type MaybeDID = DID | "";
 
+/** The room Alice created, as the test reads it: a link, and its participants. */
+type HeldRoom = ChatRoomLink & { participants?: ProfileCell[] };
+
 /** What every session receives from the setup. */
 interface Setup {
   /** Alice's principal, as her own run of a handler finds it. */
@@ -59,13 +77,13 @@ interface Setup {
   bobDid: Writable<MaybeDID>;
 
   /** The direct room Alice created, once she has. */
-  held: Writable<{ room?: Cell<ChatRoomLink> }>;
+  held: Writable<{ room?: Cell<HeldRoom> }>;
 }
 
 export const setup = pattern(() => ({
   aliceDid: Writable.of<MaybeDID>(""),
   bobDid: Writable.of<MaybeDID>(""),
-  held: Writable.of<{ room?: Cell<ChatRoomLink> }>({}),
+  held: Writable.of<{ room?: Cell<HeldRoom> }>({}),
 }));
 
 /** What `introduce` is bound to. */
@@ -106,7 +124,7 @@ const reasonOf = (
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
-    myProfile: Writable.of<ChatProfile>({ name: "Alice" }),
+    myProfile: Writable.of<TestProfile>({ name: "Alice" }),
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -140,8 +158,9 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 // Accepts the room, with a counterpart that isn't its creator and with none.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const manager = FabriChatManagerCore({
-    myProfile: Writable.of<ChatProfile>({ name: "Bob" }),
+    myProfile: bobProfile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -157,10 +176,30 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   // The room's own control, which sends `accept` with the room alone.
   const adder = AddToChats({
     room: setup.held.key("room"),
-    listed: manager.rooms,
+    catalog: manager.sharedSpaceCatalog,
     accept: manager.accept,
   } as AddArg);
   const action_add = action(() => clickButton(adder[UI], "Add to my chats"));
+
+  // A manager whose catalog lists the room as a host registers an offered
+  // one, without `accept`, so `direct` holds nothing for it.
+  const offeredCatalog = emptyCatalog();
+  const offered = FabriChatManagerCore({
+    myProfile: Writable.of<TestProfile>({ name: "Bob, offered" }),
+    sharedSpaceCatalog: offeredCatalog,
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+  } as ManagerArg);
+  const register = registerSharedSpace({ catalog: offeredCatalog });
+  const action_register_offered = action(() =>
+    register.send({
+      space: spaceOf(setup.held.key("room")) ?? "",
+      host: "http://localhost",
+      kind: CHAT_ROOM_OFFER_KIND,
+      offer: { from: setup.aliceDid.get(), id: "d-1" },
+    })
+  );
 
   return {
     [TESTS]: [
@@ -193,6 +232,25 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           manager.rooms.length === 1 &&
           manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           addDisplay(adder[UI]) === "none"
+        ),
+      },
+      // Accepting the room lists Bob among its participants, without a step
+      // of his own.
+      {
+        assertion: assert(() =>
+          (setup.held.key("room").get()?.get()?.participants ?? []).some((
+            known,
+          ) => equals(known, bobProfile))
+        ),
+      },
+      // A room listed only by the catalog names its labeled creator as its
+      // counterpart.
+      { action: action_register_offered },
+      {
+        assertion: assert(() =>
+          offered.rooms.length === 1 &&
+          offered.rooms[0]?.kind === "direct" &&
+          offered.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
       },
       { label: "bob-done" },

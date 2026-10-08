@@ -31,6 +31,7 @@ import {
   principalOf,
   SELF,
   spaceAccess,
+  spaceOf,
   Stream,
   UI,
   VIEWS,
@@ -43,6 +44,10 @@ import {
   participantEntries,
   type ParticipantRosterCell,
 } from "../loom/participants.tsx";
+import {
+  isSharedSpaceCatalog,
+  type SharedSpaceCatalogStorage,
+} from "../system/shared-space-catalog.ts";
 import { isInMain, type ShownIn } from "./logic.ts";
 import {
   type ActivityCell,
@@ -80,12 +85,12 @@ import {
   type AboutRecord,
   CHAT_ADD_MEMBER_ACTION,
   CHAT_ADD_MEMBER_SURFACE,
+  CHAT_ROOM_OFFER_KIND,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatDisplay,
-  type ChatIndexEntry,
   type ChatProfile,
   type ChatRoomAbout,
   type ChatRoomActivity,
@@ -123,21 +128,6 @@ export interface JoinRoomEvent {
   /** The profile, as the live cell in its own space. */
   profile: ProfileCell;
 }
-
-/**
- * Adds the viewer's profile to the room's participants, through `join`, the
- * one writer the participants' write contract admits. Does nothing until the
- * profile reads as present: an unresolved profile arrives as an empty cell,
- * and adding it would record no profile at all.
- */
-const joinAsViewer = handler<unknown, {
-  join: Stream<JoinRoomEvent>;
-  profile: ProfileCell | undefined;
-}>((_event, { join, profile }) => {
-  const target = profile?.resolveAsCell();
-  if (target === undefined || target.get() === undefined) return;
-  join.send({ profile: target });
-});
 
 /**
  * What a participant's chip sends its viewer's manager's `openDirect`: the
@@ -238,18 +228,28 @@ const askToList = handler<unknown, {
   accept?.send({ room });
 });
 
+/**
+ * Whether `catalog` keeps the room in `space` as one of its user's chats; a
+ * catalog that doesn't read as one keeps none.
+ */
+const listsRoomIn = (catalog: unknown, space: string | undefined): boolean => {
+  if (!isSharedSpaceCatalog(catalog) || space === undefined) return false;
+  const entry = catalog.entries[space];
+  return entry?.kind === CHAT_ROOM_OFFER_KIND && entry.state === "saved";
+};
+
 /** What the control adding a room to the viewer's chats needs. */
 export interface AddToChatsInput {
   /** The room. */
   room: Cell<ChatRoomLink>;
 
   /**
-   * The rooms the viewer's manager lists; absent when the viewer has no
-   * manager.
+   * The shared-space catalog the viewer's manager lists its rooms from; absent
+   * when the viewer has no manager.
    */
-  listed?: ChatIndexEntry[];
+  catalog?: SharedSpaceCatalogStorage;
 
-  /** The viewer's manager's `accept`, when `listed` is present. */
+  /** The viewer's manager's `accept`, when `catalog` is present. */
   accept?: Stream<AcceptRoomEvent>;
 }
 
@@ -268,13 +268,16 @@ export interface AddToChatsOutput {
  * notice their client delivered.
  */
 export const AddToChats = pattern<AddToChatsInput, AddToChatsOutput>(
-  ({ room, listed, accept }) => {
+  ({ room, catalog, accept }) => {
+    // TODO(danfuzz): A stop-gap. Remove this control once creating a room
+    // offers it to every member, so that every member's catalog lists it
+    // without a step of their own.
     const add = askToList({ room, accept });
     // Whether the viewer's manager lists the room differs by viewer, so the
     // control is hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
     const addDisplay = computed((): ChatDisplay =>
-      listed !== undefined && !listed.some((entry) => equals(entry.room, room))
+      catalog !== undefined && !listsRoomIn(catalog, spaceOf(room))
         ? "flex"
         : "none"
     );
@@ -657,14 +660,6 @@ export const FabriChatRoomCore = pattern<
   );
   const participants = computed(() => participantsOf(listed, entries));
   const join = addParticipant({ roster });
-  // Joining a space's own chat is its space's business, as adding a member
-  // is.
-  const joinDisplay = computed((): ChatDisplay =>
-    ownSpace && myProfile?.get() !== undefined &&
-      !participants.some((known) => equals(known, myProfile))
-      ? "flex"
-      : "none"
-  );
   const canSend = computed(() => canActIn(messages, myProfile));
   const addMember = AddMember({ room: messages, myProfile, ownSpace });
   const cannotSend = computed(() => !canSend);
@@ -790,20 +785,6 @@ export const FabriChatRoomCore = pattern<
             />
           ))}
         </div>
-        <cf-hstack
-          id="fabrichat-join"
-          gap="2"
-          align="center"
-          hidden
-          style={{ display: joinDisplay }}
-        >
-          <cf-button
-            size="sm"
-            onClick={joinAsViewer({ join, profile: myProfile })}
-          >
-            Join this chat
-          </cf-button>
-        </cf-hstack>
         {addMember[UI]}
 
         <cf-vstack
@@ -974,7 +955,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     const managerWish = wish<{
       openDirect: Stream<StartDirectEvent>;
       accept: Stream<AcceptRoomEvent>;
-      rooms: ChatIndexEntry[];
+      sharedSpaceCatalog: SharedSpaceCatalogStorage;
     }>({ query: "#chatManager" });
     const startsDirect = computed(() => managerWish.result !== undefined);
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a
@@ -1019,7 +1000,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         <cf-screen>
           <AddToChats
             room={self}
-            listed={managerWish.result?.rooms}
+            catalog={managerWish.result?.sharedSpaceCatalog}
             accept={managerWish.result?.accept}
           />
           {room[UI]}

@@ -30,7 +30,6 @@ import {
   type Default,
   type DID,
   eventKey,
-  type FabricEpochNsec,
   getPatternEnvironment,
   handler,
   type InSpaceGrants,
@@ -164,6 +163,12 @@ export interface ManagerStreamEvent {
   /** The id of a notice delivered. */
   id?: string;
 
+  /**
+   * The revision of a room's entry, as the list the request was made from
+   * showed it, for a room to forget.
+   */
+  revision?: string;
+
   /** A rendered control's text, or the principal it starts a direct room with. */
   readonly target?: {
     readonly value?: string;
@@ -213,6 +218,9 @@ export interface ManagerActState {
   /** Offers a newly created room to the members a request named profiles of. */
   offerRooms: Stream<OfferRoomEvent>;
 
+  /** Adds this user's profile to a room's participants. */
+  joinRooms: Stream<JoinRoomsEvent>;
+
   /** The session's group draft, which a rendered create reads. */
   draft: Writable<GroupDraft>;
 
@@ -230,6 +238,9 @@ export interface ManagerActState {
 
   /** A rendered control's notice id. */
   id?: string;
+
+  /** A rendered control's room's revision, as its row shows it. */
+  revision?: string;
 }
 
 /** The DIDs in `text`, separated by spaces, commas, or lines. */
@@ -372,6 +383,41 @@ const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
   },
 );
 
+/** What joining a room asks: the room, and the profile to join it as. */
+export interface JoinRoomsEvent {
+  /** The room to join. */
+  // `Cell<…>` is written out rather than reached through an alias, as in
+  // `OfferRoomEvent`.
+  room: Cell<ChatRoomLink>;
+
+  /** This user's profile. */
+  profile: Cell<ChatManagerProfile>;
+}
+
+/** The room's stream that adds a profile to its participants. */
+function joinStreamOf(
+  room: Cell<ChatRoomLink>,
+): Cell<{ addParticipant: Stream<{ profile: Cell<ChatManagerProfile> }> }>;
+function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
+  return room;
+}
+
+/**
+ * Adds the event's profile to the room's participants, through the room's own
+ * `addParticipant`, the one writer its roster admits, so that whoever creates
+ * or accepts a room is listed in it without a step of their own. Like
+ * `offerRooms`, it runs as an event of its own, queued by the one that creates
+ * or accepts the room, so that the room's streams exist when it sends. A
+ * profile that hasn't resolved is added to nothing.
+ */
+const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
+  (event) => {
+    const profile = event?.profile?.resolveAsCell();
+    if (profile === undefined || profile.get() === undefined) return;
+    joinStreamOf(event.room).key("addParticipant").send({ profile });
+  },
+);
+
 /**
  * A room's result, as the link an index entry holds. The room is created
  * where the link can't be typed as a cell, and stored as a link to it.
@@ -413,8 +459,9 @@ interface RoomOptions {
  * Creates a room in a space of its own, as the space's root, and its notices,
  * and registers its space in the catalog, all in one transaction: the space's
  * grants are part of creating it, so nothing has to commit apart. A notice for
- * each other member is queued for a client to deliver, and offering the room
- * to each profile in `offerTo` is queued to follow.
+ * each other member is queued for a client to deliver, and adding this user
+ * to the room's participants, and offering the room to each profile in
+ * `offerTo`, are queued to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
  * runs again with the name resolved. Nothing is registered or sent until the
@@ -456,6 +503,9 @@ const createRoom = (
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
     listRoom(state.catalog, space, { title, since: now });
+    if (state.myProfile !== undefined) {
+      state.joinRooms.send({ room, profile: state.myProfile });
+    }
     if (offerTo.length > 0) {
       state.offerRooms.send({
         room,
@@ -642,6 +692,16 @@ const performManagerAct = (
   }
 
   if (act === "forget") {
+    // Forgetting archives the room's entry, at the revision the list the
+    // request came from showed, so a choice made since is not overridden.
+    const revision = event?.revision ?? state.revision;
+    if (typeof revision !== "string") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The request names no revision of the room's entry.",
+      });
+      return;
+    }
     const space = spaceOf(room);
     const entry = isWellFormedDID(space)
       ? readSharedSpaceCatalog(catalog).entries[space]
@@ -650,12 +710,19 @@ const performManagerAct = (
       isWellFormedDID(space) && entry?.kind === CHAT_ROOM_OFFER_KIND &&
       entry.state === "saved"
     ) {
-      changeSharedSpaceMembershipIn(catalog, {
+      const changed = changeSharedSpaceMembershipIn(catalog, {
         space,
         id: eventKey(),
-        expectedRevision: entry.revision,
+        expectedRevision: revision,
         state: "archived",
       });
+      if (changed.status === "conflict") {
+        recordOutcome(state, requestId, {
+          status: "refused",
+          reason: "The room's entry changed since it was listed.",
+        });
+        return;
+      }
     }
     recordOutcome(state, requestId, { status: "done" });
     return;
@@ -709,6 +776,9 @@ const performManagerAct = (
   listRoom(catalog, space, {
     title: kind === "group" ? room.key("about").get()?.title : undefined,
   });
+  if (state.myProfile !== undefined) {
+    state.joinRooms.send({ room, profile: state.myProfile });
+  }
   if (
     kind === "direct" && counterpart !== undefined &&
     direct.key(counterpart).get() === undefined
@@ -769,6 +839,13 @@ export interface FabriChatManagerOutput {
   /** Every room this user belongs to and hasn't forgotten, newest first. */
   rooms: ChatIndexEntry[];
 
+  /**
+   * The user's shared-space catalog, as stored, from which `rooms` is drawn. A
+   * reader in another piece finds a room's entry here by its space without
+   * this manager's view having been computed.
+   */
+  sharedSpaceCatalog: SharedSpaceCatalogStorage;
+
   /** The direct room this user shares with each counterpart, by principal. */
   direct: Record<string, ChatIndexEntry>;
 
@@ -808,71 +885,53 @@ interface ShownEntry {
   /** The room. */
   room: Cell<ChatRoomLink>;
 
+  /** The revision of the room's entry, which forgetting it names. */
+  revision?: string;
+
   /** How the entry is labeled. */
   label: string;
 }
 
-/** What listing one of the catalog's rooms needs. */
-interface IndexedRoomInput {
-  /** The room's space's entry in the user's shared-space catalog. */
-  entry: SharedSpaceEntry;
-
-  /**
-   * The direct room shared with each counterpart, which names the
-   * counterpart of a direct room the manager created or accepted.
-   */
-  direct: DirectCell;
+/** What finding a catalog entry's room needs. */
+interface FoundRoomInput {
+  /** The DID of the room's space, as the catalog entry names it. */
+  space: string;
 }
 
-/** One of the catalog's rooms, as the manager lists it. */
-interface IndexedRoomOutput {
-  /** The room, its space's root; absent until it resolves. */
+/** A catalog entry's room, once found. */
+interface FoundRoomOutput {
+  /** The room; absent until it resolves. */
   room?: Cell<ChatRoomLink>;
-
-  /** The room's kind, as its creator recorded it; absent until it reads. */
-  kind?: ChatRoomKind;
-
-  /** A direct room's other member. */
-  counterpart?: string;
-
-  /** When the user's catalog admitted the room. */
-  since: FabricEpochNsec;
 }
+
+/** The room in `space`, found as the space's root. */
+const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(({ space }) => {
+  const root = wish<Cell<ChatRoomLink>>({
+    query: "#default",
+    scope: computed(() => isWellFormedDID(space) ? [space] : []),
+  });
+  return { room: root.result };
+});
 
 /**
- * One of the catalog's rooms, found as its space's root. A direct room's
- * counterpart is the one the manager stored it under, or else the principal
- * who offered it to the user.
+ * The other member of the direct room in `space`: the counterpart `direct`
+ * holds the room under, for a room this manager created or accepted, or else
+ * the room's creator, as its `about.record` is labeled, unless that is `self`.
+ * Absent when neither names one, as when the label can't be read.
  */
-const IndexedRoom = pattern<IndexedRoomInput, IndexedRoomOutput>(
-  ({ entry, direct }) => {
-    const root = wish<Cell<ChatRoomLink>>({
-      query: "#default",
-      scope: computed(() => isWellFormedDID(entry.space) ? [entry.space] : []),
-    });
-    const kind = computed((): ChatRoomKind | undefined => {
-      const room = root.result;
-      return room === undefined
-        ? undefined
-        : aboutRecordOf(room).key("kind").get() ??
-          room.key("about").get()?.kind;
-    });
-    const counterpart = computed((): string | undefined =>
-      kind !== "direct"
-        ? undefined
-        : Object.entries(direct.get() ?? {}).find(([, known]) =>
-          spaceOf(known.room) === entry.space
-        )?.[0] ?? entry.from
-    );
-
-    return {
-      room: root.result,
-      kind,
-      counterpart,
-      since: computed(() => epochNsecFromMsec(entry.since ?? 0)),
-    };
-  },
-);
+const counterpartOf = (
+  direct: Record<string, ChatIndexEntry>,
+  space: string,
+  room: Cell<ChatRoomLink>,
+  self: string | undefined,
+): string | undefined => {
+  const stored = Object.entries(direct).find(([, known]) =>
+    spaceOf(known.room) === space
+  )?.[0];
+  if (stored !== undefined) return stored;
+  const creator = principalOf(aboutRecordOf(room), "authored-by");
+  return creator === self ? undefined : creator;
+};
 
 /** What a manager's core needs: what it stores, and whose it is. */
 export interface FabriChatManagerCoreInput
@@ -902,29 +961,37 @@ export const FabriChatManagerCore = pattern<
         )
         : [];
     });
-    const indexed = savedRooms.map((entry) => IndexedRoom({ entry, direct }));
-    // Each room once it resolves and reads as a room, newest first.
-    const newestFirst = computed((): ChatIndexEntry[] =>
-      indexed.flatMap((found): ChatIndexEntry[] =>
-        found.room === undefined ||
-          (found.kind !== "direct" && found.kind !== "group")
-          ? []
-          : [{
-            room: found.room,
-            kind: found.kind,
-            ...(found.counterpart === undefined
-              ? {}
-              : { counterpart: found.counterpart }),
-            since: found.since,
-          }]
-      ).sort((a, b) =>
+    const found = savedRooms.map((entry) => FoundRoom({ space: entry.space }));
+    // Each saved room once it resolves and reads as a room, newest first. The
+    // room's own records are read here, beside the entry they belong to, so
+    // they are read in the run that lists them.
+    const newestFirst = computed((): ChatIndexEntry[] => {
+      const self = principalOf(myProfile, "represents-principal");
+      const stored = direct.get() ?? {};
+      return savedRooms.flatMap((entry, index): ChatIndexEntry[] => {
+        const room = found[index]?.room;
+        if (room === undefined) return [];
+        const kind = aboutRecordOf(room).key("kind").get() ??
+          room.key("about").get()?.kind;
+        if (kind !== "direct" && kind !== "group") return [];
+        const counterpart = kind === "direct"
+          ? counterpartOf(stored, entry.space, room, self)
+          : undefined;
+        return [{
+          room,
+          kind,
+          ...(counterpart === undefined ? {} : { counterpart }),
+          since: epochNsecFromMsec(entry.since ?? 0),
+          revision: entry.revision,
+        }];
+      }).sort((a, b) =>
         nsecOf(b.since) < nsecOf(a.since)
           ? -1
           : nsecOf(b.since) > nsecOf(a.since)
           ? 1
           : 0
-      )
-    );
+      );
+    });
     const records = {
       myProfile,
       catalog: sharedSpaceCatalog,
@@ -932,12 +999,14 @@ export const FabriChatManagerCore = pattern<
       requests,
       outgoingNotices,
       offerRooms: offerRooms({}),
+      joinRooms: joinRooms({}),
       draft,
       startRefusal,
     };
     const shown = computed((): ShownEntry[] =>
       newestFirst.map((entry) => ({
         room: entry.room,
+        ...(entry.revision === undefined ? {} : { revision: entry.revision }),
         label: entry.kind === "direct"
           ? `With ${entry.counterpart ?? "someone"}`
           : entry.room.key("about").get()?.title ?? "Group chat",
@@ -972,6 +1041,7 @@ export const FabriChatManagerCore = pattern<
     };
     const view = {
       rooms: newestFirst,
+      sharedSpaceCatalog,
       direct,
       requests,
       outgoingNotices: noticeList,
@@ -994,6 +1064,7 @@ export const FabriChatManagerCore = pattern<
                     act: "forget",
                     ...records,
                     room: entry.room,
+                    revision: entry.revision,
                   })}
                 >
                   Forget
@@ -1110,6 +1181,7 @@ const FabriChatManager = pattern<
     [UI]: core[UI],
     [VIEWS]: core[VIEWS],
     rooms: core.rooms,
+    sharedSpaceCatalog: core.sharedSpaceCatalog,
     direct: core.direct,
     requests: core.requests,
     outgoingNotices: core.outgoingNotices,

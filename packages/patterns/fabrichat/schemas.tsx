@@ -440,8 +440,15 @@ export interface ChatIndexEntry {
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When this user created or accepted it. */
+  /** When this user's index admitted it. */
   since: FabricEpochNsec;
+
+  /**
+   * The revision of the room's entry in the user's index, as listed, which a
+   * request to forget the room names; absent where the entry is not one the
+   * index keeps revisions of.
+   */
+  revision?: string;
 }
 
 /** The outcome of a manager request. */
