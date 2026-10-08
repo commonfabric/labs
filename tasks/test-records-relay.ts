@@ -3,10 +3,11 @@
 /**
  * The relay: the one CI principal that writes to the store. Runs in the
  * workflow_run follower with base-repository credentials, walks the
- * test-records-* artifacts its trigger produced, composes each artifact's
- * context line from the event payload plus the artifact's own job.json,
- * and creates one gzip-encoded object per artifact. Object names derive
- * from the run id, attempt, and artifact name, so re-running the relay
+ * test-records-* artifacts of the run attempt that triggered it, composes
+ * each artifact's context line from the event payload plus the artifact's
+ * own job.json, and creates one gzip-encoded object per artifact. Object
+ * names derive from that attempt's start, the run id, and the artifact
+ * name, none of which a later attempt changes, so re-running the relay
  * re-ships idempotently: an object that already exists collides on create
  * and is treated as shipped.
  *
@@ -14,11 +15,11 @@
  *
  * The directory holds one subdirectory per downloaded artifact. The run's
  * facts come from the workflow_run event payload (GITHUB_EVENT_PATH), or
- * from --run-json <file> for a manual re-ship. The store coordinates come
- * from TEST_RECORDS_BUCKET and TEST_RECORDS_PREFIX, and the credential is
- * the federated access token in TEST_RECORDS_GCS_TOKEN. A failed artifact
- * is reported and the relay exits nonzero, visibly; rerunning it re-ships
- * only what is missing.
+ * from --run-json <file> for a manual re-ship of one attempt. The store
+ * coordinates come from TEST_RECORDS_BUCKET and TEST_RECORDS_PREFIX, and
+ * the credential is the federated access token in TEST_RECORDS_GCS_TOKEN.
+ * A failed artifact is reported and the relay exits nonzero, visibly;
+ * rerunning it re-ships only what is missing.
  */
 
 import { join } from "@std/path";
@@ -51,6 +52,11 @@ export interface RunFacts {
   event: string;
   headSha: string;
   headBranch?: string;
+
+  /**
+   * When this attempt started. A later attempt reports a later start for
+   * the run, but never changes this attempt's.
+   */
   runStartedAt: string;
 
   /** True when the head repository differs from the base repository. */
@@ -174,7 +180,6 @@ export function composeCiContext(
   artifact: ArtifactFacts,
   artifactName: string,
 ): RunContext {
-  const producedByAttempt = artifactName.match(/-a(\d+)$/);
   const context: RunContext = {
     schema: RECORD_SCHEMA_VERSION,
     line: "context",
@@ -185,13 +190,7 @@ export function composeCiContext(
     env: "ci",
     ci: {
       workflowRunId: run.workflowRunId,
-      // The artifact name carries the attempt that produced it; the
-      // payload's attempt is the one that triggered the relay, which is
-      // not the same thing for an earlier attempt's artifacts on a
-      // re-run.
-      runAttempt: producedByAttempt !== null
-        ? Number(producedByAttempt[1])
-        : run.runAttempt,
+      runAttempt: run.runAttempt,
       workflow: run.workflow,
       job: artifact.job ?? artifactName,
     },
@@ -243,16 +242,33 @@ export interface RelayOptions {
   fetch?: typeof fetch;
 }
 
-/** Ships every artifact directory; returns the names that failed. */
+/**
+ * Ships every artifact directory the run's attempt produced; returns the
+ * names that failed. An artifact's name ends in `-a<attempt>`, and one
+ * another attempt produced is left to the relay that attempt triggered,
+ * whose payload carries that attempt's start. A name with no attempt
+ * cannot be dated, so it fails.
+ */
 export async function relayArtifacts(options: RelayOptions): Promise<string[]> {
   const failed: string[] = [];
   const names: string[] = [];
   for await (const entry of Deno.readDir(options.artifactsDir)) {
-    if (entry.isDirectory) names.push(entry.name);
+    if (!entry.isDirectory) continue;
+    const attempt = entry.name.match(/-a(\d+)$/)?.[1];
+    if (attempt === undefined) {
+      console.error(`test records: ${entry.name} names no attempt`);
+      failed.push(entry.name);
+    } else if (Number(attempt) === options.run.runAttempt) {
+      names.push(entry.name);
+    } else {
+      console.log(`test records: ${entry.name} is another attempt's`);
+    }
   }
   names.sort();
   if (names.length === 0) {
-    console.log("test records: the run produced no test-records artifacts");
+    console.log(
+      "test records: the attempt produced no test-records artifacts",
+    );
     return failed;
   }
   for (const name of names) {

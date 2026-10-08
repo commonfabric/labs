@@ -9,6 +9,7 @@ import {
 const SPACE = "did:key:catalog-test-room";
 const FROM = "did:key:catalog-test-sender";
 const OFFER = JSON.stringify([FROM, "first-offer"]);
+const IMPORTED = "did:key:catalog-test-import";
 const EXHAUSTED_SPACE = "did:key:catalog-exhausted";
 // A 272-digit generation plus the 48-character event suffix fills the bound.
 const EXHAUSTED_REVISION =
@@ -144,6 +145,61 @@ export default pattern(() => {
     home.sharedSpaceCatalog.entries[SPACE]?.host === "https://room.example" &&
     home.sharedSpaceCatalog.entries[SPACE]?.state === "saved"
   );
+  const action_register_import = action(() => {
+    home.registerSharedSpace.send({
+      space: IMPORTED,
+      host: "https://room.example",
+      kind: "loom",
+      title: "Imported loom",
+    });
+  });
+  const assert_imported = assert(() =>
+    home.sharedSpaceCatalog.entries[IMPORTED]?.revision.startsWith("1:") &&
+    Object.keys(home.sharedSpaceCatalog.entries).length === 2
+  );
+  const action_remove_stale = action(() => {
+    revision.set(home.sharedSpaceCatalog.entries[IMPORTED].revision);
+    home.removeSharedSpace.send({
+      space: IMPORTED,
+      expectedRevision: "1:not-the-observed-revision",
+    });
+  });
+  const action_remove_receipted = action(() => {
+    home.removeSharedSpace.send({
+      space: SPACE,
+      expectedRevision: home.sharedSpaceCatalog.entries[SPACE].revision,
+    });
+  });
+  const assert_both_retained = assert(() =>
+    home.sharedSpaceCatalog.entries[IMPORTED]?.revision === revision.get() &&
+    home.sharedSpaceCatalog.entries[SPACE]?.state === "saved" &&
+    home.sharedSpaceCatalog.offers[OFFER]?.space === SPACE
+  );
+  const action_remove_import = action(() => {
+    home.removeSharedSpace.send({
+      space: IMPORTED,
+      expectedRevision: home.sharedSpaceCatalog.entries[IMPORTED].revision,
+    });
+  });
+  // The validated reader refuses a catalog holding an entry slot without an
+  // entry, so reading it here also shows the removal left no such slot.
+  const assert_import_removed = assert(() =>
+    !Object.hasOwn(home.sharedSpaceCatalog.entries, IMPORTED) &&
+    Object.keys(home.sharedSpaceCatalog.entries).length === 1 &&
+    home.sharedSpaceCatalog.entries[SPACE]?.state === "saved" &&
+    Object.keys(home.sharedSpaceCatalog.offers).length === 1
+  );
+  const action_remove_again = action(() => {
+    home.removeSharedSpace.send({
+      space: IMPORTED,
+      expectedRevision: revision.get(),
+    });
+  });
+  const assert_reregistered_fresh = assert(() =>
+    home.sharedSpaceCatalog.entries[IMPORTED]?.revision.startsWith("1:") &&
+    home.sharedSpaceCatalog.entries[IMPORTED]?.revision !== revision.get() &&
+    home.sharedSpaceCatalog.entries[IMPORTED]?.state === "saved"
+  );
   return {
     [TESTS]: [
       { action: action_unsupported },
@@ -162,6 +218,17 @@ export default pattern(() => {
       { assertion: assert_restored },
       { action: action_conflicting_route },
       { assertion: assert_route_retained },
+      { action: action_register_import },
+      { assertion: assert_imported },
+      { action: action_remove_stale },
+      { action: action_remove_receipted },
+      { assertion: assert_both_retained },
+      { action: action_remove_import },
+      { assertion: assert_import_removed },
+      { action: action_remove_again },
+      { assertion: assert_import_removed },
+      { action: action_register_import },
+      { assertion: assert_reregistered_fresh },
     ],
   };
 });

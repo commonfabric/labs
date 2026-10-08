@@ -718,13 +718,14 @@ function unitCostOf(
  * What a suite costs a lane beyond its tests, fitted twice.
  *
  * The first fit reads each batch as a whole: an intercept charged once
- * per lane holding the suite, and a correction and a per-unit charge in
- * proportion to what the lane holds. What the suite's processes spend
- * before their units begin is spread through those three, however many
- * processes a lane starts. It is what a packer charges that does not know
- * the second fit, so it reads what that packer's lanes spent: a batch that
- * does not say what its processes spent on setup is as good a reading of
- * it as one that does, and the first fit prefers neither.
+ * for each pass a lane makes over the suite, and a correction and a
+ * per-unit charge in proportion to what the lane holds. What the suite's
+ * processes spend before their units begin is spread through those
+ * three, however many processes a lane starts. It is what a packer
+ * charges that does not know the second fit, so it reads what that
+ * packer's lanes spent: a batch that does not say what its processes
+ * spent on setup is as good a reading of it as one that does, and the
+ * first fit prefers neither.
  *
  * The second fit, `process`, is made where some batch measured its
  * processes' setup and started a process that marks when its units begin,
