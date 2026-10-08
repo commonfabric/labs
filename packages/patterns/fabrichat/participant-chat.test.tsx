@@ -208,6 +208,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const unclaimed = Writable.of<UnclaimedProfile>({ name: "Nobody" });
   const writeProfile = writeOwnProfile({ profile, name: "Bob" });
   const rooms = Writable.of<ChatIndexEntry[]>([]);
+  const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const bobDid = Writable.of<string>("");
   const action_note_principal = action(() =>
     bobDid.set(currentPrincipal() ?? "")
@@ -216,7 +217,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     myProfile: profile,
     rooms,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
   } as ManagerArg);
   const chipFor = {
@@ -286,6 +287,23 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           rooms.get().length === 1 && rooms.get()[0]?.kind === "direct" &&
           rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
           setup.aliceDid.get() !== ""
+        ),
+      },
+      // A chip an older room rendered names her by principal instead, and
+      // finds the same room.
+      {
+        action: manager.openDirect,
+        event: {
+          requestId: "older-chip",
+          type: "click",
+          target: { dataset: { counterpart: setup.aliceDid } },
+        },
+        trustedUi: startGesture,
+      },
+      {
+        assertion: assert(() =>
+          requests.get()["older-chip"]?.status === "done" &&
+          rooms.get().length === 1
         ),
       },
       { label: "bob-done" },

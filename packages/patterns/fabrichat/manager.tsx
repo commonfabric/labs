@@ -106,7 +106,9 @@ const isStart = (act: ManagerAct): boolean =>
  * fields its act needs. A rendered control sends no request id, which the
  * manager then mints, and either the text it holds, as `target.value`, or, for
  * a control that starts a direct room with one person, that person's profile,
- * bound as the control's `name`, as `target.name`.
+ * bound as the control's `name`, as `target.name`. A chip a room rendered
+ * before its control named a profile names the person's principal instead, as
+ * `target.dataset.counterpart`.
  */
 export interface ManagerStreamEvent {
   /**
@@ -155,6 +157,9 @@ export interface ManagerStreamEvent {
     // event's schema marks a reference position only where the wrapper is
     // written in the event type.
     readonly name?: Cell<ChatManagerProfile>;
+
+    /** The principal an older room's chip names the person by. */
+    readonly dataset?: { readonly counterpart?: string };
   };
 }
 
@@ -564,7 +569,8 @@ const performManagerAct = (
     const namedPrincipal = named === undefined
       ? undefined
       : principalOf(named, "represents-principal");
-    const counterpart = event?.counterpart ?? namedPrincipal ?? typed;
+    const counterpart = event?.counterpart ?? namedPrincipal ??
+      event?.target?.dataset?.counterpart ?? typed;
     if (!isPrincipalDID(counterpart)) {
       const reason = "The counterpart is not a principal.";
       // The session is shown the text it sent, which says what is wrong
