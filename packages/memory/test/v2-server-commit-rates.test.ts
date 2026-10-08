@@ -119,6 +119,26 @@ describe("server", () => {
       }]);
     });
 
+    it("counts a commit whose decision threw as rejected, with no operations when it carried no list of them", async () => {
+      await expect(server.transact({
+        type: "transact",
+        requestId: "commit-1",
+        space,
+        sessionId: "session:nobody",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: undefined as never,
+        },
+      })).rejects.toThrow();
+      const [rates] = server.commitRates().spaces;
+      expect(rates.minute).toEqual({
+        accepted: 0,
+        rejected: 1,
+        operations: 0,
+      });
+    });
+
     it("reports the server's own direct writes under its direct session, without a principal", async () => {
       await server.writeDocument(space, "of:direct", { written: true });
       const [rates] = server.commitRates().spaces;

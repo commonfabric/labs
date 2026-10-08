@@ -90,6 +90,24 @@ describe("engine", () => {
       expect(decisions[1].operations).toBe(1);
     });
 
+    it("counts no operations for a refused commit whose operations are not a list", () => {
+      expect(() =>
+        applyCommit(engine, {
+          sessionId: "session:a",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: undefined as never,
+          },
+        })
+      ).toThrow();
+      expect(decisions).toStrictEqual([{
+        sessionId: "session:a",
+        accepted: false,
+        operations: 0,
+      }]);
+    });
+
     it("reports every commit of one atomic operation once the transaction settles", () => {
       runAtomicCommit(engine, (apply) => {
         apply({ sessionId: "session:a", commit: commit(1, ["of:one"]) });
