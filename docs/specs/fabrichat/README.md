@@ -262,11 +262,12 @@ names the ones it needs, and they are gathered here:
   room's handler writing the sending session's own windows, and one message
   document written by two sets of writers (see
   [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
-- **Host-issued trusted gestures.** A client that draws natively needs a
-  sanctioned way to issue a reviewed gesture without a DOM. That is the
-  "sanctioned headless issuance path" in the [host embedding policy
-  record](../../features/host-embedding.md#6-policy-record-trusted-mark-threat-model)
-  (see [`clients.md`](clients.md)).
+- **Native reviewed acts as trusted gestures.** A client that draws natively
+  issues a reviewed act through the sanctioned path
+  ([host embedding](../../features/host-embedding.md#10-native-reviewed-controls),
+  §10), but a native act is not a DOM gesture, so a write that requires one,
+  as adding a member does, can't be made from it yet (see
+  [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 
 ## Implementation status
 
@@ -295,9 +296,10 @@ from this design, as below.
   offer it. A room in a space of its own keeps the space's participants,
   through `addParticipant`, the roster's one writer
   (`packages/patterns/loom/participants.tsx`): the manager that creates or
-  accepts the room adds its user, from an event that follows. A member whose
-  manager has done neither, as when an offer registered the room, is shown
-  once they write, as an author. A room in an existing social space lists that
+  accepts the room adds its user, from an event that follows. As a stop-gap, a
+  member whose manager has done neither, as when the share intake registered
+  an offer of the room, is not on the roster, and is shown once they write, as
+  an author. A room in an existing social space lists that
   space's participants, then those who joined the room.
 - **Principals.** A handler learns the principal it acts for
   (`currentPrincipal()`), so a room keys its request memory by the sender's

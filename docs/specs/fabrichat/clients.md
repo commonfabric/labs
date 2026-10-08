@@ -111,6 +111,9 @@ gesture on the reviewed surface its policy names:
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 | add a member | room's rendering | `addMember` | `ChatAddMemberSurface` |
 
+Adding a member is admitted only from a DOM gesture on the room's own rendering
+for now (see [the sanctioned issuing path](#the-sanctioned-issuing-path)).
+
 A client sends to the room's own streams, never through a placement or an
 adapter.
 
@@ -186,21 +189,30 @@ MUST behave as a trustworthy renderer:
 A client that can't meet all six MUST NOT issue trusted gestures. It can still
 read and show conversations, and it can host the room's `[UI]` for writing.
 
-### Prerequisite: a sanctioned issuing path
+### The sanctioned issuing path
 
-A native client needs a sanctioned way to hand the runtime a gesture it vouches
-for. The host embedding record already names this as the right posture: "a
-sanctioned headless issuance path, **not** a weakening of the in-runtime
-surface-origin defense". No such path exists yet. The runtime client's generic
-`cell:send` doesn't mark an event, and the in-repository precedents that do mark
-one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
-`trustedUi` steps) are not for embedding hosts. The path this design needs:
+A native client hands the runtime a gesture it vouches for through the
+sanctioned issuing path that [host
+embedding](../../features/host-embedding.md#10-native-reviewed-controls), §10,
+describes. A host running the runtime in its own process binds each control to
+its stream with `bindNativeUiControl()` from `@commonfabric/runner/native-ui`,
+naming the surface and action from the table above once, when it binds the
+control. The function that returns sends the control's payload with `native`
+provenance for that surface and action, carrying the renderer-trust mark. A
+host whose runtime runs in a worker sends the same act with
+`CellHandle.sendReviewed(event, { surface, action })`, which waits for the
+handler's run, and rejects with the reason when its write is refused. Either
+way, the runtime checks the surface and action against the write's policy as
+it checks a rendered gesture's provenance, and the mark reaches a served
+handler the way a rendered gesture's does. The generic `cell:send` marks
+nothing, and pattern code can reach neither path.
 
-- It is available only to the host, never to pattern code that the runtime runs.
-- It takes the surface and action with the event, and the runtime checks them
-  against the write's policy as it checks a rendered gesture's provenance.
-- It carries the mark to wherever the handler runs, as `rendererTrusted` already
-  does between runtimes.
+A native act is not a DOM gesture, so a write that requires one is refused from
+a native control. Adding a member is such a write: `addMember` admits someone
+with `grantSpaceAccess()`, which changes the space's access list only from a
+DOM gesture. So a client offers the add control only by rendering the room's
+`[UI]`, until the runtime counts a native reviewed act as a trusted gesture for
+that change.
 
 ## Delivering notices
 

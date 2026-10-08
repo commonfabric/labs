@@ -10,8 +10,8 @@ reason: "Record of the deliberate contract break taken when a FabriChat room bec
 A room the manager creates is now its space's root
 (`FabriChatRoom.inSpace(undefined, { grants, root: true })`), a social space in
 its own right. Opening its space shows the room, and the room keeps the space's
-participants itself: a roster in its own arguments, written only by the loom
-roster's `addParticipant` (`packages/patterns/loom/participants.tsx`). Before,
+participants itself: a roster in its own arguments, written only by
+`addParticipant` from `packages/patterns/loom/participants.tsx`. Before,
 the space's root was its default pattern, the system default app a host
 created the first time someone opened the space, and the room read the
 participants from that app through `wish({ query: "#default" })`. A room in an

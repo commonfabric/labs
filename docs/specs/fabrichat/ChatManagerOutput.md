@@ -180,7 +180,10 @@ outward act when it creates a room.
 
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
 - **Effect:** if `direct` has an entry for `counterpart`, that entry is the
-  outcome, and it is put back in `rooms` if it was forgotten. Otherwise, if a
+  outcome, and it is put back in `rooms` if it was forgotten, whatever its
+  archive state: starting the chat is the person's choice to have it listed,
+  so this restore wins over a concurrent archive, from another device, say.
+  Otherwise, if a
   creation for the same `counterpart` is still pending under another
   `requestId`, the manager MUST resume that creation rather than start another,
   and records its outcome under both ids. Otherwise, creates a direct room whose
@@ -239,7 +242,10 @@ Records a room this user has been admitted to.
 - **Admitted:** without a reviewed gesture, since it changes only this user's
   own index. Whether to add a room to their index is the user's decision (see
   [`clients.md`](clients.md#finding-conversations)).
-- **Effect:** records an entry in `rooms`. For a direct room, the counterpart it
+- **Effect:** records an entry in `rooms`, putting a forgotten room back
+  whatever its archive state: accepting the room is the person's choice to
+  have it listed, so this restore wins over a concurrent archive, from another
+  device, say. For a direct room, the counterpart it
   records is the creator `about.record`'s label names, which it reads itself;
   once the room's space has a member set, it also checks that the counterpart is
   a member. For a direct room, it also records the entry in `direct`, unless
@@ -329,7 +335,7 @@ manager offers the new room to that member through the share inbox the
 profile's `inbox` points at
 ([`private-inbox.md`](../../features/private-inbox.md)), once, after the room is
 created. A profile that points at no inbox is offered nothing. The offer is the
-envelope a loom share inbox takes:
+envelope a share inbox takes:
 
 - `kind` — `fabrichat-room`.
 - `id` — the request's `requestId`. The inbox keeps one offer per sender and

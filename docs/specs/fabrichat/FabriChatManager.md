@@ -99,8 +99,8 @@ A notice has to reach a principal who may share no space with the sender. Its
 route is the recipient's profile share inbox: a profile's `inbox` field
 (`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
 piece in a space of its own. That is either the private inbox the recipient's
-Home creates ([the private inbox](../../features/private-inbox.md)) or one a
-loom daemon created, and both take the same offer envelope. Any principal may
+Home creates ([the private inbox](../../features/private-inbox.md)) or another
+share inbox the profile points at, and both take the same offer envelope. Any principal may
 write to the inbox's space, and its offers are labeled readable by the owner
 alone, a label that binds only an honest runtime. When a request names a
 member's profile, as `openDirect` does with its `profile`, step 3 offers the

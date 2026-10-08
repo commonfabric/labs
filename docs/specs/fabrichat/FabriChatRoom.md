@@ -23,7 +23,7 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   proposed-time window, which that span covers.
 - Those who joined the room: profile links, in the order they were added, a
   roster only `addParticipant` writes
-  (`packages/patterns/loom/participants.tsx`, the roster a loom's root keeps).
+  (`packages/patterns/loom/participants.tsx`).
 
 `participants` is computed from those who joined, the participants the space's
 root lists when the room is not that root (`wish({ query: "#default" })`), and
@@ -57,7 +57,7 @@ Every write goes through one handler per stream:
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
 
 Those who joined the room are the exception. The room's `addParticipant`
-stream is bound to the loom roster's one writer, also named `addParticipant`,
+stream is bound to the roster's one writer, also named `addParticipant`,
 which adds a profile with no gesture and no `requestId`: it is a set-add, so a
 profile already listed is not added again. The roster's write contract admits
 no other writer.
