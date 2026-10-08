@@ -10,6 +10,7 @@ import {
   action,
   type AddIntegrity,
   assert,
+  type Cell,
   currentPrincipal,
   equals,
   handler,
@@ -36,6 +37,7 @@ import {
   textContent,
 } from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
+import FabriChatRoom from "./room.tsx";
 import {
   CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
@@ -53,6 +55,12 @@ type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 /** An empty shared-space catalog, as a manager registers its rooms in. */
 const emptyCatalog = () =>
   Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
+
+/** A room's result, as the link an `accept` names it by. */
+function roomOf(room: unknown): Cell<ChatRoomLink>;
+function roomOf(room: unknown): unknown {
+  return room;
+}
 
 /** The entries `catalog` holds, as Home's reader validates them. */
 const entriesOf = (
@@ -210,10 +218,11 @@ export default pattern(() => {
   // Accepting a group room, and a direct room only with its counterpart.
   const acceptRooms = Writable.of<ChatIndexEntry[]>([]);
   const acceptRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const acceptCatalog = emptyCatalog();
   const accepting = FabriChatManagerCore({
     myProfile: profile,
     rooms: acceptRooms,
-    sharedSpaceCatalog: emptyCatalog(),
+    sharedSpaceCatalog: acceptCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: acceptRequests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -232,6 +241,14 @@ export default pattern(() => {
     accepting.forget.send({
       requestId: "f-2",
       room: acceptHeld.key("room").resolveAsCell(),
+    })
+  );
+  // A space's own chat, which no manager created, so it has no record.
+  const ownChat = FabriChatRoom({});
+  const action_accept_own_chat = action(() =>
+    accepting.accept.send({
+      requestId: "a-own",
+      room: roomOf(ownChat),
     })
   );
   const action_forget_accepted_direct = action(() =>
@@ -559,6 +576,16 @@ export default pattern(() => {
           reasonOf(acceptRequests, "a-3") ===
             "The room was created by this user." &&
           acceptRooms.get().length === 0
+        ),
+      },
+      // Accepting a space's own chat lists it, but registers nothing: its
+      // space is the social space it belongs to, not a FabriChat room's.
+      { assertion: assert(() => entriesOf(acceptCatalog).length === 2) },
+      { action: action_accept_own_chat },
+      {
+        assertion: assert(() =>
+          statusOf(acceptRequests, "a-own") === "done" &&
+          entriesOf(acceptCatalog).length === 2
         ),
       },
 

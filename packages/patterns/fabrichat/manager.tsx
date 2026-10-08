@@ -285,7 +285,7 @@ const hostOrigin = (): string => new URL(getPatternEnvironment().apiUrl).origin;
 
 /**
  * Lists the room in `space` in the user's catalog: registers the space, or
- * restores its entry when the room was forgotten. An entry in any other state
+ * restores its entry when the entry is archived. An entry in any other state
  * stays as it is. A group room's title, cut to the length an offer's may run
  * to, is registered with it.
  */
@@ -296,11 +296,12 @@ const listRoom = (
 ): void => {
   const entry = readSharedSpaceCatalog(catalog).entries[space];
   if (entry === undefined) {
-    // The host is this pattern's own. A runtime reads every space from the
-    // one memory host its `apiUrl` names, and a link carries no host, so a
-    // room this manager creates or accepts is one this runtime has read, and
-    // so one this host serves; the share intake refuses an offer of a room
-    // on any other host.
+    // The host registered is this pattern's own, which serves each room this
+    // manager creates. A room it accepts is registered under it as well,
+    // since a pattern can't read which host serves a space, and a room
+    // another host serves is then registered under the wrong one.
+    // TODO(danfuzz): Register an accepted room under the host that serves
+    // its space, once a pattern can read it.
     registerSharedSpaceIn(catalog, {
       space,
       host: hostOrigin(),
@@ -662,7 +663,7 @@ const performManagerAct = (
       if (!lists(rooms, known.room)) {
         rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), known]);
       }
-      // Restores a forgotten entry at the revision just read, as `listRoom`
+      // Restores an archived entry at the revision just read, as `listRoom`
       // says: starting the chat is the choice to have it listed.
       const knownSpace = spaceOf(known.room);
       if (isWellFormedDID(knownSpace)) listRoom(state.catalog, knownSpace);
@@ -790,10 +791,15 @@ const performManagerAct = (
   }
   // Registers the room, or restores an archived entry at the revision just
   // read, as `listRoom` says: accepting the room is the choice to have it
-  // listed.
-  listRoom(state.catalog, space, {
-    title: kind === "group" ? room.key("about").get()?.title : undefined,
-  });
+  // listed. Only a room a manager created is registered, which its record
+  // says: such a room is its space's root, in a space that declares itself a
+  // `fabrichat-room`, while a space's own chat has no record, and its space is
+  // the social space it belongs to.
+  if (record.key("kind").get() !== undefined) {
+    listRoom(state.catalog, space, {
+      title: kind === "group" ? room.key("about").get()?.title : undefined,
+    });
+  }
   if (state.myProfile !== undefined) {
     state.joinRooms.send({ room, profile: state.myProfile });
   }
