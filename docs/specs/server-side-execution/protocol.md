@@ -506,10 +506,14 @@ whose lease it does not hold — the shape that would silently resolve
 `user:<serviceDID>`. Cross-space serving therefore reads foreign
 SPACE-scope state freely (§2b's free-read row) and foreign SCOPED
 state not at all; lifting that refusal is exactly the grant
-resolution above, never a lease-trust widening. Refusal (i) is typed
-as permanent for served delivery: a served event whose required load
-meets it terminalizes at once (events.md §5). Remote attestation
-stays anticipated future work.
+resolution above, never a lease-trust widening. Refusal (i) is no load
+for served delivery to wait on, and it is never silently empty for the
+data a served run reads: a run that reads the value of a refused
+document — through its declared event or its bound state — fails
+permanently and terminalizes at once (events.md §5). A refused document
+that only the dispatch preflight's dependency walk reaches, or whose
+link a run passes along without reading it, does not stop dispatch.
+Remote attestation stays anticipated future work.
 
 **Run identity for a derivation (S1).** A derivation runs PER
 DEMANDED INSTANCE and the DEMAND supplies the identity — a
@@ -613,7 +617,11 @@ relocated into the wave's commit step:
   A space created for a run whose home commit never landed is
   remembered by the process that created it and reused on replay there;
   one abandoned by a process that stopped is unreferenced and inert —
-  one access-control document nobody can reach.
+  one access-control document nobody can reach. Only the serving runtime
+  creates a space for a name. A client resolves a name only through its
+  record, so its speculative run of a provisioning handler whose record
+  does not exist yet withdraws rather than creating a space of its own
+  (speculation.md §2).
   Provisioning handlers MUST therefore be deterministic given
   payload + cells — no clock, no randomness (events.md §3); replay
   convergence depends on it. A transformer lint can trail.

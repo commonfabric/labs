@@ -2413,6 +2413,7 @@ export class RuntimeProcessor {
       instance: prepared.instance,
       policy: prepared.policy,
       sources: [...prepared.sources],
+      heldWith: prepared.heldWith.map((group) => [...group]),
       witnessedRelease: prepared.witnessedRelease,
       stance: prepared.stance,
     };
