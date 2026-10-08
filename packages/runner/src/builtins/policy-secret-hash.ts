@@ -138,6 +138,37 @@ const settleKey = (
 };
 
 /**
+ * The keys each runtime has reported it could not obtain, so that a key that
+ * stays unobtainable, such as one whose location holds a value under another
+ * label, is reported once rather than on every run that waits on it.
+ */
+const unobtainableKeys = new WeakMap<Runtime, Set<string>>();
+
+/**
+ * Helper for {@link policySecretHash}, which reports, once per runtime, that
+ * the key `secret` in `space` could not be obtained.
+ */
+const reportUnobtainableKey = (
+  runtime: Runtime,
+  space: MemorySpace,
+  secret: RuntimeSecret,
+  error: unknown,
+): void => {
+  let reported = unobtainableKeys.get(runtime);
+  if (reported === undefined) {
+    reported = new Set();
+    unobtainableKeys.set(runtime, reported);
+  }
+  const key = `${space}\n${secret.name}`;
+  if (reported.has(key)) return;
+  reported.add(key);
+  console.error(
+    "[policySecretHash] The policy's key could not be obtained.",
+    error,
+  );
+};
+
+/**
  * `policySecretHash<T>({ input })`: the keyed hash of the string `input` under
  * the key of the module policy `T` names, so that only the policy's exchange
  * rules release anything computed from it (docs/specs/cfc-policy-secret.md).
@@ -211,10 +242,7 @@ export function policySecretHash(
       // key is stored there.
       runtime.scheduler.trackBackgroundTask(
         settleKey(runtime, space, secret).then(rerun, (error) => {
-          console.error(
-            "[policySecretHash] The policy's key could not be obtained.",
-            error,
-          );
+          reportUnobtainableKey(runtime, space, secret, error);
         }),
       );
     }

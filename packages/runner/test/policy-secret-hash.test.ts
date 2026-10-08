@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import { policySecretHashOf } from "../src/builtins/policy-secret-hash.ts";
 import type { Cell } from "../src/cell.ts";
@@ -18,6 +19,7 @@ import { Runtime } from "../src/runtime.ts";
 import {
   modulePolicySecret,
   runtimeSecretLink,
+  unusableRuntimeSecret,
 } from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -68,7 +70,10 @@ export type DrawHash = Confidential<
 
 /** The candidate whose hash sorts first, once every hash is in. */
 export const drawWinner = lift(
-  (draw: { candidates: string[]; hashes: (string | undefined)[] }): string => {
+  (draw: {
+    candidates: string[];
+    hashes: (string | undefined)[] | undefined;
+  }): string => {
     const hashes = draw.hashes ?? [];
     if (hashes.length === 0 || hashes.some((hash) => !hash)) return "";
     let first = 0;
@@ -154,6 +159,8 @@ const rename = handler<void, { name: Writable<string> }>((_, { name }) => {
 
 interface Rooms {
   name: Writable<Default<string, "carol">>;
+  items: Writable<Default<string[], ["alice", "bob"]>>;
+  roomMapped: Writable<Default<RoomText, "">>;
   roomWinner: Writable<Default<RoomText, "">>;
   roomEcho: Writable<Default<RoomText, "">>;
   roomRelabel: Writable<Default<RoomText, "">>;
@@ -161,7 +168,15 @@ interface Rooms {
 }
 
 export default pattern<Rooms>((
-  { name, roomWinner, roomEcho, roomRelabel, roomStandIn },
+  {
+    name,
+    items,
+    roomMapped,
+    roomWinner,
+    roomEcho,
+    roomRelabel,
+    roomStandIn,
+  },
 ) => {
   const alice = policySecretHash<DrawHash>({ input: "alice" });
   const bob = policySecretHash<DrawHash>({ input: "bob" });
@@ -173,6 +188,10 @@ export default pattern<Rooms>((
   const winner = drawWinner({
     candidates: ["alice", "bob"],
     hashes: [alice, bob],
+  });
+  const mappedWinner = drawWinner({
+    candidates: items,
+    hashes: items.map((item) => policySecretHash<DrawHash>({ input: item })),
   });
   const steered = drawWinner({
     candidates: ["alice", "bob"],
@@ -186,16 +205,19 @@ export default pattern<Rooms>((
     carolHash,
     nameHash,
     winner,
+    mappedWinner,
     steered,
     roomWinner,
     roomEcho,
     roomRelabel,
     roomStandIn,
+    roomMapped,
     publishWinner: publish({ from: winner, to: roomWinner }),
     publishEcho: publish({ from: echo(alice), to: roomEcho }),
     publishRelabel: publish({ from: relabel(alice), to: roomRelabel }),
     publishStandIn: publish({ from: steered, to: roomStandIn }),
     rename: rename({ name }),
+    publishMapped: publish({ from: mappedWinner, to: roomMapped }),
   };
 });
 `;
@@ -217,7 +239,9 @@ type Draw = {
   carolHash?: string;
   nameHash?: string;
   winner?: string;
+  mappedWinner?: string;
   steered?: string;
+  roomMapped: string;
   roomWinner: string;
   roomEcho: string;
   roomRelabel: string;
@@ -451,6 +475,27 @@ describe("policySecretHash()", () => {
     });
   });
 
+  it("releases nothing computed from a list of hashes, which carries no witness", async () => {
+    // A list a labeled write creates gets an existence entry under the
+    // writer's clause and without its stamp, so a rule requiring the
+    // builtin's witness finds none on the list, however it was built.
+
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(runtime, "draw-mapped", async ({ result, send, read }) => {
+        const { winner } = await read();
+        await waitForCellValue<string>(
+          runtime,
+          result.key("mappedWinner"),
+          (value) => value === winner,
+          { stuckLabel: "the mapped draw" },
+        );
+
+        await send("publishMapped");
+        expect((await read()).roomMapped).toBe("");
+      });
+    });
+  });
+
   it("releases nothing other code computes from a hash", async () => {
     await withRuntime("enforce-strict", async (runtime) => {
       await runDraw(runtime, "draw-echo", async ({ send, read }) => {
@@ -532,6 +577,62 @@ describe("policySecretHash()", () => {
       for (const runtime of runtimes) await runtime.dispose();
       for (const manager of managers) await manager.close();
     }
+  });
+
+  it("hands a runtime that joins after the mint the hash the first one computed", async () => {
+    const server = newSharedServer();
+    const managers = [
+      EmulatedStorageManager.connectTo(server, { as: signer }),
+      EmulatedStorageManager.connectTo(server, { as: signer }),
+    ];
+    const runtimes = managers.map((storageManager) =>
+      new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      })
+    );
+    try {
+      const hashes: (string | undefined)[] = [];
+      for (const [index, runtime] of runtimes.entries()) {
+        await runDraw(runtime, `draw-join-${index}`, async ({ read }) => {
+          hashes.push((await read()).alice);
+        });
+      }
+      expect(hashes[0]).toMatch(/^[0-9a-f]{64}$/);
+      expect(hashes[1]).toBe(hashes[0]);
+    } finally {
+      for (const runtime of runtimes) await runtime.dispose();
+      for (const manager of managers) await manager.close();
+    }
+  });
+
+  it("hands out nothing once the key's location holds a value under another label", async () => {
+    // A stored label never weakens, so the runtime cannot mint the key over
+    // such a value, and the policy has no key in the space.
+
+    let digest: unknown;
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(runtime, "draw-digest", async ({ result }) => {
+        digest = policyClauseOf(runtime, result.key("alice"))?.policyDigest;
+      });
+    });
+    expect(typeof digest).toBe("string");
+
+    await withRuntime("enforce-strict", async (runtime) => {
+      const plant = runtime.edit();
+      plant.ensureRuntimeSecret(
+        space,
+        unusableRuntimeSecret(`policy:${digest}`),
+        runtimeWritePolicyAuthorization,
+      );
+      expect((await plant.commit().settled).error).toBeUndefined();
+
+      await runDraw(runtime, "draw-planted", async ({ read }) => {
+        expect((await read()).alice).toBeUndefined();
+      });
+    });
   });
 
   it("hands out nothing where flow labels are not persisted", async () => {

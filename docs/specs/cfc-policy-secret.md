@@ -99,8 +99,12 @@ A key never changes once a trusted one is stored:
   overwrite: the schema read is not a commit precondition, and the value read
   is of the current version.
 - A value carrying the claim over another confidentiality is untrusted too,
-  and the mint cannot replace it, since a stored label never weakens; the key
-  stays unusable, and no hash is handed out.
+  and so is a value stored without the claim under a label stronger than the
+  policy's clause; the mint cannot replace either, since a stored label never
+  weakens. The key then stays unusable in that space, no hash is handed out,
+  and each runtime reports it once. Anyone who can write the space's storage
+  below the runtime can cause this, and the only recovery is a new policy
+  digest.
 - Two runtimes that mint concurrently both read the absence, and the commit
   that lands second conflicts on that read. Its retry finds the stored key and
   writes nothing.
@@ -108,8 +112,10 @@ A key never changes once a trusted one is stored:
 A new policy digest is a new policy and gets a new key. The module identity in
 the digest is the content identity of the whole file that defines the rules,
 so any edit to that file, a rule or not, draws a new key; so does a change to
-how this runtime lowers rules. Hashes computed under the old key keep the old
-clause, and the old policy's rules keep governing them. An observer who saw what
+how this runtime lowers rules, so a runtime release that lowers rules
+differently redraws every policy's key in every space. Hashes computed under
+the old key keep the old clause, and the old policy's rules keep governing
+them. An observer who saw what
 the old policy released and then sees what the new one releases has seen two
 independent draws over the same data. A policy whose releases must not be
 redrawn belongs in a module of its own that holds the rules and the code they
@@ -200,9 +206,10 @@ The manifest is not checked up front: the commit that first carries the
 policy's clause installs it or refuses.
 
 The result is the lowercase hex of HMAC-SHA-256, keyed with the key's 32 bytes,
-over the input's UTF-8 bytes (`policySecretHashOf()`). It is the same for every
-runtime and every run given the same input, so the lifts that consume it stay
-deterministic, and it depends on nothing but the key and the input. Until the
+over the input's UTF-8 bytes (`policySecretHashOf()`); a lone surrogate encodes
+as U+FFFD, so strings differing only there hash alike. It is the same for every
+runtime of the space and every run given the same input, so the lifts that
+consume it stay deterministic. Until the
 key is available, and while the input is unset, the result is `undefined`, and
 code consuming it has to decide nothing then.
 
@@ -227,7 +234,8 @@ When no trusted key is readable, the builtin obtains one before it computes:
 ## How a policy uses it
 
 The policy's endorsed function, `drawWinner` above, reads hashes like any other
-input and computes its decision. The rule releases the decision because the
+input and computes its decision. It reads each hash as an input of its own: a
+list of hashes carries no witness (see below). The rule releases the decision because the
 endorsed function computed it, and requires, through its input witness, that
 every confidential input the function read was a hash the builtin wrote.
 
@@ -252,8 +260,25 @@ policy's clause is, and no better.
   runtime of any member, and anything that reads below
   `IExtendedStorageTransaction` (its inner storage transaction, or `cf inspect`,
   which reads the space's SQLite file) can read it, and a modified runtime can
-  write a key of its choosing under a forged writer claim. The protection is
-  the honest runtime's.
+  write a key of its choosing under a forged writer claim. The key hides what it
+  protects from pattern code and from what the runtime renders, not from a
+  member with raw access to the space's storage, who can compute every hash
+  offline. A crowd release whose prober can join as a contributor therefore
+  needs a key in a space its contributors do not read, with their
+  contributions reaching it through ingest rather than membership.
+- **The sandbox.** No code reads the key only as long as pattern code cannot
+  reach a runtime transaction or the storage beneath it. The pattern sandbox's
+  isolation from host objects is that boundary.
+- **A list of hashes.** A list that a write carrying the policy's clause
+  creates gets an existence entry, frozen at creation, under that clause and
+  without the writer's `TransformedBy`. An endorsed function that reads a list
+  of hashes, whether built by mapping `policySecretHash` over items or
+  otherwise, therefore reads a confidential location without the builtin's
+  witness, and a rule requiring the witness refuses its result. A decision over
+  hashes is witness-guarded today only when the endorsed function takes each
+  hash as an input of its own, so a fixed set of candidates rather than a
+  list. Carrying the creating writer's stamp onto the existence entry it
+  creates is the runtime change that lifts this.
 - **Chosen inputs.** The builtin hashes any input any code passes it, so any
   code holds the hash of any input it can name, under the policy's clause. An
   endorsed function that compares a hash against a caller-chosen number is an
@@ -297,4 +322,6 @@ policy's clause is, and no better.
   integrity of both together, so the release the endorsed value earns reaches
   the hash too. These are the gaps every value under a policy's clause has
   here, and the hashes add none.
+- **Whether a policy has a key.** The key's label envelope is readable, so code
+  learns whether a policy has been used in the space.
 - **A handler's `Math.random`.** It is unchanged.
