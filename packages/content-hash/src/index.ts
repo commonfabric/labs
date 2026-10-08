@@ -52,10 +52,10 @@ export function hmacSha256(key: Uint8Array, message: Uint8Array): Uint8Array {
   block.set(key.length > BLOCK_SIZE ? sha256(key) : key);
   const inner = new Uint8Array(BLOCK_SIZE + message.length);
   const outer = new Uint8Array(BLOCK_SIZE + 32);
-  for (let i = 0; i < BLOCK_SIZE; i++) {
-    inner[i] = block[i] ^ 0x36;
-    outer[i] = block[i] ^ 0x5c;
-  }
+  block.forEach((byte, i) => {
+    inner[i] = byte ^ 0x36;
+    outer[i] = byte ^ 0x5c;
+  });
   inner.set(message, BLOCK_SIZE);
   outer.set(sha256(inner), BLOCK_SIZE);
   return sha256(outer);
