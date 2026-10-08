@@ -37,6 +37,15 @@ reads held (`external-content-observation.test.ts` fails at `enforce`), and the
 `observe` check evaluated where a single-use grant cannot resolve, so it would
 have reported every release made through one. Both were fixed before the
 `enforce` run, and the two suites now run their gated cases at `enforce`.
+
+A second review then found that `observe` was not free of effects (its extra
+evaluations read and recorded grant documents the decision never consulted,
+which changes the prepared digest), that it cost about 2.5 times the input
+gate on a large document, that the floor under the join could pass where the
+pooled floor failed, that a stamp vouched for atoms `carriedStampLabel` never
+withdraws, and that a cell's stored label at the display cannot be joined over
+its label view. After those were fixed the `enforce` run was taken again, with
+the same result: no failure in either suite.
 The pattern suite's zero is real (a hook in every `cf test` child recorded
 other diagnostics), and it is also narrow: every release the suite makes reads
 an endorsed value through a schema traversal, one shallow read per node, so no
