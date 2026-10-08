@@ -245,8 +245,10 @@ describe("nested-piece-setup-repair", () => {
     try {
       const { cell } = await nestedPieceSetUpForV1(rt);
       await linkAsSpaceRoot(rt, cell);
+      const manifest = manifestOf(cell);
       expect(await rt.start(cell)).toBe(true);
       await cell.pull();
+      expect(manifestOf(cell)).not.toEqual(manifest);
       expect(await bumpAndCount(cell)).toBe(1);
       await rt.storageManager.synced();
     } finally {
