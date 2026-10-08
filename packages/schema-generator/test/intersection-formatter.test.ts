@@ -165,18 +165,46 @@ describe("IntersectionFormatter", () => {
     });
   });
 
+  describe("intersections with index signatures", () => {
+    it("returns an object whose other keys hold the index signature's values", async () => {
+      // A member keeps the type its own declaration gives it, as the checker
+      // reads `Result["x"]` as `unknown`.
+
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { x: unknown; y: string } & Record<string, string>;`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+        required: ["x", "y"],
+        additionalProperties: { type: "string" },
+      });
+    });
+
+    it("returns the intersection of several index signatures' values", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = Record<string, string | number> & Record<string, string>;`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: { type: "string" },
+      });
+    });
+  });
+
   describe("unsupported intersections", () => {
-    it("should reject intersection with index signature", async () => {
+    it("should reject an array beside an object", async () => {
       const code = `
         interface Base {
           name: string;
         }
-        
-        interface WithIndex {
-          [key: string]: unknown;
-        }
-        
-        type BadIntersection = Base & WithIndex;
+
+        type BadIntersection = Base & string[];
       `;
       const { type, checker } = await getTypeFromCode(code, "BadIntersection");
       const schema = asObjectSchema(transformer.generateSchema(type, checker));
@@ -281,7 +309,7 @@ describe("IntersectionFormatter", () => {
 
     it("should NOT filter an object with a string index signature", async () => {
       // An object with an index signature is NOT brand-only; isBrandOnlyOrEmpty
-      // returns false, so it reaches validateIntersectionParts which rejects it.
+      // returns false, so its index signature is merged beside `name`.
       const code = `
         interface Base { name: string }
         interface WithIndex { [key: string]: unknown }
@@ -290,8 +318,8 @@ describe("IntersectionFormatter", () => {
       const { type, checker } = await getTypeFromCode(code, "Result");
       const schema = asObjectSchema(transformer.generateSchema(type, checker));
 
-      expect(schema.additionalProperties).toBe(true);
-      expect(schema.$comment).toContain("index signature on constituent");
+      expect(schema.additionalProperties).toEqual({ type: "unknown" });
+      expect(schema.properties).toEqual({ name: { type: "string" } });
     });
 
     it("should fall back to full parts when all constituents are brand-only", async () => {

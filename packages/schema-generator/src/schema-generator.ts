@@ -986,6 +986,7 @@ function armsOfUnion(
             members: declaredMembersOf(schema, context),
             reach: "must" as const,
             items: holdsItems(schema, context),
+            unnamed: holdsUnnamed(schema, context),
           }]
           : []),
         ...labels,
@@ -1030,13 +1031,29 @@ function holdsItems(
 }
 
 /**
+ * Whether `schema`, read as `withBesideKeywords()` reads it, is an object
+ * with an index signature, whose values are data of the value under keys no
+ * property names.
+ */
+function holdsUnnamed(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): boolean {
+  const stated = withBesideKeywords(schema, context);
+  return isObjectSchema(stated) && stated.additionalProperties !== undefined &&
+    stated.additionalProperties !== false;
+}
+
+/**
  * The data of a merged value, which evidence must cover to go on the whole
- * of it: the members its parts declare, and its items where a part is an
- * array (`declaredMembersOf()`, `holdsItems()`).
+ * of it: the members its parts declare, its items where a part is an array,
+ * and its values under keys no member names where a part has an index
+ * signature (`declaredMembersOf()`, `holdsItems()`, `holdsUnnamed()`).
  */
 type ValueMembers = {
   readonly names: ReadonlySet<string>;
   readonly items: boolean;
+  readonly unnamed: boolean;
 };
 
 /** The data of the value `parts` merge to (`ValueMembers`). */
@@ -1047,6 +1064,7 @@ function valueMembersOf(
   return {
     names: new Set(parts.flatMap((part) => declaredMembersOf(part, context))),
     items: parts.some((part) => holdsItems(part, context)),
+    unnamed: parts.some((part) => holdsUnnamed(part, context)),
   };
 }
 
@@ -1118,7 +1136,8 @@ function withoutLabels(
 
 /**
  * Labels a part of an intersection states, the members of the part's value
- * they were written around and whether that value is an array (`items`), and
+ * they were written around, whether that value is an array (`items`) and
+ * whether it has an index signature (`unnamed`), and
  * how far into the merged value they reach, as the type path places a CFC
  * carrier's labels on its payload (`placeCarriedLabels()`). A restriction
  * reaches wherever the part's data may be (`"may"`): the members it was
@@ -1133,6 +1152,7 @@ type PartLabels = {
   readonly members: readonly string[];
   readonly reach: "may" | "must";
   readonly items?: boolean;
+  readonly unnamed?: boolean;
 };
 
 /**
@@ -1157,6 +1177,7 @@ function partLabelsOf(
           members,
           reach: "must" as const,
           items: holdsItems(part, context),
+          unnamed: holdsUnnamed(part, context),
         }]
         : []),
     ];
@@ -1180,7 +1201,7 @@ function withPartLabels(
 ): MutableJSONSchema {
   if (schema === false || placed.length === 0) return schema;
   let result: MutableJSONSchema = schema;
-  for (const { labels, members, reach, items } of placed) {
+  for (const { labels, members, reach, items, unnamed } of placed) {
     const properties: Record<string, MutableJSONSchema> | undefined =
       isObjectSchema(result) && isObjectOrArray(result.properties)
         ? result.properties as Record<string, MutableJSONSchema>
@@ -1190,7 +1211,7 @@ function withPartLabels(
       ? members.filter((member) => Object.hasOwn(properties, member))
       : [];
     const holdsAll = [...value.names].every((name) => members.includes(name)) &&
-      (!value.items || items === true);
+      (!value.items || items === true) && (!value.unnamed || unnamed === true);
     if (reach === "must" && !holdsAll && reached.length === 0) continue;
     if (
       properties && reached.length > 0 &&
@@ -1431,11 +1452,12 @@ function mergeParts(
   const key = `merge|${
     hashStringOf([
       parts.map((part) => withOriginsNumbered(part, context)),
-      carried.map(({ labels, members, reach, items }) => [
+      carried.map(({ labels, members, reach, items, unnamed }) => [
         labels,
         members,
         reach,
         items === true,
+        unnamed === true,
       ]),
     ] as FabricValue)
   }`;
@@ -1490,10 +1512,11 @@ function mergeLabeledParts(
  * among them puts on its handle (`cellOf()`); arrays, whose items are the
  * intersection of theirs; or object schemas whose properties are unioned, a
  * property several of them declare taking the intersection of its
- * declarations (`sharedPropertyOf`), and whose `required` lists are unioned.
- * A part that merge refuses — a non-object, or one with an index signature,
- * which an array beside an object is — yields the same unsupported-pattern
- * fallback the type-based path emits.
+ * declarations (`sharedPropertyOf`), whose `required` lists are unioned, and
+ * whose index signatures merge into the intersection of their values, a
+ * `never`-valued one (`false`) closing the object to other keys. A part that
+ * merge refuses — a non-object, or an array beside an object — yields the
+ * same unsupported-pattern fallback the type-based path emits.
  */
 function mergeValues(
   parts: MutableJSONSchemaObj[],
@@ -1553,13 +1576,14 @@ function mergeValues(
   };
   const declarations = new Map<string, PartProperty[]>();
   const required = new Set<string>();
+  const indexes: MutableJSONSchema[] = [];
   for (const part of reduced) {
     if (isArraySchema(part)) {
       return unsupported("index signature on constituent");
     }
     if (!isObjectSchema(part)) return unsupported("non-object constituent");
     if (part.additionalProperties !== undefined) {
-      return unsupported("index signature on constituent");
+      indexes.push(part.additionalProperties as MutableJSONSchema);
     }
     for (
       const [key, value] of Object.entries(
@@ -1587,6 +1611,14 @@ function mergeValues(
       : sharedPropertyOf(key, declared, context);
   }
   const merged: MutableJSONSchemaObj = { type: "object", properties };
+  // The keys no member names hold what every index signature among the parts
+  // holds, as one object type declaring all of their members and index
+  // signatures would; a member keeps what its own declarations give it.
+  if (indexes.length > 0) {
+    merged.additionalProperties = indexes.length === 1
+      ? indexes[0]!
+      : intersectionOf(indexes, context);
+  }
   if (required.size > 0) merged.required = [...required];
   return merged;
 }

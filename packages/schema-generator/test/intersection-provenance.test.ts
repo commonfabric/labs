@@ -721,9 +721,92 @@ describe("SchemaGenerator", () => {
         propertyA(UNSUPPORTED_NON_OBJECT),
       ],
       [
-        "keeps evidence on a fallback whose members a constituent holds",
+        "keeps evidence on the members a constituent declares beside an index signature",
         `
           type M1 = { a: { [key: string]: string } };
+          type M2 = { a: Cfc<{ x: string }, { integrity: readonly ["v"] }> };
+        `,
+        propertyA({
+          type: "object",
+          properties: { x: { type: "string", ifc: { integrity: ["v"] } } },
+          required: ["x"],
+          additionalProperties: { type: "string" },
+        }),
+      ],
+      [
+        "keeps added integrity on the members a constituent declares beside a record",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = {
+            a: Cfc<{ x: string }, { addIntegrity: readonly ["v"] }>;
+          };
+        `,
+        propertyA({
+          type: "object",
+          properties: { x: { type: "string", ifc: { addIntegrity: ["v"] } } },
+          required: ["x"],
+          additionalProperties: { type: "unknown" },
+        }),
+      ],
+      [
+        "keeps evidence on a record whose index signature the constituent declares",
+        `
+          type M1 = { a: Record<string, string> };
+          type M2 = {
+            a: Cfc<Record<string, string>, { integrity: readonly ["v"] }>;
+          };
+        `,
+        propertyA({
+          type: "object",
+          properties: {},
+          additionalProperties: { type: "string" },
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "keeps evidence off a record a constituent of no members does not hold",
+        `
+          type M1 = { a: { [key: string]: number } };
+          type M2 = { a: Cfc<unknown, { integrity: readonly ["v"] }> };
+        `,
+        propertyA({
+          type: "object",
+          properties: {},
+          additionalProperties: { type: "number" },
+        }),
+      ],
+      [
+        "keeps a restriction on the whole of a record beside the members it labels",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = { a: Confidential<{ x: string }, readonly ["s"]> };
+        `,
+        propertyA({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+          additionalProperties: { type: "unknown" },
+          ifc: labelS,
+        }),
+      ],
+      [
+        "keeps evidence on the whole of a record closed by a never-valued index signature",
+        `
+          type M1 = { a: Record<string, never> };
+          type M2 = { a: Cfc<{ x: string }, { integrity: readonly ["v"] }> };
+        `,
+        propertyA({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+          additionalProperties: false,
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "keeps evidence off the fallback of an array beside the members it labels",
+        `
+          type M1 = { a: string[] };
           type M2 = { a: Cfc<{ x: string }, { integrity: readonly ["v"] }> };
         `,
         propertyA({
@@ -731,7 +814,6 @@ describe("SchemaGenerator", () => {
           additionalProperties: true,
           $comment:
             "Unsupported intersection pattern: index signature on constituent",
-          ifc: { integrity: ["v"] },
         }),
       ],
       [

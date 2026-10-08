@@ -2052,11 +2052,18 @@ type CalculatorRequest = {
           ]),
         ),
       ).toEqual(unsupported("index signature on constituent"));
+      // An index signature merges beside the members, which keep the types
+      // their own declarations give them.
       expect(
         await schemaOf(
           f.createIntersectionTypeNode([alias("Foo"), alias("Rec")]),
         ),
-      ).toEqual(unsupported("index signature on constituent"));
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+        required: ["x", "y"],
+        additionalProperties: { type: "string" },
+      });
       // `unknown` is the identity: what is left stands as it is.
       expect(
         await schemaOf(

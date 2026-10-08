@@ -819,20 +819,36 @@ const payloadReach = (
   );
   const valueMembers = [...dataMemberDeclarations(type, checker)];
   const unwritten = holdsCarriersUnwritten(type, checker);
+  // A value an object part of which has an index signature holds data under
+  // keys no member names, which is the payload's only where the payload has
+  // an index signature too. A primitive's own index, as `string`'s by
+  // position, names no data of its own, nor does a `never`-valued one.
+  const holdsUnnamed = !indexed &&
+    alternativesOf(type).some((alternative) =>
+      (alternative.isIntersection() ? alternative.types : [alternative]).some(
+        (part) =>
+          (part.flags & PRIMITIVE_TYPE_FLAGS) === 0 &&
+          checker.getIndexInfosOfType(part).some((info) =>
+            (info.type.flags & ts.TypeFlags.Never) === 0
+          ),
+      )
+    );
   // A payload whose type lists no members, such as `{}` or `unknown`: its
   // data may be under any key, and is the whole value only where nothing
   // writes over the value's members and the value holds nothing besides.
   if (payloadMembers.size === 0 && !indexed) {
     return {
       may: "all",
-      must: unwritten && valueMembers.length === 0 ? "all" : [],
+      must: unwritten && valueMembers.length === 0 && !holdsUnnamed
+        ? "all"
+        : [],
     };
   }
   if (valueMembers.length === 0) {
     const whole = payloadMembers.size === 0;
     return {
       may: whole ? "all" : [],
-      must: whole && unwritten ? "all" : [],
+      must: whole && unwritten && !holdsUnnamed ? "all" : [],
     };
   }
   // A member with no declaration may hold the payload's data under a name the
@@ -859,20 +875,27 @@ const payloadReach = (
       (members.length > 0 && members.length === valueMembers.length)
       ? "all" as const
       : members;
-  return { may: whole(may), must: whole(must) };
+  return {
+    may: whole(may),
+    must: holdsUnnamed && must.length > 0 ? must : whole(must),
+  };
 };
 
 /**
  * `schema` with `labels` on `members` of the value: the whole value, or each
- * of those members alone, or nowhere where there are none. Read for its
- * labels alone (`labelsOnly`), a value whose label belongs to some of its
- * members carries none at its top.
+ * of those members alone, or nowhere where there are none. A schema with no
+ * members to hold them, such as an unsupported-pattern fallback, takes a
+ * restriction whole, and evidence (`evidence`) not at all, as it would then
+ * label data the payload did not establish. Read for its labels alone
+ * (`labelsOnly`), a value whose label belongs to some of its members carries
+ * none at its top.
  */
 const placeLabelsOn = (
   schema: MutableJSONSchema,
   labels: Record<string, unknown>,
   members: readonly string[] | "all",
   context: GenerationContext,
+  evidence = false,
 ): MutableJSONSchema => {
   if (members === "all") return withIfcLabels(schema, labels);
   if (members.length === 0 || context.labelsOnly) return schema;
@@ -880,7 +903,7 @@ const placeLabelsOn = (
       isObjectOrArray(schema.properties)
     ? schema.properties as Record<string, MutableJSONSchema>
     : undefined;
-  if (!properties) return withIfcLabels(schema, labels);
+  if (!properties) return evidence ? schema : withIfcLabels(schema, labels);
   const labeled: Record<string, MutableJSONSchema> = { ...properties };
   for (const name of members) {
     const property = labeled[name];
@@ -923,7 +946,7 @@ const placeCarriedLabels = (
       result = placeLabelsOn(result, restrictions, reach.may, context);
     }
     if (Object.keys(evidence).length > 0) {
-      result = placeLabelsOn(result, evidence, reach.must, context);
+      result = placeLabelsOn(result, evidence, reach.must, context, true);
     }
   }
   return result;

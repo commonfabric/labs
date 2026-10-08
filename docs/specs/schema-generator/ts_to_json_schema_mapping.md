@@ -174,29 +174,33 @@ nothing; `null` or `undefined` beside an object or a cell leaves nothing; a
 cell among the constituents is the value, the first cell's, with the cap any
 of them puts on its handle, as the checker reads a value of intersected
 cells, so `Cell<unknown> & { y: number }` is that cell; arrays merge into an
-array of the intersection of their items; and a constituent that merge
-refuses — a non-object, or one with an index signature, as an array beside
-an object has — yields the same unsupported-pattern fallback the type path
-emits. Object parts merge into one object, and a property several of them
-declare is settled the same way from the schemas its declarations give it,
-documented as the type path documents it (§9) and refused where its
-declarations are in different scopes. The keywords JSDoc writes are set
-aside while those schemas are settled, and an optional declaration admits
-`undefined` beside one that requires the property. What a constituent states
-besides which values it holds is set aside while the values are settled and
-stated of what they settle to, as the type path reads it from the checker's
-type: its scope and its default belong to the whole value, so two scopes
-refuse the intersection, as a scope wrapper nested in another with no cell
-between them, and defaults that differ leave none; its labels are placed as
-the type path places a CFC carrier's (§11): a restriction goes on the
-members of the result it declares, or on the whole result where it declares
-all of them or none, and evidence (`integrity`, `addIntegrity`) goes on the
-whole result only where the labeled constituent holds all of its data, every
-member any constituent declares and its items where one is an array, and
-otherwise on the members it declares, as data another constituent holds may
-be data the labeled one never established; a union's restrictions go on the
-members any of its arms declares, and its evidence on the members of the arm
-the value is. A keyword written beside a reference is read in place of the
+array of the intersection of their items; an index signature merges with the
+members, its values the `additionalProperties` of the merged object, the
+intersection of every part's, while a member keeps what its own declarations
+give it, as the checker reads a member of an intersection; and a constituent
+that merge refuses — a non-object, or an array beside an object — yields the
+same unsupported-pattern fallback the type path emits. Object parts merge
+into one object, and a property several of them declare is settled the same
+way from the schemas its declarations give it, documented as the type path
+documents it (§9) and refused where its declarations are in different
+scopes. The keywords JSDoc writes are set aside while those schemas are
+settled, and an optional declaration admits `undefined` beside one that
+requires the property. What a constituent states besides which values it
+holds is set aside while the values are settled and stated of what they
+settle to, as the type path reads it from the checker's type: its scope and
+its default belong to the whole value, so two scopes refuse the
+intersection, as a scope wrapper nested in another with no cell between
+them, and defaults that differ leave none; its labels are placed as the type
+path places a CFC carrier's (§11): a restriction goes on the members of the
+result it declares, or on the whole result where it declares all of them or
+none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
+only where the labeled constituent holds all of its data, every member any
+constituent declares, its items where one is an array, and the values under
+keys no member names where one has an index signature, and otherwise on the
+members it declares, as data another constituent holds may be data the
+labeled one never established; a union's restrictions go on the members any
+of its arms declares, and its evidence on the members of the arm the value
+is. A keyword written beside a reference is read in place of the
 definition's, through a chain of references, except its labels, which join
 the definition's. A merge met again inside itself, as the members of two
 recursive definitions meet, is written where it starts and as a definition
@@ -985,10 +989,20 @@ Default paths of §7:
   intersection of the element types, so `unknown[] & readonly string[]` is
   `string[]`'s schema. Its constituents' JSDoc documents it as it documents
   a merged object (below). Tested: intersection-formatter.test.ts.
-- Unsupported shapes — non-object constituent, constituent with an index
-  signature, or a checker error — produce a **permissive fallback, not a
-  throw**: `{ type: "object", additionalProperties: true, $comment:
-  "Unsupported intersection pattern: <reason>" }`.
+- An index signature merges with the members, as one object type declaring all
+  of the constituents' members and index signatures would: the keys no member
+  names hold the intersection's index type, which the checker gives as the
+  intersection of the constituents' (`additionalProperties`), and a member
+  keeps the type its own declarations give it, as the checker reads `T["x"]`
+  of an intersection. `{ x: unknown; y: string } & Record<string, string>`
+  gives `{ properties: { x: { type: "unknown" }, y: { type: "string" } },
+  additionalProperties: { type: "string" } }`, and labels follow the members
+  and index values they are written on (§11). Tested:
+  intersection-formatter.test.ts, intersection-provenance.test.ts.
+- Unsupported shapes — a non-object constituent, or an array or tuple beside
+  an object, whose items no member can hold — produce a **permissive
+  fallback, not a throw**: `{ type: "object", additionalProperties: true,
+  $comment: "Unsupported intersection pattern: <reason>" }`.
 - A property several constituents declare takes the schema of its type in
   the intersection, which the checker gives as the intersection of the
   declared types: `{ a: unknown } & { a: string }` and
@@ -1351,12 +1365,20 @@ Mechanics:
     whose carrier did not come from the type it maps over.
   - A label reaching every member lands on the whole value, and one reaching
     none lands nowhere. A union payload's members are those of each
-    alternative.
+    alternative. A value with an index signature its payload does not have
+    holds data under keys no member names, which evidence never reaches, so
+    evidence reaching every named member lands on those members, not the whole
+    value:
+    `{ x: string } & Integrity<{ x: string }, L> & Record<string, unknown>`
+    labels `x` alone. A value whose schema has no members to place labels on,
+    as an unsupported-pattern fallback, takes a restriction whole and evidence
+    that reaches only some of its data nowhere.
   - A payload whose type lists no members, such as `{}` or `unknown`, may
     hold data under any key, so a restriction labels the whole value. Its
     evidence labels the whole value only where nothing writes over members
     and the value holds nothing besides: `Integrity<{}, L>` carries `L`, but
-    `{ ...tagged, name }` and `{ name } & Integrity<{}, L>` do not.
+    `{ ...tagged, name }`, `{ name } & Integrity<{}, L>` and
+    `Record<string, number> & Integrity<unknown, L>` do not.
   - A primitive, alone or beside carriers and brands, is all the data its
     value holds, so a payload that is or includes a primitive labels such a
     value whole: `Integrity<string, L>`, and the `string` alternative of
