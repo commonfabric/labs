@@ -270,7 +270,14 @@ Detection is provenance-first:
 
 1. symbol resolution against Common Fabric declarations/imports
 2. stable alias/signature following (`const alias = computed`,
-   `declare const alias: typeof ifElse`)
+   `declare const alias: typeof ifElse`). Builder provenance is followed only
+   through `const` bindings: a call through a `let` or `var` binding of a
+   builder, or of a `lift(...)` call, does not classify as that builder,
+   because the binding can be reassigned. A call through a `const` binding of
+   a `lift(...)` call classifies as the builder `lift`; lift-applied is
+   reserved for a call whose callee is the `lift(...)` call itself
+   (`test/ast/call-kind.test.ts`; fixture
+   `closures/computed-mutable-lift-binding`)
 3. synthetic helper support for `__cfHelpers.*` nodes introduced by earlier
    passes
 
