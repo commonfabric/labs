@@ -86,6 +86,10 @@ export const CFC_ATOM_TYPE = {
   HasRole: "https://commonfabric.org/cfc/atom/HasRole",
   InjectionSafe: "https://commonfabric.org/cfc/atom/InjectionSafe",
   LinkReference: "https://commonfabric.org/cfc/atom/LinkReference",
+  // List-membership fact (integrity; spec §4.9.5) minted by the trusted
+  // runtime at a display boundary, for the acting principal, from a point
+  // query against the list a `Members` atom names. Never authorable.
+  ListedIn: "https://commonfabric.org/cfc/atom/ListedIn",
   // Runtime-minted LLM-derivation provenance: these bytes were produced by a
   // model (assistant content, or a tool result entering the dialog
   // transcript). Makes "untrusted model output" EXPLICIT provenance rather
@@ -94,6 +98,10 @@ export const CFC_ATOM_TYPE = {
   // docs/history/specs/cfc-trusted-agent-tool-integrity.md piece B). Evidence — not
   // authorable in schemas.
   LlmDerived: "https://commonfabric.org/cfc/atom/LlmDerived",
+  // List principal (confidentiality; spec §4.9.5): everyone the list held at
+  // a list position names, read at each evaluation. Satisfied through
+  // `ListedIn`; authored only under the capture check of spec §8.7.5.
+  Members: "https://commonfabric.org/cfc/atom/Members",
   Origin: "https://commonfabric.org/cfc/atom/Origin",
   // Policy principal (confidentiality; spec §4.1.2 PolicyRefAtom, §4.4.2):
   // references a policy record whose exchange rules may rewrite the clause
@@ -370,8 +378,28 @@ export type CfcHasRolePattern = CfcAtomObject & {
   readonly role: "owner" | "writer" | "reader" | CfcPatternVariable;
 };
 
+/**
+ * The address of a list position (spec §4.9.5): a field that holds a list
+ * inline, or one link to a list document.
+ */
+export type CfcListPosition = CfcAtomObject & {
+  readonly space: string;
+  readonly id: string;
+  readonly path: readonly string[];
+};
+
+export type CfcMembersPattern = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.Members;
+  readonly list: CfcListPosition | CfcPatternVariable;
+  readonly subject: CfcPatternString | CfcPolicySubjectCommitment;
+};
+
 export type CfcPatternConstructors = {
   readonly user: (subject: CfcPatternString) => CfcUserPattern;
+  readonly members: (
+    list: CfcMembersPattern["list"],
+    subject: CfcMembersPattern["subject"],
+  ) => CfcMembersPattern;
   readonly hasRole: (
     principal: CfcPatternString,
     space: CfcPatternString,
@@ -463,6 +491,17 @@ export const cfcPattern: CfcPatternConstructors = deepFreeze({
       role,
     });
   },
+
+  members(
+    list: CfcMembersPattern["list"],
+    subject: CfcMembersPattern["subject"],
+  ): CfcMembersPattern {
+    return deepFreeze({
+      type: CFC_ATOM_TYPE.Members,
+      list,
+      subject,
+    });
+  },
 });
 
 /** Marks deeply frozen declaration data for compile-time extraction. */
@@ -492,6 +531,18 @@ export type CfcPersonalSpaceAtom = CfcAtomObject & {
 export type CfcExpiresAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.Expires;
   readonly timestamp: number;
+};
+
+export type CfcMembersAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.Members;
+  readonly list: CfcListPosition;
+  readonly subject: string | CfcPolicySubjectCommitment;
+};
+
+export type CfcListedInAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.ListedIn;
+  readonly principal: string;
+  readonly list: CfcListPosition;
 };
 
 export type CfcHasRoleAtom = CfcAtomObject & {
@@ -778,6 +829,17 @@ export const cfcAtom = {
     role: "owner" | "writer" | "reader",
   ): CfcHasRoleAtom {
     return { type: CFC_ATOM_TYPE.HasRole, principal, space, role };
+  },
+
+  members(
+    list: CfcListPosition,
+    subject: string | CfcPolicySubjectCommitment,
+  ): CfcMembersAtom {
+    return { type: CFC_ATOM_TYPE.Members, list, subject };
+  },
+
+  listedIn(principal: string, list: CfcListPosition): CfcListedInAtom {
+    return { type: CFC_ATOM_TYPE.ListedIn, principal, list };
   },
 
   boundaryContext(

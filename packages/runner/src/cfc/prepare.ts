@@ -7544,6 +7544,7 @@ const RUNTIME_MINTED_INTEGRITY_ATOM_TYPES = new Set<string>([
   CFC_ATOM_TYPE.DisclosureAcknowledged,
   CFC_ATOM_TYPE.DisclosureRendered,
   CFC_ATOM_TYPE.HasRole,
+  CFC_ATOM_TYPE.ListedIn,
   // Conceptual principals live in trust statements and rule guards, never in
   // carried integrity: concept guards resolve exclusively through the trust
   // closure (exchange-eval), so a literal Concept atom in a value label is
