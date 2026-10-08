@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { sendValueToBinding } from "../src/pattern-binding.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcLabelReference } from "../src/cfc/label-documents.ts";
@@ -564,6 +565,46 @@ describe("CFC write-destination reads", () => {
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
         expect(instance.get()).toBe("before");
+      });
+    });
+
+    it("refuses a result the output slot's own narrower-scope link carries into an undeclared instance", async () => {
+      await withStrictRuntime(async (runtime) => {
+        const setup = runtime.edit();
+        const output = runtime.getCell(
+          space,
+          "scoped-output",
+          SLOT_SCHEMA,
+          setup,
+        );
+        const instance = runtime.getCell<{ slot: string }>(
+          space,
+          "scoped-output",
+          undefined,
+          setup,
+          "session",
+        );
+        instance.key("slot").set("before");
+        output.key("slot").setRaw(instance.key("slot").getAsLink());
+        expect(refusalOf(await setup.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const tx = runtime.edit();
+        const result = runtime.getCell(space, "scoped-result", undefined, tx);
+        sendValueToBinding(
+          tx,
+          result,
+          undefined,
+          runtime.getCell(space, "scoped-output", SLOT_SCHEMA, tx).key("slot")
+            .getAsWriteRedirectLink(),
+          "after",
+          {},
+        );
+        tx.prepareCfc();
+        const refusal = refusalOf(await tx.commit().settled);
+        expect(refusal).toContain("writer-fit confidentiality misfit");
+        expect(refusal).toContain(SECRET_ATOM);
+        expect(instance.key("slot").get()).toBe("before");
       });
     });
   });

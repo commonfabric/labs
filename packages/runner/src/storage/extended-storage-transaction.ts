@@ -1615,6 +1615,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return this.#narrowestReadScope;
   }
 
+  noteReadScope(scope: CellScope): void {
+    this.#recordReadScope({ scope });
+  }
+
   resetNarrowestReadScope(scope: CellScope = "space"): void {
     this.#narrowestReadScope = scope;
     // The caller is about to re-read to learn the scope of what it reads. A
@@ -4218,6 +4222,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   getNarrowestReadScope(): CellScope {
     return this.#wrapped.getNarrowestReadScope();
+  }
+
+  noteReadScope(scope: CellScope): void {
+    this.#wrapped.noteReadScope(scope);
   }
 
   resetNarrowestReadScope(scope?: CellScope): void {

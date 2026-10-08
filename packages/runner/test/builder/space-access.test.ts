@@ -14,7 +14,7 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { defer } from "@commonfabric/utils/defer";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
-import { spaceAccess } from "../../src/builder/space-access.ts";
+import { spaceAccess, spaceAccessOf } from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
@@ -267,6 +267,43 @@ describe("spaceAccess()", () => {
         const runtime = clientRuntime(user);
         await syncAcl(runtime);
         expect(callIn(runtime, runtime.edit())).toBe(level);
+      }
+    });
+
+    it("returns another principal's level through `spaceAccessOf()`, by the list alone", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+
+      const runtime = clientRuntime(alice);
+      await syncAcl(runtime);
+      const target = runtime.getCell<unknown>(space, "space-access here");
+      const ask = (
+        principal: unknown,
+        kind: "lift" | "handler" = "handler",
+      ) => {
+        const tx = runtime.edit();
+        const frame = pushFrame({ runtime, tx, space, frameKind: kind });
+        try {
+          return { level: spaceAccessOf(target, principal as never), tx };
+        } finally {
+          popFrame(frame);
+        }
+      };
+      expect(ask(bob.did()).level).toBe("WRITE");
+      expect(ask(carol.did()).level).toBe("READ");
+      expect(ask(dave.did()).level).toBe("none");
+      expect(ask(alice.did()).level).toBe("OWNER");
+      // The answer does not depend on who asks, so a computation asking
+      // about a named principal keeps its scope.
+      const asked = ask(bob.did(), "lift");
+      expect(asked.level).toBe("WRITE");
+      expect(asked.tx.getNarrowestReadScope()).not.toBe("user");
+      for (const principal of [undefined, "*", "bob", 42, null]) {
+        expect(() => ask(principal)).toThrow("takes a principal's DID");
       }
     });
 
