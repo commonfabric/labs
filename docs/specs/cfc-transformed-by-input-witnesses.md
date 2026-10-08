@@ -65,8 +65,7 @@ under-claims.
 
 The inputs are the observations the flow join itself consumes
 (`forEachFlowObservation`), so the witnesses quantify over the same reads whose
-confidentiality the output carries. That includes trigger reads, a trigger at
-the sub-path where a link exposes its form read at the slot it probes, and it
+confidentiality the output carries. That includes trigger reads, and it
 includes `followRef` observations: which reference sits at a slot is
 information the transformation consumed, so a pointer counts as an input like
 the value it points at. A label-metadata observation carries confidentiality
@@ -111,11 +110,8 @@ read's confidential locations:
   entry is the link write's, with no `TransformedBy`, so a probe that observes
   which reference sits at a slot without reading the slot retains no witness.
   A probe of a slot that holds no reference finds the value stored there, so
-  it resolves its location as a shallow read of the slot does. A read records
-  no value, so the slot is taken to hold what it holds at prepare; where the
-  transaction wrote at, above or beneath the slot, the two may differ, and
-  the probe keeps its own entries. A replica change after the probe fails the
-  commit's read-set validation.
+  it resolves its location as a shallow read of the slot does, unless the
+  transaction wrote at, above or beneath the slot.
   A read of the slot itself resolves the slot's value stamp, which is where a
   reference the writer supplied carries its writer (see "References the
   writer supplied" below). A reference followed
@@ -194,15 +190,7 @@ A peer that adds a member beneath the destination after the writer read its
 replica makes the writer's commit a conflict, so the retry sets over the
 member rather than stamping it.
 
-Other destinations keep the stamps the diff's own writes get. A list a builtin
-or a lift writes where a value of another kind stood is one: the diff writes it
-empty and then each member, so the list takes membership stamps and `*`
-templates, and each member a value stamp naming the writer. A reader that
-reads it through its schema, as compiled code does, resolves the list's own
-location over the membership stamp, which names the writer while no other code
-has changed the list, each member over its value stamp, and its probe of each
-member slot as a shallow read of the slot (above). A recursive read of the
-whole list is refused (see "What fails closed"). Collection
+Other destinations keep the stamps the diff's own writes get. Collection
 operations (`push`, `addUnique`, `removeByValue`, `increment`) record no
 destination of their own: they carry existing members through without the
 writer's code consuming them. An object they add is anchored like any other,
@@ -348,12 +336,6 @@ Each of these refuses an honest release rather than admitting a crafted one:
   entity its ceiling.
 - **Structure-only stamps.** A written location whose only derived stamp is a
   membership or shape entry has no value evidence.
-- **A list read whole that the diff wrote empty and then filled.** A
-  recursive read of such a list has a `*` location beside each member's, which
-  stands for members with no entry of their own and resolves to the `*`
-  templates. A template witnesses nothing, so the read retains no witness,
-  though every member it read carries the writer's stamp. Compiled code reads
-  the list one shallow read per node and is not affected.
 
 ## What this does not cover
 
