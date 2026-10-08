@@ -452,9 +452,9 @@ says: a member with `WRITE` can link another document as the space's root,
 and the intake refuses an offer of the space while it does. A consumer of the
 catalog reads the live root when it opens the space.
 
-FabriChat's specification and its manager do not yet make a room its space's
-root, nor declare its space's kind, so until they do, every room they offer is
-refused as `space-kind-undeclared`, and stays in the inbox.
+FabriChat's manager creates each room as its space's root, at that reserved
+address, in a space that declares itself a `fabrichat-room`, so an offer of a
+room it created passes both checks.
 
 Each refusal has a reason of its own, which its log entry names. A final one
 decides its row for good, and any other leaves the row to be vetted again, as
