@@ -486,13 +486,13 @@ repeated or delayed event can't undo what the person meant.
 - `target.value: string` — The chat address of the person to admit: a
   principal's DID, as the room's add control holds it.
 
-Admits someone to a room's space. Unlike the streams above, it is part of the
-room's own rendering, not of `[VIEWS]`: only that rendering's add control can
-send it.
+Admits someone to a room's space. Unlike the streams above, it is on the room's
+output but not in `[VIEWS]`.
 
-- **Admitted:** as a trusted DOM gesture on `ChatAddMemberSurface`, from an
-  OWNER of the room's space, for a room in a space of its own. A host's
-  reviewed action that is not a DOM gesture is refused.
+- **Admitted:** as a trusted gesture on `ChatAddMemberSurface`, from the room's
+  rendered add control or from a client's own control through the sanctioned
+  issuing path (see [`clients.md`](clients.md#the-sanctioned-issuing-path)),
+  from an OWNER of the room's space, for a room in a space of its own.
 - **Effect:** grants the principal OWNER on the room's space, so they too may
   add others. Granting someone the OWNER they already hold changes nothing.
 - **Refused:** an address that is not a principal's DID, a sender without
