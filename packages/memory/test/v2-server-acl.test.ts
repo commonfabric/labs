@@ -3493,8 +3493,9 @@ describe("v2-server-acl", () => {
       label: string,
       mode: "off" | "enforce",
       fired: Record<string, string>,
+      store: URL | string = `memory://served-acl-${label}`,
     ): Promise<Server> => {
-      const server = createAclServer(`memory://served-acl-${label}`, { mode });
+      const server = createAclServer(store, { mode });
       await initializeSpaceAcl(server, space, {
         [ALICE]: "OWNER",
         [BOB]: "WRITE",
@@ -3709,6 +3710,90 @@ describe("v2-server-acl", () => {
           .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE" });
       } finally {
         await server.close();
+      }
+    });
+
+    it("writes the changed list over no write another connection makes between its read and its commit", async () => {
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-served-foreign-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const server = await servedAclServer(
+        "foreign",
+        "enforce",
+        { e1: ALICE },
+        store,
+      );
+      const other = await Engine.open({
+        url: resolveSpaceStoreUrl(store, space as `did:${string}:${string}`),
+      });
+      // The other connection does not wait for the store: whether it is open
+      // to another writer at that moment is what the test observes.
+      other.database.exec("PRAGMA busy_timeout = 0");
+      const revokeBob = () => {
+        const { [BOB]: _bob, ...rest } = Engine.read(other, {
+          id: `of:${space}`,
+        })?.value as Record<string, string>;
+        Engine.applyCommit(other, {
+          sessionId: "another-connection",
+          space,
+          commitClass: "system",
+          commit: {
+            localSeq: Engine.serverSeq(other) + 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:${space}`,
+              value: { value: rest },
+            }],
+          },
+        });
+      };
+      try {
+        let between: "landed" | Error | undefined;
+        const verdict = await server.commitServedAclChange({
+          ...served(ALICE, "e1", { [CAROL]: "WRITE" }),
+          // Runs between the server's read of the list and its write of the
+          // changed one: another connection revokes Bob there.
+          change: (stored) => {
+            try {
+              revokeBob();
+              between = "landed";
+            } catch (error) {
+              between = error as Error;
+            }
+            return {
+              ...(stored as Record<string, string>),
+              [CAROL]: "WRITE",
+            } as never;
+          },
+          ...envelope(1),
+        });
+        const list = (await server.readDocument(space, `of:${space}`))?.value;
+        if (between === "landed") {
+          expect(list, "a revocation that landed is never written over")
+            .not.toHaveProperty(BOB);
+        }
+        expect(
+          between,
+          "the store is closed to another writer while the list is read and written",
+        ).toBeInstanceOf(Error);
+        expect(verdict).toEqual({ admitted: true, seq: 2 });
+        expect(list).toEqual({
+          [ALICE]: "OWNER",
+          [BOB]: "WRITE",
+          [CAROL]: "WRITE",
+        });
+
+        // Made once the commit is through, the revocation lands on the list
+        // the change left, and the list holds both.
+        revokeBob();
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER", [CAROL]: "WRITE" });
+      } finally {
+        Engine.close(other);
+        await server.close();
+        await Deno.remove(directory, { recursive: true });
       }
     });
 

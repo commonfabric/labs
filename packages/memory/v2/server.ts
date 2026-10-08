@@ -4263,8 +4263,11 @@ export class Server {
    * never the space, so a space with no list refuses. The grant is resolved
    * too: `capabilityRef` must name the entry the run delivers, and that entry
    * must have been fired by the carried actor. The list is read, changed and
-   * written with no wait between, so nothing lands in between. On admission
-   * the commit is published as a transact writing the list is.
+   * written in one immediate transaction, as an invitation's grant is, so a
+   * write to the store through another connection either precedes the read
+   * or waits for the commit; the whole-document `set` never writes over
+   * one. On admission the commit is published as a transact writing the
+   * list is.
    */
   async commitServedAclChange(
     request: ServedAclChange & { sessionId: string; localSeq: number },
@@ -4272,27 +4275,37 @@ export class Server {
     return await this.#withSpacePublicationLock(request.space, async () => {
       const engine = await this.#openEngine(request.space);
       const sourceEngine = await this.#openEngine(request.sourceEvent.space);
-      const prepared = this.#prepareServedAclChange(
+      const outcome = Engine.runAtomicCommit(
         engine,
-        sourceEngine,
-        request,
-        request.localSeq,
-      );
-      if ("refused" in prepared) return prepared;
-      if (prepared.commit === undefined) return { admitted: true };
-      const applied = Engine.applyCommit(engine, {
-        sessionId: request.sessionId,
-        space: request.space,
-        commit: prepared.commit,
-        commitClass: "authored",
-        delegated: {
-          actingPrincipal: request.actingPrincipal,
-          ...(request.actingSession === undefined
-            ? {}
-            : { actingSession: request.actingSession }),
-          capabilityRef: request.capabilityRef,
+        (apply): { refused: string } | { applied?: Engine.AppliedCommit } => {
+          const prepared = this.#prepareServedAclChange(
+            engine,
+            sourceEngine,
+            request,
+            request.localSeq,
+          );
+          if ("refused" in prepared) return prepared;
+          if (prepared.commit === undefined) return {};
+          return {
+            applied: apply({
+              sessionId: request.sessionId,
+              space: request.space,
+              commit: prepared.commit,
+              commitClass: "authored",
+              delegated: {
+                actingPrincipal: request.actingPrincipal,
+                ...(request.actingSession === undefined
+                  ? {}
+                  : { actingSession: request.actingSession }),
+                capabilityRef: request.capabilityRef,
+              },
+            }),
+          };
         },
-      });
+      );
+      if ("refused" in outcome) return outcome;
+      if (outcome.applied === undefined) return { admitted: true };
+      const applied = outcome.applied;
       const aclId = aclDocId(request.space);
       this.#invalidateAclCapabilities(request.space);
       this.#revokeDeauthorizedSessions(engine, request.space);
