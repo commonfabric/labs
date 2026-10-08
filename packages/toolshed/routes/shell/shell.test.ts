@@ -5,12 +5,19 @@ import { cors } from "@hono/hono/cors";
 import env from "@/env.ts";
 import createApp, { createRouter } from "@/lib/create-app.ts";
 import { generateETag } from "@commonfabric/static/etag";
-import { MEMORY_URL_META_NAME } from "@commonfabric/runner/deployment-meta";
-import router, { compiledShellRouter } from "@/routes/shell/shell.index.ts";
+import type { DeploymentMetaContent } from "@commonfabric/runner/deployment-meta";
+import {
+  experimentalPosture,
+  publishExperimentalPosture,
+} from "@/lib/experimental-posture.ts";
+import router, {
+  compiledShellRouter,
+  shellDeploymentPage,
+} from "@/routes/shell/shell.index.ts";
 import {
   createShellStaticRouter,
   StaticResponse,
-  withMemoryUrlMeta,
+  withDeploymentMeta,
 } from "@/routes/shell/shell-static.ts";
 
 if (env.ENV !== "test") {
@@ -261,12 +268,17 @@ describe("createShellStaticRouter", () => {
 describe("a compiled toolshed's shell router", () => {
   const PAGE =
     "<!doctype html><html><head><title>shell</title></head><body>index</body></html>";
-  const pageWith = (content: string) =>
-    PAGE.replace(
-      "</head>",
-      `<meta name="${MEMORY_URL_META_NAME}" content="${content}"></head>`,
+  /** `PAGE` carrying `content`, as a compiled toolshed serves it. */
+  const pageWith = (content: DeploymentMetaContent) =>
+    new TextDecoder().decode(
+      withDeploymentMeta(new TextEncoder().encode(PAGE), content),
     );
-  const PUBLISHED = pageWith("https://router.test");
+  /** A compiled toolshed's posture, before any Runtime exists. */
+  const NO_RUNTIME = () => null;
+  const PUBLISHED = pageWith({
+    memoryUrl: "https://router.test",
+    experimental: { sharedMemoryConnection: true },
+  });
   let pageDir: string;
   let plain: ReturnType<typeof createApp>;
   let published: ReturnType<typeof createApp>;
@@ -283,6 +295,8 @@ describe("a compiled toolshed's shell router", () => {
         pageDir,
         { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
         "commit-123",
+        undefined,
+        () => ({ sharedMemoryConnection: true, serverExecution: true }),
       ),
     );
     unpublished = createApp().route(
@@ -291,6 +305,8 @@ describe("a compiled toolshed's shell router", () => {
         pageDir,
         { ENV: "production", MEMORY_PUBLIC_URL: undefined },
         null,
+        undefined,
+        NO_RUNTIME,
       ),
     );
   });
@@ -303,7 +319,7 @@ describe("a compiled toolshed's shell router", () => {
     expect(await (await plain.request("/")).text()).toBe(PAGE);
   });
 
-  it("publishes the memory URL on every path that resolves to index.html", async () => {
+  it("publishes the deployment on every path that resolves to index.html", async () => {
     for (
       const url of [
         "/",
@@ -323,19 +339,57 @@ describe("a compiled toolshed's shell router", () => {
     }
   });
 
-  it("publishes an empty element where the deployment has none", async () => {
+  it("publishes no memory URL and no posture where the deployment has neither", async () => {
     // The shell takes it as conclusive and requests nothing more.
     for (const url of ["/", "//index.html", "/builds/production/"]) {
       expect(await (await unpublished.request(url)).text(), url).toBe(
-        pageWith(""),
+        pageWith({ memoryUrl: null, experimental: null }),
       );
     }
   });
 
-  it("builds the page once, at startup, and reads each other file once", async () => {
+  it("publishes the posture's sharedMemoryConnection as /api/meta publishes it", async () => {
+    // The real seam: the page reads the posture the Runtime published, as
+    // the meta route does, and only on the first request, by which time a
+    // compiled toolshed has constructed its Runtime.
+    const before = experimentalPosture();
+    try {
+      for (
+        const [posture, experimental] of [
+          [{ sharedMemoryConnection: true, serverExecution: false }, {
+            sharedMemoryConnection: true,
+          }],
+          [{ sharedMemoryConnection: false }, {
+            sharedMemoryConnection: false,
+          }],
+          // A flag the Runtime left unresolved is not published as false.
+          [{ serverExecution: true }, {}],
+        ] as const
+      ) {
+        publishExperimentalPosture(null);
+        const served = createApp().route(
+          "/",
+          await compiledShellRouter(
+            pageDir,
+            { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
+            "commit-123",
+          ),
+        );
+        publishExperimentalPosture(posture);
+        expect(await (await served.request("/")).text()).toBe(
+          pageWith({ memoryUrl: "https://router.test", experimental }),
+        );
+      }
+    } finally {
+      publishExperimentalPosture(before);
+    }
+  });
+
+  it("builds the page once, on its first request, and reads each other file once", async () => {
     // Reads by file name, through a router of its own so that no other
     // test's requests fill its cache first.
     const reads = new Map<string, number>();
+    let asked = 0;
     const counted = createApp().route(
       "/",
       await compiledShellRouter(
@@ -350,8 +404,15 @@ describe("a compiled toolshed's shell router", () => {
           },
           generateETag,
         },
+        () => {
+          asked++;
+          return { sharedMemoryConnection: true };
+        },
       ),
     );
+    // Read at startup, built on the first request.
+    expect(reads.get("index.html")).toBe(1);
+    expect(asked).toBe(0);
     // Three spellings of one file, each of which must find what the first
     // cached under the path it resolves to.
     for (
@@ -367,7 +428,64 @@ describe("a compiled toolshed's shell router", () => {
       await counted.request(url);
     }
     expect(reads.get("index.html")).toBe(1);
+    expect(asked).toBe(1);
     expect(reads.get("app.js")).toBe(1);
+  });
+
+  it("does not keep a page built before a Runtime exists", async () => {
+    // The startup order serves no request before the Runtime is constructed;
+    // a request that arrived anyway must not fix the page at null.
+    let posture: Record<string, boolean> | null = null;
+    const served = createApp().route(
+      "/",
+      await compiledShellRouter(
+        pageDir,
+        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+        null,
+        undefined,
+        () => posture,
+      ),
+    );
+    expect(await (await served.request("/")).text()).toBe(
+      pageWith({ memoryUrl: null, experimental: null }),
+    );
+    posture = { sharedMemoryConnection: true };
+    const published = pageWith({
+      memoryUrl: null,
+      experimental: { sharedMemoryConnection: true },
+    });
+    expect(await (await served.request("/")).text()).toBe(published);
+    posture = { sharedMemoryConnection: false };
+    expect(await (await served.request("/")).text()).toBe(published);
+  });
+
+  it("does not keep a build that failed", async () => {
+    let failures = 1;
+    const served = createApp().route(
+      "/",
+      await compiledShellRouter(
+        pageDir,
+        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+        null,
+        {
+          readFile: Deno.readFile,
+          generateETag: (content) =>
+            failures-- > 0
+              ? Promise.reject(new Error("no digest"))
+              : generateETag(content),
+        },
+        () => ({ sharedMemoryConnection: true }),
+      ),
+    );
+    expect((await served.request("/")).status).toBe(500);
+    const second = await served.request("/");
+    expect(second.status).toBe(200);
+    expect(await second.text()).toBe(
+      pageWith({
+        memoryUrl: null,
+        experimental: { sharedMemoryConnection: true },
+      }),
+    );
   });
 
   it("refuses to start on a bundle whose page has no </head>", async () => {
@@ -378,6 +496,8 @@ describe("a compiled toolshed's shell router", () => {
         bare,
         { ENV: "production", MEMORY_PUBLIC_URL: undefined },
         null,
+        undefined,
+        NO_RUNTIME,
       )).rejects.toThrow("no </head>");
     } finally {
       await Deno.remove(bare, { recursive: true });
@@ -400,46 +520,88 @@ describe("a compiled toolshed's shell router", () => {
   });
 });
 
-describe("withMemoryUrlMeta", () => {
+describe("shellDeploymentPage", () => {
+  const environment = { MEMORY_PUBLIC_URL: "https://router.test" };
+
+  it("carries the memory URL, or null where the deployment has none", () => {
+    expect(shellDeploymentPage(environment, null)).toEqual({
+      memoryUrl: "https://router.test",
+      experimental: null,
+    });
+    expect(shellDeploymentPage({ MEMORY_PUBLIC_URL: undefined }, null))
+      .toEqual({ memoryUrl: null, experimental: null });
+  });
+
+  it("carries the flags the shell takes from its deployment, out of the posture", () => {
+    expect(
+      shellDeploymentPage(environment, {
+        serverExecution: true,
+        sharedMemoryConnection: true,
+      }).experimental,
+    ).toEqual({ sharedMemoryConnection: true });
+    expect(
+      shellDeploymentPage(environment, { sharedMemoryConnection: false })
+        .experimental,
+    ).toEqual({ sharedMemoryConnection: false });
+    expect(
+      shellDeploymentPage(environment, { serverExecution: true })
+        .experimental,
+    ).toEqual({});
+  });
+});
+
+describe("withDeploymentMeta", () => {
   const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
   const encode = (text: string) => new TextEncoder().encode(text);
+  const page: DeploymentMetaContent = {
+    memoryUrl: "https://router.test",
+    experimental: { sharedMemoryConnection: true },
+  };
+  const CONTENT = "{&#34;memoryUrl&#34;:&#34;https://router.test&#34;," +
+    "&#34;experimental&#34;:{&#34;sharedMemoryConnection&#34;:true}}";
 
   it("inserts the element before </head>, whatever its case", () => {
-    expect(decode(withMemoryUrlMeta(
+    expect(decode(withDeploymentMeta(
       encode("<HEAD><title>t</title></HEAD ><body></body>"),
-      "https://router.test",
+      page,
     ))).toBe(
-      '<HEAD><title>t</title><meta name="cf-memory-url" ' +
-        'content="https://router.test"></HEAD ><body></body>',
+      `<HEAD><title>t</title><meta name="cf-deployment" content="${CONTENT}">` +
+        "</HEAD ><body></body>",
     );
   });
 
-  it("inserts an empty element for a deployment without a memory URL", () => {
-    expect(decode(withMemoryUrlMeta(encode("<head></head>"), undefined)))
-      .toBe('<head><meta name="cf-memory-url" content=""></head>');
+  it("carries nulls for a deployment without a memory URL or a Runtime", () => {
+    expect(decode(withDeploymentMeta(
+      encode("<head></head>"),
+      { memoryUrl: null, experimental: null },
+    ))).toBe(
+      '<head><meta name="cf-deployment" content="{&#34;memoryUrl&#34;:null,' +
+        '&#34;experimental&#34;:null}"></head>',
+    );
   });
 
   it("escapes the value for an attribute", () => {
-    expect(decode(withMemoryUrlMeta(
+    expect(decode(withDeploymentMeta(
       encode("<head></head>"),
-      `https://a.test/"><script>&'`,
+      { memoryUrl: `https://a.test/"><script>&'`, experimental: {} },
     ))).toBe(
-      '<head><meta name="cf-memory-url" content="https://a.test/&#34;&#62;' +
-        '&#60;script&#62;&#38;&#39;"></head>',
+      '<head><meta name="cf-deployment" content="{&#34;memoryUrl&#34;:' +
+        "&#34;https://a.test/\\&#34;&#62;&#60;script&#62;&#38;&#39;&#34;," +
+        '&#34;experimental&#34;:{}}"></head>',
     );
   });
 
   it("finds </head> in the shell's own page", async () => {
-    const page = await Deno.readFile(
+    const html = await Deno.readFile(
       new URL("../../../shell/public/index.html", import.meta.url),
     );
-    expect(decode(withMemoryUrlMeta(page, "https://router.test"))).toContain(
-      '<meta name="cf-memory-url" content="https://router.test"></head>',
+    expect(decode(withDeploymentMeta(html, page))).toContain(
+      `<meta name="cf-deployment" content="${CONTENT}"></head>`,
     );
   });
 
   it("refuses a page with no </head>", () => {
-    expect(() => withMemoryUrlMeta(encode(INDEX_HTML), "https://router.test"))
+    expect(() => withDeploymentMeta(encode(INDEX_HTML), page))
       .toThrow("no </head>");
   });
 });

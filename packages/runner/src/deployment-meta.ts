@@ -20,12 +20,94 @@ import type { ExperimentalOptions } from "./runtime.ts";
 import { namesApiOrigin, readMemoryUrl } from "./space-host.ts";
 
 /**
- * The name of the `<meta>` element in which a compiled toolshed publishes its
- * `MEMORY_PUBLIC_URL` to the shell pages it serves. The `content` is the
- * memory URL, or empty where the deployment has none. The toolshed writes the
- * element and the shell reads it, both by this name.
+ * The name of the `<meta>` element in which a compiled toolshed publishes what
+ * the shell takes from its deployment, to the pages it serves. The `content`
+ * is a {@link DeploymentMetaContent} as JSON. The toolshed writes the element and the
+ * shell reads it, both by this name.
  */
-export const MEMORY_URL_META_NAME = "cf-memory-url";
+export const DEPLOYMENT_META_NAME = "cf-deployment";
+
+/**
+ * Where the shell resolves one flag.
+ *
+ * - `"build"`: the shell's build decides, through the build define where
+ *   `packages/shell/felt.config.ts` has one and the built-in default
+ *   otherwise. CI pins a lane's defines, and the worker checks the
+ *   `serverExecution` arm it declares against its own.
+ * - `"deployment"`: the deployment decides. One shell build is served by
+ *   every deployment, so a flag whose value differs between deployments
+ *   that share a build goes here: a compiled toolshed publishes it, out of
+ *   the posture `/api/meta` publishes, in the page it serves
+ *   ({@link DEPLOYMENT_META_NAME}), and the shell adopts it from the page, or
+ *   from the meta document, under `adoptServerExperimentalOptions`, as `cf`
+ *   adopts the whole posture: an explicit build define still wins. Such a
+ *   flag has to be `"server"` in `EXPERIMENTAL_FLAG_AUTHORITY`, since that
+ *   adoption takes only server-authority flags, and must not change while a
+ *   toolshed serves, since the page is built once; the runner's tests hold
+ *   both.
+ */
+export type ShellFlagSource = "build" | "deployment";
+
+/**
+ * Where the shell resolves every flag, type-gated like
+ * `EXPERIMENTAL_FLAG_AUTHORITY`: a new flag does not compile until it is
+ * placed here, so "does the shell follow the deployment on this?" is a
+ * decision on record.
+ */
+export const SHELL_FLAG_SOURCES = {
+  modernCellRep: "build",
+  agentBuiltin: "build",
+  contentAddressedSchemas: "build",
+  commitPreconditions: "build",
+  plainResultReceipts: "build",
+  computedCellIds: "build",
+  lazyMaterialization: "build",
+  serverExecution: "build",
+  viewScopedReplication: "build",
+  webViewScopedReplication: "build",
+  readerSchemaPrecedence: "build",
+  // Whether a connection may carry several spaces is how the deployment
+  // routes connections: a deployment whose router terminates client
+  // connections turns it on, and one that routes each connection by the
+  // space its address names cannot, while both serve one shell build.
+  sharedMemoryConnection: "deployment",
+} as const satisfies Record<keyof ExperimentalOptions, ShellFlagSource>;
+
+/** The flags {@link SHELL_FLAG_SOURCES} gives the deployment. */
+export const SHELL_DEPLOYMENT_FLAGS: readonly (keyof ExperimentalOptions)[] =
+  (Object.keys(SHELL_FLAG_SOURCES) as (keyof ExperimentalOptions)[]).filter(
+    (flag) => SHELL_FLAG_SOURCES[flag] === "deployment",
+  );
+
+/**
+ * What a compiled toolshed writes into the page it serves, as the element's
+ * JSON content: the fields of its meta document the shell reads, in the
+ * document's own shape, so that the shell reads a page and a document alike.
+ * `memoryUrl` is the memory URL, or `null` where the deployment has none.
+ * `experimental` is the posture restricted to {@link SHELL_DEPLOYMENT_FLAGS}
+ * ({@link shellFlagsFromDeclared}), or `null` where the toolshed has no
+ * Runtime, as on the meta document.
+ */
+export interface DeploymentMetaContent {
+  memoryUrl: string | null;
+  experimental: ExperimentalOptions | null;
+}
+
+/**
+ * The flags the shell adopts from a posture a deployment declared, on its
+ * meta document or in the page it served: `declared` read as
+ * `parseServerExperimentalOptions` reads it, restricted to
+ * {@link SHELL_DEPLOYMENT_FLAGS}. A declaration without one of them says
+ * nothing about it, and the shell's default governs.
+ */
+export function shellFlagsFromDeclared(declared: unknown): ExperimentalOptions {
+  const parsed = parseServerExperimentalOptions(declared);
+  const flags: ExperimentalOptions = {};
+  for (const key of SHELL_DEPLOYMENT_FLAGS) {
+    if (parsed[key] !== undefined) flags[key] = parsed[key];
+  }
+  return flags;
+}
 
 /** How long one attempt to read the meta document may take. */
 const META_ATTEMPT_TIMEOUT_MS = 5_000;
@@ -316,11 +398,12 @@ function originOf(url: string): string {
 }
 
 /**
- * A memory URL, and whether reading again may give another: what
- * {@link memoryUrlForDeployment} reads, and what a shell takes from a page
- * that states the memory URL, which is not transient.
+ * What the shell takes from its deployment, and whether reading again may
+ * give another: what {@link deploymentForShell} reads from the meta
+ * document, and what a shell takes from a page that states it, which is not
+ * transient.
  */
-export interface DeploymentMemoryUrl {
+export interface DeploymentForShell {
   /**
    * The memory URL the deployment publishes, or `undefined`, which leaves
    * Memory on `apiUrl` ({@link memoryUrlFromMeta}).
@@ -328,28 +411,41 @@ export interface DeploymentMemoryUrl {
   memoryUrl: URL | undefined;
 
   /**
+   * The flags the deployment decides for the shell
+   * ({@link shellFlagsFromDeclared}): empty where the document could not be
+   * read or the server said it has none, which adopts nothing, as
+   * {@link settingsForDeployedClient} adopts nothing then.
+   */
+  experimental: ExperimentalOptions;
+
+  /**
    * Whether the document could not be read for a transient reason, a
    * connection that failed or a status in {@link TRANSIENT_STATUSES}, so that
-   * reading it again may give another memory URL. A caller that keeps the
-   * result keeps it unless this is set: a document the server returned, or
-   * said it has none of, settles the memory URL, and a failure that is not
-   * transient, such as a 401 or an attempt that timed out, would most likely
-   * come out the same way again.
+   * reading it again may give another result. A caller that keeps the result
+   * keeps it unless this is set: a document the server returned, or said it
+   * has none of, settles what the deployment publishes, and a failure that is
+   * not transient, such as a 401 or an attempt that timed out, would most
+   * likely come out the same way again.
    */
   transient: boolean;
 }
 
 /**
- * The memory URL a deployment publishes, from one read of its meta document,
- * for a client that takes nothing else from it: a shell whose page does not
- * state the memory URL.
+ * What a deployment publishes for the shell, from one read of its meta
+ * document: the memory URL and the flags it decides for the shell. For a
+ * shell whose page does not state them. The posture is read from wherever a
+ * redirect ended, as {@link settingsForDeployedClient} reads it; the memory
+ * URL is not.
  */
-export async function memoryUrlForDeployment(
+export async function deploymentForShell(
   params: DeploymentMetaParams,
-): Promise<DeploymentMemoryUrl> {
+): Promise<DeploymentForShell> {
   const meta = await readDeploymentMeta(params);
   return {
     memoryUrl: memoryUrlFromMeta(meta, params.apiUrl),
+    experimental: !meta.conclusive || meta.document === undefined
+      ? {}
+      : shellFlagsFromDeclared(meta.document.experimental),
     transient: !meta.conclusive && meta.transient,
   };
 }

@@ -6,10 +6,15 @@ import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server
 
 import {
   type DeployedClientParams,
+  deploymentForShell,
   memoryHostNote,
-  memoryUrlForDeployment,
   settingsForDeployedClient,
+  SHELL_DEPLOYMENT_FLAGS,
+  SHELL_FLAG_SOURCES,
+  shellFlagsFromDeclared,
 } from "../src/deployment-meta.ts";
+import { SERVING_RUNTIME_EXPERIMENTAL } from "../src/executor/serving-runtime.ts";
+import { EXPERIMENTAL_FLAG_AUTHORITY } from "../src/experimental-posture.ts";
 import {
   ADOPT_SERVER_FLAGS_ENV,
   experimentalOptionsFromEnv,
@@ -895,31 +900,94 @@ describe("deployment-meta", () => {
     });
   });
 
-  describe("memoryUrlForDeployment()", () => {
+  describe("deploymentForShell()", () => {
     const apiUrl = new URL("https://deployment.example/");
 
-    it("returns the published memory URL, not transient", async () => {
-      const read = await memoryUrlForDeployment({
+    it("returns the published memory URL and the shell's flags, not transient", async () => {
+      const requested: string[] = [];
+      const read = await deploymentForShell({
+        apiUrl,
+        fetch: (input) => {
+          requested.push(String(input));
+          return Promise.resolve(
+            metaResponse({
+              memoryUrl: "https://router.example",
+              experimental: {
+                sharedMemoryConnection: true,
+                serverExecution: true,
+              },
+            }),
+          );
+        },
+      });
+      expect(read.memoryUrl?.href).toBe("https://router.example/");
+      // One request serves both; the posture is restricted to the flags the
+      // shell takes from its deployment.
+      expect(read.experimental).toEqual({ sharedMemoryConnection: true });
+      expect(read.transient).toBe(false);
+      expect(requested).toEqual(["https://deployment.example/api/meta"]);
+      expect(
+        await deploymentForShell({
+          apiUrl,
+          fetch: () =>
+            Promise.resolve(
+              metaResponse({
+                memoryUrl: null,
+                experimental: { sharedMemoryConnection: false },
+              }),
+            ),
+        }),
+      ).toEqual({
+        memoryUrl: undefined,
+        experimental: { sharedMemoryConnection: false },
+        transient: false,
+      });
+    });
+
+    it("adopts nothing from a document that is silent, has no posture yet, or is absent", async () => {
+      for (
+        const body of [
+          {},
+          { experimental: null },
+          { experimental: {} },
+          { experimental: { serverExecution: true } },
+        ]
+      ) {
+        const read = await deploymentForShell({
+          apiUrl,
+          fetch: () => Promise.resolve(metaResponse(body)),
+        });
+        expect(read.experimental, JSON.stringify(body)).toEqual({});
+      }
+      expect(
+        await deploymentForShell({
+          apiUrl,
+          fetch: () => Promise.resolve(metaResponse({}, 404)),
+        }),
+      ).toEqual({ memoryUrl: undefined, experimental: {}, transient: false });
+    });
+
+    it("drops a flag the document declares with a non-boolean, with a warning", async () => {
+      using warn = stub(console, "warn");
+      const read = await deploymentForShell({
         apiUrl,
         fetch: () =>
           Promise.resolve(
-            metaResponse({ memoryUrl: "https://router.example" }),
+            metaResponse({ experimental: { sharedMemoryConnection: "yes" } }),
           ),
       });
-      expect(read.memoryUrl?.href).toBe("https://router.example/");
-      expect(read.transient).toBe(false);
-      expect(
-        await memoryUrlForDeployment({
-          apiUrl,
-          fetch: () => Promise.resolve(metaResponse({ memoryUrl: null })),
-        }),
-      ).toEqual({ memoryUrl: undefined, transient: false });
+      expect(read.experimental).toEqual({});
+      expect(warn.calls.length).toBe(1);
+      expect(String(warn.calls[0].args[0])).toContain(
+        "Ignoring server-published sharedMemoryConnection=",
+      );
+      expect(String(warn.calls[0].args[0])).toContain("expected a boolean");
     });
 
     it("returns a transient result only for a transient failure", async () => {
       using _warn = stub(console, "warn");
       const read = (fetch: typeof globalThis.fetch) =>
-        memoryUrlForDeployment({
+        deploymentForShell({
           apiUrl,
           retryDelaysMs: [],
           attemptTimeoutMs: 5,
@@ -933,6 +1001,7 @@ describe("deployment-meta", () => {
       ) {
         expect(await read(transient)).toEqual({
           memoryUrl: undefined,
+          experimental: {},
           transient: true,
         });
       }
@@ -948,20 +1017,83 @@ describe("deployment-meta", () => {
                 () => reject(init.signal!.reason),
               );
             }),
-          // Off the API URL's deployment, whatever it says.
-          () =>
-            Promise.resolve(
-              redirected(
-                metaResponse({ memoryUrl: "https://router.example" }),
-                "https://login.example/api/meta",
-              ),
-            ),
         ]
       ) {
         expect(await read(settled)).toEqual({
           memoryUrl: undefined,
+          experimental: {},
           transient: false,
         });
+      }
+    });
+
+    it("takes the posture, and no memory URL, from a response a redirect brought off the deployment", async () => {
+      using _warn = stub(console, "warn");
+      // As settingsForDeployedClient reads it: the posture as before
+      // deployments published a memory URL, the memory URL not.
+      expect(
+        await deploymentForShell({
+          apiUrl,
+          fetch: () =>
+            Promise.resolve(
+              redirected(
+                metaResponse({
+                  memoryUrl: "https://router.example",
+                  experimental: { sharedMemoryConnection: true },
+                }),
+                "https://login.example/api/meta",
+              ),
+            ),
+        }),
+      ).toEqual({
+        memoryUrl: undefined,
+        experimental: { sharedMemoryConnection: true },
+        transient: false,
+      });
+    });
+  });
+
+  describe("SHELL_DEPLOYMENT_FLAGS", () => {
+    it("is the flags SHELL_FLAG_SOURCES gives the deployment", () => {
+      expect(SHELL_DEPLOYMENT_FLAGS).toEqual(["sharedMemoryConnection"]);
+      for (const flag of SHELL_DEPLOYMENT_FLAGS) {
+        expect(SHELL_FLAG_SOURCES[flag]).toBe("deployment");
+      }
+    });
+
+    it("holds only server-authority flags, which is what the shell's adoption takes", () => {
+      for (const flag of SHELL_DEPLOYMENT_FLAGS) {
+        expect(EXPERIMENTAL_FLAG_AUTHORITY[flag], flag).toBe("server");
+      }
+    });
+
+    it("holds no flag the serving loop forces, since the page is built once", () => {
+      // /api/meta applies the serving overrides live; a page carrying one of
+      // them would disagree with it whenever the loop started or stopped.
+      for (const flag of SHELL_DEPLOYMENT_FLAGS) {
+        expect(flag in SERVING_RUNTIME_EXPERIMENTAL, flag).toBe(false);
+      }
+    });
+  });
+
+  describe("shellFlagsFromDeclared()", () => {
+    it("keeps the flags the shell takes from its deployment and nothing else", () => {
+      expect(shellFlagsFromDeclared({
+        sharedMemoryConnection: true,
+        serverExecution: false,
+        readerSchemaPrecedence: true,
+        unknownToThisBuild: true,
+      })).toEqual({ sharedMemoryConnection: true });
+      expect(shellFlagsFromDeclared({ sharedMemoryConnection: false }))
+        .toEqual({ sharedMemoryConnection: false });
+    });
+
+    it("reads an older server's silence as no declaration of the shell's flags", () => {
+      // parseServerExperimentalOptions reads it as the legacy false on
+      // readerSchemaPrecedence and agentBuiltin; neither is the shell's to
+      // adopt.
+      for (const declared of [undefined, null, {}, [], "posture", 3]) {
+        expect(shellFlagsFromDeclared(declared), String(declared)).toEqual({});
       }
     });
   });

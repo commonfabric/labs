@@ -93,10 +93,11 @@ Deno.test({
 });
 
 /**
- * Runs `fn` with a page at `http://shell.test` whose memory URL element names
- * `tag` (none when undefined), its `fetch` returning `responses` in turn and
- * counting requests, and `console.warn` counted. Hands `fn` a fresh env module
- * and the counts, and a promise that settles at the first warning.
+ * Runs `fn` with a page at `http://shell.test` whose deployment element
+ * carries `tag` (none when undefined), its `fetch` returning `responses` in
+ * turn and counting requests, and `console.warn` counted. Hands `fn` a fresh
+ * env module built with `defines`, the counts, and a promise that settles at
+ * the first warning.
  */
 async function withShellPage(
   tag: string | undefined,
@@ -106,6 +107,7 @@ async function withShellPage(
     counts: { pageReads: number; fetches: number; warnings: number },
     warned: Promise<void>,
   ) => Promise<void>,
+  defines: Record<string, string | undefined> = {},
 ) {
   const env = globalThis as unknown as Record<string, unknown>;
   const originals = ["document", "location", "fetch"].map((name) =>
@@ -117,7 +119,7 @@ async function withShellPage(
   env.document = {
     querySelector: (selector: string) => {
       counts.pageReads++;
-      return tag !== undefined && selector === 'meta[name="cf-memory-url"]'
+      return tag !== undefined && selector === 'meta[name="cf-deployment"]'
         ? {
           getAttribute: (name: string) => name === "content" ? tag : null,
         }
@@ -133,6 +135,7 @@ async function withShellPage(
   try {
     const mod = await withPatchedGlobals({
       $API_URL: "http://shell.test/",
+      ...defines,
     }, importFreshEnvModule);
     await fn(mod, counts, firstWarning.promise);
   } finally {
@@ -144,22 +147,33 @@ async function withShellPage(
   }
 }
 
+/** The element a toolshed with a router and sharing on writes. */
+const SHARING_PAGE = JSON.stringify({
+  memoryUrl: "https://router.test",
+  experimental: { sharedMemoryConnection: true },
+});
+const ROUTED = {
+  memoryUrl: new URL("https://router.test/"),
+  experimental: { sharedMemoryConnection: true },
+};
+const NOTHING = { memoryUrl: undefined, experimental: {} };
+
 const unreadable = () => new Response(null, { status: 500 });
 const unavailable = () => new Response(null, { status: 503 });
-const publishing = () => Response.json({ memoryUrl: "https://router.test" });
+const publishing = () =>
+  Response.json({
+    memoryUrl: "https://router.test",
+    experimental: { sharedMemoryConnection: true },
+  });
 
 Deno.test({
-  name: "shellMemoryUrl reads the page it runs in, once",
+  name: "shellDeployment reads the page it runs in, once",
   permissions: { read: true },
   async fn() {
-    await withShellPage("https://router.test", [], async (mod, counts) => {
-      mod.shellMemoryUrl.prefetch();
-      expect((await mod.shellMemoryUrl.get())?.href).toBe(
-        "https://router.test/",
-      );
-      expect((await mod.shellMemoryUrl.get())?.href).toBe(
-        "https://router.test/",
-      );
+    await withShellPage(SHARING_PAGE, [], async (mod, counts) => {
+      mod.shellDeployment.prefetch();
+      expect(await mod.shellDeployment.get()).toEqual(ROUTED);
+      expect(await mod.shellDeployment.get()).toEqual(ROUTED);
       expect(counts.pageReads).toBe(1);
       expect(counts.fetches).toBe(0);
     });
@@ -168,18 +182,18 @@ Deno.test({
 
 Deno.test({
   name:
-    "shellMemoryUrl gives the first runtime the read the page started, even one that failed",
+    "shellDeployment gives the first runtime the read the page started, even one that failed",
   permissions: { read: true },
   async fn() {
     await withShellPage(
       undefined,
       [unreadable, unreadable],
       async (mod, counts, warned) => {
-        mod.shellMemoryUrl.prefetch();
+        mod.shellDeployment.prefetch();
         // The read has failed and settled before the first runtime asks.
         await warned;
         await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(await mod.shellMemoryUrl.get()).toBeUndefined();
+        expect(await mod.shellDeployment.get()).toEqual(NOTHING);
         expect(counts.fetches).toBe(1);
         expect(counts.warnings).toBe(1);
       },
@@ -189,16 +203,16 @@ Deno.test({
 
 Deno.test({
   name:
-    "shellMemoryUrl keeps a failure that would come out the same, and warns once",
+    "shellDeployment keeps a failure that would come out the same, and warns once",
   permissions: { read: true },
   async fn() {
     await withShellPage(
       undefined,
       [unreadable, publishing],
       async (mod, counts) => {
-        mod.shellMemoryUrl.prefetch();
-        expect(await mod.shellMemoryUrl.get()).toBeUndefined();
-        expect(await mod.shellMemoryUrl.get()).toBeUndefined();
+        mod.shellDeployment.prefetch();
+        expect(await mod.shellDeployment.get()).toEqual(NOTHING);
+        expect(await mod.shellDeployment.get()).toEqual(NOTHING);
         expect(counts.fetches).toBe(1);
         expect(counts.warnings).toBe(1);
       },
@@ -208,7 +222,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "shellMemoryUrl reads again for the next runtime after a transient failure, and keeps what it then reads",
+    "shellDeployment reads again for the next runtime after a transient failure, and keeps what it then reads",
   permissions: { read: true },
   async fn() {
     await withShellPage(
@@ -217,19 +231,115 @@ Deno.test({
       async (mod, counts) => {
         // The read waits between its three attempts.
         using time = new FakeTime();
-        mod.shellMemoryUrl.prefetch();
-        const first = mod.shellMemoryUrl.get();
+        mod.shellDeployment.prefetch();
+        const first = mod.shellDeployment.get();
         await time.runAllAsync();
-        expect(await first).toBeUndefined();
+        expect(await first).toEqual(NOTHING);
         expect(counts.fetches).toBe(3);
-        expect((await mod.shellMemoryUrl.get())?.href).toBe(
-          "https://router.test/",
-        );
-        expect((await mod.shellMemoryUrl.get())?.href).toBe(
-          "https://router.test/",
-        );
+        expect(await mod.shellDeployment.get()).toEqual(ROUTED);
+        expect(await mod.shellDeployment.get()).toEqual(ROUTED);
         expect(counts.fetches).toBe(4);
       },
     );
+  },
+});
+
+Deno.test({
+  name:
+    "sharedMemoryConnection: the deployment's value governs where no define pins it",
+  permissions: { read: true },
+  async fn() {
+    for (const sharedMemoryConnection of [true, false]) {
+      await withShellPage(
+        JSON.stringify({
+          memoryUrl: null,
+          experimental: { sharedMemoryConnection },
+        }),
+        [],
+        async (mod) => {
+          // The define is unset in a release build; the shell takes the
+          // deployment's word, whichever way it goes.
+          expect(mod.EXPERIMENTAL.sharedMemoryConnection).toBeUndefined();
+          const deployment = await mod.shellDeployment.get();
+          expect(
+            mod.experimentalForDeployment(deployment.experimental)
+              .sharedMemoryConnection,
+          ).toBe(sharedMemoryConnection);
+        },
+      );
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "sharedMemoryConnection: the shell's default governs where the deployment says nothing",
+  permissions: { read: true },
+  async fn() {
+    // A page from a toolshed without a Runtime, one whose Runtime left the
+    // flag unresolved, and a page that reads a meta document saying nothing.
+    for (
+      const [tag, responses] of [
+        [JSON.stringify({ memoryUrl: null, experimental: null }), []],
+        [JSON.stringify({ memoryUrl: null, experimental: {} }), []],
+        [undefined, [() => Response.json({ memoryUrl: null })]],
+      ] as const
+    ) {
+      await withShellPage(tag, [...responses], async (mod) => {
+        const deployment = await mod.shellDeployment.get();
+        expect(deployment.experimental).toEqual({});
+        const resolved = mod.experimentalForDeployment(deployment.experimental);
+        expect(resolved.sharedMemoryConnection).toBeUndefined();
+        // Nothing else moved.
+        expect(resolved).toEqual(mod.EXPERIMENTAL);
+      });
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "sharedMemoryConnection: an explicit define overrides the deployment either way",
+  permissions: { read: true },
+  async fn() {
+    for (
+      const [define, published] of [["false", true], ["true", false]] as const
+    ) {
+      await withShellPage(
+        JSON.stringify({
+          memoryUrl: null,
+          experimental: { sharedMemoryConnection: published },
+        }),
+        [],
+        async (mod) => {
+          const deployment = await mod.shellDeployment.get();
+          expect(deployment.experimental).toEqual({
+            sharedMemoryConnection: published,
+          });
+          expect(
+            mod.experimentalForDeployment(deployment.experimental)
+              .sharedMemoryConnection,
+          ).toBe(define === "true");
+        },
+        { $EXPERIMENTAL_SHARED_MEMORY_CONNECTION: define },
+      );
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "experimentalForDeployment adopts only the flags the deployment decides for the shell",
+  permissions: { read: true },
+  async fn() {
+    const mod = await withPatchedGlobals({
+      $API_URL: "http://shell.test/",
+      $EXPERIMENTAL_SERVER_EXECUTION: "false",
+    }, importFreshEnvModule);
+    // A deployment's word on any other flag does not reach the runtime: the
+    // read restricts what it hands over, and this takes what it is handed.
+    expect(mod.experimentalForDeployment({ sharedMemoryConnection: true }))
+      .toEqual({ ...mod.EXPERIMENTAL, sharedMemoryConnection: true });
+    expect(mod.experimentalForDeployment({})).toEqual(mod.EXPERIMENTAL);
   },
 });

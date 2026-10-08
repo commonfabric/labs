@@ -38,7 +38,7 @@ was last checked against the code.
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
-| [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env / shell build define, or `RuntimeOptions.experimental` | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
+| [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
@@ -93,7 +93,10 @@ both go through that one mapping, so their wirings cannot drift; the shell
 reads the same variables from its build-time defines through the same canonical
 parser, for the flags it defines;
 `packages/shell/felt.config.ts` and `packages/shell/src/lib/env.ts` are the
-authority on which those are. A CI lane builds the binaries it caches with
+authority on which those are, and `SHELL_FLAG_SOURCES` in
+`packages/runner/src/deployment-meta.ts` on which of them the shell adopts
+from its deployment instead (see
+[Browser-side](#browser-side-build-time-defines)). A CI lane builds the binaries it caches with
 every define's variable unset unless `cachedBinaries()` in
 [`tasks/ci-capabilities.ts`](../../tasks/ci-capabilities.ts) sets it, so a lane
 that needs a flag in its baked shell names it there.
@@ -110,7 +113,10 @@ from its own environment, with an explicit `EXPERIMENTAL_*` still winning per
 flag. Which flags it takes that way is the second registry in the same file,
 `EXPERIMENTAL_FLAG_AUTHORITY`; see
 [Clients that are not built alongside their
-server](#clients-that-are-not-built-alongside-their-server).
+server](#clients-that-are-not-built-alongside-their-server). The shell is
+built alongside its toolshed but served by every deployment, so it takes a
+third registry's word, `SHELL_FLAG_SOURCES` in `deployment-meta.ts`, on which
+flags it adopts from the deployment it runs against.
 
 ### `modernCellRep`
 
@@ -745,11 +751,23 @@ holds the measurements and the conditions for revisiting.
 ### `sharedMemoryConnection`
 
 - **Toggle via.** `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` environment variable
-  (through the canonical env registry), the shell build define of the same
-  name, or `RuntimeOptions.experimental.sharedMemoryConnection`.
-  Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: whether a connection
-  may carry several spaces is a property of how the deployment routes
-  connections, so a client follows what the deployment publishes.
+  (through the canonical env registry) or
+  `RuntimeOptions.experimental.sharedMemoryConnection`. Server-authoritative in
+  `EXPERIMENTAL_FLAG_AUTHORITY`: whether a connection may carry several spaces
+  is a property of how the deployment routes connections, so a client follows
+  what the deployment publishes. The shell follows it too, unlike its other
+  flags: `SHELL_FLAG_SOURCES`
+  ([`packages/runner/src/deployment-meta.ts`](../../packages/runner/src/deployment-meta.ts))
+  gives it to the deployment,
+  so a compiled toolshed publishes its value in the
+  `<meta name="cf-deployment">` element of every page it serves, beside the
+  memory URL, and the shell adopts it from there, or from `/api/meta` when the
+  page states nothing or came from another origin, under
+  `adoptServerExperimentalOptions` (`experimentalForDeployment` in
+  [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts)). The
+  shell build define of the same name is the override: set, it wins over the
+  deployment either way, as an explicit `EXPERIMENTAL_*` does for `cf`; a
+  release build leaves it unset.
 - **Added by.** Bernhard Seefeld, 2026-09-29
   ([`docs/specs/memory-v2/connection-multiplexing.md`](../specs/memory-v2/connection-multiplexing.md)).
 - **Purpose.** With the flag on, the runner's storage manager opens one
@@ -773,6 +791,9 @@ holds the measurements and the conditions for revisiting.
   router also accepts the dedicated `?space=<DID>` address, so routed-capable
   clients and toolsheds can be installed with sharing off, Memory WebSockets
   moved to the router, and sharing enabled after that path passes acceptance.
+  Enabling it is a toolshed restart with the variable set: every client,
+  the shell included, adopts the value from the deployment, so one release
+  build serves a deployment with sharing on and one that routes by space.
   The end state is always-on.
 - **Status on 2026-09-29.** Implemented behind the flag. The server side is
   covered by `packages/memory/test/v2-server-connection-auth.test.ts`, the
@@ -783,10 +804,17 @@ holds the measurements and the conditions for revisiting.
   not gated: a connection handles frames for different spaces independently,
   `session.close` ends one session, and a presence membership belongs to a
   session.
+- **Status on 2026-10-08.** The shell adopts the flag from its deployment,
+  from the `cf-deployment` element of the page a compiled toolshed serves or
+  from `/api/meta`, with the build define as the override; a release build
+  leaves the define unset. Covered by `packages/shell/test/deployment.test.ts`
+  and `env.test.ts`, `packages/toolshed/routes/shell/shell.test.ts` and
+  `packages/runner/test/deployment-meta.test.ts`.
 - **Path to removal.** Turn the default on once every deployment serves
   shared connections; then remove the env mapping, the runtime option and its
-  authority entry, the shell define, `RemoteSessionFactory`'s
-  connection-per-space path, and the `?space=` address parameter.
+  authority entry, the shell define and its `SHELL_FLAG_SOURCES` entry,
+  `RemoteSessionFactory`'s connection-per-space path, and the `?space=`
+  address parameter.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
@@ -1845,7 +1873,10 @@ mapping.
 
 Browser-side flags are baked at build time and carried to the web worker
 that hosts the runtime; changing one means rebuilding and redeploying the
-shell.
+shell. The exception is the flags `SHELL_FLAG_SOURCES` gives the deployment
+(`sharedMemoryConnection` today), which the shell adopts from its deployment
+where the define leaves them unset: see
+[Clients that are not built alongside their server](#clients-that-are-not-built-alongside-their-server).
 
 ```
 Build Time (shell)
@@ -1855,7 +1886,8 @@ Build Time (shell)
   +-- src/lib/env.ts   --> EXPERIMENTAL (parsed via the canonical parser)
   |
 Browser (main thread)
-  +-- views/RootView.ts --> RuntimeInternals.create({ ..., experimental: EXPERIMENTAL })
+  +-- lib/deployment.ts --> the page's <meta name="cf-deployment">, else /api/meta
+  +-- views/RootView.ts --> RuntimeInternals.create({ ..., experimental: experimentalForDeployment(deployment.experimental) })
   +-- RuntimeClient.initialize(transport, { ..., experimental })
         |  postMessage (IPC), InitializationData carries experimental + CFC dials
         v
@@ -1872,7 +1904,17 @@ construction: the `browserWorker` preset takes `cfcEnforcementMode` and
 
 The shell disagrees with its server only by explicit define: toolshed bakes
 the defines and serves the bundle, so the two ship one posture per deploy.
-Every other client is installed, deployed, or checked out on its own
+One shell build is served by every deployment, though, so a flag that
+deployments sharing a build set differently cannot be a define alone. Those
+flags are the ones `SHELL_FLAG_SOURCES` in `deployment-meta.ts` gives the
+deployment (`sharedMemoryConnection`): a compiled toolshed publishes them, out of the
+posture it publishes on `/api/meta`, in the `<meta name="cf-deployment">`
+element of the page it serves, beside the memory URL, and the shell adopts
+them from the page, or from `/api/meta` when the page states nothing or came
+from another origin, with the same `adoptServerExperimentalOptions` rule as
+the clients below: an explicit define wins, otherwise the deployment's value,
+otherwise the built-in default. Every other client is installed, deployed, or
+checked out on its own
 schedule — the `cf` binary, the pieces controller a FUSE mount opens, the
 agents host, the GitHub connector host — and
 the environment they read
@@ -2089,6 +2131,11 @@ registries:
   `settingsForDeployedClient` resolves one client's posture through it; see
   [Clients that are not built alongside their
 server](#clients-that-are-not-built-alongside-their-server).
+- `SHELL_FLAG_SOURCES` in `deployment-meta.ts` places every flag as `"build"`
+  or `"deployment"` for the shell, typed the same way, so a new flag forces
+  the decision whether one shell build follows the deployment on it.
+  `SHELL_DEPLOYMENT_FLAGS` is the `"deployment"` entries; a compiled toolshed
+  publishes those in the page it serves and the shell adopts them.
 
 - Only one set of experimental flags is active per JavaScript context at a time.
 - In the browser the web worker is a separate JavaScript context, so its flags

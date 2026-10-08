@@ -5,7 +5,10 @@ import {
   createCacheHeaders,
   generateETag,
 } from "@commonfabric/static/etag";
-import { MEMORY_URL_META_NAME } from "@commonfabric/runner/deployment-meta";
+import {
+  DEPLOYMENT_META_NAME,
+  type DeploymentMetaContent,
+} from "@commonfabric/runner/deployment-meta";
 
 import { createRouter } from "@/lib/create-app.ts";
 import { getMimeType } from "@/lib/mime-type.ts";
@@ -31,12 +34,11 @@ export interface ShellStaticOptions {
   /**
    * The response for every request that resolves to `index.html`, however the
    * path spells it, the `/builds/<id>/` alias and the client-routing fallback
-   * included. A compiled toolshed builds it once at startup with
-   * {@link loadShellIndex}, so that the page it serves always carries the
-   * deployment's memory URL. Absent, `index.html` is read and served as
-   * built.
+   * included. A compiled toolshed passes what {@link loadShellIndex} gives
+   * it, so that the page it serves always carries what the shell takes from
+   * the deployment. Absent, `index.html` is read and served as built.
    */
-  index?: StaticResponse;
+  index?: () => Promise<StaticResponse>;
 }
 
 const defaultDeps: ShellStaticDeps = {
@@ -146,50 +148,88 @@ const escapeHtmlAttribute = (value: string): string =>
   value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 
 /**
- * Returns `html` with the `<meta>` element named `MEMORY_URL_META_NAME`
- * inserted before its `</head>`, carrying `memoryUrl`, or empty content where
- * the deployment has none. The shell takes an empty element as the
- * deployment saying it has none, so a deployment without a memory router
- * costs it no request.
+ * `html` split where its `</head>` starts.
  *
- * @throws If `html` has no `</head>`, since the shell would then never see
- * the element and would ask the API host for the memory URL on every load.
+ * @throws If `html` has none, since the shell would then never see the
+ * element and would ask the API host for the deployment on every load.
  */
-export function withMemoryUrlMeta(
-  html: Uint8Array,
-  memoryUrl: string | undefined,
-): Uint8Array<ArrayBuffer> {
+function splitAtHead(html: Uint8Array): [string, string] {
   const text = new TextDecoder().decode(html);
   const at = text.search(/<\/head\s*>/i);
   if (at === -1) {
     throw new Error("The shell's index.html has no </head> to publish in");
   }
-  const meta = `<meta name="${MEMORY_URL_META_NAME}" content="${
-    escapeHtmlAttribute(memoryUrl ?? "")
+  return [text.slice(0, at), text.slice(at)];
+}
+
+/** The element named `DEPLOYMENT_META_NAME`, carrying `content` as JSON. */
+function deploymentMeta(content: DeploymentMetaContent): string {
+  return `<meta name="${DEPLOYMENT_META_NAME}" content="${
+    escapeHtmlAttribute(JSON.stringify(content))
   }">`;
-  return new TextEncoder().encode(text.slice(0, at) + meta + text.slice(at));
 }
 
 /**
- * Reads `index.html` under `staticRoot` once and returns the response that
- * serves it with the deployment's memory URL ({@link withMemoryUrlMeta}),
- * the ETag computed over what is served.
+ * Returns `html` with the `<meta>` element named `DEPLOYMENT_META_NAME`
+ * inserted before its `</head>`, carrying `content` as JSON. The shell takes
+ * the element as the deployment's word on its memory URL and on the flags it
+ * decides for the shell, so a page it reads costs it no request, a
+ * deployment without a memory router included.
+ *
+ * @throws If `html` has no `</head>` ({@link splitAtHead}).
+ */
+export function withDeploymentMeta(
+  html: Uint8Array,
+  content: DeploymentMetaContent,
+): Uint8Array<ArrayBuffer> {
+  const [before, after] = splitAtHead(html);
+  return new TextEncoder().encode(before + deploymentMeta(content) + after);
+}
+
+/**
+ * Reads `index.html` under `staticRoot` once and returns what serves it: the
+ * response carrying what `content` gives ({@link withDeploymentMeta}), the
+ * ETag computed over what is served. The response is built on the first
+ * request for it, because `content` reads the posture the Runtime publishes,
+ * and a compiled toolshed constructs its Runtime after its routes. It is
+ * kept once it carries a posture, so `content` must give the same answer for
+ * as long as the process serves (`SHELL_FLAG_SOURCES`). A response built
+ * while the toolshed has no Runtime is not kept: the startup order serves no
+ * request before the Runtime exists, but nothing here enforces that, and a
+ * kept one would fix the page at `experimental: null` for the process
+ * lifetime while `/api/meta` goes on to publish the posture. Nor is a build
+ * that failed kept, so one ETag that could not be computed does not fail
+ * every page request after it.
  *
  * @throws If the file cannot be read or has no `</head>`. A compiled toolshed
- * calls this at startup, so a bundle the shell could not learn its memory URL
+ * calls this at startup, so a bundle the shell could not learn its deployment
  * from refuses to start rather than failing each page request.
  */
 export async function loadShellIndex(
   staticRoot: string,
-  memoryUrl: string | undefined,
+  content: () => DeploymentMetaContent,
   deps: ShellStaticDeps = defaultDeps,
-): Promise<StaticResponse> {
+): Promise<() => Promise<StaticResponse>> {
   const indexPath = path.join(staticRoot, "index.html");
-  return StaticResponse.fromBytes(
-    withMemoryUrlMeta(await deps.readFile(indexPath), memoryUrl),
-    getMimeType(indexPath),
-    deps,
-  );
+  const [before, after] = splitAtHead(await deps.readFile(indexPath));
+  const mimeType = getMimeType(indexPath);
+  let built: Promise<StaticResponse> | undefined;
+  return () => {
+    if (built !== undefined) return built;
+    const current = content();
+    const response = StaticResponse.fromBytes(
+      new TextEncoder().encode(before + deploymentMeta(current) + after),
+      mimeType,
+      deps,
+    );
+    if (current.experimental !== null) {
+      built = response;
+      response.catch(() => {
+        if (built === response) built = undefined;
+      });
+    }
+    return response;
+  };
 }
 
 /**
@@ -214,10 +254,10 @@ export function createShellStaticRouter(
   const router = createRouter();
   const cache = new Map<string, StaticResponse>();
   const indexPath = path.join(staticRoot, "index.html");
-  // The page itself: the one built at startup, or the file as built, read
+  // The page itself: the one the options build, or the file as built, read
   // once.
   const index = async (): Promise<StaticResponse> => {
-    if (options.index !== undefined) return options.index;
+    if (options.index !== undefined) return options.index();
     const cached = cache.get("index.html");
     if (cached) return cached;
     const res = await StaticResponse.fromFile(indexPath, deps);

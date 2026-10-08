@@ -68,9 +68,13 @@ router out in this order:
    while the app host's access log shows no Memory upgrade from it.
 4. Enable sharing: set `EXPERIMENTAL_SHARED_MEMORY_CONNECTION=true` on every
    toolshed and restart them. The flag is server-authoritative, so `cf`, FUSE
-   mounts and the connector hosts adopt it from `/api/meta`. The shell does
-   not; it takes the build define of the same name, so build the toolshed, and
-   any CDN shell copy, with the variable set as well.
+   mounts and the connector hosts adopt it from `/api/meta`, and the shell
+   adopts it from the page a compiled toolshed serves, or from `/api/meta`
+   when the page states nothing or came from another origin, as it does the
+   memory URL. No shell build changes: a release build leaves the build
+   define of the same name unset, and the same binary serves a deployment
+   that routes by space with sharing off. A shell tab opened before the
+   restart keeps the value its page carried until it reloads.
 5. Stop the app host forwarding `/api/storage/memory` to the toolsheds, and
    close the toolsheds' public direct Memory listeners (see the infra router
    README), once the app host's access log has shown no WebSocket upgrade on

@@ -1,10 +1,14 @@
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
-import { parseFlagValue } from "@commonfabric/runner/experimental-posture";
+import type { ExperimentalOptions } from "@commonfabric/runner";
 import {
-  holdMemoryUrl,
-  resolveMemoryUrl,
-  type ShellMemoryUrl,
-} from "./memory-url.ts";
+  adoptServerExperimentalOptions,
+  parseFlagValue,
+} from "@commonfabric/runner/experimental-posture";
+import {
+  holdDeployment,
+  resolveDeployment,
+  type ShellDeployment,
+} from "./deployment.ts";
 
 declare global {
   var $ENVIRONMENT: string | undefined;
@@ -64,18 +68,19 @@ export const API_URL: URL = new URL(
 );
 
 /**
- * The memory URL this page's worker opens Memory on ({@link resolveMemoryUrl}).
+ * What this page's worker takes from its deployment: the memory URL it opens
+ * Memory on and the flags the deployment decides ({@link resolveDeployment}).
  * The shell's entry calls `prefetch` as early as it can, so that a page which
  * has to read the API URL's meta document does so alongside the rest of
  * startup, and the root view awaits `get` before creating each runtime. The
  * first runtime takes that read's result, unless it is a transient failure
  * more than ten seconds old. A result that is not a transient failure is kept
- * for the page's lifetime; a transient failure is not ({@link holdMemoryUrl}),
- * so the next runtime the page creates reads again.
+ * for the page's lifetime; a transient failure is not
+ * ({@link holdDeployment}), so the next runtime the page creates reads again.
  */
-export const shellMemoryUrl: ShellMemoryUrl = holdMemoryUrl(
+export const shellDeployment: ShellDeployment = holdDeployment(
   () =>
-    resolveMemoryUrl(
+    resolveDeployment(
       globalThis.document,
       API_URL,
       globalThis.location?.origin,
@@ -111,6 +116,10 @@ export const EXPERIMENTAL = {
       ? $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION
       : undefined,
   ),
+  // Decided by the deployment (SHELL_FLAG_SOURCES): a runtime takes the
+  // value the deployment publishes unless this define pins it
+  // ({@link experimentalForDeployment}). The define is the rollback and CI
+  // lever, as for the other flags; it is unset in a release build.
   sharedMemoryConnection: flagValue(
     typeof $EXPERIMENTAL_SHARED_MEMORY_CONNECTION === "string"
       ? $EXPERIMENTAL_SHARED_MEMORY_CONNECTION
@@ -142,3 +151,19 @@ export const EXPERIMENTAL = {
     EXPERIMENTAL_READER_SCHEMA_PRECEDENCE_DEFINE,
   ),
 };
+
+/**
+ * The flags a runtime runs: the build defines, with the flags the deployment
+ * decides for the shell adopted from `declared` where no define pins them.
+ * `declared` is what the page or the meta document declared of
+ * `SHELL_DEPLOYMENT_FLAGS` (`shellDeployment.get().experimental`), so the
+ * adoption is `adoptServerExperimentalOptions` as `cf` runs it: an explicit
+ * define wins, otherwise the deployment's value, otherwise the built-in
+ * default. One shell build thereby runs a flag on against a deployment that
+ * turned it on and off against one that did not.
+ */
+export function experimentalForDeployment(
+  declared: ExperimentalOptions,
+): ExperimentalOptions {
+  return adoptServerExperimentalOptions(declared, EXPERIMENTAL);
+}

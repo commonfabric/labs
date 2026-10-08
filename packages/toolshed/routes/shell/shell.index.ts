@@ -4,9 +4,15 @@ import * as path from "@std/path";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { cors } from "@hono/hono/cors";
 
+import {
+  type DeploymentMetaContent,
+  shellFlagsFromDeclared,
+} from "@commonfabric/runner/deployment-meta";
+
 import env from "@/env.ts";
 import { buildInfo } from "@/lib/build-info.ts";
 import { createRouter } from "@/lib/create-app.ts";
+import { experimentalPosture } from "@/lib/experimental-posture.ts";
 import {
   createShellStaticRouter,
   loadShellIndex,
@@ -17,10 +23,31 @@ import {
 export { createShellStaticRouter, StaticResponse };
 
 /**
+ * What this toolshed's page tells the shell about its deployment: the memory
+ * URL its clients open Memory on (`MEMORY_PUBLIC_URL`), `null` where the
+ * deployment has none, and the flags the shell takes from its deployment
+ * (`SHELL_DEPLOYMENT_FLAGS`), out of the posture `posture` gives, which is
+ * what `/api/meta` publishes as `experimental`: `null` until a Runtime
+ * exists, and otherwise only the flags of the list that posture resolved,
+ * taken by the rule the shell reads them with (`shellFlagsFromDeclared`).
+ * The two surfaces publish one value because they read one posture.
+ */
+export function shellDeploymentPage(
+  environment: Pick<typeof env, "MEMORY_PUBLIC_URL">,
+  posture: Record<string, boolean> | null,
+): DeploymentMetaContent {
+  return {
+    memoryUrl: environment.MEMORY_PUBLIC_URL ?? null,
+    experimental: posture === null ? null : shellFlagsFromDeclared(posture),
+  };
+}
+
+/**
  * The router a compiled toolshed serves its shell with: the immutable build
- * namespace, and the page built once, at startup, carrying the memory URL its
- * clients open Memory on (`MEMORY_PUBLIC_URL`), or an empty element where the
- * deployment has none.
+ * namespace, and the page built once, carrying what the shell takes from the
+ * deployment ({@link shellDeploymentPage}). The page is built on the first
+ * request for it, since the Runtime whose posture it carries is constructed
+ * after the routes are (`loadShellIndex`).
  *
  * @throws If the bundle's `index.html` cannot carry the element, which
  * refuses startup.
@@ -30,6 +57,8 @@ export async function compiledShellRouter(
   environment: Pick<typeof env, "ENV" | "MEMORY_PUBLIC_URL">,
   commitSha: string | null | undefined,
   deps?: ShellStaticDeps,
+  /** The posture `/api/meta` publishes; a seam for tests. */
+  posture: () => Record<string, boolean> | null = experimentalPosture,
 ) {
   return createShellStaticRouter(staticRoot, {
     // build-binaries uses the mode name when no commit SHA was supplied;
@@ -39,7 +68,7 @@ export async function compiledShellRouter(
       (environment.ENV === "production" ? "production" : "development"),
     index: await loadShellIndex(
       staticRoot,
-      environment.MEMORY_PUBLIC_URL,
+      () => shellDeploymentPage(environment, posture()),
       deps,
     ),
     ...(deps !== undefined ? { deps } : {}),

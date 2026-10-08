@@ -60,13 +60,18 @@ function installBrowserGlobals(): () => void {
       appendChild() {},
     }),
     createTreeWalker: () => ({}),
-    // The page publishes a memory URL, as a toolshed with MEMORY_PUBLIC_URL
-    // serves it.
+    // The page publishes its deployment, as a toolshed with MEMORY_PUBLIC_URL
+    // and sharing on serves it.
     querySelector: (selector: string) =>
-      selector === 'meta[name="cf-memory-url"]'
+      selector === 'meta[name="cf-deployment"]'
         ? {
           getAttribute: (name: string) =>
-            name === "content" ? "https://router.root-view.test" : null,
+            name === "content"
+              ? JSON.stringify({
+                memoryUrl: "https://router.root-view.test",
+                experimental: { sharedMemoryConnection: true },
+              })
+              : null,
         }
         : null,
   });
@@ -171,13 +176,21 @@ describe("XRootView", () => {
     }
   });
 
-  it("passes the page's memory URL to RuntimeInternals", async () => {
+  it("passes the page's memory URL and flags to RuntimeInternals", async () => {
     const restore = installBrowserGlobals();
     const { RuntimeInternals } = await import("@commonfabric/lib-shell");
     const originalCreate = RuntimeInternals.create;
-    const captured: { apiUrl?: URL; memoryUrl?: URL }[] = [];
+    const captured: {
+      apiUrl?: URL;
+      memoryUrl?: URL;
+      sharedMemoryConnection?: boolean;
+    }[] = [];
     RuntimeInternals.create = ((options) => {
-      captured.push({ apiUrl: options.apiUrl, memoryUrl: options.memoryUrl });
+      captured.push({
+        apiUrl: options.apiUrl,
+        memoryUrl: options.memoryUrl,
+        sharedMemoryConnection: options.experimental?.sharedMemoryConnection,
+      });
       return Promise.resolve({
         runtime: () => ({
           on: () => {},
@@ -198,12 +211,17 @@ describe("XRootView", () => {
       const task = view.accessForTestingOnly.rt;
       task.run([view.app]);
       await task.taskComplete;
-      expect(captured.map(({ apiUrl, memoryUrl }) => [
-        apiUrl?.href,
-        memoryUrl?.href,
-      ])).toEqual([[
+      expect(
+        captured.map(({ apiUrl, memoryUrl, sharedMemoryConnection }) => [
+          apiUrl?.href,
+          memoryUrl?.href,
+          sharedMemoryConnection,
+        ]),
+      ).toEqual([[
         "http://localhost:8000/",
         "https://router.root-view.test/",
+        // Adopted from the page: no define is set in a test run.
+        true,
       ]]);
     } finally {
       RuntimeInternals.create = originalCreate;

@@ -39,8 +39,8 @@ import {
 import {
   COMMIT_SHA,
   ENVIRONMENT,
-  EXPERIMENTAL,
-  shellMemoryUrl,
+  experimentalForDeployment,
+  shellDeployment,
 } from "../lib/env.ts";
 import { runtimeHostFlags } from "../lib/host-toggles.ts";
 import { type BrowserTelemetry, initBrowserOtel } from "../lib/otel.ts";
@@ -275,15 +275,16 @@ export class XRootView extends BaseView implements ShellApp {
         });
         this.#telemetry = telemetry ?? undefined;
 
+        // Awaited at each creation; kept unless the read failed for a
+        // transient reason (holdDeployment). A later value does not recreate
+        // this runtime. The first creation takes the read the shell's entry
+        // started, usually settled by now.
+        const deployment = await shellDeployment.get();
         const rt = await RuntimeInternals.create({
           identity: app.identity,
           apiUrl: app.apiUrl,
-          // Awaited at each creation; kept unless the read failed for a
-          // transient reason (holdMemoryUrl). A later value does not recreate
-          // this runtime. The first creation takes the read the shell's entry
-          // started, usually settled by now.
-          memoryUrl: await shellMemoryUrl.get(),
-          experimental: EXPERIMENTAL,
+          memoryUrl: deployment.memoryUrl,
+          experimental: experimentalForDeployment(deployment.experimental),
           // Select the deployed shell's immutable worker asset graph. Source
           // runs keep the explicit mutable /scripts URL below.
           clientVersion: COMMIT_SHA,

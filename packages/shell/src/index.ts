@@ -13,7 +13,12 @@ import "@commonfabric/ui";
 // rather than emitting a chunk.
 import { handleDeviceLink } from "./lib/device-link-login.ts";
 import { consumeDeviceLinkFragment } from "./lib/device-link.ts";
-import { API_URL, COMMIT_SHA, ENVIRONMENT, shellMemoryUrl } from "./lib/env.ts";
+import {
+  API_URL,
+  COMMIT_SHA,
+  ENVIRONMENT,
+  shellDeployment,
+} from "./lib/env.ts";
 import { setupHostToggles } from "./lib/host-toggles.ts";
 import { handleLoomPairingLink } from "./lib/loom-pairing-login.ts";
 import { consumeLoomPairingFragment } from "./lib/loom-pairing.ts";
@@ -68,9 +73,9 @@ if ("serviceWorker" in navigator) {
 console.log(`ENVIRONMENT=${ENVIRONMENT}`);
 console.log(`API_URL=${API_URL}`);
 console.log(`COMMIT_SHA=${COMMIT_SHA}`);
-// Started now, so that a page served without the memory URL asks the API URL
+// Started now, so that a page served without its deployment asks the API URL
 // for it while the rest of the shell starts.
-shellMemoryUrl.prefetch();
+shellDeployment.prefetch();
 setupHostToggles();
 
 const root = document.querySelector<XRootView>("x-root-view");
