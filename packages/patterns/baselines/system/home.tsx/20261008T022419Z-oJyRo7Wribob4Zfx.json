@@ -1315,7 +1315,7 @@
             "type": "string"
           },
           "refusedAt": {
-            "description": "When Home recorded the refusal, in milliseconds since the epoch. A\nhandler's clock reads to the second.",
+            "description": "When Home first recorded this refusal, of this inbox for this reason, in\nmilliseconds since the epoch. A handler's clock reads to the second.",
             "type": "number"
           }
         },

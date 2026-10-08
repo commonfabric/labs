@@ -165,12 +165,12 @@ the profile's `inbox` field, which is how a sender finds it, and leaves a
 profile pointing at another inbox as it is. While it holds none, as after a
 failed vetting, a profile that points at no inbox stays unpointed. A failed
 vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
-the host's reason code, a link to the refused inbox, and when Home recorded it.
-Each ensure, which is to say the next bring-up of Home in a runtime worker,
-clears it when Home adopts or creates an inbox, when the deciding profile points
-at the inbox Home holds, or when no profile points at the refused inbox any
-longer. Nothing else clears it automatically in between, though the owner's own
-code can also clear it, or record a refusal, by sending Home's
+the host's reason code, a link to the refused inbox, and when Home first
+recorded it. Each ensure, which is to say the next bring-up of Home in a runtime
+worker, clears it when Home adopts or creates an inbox, when the deciding
+profile points at the inbox Home holds, or when no profile points at the refused
+inbox any longer. Nothing else clears it automatically in between, though the
+owner's own code can also clear it, or record a refusal, by sending Home's
 `ensurePrivateInbox` stream. It is read from Home's root like any other field of
 Home, the root being the link the `#default` wish answers with, as "Custom Home
 Pattern" below says. A profile created once Home holds the inbox is pointed at

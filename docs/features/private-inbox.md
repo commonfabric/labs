@@ -199,8 +199,12 @@ link, for a narrower reason. That link travels in the event, which carries no
 label of its own, so read untyped it joins nothing; with server execution on
 and the event drain delivering the run, a handler reading it as
 `Cell<unknown>` keeps its event. What the type bars is naming a labeled member
-of the inbox's result through it, such as `offers`: read that way, the run
-joins the inbox's label and the event is lost.
+of the inbox's result through it, such as `offers`: read that way, the run joins
+the inbox's label and the event is lost. The copy Home's refusal record stores
+is a different matter: it names the refused inbox's result document, as an
+adoption's link does, so like Home's holder it carries the label the refused
+inbox's owner gives its offers, and any reader of the record, such as a notice
+in Home's UI, reads it as the typed link.
 
 `private-inbox.pointer-type.test.ts` fails to compile if any reader's pointer
 type, the host's, the ensure's and the pointing step's, the seed step's, the
@@ -245,26 +249,33 @@ inbox failed vetting, as the event named it, trimmed and cut to
 `REFUSAL_REASON_MAX_LENGTH` (64), which today is one of `InboxAdoptionRefusal`'s
 codes in `packages/piece/src/ops/private-inbox.ts`, such as
 `inbox-adoption-acl-mismatch`; `inbox`, a link to the inbox refused; and
-`refusedAt`, when Home recorded it, by the handler's clock, which reads to the
-second. Home stores the code as given rather than checking it against the
-host's list, so a newer host's code needs no change to Home. With no
+`refusedAt`, when Home first recorded this refusal, of this inbox for this
+reason, by the handler's clock, which reads to the second. Home stores the code
+as given rather than checking it against the host's list, so a newer host's code
+needs no change to Home. The codes are not loom's one for one:
+`inbox-profile-space` is the host's alone, loom's `profile-inbox-malformed` has
+no counterpart here, and the host checks the access list before `offers` and
+`receive` where loom checks them after, so an inbox that fails more than one
+check can be given one code here and another by `loom doctor`. With no
 `refusal`, there is no refusal to report. It is there so that the owner, and
-what acts for them, can learn that shares may not reach them: senders deliver
-to the inbox the profile advertises, which Home does not read.
+what acts for them, can learn that shares may not reach them: senders deliver to
+the inbox the profile advertises, which Home does not read.
 
-Home's handler records the refusal an event names, in place of one recorded
-before, under the check it makes of an adoption: the profile the event names is
-in Home's list and still points at the refused inbox, and that inbox is not the
-one Home holds. So an event that a moved pointer has left behind, one naming no
-profile, and one refusing the inbox Home holds, as a refusal that lost a race to
-an adoption of the same inbox does, record nothing. The record
-is cleared when Home adopts or creates an inbox, when the profile an event names
-is in Home's list and points at the inbox Home holds, and, on any event that
-records no refusal, when no profile in Home's list points at the refused inbox
-any longer, by the comparison the check uses. So once no profile points at the
-refused inbox, whether its pointers moved to another inbox or to none, the next
-ensure clears the record, or records in its place a refusal it names. Like
-every other ensure, that runs only at a runtime worker's bring-up of Home.
+Home's handler records the refusal an event names, in place of a different one
+recorded before, under the check it makes of an adoption: the profile the event
+names is in Home's list and still points at the refused inbox, and that inbox is
+not the one Home holds. So an event that a moved pointer has left behind, one
+naming no profile, and one refusing the inbox Home holds, as a refusal that lost
+a race to an adoption of the same inbox does, record nothing. A repeat of the
+recorded refusal, of the same inbox for the same reason, keeps its time and
+writes nothing. The record is cleared when Home adopts or creates an inbox, when
+the profile an event names is in Home's list and points at the inbox Home holds,
+and, on any event that records no refusal, when no profile in Home's list points
+at the refused inbox any longer, by the comparison the check uses. So once no
+profile points at the refused inbox, whether its pointers moved to another inbox
+or to none, the next ensure clears the record, or records in its place a refusal
+it names. Like every other ensure, that runs only at a runtime worker's bring-up
+of Home.
 
 The record is a field of Home's result, `privateInboxRefusal`, so `cf` and an
 agent each read it as they read any other field of Home, at Home's root, the

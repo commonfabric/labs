@@ -244,14 +244,19 @@ describe("private inbox across runtimes", () => {
     await harness.settle();
     refusalsAfter = await adoptionRefusals();
 
-    // `curedHome`: one profile, pointing at the stranger's inbox and then,
-    // once the refusal is recorded, at a usable inbox of the owner's.
+    // `curedHome`: two profiles, both pointing at the stranger's inbox. Once
+    // the refusal is recorded, the first, the deciding one, is pointed at a
+    // usable inbox of the owner's, and the second still points at the
+    // stranger's, so only the adoption can clear the record.
+    await owner.send("createCuredProfile");
     await owner.send("createCuredProfile");
     await owner.send("createCureInbox");
     await harness.settle();
     await owner.send("pointCuredProfileAtStranger", { index: 0 });
+    await owner.send("pointCuredProfileAtStranger", { index: 1 });
     await harness.settleUntil(async () =>
-      await pointed(["curedHome", "profiles", 0])
+      await pointed(["curedHome", "profiles", 0]) &&
+      await pointed(["curedHome", "profiles", 1])
     );
     curedRefusal = await ensureThroughHost(["curedHome"]);
     await harness.settle();
@@ -483,6 +488,8 @@ describe("private inbox across runtimes", () => {
   });
 
   it("clears a recorded refusal when the refused profile is pointed at a usable inbox and the next ensure adopts it", async () => {
+    // Another profile still points at the refused inbox, so the adoption's
+    // clear is the one that clears the record here.
     const strangers = await owner.link(["strangerInbox", "piece"]);
     const cure = await owner.link(["cureInbox", "piece"]);
 
@@ -494,9 +501,15 @@ describe("private inbox across runtimes", () => {
       (await owner.link(["curedHome", "privateInbox", "piece"])).id,
     ).toBe(cure.id);
     expect(await owner.read(["curedHome", "privateInboxRefusal"])).toEqual({});
+    expect(
+      (await owner.link(["curedHome", "profiles", 1, "inbox", "piece"])).id,
+    ).toBe(strangers.id);
   });
 
   it("clears a recorded refusal when no profile advertises an inbox and the next ensure creates one", async () => {
+    // Home creates an inbox only while no profile advertises one, so here the
+    // clear that creation makes and the clear for no profile pointing at the
+    // refused inbox coincide; this case pins the pair, not either alone.
     const strangers = await owner.link(["strangerInbox", "piece"]);
 
     expect(creatingRecord.reason).toBe("inbox-adoption-acl-mismatch");
