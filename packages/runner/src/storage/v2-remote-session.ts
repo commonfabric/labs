@@ -962,8 +962,14 @@ export class RemoteSessionFactory implements SessionFactory {
     signal?: AbortSignal,
   ): Promise<MemoryProtocolFlags | null> {
     if (this.#sharedConnections) {
-      return (await this.#sharedClient(this.#resolveAddress(space), signal))
-        .serverFlags;
+      const client = await this.#sharedClient(
+        this.#resolveAddress(space),
+        signal,
+      );
+      // A shared connection may be reconnecting, and the flags it holds are
+      // then the previous server's until the new handshake is done.
+      await client.restoreConnection();
+      return client.serverFlags;
     }
     const transport = this.#dedicatedTransport(space);
     let client: MemoryClient.Client | undefined;

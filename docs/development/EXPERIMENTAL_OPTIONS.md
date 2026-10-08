@@ -332,7 +332,9 @@ server](#clients-that-are-not-built-alongside-their-server).
   nothing about it is negotiated per connection. A memory server does report,
   in every `hello.ok`, whether server execution is attached to it
   (`serverExecution`), as a fact a client reads before opening any session
-  rather than a capability the two agree on.
+  rather than a capability the two agree on. A server that predates the flag
+  sends no `serverExecution` at all, and a client receiving none does not know
+  whether server execution is on.
 - **Added by.** Bernhard Seefeld, in server-execution v2 Phase 1 stage A
   (#5339;
   [`docs/plans/server-execution-v2.md`](../plans/server-execution-v2.md);

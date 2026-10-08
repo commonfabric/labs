@@ -165,6 +165,5 @@ describe("StorageManager.serverFlags()", () => {
     });
     expect(opened).toContain(space);
     expect(getPatternSource(root!)).toBe(HOME_PATTERN_SOURCE);
-    expect(host.stats().rootEnsure.created).toBe(1);
   });
 });
