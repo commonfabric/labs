@@ -13,7 +13,12 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
-import { IN_SPACE_ROOT_CAUSE, isCell, Runtime } from "@commonfabric/runner";
+import {
+  type Cell,
+  IN_SPACE_ROOT_CAUSE,
+  isCell,
+  Runtime,
+} from "@commonfabric/runner";
 import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
@@ -59,6 +64,22 @@ const startClick = (
   markRendererTrustedEvent(click);
   return click;
 };
+
+// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
+// because a room's participants link only a document that carries a label.
+const profileSchema = {
+  type: "object",
+  properties: { name: { type: "string" } },
+  ifc: { addIntegrity: ["fabrichat-test-profile"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
+
+// Reads a room's participants as links, not copies.
+const participantListSchema = {
+  type: "array",
+  items: { type: "unknown", asCell: ["cell"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
 
 // Reads an index entry with its room as a link, not a copy.
 const entryListSchema = {
@@ -118,7 +139,7 @@ describe("fabrichat-manager", () => {
     const profile = runtime.getCell<{ name: string }>(
       home,
       "profile",
-      undefined,
+      profileSchema,
       tx,
     );
     profile.set({ name: "Tester" });
@@ -152,7 +173,7 @@ describe("fabrichat-manager", () => {
     const rooms = () =>
       // deno-lint-ignore no-explicit-any
       manager.key("rooms").asSchema(entryListSchema).get() as any[];
-    return { manager, send, rooms };
+    return { manager, send, rooms, profile };
   };
 
   it("creates each room as its space's root, at the address the space's genesis reserves for one", async () => {
@@ -179,6 +200,27 @@ describe("fabrichat-manager", () => {
       expect(root.equalLinks(runtime.getCell(space, IN_SPACE_ROOT_CAUSE)))
         .toBe(true);
       expect(root.equalLinks(room)).toBe(true);
+    }
+  });
+
+  it("lists this user among the participants of each room it creates", async () => {
+    const { send, rooms, profile } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
+    });
+    const listed = rooms();
+    expect(listed.length).toBe(2);
+    for (const entry of listed) {
+      const room = entry.room.resolveAsCell();
+      await room.pull();
+      const participants = room.key("participants")
+        .asSchema(participantListSchema).get() as Cell<unknown>[];
+      expect(participants.length).toBe(1);
+      expect(participants[0].equalLinks(profile)).toBe(true);
     }
   });
 
