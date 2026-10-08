@@ -260,15 +260,13 @@ describe("space-root-open", () => {
   });
 
   describe("a DID no space answers to", () => {
-    it("is not found, and is not created, whatever `start` is", async () => {
+    it("is not found on opening, and is not created", async () => {
       await using room = await rootlessSpace();
       const nobody = (await Identity.generate({ implementation: "noble" }))
         .did();
 
-      for (const start of [false, true]) {
-        await expect(room.visitor.getSpaceRootPattern(nobody, { start }))
-          .rejects.toThrow(`No space answers to ${nobody}`);
-      }
+      await expect(room.visitor.getSpaceRootPattern(nobody))
+        .rejects.toThrow(`No space answers to ${nobody}`);
       expect(await room.spaceExists(nobody)).toBe(false);
       expect(room.fetched).toEqual([]);
     });

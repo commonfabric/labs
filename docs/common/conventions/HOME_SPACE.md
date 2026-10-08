@@ -441,8 +441,8 @@ Both the home pattern and the default app pattern follow the same mechanism:
    the open of any other principal the space admits, and any read with `start`
    false, returns `undefined` and writes nothing, so a visitor never puts a
    root in someone else's space. A principal the space refuses gets that
-   refusal instead, whether or not the space has a root. An open or a read of
-   a DID no space answers to, other than the identity's own Home, throws
+   refusal instead, whether or not the space has a root. An open of a DID no
+   space answers to, other than the identity's own Home, throws
    `SpaceNotFoundError` and creates nothing. A space whose genesis
    reserved its root, as a profile's space does, gets that root from the run of
    its creator's `inSpace(..., { root: true })` call

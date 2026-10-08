@@ -1050,10 +1050,6 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * Opening a space with `start` true creates its root when it has none and
    * this runtime's identity owns the space. Reading with `start` false never
    * creates one, and neither does any other principal's open.
-   *
-   * @throws A `RuntimeErrorCode.SpaceNotFound` error when no space answers to
-   *   `space`, whatever `start` is, unless `space` is this runtime's
-   *   identity's own Home.
    */
   async getSpaceRootPattern(
     space: DID,

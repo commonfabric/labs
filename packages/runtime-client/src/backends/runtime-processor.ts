@@ -2933,8 +2933,8 @@ export class RuntimeProcessor {
    *
    * @throws The server's refusal when this runtime's identity may not read
    *   the space, whether or not a root is still held from before.
-   * @throws {SpaceNotFoundError} When no space answers to the DID, read or
-   *   opened, other than this runtime's identity's own Home.
+   * @throws {SpaceNotFoundError} When the request opens a DID that no space
+   *   answers to, other than this runtime's identity's own Home.
    */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
@@ -2951,16 +2951,16 @@ export class RuntimeProcessor {
       // Checked whatever the lookup found, since a root this runtime read
       // before losing the space is still in its replica.
       this.#throwIfAccessRefused(request.space);
-      if (stored) return { piece: createPieceRef(stored) };
-      await this.#throwIfNoSuchSpace(request.space);
-      return {};
+      return stored ? { piece: createPieceRef(stored) } : {};
     }
     const existing = await cc.getDefaultPattern(false);
     this.#throwIfAccessRefused(request.space);
     if (existing === undefined && !(await this.#ownsSpace(request.space))) {
       // No owner means either a space someone else owns, which has nothing in
       // it yet, or no space at all, which opening does not create.
-      await this.#throwIfNoSuchSpace(request.space);
+      if (!(await this.#runtime.spaceExists(request.space))) {
+        throw new SpaceNotFoundError(request.space);
+      }
       return {};
     }
     const piece = await cc.ensureDefaultPattern();
@@ -2983,18 +2983,6 @@ export class RuntimeProcessor {
     if (space === principal) return true;
     const acl = await new ACLManager(this.#runtime, space).get();
     return acl !== null && spaceReaderRole(acl, principal) === "owner";
-  }
-
-  /**
-   * Throws `SpaceNotFoundError` when no space answers to `space`. This
-   * runtime's identity's own Home is exempt, since it comes into being on its
-   * user's first open rather than being created on purpose.
-   */
-  async #throwIfNoSuchSpace(space: DID): Promise<void> {
-    if (space === this.#runtime.userIdentityDID) return;
-    if (!(await this.#runtime.spaceExists(space))) {
-      throw new SpaceNotFoundError(space);
-    }
   }
 
   /**
