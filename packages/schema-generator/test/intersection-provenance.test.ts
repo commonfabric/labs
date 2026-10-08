@@ -30,17 +30,21 @@ const WRAPPER_PRELUDE = `
 `;
 
 /**
- * The schema of `M1 & M2`, for `declarations` declaring `M1` and `M2`, by
- * each path: by its type, and as a type node with no checker bindings, whose
- * constituents are read through their names, as for transformer-created type
- * nodes. Each is read when called, so a refusal can be expected of it.
+ * The schema of `result`, `M1 & M2` unless given, for `declarations`
+ * declaring what it names, by each path: by its type, and as a type node with
+ * no checker bindings, whose constituents are read through their names, as
+ * for transformer-created type nodes. Each is read when called, so a refusal
+ * can be expected of it.
  */
-async function schemasOfBothPaths(declarations: string): Promise<{
+async function schemasOfBothPaths(
+  declarations: string,
+  result = "M1 & M2",
+): Promise<{
   byType: () => JSONSchema;
   byNode: () => JSONSchema;
 }> {
   const { checker, program, sourceFile } = await createTestProgram(
-    `${WRAPPER_PRELUDE}\n${declarations}\ntype Result = M1 & M2;`,
+    `${WRAPPER_PRELUDE}\n${declarations}\ntype Result = ${result};`,
   );
   expect(program.getSemanticDiagnostics(sourceFile)).toEqual([]);
   const declaration = sourceFile.statements.find((statement) =>
@@ -51,7 +55,7 @@ async function schemasOfBothPaths(declarations: string): Promise<{
   }
   const synthetic = ts.createSourceFile(
     "synthetic.ts",
-    `type Result = M1 & M2;`,
+    `type Result = ${result};`,
     ts.ScriptTarget.Latest,
     true,
   ).statements[0];
@@ -859,6 +863,22 @@ describe("SchemaGenerator", () => {
 
       expect(byType()).toEqual(true);
       expect(byNode()).toEqual({ ifc: labelS });
+    });
+
+    it("throws for a whole intersection with `any` in two scopes by the node path alone", async () => {
+      // The type path is given `any` itself, which holds neither scope. The
+      // constituents are written in place, as a name declared `any` reads as
+      // `any` alone.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        "",
+        "PerUser<any> & PerSpace<string>",
+      );
+
+      expect(byType()).toEqual(true);
+      expect(byNode).toThrow(
+        "Nested scope wrappers require a cell boundary between scopes.",
+      );
     });
 
     it("throws for a property two declarations cap in different scopes", async () => {
