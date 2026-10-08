@@ -79,8 +79,9 @@ dial: it holds in every mode.
 
 A reviewed action a native host sends from a control it draws itself is not a
 trusted gesture, since only an event of `dom` origin is, so a control a host
-draws natively cannot change a list today. That is a gap, not a design: a
-native reviewed act is to count wherever a trusted gesture does, and
+draws natively cannot satisfy the trusted-gesture check in
+`grantSpaceAccess()` or `revokeSpaceAccess()` today. That is a gap, not a
+design: a native reviewed act is to count wherever a trusted gesture does, and
 [host embedding, §11](host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)
 records the principle and the pending change.
 

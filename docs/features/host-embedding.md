@@ -3,7 +3,8 @@
 The seams a non-shell host (Loom, or any future embedder) may bind to
 when mounting labs components and patterns, plus three policy records
 upstream commits to honor. Each seam has a labs-side test that goes red
-when the contract changes.
+when the contract changes, except the §11 policy record, which the runtime does
+not yet meet.
 
 > **Audience.** You are embedding `@commonfabric/ui` components and labs
 > patterns in a host that is *not* the labs shell — most concretely Loom
@@ -643,11 +644,13 @@ today. A write gated on a `UiAction` contract already admits one, since
 | a write gated on a `UiPromptSlot` or `UiDisclosure` contract | `recordedTrustedEventProvenanceMatchesUiContract()` in `ui-contract.ts`, which matches a `UiPromptSlot` contract on the event's `uiSurface`, and its `uiRole` when the contract names a role, and a `UiDisclosure` contract on its `uiDisclosureKind` | refused: `bindNativeUiControl()` takes only a surface and an action, so the event it sends carries none of those fields |
 
 So a native client can confirm a snapshot share or a custody seal through its
-runtime client today, but cannot change an access list, and cannot satisfy a
-`UiPromptSlot` or `UiDisclosure` contract. The runtime change that admits a
-native reviewed act at each of these gates, recorded as native, is pending.
-Until it lands, a host that does one of those acts renders the pattern's
-reviewed surface for it. §10,
+runtime client today (§8, §9), and can change an access list directly through
+`RuntimeClient.setSpaceAclEntry()` and `removeSpaceAclEntry()` (§3a). What it
+cannot do is satisfy a pattern handler's `grantSpaceAccess()` or
+`revokeSpaceAccess()`, or a `UiPromptSlot` or `UiDisclosure` contract. The
+runtime change that admits a native reviewed act at each of these gates,
+recorded as native, is pending. Until it lands, a host that sends one of those
+two kinds of act renders the pattern's reviewed surface for it. §10,
 [`space-access-changes.md`](space-access-changes.md), and
 [the runtime client's README](../../packages/runtime-client/README.md#sending-events)
 describe each gate as it behaves now.
