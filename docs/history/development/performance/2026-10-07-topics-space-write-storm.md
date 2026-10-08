@@ -57,17 +57,24 @@ The deploy of `b0649f3d` landed at 23:07 on 2026-10-06. The storm began
 thirty minutes later, as the first client sessions came up against the new
 build.
 
-The last 600 revisions, grouped by writing session, document and the
-spelling of the value written:
+The last 600 revisions: 590 of them in the six documents below, grouped by
+writing session, document and the spelling of the value written, and the
+other ten one-off writes by a fifth session to ten further documents.
 
 | Identity | Session | Document | Value written | Count |
 | --- | --- | --- | --- | ---: |
 | Robin | `4ba3…` | `computed:…tJfi…` | link, `scope: "session"` | 48 |
 | Robin | `696f…` | `computed:…tJfi…` | link, `scope: "space"` | 48 |
+| Robin | `4ba3…` | `computed:…iNR5…` | link, `scope: "session"` | 48 |
+| Robin | `696f…` | `computed:…iNR5…` | `""` | 49 |
+| Robin | `4ba3…` | `computed:…UNwz…` | link, `scope: "space"` | 49 |
+| Robin | `696f…` | `computed:…UNwz…` | `""` | 50 |
 | Robin | `ec0e…` | `computed:…ZPrn…` | link, `scope: "session"` | 50 |
 | Gideon | `5a14…` | `computed:…ZPrn…` | link, `scope: "space"` | 49 |
-| Gideon | `5a14…` | `computed:…_vh6…` | `""` | 49 |
+| Robin | `ec0e…` | `computed:…hFkA…` | link, `scope: "session"` | 50 |
+| Gideon | `5a14…` | `computed:…hFkA…` | `""` | 50 |
 | Robin | `ec0e…` | `computed:…_vh6…` | link, `scope: "space"` | 50 |
+| Gideon | `5a14…` | `computed:…_vh6…` | `""` | 49 |
 
 Six documents, each rewritten in turn by two sessions, each session writing
 its own spelling of the same result: a link to the topic's content redirect
