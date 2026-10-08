@@ -112,7 +112,9 @@ export {
 } from "./junit.ts";
 export type { IngestJUnitOptions, JUnitCase } from "./junit.ts";
 export {
+  importRsaSigningKey,
   METADATA_TOKEN_URL,
+  rs256Jwt,
   saAssertion,
   tokenFromKey,
   tokenFromMetadata,

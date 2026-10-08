@@ -85,7 +85,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();

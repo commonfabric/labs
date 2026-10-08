@@ -282,8 +282,6 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece new --root ", "dirs", undefined],
   ["cf piece setsrc --root ", "dirs", undefined],
   ["cf piece survey --root ", "dirs", undefined],
-  ["cf space set-home --root ", "dirs", undefined],
-  ["cf piece set-home --root ", "dirs", undefined],
   ["cf check --root ", "dirs", undefined],
   ["cf test --root ", "dirs", undefined],
   ["cf piece new --test ", "files", "*.tsx"],
@@ -303,9 +301,10 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf inspect html x --out ", "files", undefined],
   ["cf check --output ", "files", undefined],
   ["cf agent runner --loom-retrieval-config ", "files", "*.json"],
+  ["cf agent runner --local-job-profiles ", "files", "*.json"],
+  ["cf agent runner --local-jobs-socket ", "files", undefined],
+  ["cf agent runner --local-jobs-store ", "files", undefined],
   ["cf agent runner --work-root ", "dirs", undefined],
-  ["cf space set-home ", "files", "*.tsx"],
-  ["cf piece set-home ", "files", "*.tsx"],
   ["cf piece getsrc ", "files", undefined],
   ["cf deps update ", "files", undefined],
   ["cf fuse mount ", "dirs", undefined],
@@ -449,8 +448,6 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertEquals(options.get("root"), [
     "check",
     "piece new",
-    "piece set-home",
-    "space set-home",
     "piece setsrc",
     "piece survey",
     "test",
@@ -1483,7 +1480,7 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
     ) {
       const tx = this.edit();
       cell.withTx(tx).set(value);
-      await tx.commit();
+      await tx.commit().settled;
     }
     return true;
   });

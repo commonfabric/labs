@@ -54,7 +54,7 @@ describe("result projection", () => {
         {},
         runtime.getCell(space, "bytes-result", undefined, tx),
       );
-      await tx.commit();
+      await tx.commit().settled;
       expect(storedBytes(runtime, "bytes-result")).toEqual([1, 2, 3]);
 
       const tx2 = runtime.edit();
@@ -64,7 +64,7 @@ describe("result projection", () => {
         {},
         runtime.getCell(space, "bytes-result", undefined, tx2),
       );
-      await tx2.commit();
+      await tx2.commit().settled;
       expect(storedBytes(runtime, "bytes-result")).toEqual([9, 9, 9]);
     } finally {
       await runtime.dispose();
@@ -99,7 +99,7 @@ describe("result projection", () => {
         {},
         runtime.getCell(space, "native-result", undefined, tx),
       );
-      await tx.commit();
+      await tx.commit().settled;
 
       const tx2 = runtime.edit();
       runtime.run(
@@ -108,7 +108,7 @@ describe("result projection", () => {
         {},
         runtime.getCell(space, "native-result", undefined, tx2),
       );
-      await tx2.commit();
+      await tx2.commit().settled;
 
       const raw = runtime.getCell(space, "native-result", undefined)
         .getRaw() as { tag: number; when: unknown };

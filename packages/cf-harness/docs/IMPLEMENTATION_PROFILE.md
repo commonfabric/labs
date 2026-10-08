@@ -135,10 +135,14 @@ advertised capability as dependency readiness.
   broken Codex binding does not fall back to gateway billing or retention. The
   dedicated local Loom host uses the fixed credential owner `local`, a canonical
   home identity, and the persisted provider/authentication source.
-- Execution substrate: a gVisor sandbox reached through one of two drivers. The
-  default is Docker, normally with the sibling gVisor `runsc-cfc` runtime, with
+- Execution substrate: a gVisor sandbox reached through one of two drivers. One
+  is Docker, normally with the sibling gVisor `runsc-cfc` runtime, with
   configurable image and runtime. The other invokes a `runsc` binary directly,
-  with no Docker and with a configurable rootfs, CFC policy, and binary.
+  with no Docker and with a configurable rootfs, CFC policy, and binary. A run
+  names its driver; where it names none, macOS takes the direct driver over its
+  native cfc-vm store, refusing where that is not set up, and every other
+  platform takes Docker, except that the Loom local host, and a console launched
+  for a Loom instance, refuse where none is named.
   [Sandbox runtimes](CURRENT_STATE.md#sandbox-runtimes) describes both.
 - CFC authority: Common Fabric runner/runtime evidence and trusted sandbox
   sidecars. Harness-local policy logic is conservative transport/enforcement,
@@ -203,22 +207,24 @@ Current selectable parent tools are `bash`, `read_file`, `view_image`,
 `research`, `loom_compose`, `loom_inspect`, `loom_authoring_context`, and the
 eight read-only Loom tools `loom_search`, `loom_page_discover`,
 `loom_page_inspect`, `loom_page_read`, `loom_people`, `loom_calendar_list`,
-`loom_context`, and `loom_profile`, plus `submit_result`. Individual runs
-receive only their configured subset; `web_fetch` and `run_skill_script` are not
-in the ordinary default surface. Optional tools are gated on the backing a run
-can supply — a fabric session for `run_pattern`, `assign_slug`, and
-`acquire_skill`, the pattern index for `search_patterns` and `record_feedback`,
-configured skills.sh discovery for `search_skills`, and a resolved documentation
-corpus or pattern index for `research`, explicit host Loom authoring
-configuration for the three authoring tools, explicit host Loom retrieval
-configuration for the eight retrieval tools, and a configured structured-result
-schema for `submit_result` — and a tool the run cannot back is absent from the
-surface rather than present and failing, so an explicit allowlist naming it does
-not conjure it. `run_pattern` additionally requires the three `--fabric-*`
-session flags. `browser` exists only as a built-in used by the authorized
-browser child profile and cannot be selected as a parent CLI tool. It sends its
-typed action vocabulary to a browser host attached to the run when there is one,
-and otherwise drives the host `agent-browser` CLI, with the Browser Access CDP
+`loom_context`, and `loom_profile`, the two host-command tools `list_commands`
+and `run_command`, plus `submit_result`. Individual runs receive only their
+configured subset; `web_fetch` and `run_skill_script` are not in the ordinary
+default surface. Optional tools are gated on the backing a run can supply — a
+fabric session for `run_pattern`, `assign_slug`, and `acquire_skill`, the
+pattern index for `search_patterns` and `record_feedback`, configured skills.sh
+discovery for `search_skills`, and a resolved documentation corpus or pattern
+index for `research`, explicit host Loom authoring configuration for the three
+authoring tools, explicit host Loom retrieval configuration for the eight
+retrieval tools, explicit host command broker configuration for `list_commands`
+and `run_command`, and a configured structured-result schema for `submit_result`
+— and a tool the run cannot back is absent from the surface rather than present
+and failing, so an explicit allowlist naming it does not conjure it.
+`run_pattern` additionally requires the three `--fabric-*` session flags.
+`browser` exists only as a built-in used by the authorized browser child profile
+and cannot be selected as a parent CLI tool. It sends its typed action
+vocabulary to a browser host attached to the run when there is one, and
+otherwise drives the host `agent-browser` CLI, with the Browser Access CDP
 endpoint attached by the harness rather than written by the model. In neither
 case does an input name a session, an endpoint, or a jar.
 
@@ -362,12 +368,14 @@ placeholders resolve only at the SQLite query boundary.
 4. **Incomplete opaque-reference boundary.** Address handles cover cell
    addresses but not the reserved value-handle form. Denial-path messages are
    not swapped, and cross-agent transfer exists only across an explicit
-   delegation boundary. Shape inspection does not expose values, and there is no
-   value dereference, release, or garbage-collection contract. Raw operator
-   reports may expose artifact paths and canonical references. Owner:
-   `cf-harness`. Retirement: every model-facing path uses held opaque handles
-   with explicit lifetime and release/readback semantics while operator tooling
-   retains resolvable provenance.
+   delegation boundary. Shape inspection does not expose values. A return
+   referent is dereferenced only by the `browser` tool's `urlHandle` and
+   `valueHandle` on a browser host; there is no general value dereference,
+   release, or garbage-collection contract. Raw operator reports may expose
+   artifact paths and canonical references. Owner: `cf-harness`. Retirement:
+   every model-facing path uses held opaque handles with explicit lifetime and
+   release/readback semantics while operator tooling retains resolvable
+   provenance.
 5. **Durable trusted-host pattern execution.** Each `run_pattern` call creates a
    detached Fabric piece whose source revision remains a retention root. The
    piece stays out of the piece list until `assign_slug` names it; abort stops
@@ -414,9 +422,11 @@ placeholders resolve only at the SQLite query boundary.
     The assumption can under-label a row: what it holds is decided by its store,
     not by who asked. A row whose `ifc` is present and unreadable is still
     refused, and loom's own facet filtering still runs first on the host. The
-    rule is `labelForUnlabeledLoomRow()` in `src/tools/loom-retrieval.ts`; see
-    [Read-only Loom retrieval](LOOM_RETRIEVAL.md). Owner: `cf-harness` and loom.
-    Retirement: loom returns a label per row and the function reads it.
+    rule is `labelForUnlabeledLoomRow()` in `src/tools/loom-retrieval.ts`, and a
+    host command's answer, measured as one row, takes the same path; see
+    [Read-only Loom retrieval](LOOM_RETRIEVAL.md) and
+    [Host commands](LOOM_COMMANDS.md). Owner: `cf-harness` and loom. Retirement:
+    loom returns a label per row and the function reads it.
 
 ## Test evidence
 

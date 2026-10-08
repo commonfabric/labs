@@ -15,11 +15,18 @@ import {
   commitSpaceAccessChanges,
   grantSpaceAccess,
   revokeSpaceAccess,
+  settleSpaceAccessChanges,
 } from "../../src/builder/space-access-change.ts";
 import type { Frame } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
-import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "../../src/cfc/ui-contract.ts";
+import { stampWaveRunContext } from "../../src/executor/wave.ts";
+import { bindNativeUiControl } from "../../src/native-ui.ts";
 import { Runtime } from "../../src/runtime.ts";
+import { stampSpeculationRunContext } from "../../src/speculation/overlay-destination.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import type { SessionFactory } from "../../src/storage/v2.ts";
 import { TestStorageManager } from "../memory-v2-test-utils.ts";
@@ -112,6 +119,9 @@ function gesture(payload: Record<string, unknown>): Record<string, unknown> {
   markRendererTrustedEvent(event);
   return event;
 }
+
+/** The native control a host draws for the surface `gesture()` names. */
+const MEMBERS_CONTROL = { surface: "MembersSurface", action: "ChangeAccess" };
 
 /**
  * A loopback session factory recording the ids each commit it sends writes,
@@ -331,12 +341,12 @@ describe("space-access-change", () => {
     {
       const tx = runtime.edit();
       argument.withTx(tx).set({ notes: [] });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancel = result.sink(() => {});
     cleanups.push(() => Promise.resolve(cancel()));
@@ -352,6 +362,21 @@ describe("space-access-change", () => {
     event: Record<string, unknown>,
   ): Promise<void> {
     result.key(stream).send(event);
+    await runtime.idle();
+    await runtime.storageManager.synced();
+  }
+
+  /**
+   * Sends `payload` to `result`'s stream `stream` from a native control bound
+   * to `MEMBERS_CONTROL`, and waits for it to land.
+   */
+  async function sendNative(
+    runtime: Runtime,
+    result: AccessPatternResult,
+    stream: "grant" | "revoke",
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    bindNativeUiControl(result.key(stream), MEMBERS_CONTROL)(payload);
     await runtime.idle();
     await runtime.storageManager.synced();
   }
@@ -643,7 +668,78 @@ describe("space-access-change", () => {
       const tx = member.runtime.edit();
       member.runtime.getCell<string>(space, "written by bob", undefined, tx)
         .set("hello");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
+    });
+
+    describe("from a native host's reviewed control", () => {
+      it("grants a level, which the memory server's list then holds, and commits the handler's writes", async () => {
+        const { runtime } = clientRuntime(alice);
+        const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+        const result = await runAccessPattern(runtime, space);
+
+        await sendNative(runtime, result, "grant", {
+          principal: bob.did(),
+          level: "OWNER",
+        });
+
+        expect(await storedAcl(space)).toEqual({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "OWNER",
+        });
+        expect(result.key("notes").get()).toEqual([`granted ${bob.did()}`]);
+      });
+
+      it("revokes an entry", async () => {
+        const { runtime } = clientRuntime(alice);
+        const space = await createSpace(runtime, {
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        });
+        const result = await runAccessPattern(runtime, space);
+
+        await sendNative(runtime, result, "revoke", { principal: bob.did() });
+
+        expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+        expect(result.key("notes").get()).toEqual([`revoked ${bob.did()}`]);
+      });
+
+      it("changes nothing for an actor without `OWNER`", async () => {
+        const owner = clientRuntime(alice);
+        const space = await createSpace(owner.runtime, {
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        });
+        const { runtime, errors } = clientRuntime(bob);
+        await syncAcl(runtime, space);
+        const result = await runAccessPattern(runtime, space);
+
+        await sendNative(runtime, result, "grant", {
+          principal: carol.did(),
+          level: "OWNER",
+        });
+
+        expect(errors.join("\n")).toContain(`which ${bob.did()} does not hold`);
+        expect(await storedAcl(space)).toEqual({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        });
+        expect(result.key("notes").get()).toEqual([]);
+      });
+
+      it("changes nothing for an event carrying a control's provenance without the mark the control sends", async () => {
+        const { runtime, errors } = clientRuntime(alice);
+        const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+        const result = await runAccessPattern(runtime, space);
+
+        await send(runtime, result, "grant", {
+          principal: bob.did(),
+          provenance: reviewedActionProvenance("native", MEMBERS_CONTROL),
+        });
+
+        expect(errors.join("\n")).toContain("requires the handler's event");
+        expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+        expect(result.key("notes").get()).toEqual([]);
+      });
     });
 
     it("throws in a `computed()`", async () => {
@@ -756,7 +852,7 @@ describe("space-access-change", () => {
       ).toThrow("requires the handler's event to be a trusted gesture");
     });
 
-    it("throws on a serving runtime", () => {
+    it("throws on a serving runtime for a run the serving loop stamped with no actor", () => {
       const runtime = servingRuntime();
       const target = runtime.getCell(alice.did() as MemorySpace, "target");
       expect(() =>
@@ -765,7 +861,7 @@ describe("space-access-change", () => {
           runtime.edit(),
           () => grantSpaceAccess(target, bob.did(), "READ"),
         )
-      ).toThrow("not available on a serving runtime");
+      ).toThrow("requires an event with an actor");
     });
 
     it("throws in a `lift()` frame", async () => {
@@ -1054,6 +1150,75 @@ describe("space-access-change", () => {
         [alice.did()]: "OWNER",
         [bob.did()]: "OWNER",
       });
+    });
+  });
+
+  describe("settleSpaceAccessChanges()", () => {
+    it("commits a client handler's changes before it settles", async () => {
+      const { runtime } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+
+      await settleSpaceAccessChanges(frame);
+
+      expect(frame.pendingSpaceAccessChanges).toBeUndefined();
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "READ",
+      });
+    });
+
+    it("returns `undefined` and commits nothing for a speculative run's changes", async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const target = runtime.getCell(space, "target");
+      const tx = runtime.edit();
+      stampSpeculationRunContext(tx, {
+        actionId: "space-access-change echo",
+        kind: "event-handler",
+        eventId: "space-access-change echo event",
+      });
+      const frame = inHandler(
+        runtime,
+        tx,
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
+      const before = aclCommitCount(factory, space);
+
+      expect(settleSpaceAccessChanges(frame)).toBeUndefined();
+
+      expect(frame.pendingSpaceAccessChanges).toBeUndefined();
+      await runtime.storageManager.synced();
+      expect(aclCommitCount(factory, space)).toBe(before);
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+    });
+
+    it("returns `undefined` and commits nothing itself for a served run's changes", () => {
+      const runtime = servingRuntime();
+      const target = runtime.getCell(carol.did() as MemorySpace, "target");
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "space-access-change served",
+        kind: "event-handler",
+        acting: { user: alice.did() },
+      });
+      const frame = inHandler(
+        runtime,
+        tx,
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(carol.did() as MemorySpace))
+        .toHaveLength(1);
+
+      expect(settleSpaceAccessChanges(frame)).toBeUndefined();
+
+      expect(frame.pendingSpaceAccessChanges).toBeUndefined();
     });
   });
 

@@ -71,7 +71,7 @@ describe("collection key extraction", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     let writingRuns = 0;
     const collect = (event: Event) => {
@@ -118,14 +118,14 @@ describe("collection key extraction", () => {
       tx = runtime.edit();
       runtime.telemetry.addEventListener("telemetry", collect);
       first.withTx(tx).set("changed contents");
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(readKeys()).toEqual(expected);
       expect(writingRuns).toBe(0);
 
       tx = runtime.edit();
       rows.withTx(tx).key(2).key("useOwner").set(true);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(readKeys()).toEqual([expected[0], expected[1], expected[0]]);
       expect(writingRuns).toBeGreaterThan(0);

@@ -113,7 +113,11 @@ type Fixture = {
  */
 async function withFixture(
   body: (fixture: Fixture) => Promise<void>,
-  { sources = [] as unknown[], withAcl = true } = {},
+  {
+    sources = [] as unknown[],
+    withAcl = true,
+    draftLabel = undefined as unknown[] | undefined,
+  } = {},
 ) {
   const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
   const managers: EmulatedStorageManager[] = [];
@@ -147,7 +151,7 @@ async function withFixture(
     } as never, install).set({ open: true } as never);
     const terms = runtime.getCell(S, "custody-terms", undefined, install);
     terms.set(TERMS as never);
-    expect((await install.commit()).error).toBeUndefined();
+    expect((await install.commit().settled).error).toBeUndefined();
     const acl = new ACLManager(roomRuntime, S);
     if (withAcl) {
       await acl.set(roomOwner.did(), "OWNER");
@@ -160,8 +164,8 @@ async function withFixture(
     const draft = runtime.getCell<{ choice: string }>(home, "stance-draft", {
       type: "object",
       properties: { choice: { type: "string" } },
-      ifc: { confidentiality: [cfcAtom.user(home)] },
-    }, tx);
+      ifc: { confidentiality: draftLabel ?? [cfcAtom.user(home)] },
+    } as never, tx);
     draft.set({ choice: "sushi" });
     const policy = runtime.getCell(home, "room-policy", undefined, tx);
     policy.set(P as never);
@@ -169,7 +173,7 @@ async function withFixture(
       ifc: { confidentiality: [cfcAtom.user(home)] },
     } as never, tx);
     allowed.set(sources);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await body({
       processor,
@@ -246,7 +250,7 @@ function atEditWithRetry(
 async function rewrite<T>(runtime: Runtime, cell: Cell<T>, value: T) {
   const tx = runtime.edit();
   cell.withTx(tx).set(value);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
 }
 
 describe("custody-seal", () => {
@@ -260,6 +264,7 @@ describe("custody-seal", () => {
       }, first) as CustodySealPreview;
       expect(Object.keys(preview).sort()).toEqual([
         "actor",
+        "heldWith",
         "id",
         "instance",
         "policy",
@@ -310,13 +315,30 @@ describe("custody-seal", () => {
     });
   });
 
+  it("hands the dialog the people a value was drawn from data shared with", async () => {
+    const home = alice.did();
+    await withFixture(async ({ processor, refs }) => {
+      const preview = await processor.handleRequest({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first) as CustodySealPreview;
+      expect(preview.heldWith).toEqual([[bob.did()]]);
+      expect(preview.sources).toEqual([]);
+    }, {
+      draftLabel: [
+        cfcAtom.user(home),
+        { anyOf: [home, cfcAtom.user(bob.did())] },
+      ],
+    });
+  });
+
   it("writes the link to the box into the room's box cell the host names", async () => {
     await withFixture(async ({ processor, runtime, refs }) => {
       // The room document whose cell receives the link.
       const cells = runtime.getCell(S, "room-cells");
       const setup = runtime.edit();
       cells.withTx(setup).set({} as never);
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       const roomBox = cells.key("box");
       const preview = await processor.handleRequest({
         type: RequestType.CustodySealPrepare,

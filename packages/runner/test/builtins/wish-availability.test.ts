@@ -86,12 +86,12 @@ describe("wish-availability", () => {
         const profileTx = runtime.edit();
         profile.withTx(profileTx).set({ initialNameApplied: "Tester" });
         runtime.prepareTxForCommit(profileTx);
-        expect((await profileTx.commit()).error).toBeUndefined();
+        expect((await profileTx.commit().settled).error).toBeUndefined();
         const tx = runtime.edit();
         runtime.getHomeSpaceCell(tx).asSchema(undefined).set({
           defaultPattern: {
             profiles: [profile],
-            defaultProfile: profile,
+            defaultProfile: { profile },
             backlinksIndex: { mentionable: [missing] },
           },
         });
@@ -102,7 +102,7 @@ describe("wish-availability", () => {
         });
         owner.withTx(tx).set({});
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await manager.synced();
         let output: Cell<unknown> | undefined;
         const completed = defer<void>();
@@ -163,7 +163,7 @@ describe("wish-availability", () => {
       inputs.withTx(tx).set({ query: "#notebook", scope: ["."] });
       owner.withTx(tx).set({});
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await manager.synced();
       provider.sync = async (...args) => {
         requested.resolve();
@@ -186,7 +186,7 @@ describe("wish-availability", () => {
       const resolving = runtime.edit();
       resolver.action(resolving);
       runtime.prepareTxForCommit(resolving);
-      expect((await resolving.commit()).error).toBeUndefined();
+      expect((await resolving.commit().settled).error).toBeUndefined();
       expect(output).toBeDefined();
       expect(output!.withTx(undefined).key("result").key("body").get()).toBe(
         "Available",
@@ -240,7 +240,7 @@ describe("wish-availability", () => {
         });
         owner.withTx(tx).set({});
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await manager.synced();
         provider.sync = async (id, ...rest) => {
           if (id === missing.getAsNormalizedFullLink().id) {
@@ -379,14 +379,14 @@ describe("wish-availability", () => {
             kind === "favorites" ? ["notebook"] : "notebook",
           );
           seed.prepareTxForCommit(fieldTx);
-          expect((await fieldTx.commit()).error).toBeUndefined();
+          expect((await fieldTx.commit().settled).error).toBeUndefined();
           const candidateTx = seed.edit();
           candidate.withTx(candidateTx).set({
             [NAME]: kind === "favorites" ? "notebook" : field,
             body: "Existing notebook",
           });
           seed.prepareTxForCommit(candidateTx);
-          expect((await candidateTx.commit()).error).toBeUndefined();
+          expect((await candidateTx.commit().settled).error).toBeUndefined();
           const tx = seed.edit();
           index.withTx(tx).set(
             kind === "favorites"
@@ -410,7 +410,7 @@ describe("wish-availability", () => {
           });
           owner.withTx(tx).set({});
           seed.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await seed.storageManager.synced();
 
           const coldInputs = runtime.getCellFromLink(

@@ -68,7 +68,6 @@ import {
   resolveLinkEndpointAddress,
   resolvePieceConfig,
   searchPieces,
-  setHomePattern,
   setPiecePattern,
   type SpaceConfig,
   withRuntimeCleanupOnFailure,
@@ -1763,12 +1762,8 @@ describe("cli piece parsing", () => {
   });
 
   it("shows source-location options for every local deployment command", () => {
-    // `set-home` is reached through `cf space` now; the hidden `cf piece`
-    // mount is the same definition and is pinned against it below.
     const pieceFlags = (command: string) =>
       piece.getCommand(command, true)!.getOptions().flatMap((o) => o.flags);
-    const spaceFlags = (command: string) =>
-      space.getCommand(command)!.getOptions().flatMap((o) => o.flags);
     const newFlags = pieceFlags("new");
     expect(newFlags).toContain("--slug");
     expect(newFlags).toContain("--root");
@@ -1777,15 +1772,12 @@ describe("cli piece parsing", () => {
     expect(newFlags).toContain("--datafile");
     expect(newFlags).toContain("--dangerously-allow-incompatible-schema");
 
-    for (const flags of [pieceFlags("setsrc"), spaceFlags("set-home")]) {
-      expect(flags).toContain("--root");
-      expect(flags).toContain("--repository");
-      expect(flags).toContain("--test");
-      expect(flags).toContain("--datafile");
-    }
-    expect(pieceFlags("setsrc")).toContain(
-      "--dangerously-allow-incompatible-schema",
-    );
+    const setsrcFlags = pieceFlags("setsrc");
+    expect(setsrcFlags).toContain("--root");
+    expect(setsrcFlags).toContain("--repository");
+    expect(setsrcFlags).toContain("--test");
+    expect(setsrcFlags).toContain("--datafile");
+    expect(setsrcFlags).toContain("--dangerously-allow-incompatible-schema");
   });
 
   it("declares the same options on both mounts of a moved command", () => {
@@ -1795,11 +1787,9 @@ describe("cli piece parsing", () => {
     // contribute different globals -- see the `--json` case below.
     const own = (command: { getBaseOptions(): { flags: string[] }[] }) =>
       command.getBaseOptions().flatMap((o) => o.flags).sort();
-    for (const moved of ["set-home", "recreate-root"]) {
-      expect(own(piece.getCommand(moved, true)!)).toEqual(
-        own(space.getCommand(moved)!),
-      );
-    }
+    expect(own(piece.getCommand("recreate-root", true)!)).toEqual(
+      own(space.getCommand("recreate-root")!),
+    );
   });
 
   it("refuses `--json` on a moved command rather than ignoring it", async () => {
@@ -1820,8 +1810,10 @@ describe("cli piece parsing", () => {
     // from silently printing human text to a caller who asked to parse it.
     const all = (command: { getOptions(): { flags: string[] }[] }) =>
       command.getOptions().flatMap((o) => o.flags);
-    expect(all(space.getCommand("set-home")!)).toContain("--json");
-    expect(all(piece.getCommand("set-home", true)!)).not.toContain("--json");
+    expect(all(space.getCommand("recreate-root")!)).toContain("--json");
+    expect(all(piece.getCommand("recreate-root", true)!)).not.toContain(
+      "--json",
+    );
   });
 
   it("hides the superseded `cf piece` mounts from help", () => {
@@ -1836,11 +1828,47 @@ describe("cli piece parsing", () => {
       command.getCommands(includeHidden).map((c: { getName(): string }) =>
         c.getName()
       );
-    for (const moved of ["set-home", "recreate-root"]) {
-      expect(names(piece, true)).toContain(moved);
-      expect(names(piece, false)).not.toContain(moved);
-      expect(names(space, false)).toContain(moved);
+    expect(names(piece, true)).toContain("recreate-root");
+    expect(names(piece, false)).not.toContain("recreate-root");
+    expect(names(space, false)).toContain("recreate-root");
+  });
+
+  it("answers the retired `set-home` on both mounts with what replaced it", async () => {
+    // Retired rather than removed, for now: a script that still writes the
+    // command is told what to write instead, and is told the same day both
+    // times. Neither mount is offered to anyone new.
+    const names = (
+      // deno-lint-ignore no-explicit-any
+      command: any,
+      includeHidden: boolean,
+    ): string[] =>
+      command.getCommands(includeHidden).map((c: { getName(): string }) =>
+        c.getName()
+      );
+    for (const noun of [piece, space]) {
+      expect(names(noun, true)).toContain("set-home");
+      expect(names(noun, false)).not.toContain("set-home");
     }
+    for (
+      const line of [
+        "space set-home -i ./k.key -a http://localhost:8000 --reset",
+        "piece set-home -i ./k.key -a http://localhost:8000 ./my-home.tsx",
+      ]
+    ) {
+      const { code, stdout, stderr } = await cf(line);
+      expect(code, line).not.toBe(0);
+      // The refusal prints the help page as context, as every refusal here
+      // does, and that page is where the replacement is written out.
+      expect(stripAnsi(stdout.join("\n")), line).toContain("Retired.");
+      const said = stripAnsi(stderr.join("\n"));
+      expect(said, line).toContain("is retired");
+      expect(said, line).toContain("created on its user's first open");
+      expect(said, line).toContain("cf piece setsrc --cell <home-root>");
+      expect(said, line).toContain("stops answering after 2026-10-21");
+    }
+    const { code, stdout } = await cf("space set-home --help");
+    expect(code).toBe(0);
+    expect(stripAnsi(stdout.join("\n"))).toContain("Retired.");
   });
 
   it("offers computed transforms for piece reads", () => {
@@ -3105,7 +3133,7 @@ describe("cli piece parsing", () => {
             submit: { type: "object", asCell: ["stream"] },
           },
         } as const satisfies JSONSchema;
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         const value = cell.asSchema(schema).get();
         const submit = value.submit;
@@ -3134,54 +3162,6 @@ describe("cli piece parsing", () => {
         await storageManager.close();
       }
     });
-  });
-
-  it("rejects repository metadata when resetting the home pattern", async () => {
-    // The test mutates the command's error handling, so it needs a copy of its
-    // own; the query string is what makes the copy.
-    // deno-lint-ignore cf-imports/no-inline-module-import
-    const { piece: command } = await import(
-      "../commands/piece.ts?repository-reset-test"
-    );
-    command.throwErrors();
-    await expect(command.parse([
-      "set-home",
-      "--reset",
-      "--repository",
-      "https://github.com/commonfabric/labs",
-    ])).rejects.toThrow("Cannot use --repository with --reset");
-  });
-
-  it("rejects attached tests when resetting the home pattern", async () => {
-    // The test mutates the command's error handling, so it needs a copy of its
-    // own; the query string is what makes the copy.
-    // deno-lint-ignore cf-imports/no-inline-module-import
-    const { piece: command } = await import(
-      "../commands/piece.ts?test-reset-test"
-    );
-    command.throwErrors();
-    await expect(command.parse([
-      "set-home",
-      "--reset",
-      "--test",
-      "/repo/home.test.tsx",
-    ])).rejects.toThrow("Cannot use --test with --reset");
-  });
-
-  it("rejects attached data files when resetting the home pattern", async () => {
-    // The test mutates the command's error handling, so it needs a copy of its
-    // own; the query string is what makes the copy.
-    // deno-lint-ignore cf-imports/no-inline-module-import
-    const { piece: command } = await import(
-      "../commands/piece.ts?test-reset-datafile"
-    );
-    command.throwErrors();
-    await expect(command.parse([
-      "set-home",
-      "--reset",
-      "--datafile",
-      "/repo/data/cities.json",
-    ])).rejects.toThrow("Cannot use --datafile with --reset");
   });
 
   it("builds repository-aware entries from deployment flags", () => {
@@ -3733,7 +3713,7 @@ describe("cli piece parsing", () => {
         foreignResult.set({ text: "foreign-only-needle" });
         foreignInput.set({});
         setResultCell(foreignInput, foreignResult);
-        expect((await foreignTx.commit()).error).toBeUndefined();
+        expect((await foreignTx.commit().settled).error).toBeUndefined();
         const tx = runtime.edit();
         const localResult = runtime.getCell(
           SPACE_DID,
@@ -3754,7 +3734,7 @@ describe("cli piece parsing", () => {
         localResult.set({});
         localInput.set({ linked: foreignResult.withTx() });
         setResultCell(localInput, localResult);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(pieceId(localResult)).toBe(pieceId(foreignResult));
         const linked = (await localInput.pull()).linked;
@@ -4308,7 +4288,7 @@ describe("cli piece parsing", () => {
         tx,
       );
       result.set({ $NAME: "needle only in the piece name" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const inputValue = await input.pull();
@@ -4480,7 +4460,7 @@ describe("cli piece parsing", () => {
       input.set({ linked: owner });
       setResultCell(input, referrer);
       setResultCell(ownerInput, owner);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(owner.getAsNormalizedFullLink()).toEqual(
         registeredOwner.getAsNormalizedFullLink(),
       );
@@ -4695,7 +4675,7 @@ describe("cli piece parsing", () => {
       setResultCell(ownerResult, referrerResult);
       setResultCell(referrerInput, referrerResult);
       setResultCell(aliasInput, aliasResult);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const referrerInputValue = await referrerInput.pull();
@@ -4873,7 +4853,7 @@ describe("cli piece parsing", () => {
         tx,
       );
       brokenSource.set("unreachable source value");
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const sourceError = new Error("source ownership unavailable");
@@ -5033,7 +5013,7 @@ describe("cli piece parsing", () => {
       second.set({ text: "other cycle value" });
       setResultCell(first, second);
       setResultCell(second, first);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const cell = (value: unknown) => ({
@@ -5124,7 +5104,7 @@ describe("cli piece parsing", () => {
     leaf.set({ text: "cold-cache-needle" });
     middle.set({ leaf });
     root.set({ middle });
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await writerStorage.synced();
 
     const readerStorage = EmulatedStorageManager.connectTo(server, {
@@ -5263,7 +5243,7 @@ describe("cli piece parsing", () => {
       objectToArraySource.set({ oldObjectValue: true });
       const objectToArrayProxy = objectToArraySource.getAsQueryResult();
       objectToArraySource.set(["array-shape-value"]);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const cell = (value: unknown) => ({
@@ -5615,33 +5595,6 @@ describe("cli piece parsing", () => {
       await runtime.dispose();
       await storageManager.close();
     }
-  });
-
-  it("forwards repository metadata when deploying a home pattern", async () => {
-    const repository = "https://github.com/commonfabric/labs";
-    let recreateOptions: unknown;
-
-    await setHomePattern(
-      { apiUrl: API_URL, identity: ID },
-      { mainPath: "/repo/home.tsx", repository },
-      {
-        loadIdentity: () =>
-          Promise.resolve({ did: () => "did:key:home" } as any),
-        getProgramFromFile: () => Promise.resolve({} as any),
-        loadPieces: () =>
-          Promise.resolve({
-            recreateDefaultPattern: (options: unknown) => {
-              recreateOptions = options;
-              return Promise.resolve({ id: PIECE });
-            },
-          } as any),
-      },
-    );
-
-    expect(recreateOptions).toEqual({
-      customProgram: {},
-      repository,
-    });
   });
 
   it("shows set-slug command options", async () => {

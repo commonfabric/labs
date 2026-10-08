@@ -147,6 +147,41 @@ describe("CFCellLink", () => {
     expect(unsubscribeCount).toBe(1);
   });
 
+  it("names a link the worker will not show the name of as withheld", () => {
+    const ref: CellRef = {
+      id: "of:sealed-cell",
+      space: "did:key:test-space",
+      scope: "space",
+      path: [],
+      schema: { type: "object" },
+    };
+    let deliver = (_value: unknown) => {};
+    let refuse = () => {};
+    const element = new CFCellLink() as any;
+    markConnected(element);
+    element._resolvedCell = {
+      ref: () => ref,
+      id: () => ref.id,
+      asSchema: () => ({
+        subscribe: (
+          callback: (value: unknown) => void,
+          options: { onRefused: () => void },
+        ) => {
+          deliver = callback;
+          refuse = options.onRefused;
+          return () => {};
+        },
+      }),
+    };
+    element._updateSubscription();
+    deliver({ $NAME: "Inbox" });
+    expect(element._name).toBe("Inbox");
+
+    refuse();
+
+    expect(element._name).toBe("Content hidden by policy");
+  });
+
   it("resubscribes when the resolved handle changes with the same ref", () => {
     const ref: CellRef = {
       id: "of:test-cell" as CellRef["id"],
@@ -739,7 +774,7 @@ describe("CFCellLink drag preview", () => {
       .toMatchObject({ left: "40px", top: "50px" });
   });
 
-  it("carries no teardown when the preview is a static pill", () => {
+  it("carries the teardown of the render that names the cell in its preview", () => {
     const { cell } = createRenderableCellHandle(undefined);
     const element = new CFCellLink() as any;
     withClassList(element);
@@ -747,7 +782,7 @@ describe("CFCellLink drag preview", () => {
 
     element._beginDrag(pointerEvent(0, 0));
 
-    expect(getCurrentDrag()!.previewCleanup).toBeUndefined();
+    expect(getCurrentDrag()!.previewCleanup).toBeDefined();
   });
 
   it("does not begin a drag before a cell resolves", () => {

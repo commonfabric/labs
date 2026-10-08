@@ -60,6 +60,7 @@ const sameSessionDescriptor = (
     sessionToken?: string;
     actingAs?: string;
     genesisRoot?: FabricValue;
+    spaceKind?: string;
   },
 ): boolean =>
   (typeof left.sessionId === "string" ? left.sessionId : undefined) ===
@@ -73,7 +74,10 @@ const sameSessionDescriptor = (
   // mismatch, so the binding cannot be injected or stripped in transit.
   (typeof left.actingAs === "string" ? left.actingAs : undefined) ===
     right.actingAs &&
-  valueEqual(left.genesisRoot, right.genesisRoot);
+  valueEqual(left.genesisRoot, right.genesisRoot) &&
+  // Compared as signed, so a signed kind the message does not carry, of any
+  // form, is a mismatch rather than read as no kind.
+  left.spaceKind === right.spaceKind;
 
 export type SessionOpenMessage = {
   space: string;
@@ -82,6 +86,7 @@ export type SessionOpenMessage = {
     seenSeq?: number;
     sessionToken?: string;
     genesisRoot?: FabricValue;
+    spaceKind?: string;
   };
   invocation?: FabricPlainObject;
   authorization?: FabricValue;

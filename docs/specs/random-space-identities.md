@@ -48,8 +48,9 @@ arithmetic.
 - The private key signs one access-control-only genesis transaction. That
   transaction has no prior version and makes the authenticated creator the
   first owner.
-- The genesis transaction grants the creator alone. A newly created space is
-  not world-writable. The deployment's configured service identities keep the
+- The genesis transaction makes the creator an owner, and grants nobody else
+  anything the creator did not ask for. A newly created space is not
+  world-writable unless its creator asks for that. The deployment's configured service identities keep the
   authority the deployment already gives them; that authority is policy, not
   anything derived from the space key.
 - The private key is destroyed once the genesis commit has been confirmed. It
@@ -104,7 +105,10 @@ records its own DID:
   on a client, the user whose runtime is resolving the name; on a serving
   runtime, the run's demanding identity. A serving run with no such identity
   resolves no name and creates no space, rather than creating one owned by the
-  service.
+  service. Under server execution a client creates no space at all: its run of
+  a handler is a speculative echo of the serving runtime's, which creates the
+  space. The client resolves a name only through its record, and its echo of a
+  handler naming one that has none withdraws.
 
   An allocation record is one document per name, addressed by a canonical cause
   over the calling space and the name, and immutable once written. A

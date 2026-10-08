@@ -72,7 +72,11 @@ The console comes along when the fabric starts. Loom starts its instance's pair
 through labs' `scripts/start-local-dev.sh` and passes `--cf-harness`, so
 `loom start`, `loom restart` and the daemon's own toolshed recovery each bring a
 console up with the toolshed and stop it with the pair. Nothing is launched by
-hand, and loom holds no configuration for it.
+hand, and loom holds no configuration of the console's own. What reaches the
+console from loom is the instance, which the start script passes on as
+`--instance` from `LOOM_INSTANCE_ID`, and, where loom sets it, the sandbox
+driver loom chose for that instance, as `CF_HARNESS_SANDBOX_RUNTIME` in the
+environment.
 
 A labs developer gets one the same way, against their own dev fabric:
 
@@ -84,20 +88,52 @@ Either way the flag calls one resolver, and that resolver is reachable directly
 when a console is wanted against a fabric that is already running:
 
 ```sh
-deno task --cwd packages/cf-harness console:launch --instance <instance>
+CF_HARNESS_SANDBOX_RUNTIME=docker \
+  deno task --cwd packages/cf-harness console:launch --instance <instance>
 ```
 
-It resolves the identity, the space and the toolshed URL from the instance's
-`pieces.json`, the store from `loom toolshed-store-dir`, and the two sidecar
-directories from the `runsc-cfc` registration `docker info` reports. A console
-whose environment selects the direct driver (`CF_HARNESS_SANDBOX_RUNTIME=runsc`,
-which a Loom that offers its native runtime sets for an instance that chose it)
-needs no sidecar directory and reads no Docker registration; the printout names
-its `runsc` binary, rootfs and CFC policy instead. It prints every value beside
-the record that decided it, and serves on 8135 — the port Weaver's harness
-console setting and loom's proxy both address. Read the printout before opening
-Weaver: a value that is wrong names where to fix it, and those are three
-different places.
+The variable names the driver the instance runs on, `docker` or `runsc`, which a
+launch for an instance has to be told. It resolves the identity, the space and
+the toolshed URL from the instance's `pieces.json`, the store from
+`loom toolshed-store-dir`, and, on the Docker driver, the two sidecar
+directories from the `runsc-cfc` registration `docker info` reports. It prints
+every value beside the record that decided it, and serves on 8135 — the port
+Weaver's harness console setting and loom's proxy both address. Read the
+printout before opening Weaver: a value that is wrong names where to fix it, and
+those are three different places.
+
+Which sandbox driver the console runs on comes from its environment, and the
+printout's `sandbox` row says which and why:
+
+- `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`. A console that
+  came up with a loom instance inherits the variable from loom, where loom sets
+  it, to the driver it chose for that instance.
+- `--instance` says only whose console it is. It is the launch flag, and it does
+  not choose a driver; the variable is loom's choice. A launch given
+  `--instance` with the variable unset takes no default and does not start,
+  saying that Loom must name `docker` or `runsc`: a default could be another
+  driver than the one the instance's runs are on. Where the refusal shows
+  depends on what launched it. A console that `start-local-dev.sh` launches,
+  which is how loom starts its instance's console, does not start while the
+  fabric still comes up, and the refusal is written to
+  `packages/cf-harness/local-dev-console.log`, the console's log; the script's
+  own stderr says the console did not start, names that log, and prints its last
+  lines, the refusal among them. `console:launch --instance` run directly exits
+  with the refusal on its own stderr, and writes no log. A loom that does not
+  set the variable for the console it starts needs updating to one that does.
+- A console launched for no instance, by the start script on a labs dev fabric
+  or by hand, with the variable unset, takes its platform's default. A Mac runs
+  the native runtime, the direct driver over the cfc-vm store at `CFC_VM_HOME`
+  or `~/Library/Application Support/cfc-vm`, and the launch is refused where
+  that store is not set up, naming the store and what it lacks. Every other
+  platform runs Docker. Nothing falls back from one to the other: to put a Mac's
+  console on Docker, set `CF_HARNESS_SANDBOX_RUNTIME=docker` in the environment
+  the fabric starts from.
+
+A console on the direct driver needs no sidecar directory and reads no Docker
+registration; the printout names its `runsc` binary, rootfs and CFC policy
+instead, each beside the variable or the store it came from, or beside
+`harness default` where neither named it.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and
@@ -114,16 +150,20 @@ console untouched, so every other flag it takes —
 this one path:
 
 ```sh
-deno task --cwd packages/cf-harness console:launch --instance <instance> \
+CF_HARNESS_SANDBOX_RUNTIME=docker \
+  deno task --cwd packages/cf-harness console:launch --instance <instance> \
   -- --host-mount name=corpus,source=/absolute/corpus,target=/corpus
 ```
 
 **A console that cannot start does not take the fabric down.** It needs its
-sandbox runtime (Docker, unless the direct driver is selected) and a connected
-model provider, and when either is missing the flag reports it in the script's
-output and in `packages/cf-harness/local-dev-console.log`, and the shell and
-toolshed keep running. That is the shape to expect: the pair is the fabric, and
-the console is a surface on it.
+sandbox runtime (on a Mac the native store, elsewhere Docker, unless
+`CF_HARNESS_SANDBOX_RUNTIME` names one) and a connected model provider, and when
+either is missing the flag reports it in the script's output and in
+`packages/cf-harness/local-dev-console.log`, and the shell and toolshed keep
+running. A Mac whose native store is not set up is one such case: the log holds
+the refusal, with the store, what it lacks, and the variable that selects
+Docker. That is the shape to expect: the pair is the fabric, and the console is
+a surface on it.
 
 **One console per state directory.** The launcher names a directory per instance
 and port, so two consoles started this way keep separate runs, sessions and
@@ -286,7 +326,8 @@ Mac. Then, in Weaver's settings under Services:
 - `/cf-harness <task>` starts a fresh session and places the live panel in the
   current loom. A turn runs for minutes; the panel streams throughout, and the
   piece replaces it when the turn ends. On a console launched with
-  `--allow-browser-host`, the Weaver declares itself the turn's
+  `--allow-browser-host`, which says so by listing `browser_host` in its
+  `GET /api/status`, the Weaver declares itself the turn's
   [browser host](../console/README.md#browser-hosts), so the browser children of
   a task that needs the web drive a page the Weaver shows the owner, who takes
   it over when an agent hands it to them. Such a task may end with a Markdown

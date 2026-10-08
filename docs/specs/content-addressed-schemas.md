@@ -97,7 +97,8 @@ A schema document is a `cid:` document whose value is a JSON Schema:
 - **Write**: idempotent blind write (no read-before-write, per the
   `ensureSchemaDocument` precedent — a read-before-write turns concurrent
   installation of the same content into a false conflict), performed in the
-  same transaction as the write that references it.
+  same transaction as the write that references it, or for an event's
+  payload, in the event append's own commit.
 - **Per space**: a schema document must exist in every space that contains a
   reference to it, written there by whichever writer first references it in
   that space. Content addressing makes concurrent installs collide
@@ -558,7 +559,12 @@ documents available alongside their declarations:
   decomposed closure is written into the space that will hold the
   reference, in the same transaction as the reference itself. A
   transaction commits against one space's session, so the closure reaches
-  whichever server handles that space by construction. `decomposeSchema`
+  whichever server handles that space by construction. An event append is
+  committed outside any transaction, and carries the closure behind its
+  payload's link schemas in its own commit, less what the stream's space is
+  already known to hold; a payload's link may name a cell in any space, and
+  its schema documents are owed to the space holding the stream, as for any
+  other reference. `decomposeSchema`
   refuses to emit a reference whose closure the writer does not hold,
   and the commit boundary independently enforces the same obligation for
   raw commits that never went through it.

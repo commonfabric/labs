@@ -19,6 +19,11 @@ import {
 } from "@commonfabric/runner/cfc";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
+import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
@@ -147,7 +152,7 @@ const writeOwnedProfile = async (
     },
   });
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) throw result.error;
   return profile;
 };
@@ -196,7 +201,7 @@ const writeOwnedString = async (
     },
   });
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) throw result.error;
   return cell;
 };
@@ -207,17 +212,23 @@ type LabelEntry = {
   label: { integrity?: readonly unknown[] };
 };
 
-/** The `represents-principal` subjects among `entries`' integrity atoms. */
-const representedSubjects = (entries: readonly LabelEntry[]): string[] =>
+/** The subjects of `kind` claims among `entries`' integrity atoms. */
+const claimSubjects = (
+  entries: readonly LabelEntry[],
+  kind: "authored-by" | "represents-principal",
+): string[] =>
   entries.flatMap((entry) =>
     (entry.label.integrity ?? []).flatMap((atom) => {
       const claim = atom as { kind?: unknown; subject?: unknown };
-      return claim.kind === "represents-principal" &&
-          typeof claim.subject === "string"
+      return claim.kind === kind && typeof claim.subject === "string"
         ? [claim.subject]
         : [];
     })
   );
+
+/** The `represents-principal` subjects among `entries`' integrity atoms. */
+const representedSubjects = (entries: readonly LabelEntry[]): string[] =>
+  claimSubjects(entries, "represents-principal");
 
 /** Sends `event` to `stream` and waits for its transaction to settle. */
 const sendAndSettle = (
@@ -350,7 +361,7 @@ describe("loom-root", () => {
       tx,
     );
     profile.set({ name: "Adder" });
-    await tx.commit();
+    await tx.commit().settled;
     const target = runtime.getCell(pieces.getSpace(), "loom-root-adder-target");
     const output = root.asSchema(rootSchema);
     const addPiece = await output.key("addPiece").pull();
@@ -383,6 +394,115 @@ describe("loom-root", () => {
         }),
       }),
     );
+  });
+
+  it("links an occurrence whose `addedBy` label names the caller alone or nobody, and refuses one it contests or names in a form no runtime mints", async () => {
+    /** Stores a URL occurrence at `cause` whose label map is `entries`. */
+    const occurrence = async (cause: string, entries: unknown[]) => {
+      const cell = runtime.getCell(pieces.getSpace(), cause);
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, pieces.getSpace());
+      seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
+        value: {
+          kind: "url",
+          url: `https://example.com/${cause}`,
+          addedBy: signer.did(),
+        },
+        ...(entries.length === 0 ? {} : {
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries },
+          },
+        }),
+      } as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return cell;
+    };
+    /** A declared entry at `path` whose integrity is `atoms`. */
+    const at = (path: string[], ...atoms: unknown[]) => ({
+      path,
+      label: { integrity: atoms },
+      origin: "declared",
+    });
+    const by = (subject: string) => ({ kind: "authored-by", subject });
+    const output = root.asSchema(rootSchema);
+    const addPanel = await output.key("addPanel").pull();
+    const refused = [
+      await occurrence("contested", [
+        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
+      ]),
+      await occurrence("misspelled", [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+      ]),
+      await occurrence("root-contested", [
+        at([], by(foreignSigner.did())),
+        at(["addedBy"], by(signer.did())),
+      ]),
+    ];
+    // A refused event aborts its transaction; the handler's own error
+    // reaches the scheduler's error handlers.
+    const errors: string[] = [];
+    runtime.scheduler.onError((error) => errors.push(String(error)));
+    for (const [index, panel] of refused.entries()) {
+      errors.length = 0;
+      const refusal = await sendAndSettle(
+        addPanel,
+        { panel },
+        `refused-${index}`,
+      ).then(() => undefined, (error: unknown) => error);
+      expect(refusal).toBeDefined();
+      expect(
+        errors.some((error) =>
+          error.includes("whose adder its label contests")
+        ),
+      ).toBe(true);
+    }
+    expect((await output.key("panels").pull()).length).toBe(0);
+    const linked = [
+      await occurrence("own", [at(["addedBy"], by(signer.did()))]),
+      await occurrence("claimed", []),
+    ];
+    for (const [index, panel] of linked.entries()) {
+      await sendAndSettle(addPanel, { panel }, `linked-${index}`);
+    }
+    await runtime.idle();
+    const panels = await output.key("panels").pull();
+    expect(panels.length).toBe(2);
+    expect(
+      panels.map((panel, index) => panel.resolveAsCell().equals(linked[index])),
+    ).toEqual([true, true]);
+  });
+
+  it("records the registering principal as a panel's adder, with an `authored-by` entry declared at the field", async () => {
+    const target = runtime.getCell(
+      pieces.getSpace(),
+      "loom-root-registered-target",
+    );
+    await pieces.add([target]);
+    const panels = await root.asSchema(rootSchema).key("panels").pull();
+    expect(panels.length).toBe(1);
+    const panel = panels[0].resolveAsCell();
+    const value = await panel.asSchema({
+      type: "object",
+      properties: { addedBy: { type: "string" } },
+    }).pull();
+    expect(value.addedBy).toBe(signer.did());
+    const read = runtime.edit();
+    const entries = (readStoredCfcMetadata(
+      read,
+      panel.getAsNormalizedFullLink(),
+    )?.labelMap.entries ?? []) as readonly LabelEntry[];
+    read.abort();
+    expect(
+      claimSubjects(
+        entries.filter((entry) =>
+          entry.origin !== "link" &&
+          entry.path.length === 1 && entry.path[0] === "addedBy"
+        ),
+        "authored-by",
+      ),
+    ).toEqual([signer.did()]);
   });
 
   for (const atRoot of [false, true]) {
@@ -491,7 +611,7 @@ describe("loom-root", () => {
     const tx = runtime.edit();
     const profile = runtime.getCell(pieces.getSpace(), id, profileSchema, tx);
     profile.set({ name: "Plain" });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     if (result.error) throw result.error;
     return profile;
   };
@@ -555,6 +675,281 @@ describe("loom-root", () => {
     ]);
   });
 
+  it("removes an occurrence for the principal its label attests as its adder, for anyone when it attests nobody, and for an OWNER when the adder has left", async () => {
+    const space = pieces.getSpace();
+    const output = root.asSchema(rootSchema);
+    const addPanel = await output.key("addPanel").pull();
+    const removePanel = await output.key("removePanel").pull();
+    const removePiece = await output.key("removePiece").pull();
+    /** A declared entry at `path` whose integrity is `atoms`. */
+    const at = (path: string[], ...atoms: unknown[]) => ({
+      path,
+      label: { integrity: atoms },
+      origin: "declared",
+    });
+    const by = (subject: string) => ({ kind: "authored-by", subject });
+    const represents = (subject: string) => ({
+      kind: "represents-principal",
+      subject,
+    });
+    const envelope = (entries: unknown[]) => ({
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: { version: 1, entries },
+    });
+    /** Stores `value` at `cause` in `where` with a label map of `entries`. */
+    const stored = async (
+      cause: string,
+      value: unknown,
+      entries: unknown[],
+      where: MemorySpace = space,
+    ) => {
+      const cell = runtime.getCell(where, cause);
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, where);
+      seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
+        value,
+        ...(entries.length === 0 ? {} : { cfc: envelope(entries) }),
+      } as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return cell;
+    };
+    /**
+     * Links an occurrence into the root, then stores `value` and a label map
+     * of `entries` at it: the link guard admits only an occurrence that names
+     * no profile and that no label attests to another principal, so both
+     * follow the link.
+     */
+    const linked = async (
+      cause: string,
+      value: unknown,
+      entries: unknown[],
+      where: MemorySpace = space,
+    ) => {
+      const { addedByProfile: _, ...linkable } = value as Record<
+        string,
+        unknown
+      >;
+      const cell = await stored(cause, linkable, [], where);
+      await sendAndSettle(addPanel, { panel: cell }, `link-${cause}`);
+      const tx = runtime.edit();
+      seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
+        value,
+        ...(entries.length === 0 ? {} : { cfc: envelope(entries) }),
+      } as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return cell;
+    };
+    const url = (cause: string) => ({
+      kind: "url",
+      url: `https://example.com/${cause}`,
+    });
+    const errors: string[] = [];
+    runtime.scheduler.onError((error) => errors.push(String(error)));
+    /** Sends `event` to `stream` and returns whether it was refused with `message`. */
+    const refusedWith = async (
+      stream: Readonly<Stream<unknown>>,
+      event: unknown,
+      eventId: string,
+      message: string,
+    ) => {
+      errors.length = 0;
+      const refusal = await sendAndSettle(stream, event, eventId)
+        .then(() => undefined, (error: unknown) => error);
+      return refusal !== undefined &&
+        errors.some((error) => error.includes(message));
+    };
+    const holds = async (cell: Cell<unknown>) =>
+      (await output.key("panels").pull()).some((panel) =>
+        panel.resolveAsCell().equals(cell)
+      );
+    /** Replaces the space's access list, as a member's replica would read it. */
+    const setAcl = async (acl: Record<string, string>) => {
+      const tx = runtime.edit();
+      seedStoredEnvelope(
+        tx,
+        { space, scope: "space", id: `of:${space}` as never, path: [] },
+        { value: acl } as never,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+    };
+    // The caller owns the space; the foreign signer is a WRITE member; the
+    // profile owner is nobody there.
+    await setAcl({ [signer.did()]: "OWNER", [foreignSigner.did()]: "WRITE" });
+
+    // The caller's own profile, linked on an occurrence another principal
+    // added under it: the stamp on the field names who acted.
+    const ownProfile = await stored("own-profile", { name: "Mine" }, [
+      at([], represents(signer.did())),
+    ]);
+    // A DID stored in its own document, labeled as the caller's writing, for
+    // an `addedBy` that links it: the stamp on the field is read, the label
+    // on the document the link leads to is not.
+    const didCell = await stored("did-cell", signer.did(), [
+      at([], by(signer.did())),
+    ]);
+    const others = "Only the principal who added a panel can remove it";
+    const refusals: [string, unknown, unknown[], string][] = [
+      // A malformed field names nobody; the well-formed one still does.
+      ["malformed-beside-stamp", {
+        ...url("malformed-beside-stamp"),
+        addedByProfile: ownProfile.getAsLink(),
+      }, [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+        at(["addedByProfile"], represents(foreignSigner.did())),
+      ], others],
+      ["stamped-other", url("stamped-other"), [
+        at(["addedBy"], by(foreignSigner.did())),
+      ], others],
+      ["under-own-profile", {
+        ...url("under-own-profile"),
+        addedByProfile: ownProfile.getAsLink(),
+      }, [
+        at(["addedByProfile"], represents(foreignSigner.did())),
+        { ...at(["addedByProfile"], represents(signer.did())), origin: "link" },
+      ], others],
+      [
+        "linked-addedby-other",
+        {
+          ...url("linked-addedby-other"),
+          addedBy: didCell.getAsLink(),
+        },
+        [at(["addedBy"], by(foreignSigner.did()))],
+        others,
+      ],
+    ];
+    for (const [cause, value, entries, message] of refusals) {
+      const cell = await linked(cause, value, entries);
+      expect([
+        cause,
+        await refusedWith(removePanel, { panel: cell }, `rm-${cause}`, message),
+      ]).toEqual([cause, true]);
+      expect([cause, await holds(cell)]).toEqual([cause, true]);
+    }
+
+    const removals: [string, unknown, unknown[]][] = [
+      ["stamped-own", url("stamped-own"), [at(["addedBy"], by(signer.did()))]],
+      ["claimed-other", {
+        ...url("claimed-other"),
+        addedBy: foreignSigner.did(),
+      }, []],
+      ["unattributed", url("unattributed"), []],
+      ["linked-addedby-own", {
+        ...url("linked-addedby-own"),
+        addedBy: didCell.getAsLink(),
+      }, [at(["addedBy"], by(signer.did()))]],
+      // A label that settles on no single adder protects nobody: any writer
+      // removes the occurrence.
+      ["two-adders", url("two-adders"), [
+        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
+      ]],
+      ["both-fields", url("both-fields"), [
+        at(["addedBy"], by(signer.did())),
+        at(["addedByProfile"], represents(foreignSigner.did())),
+      ]],
+      ["misspelled", url("misspelled"), [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+      ]],
+      // An OWNER removes what a participant who has left added.
+      ["stamped-departed", url("stamped-departed"), [
+        at(["addedBy"], by(profileOwner.did())),
+      ]],
+    ];
+    for (const [cause, value, entries] of removals) {
+      const cell = await linked(cause, value, entries);
+      await sendAndSettle(removePanel, { panel: cell }, `rm-${cause}`);
+      expect([cause, await holds(cell)]).toEqual([cause, false]);
+    }
+
+    // An occurrence the root admitted under another person's profile is its
+    // actor's to remove: the profile's owner is not who added it.
+    const borrowed = await stored("borrowed-profile", { name: "Theirs" }, [
+      at([], represents(profileOwner.did())),
+    ]);
+    await sendAndSettle(
+      await output.key("addPiece").pull(),
+      { piece: runtime.getCell(space, "borrowed-target"), as: borrowed },
+      "add-as-borrowed",
+    );
+    await runtime.idle();
+    const admitted = (await output.key("panels").pull()).map((panel) =>
+      panel.resolveAsCell()
+    ).find((panel) =>
+      panel.key("addedByProfile").resolveAsCell().equals(borrowed)
+    )!;
+    expect(declaredAdders(admitted)).toEqual([signer.did()]);
+    await sendAndSettle(removePanel, { panel: admitted }, "rm-admitted");
+    expect(await holds(admitted)).toBe(false);
+
+    // Unregistering a piece removes every occurrence of it or none.
+    const piece = runtime.getCell(space, "shared-target");
+    const mine = await linked("piece-mine", {
+      kind: "piece",
+      piece: piece.getAsLink(),
+    }, [at(["addedBy"], by(signer.did()))]);
+    const theirs = await linked("piece-theirs", {
+      kind: "piece",
+      piece: piece.getAsLink(),
+    }, [at(["addedBy"], by(foreignSigner.did()))]);
+    expect(await refusedWith(removePiece, { piece }, "unregister", others))
+      .toBe(true);
+    expect([await holds(mine), await holds(theirs)]).toEqual([true, true]);
+
+    // A WRITE member does not clear up after one who has left: only an OWNER.
+    const departed = await linked("departed-again", url("departed-again"), [
+      at(["addedBy"], by(profileOwner.did())),
+    ]);
+    await setAcl({
+      [thirdOwner.did()]: "OWNER",
+      [signer.did()]: "WRITE",
+      [foreignSigner.did()]: "WRITE",
+    });
+    expect(
+      await refusedWith(
+        removePanel,
+        { panel: departed },
+        "rm-as-writer",
+        others,
+      ),
+    ).toBe(true);
+    expect(await holds(departed)).toBe(true);
+
+    // An occurrence linked from another space is judged by the Loom's list,
+    // not that space's: owning the occurrence's space, whose list omits a
+    // current member, does not let a WRITE member of the Loom remove that
+    // member's panel.
+    const mineAlone = await runtime.createSpace();
+    const elsewhere = await linked(
+      "elsewhere",
+      url("elsewhere"),
+      [at(["addedBy"], by(foreignSigner.did()))],
+      mineAlone,
+    );
+    expect(
+      await refusedWith(
+        removePanel,
+        { panel: elsewhere },
+        "rm-elsewhere",
+        others,
+      ),
+    ).toBe(true);
+    expect(await holds(elsewhere)).toBe(true);
+    // And one who has left the Loom is cleared up by a Loom OWNER although
+    // the occurrence's own space still admits them.
+    await setAcl({ [signer.did()]: "OWNER" });
+    const theirSpace = await runtime.createSpace({
+      grants: { [foreignSigner.did()]: "WRITE" },
+    });
+    const left = await linked(
+      "left-elsewhere",
+      url("left-elsewhere"),
+      [at(["addedBy"], by(foreignSigner.did()))],
+      theirSpace,
+    );
+    await sendAndSettle(removePanel, { panel: left }, "rm-left-elsewhere");
+    expect(await holds(left)).toBe(false);
+  });
+
   it("names the actor, not the owner, when `as` names another person's profile whose fields are redirect links", async () => {
     // Shaped as another person's profile-home result: each field is a
     // redirect link to a cell its owner wrote through the trusted editor, so
@@ -575,7 +970,7 @@ describe("loom-root", () => {
     (borrowed as Cell<unknown>).setRaw({
       name: nameCell.getAsWriteRedirectLink(),
     });
-    const written = await tx.commit();
+    const written = await tx.commit().settled;
     if (written.error) throw written.error;
 
     const output = root.asSchema(rootSchema);

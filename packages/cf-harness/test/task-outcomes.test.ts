@@ -2,7 +2,8 @@ import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { ConsoleServer, resolveConsoleConfig } from "../console/server.ts";
+import { ConsoleServer } from "../console/server.ts";
+import { resolveConsoleConfig } from "./support/on-linux.ts";
 import { readConsoleTurnResult } from "../console/turn-result.ts";
 import type { HarnessChatEventEnvelope } from "../src/contracts/interactive-chat.ts";
 import { finishTaskTool } from "../src/tools/finish-task.ts";

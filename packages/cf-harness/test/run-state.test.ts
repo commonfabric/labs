@@ -5,6 +5,7 @@ import {
   mintAddressHandle,
 } from "../src/handle-table.ts";
 import {
+  addHarnessDocsQueryFailures,
   createHarnessRunState,
   setHarnessRunStatus,
 } from "../src/run-state.ts";
@@ -98,6 +99,39 @@ describe("run-state", () => {
       expect(state.wellKnownGrants).not.toBe(grants);
       grants.pop();
       expect(state.wellKnownGrants?.length).toBe(1);
+    });
+  });
+
+  describe("addHarnessDocsQueryFailures()", () => {
+    const state = () =>
+      createHarnessRunState({
+        cfcEnforcementMode: "disabled",
+        currentDir: "/workspace",
+        now: "2026-09-02T00:00:00.000Z",
+      });
+
+    it("adds `count` to the failures the run already holds", () => {
+      const once = addHarnessDocsQueryFailures(
+        state(),
+        2,
+        "2026-09-02T00:00:01.000Z",
+      );
+      const twice = addHarnessDocsQueryFailures(
+        once,
+        3,
+        "2026-09-02T00:00:02.000Z",
+      );
+
+      expect(once.docsQueryFailures).toBe(2);
+      expect(twice.docsQueryFailures).toBe(5);
+      expect(twice.updatedAt).toBe("2026-09-02T00:00:02.000Z");
+    });
+
+    it("returns the run itself when `count` is not positive", () => {
+      const run = state();
+
+      expect(addHarnessDocsQueryFailures(run, 0)).toBe(run);
+      expect(addHarnessDocsQueryFailures(run, -1)).toBe(run);
     });
   });
 });

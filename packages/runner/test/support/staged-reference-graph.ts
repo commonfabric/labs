@@ -21,7 +21,7 @@ export async function seedReferenceGraphLeaf(
     ifc: { confidentiality: ["secret"], integrity: ["leaf-proof"] },
   }, tx).set({ value: "payload" });
   runtime.prepareTxForCommit(tx);
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) throw result.error;
 }
 

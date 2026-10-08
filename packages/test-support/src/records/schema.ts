@@ -354,16 +354,11 @@ export function localObjectName(context: RunContext): string {
  * Object name for one CI artifact's records, relative to the relay's
  * `submissions/ci/` folder. The run id and the artifact name — which
  * carries the attempt that produced it — are unique within a repository,
- * and the repository is in the folder path, so the name is deterministic
- * and re-running the relay is idempotent: a later attempt's relay
- * re-ships an earlier attempt's artifacts into a collision and ships the
- * re-run jobs' new artifacts as new objects.
- *
- * That collision needs both attempts to land in one partition, and the
- * partition comes from `runStartedAt`, which GitHub reports per attempt.
- * Two attempts separated by a UTC midnight therefore compute different
- * partitions, and the earlier attempt's artifacts are stored a second
- * time under the later day rather than colliding.
+ * and the repository is in the folder path. The partition comes from
+ * `runStartedAt`, the start of the attempt that produced the artifact,
+ * which no later attempt changes. The name is therefore deterministic, and
+ * re-running the relay for one attempt is idempotent: a re-ship collides
+ * with the first shipment.
  */
 export function ciObjectName(options: {
   runStartedAt: string;

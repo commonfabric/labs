@@ -1279,6 +1279,18 @@ the classes never share a commit. Whole-wave CAS failure is FORBIDDEN
 (livelock under sustained authored traffic), as are blind derived
 writes (clobber).
 
+A failed commit precondition resolves per owner too. The store checks
+a batch's preconditions one at a time inside the wave's transaction and
+names each failure by its index; the commit step maps the index to the
+contribution that carried it, requeues that contribution when it is an
+event handler and drops it whole otherwise, and commits the rest. A
+create-only receipt that already exists fails this way, and so does a
+value pin (`entity-value-hash`), such as the one CFC commit preparation
+takes over a policy manifest it consulted, for any kind of contribution.
+The batch carries no confirmed reads, so a value pin is how a
+contribution brings a document it read and did not write into the wave's
+concurrency check.
+
 **Recomputation after a drop arrives by DEPENDENCY ONLY (Q1, RULED
 2026-08-05).** A dropped superseded write has no recompute trigger of
 its own: basis rows are reads-only, so an intrusion on a producer's
@@ -1452,6 +1464,35 @@ refusal takes the ordinary foreign-failure path (home withheld, every
 event requeued). A served `.inSpace()` target's genesis is untouched by
 all of this: `Runtime.createSpace` signs it as the new space's own key
 over an ordinary session of its own, never through a wave.
+
+**A handler changes an access list through the memory server.** The
+one sanctioned path from a served run to an access list is
+`grantSpaceAccess()` and `revokeSpaceAccess()`
+(`docs/features/space-access-changes.md`). The run stages its changes
+on its transaction rather than writing the document. The seal asks the
+co-hosted memory server to decide them (`checkServedAclChange()`):
+the memory server applies them to the list it holds and admits the
+result as it admits a session's commit of the list, with the event's
+actor as the principal (INV-12's shape, the genesis rule, the actor's
+`OWNER`), and resolves the run's grant, `event-consequence:<eventId>`,
+against the entry the run delivers, which the actor must have fired.
+Only a handler run delivering a durable entry, carrying the delegated
+carriage of the actor each change was made as, passes. A refusal is
+deterministic and takes the path of the refused write above: the
+entry carries the error, and nothing of the run reaches the wave. At
+the commit step each surviving contribution's changes commit FIRST,
+in seal order, before the foreign provisioning batches and the home
+batch, so the outbox rows the home batch writes are delivered after
+the change. Each is an authored commit of the list alone under the
+run's delegated carriage, enveloped by the holder session and checked
+again by the memory server (`commitServedAclChange()`, through the
+sink's `commitSpaceAccessChange()`). A change refused there, for a
+list changed since the seal, requeues its event, and the replay's seal
+decides it afresh. A change that landed stands whatever the wave does
+next, as a landed foreign provisioning commit does; the replay finds
+nothing left to change. A speculation-stamped run, a flag-ON client's
+echo, stages its changes and commits none (events.md §7: an echo
+commits only the event).
 
 ## 3e. Pattern updates
 

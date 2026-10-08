@@ -42,15 +42,22 @@ return { [UI]: <div>{wishResult.result}</div> };
 
 ### Results wait for loading documents
 
-Wish waits for the backing documents of its discovery collections and of the
-favorite and mentionable candidates before selecting a result. This loading
-behavior applies to every hashtag Wish. Pending document loads leave any
-existing state untouched; a cold Wish with no existing state publishes none
-until loading settles. A favorite whose piece document is confirmed absent is
-excluded from matches; its bookmark remains in the home collection. UI loading
+Wish waits for the backing documents of its discovery collections and candidates
+before selecting a result. This loading behavior applies to every hashtag Wish.
+Pending document loads leave any existing state untouched; a cold Wish with no
+existing state publishes none until loading settles. A favorite, mentionable, or
+profile element whose piece document is confirmed absent is excluded from
+matches; its entry remains in the discovery collection. Failed favorite,
+mentionable, and profile element loads are skipped when another readable match
+remains. This includes current-space and explicit-DID mentionable searches. A
+profile-scope search reads the selected profile's elements, so when the selected
+profile itself failed to load, the search reports that load error (see the
+profile rules below). If no readable match remains and a candidate load failed,
+Wish reports the load error. The legacy
+`#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
-collection produces a no-match error; a failed document load produces a load
-error.
+collection produces a no-match error. A failed discovery-collection load, or a
+candidate load failure with no readable match, produces a load error.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
@@ -144,8 +151,9 @@ wish({ query: "#portfolio", scope: ["profile"] })
 
 ### Well-Known Profile Targets
 
-A user may have multiple profiles, stored on the home default pattern at
-`homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
+A user may have multiple profiles. Each is a piece in a space of its own, and a
+new profile is that space's root. The home default pattern holds links to them
+at `homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
 recency-ordered `mru`. The well-known wishes enumerate that list and resolve,
 ordered **default first, then by MRU, then list order**:
 
@@ -164,7 +172,7 @@ the best of the ordered candidates (default → MRU → first) — in **every** 
 (interactive, headless, and the blessed read). It does not depend on the picker
 sidecar pattern running, so
 consumers can gate on `.result` without stranding in the multi-profile case
-(CT-1829). The `candidates` array holds all ordered profiles.
+(CT-1829). The `candidates` array holds the ordered profiles that loaded.
 
 Profile resolution waits for the Home root, default pattern, roster, and
 referenced profile documents to load before publishing a new result or opening
@@ -172,12 +180,17 @@ profile creation.
 While those reads are pending, the existing wish state is retained; a new wish
 can remain unset. Confirmation re-runs the wish even when a document is absent
 and no data arrives. A confirmed empty roster opens profile creation. An entry
-confirmed absent is skipped when another valid profile remains. A failed load,
-or absent entries leaving no valid profile, produces an error surface instead.
+confirmed absent is skipped when another valid profile remains. A profile whose
+load failed keeps its place in the ordering, so a failure never changes which
+profile is selected: any other failed profile is left out of `candidates`, and
+when the selected profile failed, the Wish reports the load error instead of
+selecting another one. Absent entries leaving no valid profile also produce an
+error surface rather than profile creation.
 Failed confirmations do not schedule another load on their own. Every re-run
 checks the current document before consulting a cached failure, so document
-arrival allows the same Wish instance to recover. A fresh Wish instance or a
-replica reset can request another load.
+arrival allows the same Wish instance to recover. A load that failed because
+the connection dropped is requested again when the session reconnects. A fresh
+Wish instance or a replica reset can request another load.
 
 The picker is the **switching affordance**, not the source of `.result`:
 selection is _state_, not a channel. When the picker's "Use" writes `mru` or
@@ -223,7 +236,7 @@ for the rendered output so each viewer sees their own home profile projection.
 
 | Feature    | Favorites (`~`)            | Mentionables (`.`)              | Profile (`profile`)              |
 |------------|----------------------------|---------------------------------|----------------------------------|
-| Storage    | Home default pattern       | Current space                   | Profile default pattern          |
+| Storage    | Home default pattern       | Current space                   | Profile piece                    |
 | Scope      | Cross-space                | Per-space                       | Cross-space, per-user            |
 | Source     | User's favorites list      | Pattern's `mentionable` export  | User's profile element list      |
 | Tag source | Snapshotted when favorited | Computed from schema            | `userTags` first, then `tag`     |
@@ -287,8 +300,12 @@ This ensures the wish is established once. Conditional logic belongs in how you
 
 These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
-`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, and the
-`#profile*` targets, which require a signed-in user and resolve from that user's home space.
+`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
+`#chatManager`, and the `#profile*` targets, which require a signed-in user and
+resolve from that user's home space. `#chatManager` reports an error, naming
+the remedies, when the home pattern holds no chat manager: a system home
+pattern set up before its source had one gains it when the home space is next
+opened, and a custom one holds it only if it says so.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |
@@ -309,7 +326,8 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#learned`          | User's learned data (home space)                        |
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
 | `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
-| `#profile`          | Profile default pattern object                          |
+| `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
+| `#profile`          | User's current profile piece                            |
 | `#profileName`      | User's profile display name                             |
 | `#profileAvatar`    | User's profile avatar                                   |
 | `#profileSpace`     | User's profile space cell                               |

@@ -48,7 +48,7 @@ async function runAndSnapshot(
       tx,
     );
     const handle = runtime.run(tx, compiled, argument, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await handle.pull();
     await runtime.idle();
     return runtime.scheduler.getGraphSnapshot().nodes;

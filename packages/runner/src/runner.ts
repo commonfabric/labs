@@ -44,7 +44,7 @@ import {
   popFrame,
   pushFrameFromCause,
 } from "./builder/pattern.ts";
-import { commitSpaceAccessChanges } from "./builder/space-access-change.ts";
+import { settleSpaceAccessChanges } from "./builder/space-access-change.ts";
 import {
   type CellScope,
   type FabricExecValue,
@@ -80,7 +80,10 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
-import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
+import {
+  recordNewDocumentProtectedDefaults,
+  recordNewProtectedDefaults,
+} from "./cfc/default-initialization.ts";
 import {
   CFC_POLICY_MANIFEST_DOC_SCHEMA,
   CFC_POLICY_MANIFEST_ID_PREFIX,
@@ -88,6 +91,7 @@ import {
   collectModulePolicyDigests,
 } from "./cfc/policy.ts";
 import {
+  recordCapturedArgumentFields,
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
@@ -168,7 +172,10 @@ import {
 } from "./scheduler.ts";
 import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
-import { RetryImmediately } from "./scheduler/retry-immediately.ts";
+import {
+  InSpaceTargetUnresolved,
+  RetryImmediately,
+} from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
@@ -256,7 +263,7 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { narrowestScope, scopeRank } from "./scope.ts";
+import { narrowestScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -914,12 +921,23 @@ function describeSkippedSubPatternNode(
   };
 }
 
+/**
+ * Records what each write redirect `projection` stages into `resultCell`
+ * initializes, at the position the redirect takes. A redirect to one of
+ * `ownCells`, the documents the setup creates for its piece, is the setup's own
+ * initialization of that cell and records a setup projection. Any other
+ * redirect names a cell the piece was handed, through its argument or through
+ * the code setting it up, and records a binding of the slot holding it: the
+ * slot is compared by the cell it names, a later setup may re-point it, and
+ * the cell itself is not initialized.
+ */
 const recordSetupProjectionPolicyInputs = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
   resultCell: Cell<any>,
   resultSchema: JSONSchema | undefined,
   projection: unknown,
+  ownCells: readonly NormalizedFullLink[],
   schemaPath: readonly string[] = [],
 ): void => {
   if (resultSchema === undefined) {
@@ -939,20 +957,39 @@ const recordSetupProjectionPolicyInputs = (
   // still-deferred binding of an embedded pattern) is inert there. The
   // prepare gate agrees: marker verification requires the stored value to be
   // a sigil redirect (`setupProjectionSourceMatchesValue`), and recording a
-  // marker for an alias would wrongly widen
+  // setup-projection marker for an alias would wrongly widen
   // `writeIsPatternSetupInitialization`'s trusted-initialization exemption to
-  // a path nothing redirects to.
+  // a path nothing redirects to. A binding of an alias would name a slot that
+  // never holds the link it records.
   if (isWriteRedirectLink(projection)) {
     const target = resultCell.getAsNormalizedFullLink();
+    const slot = {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      path: [...target.path, ...schemaPath],
+    };
     const source = parseLink(projection, target);
+    const own = ownCells.some((cell) =>
+      cell.space === source.space && cell.id === source.id &&
+      normalizeCellScope(cell.scope) === normalizeCellScope(source.scope)
+    );
+    if (!own) {
+      // A cell the piece was handed: staging the redirect initializes the
+      // slot and nothing of the cell. Every setup stages it again, and a
+      // pattern version may name another cell for it, so a later setup may
+      // re-point the slot, which a list builtin's capture may not.
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "binding",
+        target: slot,
+        value: projection,
+      }, runtimeWritePolicyAuthorization);
+      return;
+    }
     tx.recordCfcWritePolicyInput({
       kind: "structural-provenance",
-      target: {
-        space: target.space,
-        id: target.id,
-        scope: target.scope,
-        path: [...target.path, ...schemaPath],
-      },
+      target: slot,
       claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
       sources: [{
         space: source.space,
@@ -972,6 +1009,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        ownCells,
         [...schemaPath, String(index)],
       )
     );
@@ -1001,6 +1039,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        ownCells,
         [...schemaPath, key],
       );
     }
@@ -1211,6 +1250,19 @@ export const SEALING_SOURCE_UPDATE_REFUSAL =
   "can undo";
 
 /**
+ * The cause of the root `PatternFactory.inSpace(..., { root: true })` places
+ * in `space`, the space it creates. The space's genesis commit reserves the
+ * address it derives there, so the root's address is fixed before the run that
+ * places it. The cause names `space`, so the roots of two such spaces are two
+ * entities, and a pattern keying a record by the entity a root names, as one
+ * keys a person's record by their profile, keeps one person's record apart
+ * from another's.
+ */
+export function inSpaceRootCause(space: MemorySpace): string {
+  return `in-space-root:${space}`;
+}
+
+/**
  * Reports work which failed after storage accepted a pattern setup.
  *
  * The receipt remains authoritative for the setup transaction. `.cause`
@@ -1304,6 +1356,9 @@ type SetupValidationOptions = {
 
   /** See `RunnerRunOptions.referencedArgumentFields`. */
   referencedArgumentFields?: readonly string[];
+
+  /** See `RunnerRunOptions.capturedArgumentFields`. */
+  capturedArgumentFields?: readonly string[];
 
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
@@ -1648,10 +1703,18 @@ export type RunnerRunOptions = {
   parentPieceRootId?: string;
   // Argument fields a collection builtin fills with a link to a cell that
   // exists already: a list's entry, the list itself. Each one whose staged
-  // value is such a link is recorded as a protected initialization
-  // (docs/specs/cfc-protected-initialization.md), so handing a new piece a
-  // reference to an owner-protected cell does not pass for modifying it.
+  // value is a link that is not a write redirect is recorded as a protected
+  // initialization (docs/specs/cfc-protected-initialization.md), so handing a
+  // new piece a reference to an owner-protected cell does not pass for
+  // modifying it.
   referencedArgumentFields?: readonly string[];
+  // Argument fields a collection builtin fills with the bindings its callback
+  // captures: a record holding a write redirect to each captured cell, and
+  // values beside them. Each link in the record is recorded as a captured
+  // binding (docs/specs/cfc-protected-initialization.md), so handing a new
+  // piece a binding to an owner-protected cell does not pass for modifying
+  // it; a value in the record is not recorded.
+  capturedArgumentFields?: readonly string[];
   // The source origin a piece brought into being by this run records with its
   // creation revision. A run that finds the piece already there leaves both
   // alone: what a piece records after it exists is decided by a source
@@ -2923,17 +2986,19 @@ export class Runner {
     // What it walks is what this setup PROJECTS, which is `projection`: the
     // argument itself wherever the two are one value, and the caller's own
     // argument where the value being written folded the stored document's
-    // slots in. Each redirect it finds records a setup-projection marker, and
-    // a marker exempts writes at-or-below its target from `writeAuthorizedBy`
-    // for the rest of the transaction (`writeIsPatternSetupInitialization` in
-    // cfc/prepare.ts), so the redirects it walks are the ones this setup
-    // establishes rather than the ones the document already held.
+    // slots in. Each redirect it finds records a binding of the slot holding
+    // it (`writeIsRuntimeInitialization` in cfc/prepare.ts), so the redirects
+    // it walks are the ones this setup establishes rather than the ones the
+    // document already held. The cell a redirect names receives no exemption:
+    // it is the caller's, and this setup writes none of it, so no cell counts
+    // as the setup's own.
     recordSetupProjectionPolicyInputs(
       tx,
       this.#runtime,
       argumentCell,
       argumentSchema,
       projection,
+      [],
     );
     diffAndUpdate(
       this.#runtime,
@@ -3029,6 +3094,7 @@ export class Runner {
     patternRef: { identity: string; symbol: string },
     setupState: SetupStateReuse,
     referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): SetupResult<R> | undefined {
     const key = this.#getDocKey(resultCell);
     if (!this.#cancels.has(key)) return undefined;
@@ -3092,6 +3158,7 @@ export class Runner {
         argumentLink,
         referencedArgumentFields,
       );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
       return { resultCell, patternRef, needsStart: false };
     }
 
@@ -3112,12 +3179,20 @@ export class Runner {
       options,
     );
     if (changed) {
+      // A result field the setup projects to one of the piece's internal
+      // cells is the setup's own initialization of that cell. Those cells are
+      // minted from the result cell's cause, so no one else names them; a
+      // field naming any other cell, the piece's argument or a cell the code
+      // setting it up closed over, is a binding of the field alone.
       recordSetupProjectionPolicyInputs(
         tx,
         this.#runtime,
         resultCell,
         pattern.resultSchema,
         result,
+        (pattern.derivedInternalCells ?? []).map((descriptor) =>
+          getDerivedInternalCellLink(resultCell, descriptor)
+        ),
       );
       const writableResultCell = pattern.resultSchema === undefined
         ? resultCell.withTx(tx)
@@ -3264,9 +3339,23 @@ export class Runner {
             meta: ignoreReadForScheduling,
           });
           if (currentValue === undefined) {
-            derivedCell.setRawUntyped(
-              fabricFromConvertibleJsValue(schemaDefault),
-            );
+            const seed = fabricFromConvertibleJsValue(schemaDefault);
+            derivedCell.setRawUntyped(seed);
+            // The cell is the pattern's own and absent until now, so its
+            // default is an initialization whether or not anything projects
+            // it: a result field, a sub-pattern's argument, or nothing.
+            const seeded = derivedCell.getAsNormalizedFullLink();
+            tx.recordCfcWritePolicyInput({
+              kind: "initialization",
+              mode: "seed",
+              target: {
+                space: seeded.space,
+                id: seeded.id,
+                scope: seeded.scope,
+                path: [...seeded.path],
+              },
+              value: seed,
+            }, runtimeWritePolicyAuthorization);
           }
         }
       }
@@ -3305,6 +3394,7 @@ export class Runner {
     argument: T,
     resultCell: Cell<R>,
     referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): void {
     // Every write below fills a store this piece owns — the argument
     // document, each internal document the result projects to, and the result
@@ -3370,6 +3460,20 @@ export class Runner {
       argumentLink = newArgumentCell.getAsNormalizedFullLink();
       if (argumentLink === undefined) {
         throw new Error("Invalid argument link in updateArgument");
+      }
+      // The argument document is new, so a protected field the caller leaves
+      // out, and setup fills with its default, is the setup's initialization,
+      // whatever later reads or projects the field. A field the caller
+      // supplies is the caller's write, even where it equals the default.
+      if (nextArgument !== undefined) {
+        recordNewDocumentProtectedDefaults(
+          tx,
+          argumentLink,
+          pattern.argumentSchema,
+          defaults,
+          argument,
+          nextArgument,
+        );
       }
     } else if (!restageStoredArgument) {
       // Same stored setup over an argument document that already exists. The
@@ -3476,6 +3580,7 @@ export class Runner {
         argumentLink,
         referencedArgumentFields,
       );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
     }
 
     // Record the content-addressed {identity, symbol} reference — the ONLY
@@ -3831,6 +3936,7 @@ export class Runner {
       entryRef,
       setupState,
       validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
     if (runningSetup) {
       return runningSetup;
@@ -3853,6 +3959,7 @@ export class Runner {
       argument,
       resultCell,
       validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
 
     if (validationOptions.validateArgumentLinks !== undefined) {
@@ -4042,42 +4149,6 @@ export class Runner {
     // authoritative over such a start and tombstones it; a release is not, and
     // leaves it to resolve into a result of its own.
     this.#stopResult(resultCell);
-  }
-
-  /**
-   * True when `resultCell` is its space's default/root pattern — the piece the
-   * PieceController's own cold-start repair (startEnsuredDefaultPattern) owns,
-   * including its roll-forward-to-official backstop and clear-error contract.
-   * The runner's initial-start setup repair must DEFER to the controller for
-   * the root and heal only the nested pieces the controller never sees (a
-   * profile mounted via a #wish, say). Profiles are plain `inSpace` pieces and
-   * are never a space's `defaultPattern` (only the controller sets that), so
-   * they are correctly not excluded. Called only on the rare repair path, so
-   * the space-cell read costs nothing on a healthy start. A read failure
-   * returns false: better to attempt the idempotent, fail-closed repair than
-   * to leave a piece bricked because a lookup raced.
-   */
-  #isSpaceDefaultPattern(resultCell: Cell<unknown>): boolean {
-    try {
-      const defaultPatternCell = this.#runtime
-        .getSpaceCell(resultCell.space)
-        .key("defaultPattern")
-        .get() as Cell<unknown> | undefined;
-      if (defaultPatternCell === undefined) return false;
-      const a = resultCell.getAsNormalizedFullLink();
-      const b = defaultPatternCell.getAsNormalizedFullLink();
-      // Full document identity: space + scope + id. `scope` (space/user/session)
-      // is part of the address — a user- or session-scoped nested cell can share
-      // an entity id with the space-scoped root, so omitting scope would
-      // misclassify it as the root and silently suppress its heal. `path` is
-      // intentionally not compared: doStart normalizes a subpath input to its
-      // root before `#startCore()`, so resultCell is always a root cell here.
-      return a.space === b.space &&
-        (a.scope ?? "space") === (b.scope ?? "space") &&
-        a.id === b.id;
-    } catch {
-      return false;
-    }
   }
 
   /**
@@ -4794,58 +4865,60 @@ export class Runner {
               teardownRegistrationIfCurrent();
             }
           };
-          const commitWork = actualTx.commit().then(async ({ error }) => {
-            if (error !== undefined) {
-              // A lost manifest install recovers in every posture, for the
-              // reason `refusalNamesOnlyPolicyManifests` gives.
-              if (refusalNamesOnlyPolicyManifests(error)) {
-                await recoverInstantiationOnce(error, "manifest");
+          const commitWork = actualTx.commit().settled.then(
+            async ({ error }) => {
+              if (error !== undefined) {
+                // A lost manifest install recovers in every posture, for the
+                // reason `refusalNamesOnlyPolicyManifests` gives.
+                if (refusalNamesOnlyPolicyManifests(error)) {
+                  await recoverInstantiationOnce(error, "manifest");
+                  return;
+                }
+                // A stale read recovers only where a serving side supplies the
+                // view the retry reads.
+                if (
+                  this.#runtime.experimental.serverExecution === true &&
+                  isStaleReadConflict(error)
+                ) {
+                  await recoverInstantiationOnce(error, "basis");
+                  return;
+                }
+                this.#reportPieceStartCommitFailure(instantiateActionId, error);
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
                 return;
               }
-              // A stale read recovers only where a serving side supplies the
-              // view the retry reads.
-              if (
-                this.#runtime.experimental.serverExecution === true &&
-                isStaleReadConflict(error)
-              ) {
-                await recoverInstantiationOnce(error, "basis");
-                return;
-              }
-              this.#reportPieceStartCommitFailure(instantiateActionId, error);
-              if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
-              return;
-            }
-            const settlement = waveSettlementOf(actualTx);
-            if (settlement === undefined) return;
-            const settled = await settlement;
-            if (settled.error === undefined) return;
+              const settlement = waveSettlementOf(actualTx);
+              if (settlement === undefined) return;
+              const settled = await settlement;
+              if (settled.error === undefined) return;
 
-            const waveWithdrawalCause = settled.error.waveWithdrawalCause;
-            if (waveWithdrawalCause === "wave-abandoned") {
-              // Explicit abandon is clean enclosing-lifecycle teardown, not a
-              // structure-load failure. Keep it visible without incrementing
-              // the serving runtime's failure observer/health counter.
-              logger.warn("piece-start-commit-abandoned", () => [
-                `piece-start commit ${instantiateActionId} was withdrawn by ` +
-                "wave abandon; the enclosing lifecycle owns any restart",
+              const waveWithdrawalCause = settled.error.waveWithdrawalCause;
+              if (waveWithdrawalCause === "wave-abandoned") {
+                // Explicit abandon is clean enclosing-lifecycle teardown, not a
+                // structure-load failure. Keep it visible without incrementing
+                // the serving runtime's failure observer/health counter.
+                logger.warn("piece-start-commit-abandoned", () => [
+                  `piece-start commit ${instantiateActionId} was withdrawn by ` +
+                  "wave abandon; the enclosing lifecycle owns any restart",
+                  settled.error,
+                ]);
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
+                return;
+              }
+              // A WHOLE contribution drop is recoverable in the same sense the
+              // stale-read refusal is, and the helper reports only if its one
+              // retry also loses. A partial drop is not: part of the
+              // contribution stands, so there is no rolled-back view to
+              // re-instantiate against, and it takes the same terminal arm a
+              // second failure takes.
+              await recoverInstantiationOnce(
                 settled.error,
-              ]);
-              if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
-              return;
-            }
-            // A WHOLE contribution drop is recoverable in the same sense the
-            // stale-read refusal is, and the helper reports only if its one
-            // retry also loses. A partial drop is not: part of the
-            // contribution stands, so there is no rolled-back view to
-            // re-instantiate against, and it takes the same terminal arm a
-            // second failure takes.
-            await recoverInstantiationOnce(
-              settled.error,
-              waveWithdrawalCause === "contribution-dropped"
-                ? "basis"
-                : "terminal",
-            );
-          }).catch((error) => {
+                waveWithdrawalCause === "contribution-dropped"
+                  ? "basis"
+                  : "terminal",
+              );
+            },
+          ).catch((error) => {
             this.#reportPieceStartCommitFailure(instantiateActionId, error);
             if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
           });
@@ -4958,7 +5031,7 @@ export class Runner {
         }
         // ON-arm serving: the setup seals into the wave, and the wave
         // can still WITHDRAW it at the commit step (a conflict drop, a
-        // lease-lost abort) AFTER commit() resolved — so the running
+        // lease-lost abort) after `commit().settled` resolved — so the running
         // graph is replaced only once the setup is DURABLY accepted
         // (waveSettlementOf). On withdrawal the OLD graph stays: v2
         // running against withdrawn setup would read internal cells that
@@ -4980,7 +5053,7 @@ export class Runner {
               resultCell,
             );
             this.#runtime.prepareTxForCommit(setupTx);
-            const committed = await setupTx.commit();
+            const committed = await setupTx.commit().settled;
             if (committed.error !== undefined) {
               logger.error(
                 "pattern-swap-setup-error",
@@ -5341,9 +5414,10 @@ export class Runner {
     // setup for it: the internal cells the new version's setup would have
     // materialized — a handler's stream among them — have no manifest entry
     // and no result projection reaching them, and nothing about the stored
-    // doc changes on its own. A fresh run() would materialize them; this is
-    // the same repair the home ROOT gets in startEnsuredDefaultPattern,
-    // reachable here for the nested pieces that never pass through it.
+    // doc changes on its own. A fresh run() would materialize them, and this
+    // repair does the same for every piece, whatever starts it: a space's root
+    // is repaired as a nested piece is, a profile that is its space's root
+    // among them.
     //
     // The trigger is that stored state and nothing else: a setup-completion
     // marker that does not name this version, and a manifest missing one of
@@ -5379,10 +5453,7 @@ export class Runner {
             ref,
             this.#sessionPatternPointer(resultCell),
           ) !== "matches" &&
-        !this.#storedManifestCovers(resultCell, pattern) &&
-        // The root/default pattern is the PieceController's to repair (it has
-        // the richer roll-forward + clear-error path); defer to it there.
-        !this.#isSpaceDefaultPattern(resultCell)
+        !this.#storedManifestCovers(resultCell, pattern)
       ) {
         setupRepair = {
           pattern,
@@ -6021,7 +6092,7 @@ export class Runner {
     resultCell: Cell<any>,
   ): Promise<Result<Unit, CommitError>> {
     const committer = this.#deferredStartCommitter;
-    const commit: DeferredStartCommit = () => tx.commit();
+    const commit: DeferredStartCommit = () => tx.commit().settled;
     return committer === undefined
       ? commit()
       : committer(tx, resultCell, commit);
@@ -7437,6 +7508,7 @@ export class Runner {
       resultCell,
       {
         referencedArgumentFields: options.referencedArgumentFields,
+        capturedArgumentFields: options.capturedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         ...(creatingPiece
           ? {
@@ -8378,6 +8450,17 @@ export class Runner {
             derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
               undefined
           ) return;
+          // A default belongs to its owning piece, so it carries the label on
+          // the piece's root. The pattern pointer and the manifest read above
+          // are members of the piece's document, and reading a member
+          // consumes no label, so this read is what brings the root label
+          // into the seed. It is `nonRecursive`, which consumes the root
+          // entry alone: the labels on the piece's fields belong to other
+          // values, and a constant default does not derive from them.
+          tx.readValueOrThrow({ ...resultLink, path: [] }, {
+            nonRecursive: true,
+            meta: ignoreReadForScheduling,
+          });
           // The graph has not enrolled its stores yet. This seed carries the
           // same ownership claim as setup through the ordinary writer-fit gate.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
@@ -10480,6 +10563,24 @@ export class Runner {
     tx.enableMultiSpaceWrites?.([...childSpaces, parentSpace]);
   }
 
+  /**
+   * Helper for the handler paths, which returns the result cell of the
+   * handling caused by `cause`: its receipt, in the space of the handler's
+   * own result cell `patternResultCell`.
+   */
+  #handlingReceiptCell(
+    patternResultCell: Cell<any>,
+    cause: Record<string, any>,
+    tx: IExtendedStorageTransaction,
+  ): Cell<unknown> {
+    return this.#runtime.getCell(
+      patternResultCell.space,
+      { resultFor: cause },
+      undefined,
+      tx,
+    );
+  }
+
   #handleJavaScriptHandlerResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
@@ -10490,12 +10591,7 @@ export class Runner {
     addCancel: AddCancel,
     cause: Record<string, any>,
   ): any {
-    const receiptCell = this.#runtime.getCell(
-      patternResultCell.space,
-      { resultFor: cause },
-      undefined,
-      tx,
-    );
+    const receiptCell = this.#handlingReceiptCell(patternResultCell, cause, tx);
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
       // Events-down (runtime-mapping.md, row N26): receipt create-only
@@ -10803,7 +10899,9 @@ export class Runner {
    * throws {@link RetryImmediately} so the scheduler re-runs the handler or
    * action. On the re-run each name resolves synchronously (see the pattern
    * builder's resolveInSpaceTargetSpace), and the run records the allocation
-   * in the same commit as the writes that refer to it.
+   * in the same commit as the writes that refer to it. A name the runtime
+   * leaves unresolved throws {@link InSpaceTargetUnresolved} instead (see
+   * `Runtime.resolveInSpaceName()`).
    *
    * Each space created for a name is owned by the owner
    * {@link Runtime.actingPrincipalFor} gives the run's transaction, the one the
@@ -10814,6 +10912,7 @@ export class Runner {
   async #resolvePendingSpaceNamesAndRetry(
     frame: Frame,
     tx?: IExtendedStorageTransaction,
+    receiptCell?: Cell<unknown>,
   ): Promise<never> {
     const pending = [...(frame.pendingSpaceNames ?? [])];
     const space = frame.space;
@@ -10827,14 +10926,24 @@ export class Runner {
           "acting user, and this run has none",
       );
     }
-    await Promise.all(
-      pending.map(([name, grants]) =>
-        this.#runtime.resolveInSpaceName(space, name, {
-          owner,
-          ...(grants !== undefined ? { grants } : {}),
-        })
-      ),
-    );
+    try {
+      await Promise.all(
+        pending.map(([name, request]) =>
+          this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
+        ),
+      );
+    } catch (error) {
+      // A withdrawn run still names the handling's receipt, which the serving
+      // runtime's run of the same event writes: the address derives from the
+      // event, and a caller reads the served outcome through it.
+      if (
+        error instanceof InSpaceTargetUnresolved && tx !== undefined &&
+        receiptCell !== undefined
+      ) {
+        tx.handlingReceiptLink = receiptCell.getAsNormalizedFullLink();
+      }
+      throw error;
+    }
     throw new RetryImmediately(
       `Resolving in-space target spaces: ${
         pending.map(([name]) => name).join(", ")
@@ -11238,7 +11347,11 @@ export class Runner {
           logger.timeStart("stream", "postRun");
           try {
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
-              return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
+              return this.#resolvePendingSpaceNamesAndRetry(
+                frame,
+                tx,
+                this.#handlingReceiptCell(resultCell, cause, tx),
+              );
             }
             const handleResult = () => {
               const normalized = normalizeSandboxResult(result, name);
@@ -11254,10 +11367,11 @@ export class Runner {
               );
             };
             // Access-list changes commit on their own, ahead of the handler's
-            // transaction: the memory server admits an access-list change
-            // only as a commit's single operation.
+            // writes: the memory server admits an access-list change only as
+            // a commit's single operation.
             if ((frame.pendingSpaceAccessChanges?.size ?? 0) > 0) {
-              return commitSpaceAccessChanges(frame).then(handleResult);
+              const settling = settleSpaceAccessChanges(frame);
+              if (settling !== undefined) return settling.then(handleResult);
             }
             return handleResult();
           } finally {
@@ -11282,8 +11396,11 @@ export class Runner {
           frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
         ) {
           popFrameAfterReturn = false;
-          return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
-            .finally(() => popFrame(frame));
+          return this.#resolvePendingSpaceNamesAndRetry(
+            frame,
+            tx,
+            this.#handlingReceiptCell(resultCell, cause, tx),
+          ).finally(() => popFrame(frame));
         }
         (error as Error & { frame?: Frame }).frame = frame;
         throw error;
@@ -12615,7 +12732,9 @@ export class Runner {
     const targetSpace = module.targetSpace ?? resultCell.space;
     let childResultCell = this.#runtime.getCell(
       targetSpace,
-      {
+      // A space's root sits where its genesis reservation says, which the
+      // reservation fixed before this output existed.
+      module.targetSpaceRoot ? inSpaceRootCause(targetSpace) : {
         resultFor: {
           space: outputRedirect.space,
           id: outputRedirect.id,
@@ -12700,6 +12819,9 @@ export class Runner {
           parentResultCell.space,
           delegatedCarriageOf(waveRunContextOf(instanceTx)),
         );
+        if (plan.module.targetSpaceRoot) {
+          this.#linkSpaceRootIfAbsent(instanceTx, childResultCell);
+        }
       }
       // Only a child in a space of its own claims one: an in-space nested
       // node is part of its parent's graph and is re-instantiated from the
@@ -12781,6 +12903,22 @@ export class Runner {
           }
         },
     );
+  }
+
+  /**
+   * Links `root` as the root of its space in `tx`, unless a root is linked
+   * there already. Reading the slot puts it in `tx`'s read set, so a rival
+   * linking a root first makes this commit conflict rather than replace it.
+   */
+  #linkSpaceRootIfAbsent(
+    tx: IExtendedStorageTransaction,
+    root: Cell<unknown>,
+  ): void {
+    const slot = this.#runtime.getSpaceCell(root.space).withTx(tx).key(
+      "defaultPattern",
+    );
+    if (slot.getRaw() !== undefined) return;
+    slot.set(root.withTx(tx));
   }
 
   /** Resumes a child from its retained source after its parent's commit. */

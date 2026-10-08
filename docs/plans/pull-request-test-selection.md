@@ -679,9 +679,9 @@ that migration into an edit of one file rather than of all of them.
 
 Both consult the same **skip list**: the identities this invocation is not
 to run. A listed test is registered as ignored rather than dropped, so it
-appears in the run's output and in its JUnit report as skipped, and the
-store learns it was deliberately not run instead of watching the identity
-disappear.
+appears in the run's output and in its JUnit report as skipped rather
+than disappearing from them. A lane ships no record of a test its own list
+named, since the plan gave that test to another lane or to none.
 
 Four properties come from intercepting at registration rather than on the
 command line. The list is a file named by an environment variable, so
@@ -1408,35 +1408,27 @@ object: a day of records is over a gigabyte of NDJSON, against a maximum
 string length of about half that, and an object has to fit in a string
 both to be written and to be read.
 
-**A re-run's earlier attempts can be stored a second time.** An object's
-day partition comes from the run's start time, and GitHub reports that
-per attempt rather than per run: across four re-run builds in this
-repository every one reported a later start for its second attempt, one
-of them nearly six hours later. Artifacts are scoped to the run rather
-than to the attempt, so a later attempt's relay re-ships the earlier
-attempts' as well as its own. Where two attempts fall either side of a
-UTC midnight their partitions differ, so the re-shipped records are
-written as a second object under the later day rather than colliding with
-the first, and the publisher folds both because it keys on the object
-name. A survey of five days of the store, 68,822 objects, found no run
-identifier written into two partitions, so this has not happened yet.
+**Some earlier attempts are stored twice.** A relay once shipped every
+attempt's artifacts and dated them all by the latest attempt's start,
+which GitHub moves when a re-run begins. A run re-run on a later UTC day
+therefore had its earlier attempts' artifacts written a second time under
+the later day. Measured on 2026-10-01, 1,334 object names from 26 runs
+each appear under two dates, and the publisher folds both copies because it
+keys on the object name. The relay now ships only the attempt that
+triggered it, dated by that attempt's own start, so no new copies arise.
+[The record spec](../specs/test-records.md#the-store) says how a reader
+recognizes an existing one.
 
-What it would distort is narrower than it first looks, and the rest of
-this paragraph is inference rather than measurement. Catches are safe by
-construction, because each is attributed to the pair of the commit and
-the source that saw it. Costs are a percentile over many observations and
-would barely move. Duplicating a report doubles its failures and its runs
-together, so a ratio over both is largely unmoved — but the report that
-gets duplicated is the earlier attempt's, which is the one somebody
-re-ran because it failed, so `churn` would carry those failures twice
-against run counts that are only partly duplicated.
-
-Fixing it means settling something this plan should not settle on its
-own. The partition wants to be stable across attempts, while a record's
-context honestly wants the attempt's own start, and one field is doing
-both jobs today. The change reaches `ciObjectName`, the compactor, and
-[the record spec](../specs/test-records.md), so it belongs to the store
-rather than to selection, and it is its own piece of work.
+The rest of this paragraph is inference rather than measurement. Catches
+are safe by construction, because each is attributed to the pair of the
+commit and the source that saw it. Costs are a percentile over many
+observations and barely move. A duplicated report doubles its failures and
+its runs together, so a ratio over both is largely unmoved — but the
+report that was duplicated is the earlier attempt's, which is the one
+somebody re-ran because it failed, so `churn` carries those failures twice
+against run counts that are only partly duplicated. Those counters are kept
+by day, so the copies stop counting once their days leave the window a
+state keeps counters for.
 
 ## Scoring
 
@@ -4050,10 +4042,10 @@ pull request's own run could not have:
   merge commit its records name, and never the branch's tip. Where the report
   cannot establish that commit or its date, it says the run did not run the test
   and gives no reason. The same holds for a pull request whose run did not run
-  in lanes, since no manifest chose what it ran. The answer changes what to do. Not selected is the
-  expected cost of selection, and the failure will raise the test's score so the
-  next change in that area runs it. Ran and passing is a flake or an interaction
-  between changes, and it is a different conversation.
+  in lanes, since no manifest chose what it ran. The answer changes what to do.
+  Not run is the cost of selection, and the note says what the plan the lanes
+  computed records about leaving the test out. Ran and passing is a flake or an
+  interaction between changes, and it is a different conversation.
 - **A coverage debt increase above the threshold**, naming the source
   groups the change touched that rose as well, which is as near as this
   gets to saying where a test would go. Never as a failure — the run is
@@ -4108,9 +4100,10 @@ observation about it:
   team, or per anything. No history. The comment exists on the pull
   request and nowhere else, and no tile, report, or query rolls them up.
 - **It is not a judgement, because the system chose not to run the test.**
-  When a test was not selected, the honest statement is that this design
-  traded that coverage away, and the comment says so in those words. The
-  author did not miss anything; the selector did.
+  When a test was not selected, the comment says what the plan the lanes
+  computed says about leaving it out: its unit runs whole and holds a
+  withheld test, no lane can hold it, the tests that had to run left no
+  room for anything else, or the lanes filled the room with other tests. The author did not miss anything; the selector decided.
 - **It is accurate about flakes.** A test the store has seen disagreeing
   with itself is labelled as one, with the counts behind the label, so
   nobody is told they broke something that breaks on its own and nobody
@@ -4133,7 +4126,7 @@ selector did not pick will merge, and `main` will go red about 15 minutes
 later. That is the trade. What makes it bearable is that the blast radius
 is one commit, the full run names the test, the change that caused it gets
 told without anybody going looking, and the failure raises that test's
-score so the next change in that area runs it. If the rate turns out to be
+score, which makes later changes in that area more likely to run it. If the rate turns out to be
 intolerable, the escape hatch is a merge queue, which restores the
 guarantee at the cost of merge latency. This plan does not propose one; it
 notes that the option exists and that nothing here forecloses it.
@@ -4233,7 +4226,7 @@ is pinned to the commit's date. And if none of that settles it,
 | Two measured sets over one member disagree | Nothing joins them. Each carries its own baseline and its own verdict, and an `ACCEPT_COVERAGE_DEBT` marker naming the member accepts a rise in either. |
 | A lane exceeds five minutes repeatedly | The correction factors rise on the next publisher run and less is packed. If more than 15% of the lanes projected inside their bound overrun it over the cost window, the dashboard's test selection tile goes red and says so. |
 | The cost model breaks | The manifest is published anyway, carrying what broke, and the publisher's run succeeds. The dashboard's test selection tile goes red and links to the page's cost model section, which names each suite and figure. |
-| Two attempts of one run straddle a UTC midnight | The later attempt's relay writes the earlier attempt's records a second time, under the later day, and the publisher folds both. Not observed in the store so far; see [What the store is missing](#what-the-store-is-missing). |
+| Two attempts of one run straddle a UTC midnight | Each attempt's relay ships only that attempt's artifacts, dated by that attempt's own start, so each lands once, under the day it ran. Copies written before the relay worked this way remain; see [What the store is missing](#what-the-store-is-missing). |
 | A fork pull request | Works unchanged. The manifest is world-readable, and the existing member gate decides whether the fork's records ship. |
 | A re-run of one failed lane | Runs the same set, because the manifest is resolved by the commit's date, which no attempt changes. |
 | A lane cannot read the date of the commit it is testing | The lane fails and says why, and so does the job counting the full run's lanes. Reading the date can fail in one lane and not the next, and no other moment is one the lanes are sure to share, so this fails for the reason an unreachable store does. |

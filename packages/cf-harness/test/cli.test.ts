@@ -28,10 +28,10 @@ import {
   formatCfHarnessCliUsage,
   formatCfHarnessTranscriptEvent,
   installCfHarnessSignalHandlers,
-  parseCfHarnessCliArgs,
   resolveCfHarnessCliSystemPrompt,
-  runCfHarnessCli,
 } from "../src/cli.ts";
+import { parseCfHarnessCliArgs, runCfHarnessCli } from "./support/on-linux.ts";
+import type { HarnessBrowserHost } from "../src/contracts/browser-host.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -72,6 +72,18 @@ const createIoBuffers = (): {
     stderr,
   };
 };
+
+/**
+ * The operator summary of a run this file's `runCfHarnessCli()` made without
+ * naming a sandbox runtime: Docker, by the default of Linux, the platform
+ * that function runs as here.
+ */
+const defaultedDockerSummary = (result: HarnessPromptLoopResult): string =>
+  formatCfHarnessCliResult(result, "operator", {
+    runtime: "docker",
+    source: "default",
+    platform: "linux",
+  });
 
 const completedCliResult = (
   runId: string,
@@ -2627,6 +2639,42 @@ Deno.test("installCfHarnessSignalHandlers terminalizes the active run before exi
   );
 });
 
+Deno.test("installCfHarnessSignalHandlers handles one signal, and disposes once", async () => {
+  let handler: CfHarnessCliSignalHandler | undefined;
+  let disposals = 0;
+  const exits: number[] = [];
+  let release = () => {};
+  const held = new Promise<void>((resolve) => release = resolve);
+  const cleanup = installCfHarnessSignalHandlers(
+    () =>
+      ({ terminalizeInterruptedRun: () => held }) as unknown as CfHarnessEngine,
+    {
+      registerSignalHandler: (_signals, registeredHandler) => {
+        handler = registeredHandler;
+        return () => {
+          disposals += 1;
+        };
+      },
+      exit: (code) => {
+        exits.push(code);
+      },
+    },
+  );
+
+  // A second signal while the first is being handled is not handled again.
+  const first = Promise.resolve(handler?.("SIGINT"));
+  await handler?.("SIGTERM");
+  release();
+  await first;
+  cleanup();
+  cleanup();
+
+  assertEquals(exits, [130]);
+  // Once as the signal is handled, once as the caller disposes; the second
+  // dispose does nothing.
+  assertEquals(disposals, 2);
+});
+
 Deno.test("runCfHarnessCli registers and disposes signal handlers around a run", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let registeredSignals: readonly string[] = [];
@@ -2683,7 +2731,7 @@ Deno.test("runCfHarnessCli registers and disposes signal handlers around a run",
   assertEquals(disposed, true);
   assertEquals(stderr, []);
   assertEquals(stdout, [
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "Done.",
       transcript: [
@@ -2840,6 +2888,56 @@ Deno.test("runCfHarnessCli omits the posture record for a run that recorded none
   assertEquals(summary.includes("provenance"), false);
 });
 
+Deno.test("runCfHarnessCli hands an embedder's browser host to the run's engine", async () => {
+  const { io } = createIoBuffers();
+  const browserHost: HarnessBrowserHost = {
+    perform: () =>
+      Promise.resolve({
+        status: "ok",
+        page: { url: "about:blank", title: "" },
+      }),
+  };
+  let createdOptions: Record<string, unknown> | undefined;
+  const exitCode = await runCfHarnessCli(
+    [
+      "--model-provider",
+      "openai-compatible-gateway",
+      "--workspace",
+      "/tmp/project",
+      "--prompt",
+      "Find the opening hours",
+      "--model",
+      "gpt-5.4",
+      "--allow-tool",
+      "delegate_task",
+      "--allow-subagent-profile",
+      "browser",
+    ],
+    {
+      io,
+      env: { CF_HARNESS_API_KEY: "test-key" },
+      browserHost,
+      createPromptLoop: (options) => {
+        createdOptions = options as Record<string, unknown>;
+        return {
+          runPrompt: () =>
+            Promise.reject(new Error("the loop is not run in this test")),
+          runTranscript: () =>
+            Promise.reject(new Error("unexpected resume path")),
+        };
+      },
+    },
+  );
+
+  assertEquals(exitCode, 1);
+  assertEquals(
+    (createdOptions?.engine as { browserHost?: HarnessBrowserHost })
+      ?.browserHost,
+    browserHost,
+  );
+  assertEquals(createdOptions?.allowedSubagentProfiles, ["browser"]);
+});
+
 Deno.test("runCfHarnessCli executes the prompt loop and prints result metadata", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
@@ -2921,7 +3019,7 @@ Deno.test("runCfHarnessCli executes the prompt loop and prints result metadata",
   assertEquals(
     stdout,
     [
-      formatCfHarnessCliResult({
+      defaultedDockerSummary({
         model: "gpt-5.4",
         finalAssistantText: "Inspection complete.",
         transcript: [
@@ -3898,7 +3996,7 @@ Deno.test("runCfHarnessCli can stream transcript events as they happen", async (
     'assistant -> tools: read_file(path="README.md")\n',
     "tool read_file: outputId=read-1\n",
     "assistant: Inspection complete.\n",
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "Inspection complete.",
       transcript: [
@@ -4953,7 +5051,7 @@ Deno.test("runCfHarnessCli allows no-auth gateway mode without an API key", asyn
   assertEquals(createdOptions?.gatewayAuthMode, "none");
   assertEquals(createdOptions?.apiKey, undefined);
   assertEquals(stdout, [
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "No auth path.",
       transcript: [
@@ -5083,7 +5181,7 @@ Deno.test("runCfHarnessCli can resume from persisted run artifacts", async () =>
   );
   assertEquals(runTranscriptOptions?.promptSlotBinding, promptSlotBinding);
   assertEquals(stdout, [
-    formatCfHarnessCliResult({
+    defaultedDockerSummary({
       model: "gpt-5.4",
       finalAssistantText: "Resumed.",
       transcript: [
@@ -7777,6 +7875,58 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool 
       ),
     Error,
     "--allow-tool loom_people requires a Loom retrieval configuration",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs reads the host command broker configuration from the flag or the environment", async () => {
+  const commands = {
+    cliPath: "/trusted/loom",
+    transport: { kind: "broker" as const, queuePath: "/trusted/queue" },
+  };
+  const readTextFile = (path: string) => {
+    assertEquals(path, "/trusted/commands.json");
+    return Promise.resolve(JSON.stringify(commands));
+  };
+  const flagged = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--loom-commands-config",
+      "/trusted/commands.json",
+      "--allow-tool",
+      "run_command",
+    ],
+    { cwd: "/tmp/project", env: {}, readTextFile },
+  );
+  if ("help" in flagged) throw new Error("expected config result");
+  assertEquals(flagged.loomCommands, commands);
+  const fromEnvironment = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: { CF_HARNESS_LOOM_COMMANDS_CONFIG: "/trusted/commands.json" },
+      readTextFile,
+    },
+  );
+  if ("help" in fromEnvironment) throw new Error("expected config result");
+  assertEquals(fromEnvironment.loomCommands, commands);
+  const absent = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in absent) throw new Error("expected config result");
+  assertEquals(absent.loomCommands, undefined);
+});
+
+Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without the broker configuration", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "list_commands"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool list_commands requires a host command broker configuration",
   );
 });
 

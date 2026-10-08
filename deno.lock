@@ -2868,6 +2868,11 @@
       "npm:zod@^4.4.3"
     ],
     "members": {
+      "packages/agent-runner": {
+        "dependencies": [
+          "jsr:@db/sqlite@0.13.0"
+        ]
+      },
       "packages/api": {
         "dependencies": [
           "npm:typescript@6.0.3"

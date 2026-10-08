@@ -67,7 +67,7 @@ describe("query-result-proxy view drift", () => {
   });
 
   afterEach(async () => {
-    if (tx.status().status === "ready") await tx.commit();
+    if (tx.status().status === "ready") await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -307,7 +307,7 @@ describe("query-result-proxy view drift", () => {
       tx,
     );
     seed.set({ a: 1 });
-    await tx.commit();
+    await tx.commit().settled;
     const readTx = runtime.edit();
     readTx.markLazyMaterialize(true);
     const view = createQueryResultProxy<{ a: number }>(
@@ -315,7 +315,7 @@ describe("query-result-proxy view drift", () => {
       readTx,
       seed.getAsNormalizedFullLink(),
     );
-    await readTx.commit();
+    await readTx.commit().settled;
     expect(() => view.a).toThrow("Transaction is complete");
     expect(getCellOrThrow(view).getAsNormalizedFullLink()).toEqual(
       seed.getAsNormalizedFullLink(),
@@ -326,7 +326,7 @@ describe("query-result-proxy view drift", () => {
   it("refuses on a standing handle once a later commit changed the kind", async () => {
     const seed = runtime.getCell<unknown>(space, "handle-drift", undefined, tx);
     seed.set({ a: 1 });
-    await tx.commit();
+    await tx.commit().settled;
 
     // No transaction: a standing handle that resolves one per access.
     const handle = createQueryResultProxy<{ a: number }>(
@@ -338,7 +338,7 @@ describe("query-result-proxy view drift", () => {
 
     const later = runtime.edit();
     runtime.getCell<unknown>(space, "handle-drift", undefined, later).set([9]);
-    await later.commit();
+    await later.commit().settled;
 
     expect(() => handle.a).toThrow(ViewDriftError);
     const fresh = createQueryResultProxy<number[]>(

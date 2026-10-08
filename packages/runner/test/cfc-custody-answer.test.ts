@@ -28,6 +28,7 @@ import {
 } from "../src/cfc/policy.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
+import { hostGestureProvenance } from "../src/cfc/host-review.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -140,11 +141,7 @@ const termsFor = (question: string) => ({
 const trustedClick = () => {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "CustodySeal" },
-    },
+    provenance: hostGestureProvenance("CustodySeal"),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -220,7 +217,7 @@ const setup = async ({ witnessed = true, toSeal = true } = {}) => {
   terms.set(termsFor("Where should we eat?") as never);
   // The room document whose cells receive the seal's links.
   host.getCell(S, "room-cells", undefined, install).set({} as never);
-  expect((await install.commit()).error).toBeUndefined();
+  expect((await install.commit().settled).error).toBeUndefined();
   const roomAcl = new ACLManager(runtimeFor(roomOwner), S);
   await roomAcl.set(alice.did(), "OWNER");
   for (const member of [bob, mallory]) {
@@ -253,7 +250,7 @@ const setup = async ({ witnessed = true, toSeal = true } = {}) => {
       const tx = host.edit();
       host.getCellFromLink(terms.getAsNormalizedFullLink(), undefined, tx)
         .set(termsFor(question) as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     },
     /** Seals `choice` for `identity`, linking the box into `box`. */
     async seal(identity: Identity, choice: string, box: Cell<unknown>) {
@@ -281,7 +278,7 @@ const setup = async ({ witnessed = true, toSeal = true } = {}) => {
           },
         },
       } as FabricValue);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const prepared = await prepareCustodySeal(
         draft.withTx(undefined),
         fixture.room(identity, box),

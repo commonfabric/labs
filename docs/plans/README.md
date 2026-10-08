@@ -10,6 +10,15 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [CFC spec correspondence process](cfc-spec-correspondence-process.md)
+  gives agents the procedure for changing Contextual Flow Control here: read
+  the specification first, classify the change as host arrangement, conforming
+  implementation or semantic gap, and route a semantic gap through a specs
+  pull request before code; and stages what enforces it, from the instruction
+  surfaces that name the specs repository, through a hash-pinned spec snapshot
+  and correspondence manifest checked in CI and a §18.6.4 conformance
+  statement, to a kernel of same-named pure functions the pseudocode is the
+  source of.
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.

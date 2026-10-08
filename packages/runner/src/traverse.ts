@@ -27,6 +27,7 @@ import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schem
 import {
   collectExternalSchemaRefHashes,
   containsExternalSchemaRef,
+  isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import type { MemorySpace, Result, Unit } from "@commonfabric/memory/interface";
 import {
@@ -90,11 +91,15 @@ import {
   parseLink,
   schemaForSpaceCrossing,
 } from "./link-utils.ts";
-import { canFollowScopedLink, isCellScope, scopeRank } from "./scope.ts";
+import {
+  canFollowScopedLink,
+  isCellScope,
+  noteDeclaredReadScope,
+  scopeRank,
+} from "./scope.ts";
 import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
 import {
   type Activity,
-  type CommitError,
   createReadOnlyTransactionError,
   type IAttestation,
   type IExtendedStorageTransaction,
@@ -106,6 +111,7 @@ import {
   type ITransactionJournal,
   type ReadError,
   type StorageTransactionStatus,
+  type TransactionCommitReceipt,
   type WriteError,
   type WriterError,
 } from "./storage/interface.ts";
@@ -1879,7 +1885,7 @@ export class ManagedStorageTransaction implements IStorageTransaction {
     this.#assertWritable("abort()");
     throw new Error("Method not implemented.");
   }
-  commit(): Promise<Result<Unit, CommitError>> {
+  commit(): TransactionCommitReceipt {
     this.#assertWritable("commit()");
     throw new Error("Method not implemented.");
   }
@@ -2693,6 +2699,32 @@ const schemaScopeForSelector = (selector?: SchemaPathSelector) =>
 const schemaFollowScopeCap = (schema: unknown): SchemaScope | undefined =>
   ContextualFlowControl.getSchemaScopeCap(schema as JSONSchema | undefined);
 
+const _schemaScopeCapCache = new WeakMap<object, SchemaScope | undefined>();
+
+/**
+ * {@link schemaFollowScopeCap}, memoized by schema identity. Handle
+ * construction asks it of every element read as a handle, and the elements
+ * of one array share one declaration, so the reference resolution behind the
+ * answer runs once per declaration rather than once per element. A schema
+ * whose root is a content-addressed reference is answered from the closure
+ * the registry holds at the time, which may not hold it yet, so that answer
+ * is never kept.
+ */
+function schemaFollowScopeCapMemoized(
+  schema: JSONSchema | undefined,
+): SchemaScope | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  if (_schemaScopeCapCache.has(schema)) {
+    return _schemaScopeCapCache.get(schema);
+  }
+  const cap = schemaFollowScopeCap(schema);
+  const ref = (schema as { $ref?: unknown }).$ref;
+  if (!(typeof ref === "string" && isExternalSchemaRef(ref))) {
+    _schemaScopeCapCache.set(schema, cap);
+  }
+  return cap;
+}
+
 /**
  * The key `TraversalContext.missingLinkTargetDocs` holds a document under: its
  * space, its scope and its id, since one id names a different document in
@@ -2901,6 +2933,7 @@ function followPointer(
     ]);
     return [notFound(target), selector];
   }
+  noteDeclaredReadScope(tx, schemaScope, link.scope);
   if (selector !== undefined) {
     // We'll need to re-root the selector for the target doc
     // Remove the portions of doc.path from selector.path, limiting schema if
@@ -3511,8 +3544,10 @@ export function combineSchemaForLink(
       schemaWithProperties(adopted, { default: parentDefault }),
     );
   }
-  const linkDefault = isObjectOrArray(linkSchema)
-    ? linkSchema.default
+  // The link's declaration is read in structural form, so a default behind a
+  // content-addressed reference is inherited as an inline one is.
+  const linkDefault = isObjectNotArray(linkSchema)
+    ? resolveExternalRootRefForStructure(linkSchema).default
     : undefined;
   if (linkDefault === undefined) {
     return parentSchema;
@@ -5978,6 +6013,23 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // since we can't follow all the write-redirect links.
         return fail(TRAVERSE_FAILURES.undefinedLink);
       } else {
+        // The selector combined the link's schema in at the hop, so its
+        // `default` is the nearest declaration for the value at the target,
+        // and an absent target reads as that default here as it does where a
+        // read enters at the target itself. A default standing in for a
+        // document the replica lacks is noted, so a view refuses to publish
+        // it.
+        const resolved = isObjectOrArray(redirSelector.schema) &&
+            "$ref" in redirSelector.schema
+          ? resolveSchemaRefsCanonical(redirSelector.schema)
+          : redirSelector.schema;
+        const defaultValue = resolved === undefined
+          ? undefined
+          : this.#applyDefault(redirDoc, resolved);
+        if (defaultValue !== undefined) {
+          this.#noteDefaultOnAbsentValue(redirDoc);
+          return { ok: defaultValue };
+        }
         return this.#isValidType(redirSelector.schema, "undefined")
           ? { ok: this.#traversePrimitive(redirDoc, redirSelector.schema) }
           : fail(TRAVERSE_FAILURES.undefinedLink);
@@ -6367,6 +6419,13 @@ function getNextCellLink(
         ? combined
         : schemaForSpaceCrossing(tx, doc.address.space, combined),
     };
+    // A handle built over a link is that link followed from the position
+    // the handle is declared at, as much as a value read through it is.
+    noteDeclaredReadScope(
+      tx,
+      schemaFollowScopeCapMemoized(schema),
+      lastLink.scope,
+    );
     noteLinkCrossing(context, doc.address, target);
     return target;
   }

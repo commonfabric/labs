@@ -164,7 +164,7 @@ describe("bench-write-accounting", () => {
         cell.set([1, 2, 3]);
         expect(accountNovelty(tx.journal.novelty(space)))
           .toEqual({ docs: 1, bytes: '{"value":[1,2,3]}'.length });
-        await tx.commit();
+        await tx.commit().settled;
       } finally {
         await close();
       }
@@ -184,7 +184,7 @@ describe("bench-write-accounting", () => {
         // The parent array holds a link per element, and each element is a
         // document of its own.
         expect(accountNovelty(tx.journal.novelty(space)).docs).toBe(4);
-        await tx.commit();
+        await tx.commit().settled;
       } finally {
         await close();
       }
@@ -204,7 +204,7 @@ describe("bench-write-accounting", () => {
           { label: "a", tags: ["one"] },
           { label: "b", tags: ["two"] },
         ]);
-        await setupTx.commit();
+        await setupTx.commit().settled;
 
         const tx = runtime.edit();
         const cell = runtime.getCell<{ label: string; tags: string[] }[]>(
@@ -224,7 +224,7 @@ describe("bench-write-accounting", () => {
           docs: 1,
           bytes: JSON.stringify(replacement).length,
         });
-        await tx.commit();
+        await tx.commit().settled;
       } finally {
         await close();
       }
@@ -241,7 +241,7 @@ describe("bench-write-accounting", () => {
           tx,
         );
         cell.set([1, 2, 3]);
-        await tx.commit();
+        await tx.commit().settled;
         // A settled transaction releases its journal, which is why the
         // benchmarks read these numbers before they commit.
         expect(accountNovelty(tx.journal.novelty(space)))

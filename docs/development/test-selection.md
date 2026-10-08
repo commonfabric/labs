@@ -76,10 +76,12 @@ where the value comes from, and which way you would move it.
 ### `coverage`
 
 Every measured set — one suite's units over one workspace member's lines —
-with how many units it holds and the baseline this commit's manifest holds
-for it, and then every workspace member that carries no set, with the
-reason. That baseline is the one the coverage gate compares this commit
-against, since the gate resolves its manifest at the commit's moment too.
+with how many units it holds and its baseline, and then every workspace
+member that carries no set, with the reason. Of the baselines this commit's
+manifest holds for a set, the one shown is the one measured at the newest
+default-branch commit the checkout contains. That is the one the coverage
+gate compares this commit against, since the gate resolves its manifest at
+the commit's moment too and chooses among its baselines the same way.
 This is what answers "why is my package not gated?" and "what am I being
 compared against?".
 
@@ -1452,8 +1454,13 @@ itself.
   the test and gives no reason. The same holds for a pull request whose run did
   not run in lanes, since no manifest chose what it ran. Ran and passed is a flake or an interaction
   between changes. Withheld is the store holding the test back as too flaky to
-  judge a change by. Not selected is the expected cost of selection: the
-  coverage this design traded away, so nothing was missed. A test the packing
+  judge a change by. Otherwise the note says what the plan the lanes computed
+  over that manifest says about leaving it out, which is never something the
+  author missed. Either its unit runs whole and holds a withheld test, or no
+  lane can hold the test, or the tests that had to run left no room in the lanes
+  for anything else, or the lanes filled what they left with other tests. Only
+  those four are said, because the plan records nothing more specific about a
+  test it did not place. A test the packing
   reached, or one the store has never seen, with no record either way is a run
   that recorded less than it ran — a test job that fails before it uploads
   leaves its share behind like that — which is said in those words rather than
@@ -1530,9 +1537,9 @@ that reporting is about the system and never about individuals. The
 comment's subject is a commit and a test, and no author is named. Nothing
 is counted per author, per team, or per anything, and no history is kept:
 each comment is a pure function of one run, and no tile, report or query
-rolls them up. A test the selector declined to run is described as
-coverage this design traded away, because the author did not miss it. A
-test the store has seen disagreeing with itself is labelled as one, with
+rolls them up. A test the selector declined to run is described by what the plan
+the lanes computed says about leaving it out, because the author did not miss
+it. A test the store has seen disagreeing with itself is labelled as one, with
 the counts behind the label rather than a figure to be taken on trust.
 And the comment is edited in place rather than repeated, which the hidden marker
 at the top makes possible; a later attempt that finds nothing withdraws
@@ -1553,7 +1560,8 @@ run and pass `--dry-run`, which posts nothing.
 ## Units that run whole
 
 An invocation unit is usually one test file. A lane that wants part of
-one registers the rest of the file's tests as ignored.
+one registers the rest of the file's tests as ignored, and ships no
+record of them.
 
 Some units hold more than one test and cannot be split. These are a
 workspace member whose test task takes no file list, a member's browser

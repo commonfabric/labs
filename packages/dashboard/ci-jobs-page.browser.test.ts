@@ -53,7 +53,7 @@ const JOBS: Job[] = [
 
 const collected: CiJobs = {
   jobs: JOBS,
-  repoCount: 4,
+  repos: ["zed", "amp", "loom", "bay"],
   unreadableRepos: [],
   collectedAt: NOW,
 };
@@ -183,7 +183,7 @@ Deno.test("ci jobs sorting: a live update keeps the reader's sort and the rows t
   const duration = heading(fixture, 4);
   duration.click();
   const before = rows(fixture);
-  const link = before[2].querySelector("a");
+  const link = before[2].cells[1].querySelector("a");
 
   // The amp job reran and took as long again.
   const rerun = "https://example.com/rerun";
@@ -197,11 +197,13 @@ Deno.test("ci jobs sorting: a live update keeps the reader's sort and the rows t
     heading(fixture, 4).parentElement?.getAttribute("aria-sort"),
     "ascending",
   );
-  // Every row is kept, and in the one that changed only the link is replaced.
+  // Every row is kept, and in the one that changed only the workflow's link
+  // is replaced.
   const after = rows(fixture);
   after.forEach((row, index) => assert(row === before[index]));
   assertEquals(after[2].cells[0].textContent, "amp");
-  const relinked = after[2].querySelector("a");
+  assert(after[2].cells[0] === before[2].cells[0]);
+  const relinked = after[2].cells[1].querySelector("a");
   assert(relinked !== link);
   assertEquals(relinked?.getAttribute("href"), rerun);
 

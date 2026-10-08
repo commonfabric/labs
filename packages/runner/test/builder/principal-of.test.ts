@@ -8,7 +8,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { currentPrincipal } from "../../src/builder/current-principal.ts";
 import { pattern, popFrame, pushFrame } from "../../src/builder/pattern.ts";
-import { principalOf } from "../../src/builder/principal-of.ts";
+import { principalOf, principalsOf } from "../../src/builder/principal-of.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { UnknownCfcMetadataVersionError } from "../../src/cfc/metadata.ts";
@@ -191,7 +191,7 @@ describe("principalOf()", () => {
         }),
       } as never,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return runtime.getCell(space, cause);
   };
 
@@ -210,7 +210,7 @@ describe("principalOf()", () => {
         labelMap: { version: 1, entries },
       } as never,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /**
@@ -259,7 +259,7 @@ describe("principalOf()", () => {
       },
     });
     tx.prepareCfc();
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     return { cell: runtime.getCell(space, cause), author, error };
   };
 
@@ -319,7 +319,7 @@ describe("principalOf()", () => {
       const holder = runtime.getCell<unknown>(space, "holder");
       const tx = runtime.edit();
       holder.withTx(tx).set(profile);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(callIn(edit(), holder, "represents-principal")).toBe(bob.did());
     });
@@ -331,7 +331,7 @@ describe("principalOf()", () => {
       const holder = runtime.getCell<unknown>(space, "holder");
       const tx = runtime.edit();
       holder.withTx(tx).set(profile);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
         callIn(edit(), holder.getAsReactiveProxy(), "represents-principal"),
@@ -407,7 +407,7 @@ describe("principalOf()", () => {
           },
         } as never,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(() => callIn(edit(), profile, "represents-principal")).toThrow(
         UnknownCfcMetadataVersionError,
@@ -548,7 +548,7 @@ describe("principalOf()", () => {
         { target: runtime.getCell(space, "profile") },
         runtime.getCell(space, "principal-of-lift", undefined, tx),
       ) as Cell<{ principal?: string; held?: string }>;
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const cancel = result.sink(() => {});
       try {
         await waitForCellValue(
@@ -603,12 +603,12 @@ describe("principalOf()", () => {
       {
         const tx = runtime.edit();
         argument.withTx(tx).set({ seen: "no event yet", profile });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = runtime.edit();
         runtime.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const cancel = result.sink(() => {});
       await runtime.idle();
@@ -683,6 +683,185 @@ describe("principalOf()", () => {
     it("throws for a `target` that is not a cell", () => {
       expect(() => callIn(edit(), { name: "Bob" }, "authored-by")).toThrow(
         "takes a cell as its target",
+      );
+    });
+  });
+
+  describe('with `label` of `"written"`', () => {
+    /** Calls `principalOf(target, kind, options)` in a handler frame. */
+    const callAt = (target: unknown, kind: unknown, options: unknown) =>
+      inFrame(edit(), "handler", () => principalOf(target, kind, options));
+
+    /**
+     * Stores a document under `cause` whose `by` field links a profile that
+     * attests bob, with a label map of `entries`, and returns its cell.
+     */
+    const holding = async (cause: string, entries: SeedEntry[]) => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      return await seed(cause, entries, {
+        by: profile.getAsLink(),
+        title: "Held",
+      });
+    };
+
+    /** The copy of the linked profile's claim a link carries at `by`. */
+    const carried: SeedEntry = {
+      path: ["by"],
+      label: { integrity: [claim("represents-principal", bob.did())] },
+      origin: "link",
+    };
+
+    it("returns the DID attested on a field holding a link, where the default returns the linked document's", async () => {
+      const holder = await holding("holder", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+        carried,
+      ]);
+      const field = holder.key("by");
+      expect(callIn(edit(), field, "represents-principal")).toBe(bob.did());
+      expect(callAt(field, "represents-principal", { label: "resolved" }))
+        .toBe(bob.did());
+      expect(callAt(field, "represents-principal", { label: "written" }))
+        .toBe(alice.did());
+      expect(
+        inFrame(
+          edit(),
+          "handler",
+          () =>
+            principalsOf(field, "represents-principal", { label: "written" }),
+        ),
+      ).toEqual([alice.did()]);
+    });
+
+    it("does not count the claim a link carries from the document it leads to", async () => {
+      const holder = await holding("holder", [carried]);
+      const field = holder.key("by");
+      expect(callAt(field, "represents-principal", { label: "written" }))
+        .toBeUndefined();
+      expect(
+        inFrame(
+          edit(),
+          "handler",
+          () =>
+            principalsOf(field, "represents-principal", { label: "written" }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("follows the links on the way to the field", async () => {
+      const holder = await holding("holder", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+      ]);
+      const via = runtime.getCell<{ by: unknown }>(space, "via");
+      const tx = runtime.edit();
+      via.withTx(tx).set(holder as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(
+        callAt(via.key("by"), "represents-principal", { label: "written" }),
+      ).toBe(alice.did());
+    });
+
+    it("follows a redirect stored in the field, as a write to it would", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      const holder = await seed("redirecting", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+      ], { by: profile.getAsWriteRedirectLink() });
+      expect(
+        callAt(holder.key("by"), "represents-principal", { label: "written" }),
+      ).toBe(bob.did());
+    });
+
+    it("reads a field holding no link as the default does", async () => {
+      const record = await seed("record", [
+        claimsAt(["name"], claim("authored-by", bob.did())),
+      ]);
+      const field = record.key("name" as never);
+      expect(callAt(field, "authored-by", { label: "written" })).toBe(
+        bob.did(),
+      );
+      expect(callIn(edit(), field, "authored-by")).toBe(bob.did());
+    });
+
+    it("throws for `options` in another form", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      for (const options of [null, "no", [], { label: "field" }]) {
+        expect(() => callAt(profile, "represents-principal", options))
+          .toThrow('takes `options` of `{ label?: "written" | "resolved" }`');
+      }
+    });
+  });
+
+  describe("principalsOf()", () => {
+    /** Calls `principalsOf(target, kind)` in a handler frame over `tx`. */
+    const callAllIn = (
+      tx: IExtendedStorageTransaction,
+      target: unknown,
+      kind: unknown,
+    ) => inFrame(tx, "handler", () => principalsOf(target, kind));
+
+    it("returns no principals for a document whose label attests none", async () => {
+      const unlabeled = await seed("unlabeled", []);
+      expect(callAllIn(edit(), unlabeled, "authored-by")).toEqual([]);
+    });
+
+    it("returns the one principal a claim attests", async () => {
+      const record = await seed("record", [
+        claimsAt(["name"], claim("authored-by", bob.did())),
+      ]);
+      expect(callAllIn(edit(), record, "authored-by")).toEqual([bob.did()]);
+    });
+
+    it("returns every principal a label attests, in the order they first appear, where `principalOf()` returns `undefined`", async () => {
+      const record = await seed("record", [
+        claimsAt(["name"], claim("authored-by", bob.did())),
+        claimsAt(["bio"], claim("authored-by", alice.did())),
+        claimsAt([], claim("authored-by", bob.did())),
+      ]);
+      expect(callAllIn(edit(), record, "authored-by")).toEqual([
+        bob.did(),
+        alice.did(),
+      ]);
+      expect(callIn(edit(), record, "authored-by")).toBeUndefined();
+    });
+
+    it("returns only the principals a key's own field attests, leaving out another field's", async () => {
+      await seed("panel", [
+        claimsAt(["addedBy"], claim("authored-by", alice.did())),
+        claimsAt(["titleOverride"], claim("authored-by", bob.did())),
+      ], { addedBy: alice.did(), titleOverride: "Bob's title" });
+      const panel = runtime.getCell<
+        { addedBy: string; titleOverride: string }
+      >(space, "panel");
+      expect(callAllIn(edit(), panel.key("addedBy"), "authored-by")).toEqual([
+        alice.did(),
+      ]);
+      expect(callAllIn(edit(), panel, "authored-by")).toEqual([
+        alice.did(),
+        bob.did(),
+      ]);
+    });
+
+    it("returns `undefined` for a label holding a claim in any form but the one a runtime mints", async () => {
+      const record = await seed("record", [
+        claimsAt([], claim("authored-by", bob.did())),
+        claimsAt(["name"], `authored-by:${bob.did()}`),
+      ]);
+      expect(callAllIn(edit(), record, "authored-by")).toBeUndefined();
+    });
+
+    it("returns `undefined` for a `target` passed as `undefined`", () => {
+      expect(callAllIn(edit(), undefined, "authored-by")).toBeUndefined();
+    });
+
+    it("throws outside a handler or a reactive computation, naming itself", () => {
+      expect(() => principalsOf(undefined, "authored-by")).toThrow(
+        "`principalsOf(target, kind)` can only be called from a handler or a reactive computation",
       );
     });
   });

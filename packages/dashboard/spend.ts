@@ -34,6 +34,9 @@ export interface SpendSummaryOptions {
   measuredMtd?: number;
   priorMonthDaily?: number[];
   availableSince?: string;
+
+  /** Days for which this source returned a report, including $0 days. */
+  knownDays?: ReadonlySet<string>;
 }
 
 interface Projection {
@@ -57,6 +60,13 @@ export interface SpendChartSource {
    * source reports on every month it spans.
    */
   knownMonths?: ReadonlySet<string>;
+
+  /**
+   * Individual days for which the source returned a report. A missing day is
+   * left out of the line rather than drawn as $0. Leave this undefined when a
+   * report covers every day in each known month.
+   */
+  knownDays?: ReadonlySet<string>;
 }
 
 /**
@@ -184,7 +194,13 @@ export function summarizeDailySpend(
     month0,
     thisMonth.length,
   );
-  const coveredDays = settledThis.slice(currentStart);
+  const currentPrefix = `${year}-${String(month0 + 1).padStart(2, "0")}-`;
+  const coveredDays = settledThis.slice(currentStart).filter((_, index) =>
+    !options.knownDays ||
+    options.knownDays.has(
+      currentPrefix + String(index + currentStart + 1).padStart(2, "0"),
+    )
+  );
   const previousMonth = month0 === 0 ? 11 : month0 - 1;
   const previousYear = month0 === 0 ? year - 1 : year;
   const previous = calendarMonth(byDay, previousYear, previousMonth);
@@ -227,11 +243,13 @@ export function spendChart(
   sources: SpendChartSource[],
   now: Date,
   estimateDays?: number,
+  estimateSince?: string,
 ): { chart: string; duration: number } {
   const allDays = new Set<string>();
   for (const source of sources) {
     if (source.spend) {
       for (const day of source.spend.byDay.keys()) allDays.add(day);
+      for (const day of source.knownDays ?? []) allDays.add(day);
       if (source.spend.byDay.size > 0 && source.knownMonths) {
         for (const month of source.knownMonths) allDays.add(`${month}-01`);
       }
@@ -244,7 +262,8 @@ export function spendChart(
   // A month the source has no report for tells us nothing about its days, so
   // those days are left out of the line entirely.
   const reports = (source: SpendChartSource, day: string) =>
-    !source.knownMonths || source.knownMonths.has(day.slice(0, 7));
+    (!source.knownMonths || source.knownMonths.has(day.slice(0, 7))) &&
+    (!source.knownDays || source.knownDays.has(day));
   // A source is known through the newest day its reporting lag has settled. A
   // settled day with no report is a real $0. A day past that horizon has no
   // complete figure yet, even when the source already carries rows for it, so
@@ -283,7 +302,12 @@ export function spendChart(
     estimateDays ??
       Math.max(currentDays, MIN_SPEND_WINDOW_DAYS),
   );
-  const highlightFrom = grid.length - highlightDays;
+  let highlightFrom = grid.length - highlightDays;
+  if (estimateSince) {
+    const estimateStart = grid.findIndex((day) => day >= estimateSince);
+    highlightFrom = estimateStart < 0 ? grid.length : estimateStart;
+  }
+  const highlightCount = grid.length - highlightFrom;
   const lines = sources.flatMap((source) => {
     const known = knownThrough.get(source);
     if (known === undefined) return [];
@@ -316,7 +340,8 @@ export function spendChart(
   return {
     chart: multiSparkline(lines, {
       fade: true,
-      highlight: { count: highlightDays },
+      highlight: { count: highlightCount },
+      scale: { highlighted: true },
     }),
     duration: end - start + DAY_MS,
   };

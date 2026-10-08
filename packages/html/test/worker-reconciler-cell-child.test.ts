@@ -199,7 +199,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
             title.withTx(tx).set(value);
             props.withTx(tx).set({ title: value });
             children.withTx(tx).set([value]);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             await runtime.idle();
             await t.settle();
           };
@@ -281,7 +281,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       const seed = runtime.edit();
       title.withTx(seed).set("first title");
       children.withTx(seed).set(["first child"]);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await runtime.idle();
 
       const root = new MockCell({
@@ -331,7 +331,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         const update = runtime.edit();
         title.withTx(update).set("second title");
         children.withTx(update).set(["second child"]);
-        expect((await update.commit()).error).toBeUndefined();
+        expect((await update.commit().settled).error).toBeUndefined();
         await runtime.idle();
         await t.settle();
         expect(collector.getOpsOfType("set-prop")).toContainEqual({
@@ -359,7 +359,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         const afterReplacement = runtime.edit();
         title.withTx(afterReplacement).set("ignored title");
         children.withTx(afterReplacement).set(["ignored child"]);
-        expect((await afterReplacement.commit()).error).toBeUndefined();
+        expect((await afterReplacement.commit().settled).error).toBeUndefined();
         await runtime.idle();
         await t.settle();
         expect(collector.getOps()).toEqual([]);
@@ -2077,6 +2077,46 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         false,
         "Should not remove $value literal key",
       );
+    },
+  );
+
+  await t.step(
+    "binds the prop to the new cell, on the element it updates, when an update binds the prop to another cell",
+    async () => {
+      const collector = createOpsCollector();
+      const reconciler = new WorkerReconciler({
+        onOps: collector.onOps,
+      });
+
+      const cellNamed = (name: string) => {
+        const cell = runtime.getCell(signer.did(), name, undefined, dummyTx);
+        cell.set(name);
+        return cell;
+      };
+      const first = cellNamed("binding-swap-first");
+      const second = cellNamed("binding-swap-second");
+      const view = (bound: unknown) => ({
+        type: "vnode",
+        name: "cf-input",
+        props: { $value: bound },
+        children: [],
+      });
+      const rootCell = new MockCell(view(first));
+
+      reconciler.mount(rootCell as any);
+      await t.settle();
+      const boundIds = () =>
+        collector.getOpsOfType("set-binding").map((op) =>
+          (op as { cellRef: { id: string } }).cellRef.id
+        );
+      expect(boundIds()).toEqual([first.getAsNormalizedFullLink().id]);
+      collector.clear();
+
+      rootCell.set(view(second));
+      await t.settle();
+
+      expect(boundIds()).toEqual([second.getAsNormalizedFullLink().id]);
+      expect(collector.getOpsOfType("create-element")).toEqual([]);
     },
   );
 

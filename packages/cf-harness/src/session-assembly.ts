@@ -23,6 +23,7 @@
 import type { RunscNetworkMode } from "./sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessLoomAuthoringConfig } from "./loom-authoring.ts";
+import type { HarnessLoomCommandsConfig } from "./loom-commands.ts";
 import type { HarnessLoomRetrievalConfig } from "./loom-retrieval.ts";
 import type { CfHarnessEngine } from "./engine.ts";
 import type {
@@ -56,8 +57,13 @@ import {
 import { patternRefsContextMessage } from "./pattern-refs.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
+import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
-import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
+import type {
+  DockerRunscAdditionalMountConfig,
+  SandboxRuntimeChoice,
+  SandboxRuntimeKind,
+} from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
 import { persistHarnessRunSkillRegistry } from "./skills/run-registry.ts";
 import { wellKnownGrantsContextMessage } from "./well-known-grants.ts";
@@ -90,14 +96,22 @@ export interface HarnessSessionConfig {
   sandboxDockerRuntime?: string;
 
   /**
-   * The runsc sandbox (`--sandbox-runtime runsc`): no Docker, sessions
-   * honoured. Absent means the docker sandbox.
+   * The sandbox runtime the run's engine builds: `runsc` is the direct
+   * driver, with no Docker and sessions honoured, and `docker` is the Docker
+   * driver. Absent, the engine builds the Docker driver on every platform;
+   * no platform default is applied here. An entrypoint applies its
+   * platform's default when it derives the selection, before it builds this
+   * configuration, and sets `runsc` for the native runtime macOS defaults
+   * to; `sandboxRuntimeChoice` records how the runtime was selected.
    */
-  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRuntimeKind?: SandboxRuntimeKind;
   sandboxRootfs?: string;
   sandboxCfcPolicy?: string;
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+
+  /** How the sandbox runtime was selected, as the run records it. */
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
 
   /** The skills tree scanned into the run's registry, on the host. */
   skillsRoot?: string;
@@ -136,6 +150,9 @@ export interface HarnessSessionConfig {
 
   /** Explicit host-owned backing for read-only Loom retrieval. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /** Explicit host-owned broker for the commands the host admits. */
+  loomCommands?: HarnessLoomCommandsConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -191,6 +208,7 @@ export const harnessSessionToolBacking = (
   fabricSessionAvailable: config.fabricSession !== undefined,
   loomAuthoringAvailable: config.loomAuthoring !== undefined,
   loomRetrievalAvailable: config.loomRetrieval !== undefined,
+  loomCommandsAvailable: config.loomCommands !== undefined,
   patternIndexAvailable: config.patternIndex !== undefined,
   skillsShSearchAvailable: config.skillsSh !== undefined,
   skillsShAcquisitionAvailable: config.skillsSh !== undefined,
@@ -303,6 +321,9 @@ export const harnessSessionEngineOptions = (
     ...(config.sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
       : {}),
+    ...(config.sandboxRuntimeChoice !== undefined
+      ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }
+      : {}),
     ...(config.cfcResultDir !== undefined
       ? { cfcResultDir: config.cfcResultDir }
       : {}),
@@ -342,6 +363,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.loomRetrieval !== undefined
       ? { loomRetrieval: config.loomRetrieval }
+      : {}),
+    ...(config.loomCommands !== undefined
+      ? { loomCommands: config.loomCommands }
       : {}),
     ...(config.patternIndex !== undefined
       ? { patternIndex: config.patternIndex }
@@ -397,7 +421,8 @@ export interface EstablishHarnessSessionContextOptions {
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
  * skills, the well-known grants of the session's space, host-supplied input
- * cells, and the guidance for selecting a piece target.
+ * cells, the guidance for selecting a piece target, and, for a run whose host
+ * opted in to `weaver_action`, the guidance for using the Weaver's commands.
  *
  * The three differ in how they fail, and deliberately. A missing skills root
  * simply yields no messages. Grants are best-effort: a session that will not
@@ -477,6 +502,9 @@ const establishContextMessages = async (
   );
   if (patternRefsMessage !== undefined) {
     messages.push(patternRefsMessage);
+  }
+  if (engine.clientActionsAvailable) {
+    messages.push(WEAVER_COMMAND_GUIDANCE);
   }
   messages.push(REVISION_VERIFICATION_GUIDANCE);
   return messages;

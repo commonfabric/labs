@@ -63,7 +63,7 @@ export type {
 } from "./unsafe-host-trust.ts";
 export * from "./interface.ts";
 export { raw } from "./module.ts";
-export type { Cell, SinkConsumedLabel, Stream } from "./cell.ts";
+export type { Cell, ProjectedRead, SinkConsumedLabel, Stream } from "./cell.ts";
 // The seam's vocabulary, which describes a document's shape and is read by
 // hosts. Its write authorization is deliberately not here: it rides the
 // `@commonfabric/runner/meta-seam` subpath, so an import of it names the seam
@@ -95,18 +95,21 @@ export type {
 } from "./scheduler.ts";
 export type {
   ChangeGroup,
+  CommitError,
   EventAppendDeliveryOutcome,
   IExtendedStorageTransaction,
   IOperationStorageCapability,
   IPresenceStorageCapability,
   MemorySpace,
   TransactionCommitOptions,
+  TransactionCommitReceipt,
 } from "./storage/interface.ts";
 export {
   hasOperationStorageCapability,
   hasPresenceStorageCapability,
 } from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
+export { transactionFailureMessage } from "./storage/transaction-errors.ts";
 export type {
   EntityIdListOptions,
   EntityIdListResult,
@@ -124,11 +127,14 @@ export {
   convertCellsToLinks,
   encodeSqliteParams,
   exportCell,
+  hostValueOf,
   isCell,
   isReadableCell,
   isStream,
+  readProjected,
   sendEvent,
   setCell,
+  sinkProjected,
 } from "./cell.ts";
 export {
   getCellOrThrow,
@@ -211,6 +217,12 @@ export {
   SYSTEM_PATTERN_SOURCE_SCHEME,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
+export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
+export {
+  orderProfileCandidates,
+  profileCellIsValid,
+  type ProfileOrder,
+} from "./profile-order.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,
@@ -229,6 +241,7 @@ export {
   getPieceReconciliation,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
+  inSpaceRootCause,
   isStoredArgumentSchemaRefusal,
   mergeSchemaDefaults,
   patternIdentityKey,

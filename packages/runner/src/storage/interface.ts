@@ -374,19 +374,42 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * Creates a space and returns its DID, once the space's genesis commit is
    * confirmed. The space's key is generated from random data, and signs one
    * commit that writes `acl` as the space's access-control document and, when
-   * `root` is given, reserves the space's root pattern. The key is used for
-   * nothing else, and is never stored, returned, or logged.
+   * `genesis.root` is given, reserves the space's root pattern, and when
+   * `genesis.spaceKind` is given, declares the space's kind. The key is used
+   * for nothing else, and is never stored, returned, or logged.
    *
    * `acl` must name a concrete OWNER, and must grant this manager's signer at
-   * least READ if this manager will open the space. `root` requires a host
-   * that supports root reservations; its complete source, cause, arguments,
-   * and attached source roots are snapshotted in the genesis receipt, and a
-   * later mount that declares a root intent must match it.
+   * least READ if this manager will open the space. `genesis.root` is the
+   * reservation itself, or a function computing it from the new space's DID,
+   * which nothing knows before the key is generated. It requires a host that
+   * advertises the `genesisRoot` server flag; its complete source, cause,
+   * arguments, and attached source roots are snapshotted in the genesis
+   * receipt, and a later mount that declares a root intent must match it.
+   * `genesis.spaceKind` requires a host that advertises the `spaceKind` server
+   * flag, and is sealed the same way (`docs/features/space-kinds.md`).
    *
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
-  createSpace?(acl: ACL, root?: GenesisRoot): Promise<MemorySpace>;
+  createSpace?(
+    acl: ACL,
+    genesis?: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<MemorySpace>;
+
+  /**
+   * The kind `space` declares in its genesis commit, or `undefined` when it
+   * declares none (`docs/features/space-kinds.md`). Opens the space, so it
+   * resolves once the memory server has admitted this manager's signer to
+   * it. Optional: emulated/test managers may omit it.
+   *
+   * @throws If the space cannot be opened, as when its access list admits
+   *   this manager's signer to nothing, or if the memory server does not
+   *   advertise `spaceKind`, which leaves the kind unknown rather than absent.
+   */
+  spaceKind?(space: MemorySpace): Promise<string | undefined>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
@@ -602,6 +625,18 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   >[];
 
   /**
+   * Whether this manager refuses every read of `address` by construction: a
+   * serving manager reads no scoped instance of a space other than its home
+   * (protocol.md §2's fail-closed interim). Such a read returns no data
+   * however long it is waited for, so the manager registers no pending load
+   * for it, and a served run that reads it has read an absence that is not
+   * the document's state.
+   */
+  refusesReadByConstruction?(
+    address: Pick<IMemorySpaceAddress, "space" | "scope">,
+  ): boolean;
+
+  /**
    * Generation of the currently in-flight load for an entity key, or
    * `undefined` when the key is not loading. A new generation is allocated
    * after a prior load settles so event preflight can distinguish a genuinely
@@ -656,7 +691,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * that the principal was granted access. The other trigger of the session
    * remount besides `noteSpaceAclChanged()`: it opens the session again
    * through the same `session.open` admission the first attempt went
-   * through, so it can admit only what that admission would.
+   * through, so it can admit only what that admission would. The v2
+   * StorageManager also calls it itself, on a `session/admissible` naming its
+   * principal.
    *
    * Resolves once the server has decided. An admission clears
    * `spaceAccessError()`, notifies `subscribeSpaceAccessChange()` observers,
@@ -1194,28 +1231,53 @@ export type StorageTransactionStatus =
   };
 
 /**
- * Options for {@link IStorageTransaction.commit}.
+ * Controls the storage view's coverage barrier independently of commit stages.
  */
 export interface TransactionCommitOptions {
   /**
-   * When the returned promise resolves.
+   * Keeps replica and storage `synced()` pending until accepted writes reach
+   * the subscribed view. Defaults to true. Controlled-staleness callers can
+   * disable this hold while observing the verdict; settlement still waits for
+   * coverage and rejection repair, as does the runtime's pending-commit
+   * barrier.
+   */
+  holdSyncedUntilCovered?: boolean;
+}
+
+/** Options for a replica's native commit, below the transaction receipt API. */
+export interface NativeCommitOptions {
+  /**
+   * On accept, `"coverage"` (default) keeps `synced()` pending until the
+   * subscribed view covers the committed write and its watch-set consequences
+   * (marker coverage, spec §4.11.2). `"verdict"` disables that hold. A direct
+   * native commit also skips its inline coverage wait in verdict mode.
    *
-   * - `"coverage"` (default): on accept, once the caller's subscribed view
-   *   reflects the committed write, its watch-set consequences, and the
-   *   foreign novelty it was applied on top of (marker coverage, spec
-   *   §4.11.2); on rejection, after the read-repair gate, so a retry runs
-   *   against the repaired base.
-   * - `"verdict"`: as soon as the commit's fate is sealed — the accept
-   *   verdict or the rejection receipt — without the coverage wait, the
-   *   read-repair wait, the synced() hold, or the post-commit effect run
-   *   (still tracked via postCommitEffectsSettled()). For callers whose
-   *   premise is "durably decided but not yet fanned out":
-   *   controlled-staleness test fixtures foremost. Only the RETURNED
-   *   promise changes: state application still parks, and commit
-   *   callbacks and the pending-commit barrier remain on the full
-   *   settlement timeline (coverage on accept, read repair on rejection).
+   * Transaction-sourced native commits record the coverage wait for the
+   * transaction's settlement stage in either mode. Rejections always wait for
+   * read repair; the transaction's separate verdict signal reports rejection
+   * before that wait. Native commits do not run extended transaction effects.
    */
   resolveAt?: "coverage" | "verdict";
+}
+
+/** The independently observable completion stages of one commit attempt. */
+export interface TransactionCommitReceipt {
+  /** Rejects promise assimilation; select a completion stage explicitly. */
+  readonly then: (selectVerdictOrSettled: never) => never;
+
+  /**
+   * The commit's fate. A separate backend verdict signal can report it before
+   * subscription coverage or rejection repair; otherwise it resolves with
+   * settlement.
+   * A sealed contribution's fate follows its seal destination's contract.
+   */
+  readonly verdict: Promise<Result<Unit, CommitError>>;
+
+  /**
+   * Completion after coverage or rejection repair, commit
+   * callbacks, and inline post-commit effects.
+   */
+  readonly settled: Promise<Result<Unit, CommitError>>;
 }
 
 /**
@@ -1444,19 +1506,18 @@ export interface IStorageTransaction {
   ): void;
 
   /**
-   * Abandon the mergeable fast path for the arrays covered by `address`. A
-   * caller that rewrites an array in a way a recorded mergeable op cannot
-   * represent — an in-place reshape such as sort/reverse/splice after a push, or
-   * a whole-value overwrite — calls this so the commit emits the whole-array
-   * diff (the correct local value) instead of a tail-relative op whose recorded
-   * tail no longer identifies the appended elements.
+   * Abandon the mergeable fast path for the values covered by `address`, for
+   * the rest of the transaction. A caller that writes a value whole — a
+   * whole-value overwrite, or an in-place reshape such as sort/reverse/splice
+   * — calls this so the commit emits the whole-value diff (the correct local
+   * value) instead of an op. The write says what the value is, and an op
+   * resolves against whatever the store holds.
    *
-   * This covers every recorded op AT or BENEATH `address`, since a write to an
-   * enclosing object rewrites the arrays inside it too, and nothing above it, so
-   * a write beneath an array (an element edit) leaves that array's op alone. A
-   * path carrying no op yet is left untouched — not because a reshape before an
-   * op is harmless, but because that case is caught at commit instead, when the
-   * op's recorded tail is checked against the value it claims to describe.
+   * This covers every op AT or BENEATH `address`, since a write to an
+   * enclosing object rewrites the arrays inside it too, and nothing above it,
+   * so a write beneath an array (an element edit) leaves that array's op
+   * alone. An op recorded ahead of the write is dropped, and one that would
+   * be recorded after it is refused.
    */
   poisonMergeableOp?(address: IMemorySpaceAddress): void;
 
@@ -1585,7 +1646,7 @@ export interface IStorageTransaction {
    * Describes current status of the transaction. Returns a union type with
    * status field indicating the current state:
    * - `"ready"`: Transaction is being built and ready for operations
-   * - `"pending"`: Commit was called but promise has not resolved yet
+   * - `"pending"`: The storage attempt is in progress
    * - `"done"`: Commit successfully completed
    * - `"error"`: Transaction has failed or was cancelled, includes error details
 
@@ -1717,34 +1778,15 @@ export interface IStorageTransaction {
    * failed) returns the prior error or a {@link IStorageTransactionComplete}
    * error. Commit is NOT idempotent — it does not replay the original result.
    *
-   * When this method returns, the changes will have been committed locally,
-   * but may not be visible to another runtime. The commit is fully durable
-   * and available to other processes at the VERDICT; the returned promise
-   * (by default) resolves later, at coverage — once the server's first
-   * subscription update after the write has been integrated, so the
-   * caller's view reflects the write, any docs it made newly reachable,
-   * and the foreign novelty it was applied on top of. On rejection the
-   * promise resolves after the read-repair gate, so a retry runs against
-   * the repaired base. {@link TransactionCommitOptions.resolveAt}
-   * `"verdict"` resolves at fate-sealing instead; effects gated on
-   * durability alone hook {@link IExtendedStorageTransaction.addVerdictCallback}
-   * or {@link commitVerdict} rather than this promise.
+   * Returns a receipt synchronously. Valid ordinary single-space writes apply
+   * locally before this returns; multi-space writes start each space in
+   * sequence. Local readiness does not require awaiting the receipt. Observe
+   * `.verdict` for the attempt's fate or `.settled` for subscription coverage,
+   * rejection repair, commit callbacks, and inline post-commit effects.
    */
   commit(
     options?: TransactionCommitOptions,
-  ): Promise<Result<Unit, CommitError>>;
-
-  /**
-   * Resolves with the same result as {@link commit}, but no later than the
-   * moment the commit's fate is known — the server verdict or a local
-   * rejection. The commit promise itself may resolve later: it additionally
-   * waits for the subscribed view to reflect the committed write (or the
-   * read-repair gate on rejection). Effects gated on durability alone
-   * (verdict callbacks, the outbox flush) hook this instead of the commit
-   * promise. Optional: backends without the split fall back to the commit
-   * promise.
-   */
-  commitVerdict?(): Promise<Result<Unit, CommitError>>;
+  ): TransactionCommitReceipt;
 
   /**
    * Optional native commit draft hook for storage backends that can consume a
@@ -1796,15 +1838,23 @@ export interface ITransactionSealSink {
 }
 
 /**
- * The seal destination an action transaction closes into when one is
- * installed (server-execution v2, serving-loop.md §3d): server-side, under
- * EXPERIMENTAL_SERVER_EXECUTION, an action tx SEALS into the wave
- * accumulator instead of committing to the store. One abstraction, two
- * destinations — with no destination installed (every client, and the OFF
- * arm always), commit() takes today's store path unchanged.
+ * The destination that accepts an action transaction's contribution. Serving
+ * runtimes seal into a wave accumulator; client speculation overlays stage
+ * speculative work and forward ordinary commits to the store. Without a
+ * destination, the transaction commits directly to the store.
  */
 export interface TransactionSealDestination {
-  seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>>;
+  /**
+   * Accepts the contribution, or forwards a store commit's receipt when the
+   * destination commits directly. A one-stage seal promise supplies both
+   * stages; a receipt preserves its distinct verdict and settlement. Direct
+   * store forwarding applies `options` to the storage view's coverage hold;
+   * speculative or wave acceptance follows the destination's own contract.
+   */
+  seal(
+    tx: IExtendedStorageTransaction,
+    options?: TransactionCommitOptions,
+  ): Promise<Result<Unit, CommitError>> | TransactionCommitReceipt;
 
   /**
    * The HOME space of the wave this destination seals into (the space
@@ -1958,8 +2008,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /**
    * Commit-time preconditions attached to this transaction's commit in
-   * the given space (scheduler-v2 §7.6). Violations surface as
-   * IPreconditionFailedError (permanent — never retried).
+   * the given space (scheduler-v2 §7.6). An `origin-committed` violation
+   * surfaces as IPreconditionFailedError of kind `origin-committed`, and an
+   * `entity-absent` violation as one of kind `receipt-exists`; both are
+   * permanent and never retried. An `entity-value-hash` violation surfaces as
+   * a `ConflictError`, which an event handler's commit retries against fresh
+   * state as it does any conflict, when its delivery retries at all (the
+   * default).
    */
   addCommitPrecondition?(
     space: MemorySpace,
@@ -2085,6 +2140,16 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   getNarrowestReadScope(): CellScope;
   resetNarrowestReadScope(scope?: CellScope): void;
+
+  /**
+   * Narrows the transaction's read scope to `scope` when it is narrower than
+   * what the reads so far established. A read records the scope of the
+   * address it lands on by itself; this is for a read that learns a narrower
+   * scope from a declaration rather than from an address, such as a followed
+   * link whose target position is declared narrower than the link's own
+   * scope.
+   */
+  noteReadScope(scope: CellScope): void;
 
   /**
    * Turn lazy materialization on (or off) for this transaction.
@@ -2480,11 +2545,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Resolves once the current commit's post-commit effect layer — verdict
    * callbacks and the CFC outbox flush — has run. The effects run at the
-   * verdict, so this may resolve before the commit promise itself, which
+   * verdict, so this may resolve before `commit().settled`, which
    * additionally waits for the subscribed view to reflect the write.
    * Barriers that wait for a fire-and-forget commit's effects (work
    * registration, the sqlite query RPC + writeback) wait on this rather
-   * than the commit promise: the promise's extra wait is on incoming watch
+   * than `commit().settled`: its extra wait is on incoming watch
    * frames, which quiescence must not depend on. Resolved when no commit
    * is in flight.
    */
@@ -2522,9 +2587,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /**
    * Add a callback that fires when the commit's fate is sealed — the
-   * accept verdict or the rejection receipt — BEFORE the waits the commit
-   * promise (and commit callbacks) additionally sit out: view coverage on
-   * accept, the read-repair gate on rejection. For work gated on
+   * accept verdict or the rejection receipt — BEFORE the waits
+   * `commit().settled` (and commit callbacks) additionally sit out: view
+   * coverage on accept, the read-repair gate on rejection. For work gated on
    * durability alone; a consumer that acts on the post-commit view (a
    * compensation reading the repaired base, a retry) belongs on
    * {@link addCommitCallback}. Same once-only dispatch and error isolation
@@ -3153,7 +3218,7 @@ export interface ISpaceReplica extends ISpace {
   commitNative?(
     transaction: NativeStorageCommit,
     source?: IStorageTransaction,
-    options?: TransactionCommitOptions,
+    options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>>;
 
   /**
@@ -3444,9 +3509,12 @@ export type PullError =
 /** A serving runtime's refusal of a scoped read of a space other than its home
  * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
  * scope and the runtime's serving posture decide it, never transport or session
- * state, so the same read from the same runtime is refused every time. A served
- * event whose required load meets it terminalizes at once instead of spending
- * the delivery-failure budget (events.md §5). */
+ * state, so the same read from the same runtime is refused every time. So it is
+ * no load in flight: the storage manager registers no pending load for it. A
+ * served run that reads the document's value fails permanently in
+ * `dispatch-load` (events.md §5), and where the refusal reaches a load
+ * failure it is permanent evidence rather than a retryable `connection`
+ * failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
 }

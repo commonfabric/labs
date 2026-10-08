@@ -429,7 +429,12 @@ export type SpaceServerOptions = {
    * polled; a test that has to act once an attempt has landed waits on
    * this instead. */
   onRootEnsure?: (
-    outcome: "created" | "resolved" | "skipped-no-owner" | "failed",
+    outcome:
+      | "created"
+      | "resolved"
+      | "awaiting-creator"
+      | "skipped-no-owner"
+      | "failed",
   ) => void;
 };
 
@@ -1438,6 +1443,10 @@ export class SpaceServer implements TransactionSealDestination {
       onHomeRefused: () => {
         this.#confirmLease(engine);
       },
+      // A served run's access-list change is admitted and committed by the
+      // memory server itself, through the check its sessions' commits pass.
+      commitServedAclChange: (change, envelope) =>
+        this.#options.server.commitServedAclChange({ ...change, ...envelope }),
     });
     this.#sink = this.#options.decorateWaveCommitSink?.(sink, space) ?? sink;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
@@ -2329,6 +2338,10 @@ export class SpaceServer implements TransactionSealDestination {
         onForeignWriteRefusal: () => {
           this.#options.stats.foreignWriteRefusals += 1;
         },
+        // The memory server decides a served run's access-list change when
+        // the run seals, as its commit would against the store then.
+        spaceAccessAuthority: (change) =>
+          this.#options.server.checkServedAclChange(change),
       });
     }
     return this.#currentWave;
@@ -2893,7 +2906,7 @@ export class SpaceServer implements TransactionSealDestination {
    * Commit a transaction stamped `directCommit` to the store on its own
    * (docs/features/server-pattern-lifecycle.md): the serving loop's own
    * derived-class commit under the space's lease, made outside the wave,
-   * so the transaction's `commit()` resolves with the store's verdict and
+   * so the transaction's `commit().verdict` reports the store's outcome and
    * nothing the wave later decides can withdraw it.
    *
    * The store validates the transaction's own read set as it does a client
@@ -3481,7 +3494,7 @@ export class SpaceServer implements TransactionSealDestination {
           "deliveryDeferral",
         ],
       }).withTx(tx).set(checkpoint);
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       const pending = this.#pendingDeliveryCheckpointWrites.get(entry.eventId);
       if (pending?.checkpoint === checkpoint) {
         pending.wave = this.#waveByTx.get(tx);
@@ -4652,7 +4665,7 @@ export class SpaceServer implements TransactionSealDestination {
           }
         }
       }
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       if (outcome?.kind === "needs-attention") {
         const pending = this.#pendingAttentionNotices.get(entry.eventId);
         if (pending?.attention === outcome.attention) {
@@ -4778,7 +4791,7 @@ export class SpaceServer implements TransactionSealDestination {
             acks: instance.remainingAcks,
           } as never,
         );
-        tx.commit().then(({ error }) => {
+        tx.commit().settled.then(({ error }) => {
           if (error) {
             logger.warn("effects-retirement-seal-failed", () => [
               `retirement for ${instance.scopeKey} failed to seal; ` +
@@ -5666,6 +5679,11 @@ export class SpaceServer implements TransactionSealDestination {
    * stays client-side until stage 2 moves it — the recorded stage-2
    * gate).
    *
+   * The exception is a space whose genesis reservation names no source:
+   * its creator places the root, so until a root is linked the ensure
+   * creates nothing and reports `awaiting-creator`, and the space serves
+   * with no root.
+   *
    * Identity, per the design's §4(b): the space's ACL OWNER, resolved
    * through the memory server's ruled service-identity ACL read
    * (`resolveSpaceOwner`) — self-owned = the space's own home. The
@@ -5768,7 +5786,9 @@ export class SpaceServer implements TransactionSealDestination {
       stats.runs += 1;
       if (result.outcome === "created") stats.created += 1;
       this.#options.onRootEnsure?.(
-        result.outcome === "created" ? "created" : "resolved",
+        result.outcome === "created" || result.outcome === "awaiting-creator"
+          ? result.outcome
+          : "resolved",
       );
       logger.info?.("space-root-ensure", () => [
         `space ${space}: root ensure ${result.outcome} ` +
@@ -5797,8 +5817,8 @@ export class SpaceServer implements TransactionSealDestination {
     // passes below load what the ensure materializes. Fully awaited
     // like the drain — once per tenure, so a slow first compile costs
     // the first wave only; its seal joins THIS cycle's wave and commits
-    // with it. (Its commit resolves at seal-accept — the wave commit
-    // happens at this cycle's end — so awaiting it here cannot
+    // with it. (`commit().settled` resolves at seal acceptance — the wave
+    // commit happens at this cycle's end — so awaiting it here cannot
     // deadlock against the wave.)
     if (this.#rootEnsureOwed) {
       this.#rootEnsureOwed = false;
@@ -6416,7 +6436,7 @@ export class SpaceServer implements TransactionSealDestination {
         },
         advanceTo,
       );
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error) {
         // The advance did not enter the wave: W must not move either —
         // the doc and the metadata advance together or not at all

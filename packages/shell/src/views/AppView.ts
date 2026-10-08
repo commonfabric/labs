@@ -11,8 +11,10 @@ import {
 import { type NameSchema, stringSchema } from "@commonfabric/runner/schemas";
 import { parseCellReference } from "@commonfabric/runner/shared";
 import { slugIdForSpace, validateSlug } from "@commonfabric/runner/slugs";
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import {
   type Cancel,
+  type CellHandleRead,
   type ErrorNotification,
   type FavoritePieceAddress,
   NAME,
@@ -25,6 +27,7 @@ import { property, state } from "lit/decorators.js";
 import { CellEventTarget, CellUpdateEvent } from "../lib/cell-event-target.ts";
 import { DebuggerController } from "../lib/debugger-controller.ts";
 import { GlobalShortcutsController } from "../lib/global-shortcuts-controller.ts";
+import { deliverOpenPath } from "../lib/open-path.ts";
 import {
   RuntimeInternals,
   type SlugReferenceRefusal,
@@ -224,6 +227,16 @@ interface ShownResolution {
 }
 
 /**
+ * The title a piece's name read gives: the name, or the placeholder a render
+ * shows where the display ceiling refuses what it holds, rather than the
+ * "Untitled" of a piece that has no name.
+ */
+function titleOf(read: CellHandleRead<string | undefined>): string | undefined {
+  if ("refused" in read) return CFC_POLICY_PLACEHOLDER_TEXT;
+  return "value" in read ? read.value : undefined;
+}
+
+/**
  * The origin a reference is opened under when it is read as a page. Only the
  * path is read, so which origin this is decides nothing.
  */
@@ -418,7 +431,7 @@ export class XAppView extends BaseView {
   });
 
   /**
-   * Whether the one-shot `?path=` deep link has been delivered; set after the
+   * Whether the one-shot `?path=` deep link has been delivered; set at the
    * first send so slug re-resolutions and task reruns never re-fire it.
    */
   #openPathDelivered = false;
@@ -426,22 +439,26 @@ export class XAppView extends BaseView {
   /** Deliver a `?path=` deep link into the loaded piece, once.
    *
    * Opt-in by contract: the piece must export an `openPath` stream on its
-   * result (e.g. Mobile Loom opens the given cabinet path in its page
-   * viewer). Pieces without the stream are untouched — the field simply
-   * goes undelivered. Fire-and-forget; a failed send must never affect
-   * pattern loading. */
-  #maybeDeliverOpenPath(pattern: PieceHandle<NameSchema>): void {
+   * result (`deliverOpenPath()`). A piece that exports none, or whose
+   * `openPath` is not a stream, is not written to, and nor is one whose field
+   * the display ceiling keeps from the shell. The link is claimed only once
+   * the answer is in, so a rerun that asked meanwhile, or a selection that
+   * moved on, sends nothing. Fire-and-forget; a failed send must never
+   * affect pattern loading. */
+  #maybeDeliverOpenPath(
+    pattern: PieceHandle<NameSchema>,
+    signal: AbortSignal,
+  ): void {
     if (this.#openPathDelivered) return;
     const view = this.app?.view;
     if (!view || !("openPath" in view) || !view.openPath) return;
-    const data = pattern.cell().get() as Record<string, unknown> | undefined;
-    if (!data || typeof data !== "object" || !("openPath" in data)) return;
-    this.#openPathDelivered = true;
-    (pattern.cell() as unknown as {
-      key(k: string): { send(v: unknown): Promise<void> };
-    })
-      .key("openPath")
-      .send({ path: view.openPath });
+    deliverOpenPath(pattern.cell(), view.openPath, () => {
+      if (signal.aborted || this.#openPathDelivered) return false;
+      this.#openPathDelivered = true;
+      return true;
+    }).catch((error) => {
+      console.error("[AppView] Failed to deliver the deep link:", error);
+    });
   }
 
   _selectedPattern = new Task(this, {
@@ -537,7 +554,7 @@ export class XAppView extends BaseView {
           // answer, and saying so with another's identity is how a slow load
           // came to claim a newer answer was on screen.
           this.#markShown(reference, landed, signal);
-          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern);
+          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern, signal);
           return pattern;
         }
         if ("pieceId" in app.view && app.view.pieceId) {
@@ -557,7 +574,7 @@ export class XAppView extends BaseView {
           if (!signal.aborted && slug) {
             this.#replacePieceUrlWithSlug(app.view, slug);
           }
-          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern);
+          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern, signal);
           return pattern;
         }
       } catch (error) {
@@ -664,13 +681,16 @@ export class XAppView extends BaseView {
       }, 1000);
 
       let sawInitialCallback = false;
-      watch.cancel = cell.subscribe(() => {
+      // A refusal of the slug's read is a change to what it names as far as
+      // this view can tell, so it re-resolves the slug as a value would.
+      const refresh = () => {
         if (!sawInitialCallback) {
           sawInitialCallback = true;
           return;
         }
         void this.#refreshSlugTarget(watch);
-      });
+      };
+      watch.cancel = cell.subscribe(refresh, { onRefused: refresh });
     }).catch((error) => {
       if (!this.#isCurrentSlugWatch(watch)) return;
       if (rt.signal.aborted) {
@@ -872,18 +892,13 @@ export class XAppView extends BaseView {
         return;
       }
       this.titleSubscription = new CellEventTarget(cell);
-      try {
-        this.pieceTitle = cell.get();
-      } catch {
-        // Cell not synced yet
-        this.pieceTitle = undefined;
-      }
+      this.pieceTitle = titleOf(cell.lastRead());
     }
   }
 
   #onPieceTitleChange = (e: Event) => {
     const event = e as CellUpdateEvent<string | undefined>;
-    this.pieceTitle = event.detail ?? "";
+    this.pieceTitle = titleOf(event.detail) ?? "";
   };
 
   #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {
@@ -911,41 +926,8 @@ export class XAppView extends BaseView {
     replaceNavigation(view);
   }
 
-  #isRecreatingSpaceRootPattern = false;
-
-  #handleRecreateSpaceRootPattern = async (e: Event) => {
-    const done = (e as CustomEvent).detail?.done as (() => void) | undefined;
-    if (!this.rt || !this.space) {
-      done?.();
-      return;
-    }
-    if (this.#isRecreatingSpaceRootPattern) return;
-    this.#isRecreatingSpaceRootPattern = true;
-    try {
-      await this.rt.recreateSpaceRootPattern(this.space);
-      this._spaceRootPattern.run();
-    } catch (err) {
-      console.error("[AppView] Failed to recreate pattern:", err);
-    } finally {
-      this.#isRecreatingSpaceRootPattern = false;
-      done?.();
-    }
-  };
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.addEventListener(
-      "recreate-space-root-pattern",
-      this.#handleRecreateSpaceRootPattern,
-    );
-  }
-
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this.removeEventListener(
-      "recreate-space-root-pattern",
-      this.#handleRecreateSpaceRootPattern,
-    );
     this.#stopSlugWatch();
   }
 
@@ -1136,6 +1118,13 @@ export class XAppView extends BaseView {
       ? { kind: "piece", error: this._selectedPattern.error }
       : undefined;
     const loadError = this.spaceLoadError ?? patternLoadError;
+    // The lookup returns no root both for a space that has none and when it
+    // had no runtime or space to ask with, and has no value while it is
+    // pending, so only a lookup completed against both says the space has none.
+    const spaceHasNoRoot = isViewingDefaultPattern &&
+      this.rt !== undefined && this.space !== undefined &&
+      this._spaceRootPattern.status === TaskStatus.COMPLETE &&
+      this._spaceRootPattern.value === undefined;
     const runtimeLoadError = loadError
       ? undefined
       : this.#getRuntimeLoadError();
@@ -1154,6 +1143,7 @@ export class XAppView extends BaseView {
         .spaceName="${"spaceName" in this.app.view
           ? this.app.view.spaceName
           : undefined}"
+        .spaceHasNoRoot="${spaceHasNoRoot}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"
         .showSidebar="${config.showSidebar ?? false}"
         .embedded="${embedded}"

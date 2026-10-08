@@ -22,8 +22,10 @@ import "../cf-render/index.ts";
  * @attr {boolean} disabled - Whether the picker is disabled
  * @attr {string} min-height - Optional minimum height for the picker area
  *
- * @prop {CellHandle<any[]> | any[]} items - Array of Cells with [UI] to render (CellHandle or plain array)
+ * @prop {CellHandle<any[]> | any[]} items - Array of Cells with [UI] to render (CellHandle or plain array); with none, the picker shows only its children
  * @prop {CellHandle<number>} selectedIndex - Two-way bound cell for current selection index
+ *
+ * @slot - Shown only while there are no `items`, which is where a view puts the access placeholder while a space the list is read from is out of reach
  *
  * @fires cf-change - Fired when selection changes: { index, value, items }
  * @fires cf-confirm - Fired when Enter/Space pressed to confirm selection: { index, value }
@@ -189,7 +191,7 @@ export class CFPicker extends BaseElement {
     disabled: { type: Boolean, reflect: true },
   };
 
-  declare items: CellHandle<any[]> | any[];
+  declare items: CellHandle<any[]> | any[] | undefined;
   declare selectedIndex: CellHandle<number>;
   declare minHeight: string;
   declare disabled: boolean;
@@ -266,11 +268,7 @@ export class CFPicker extends BaseElement {
 
   override firstUpdated() {
     this._indexCellController.bind(this.selectedIndex, numberSchema);
-    this._itemsCellController.bind(
-      isCellHandle(this.items)
-        ? this.items.asSchema(pieceListSchema)
-        : this.items,
-    );
+    this._itemsCellController.bind(this.#itemsToBind());
     this._updateAriaAttributes();
     this._updateMinHeight();
   }
@@ -281,12 +279,15 @@ export class CFPicker extends BaseElement {
       this._indexCellController.bind(this.selectedIndex, numberSchema);
     }
     if (changedProperties.has("items")) {
-      this._itemsCellController.bind(
-        isCellHandle(this.items)
-          ? this.items.asSchema(pieceListSchema)
-          : this.items,
-      );
+      this._itemsCellController.bind(this.#itemsToBind());
     }
+  }
+
+  /** The items as the controller binds them: a handle read as a piece list. */
+  #itemsToBind(): CellHandle<any[]> | any[] {
+    return isCellHandle(this.items)
+      ? this.items.asSchema(pieceListSchema)
+      : this.items ?? [];
   }
 
   override updated(changed: PropertyValues) {
@@ -303,6 +304,11 @@ export class CFPicker extends BaseElement {
   }
 
   override render() {
+    // A view's render policy withholds an `items` binding the viewer may not
+    // see, and then no items arrive, which is not an empty list. What shows
+    // then is the element's own children: the access placeholder the view
+    // puts there while the list's space is out of reach, or nothing.
+    if (this.items === undefined) return html`<slot></slot>`;
     const items = this._getItems();
     const hasMultipleItems = items.length > 1;
     const currentIndex = items.length
@@ -393,23 +399,25 @@ export class CFPicker extends BaseElement {
   // Selection methods
   //
 
-  private _selectPrevious = (): void => {
-    const items = this._getItems();
-    if (this.disabled || !items.length) return;
-    const len = items.length;
-    this._selectIndex(
-      this._currentIndex <= 0 ? len - 1 : this._currentIndex - 1,
-    );
-  };
+  private _selectPrevious = (): void => this._step(-1);
 
-  private _selectNext = (): void => {
-    const items = this._getItems();
-    if (this.disabled || !items.length) return;
-    const len = items.length;
-    this._selectIndex(
-      this._currentIndex >= len - 1 ? 0 : this._currentIndex + 1,
-    );
-  };
+  private _selectNext = (): void => this._step(1);
+
+  /**
+   * Moves the selection `by` one place, wrapping at either end. The place it
+   * moves from is what the cell holds, so the cell controller computes it,
+   * asking the worker first where it has read nothing.
+   */
+  private _step(by: 1 | -1): void {
+    const len = this._getItems().length;
+    if (this.disabled || !len) return;
+    void this._indexCellController.updateValue((held) =>
+      ((held ?? 0) + by + len) % len
+    ).then(() => {
+      this._updateAriaAttributes();
+      this.requestUpdate();
+    });
+  }
 
   private _selectIndex(index: number): void {
     const len = this._getItems().length;

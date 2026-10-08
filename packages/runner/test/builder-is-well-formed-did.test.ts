@@ -113,12 +113,12 @@ describe("isWellFormedDID()", () => {
           spaced: SPACED,
           seen: [],
         });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = runtime.edit();
         runtime.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const cancel = result.sink(() => {});
       try {

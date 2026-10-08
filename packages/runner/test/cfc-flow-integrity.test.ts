@@ -70,7 +70,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -98,10 +98,12 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
     expect(atomPropagationClass(certified("p"))).toBe("hereditary");
     expect(atomPropagationClass({ type: CFC_ATOM_TYPE.InjectionSafe }))
       .toBe("value-bound");
+    // §15.4 registers `Builtin` value-bound.
     expect(atomPropagationClass({ type: CFC_ATOM_TYPE.Builtin, name: "x" }))
-      .toBe("provenance");
-    // External-ingest is origin provenance (like UserSurfaceInput): the
-    // channel is vouched, the contents are not, so it never propagates.
+      .toBe("value-bound");
+    // A stated deviation from §15.4, which registers `ExternalIngest`
+    // value-bound: the runtime does not verify its `valueDigest`, and
+    // demoting a family to provenance is sound (§15.1.1).
     expect(atomPropagationClass({ type: CFC_ATOM_TYPE.ExternalIngest }))
       .toBe("provenance");
     // Unknown record types, plain strings, kind-shaped records: value-bound.
@@ -141,7 +143,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { sum: rawA.n + rawB.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       // p1 on every input: survives the meet. p2 only on B: dropped.
@@ -184,7 +186,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const a = runtime.getCell(space, "flow-wl-a", undefined, tx);
@@ -194,7 +196,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const out = runtime.getCell(space, "flow-wl-out", undefined, tx);
       out.set({ sum: rawA.n + rawB.n });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(
         storageManager,
@@ -231,7 +233,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
@@ -282,7 +284,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       for (const id of [out1Id, out2Id]) {
         const integrity = derivedIntegrity(storageManager, id);
@@ -324,7 +326,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // The unattributed write must not borrow the later trusted identity.
       for (const id of [out1Id, out2Id]) {
@@ -363,7 +365,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         builtinId: "the-bystander",
       });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
@@ -406,7 +408,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const cell = runtime.getCell(space, "flow-forge", forged.schema, tx);
       cell.set({ field: "hello" });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const declared = entriesOf(
         storageManager,

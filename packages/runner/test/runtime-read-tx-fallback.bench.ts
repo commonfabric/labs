@@ -24,7 +24,7 @@ async function cleanup(
   _storageManager: ReturnType<typeof StorageManager.emulate>,
   tx?: IExtendedStorageTransaction,
 ) {
-  await tx?.commit();
+  await tx?.commit().settled;
   await runtime.dispose();
 }
 
@@ -42,7 +42,7 @@ Deno.bench({
       tx,
     );
     cell.set(42);
-    await tx.commit();
+    await tx.commit().settled;
     const link = cell.getAsNormalizedFullLink();
 
     b.start();
@@ -70,7 +70,7 @@ Deno.bench({
       tx,
     );
     cell.set(42);
-    await tx.commit();
+    await tx.commit().settled;
 
     b.start();
     for (let i = 0; i < 100; i++) {
@@ -99,7 +99,7 @@ Deno.bench({
       age: 42,
       nested: { value: 123 },
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     b.start();
     for (let i = 0; i < 100; i++) {

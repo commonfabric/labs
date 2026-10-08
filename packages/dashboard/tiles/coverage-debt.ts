@@ -29,6 +29,7 @@ import {
   liveCoverageDebtSource,
   refreshCoverageDebt,
 } from "../coverage-debt-history.ts";
+import { REPO } from "../config.ts";
 import { friendlyError, groupDigits, median, sparkline } from "../lib.ts";
 import { CHART_HIGHLIGHT, CHART_LINE } from "../theme.ts";
 
@@ -189,6 +190,7 @@ export function makeCoverageDebt(
   let store = options.store;
   return {
     label: "labs coverage debt",
+    repo: REPO,
     intervalMs: COVERAGE_REFRESH_MS,
     async collect(): Promise<TileView> {
       store ??= new CoverageDebtStore();

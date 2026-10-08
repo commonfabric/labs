@@ -71,7 +71,7 @@ Deno.test("worker reconciler CFC atom admission", async (t) => {
         },
       },
     });
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assertEquals(commitResult.ok !== undefined, true);
 
     const confidential = runtime.getCell<string>(
@@ -186,6 +186,29 @@ Deno.test("worker reconciler CFC atom admission", async (t) => {
         assertEquals(
           admission.canRenderCellUnderPolicy(confidential, policy),
           true,
+        );
+      },
+    );
+
+    await t.step(
+      "a cell whose schema's labels cannot be read is refused under a declassify-only policy",
+      () => {
+        // No label is stored, so the schema decides, and its `$ref` names
+        // nothing: its information-flow atoms cannot be read. A policy with
+        // no ceiling that declassifies something admits every atom it does
+        // not refuse outright, so what stands for the unreadable label has
+        // to be the marker no policy admits.
+        const unreadable = runtime.getCell<string>(
+          signer.did(),
+          "cfc-atom-admission-unreadable-schema",
+          { $ref: "#/$defs/missing" },
+        );
+        const policy: RenderPolicy = {
+          declassifyConfidentiality: [healthRecordAtom],
+        };
+        assertEquals(
+          admission.canRenderCellUnderPolicy(unreadable, policy),
+          false,
         );
       },
     );

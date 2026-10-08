@@ -642,7 +642,12 @@ home root, any more than a non-home one does. Migration preserves both as
 detached unless a durable tracking choice explicitly supplies and authorizes an
 origin. A root that records no origin and cannot start is still rolled forward
 to its space's official system source, because that is a repair of an unopenable
-space rather than an update, and it stamps the origin it rolled to.
+space rather than an update, and it stamps the origin it rolled to. A root at
+the address the space's genesis commit reserves for the root an
+`inSpace(..., { root: true })` call places is the exception: its creator's
+pattern placed it, the system source is no replacement for it, and a start that
+fails leaves it as it is, whether its pattern cannot load or CFC migration
+rejects its setup repair.
 New spaces create their root through the ordinary source-creation transition
 and link that new piece as the space root.
 
@@ -1036,7 +1041,7 @@ site-table value that was synchronized. The entry contains the DID, normalized
 host, operation-specific source, and an ISO timestamp assigned by the worker.
 The transaction keeps the synchronized table value as a commit precondition.
 
-The operation awaits `transaction.commit()` and inspects its result. It returns
+The operation awaits `transaction.commit().settled` and inspects its result. It returns
 success only for an `ok` result. A resolved result containing `ConflictError` or
 `StoreError` fails the operation, as does a thrown commit error. The operation
 does not retry any of these failures automatically. A live route accepted

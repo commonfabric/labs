@@ -3,11 +3,13 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
+import { readSpaceKind } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { type Cell } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { InSpaceTargetUnresolved } from "../src/scheduler/retry-immediately.ts";
 import type { ACL, MemorySpace, URI } from "../src/storage/interface.ts";
 import {
   EmulatedStorageManager,
@@ -28,11 +30,16 @@ describe("in-space allocation", () => {
   let runtime: Runtime;
   const opened: Runtime[] = [];
 
-  /** A runtime of its own over this test's server, as another process. */
-  const openRuntime = (): Runtime => {
+  /**
+   * A runtime of its own over this test's server, as another process, with
+   * server execution on when `serverExecution` says so. Such a runtime is a
+   * client: none here takes the serving posture.
+   */
+  const openRuntime = (serverExecution = false): Runtime => {
     const next = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+      ...(serverExecution ? { experimental: { serverExecution: true } } : {}),
     });
     opened.push(next);
     return next;
@@ -127,7 +134,7 @@ describe("in-space allocation", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -242,7 +249,7 @@ describe("in-space allocation", () => {
     const resolvedSync = (grants?: ACL) => {
       const tx = runtime.edit();
       try {
-        return runtime.resolveInSpaceNameSync(home, "raced", tx, grants);
+        return runtime.resolveInSpaceNameSync(home, "raced", tx, { grants });
       } finally {
         tx.abort();
       }
@@ -257,10 +264,12 @@ describe("in-space allocation", () => {
       grants: readable,
     });
     const tx = runtime.edit();
-    expect(runtime.resolveInSpaceNameSync(home, "aborted", tx, readable))
-      .toBe(open);
-    expect(runtime.resolveInSpaceNameSync(home, "aborted", tx, readable))
-      .toBe(open);
+    expect(
+      runtime.resolveInSpaceNameSync(home, "aborted", tx, { grants: readable }),
+    ).toBe(open);
+    expect(
+      runtime.resolveInSpaceNameSync(home, "aborted", tx, { grants: readable }),
+    ).toBe(open);
     tx.abort();
 
     const later = runtime.edit();
@@ -296,6 +305,52 @@ describe("in-space allocation", () => {
       tx.abort();
     }
     expect(await recorded(runtime, home, "kept")).toBe(existing);
+  });
+
+  describe("under server execution", () => {
+    /** Counts the spaces `reader`'s storage manager creates. */
+    const countCreatedSpaces = (reader: Runtime): () => number => {
+      const manager = reader.storageManager as {
+        createSpace: (...args: never[]) => Promise<MemorySpace>;
+      };
+      const original = manager.createSpace.bind(manager);
+      let created = 0;
+      manager.createSpace = (...args) => {
+        created++;
+        return original(...args);
+      };
+      return () => created;
+    };
+
+    it("leaves a name with no record unresolved on a client, and creates no space for it", async () => {
+      const client = openRuntime(true);
+      const created = countCreatedSpaces(client);
+
+      await expect(client.resolveInSpaceName(home, "client-unrecorded"))
+        .rejects.toThrow(InSpaceTargetUnresolved);
+      expect(created()).toBe(0);
+      expect(await recorded(client, home, "client-unrecorded"))
+        .toBeUndefined();
+    });
+
+    it("returns a recorded space to a client", async () => {
+      const existing = await runtime.createSpace();
+      await writeRecord(home, "client-recorded", existing);
+      const client = openRuntime(true);
+      const created = countCreatedSpaces(client);
+
+      expect(await client.resolveInSpaceName(home, "client-recorded"))
+        .toBe(existing);
+      expect(created()).toBe(0);
+    });
+
+    it("creates a space for a name with no record when server execution is off", async () => {
+      const created = countCreatedSpaces(runtime);
+
+      expect(await runtime.resolveInSpaceName(home, "off-unrecorded"))
+        .toBeDefined();
+      expect(created()).toBe(1);
+    });
   });
 
   it("throws for a record that names a DID no space answers to", async () => {
@@ -355,16 +410,184 @@ describe("in-space allocation", () => {
     });
   });
 
-  it("throws for a grant beyond READ or WRITE, whatever the caller's type says", () => {
+  it("creates a space whose grants name another principal OWNER, with the creator an OWNER too", async () => {
+    const member = (await Identity.generate()).did();
+    const root = await spawnRoot((Child, value) => [
+      Child.inSpace("co-owned", { grants: { [member]: "OWNER" } })({ value }),
+    ]);
+    await root.send("first");
+
+    const [space] = await root.spaces();
+    expect(await aclOf(space as MemorySpace)).toEqual({
+      [member]: "OWNER",
+      [signer.did()]: "OWNER",
+    });
+  });
+
+  it("creates a space whose creator is an OWNER when the grants name it at a lower level", async () => {
+    const member = (await Identity.generate()).did();
+    const space = await runtime.resolveInSpaceName(home, "demoted", {
+      grants: { [signer.did()]: "READ", [member]: "OWNER" },
+    });
+
+    expect(await aclOf(space)).toEqual({
+      [member]: "OWNER",
+      [signer.did()]: "OWNER",
+    });
+  });
+
+  describe("a declared space kind", () => {
+    /** The kind the genesis receipt of `space` declares, as the server reads it. */
+    const sealedKindOf = async (space: string) =>
+      readSpaceKind(await server.engineForSpace(space));
+
+    it("declares the kind the call names in the genesis of the space it creates, with `root` and without", async () => {
+      const root = await spawnRoot((Child, value) => [
+        value === "room"
+          ? Child.inSpace("room", { spaceKind: "fabrichat-room" })({ value })
+          : value === "notebook"
+          ? Child.inSpace(undefined, { root: true, spaceKind: "notebook" })({
+            value,
+          })
+          : Child.inSpace("plain")({ value }),
+      ]);
+      await root.send("room");
+      await root.send("notebook");
+      await root.send("plain");
+
+      const [room, notebook, plain] = await root.spaces();
+      expect(await sealedKindOf(room)).toBe("fabrichat-room");
+      expect(await sealedKindOf(notebook)).toBe("notebook");
+      expect(await sealedKindOf(plain)).toBeUndefined();
+      const reader = openRuntime();
+      expect(await reader.spaceKind(room as MemorySpace)).toBe(
+        "fabrichat-room",
+      );
+      expect(await reader.spaceKind(notebook as MemorySpace)).toBe("notebook");
+      expect(await reader.spaceKind(plain as MemorySpace)).toBeUndefined();
+    });
+
+    it("creates a space for each kind requested for an unrecorded name, and returns each request its own", async () => {
+      const [room, plain, again, notebook] = await Promise.all([
+        runtime.resolveInSpaceName(home, "kinded", {
+          spaceKind: "fabrichat-room",
+        }),
+        runtime.resolveInSpaceName(home, "kinded"),
+        runtime.resolveInSpaceName(home, "kinded", {
+          spaceKind: "fabrichat-room",
+        }),
+        runtime.resolveInSpaceName(home, "kinded", { spaceKind: "notebook" }),
+      ]);
+
+      expect(again).toBe(room);
+      expect(new Set([room, plain, notebook]).size).toBe(3);
+      expect(await sealedKindOf(room)).toBe("fabrichat-room");
+      expect(await sealedKindOf(plain)).toBeUndefined();
+      expect(await sealedKindOf(notebook)).toBe("notebook");
+      const resolvedSync = (spaceKind?: string) => {
+        const tx = runtime.edit();
+        try {
+          return runtime.resolveInSpaceNameSync(home, "kinded", tx, {
+            ...(spaceKind === undefined ? {} : { spaceKind }),
+          });
+        } finally {
+          tx.abort();
+        }
+      };
+      expect(resolvedSync("fabrichat-room")).toBe(room);
+      expect(resolvedSync()).toBe(plain);
+      expect(resolvedSync("notebook")).toBe(notebook);
+    });
+
+    it("returns the space a name's record names, whatever kind a later request names", async () => {
+      const space = await runtime.resolveInSpaceName(home, "unkinded");
+      await writeRecord(home, "unkinded", space);
+
+      expect(
+        await runtime.resolveInSpaceName(home, "unkinded", {
+          spaceKind: "fabrichat-room",
+        }),
+      ).toBe(space);
+      expect(await sealedKindOf(space)).toBeUndefined();
+    });
+
+    it("throws for a kind with a space named by its DID or by a cell", () => {
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+      const cell = runtime.getCell(home, "in-space kind target");
+
+      for (const target of [home, cell]) {
+        expect(() => Child.inSpace(target, { spaceKind: "notebook" })).toThrow(
+          "declares the kind only of a space it creates",
+        );
+        expect(() => Child.inSpace(target)).not.toThrow();
+      }
+    });
+
+    it("throws for a kind that is not lowercase words joined by hyphens, whatever the caller's type says", () => {
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+
+      for (
+        const spaceKind of ["Notebook", "", "fabrichat room", "k".repeat(33)]
+      ) {
+        expect(() => Child.inSpace("room", { spaceKind })).toThrow(
+          "declares a space kind of lowercase words joined by hyphens",
+        );
+      }
+      expect(() => Child.inSpace("room", { spaceKind: 7 as unknown as string }))
+        .toThrow("declares a space kind of lowercase words joined by hyphens");
+      expect(() => Child.inSpace("room", { spaceKind: "fabrichat-room" })).not
+        .toThrow();
+    });
+  });
+
+  it("throws for a grant beyond READ, WRITE, or OWNER, whatever the caller's type says", () => {
+    const { pattern } = createTrustedBuilder(runtime).commonfabric;
+    const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+    const grants = { "*": "ADMIN" } as unknown as Record<string, "READ">;
+
+    expect(() => Child.inSpace("admin", { grants })).toThrow(
+      "grants READ, WRITE, or OWNER only",
+    );
+    expect(() => Child.inSpace("read", { grants: { "*": "READ" } })).not
+      .toThrow();
+  });
+
+  it("throws for an OWNER grant to `*`, whatever the caller's type says", () => {
     const { pattern } = createTrustedBuilder(runtime).commonfabric;
     const Child = pattern<{ value: string }>(({ value }) => ({ value }));
     const grants = { "*": "OWNER" } as unknown as Record<string, "READ">;
 
     expect(() => Child.inSpace("owned", { grants })).toThrow(
-      "grants READ or WRITE only",
+      "grants OWNER only to a principal DID",
     );
-    expect(() => Child.inSpace("read", { grants: { "*": "READ" } })).not
-      .toThrow();
+  });
+
+  it("throws for an OWNER grant to a principal that is not a DID, whatever the caller's type says", () => {
+    const { pattern } = createTrustedBuilder(runtime).commonfabric;
+    const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+    const grants = { alice: "OWNER" } as unknown as Record<string, "READ">;
+
+    expect(() => Child.inSpace("owned", { grants })).toThrow(
+      "grants OWNER only to a principal DID",
+    );
+  });
+
+  it("creates the space with the grants as they were when `inSpace()` was called", async () => {
+    const root = await spawnRoot((Child, value) => {
+      const grants: Record<string, string> = { "*": "READ" };
+      const Mutated = Child.inSpace("mutated", { grants });
+      grants["*"] = "OWNER";
+      return [Mutated({ value })];
+    });
+    await root.send("first");
+
+    const [space] = await root.spaces();
+    expect(await aclOf(space as MemorySpace)).toEqual({
+      "*": "READ",
+      [signer.did()]: "OWNER",
+    });
   });
 
   it("settles two processes resolving one name on one record", async () => {

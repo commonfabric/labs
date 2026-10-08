@@ -16,7 +16,7 @@ Deno.test("transformer coverage: nested aliases expand to canonical metadata", a
   const source = `/// <cts-enable />
     import { toSchema } from "commonfabric";
 
-    type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+    type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
     type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
     type SecretText<T> = Confidential<T, readonly ["secret"]>;
 
@@ -39,7 +39,7 @@ Deno.test("transformer coverage: projection paths lower as canonical pointers", 
   const source = `/// <cts-enable />
     import { toSchema } from "commonfabric";
 
-    type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+    type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
     type ProjectionPath<T, From extends string, Path extends readonly unknown[]> = Cfc<T, { projection: { from: From; path: Path } }>;
     type ProjectionOf<Root, PathTuple extends readonly unknown[]> = ProjectionPath<Root, "/", PathTuple>;
 
@@ -71,7 +71,7 @@ Deno.test("transformer coverage: non-canonical Cfc payloads lower structurally",
   const source = `/// <cts-enable />
     import { toSchema } from "commonfabric";
 
-    type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+    type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
     type OpaqueInput<T, Spec extends true | { schema?: unknown; allowPassThrough?: boolean } = true> = Cfc<T, { opaque: Spec }>;
 
     interface SecretPayload {

@@ -19,8 +19,8 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
-// commit can be withdrawn AFTER commit() resolves — runner.ts's pattern-swap
-// settlement precedent) so a withdrawn one-shot is at least named.
+// contribution can be withdrawn after `commit().settled` resolves — the
+// pattern-swap settlement precedent in runner.ts) so a withdrawn one-shot is at least named.
 import { waveSettlementOf } from "../executor/wave.ts";
 import {
   type CellScope,
@@ -40,12 +40,20 @@ import {
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
+import {
+  homeHasDefaultProfileSlot,
+  orderProfileCandidates,
+  profileCellIsValid,
+  profileLinkListSchema,
+  sameProfileCell,
+} from "../profile-order.ts";
 import { setRunnableName } from "../runner-utils.ts";
 import { type Runtime, spaceCellSchema } from "../runtime.ts";
 import { type Action, type ReactivityLog } from "../scheduler.ts";
 import { RetryImmediately } from "../scheduler/retry-immediately.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { transactionFailureMessage } from "../storage/transaction-errors.ts";
 import {
   isConflictRejection,
   isStorageTransactionInconsistent,
@@ -59,6 +67,7 @@ import {
 import { scopedCell } from "./scope-policy.ts";
 import {
   createDocumentReadiness,
+  DocumentLoadError,
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
@@ -99,28 +108,6 @@ const profileElementListSchema = internSchema(
         source: { type: "string" },
       },
     },
-  },
-);
-
-// Schema for a list of profile links (the home `profiles` and `mru` lists). Each
-// element is read as a cell *reference* (`asCell`), NOT its inlined value, so the
-// list can be enumerated without deep-resolving every profile's own space. A
-// plain `.get()` inlines each element and returns `undefined` for the whole list
-// whenever any element is a link into a space not yet loaded in the reading
-// context — e.g. a shared piece resolving `#profile` right after a profile was
-// created in its own (`inSpace`) space. That collapsed the list to length 0 and
-// hid the just-created profile behind the "No profile" / create surface.
-//
-// The item type is `unknown` (not `object`) on purpose: with `asCell`, an
-// `object` item schema would trigger a *deep* sync of each linked profile —
-// fetching its entire object graph and everything it transitively links, across
-// space boundaries — just to count the list. `unknown` keeps the sync shallow
-// (we only need the links here). The default profile's name is loaded lazily and
-// targeted via `subscribeProfileName` once a candidate is selected.
-const profileLinkListSchema = internSchema(
-  {
-    type: "array",
-    items: { type: "unknown", asCell: ["cell"] },
   },
 );
 
@@ -235,6 +222,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#learned":
     case "#learnedSummary":
     case "#agent_queue":
+    case "#chatManager":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -286,6 +274,18 @@ export function tagMatchesHashtag(
 type WishContext = {
   runtime: Runtime;
   readiness: ReturnType<typeof createDocumentReadiness>;
+
+  /** Candidate load failures encountered during this resolution. */
+  candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
+
+  /**
+   * Documents of profiles left out of the roster because their load failed:
+   * the roster entry, and any default or MRU reference into the same profile
+   * space. Their failures are not discovery failures: they only exempt those
+   * documents from the final load check.
+   */
+  skippedProfiles?: Set<Cell<unknown>>;
+
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -411,61 +411,6 @@ function homeSpaceUserDID(ctx: WishContext): string | undefined {
 }
 
 /**
- * A profile link is valid when it resolves to a cell in another space (the
- * profile's own `inSpace` space) with an empty path. An unset link, or one that
- * still points into the home space, means the profile does not exist yet.
- */
-function profileCellIsValid(
-  cell: Cell<unknown>,
-  rawIsSet: boolean,
-  homeSpace: Cell<unknown>["space"],
-): boolean {
-  if (!rawIsSet) return false;
-  const link = cell.getAsNormalizedFullLink();
-  return link.space !== homeSpace && link.path.length === 0;
-}
-
-/**
- * Whether a `mru` / `defaultProfile` entry names the SAME profile as a candidate
- * from the home `profiles` list — compared by the profile's own SPACE, NOT by
- * `Cell.equals` or by entity id.
- *
- * CT-1842: the `#profile` ordering matches candidates (from `profiles`) against
- * the `defaultProfile` link and the `mru` list. Those name the same profiles but
- * reach them through DIFFERENT links. Two distinct differences defeat a naive
- * comparison, both observed on live data:
- *   - `scope` skew — `Cell.equals` (`areNormalizedLinksSame`) compares `scope`,
- *     which the two sides don't always agree on; and
- *   - DIFFERENT entity `id` — the `mru`/`defaultProfile` link and the `profiles`
- *     link for the SAME profile point at different cells WITHIN that profile's
- *     space (e.g. the picker stores the profile pattern's result cell while the
- *     list stores the pattern cell). So even id+space+path comparison fails.
- *
- * The stable per-profile identity is the profile's own SPACE. Each profile is a
- * distinct anonymous `ProfileHome.inSpace()` (see submitProfileCreation), whose
- * DID is unique per user AND per creation event, and `profileCellIsValid`
- * guarantees every valid candidate lives in its OWN non-home space. No two
- * distinct valid profiles ever share a space, so equal space ⇒ same profile.
- * Reading each cell's normalized link keeps the ordering reactive to
- * `mru`/`defaultProfile` changes.
- *
- * `homeSpace` guards the degenerate case: a `mru`/`defaultProfile` entry that
- * still resolves into the home space (an unmaterialized / invalid link) must
- * never match — candidates are never in the home space, but the guard makes the
- * intent explicit and defends against a future home-space candidate slipping in.
- */
-function sameProfileCell(
-  a: Cell<unknown>,
-  b: Cell<unknown>,
-  homeSpace: Cell<unknown>["space"],
-): boolean {
-  const spaceA = a.getAsNormalizedFullLink().space;
-  const spaceB = b.getAsNormalizedFullLink().space;
-  if (spaceA === homeSpace || spaceB === homeSpace) return false;
-  return spaceA === spaceB;
-}
-
-/**
  * Subscribe to a profile cell's live name so the wish re-runs once a
  * freshly-created profile's name materializes across the space boundary.
  */
@@ -485,6 +430,19 @@ function subscribeProfileName(cell: Cell<unknown>): void {
   cell.key("initialNameApplied").get();
 }
 
+/** A profile document's presence, or the failure that kept it from loading. */
+function profileDocument(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean | DocumentLoadError {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (error instanceof DocumentLoadError) return error;
+    throw error;
+  }
+}
+
 /**
  * Enumerate the user's profile candidate cells from the home `profiles` list,
  * ordered: default first, then by most-recently-used (MRU), then remaining list
@@ -492,8 +450,11 @@ function subscribeProfileName(cell: Cell<unknown>): void {
  * `ProfileHome.inSpace()` space, so the `defaultProfile` / `mru` links are
  * matched to candidates by space, not `Cell.equals` (see `sameProfileCell`;
  * CT-1842). Skips confirmed-absent entries when a valid candidate remains.
- * Throws `DocumentPending` while backing documents load, and `WishError`
- * when absent entries leave no valid candidate.
+ * A profile whose load failed is ordered with the rest, so a failure never
+ * changes which profile is selected: the selected profile's failure is thrown,
+ * and any other failed profile is left out of the roster. Throws
+ * `DocumentPending` while backing documents load, and `WishError` when absent
+ * entries leave no valid candidate.
  */
 function getProfileCandidateCells(
   ctx: WishContext,
@@ -511,12 +472,15 @@ function getProfileCandidateCells(
   const rawList = profilesCell.asSchema(profileLinkListSchema).get();
   const length = Array.isArray(rawList) ? rawList.length : 0;
 
+  // Valid profiles in list order, including those whose load failed.
   const candidates: Cell<unknown>[] = [];
+  const failures = new Map<Cell<unknown>, DocumentLoadError>();
   let hasAbsentProfile = false;
   for (let i = 0; i < length; i++) {
     const entry = profilesCell.key(i);
     const cell = entry.resolveAsCell();
-    if (!ctx.readiness.requireDocument(cell, ctx.tx)) {
+    const loaded = profileDocument(cell, ctx);
+    if (loaded === false) {
       hasAbsentProfile = true;
       continue;
     }
@@ -529,7 +493,11 @@ function getProfileCandidateCells(
     ) {
       continue;
     }
-    subscribeProfileName(cell);
+    if (loaded instanceof DocumentLoadError) {
+      failures.set(cell, loaded);
+    } else {
+      subscribeProfileName(cell);
+    }
     candidates.push(cell);
   }
   if (candidates.length === 0) {
@@ -537,40 +505,33 @@ function getProfileCandidateCells(
     return { ordered: [], defaultValid: false };
   }
 
-  // Ordering inputs: the default link and the MRU list.
-  const defaultEntry = defaultPattern.key("defaultProfile");
-  const defaultCell = defaultEntry.resolveAsCell();
-  const defaultValid = profileCellIsValid(
-    defaultCell,
-    defaultEntry.getRaw() !== undefined,
-    homeSpaceCell.space,
-  );
-
-  const mruCell = defaultPattern.key("mru");
-  const mruRaw = mruCell.asSchema(profileLinkListSchema).get();
-  const mruLength = Array.isArray(mruRaw) ? mruRaw.length : 0;
-  const mruCells: Cell<unknown>[] = [];
-  for (let j = 0; j < mruLength; j++) {
-    mruCells.push(mruCell.key(j).resolveAsCell());
-  }
-  // Match by the profile's own space, not `Cell.equals` — see sameProfileCell.
   const homeSpace = homeSpaceCell.space;
-  const mruRank = (cell: Cell<unknown>): number => {
-    const idx = mruCells.findIndex((m) => sameProfileCell(m, cell, homeSpace));
-    return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
-  };
-
-  const ordered = [...candidates];
-  ordered.sort((a, b) => {
-    if (defaultValid) {
-      const aDef = sameProfileCell(defaultCell, a, homeSpace);
-      const bDef = sameProfileCell(defaultCell, b, homeSpace);
-      if (aDef && !bDef) return -1;
-      if (bDef && !aDef) return 1;
+  const { ordered, defaultValid, defaultCell, mruCells } =
+    orderProfileCandidates(
+      ctx.runtime,
+      defaultPattern,
+      homeSpace,
+      candidates,
+      ctx.tx,
+    );
+  // Falling back past the selected profile would switch persona silently.
+  const selectedFailure = failures.get(ordered[0]);
+  if (selectedFailure) throw selectedFailure;
+  if (failures.size === 0) return { ordered, defaultValid };
+  // A default or MRU reference can name another document in a skipped
+  // profile's space (see sameProfileCell); resolving it loaded that document,
+  // which fails with the rest of the space.
+  const skipped = ctx.skippedProfiles ??= new Set();
+  for (const cell of failures.keys()) {
+    skipped.add(cell);
+    for (const reference of [defaultCell, ...mruCells]) {
+      if (sameProfileCell(reference, cell, homeSpace)) skipped.add(reference);
     }
-    return mruRank(a) - mruRank(b);
-  });
-  return { ordered, defaultValid };
+  }
+  return {
+    ordered: ordered.filter((cell) => !failures.has(cell)),
+    defaultValid,
+  };
 }
 
 /**
@@ -601,9 +562,28 @@ function formatTarget(parsed: ParsedWishTarget): string {
     (parsed.path.length > 0 ? "/" + parsed.path.join("/") : "");
 }
 
-/**
- * Search favorites in home space for pieces matching a hashtag.
- */
+/** Checks a discovery candidate, retaining load failures for an empty search. */
+function requireDiscoveryCandidate(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (!(error instanceof DocumentLoadError)) throw error;
+    ctx.candidateFailures.set(cell, error);
+    return false;
+  }
+}
+
+/** Reports a candidate load failure when no readable match remains. */
+function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
+  const failure = ctx.candidateFailures.values().next().value;
+  if (failure) throw failure;
+  throw new WishError(message);
+}
+
+/** Searches favorites in home space for pieces matching a hashtag. */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
@@ -649,7 +629,7 @@ function searchFavoritesForHashtag(
     () =>
       matches.flatMap((match) => {
         const cell = match.cell.resolveAsCell();
-        return ctx.readiness.requireDocument(cell, ctx.tx)
+        return requireDiscoveryCandidate(cell, ctx)
           ? [{ cell, pathPrefix }]
           : [];
       }),
@@ -693,6 +673,8 @@ function searchMentionablesForHashtag(
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
         if (!pieceCell) return false;
+        const resolved = pieceCell.resolveAsCell();
+        if (!requireDiscoveryCandidate(resolved, ctx)) return false;
 
         const piece = measureWishPhase(
           "mentionable-piece-get",
@@ -793,9 +775,13 @@ function searchProfileForHashtag(
     "profile-elements-result-map",
     queryKey,
     () =>
-      matches.flatMap((match) =>
-        match.cell ? [{ cell: match.cell, pathPrefix }] : []
-      ),
+      matches.flatMap((match) => {
+        if (!match.cell) return [];
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -867,10 +853,39 @@ function searchByHashtag(
       parts.push(`${arbitraryDIDs.length} space(s)`);
     }
     const scopeDesc = parts.join(" or ") || "favorites";
-    throw new WishError(`No ${scopeDesc} found matching "${searchTerm}"`);
+    throwNoDiscoveryMatch(
+      ctx,
+      `No ${scopeDesc} found matching "${searchTerm}"`,
+    );
   }
 
   return allMatches;
+}
+
+/**
+ * Throws a `WishError` naming the remedies when the home pattern in
+ * `homeSpaceCell` holds nothing at `field`, which it names to the user as
+ * `what`. The system home pattern gains a field its current source adds only
+ * when the home space is next opened, since nothing updates a piece nobody
+ * opens, so a home set up before the field existed lacks it until then. A
+ * custom home pattern follows no source of the system's, and holds the field
+ * only if it says so. The wish does not open the home itself.
+ */
+function requireHomeField(
+  homeSpaceCell: Cell<unknown>,
+  field: string,
+  what: string,
+  ctx: WishContext,
+): void {
+  const held = resolvePath(homeSpaceCell, ["defaultPattern", field], ctx);
+  if (held.getRaw() === undefined) {
+    throw new WishError(
+      `The home space holds no ${what}. If its home pattern is the system ` +
+        `one, set up before it had one, open the home space once, which ` +
+        `brings it up to date. A custom home pattern needs to hold the ` +
+        `${what} itself.`,
+    );
+  }
 }
 
 /**
@@ -907,16 +922,19 @@ function resolveHomeSpaceTarget(
 
       const match = favorites.find((entry) => {
         const userTags = entry.userTags ?? [];
-        for (const t of userTags) {
-          if (t.toLowerCase().includes(searchTerm)) return true;
-        }
-
         // Match the discovery tags snapshotted when favorited.
-        return (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        const tagged = userTags.some((t) =>
+          t.toLowerCase().includes(searchTerm)
+        ) || (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        return tagged &&
+          requireDiscoveryCandidate(entry.cell.resolveAsCell(), ctx);
       });
 
       if (!match) {
-        throw new WishError(`No favorite found matching "${searchTerm}"`);
+        throwNoDiscoveryMatch(
+          ctx,
+          `No favorite found matching "${searchTerm}"`,
+        );
       }
 
       return [{
@@ -964,6 +982,24 @@ function resolveHomeSpaceTarget(
       }];
     }
 
+    case "#chatManager": {
+      // The user's chat manager: the index of the FabriChat rooms they belong
+      // to. A hashtag search would not find it, since under `scope: ["~"]`
+      // that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #chatManager",
+        );
+      }
+      const homeSpaceCell = getHomeSpaceCell(ctx);
+      requireHomeField(homeSpaceCell, "chatManager", "chat manager", ctx);
+      return [{
+        cell: homeSpaceCell,
+        pathPrefix: ["defaultPattern", "chatManager"],
+      }];
+    }
+
     case "#learnedSummary": {
       // The free-form learned summary string (home `learned.summary`). This is
       // what `#profile` used to resolve to before it was repurposed for the
@@ -991,10 +1027,12 @@ function resolveHomeSpaceTarget(
         // create surface (see profileCreateUI).
         throw new NoProfileError();
       }
-      // Always expose the full, ordered roster as `candidates`. The wish action
-      // below still makes `ordered[0]` the current profile and only renders the
-      // picker when no valid default exists. Keeping the roster here is important
-      // for identity-only consumers such as ProfileHome's owner edit gate.
+      // Expose the ordered roster as `candidates`: every profile that loaded,
+      // without any unselected profile whose load failed (see
+      // getProfileCandidateCells). The wish action below still makes
+      // `ordered[0]` the current profile and only renders the picker when no
+      // valid default exists. Keeping the roster here is important for
+      // identity-only consumers such as ProfileHome's owner edit gate.
       return ordered.map((cell) => ({ cell, pathPrefix: [] }));
     }
 
@@ -1456,7 +1494,10 @@ function resolveBase(
 
     throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
   } finally {
-    ctx.readiness.requireLoadedReads(ctx.tx);
+    ctx.readiness.requireLoadedReads(ctx.tx, [
+      ...ctx.candidateFailures.keys(),
+      ...(ctx.skippedProfiles ?? []),
+    ]);
   }
 }
 
@@ -1526,6 +1567,7 @@ function createSharedHashtagResolver(
     const sharedContext: WishContext = {
       runtime: ctx.runtime,
       readiness,
+      candidateFailures: new Map(),
       tx,
       parentCell: ctx.parentCell,
       scope: sharedScope,
@@ -1975,27 +2017,6 @@ export function isSurfacableWishCommitFailure(
   return true;
 }
 
-/**
- * The text the wish surface shows for a settled commit failure: the
- * informative layer, not the debug dump. A plain abort's own message is the
- * generic "Transaction was aborted" — the cause rides `reason` — while a
- * CFC-modeled rejection carries everything in `message`.
- */
-export function wishCommitFailureMessage(
-  error: { message?: string; reason?: unknown },
-): string {
-  const message = typeof error.message === "string" ? error.message : "";
-  if (message !== "" && !message.startsWith("Transaction was aborted")) {
-    return message;
-  }
-  const reason = (error as { reason?: unknown }).reason;
-  if (reason instanceof Error && reason.message !== "") {
-    return reason.message;
-  }
-  if (message !== "") return message;
-  return toCompactDebugString(error);
-}
-
 export function wishTargetMayUseHomeSpace(
   query: unknown,
   scope?: ("~" | "." | "profile" | string)[],
@@ -2087,6 +2108,7 @@ export function wish(
   interface ProfileCreateSidecarSlot extends SidecarSurfaceState {
     input?: {
       profiles: unknown;
+      privateInbox: unknown;
       inputId: string;
       buttonId: string;
     };
@@ -2097,7 +2119,10 @@ export function wish(
     input?: {
       profiles: unknown;
       defaultProfile: unknown;
+      legacyDefaultProfile: unknown;
+      offersSetDefault: boolean;
       mru: unknown;
+      privateInbox: unknown;
     };
     resultCell?: Cell<any>;
   }
@@ -2256,7 +2281,7 @@ export function wish(
     tx.addCommitCallback((_tx, result) => {
       if (!result.error) return;
       if (!isSurfacableWishCommitFailure(result.error)) return;
-      const message = wishCommitFailureMessage(result.error);
+      const message = transactionFailureMessage(result.error);
       // Keyed per scoped INSTANCE: scope and identity separate user/session
       // instances of one doc id, so one demander's in-flight report cannot
       // hide another's failure.
@@ -2371,7 +2396,7 @@ export function wish(
       >[1],
     );
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     if (error === undefined) return;
     if (
       attempt < 2 &&
@@ -2529,7 +2554,7 @@ export function wish(
       sidecarError: message,
     });
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     // The account of the failure failed to land, so the surface stays blank
     // and this is the only place the reason exists. Writing it again would
     // meet whatever refused it the first time.
@@ -2614,7 +2639,7 @@ export function wish(
           sidecarRunOptions(surface),
         );
         runtime.prepareTxForCommit(runTx);
-        const { error } = await runTx.commit();
+        const { error } = await runTx.commit().settled;
         if (error) {
           const disposition = await sidecarRunFailureDisposition(
             error,
@@ -2632,7 +2657,8 @@ export function wish(
           );
           return;
         }
-        // Under a serving wave, commit() resolving ok is not durability:
+        // Under a serving wave, `commit().settled` resolving `ok` accepts
+        // the contribution into the wave:
         // the commit step can still withdraw the contribution (runner.ts's
         // pattern-swap settlement precedent). Nothing re-issues a withdrawn
         // sidecar instantiation, so at least SAY so — the silent one-shot
@@ -2702,6 +2728,11 @@ export function wish(
       profiles: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
       ),
+      // The home's private inbox, which a profile created here is pointed
+      // at; a home without one holds nothing at this path.
+      privateInbox: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
+      ),
       inputId: "wish-profile-name-input",
       buttonId: "wish-profile-create-button",
     };
@@ -2745,6 +2776,7 @@ export function wish(
       return slot.input && {
         ...slot.input,
         profiles: bindInputCell(slot.input.profiles),
+        privateInbox: bindInputCell(slot.input.privateInbox),
       };
     };
 
@@ -2784,7 +2816,7 @@ export function wish(
               });
               readyCell.withTx(readyTx).set(true);
               runtime.prepareTxForCommit(readyTx);
-              trackSidecarLaunch(readyTx.commit());
+              trackSidecarLaunch(readyTx.commit().settled);
             }
             return runSidecarInOwnTx(
               slot.resultCell,
@@ -2866,15 +2898,38 @@ export function wish(
     );
     const homeDefaultPattern = getHomeSpaceCell(ctx).key("defaultPattern")
       .resolveAsCell();
+    // A home with the slot hands it over for "Set default" and its earlier
+    // default as `legacyDefaultProfile`. A home without hands over no slot and
+    // `offersSetDefault: false`, since a write through a cell whose root holds
+    // a link lands in the linked profile; its `defaultProfile` cell, holding
+    // the default that way, goes as `legacyDefaultProfile`.
+    const hasSlot = homeHasDefaultProfileSlot(
+      runtime,
+      homeDefaultPattern,
+      ctx.tx,
+    );
     slot.input = {
       profiles: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
       ),
-      defaultProfile: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+      defaultProfile: hasSlot
+        ? createSigilLinkFromParsedLink(
+          homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+        )
+        : undefined,
+      legacyDefaultProfile: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key(
+          hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+        ).getAsNormalizedFullLink(),
       ),
+      offersSetDefault: hasSlot,
       mru: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("mru").getAsNormalizedFullLink(),
+      ),
+      // As for the create surface: the picker's create section points a new
+      // profile at it.
+      privateInbox: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
       ),
     };
     const tx = providedTx || runtime.edit();
@@ -2903,7 +2958,10 @@ export function wish(
       return slot.input && {
         profiles: bindInputCell(slot.input.profiles),
         defaultProfile: bindInputCell(slot.input.defaultProfile),
+        legacyDefaultProfile: bindInputCell(slot.input.legacyDefaultProfile),
+        offersSetDefault: slot.input.offersSetDefault,
         mru: bindInputCell(slot.input.mru),
+        privateInbox: bindInputCell(slot.input.privateInbox),
       };
     };
 
@@ -3030,6 +3088,7 @@ export function wish(
           const ctx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,
@@ -3341,6 +3400,7 @@ export function wish(
           const suggestionCtx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,

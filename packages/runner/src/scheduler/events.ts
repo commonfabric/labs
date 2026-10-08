@@ -25,10 +25,12 @@ import {
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
+import { commitPromiseRejectionOf } from "../storage/extended-storage-transaction.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
   IPreconditionFailedError,
+  IStorageManager,
   MemorySpace,
 } from "../storage/interface.ts";
 import {
@@ -36,6 +38,10 @@ import {
   releaseLocalReadBasis,
   validateLocalReadBasis,
 } from "../storage/local-read-policy.ts";
+import {
+  isLinkResolutionProbe,
+  isReadIgnoredForScheduling,
+} from "../storage/reactivity-log.ts";
 import {
   isConflictRejection,
   isPermanentRejection,
@@ -59,7 +65,10 @@ import { mintEventId } from "./event-identity.ts";
 import { planEventInvalidDependencyScheduling } from "./execution.ts";
 import type { OriginStatus } from "./lineage.ts";
 import type { NodeRegistry } from "./node-record.ts";
-import { RetryImmediately } from "./retry-immediately.ts";
+import {
+  InSpaceTargetUnresolved,
+  RetryImmediately,
+} from "./retry-immediately.ts";
 import {
   hasAnnotatedWrites,
   trustedEventWriteCandidatesFromTransaction,
@@ -1009,6 +1018,12 @@ export interface SchedulerEventExecutionState {
     originTx: IExtendedStorageTransaction,
     event: QueuedEvent,
   ) => void;
+
+  /** Notes that the dispatch runs `originTx`'s work again once it fails. */
+  readonly noteLineageRerun: (originTx: IExtendedStorageTransaction) => void;
+
+  /** Whether the dispatch noted that it runs `originTx`'s work again. */
+  readonly lineageRunsAgain: (originTx: IExtendedStorageTransaction) => boolean;
   readonly getOriginLocalSeq: (
     originTx: IExtendedStorageTransaction,
     space: MemorySpace,
@@ -1495,6 +1510,8 @@ export async function processPullQueuedEventDuringExecute(
       state.releaseLineageEvent(originTx, event),
     recordLineageEvent: (originTx, event) =>
       state.recordLineageEvent(originTx, event),
+    noteLineageRerun: (originTx) => state.noteLineageRerun(originTx),
+    lineageRunsAgain: (originTx) => state.lineageRunsAgain(originTx),
     getOriginLocalSeq: (originTx, space) =>
       state.getOriginLocalSeq(originTx, space),
     collectPendingLoadParkKeys: (event, log) =>
@@ -1526,6 +1543,12 @@ export async function dispatchQueuedEvent(state: {
     originTx: IExtendedStorageTransaction,
     event: QueuedEvent,
   ) => void;
+
+  /** Notes that the dispatch runs `originTx`'s work again once it fails. */
+  readonly noteLineageRerun: (originTx: IExtendedStorageTransaction) => void;
+
+  /** Whether the dispatch noted that it runs `originTx`'s work again. */
+  readonly lineageRunsAgain: (originTx: IExtendedStorageTransaction) => boolean;
   readonly getOriginLocalSeq: (
     originTx: IExtendedStorageTransaction,
     space: MemorySpace,
@@ -1606,6 +1629,33 @@ export async function dispatchQueuedEvent(state: {
   state.eventQueue.shift();
 
   const tx = state.runtime.edit();
+  // The attempt's commit outcome is classified once, when it settles, by a
+  // commit callback registered before the handler runs. Commit callbacks run
+  // in the order they were added, and the lineage adds its settle callback
+  // only when the handler sends its first follow-up, so a run of the event
+  // that is coming — a stale-basis rejection backing off to run the handler
+  // again — is noted on the lineage before that callback drops the
+  // follow-ups this attempt sent: the re-run sends its own. A commit
+  // callback sees the outcome the commit settled with, which a verdict
+  // callback does not always see. A commit whose promise rejected hands its
+  // callbacks an error holding the rejection, and the classification here
+  // reads the rejection itself, as the commit handler below does.
+  let settledDisposition:
+    | { readonly error: unknown; readonly disposition: CommitDisposition }
+    | undefined;
+  tx.addCommitCallback((_tx, result) => {
+    if (result.error === undefined) return;
+    const rejected = commitPromiseRejectionOf(result.error);
+    const disposition = classifyCommitDisposition(
+      rejected === undefined
+        ? result.error
+        : normalizeEventCommitRejection(rejected.reason),
+      queuedEvent,
+      state.backpressure,
+    );
+    settledDisposition = { error: result.error, disposition };
+    if (disposition.kind === "backoff") state.noteLineageRerun(tx);
+  });
   let viewHandler = presyncedImplementation ?? handler;
   const served = queuedEvent.served;
   let lineageReleased = false;
@@ -1975,6 +2025,43 @@ export async function dispatchQueuedEvent(state: {
     };
 
     const finalize = (error?: unknown): void => {
+      // A served run that read a document this runtime refuses by
+      // construction read an absence that is not the document's state, so
+      // whatever it did with it — an `undefined` argument, a throw, a
+      // branch taken on nothing — is no consequence of the event. The read
+      // is refused the same way every time, so the entry fails permanently
+      // in `dispatch-load`, as a load that cannot succeed fails it. Only
+      // what the run itself read decides this: the preflight's dependency
+      // walk is a transaction of its own, and a refused document only it
+      // reaches leaves the run free to dispatch.
+      const refused = served === undefined
+        ? undefined
+        : refusedReadIn(state.runtime.storageManager, tx);
+      if (refused !== undefined) {
+        if (tx.status().status === "ready") {
+          tx.abort(new Error(`served run read a refused document: ${refused}`));
+        }
+        reportServedEventFailure(served, {
+          kind: "deferred",
+          cause: "load-park",
+          role: "failed-head",
+          failure: {
+            failureClass: "protocol",
+            recoveryEpoch: `refused-read:${refused}`,
+            permanentEvidence: true,
+          },
+        });
+        deferLaterSameSpaceServedEvents(
+          state,
+          queuedEvent,
+          `whose served run read a refused document (${refused})`,
+        );
+        runFinalCommitCallback();
+        tx.abandonStagedWork(
+          eventAbandonError("served run read a refused document"),
+        );
+        return;
+      }
       const unavailable = validateLocalReadBasis(tx);
       if (unavailable !== undefined) {
         if (tx.status().status === "ready") tx.abort(unavailable);
@@ -1982,15 +2069,33 @@ export async function dispatchQueuedEvent(state: {
         runFinalCommitCallback();
         return;
       }
+      // The handler named an inSpace("name") target that this runtime leaves
+      // unresolved: it creates no space for a name, as a client running
+      // under server execution does not. The run is the speculative echo of
+      // the serving runtime's, which creates the space, so the echo
+      // withdraws instead of running again, and the serving run's
+      // consequence replaces it. The follow-ups it sent drop quietly: the
+      // serving run sends its own.
+      if (error instanceof InSpaceTargetUnresolved) {
+        state.noteLineageRerun(tx);
+        if (tx.status().status === "ready") tx.abort(error);
+        runFinalCommitCallback();
+        tx.abandonStagedWork(eventAbandonError("speculative run withdrawn"));
+        return;
+      }
       // A RetryImmediately signal means the handler referenced an inSpace("name")
       // target that has now been resolved into the runtime cache, or that its
       // access-list commit conflicted. Abort this run's transaction and re-queue
       // the event so the handler re-runs.
       if (error instanceof RetryImmediately) {
+        const rerun = retry || served !== undefined;
+        // Before the abort, whose settle callback drops the follow-ups this
+        // attempt sent: the re-run sends its own.
+        if (rerun) state.noteLineageRerun(tx);
         if (tx.status().status === "ready") {
           tx.abort(error);
         }
-        if (retry || served !== undefined) {
+        if (rerun) {
           requeueForNameResolution();
         } else {
           // An unserved retries:false event is a one-shot; it does not re-run to
@@ -2230,12 +2335,18 @@ export async function dispatchQueuedEvent(state: {
         // intent must converge or fail loudly: a stale-basis rejection backs off
         // and retries within a bounded window rather than being dropped; a
         // permanent or non-stale-basis rejection is not retried; an unconverged
-        // write surfaces a terminal error.
-        const disposition = classifyCommitDisposition(
-          error,
-          queuedEvent,
-          state.backpressure,
-        );
+        // write surfaces a terminal error. The rejection the attempt's commit
+        // callbacks saw keeps the classification the lineage acted on; a
+        // settlement reporting another error, as one a commit promise
+        // rejected with, is classified as it reports it.
+        const disposition =
+          error !== undefined && settledDisposition?.error === error
+            ? settledDisposition.disposition
+            : classifyCommitDisposition(
+              error,
+              queuedEvent,
+              state.backpressure,
+            );
 
         let telemetryFailure: { readonly error: unknown } | undefined;
         try {
@@ -2456,6 +2567,22 @@ export async function dispatchQueuedEvent(state: {
                 ],
               );
             }
+            // A follow-up whose origin failed and is run again is refused by
+            // its origin-committed precondition as a matter of course: the
+            // origin's next run sends its own.
+            if (
+              permanentRejection === "origin-committed" &&
+              queuedEvent.originTx !== undefined &&
+              state.lineageRunsAgain(queuedEvent.originTx)
+            ) {
+              logger.debug(
+                "scheduler",
+                "Event handler commit refused: its origin failed and runs " +
+                  "again; not retrying",
+                { error, handlerId },
+              );
+              break;
+            }
             logger.warn(
               "scheduler",
               "Event handler commit permanently rejected; not retrying",
@@ -2495,7 +2622,7 @@ export async function dispatchQueuedEvent(state: {
         }
         return requeue;
       };
-      const handled = tx.commit().then(
+      const handled = tx.commit().settled.then(
         ({ error }) => handleCommitResult(error),
         (reason) => handleCommitResult(normalizeEventCommitRejection(reason)),
       ).catch((error) => {
@@ -2599,6 +2726,37 @@ export async function dispatchQueuedEvent(state: {
   } catch (error) {
     finalizeFailure(error);
   }
+}
+
+/**
+ * The first document whose value `tx` read that `manager` refuses by
+ * construction, as `<space>/<scope>/<id>`, or `undefined` when it read none.
+ * A read of the document's root counts, as a read of its value does, among
+ * the reads the run depends on. Three kinds of read do not count, since none
+ * is the run consuming the document's data: a read of its CFC metadata, which
+ * a run passing a link to the document along makes; a read the transaction
+ * records as a link-resolution probe, which resolving a link through the
+ * document makes; and a read it records as ignored for scheduling, which
+ * writing into the document makes.
+ */
+export function refusedReadIn(
+  manager: Pick<IStorageManager, "refusesReadByConstruction">,
+  tx: Pick<IExtendedStorageTransaction, "getReadActivities">,
+): string | undefined {
+  if (manager.refusesReadByConstruction === undefined) return undefined;
+  for (const read of tx.getReadActivities?.() ?? []) {
+    if (
+      isLinkResolutionProbe(read.meta) ||
+      isReadIgnoredForScheduling(read.meta)
+    ) {
+      continue;
+    }
+    if (read.path.length > 0 && read.path[0] !== "value") continue;
+    if (manager.refusesReadByConstruction(read)) {
+      return `${read.space}/${read.scope ?? "space"}/${read.id}`;
+    }
+  }
+  return undefined;
 }
 
 function formatEventCommitAddress(address: {

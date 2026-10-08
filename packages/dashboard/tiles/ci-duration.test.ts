@@ -399,6 +399,59 @@ Deno.test("the commit Gantt page contains only one commit selection", () => {
   assert(!empty.includes("/ci-gantt.svg?"));
 });
 
+Deno.test("the commit Gantt page stars a commit the green branch is at, and no commit it was never at", () => {
+  const held = "f".repeat(40);
+  const page = (sha: string) =>
+    ciCommitGanttPage(
+      new URL(`http://d/ci-gantt?repo=loom&sha=${sha}&run=701:1`),
+      (repo, asked) =>
+        repo === LOOM_REPO && asked === held
+          ? { branch: "main-green", current: true }
+          : undefined,
+    );
+  assertStringIncludes(
+    page(held),
+    `${LOOM_REPO} · <span class="green-star" role="img" aria-label="main-green is at this commit" title="main-green is at this commit">★</span><a class="commit"`,
+  );
+  assertStringIncludes(page(held), "span.green-star{color:var(--status-good)");
+  assert(!page("9".repeat(40)).includes(`<span class="green-star"`));
+});
+
+Deno.test("the commit Gantt route reads the green branch of a repository that has one before it serves the page", async () => {
+  const at = "e".repeat(40);
+  const route = labsCiDuration.routes?.find((route) => route.path === "/ci-gantt");
+  assert(route);
+  const requests: URL[] = [];
+  const realFetch = globalThis.fetch;
+  const realToken = Deno.env.get("GH_TOKEN");
+  Deno.env.set("GH_TOKEN", "test-token");
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requests.push(new URL(input instanceof Request ? input.url : String(input)));
+    return Promise.resolve(Response.json([
+      { id: 8801, after: at, timestamp: new Date().toISOString() },
+    ]));
+  }) as typeof fetch;
+  try {
+    const serve = async (repo: string) => {
+      const url = new URL(`http://d/ci-gantt?repo=${repo}&sha=${at}&run=701:1`);
+      return await (await route.handler(new Request(url), url)).text();
+    };
+    assertStringIncludes(
+      await serve("loom"),
+      `aria-label="main-green is at this commit"`,
+    );
+    assertEquals(requests.map((url) => url.pathname), [
+      `/repos/${LOOM_REPO}/activity`,
+    ]);
+    assert(!(await serve("labs")).includes(`<span class="green-star"`));
+    assertEquals(requests.length, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realToken === undefined) Deno.env.delete("GH_TOKEN");
+    else Deno.env.set("GH_TOKEN", realToken);
+  }
+});
+
 Deno.test("commit Gantt URL normalization preserves only renderer themes", () => {
   const selection = `repo=labs&sha=${"e".repeat(40)}&run=42:1`;
   for (const theme of ["dark", "light"]) {

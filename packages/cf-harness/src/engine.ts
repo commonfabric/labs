@@ -14,6 +14,16 @@ import type {
 } from "./loom-retrieval.ts";
 import type { JSONSchema } from "@commonfabric/api";
 import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
+import {
+  createLoomCommandCatalogSource,
+  type LoomCommandCatalogSource,
+} from "./loom-commands.ts";
+import type {
+  ListCommandsInput,
+  ListCommandsOutput,
+  RunCommandInput,
+  RunCommandOutput,
+} from "./tools/loom-commands.ts";
 import type {
   SubmitResultInput,
   SubmitResultOutput,
@@ -223,13 +233,23 @@ import {
   RunscSandboxRuntime,
 } from "./sandbox/runsc.ts";
 import {
+  CFC_VM_HOME_ENV,
+  recordedSandboxRuntime,
+  sandboxRuntimeOfOptions,
+  sandboxRuntimeResumeRefusal,
+  unnamedRuntimeMountNote,
+} from "./sandbox/runtime-selection.ts";
+import {
   DenoProcessRunner,
   type ProcessRunner,
 } from "./sandbox/process-runner.ts";
 import type {
   DockerRunscAdditionalMountConfig,
   DockerRunscSandboxConfig,
+  SandboxPlatform,
   SandboxRuntime,
+  SandboxRuntimeChoice,
+  SandboxRuntimeKind,
   SandboxRuntimeMountDescription,
 } from "./sandbox/types.ts";
 import {
@@ -258,7 +278,7 @@ import type {
   WeaverActionInput,
   WeaverActionOutput,
 } from "./tools/weaver-action.ts";
-import type { HarnessClientActionRequester } from "./contracts/client-action.ts";
+import type { HarnessClientActionRequester } from "./client-actions/coordinator.ts";
 import {
   type ReadFileToolInput,
   type ReadFileToolOutput,
@@ -350,6 +370,8 @@ export interface BuiltinToolInputMap {
   loom_calendar_list: LoomCalendarListInput;
   loom_context: LoomContextInput;
   loom_profile: LoomProfileInput;
+  list_commands: ListCommandsInput;
+  run_command: RunCommandInput;
   submit_result: SubmitResultInput;
 }
 
@@ -388,6 +410,8 @@ export interface BuiltinToolOutputMap {
   loom_calendar_list: LoomRetrievalToolOutput;
   loom_context: LoomRetrievalToolOutput;
   loom_profile: LoomRetrievalToolOutput;
+  list_commands: ListCommandsOutput;
+  run_command: RunCommandOutput;
   submit_result: SubmitResultOutput;
 }
 
@@ -423,7 +447,7 @@ export interface CreateHarnessEngineOptions
    * default) drives Docker with the runsc-cfc runtime; `runsc` runs runsc
    * directly, with no Docker, and honours tool-call sessions.
    */
-  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRuntimeKind?: SandboxRuntimeKind;
   /** runsc runtime: the rootfs a bundle names. */
   sandboxRootfs?: string;
   /** runsc runtime: CFC policy file; `--cfc` is passed exactly when set. */
@@ -431,6 +455,20 @@ export interface CreateHarnessEngineOptions
   /** runsc runtime: the binary, default `runsc` on PATH. */
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+
+  /**
+   * runsc runtime: the platform whose driver defaults apply, as
+   * `Deno.build.os` writes it, which it is when absent. On macOS an unnamed
+   * rootfs is the kitchen-sink image of the macOS `runsc`'s store.
+   */
+  sandboxPlatform?: SandboxPlatform;
+
+  /**
+   * How an entrypoint selected the runtime, which the run records in its
+   * runtime description. Absent for a caller that selected none.
+   */
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
+
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
   cfcResultDir?: string;
   cfcInvocationContextDir?: string;
@@ -724,6 +762,9 @@ export class CfHarnessEngine {
   readonly #skillsShAcquisitionClientFactory?:
     HarnessSkillsShAcquisitionClientFactory;
   #docsCorpus?: Promise<HarnessDocsCorpus>;
+
+  /** The run's host command catalog, made on the first tool context. */
+  #loomCommandCatalog?: LoomCommandCatalogSource;
   #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
@@ -737,6 +778,7 @@ export class CfHarnessEngine {
   readonly #ownedRunscConfig?: DockerRunscSandboxConfig;
   /** The runsc configuration this engine built, when it built one. */
   readonly #ownedNativeConfig?: RunscSandboxConfig;
+  readonly #sandboxRuntimeChoice?: SandboxRuntimeChoice;
   #sandboxClosed = false;
   readonly #ownsSandbox: boolean;
   readonly #resumedRun: boolean;
@@ -900,6 +942,23 @@ export class CfHarnessEngine {
           : `resumed run CFC enforcement mode ${options.runState.cfcEnforcementMode} does not match requested CFC enforcement mode ${this.config.cfcEnforcementMode}`,
       );
     }
+    // A run's files carry the CFC labels of the runtime that wrote them,
+    // kept where the other runtime need not read them, so a run stays on the
+    // runtime its state records. A state that records none has nothing to
+    // compare, and is bound to this runtime where the state is taken below.
+    const sandboxRuntime = sandboxRuntimeOfOptions(options);
+    const recordedRuntime = options.runState === undefined
+      ? undefined
+      : recordedSandboxRuntime(options.runState);
+    if (recordedRuntime !== undefined && recordedRuntime !== sandboxRuntime) {
+      throw sandboxRuntimeResumeRefusal(
+        recordedRuntime,
+        options.sandboxRuntimeChoice?.runtime === sandboxRuntime
+          ? options.sandboxRuntimeChoice
+          : sandboxRuntime,
+        false,
+      );
+    }
     const runId = options.runState?.runId ?? options.runId ??
       crypto.randomUUID();
     // The session behind `run_pattern` is expensive and remote, so it is
@@ -1018,10 +1077,20 @@ export class CfHarnessEngine {
         networkMode: options.sandboxRunscNetworkMode,
         additionalMounts: options.additionalMounts,
         runId,
+        ...(options.sandboxPlatform !== undefined
+          ? { platform: options.sandboxPlatform }
+          : {}),
+        // The macOS `runsc` runs with this process's environment, and finds
+        // its store by these two.
         homeDir: Deno.env.get("HOME"),
+        cfcVmHome: Deno.env.get(CFC_VM_HOME_ENV),
+        unnamedRuntimeNote: unnamedRuntimeMountNote(
+          options.sandboxRuntimeChoice,
+        ),
       })
       : undefined;
     this.#ownedNativeConfig = runscConfig;
+    this.#sandboxRuntimeChoice = options.sandboxRuntimeChoice;
     this.#ownsSandbox = options.sandboxRuntime === undefined ||
       options.ownsSandboxRuntime === true;
     this.sandbox = options.sandboxRuntime ??
@@ -1230,10 +1299,23 @@ export class CfHarnessEngine {
         }
       }
     }
-    this.#runState = options.runState ??
-      createHarnessRunState({
+    // Written here, before anything runs in the sandbox and whatever a first
+    // probe of it comes to, so that no later state of the run lacks it.
+    // How the runtime was chosen is the run's first start's, as its runtime
+    // description is; a record that holds none takes this engine's.
+    const sandboxRuntimeChoice = options.runState?.sandboxRuntimeChoice ??
+      options.sandboxRuntimeChoice;
+    this.#runState = options.runState !== undefined
+      ? {
+        ...options.runState,
+        sandboxRuntime,
+        ...(sandboxRuntimeChoice !== undefined ? { sandboxRuntimeChoice } : {}),
+      }
+      : createHarnessRunState({
         runId,
         cfcEnforcementMode: this.config.cfcEnforcementMode,
+        sandboxRuntime,
+        ...(sandboxRuntimeChoice !== undefined ? { sandboxRuntimeChoice } : {}),
         ...(fabricSessionCfc !== undefined ? { fabricSessionCfc } : {}),
         currentDir,
         model: this.config.model,
@@ -1330,6 +1412,16 @@ export class CfHarnessEngine {
    */
   get ownedRunscSandboxConfig(): RunscSandboxConfig | undefined {
     return this.#ownedNativeConfig;
+  }
+
+  /**
+   * How the entrypoint that built this engine selected its sandbox runtime,
+   * or `undefined` where it was built without a selection. A delegating
+   * parent hands it to the child engine, whose sandbox is the parent's own or
+   * one built from the same settings.
+   */
+  get sandboxRuntimeChoice(): SandboxRuntimeChoice | undefined {
+    return this.#sandboxRuntimeChoice;
   }
 
   /**
@@ -2494,6 +2586,9 @@ export class CfHarnessEngine {
           ...(this.config.modelProvider === "openai-compatible-gateway"
             ? { gatewayAuthMode: this.config.gatewayAuthMode }
             : {}),
+          ...(this.#sandboxRuntimeChoice !== undefined
+            ? { sandboxRuntimeChoice: this.#sandboxRuntimeChoice }
+            : {}),
         },
       );
       let capabilitiesPath: string | undefined;
@@ -3059,6 +3154,16 @@ export class CfHarnessEngine {
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
+      loomCommands: this.config.loomCommands,
+      ...(this.config.loomCommands !== undefined
+        ? {
+          loomCommandCatalog: this.#loomCommandCatalog ??=
+            createLoomCommandCatalogSource(
+              this.config.loomCommands,
+              this.hostProcessRunner,
+            ),
+        }
+        : {}),
       mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
         this.mintReferentHandle(referent),
       mintResearchHandle: (

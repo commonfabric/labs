@@ -17,6 +17,9 @@ a line for each new document to the index below.
 
 ## Writes, storage, and sync
 
+- [`transaction-commit.md`](transaction-commit.md) — local readiness, commit
+  receipts, verdict and settlement stages, and explicit durability barriers
+
 - [`collection-indexes.md`](collection-indexes.md) — reactive grouping,
   unique-key lookup, membership ownership, and work limits
 - [`collection-aggregates.md`](collection-aggregates.md) — named incremental
@@ -58,7 +61,12 @@ a line for each new document to the index below.
   how an authorization failure during storage sync reaches the caller as a typed
   error instead of a silent absent read or an endless wait
 - [`custom-space-roots.md`](custom-space-roots.md) — seal a custom
-  default-pattern reservation with the initial ACL.
+  default-pattern reservation with the initial ACL, or one leaving the root to
+  the space's creator, as `inSpace(..., { root: true })` does.
+- [`space-kinds.md`](space-kinds.md) — the kind a space declares in its genesis
+  commit, as `inSpace(..., { spaceKind })` does: how it is sealed so that only
+  its creator states it, once; who can read it; the known kinds; and what a
+  kind does not vouch for
 - [`lazy-cell-materialization.md`](lazy-cell-materialization.md) — the
   schema-observing view a marked transaction hands back from a read, what it
   checks and when, and the rules that keep it agreeing with an eager read
@@ -69,6 +77,8 @@ a line for each new document to the index below.
 
 ## Identity and people
 
+- [`shared-space-catalog.md`](shared-space-catalog.md) — portable collection
+  membership, transactional registration, and archive/restore confirmation
 - [`did-identifiers.md`](did-identifiers.md) — what makes a string a DID, the
   one module that decides it, and the guard for an argument that takes a space
   name rather than a DID
@@ -86,11 +96,19 @@ a line for each new document to the index below.
   available only in a handler
 - [`principal-of.md`](principal-of.md) — the principal a cell's label attests:
   which claims `principalOf(target, kind)` reads, when it returns `undefined`,
-  what it reads to find out, and why the result carries no label
+  how `principalsOf(target, kind)` tells a label attesting none from one
+  attesting several, what they read to find out, and why the result carries no
+  label
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
-  and how it stays current
+  and how it stays current; and what `spaceOf(target)` returns, the DID of
+  that space
+- [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
+  others deliver offers: where it lives, who creates it, what access its space
+  grants, the offer envelope it shares with loom's share inbox, what `receive`
+  keeps, how the host's share intake vets offers and registers them in Home's
+  catalog, and what it does not keep private
 - [`space-access-changes.md`](space-access-changes.md) — how a handler grants
   and revokes access to a space with `grantSpaceAccess()` and
   `revokeSpaceAccess()`: what a grant exposes, who may change the list and
@@ -160,6 +178,9 @@ a line for each new document to the index below.
 
 - [`logger-internals.md`](logger-internals.md) — the TypeScript side of the
   structured logging system: creating a logger, severity, timing, and flags
+- [`cfc-value-stamps.md`](cfc-value-stamps.md) — what `ifc.addIntegrity` puts
+  on a written value: where the stamp is stored, when a later write withdraws
+  it, and how one `*` entry stands for a list whose elements all carry it
 - [`cfc-denial-reporting.md`](cfc-denial-reporting.md) — how each Contextual
   Flow Control gate says what it turned away, what may be said at warning level
   and what reaches only debug, and how often a gate reports

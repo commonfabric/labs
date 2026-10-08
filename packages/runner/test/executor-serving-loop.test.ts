@@ -279,7 +279,7 @@ describe("stage F serving loop", () => {
     await runtime.storageManager.synced();
     const tx = runtime.edit();
     runtime.run(tx, compiled, argument, result);
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     if (committed.error !== undefined) {
       throw new Error(
         `serving pattern run failed: ${committed.error.message}`,
@@ -350,7 +350,7 @@ describe("stage F serving loop", () => {
           argument.withTx(tx).set({ rows: inputs });
         }
         runtime.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         cancel = result.sink(() => {});
         await runtime.idle();
         readRows = () => result.get().rows;
@@ -410,7 +410,7 @@ describe("stage F serving loop", () => {
         await input.sync();
         const tx = clientRuntime.edit();
         input.withTx(tx).key("value").set(10 + edited);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         // The serving wave can advance the head beyond its authored input.
         const authored = engine.database.prepare(
           `SELECT MAX(seq) AS seq FROM "commit" WHERE class = 'authored'`,
@@ -496,7 +496,7 @@ describe("stage F serving loop", () => {
       await input.sync();
       const tx = clientRuntime.edit();
       input.withTx(tx).key("value").set(10);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await parked();
       expect(parks.entries).toEqual([{ space, reason: "lease-lost-abort" }]);
 
@@ -548,7 +548,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 41 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
 
     // The serving loop activates, derives, and advances the watermark
@@ -631,7 +631,7 @@ describe("stage F serving loop", () => {
     // across renewals.
     const tx2 = clientRuntime.edit();
     clientArg.withTx(tx2).set({ n: 99 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     const authored2 = Engine.serverSeq(engine);
     await awaitSettled(clientRuntime, space, authored2);
     // Read past the barrier: a write is counted as SEEN when it reaches
@@ -718,7 +718,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 7 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
     await awaitSettled(clientRuntime, space, authoredSeq);
 
@@ -777,7 +777,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const argTx = clientRuntime.edit();
     clientArg.withTx(argTx).set({ n: 41 });
-    expect((await argTx.commit()).error).toBeUndefined();
+    expect((await argTx.commit().settled).error).toBeUndefined();
     const preInstantiationSeq = Engine.serverSeq(engine);
 
     // Barrier (engine-side, deterministic): W covering that commit
@@ -843,7 +843,7 @@ describe("stage F serving loop", () => {
       await instantiator.storageManager.synced();
       const tx = instantiator.edit();
       instantiator.run(tx, compiled, instArg, instResult);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `instantiation run failed: ${committed.error.message}`,
@@ -863,7 +863,7 @@ describe("stage F serving loop", () => {
     // the serving loop.
     const pokeTx = clientRuntime.edit();
     clientArg.withTx(pokeTx).set({ n: 99 });
-    expect((await pokeTx.commit()).error).toBeUndefined();
+    expect((await pokeTx.commit().settled).error).toBeUndefined();
 
     // The convergence this test exists for, gated ENGINE-side: a
     // computed revision riding a DERIVED-class commit can only be the
@@ -951,7 +951,7 @@ describe("stage F serving loop", () => {
       await authorArg.sync();
       const argTx = author.edit();
       authorArg.withTx(argTx).set({ items: [{ n: 1 }, { n: 2 }, { n: 3 }] });
-      expect((await argTx.commit()).error).toBeUndefined();
+      expect((await argTx.commit().settled).error).toBeUndefined();
       const authorResult = author.getCell<{ doubled: number[] }>(
         space,
         "seed-result",
@@ -966,7 +966,7 @@ describe("stage F serving loop", () => {
       await author.storageManager.synced();
       const tx = author.edit();
       author.run(tx, compiled, authorArg, authorResult);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `author pattern run failed: ${committed.error.message}`,
@@ -1010,7 +1010,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const pokeTx = clientRuntime.edit();
     clientArg.withTx(pokeTx).set({ items: [{ n: 2 }, { n: 3 }, { n: 4 }] });
-    expect((await pokeTx.commit()).error).toBeUndefined();
+    expect((await pokeTx.commit().settled).error).toBeUndefined();
 
     // The demanded derivation LANDS server-side and reaches the client
     // through ordinary push + link traversal. A plain client never runs
@@ -1079,7 +1079,7 @@ describe("stage F serving loop", () => {
         { space, id: kickId as never, scope: "space", path: ["n"] },
         n,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       // The kick's own seq, read from its document's head rather than the
       // space's: the commit resolves only once the client's view reflects
       // it, so the wave commit that advances W over the kick can land
@@ -1150,7 +1150,7 @@ describe("stage F serving loop", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -1181,7 +1181,7 @@ describe("stage F serving loop", () => {
     // strict assertion's precondition, as in the first test).
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 41 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
     await awaitSettled(clientRuntime, space, authoredSeq);
     await waitForCellValue(
@@ -1200,7 +1200,7 @@ describe("stage F serving loop", () => {
     // watermark upsert alone, and this read sees the STALE total.
     const tx2 = clientRuntime.edit();
     clientArg.withTx(tx2).set({ n: 99 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     const authored2 = Engine.serverSeq(engine);
     await awaitSettled(clientRuntime, space, authored2);
     expect(clientResult.key("total").get()).toBe(100);
@@ -1261,7 +1261,7 @@ describe("stage F serving loop", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, v1, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -1287,7 +1287,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 41 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
     await awaitSettled(clientRuntime, space, authoredSeq);
     await waitForCellValue(
@@ -1311,7 +1311,7 @@ describe("stage F serving loop", () => {
       v2Ref!,
       rawMetaWriteAuthorization,
     );
-    expect((await pointerTx.commit()).error).toBeUndefined();
+    expect((await pointerTx.commit().settled).error).toBeUndefined();
 
     // The SpaceServer's watcher swaps to v2 and the wave serves the new
     // derivation: total becomes 43 without any client-side run — OW6's
@@ -1368,7 +1368,7 @@ describe("stage F serving loop", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await activated();
     const spaceServer = host.spaceServer(space)!;
@@ -1478,7 +1478,7 @@ describe("stage F serving loop", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await activated();
     const spaceServer = host.spaceServer(space)!;
@@ -1510,7 +1510,7 @@ describe("stage F serving loop", () => {
     });
     probeCell.withTx(probeTx).set({ n: 1 });
     // Resolves at SEAL (the wave holds the store commit).
-    expect((await probeTx.commit()).error).toBeUndefined();
+    expect((await probeTx.commit().settled).error).toBeUndefined();
 
     // The blip: the row vanishes with NO rival. The next renew tick
     // fails (tenure ends) and the same-process reacquire succeeds
@@ -1600,7 +1600,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 41 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     // Under the live lease the store accepts the loop's commits.
     await waitForCellValue(
       clientRuntime,
@@ -1636,7 +1636,7 @@ describe("stage F serving loop", () => {
     // below rather than leaving the wait stuck.
     const tx2 = clientRuntime.edit();
     clientArg.withTx(tx2).set({ n: 99 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     await awaitEdges(
       [parks.edge, refusals.edge, cycles.edge],
       () =>
@@ -1684,7 +1684,7 @@ describe("stage F serving loop", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await activated();
     const spaceServer = host.spaceServer(space)!;
@@ -1765,7 +1765,7 @@ describe("stage F serving loop", () => {
     const engine = await server.engineForSpace(space);
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
   });
@@ -1816,7 +1816,7 @@ describe("stage F serving loop", () => {
       const engine = await server.engineForSpace(space);
       const tx = clientRuntime.edit();
       input.withTx(tx).set({ value: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const authoredSeq = Engine.serverSeq(engine);
       await awaitAdmitted(
         server,
@@ -1854,7 +1854,7 @@ describe("stage F serving loop", () => {
     releaseExecutionLease(engine, { space, holder: rival });
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
     expect(activations.entries).toEqual([
@@ -1928,7 +1928,7 @@ describe("stage F serving loop", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await activated();
     const first = host.spaceServer(space)!;
@@ -1958,7 +1958,7 @@ describe("stage F serving loop", () => {
     blowUp = false;
     const tx2 = clientRuntime.edit();
     input.withTx(tx2).set({ value: 2 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     const authored2 = Engine.serverSeq(engine);
     await activations.matching(() => {
       const current = host!.spaceServer(space);
@@ -2056,7 +2056,7 @@ describe("stage F serving loop", () => {
       while (driving) {
         const tx = clientRuntime.edit();
         input.withTx(tx).set({ value: n++ });
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         if (committed.error !== undefined) {
           throw new Error(`driver write failed: ${committed.error.message}`);
         }
@@ -2089,7 +2089,7 @@ describe("stage F serving loop", () => {
     blowUp = false;
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1_000 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const healthySeq = Engine.serverSeq(engine);
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= healthySeq);
 
@@ -2119,7 +2119,7 @@ describe("stage F serving loop", () => {
     blowUp = true;
     const failTx = clientRuntime.edit();
     input.withTx(failTx).set({ value: 1_001 });
-    expect((await failTx.commit()).error).toBeUndefined();
+    expect((await failTx.commit().settled).error).toBeUndefined();
     await withStuckNet(
       failing.whenParked,
       "the failing tenure's park to complete",
@@ -2127,7 +2127,7 @@ describe("stage F serving loop", () => {
     const failedAgainAt = parkTimes[parksBefore];
     const trigger = clientRuntime.edit();
     input.withTx(trigger).set({ value: 1_002 });
-    expect((await trigger.commit()).error).toBeUndefined();
+    expect((await trigger.commit().settled).error).toBeUndefined();
     await activationLog.reached(countBefore + 1);
     const rebuildGap = activationTimes[countBefore] - failedAgainAt;
     expect(rebuildGap).toBeGreaterThanOrEqual(140);
@@ -2141,7 +2141,7 @@ describe("stage F serving loop", () => {
     blowUp = false;
     const finalTx = clientRuntime.edit();
     input.withTx(finalTx).set({ value: 1_003 });
-    expect((await finalTx.commit()).error).toBeUndefined();
+    expect((await finalTx.commit().settled).error).toBeUndefined();
     const finalSeq = Engine.serverSeq(engine);
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= finalSeq);
   });
@@ -2167,7 +2167,7 @@ describe("stage F serving loop", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await activated();
     const first = host.spaceServer(space)!;
     const authoredSeq = Engine.serverSeq(engine);
@@ -2192,7 +2192,7 @@ describe("stage F serving loop", () => {
       kind: "derivation",
     });
     profileCell.withTx(probeTx).set({ name: "bootstrap" });
-    const committed = await probeTx.commit();
+    const committed = await probeTx.commit().settled;
     // Action-scoped: THIS commit fails, loudly and counted.
     expect(committed.error).toBeDefined();
     expect(committed.error!.message).toContain("foreign-space write");
@@ -2203,7 +2203,7 @@ describe("stage F serving loop", () => {
     // write is drained by it.
     const tx2 = clientRuntime.edit();
     input.withTx(tx2).set({ value: 2 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     const authored2 = Engine.serverSeq(engine);
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authored2);
     expect(host.spaceServer(space)).toBe(first);
@@ -2230,7 +2230,7 @@ describe("stage F serving loop", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await closeRaces.reached(1);
     await closeStarted;
@@ -2307,7 +2307,7 @@ describe("stage F serving loop", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await activated();
     const holder = host.spaceServer(space)!.holder;
@@ -2381,7 +2381,7 @@ describe("stage F serving loop", () => {
     const engine = await server.engineForSpace(space);
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
   });
@@ -2435,7 +2435,7 @@ describe("stage F serving loop", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -2470,7 +2470,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ url: "https://stage-g.test/one" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     // The miss fires exactly once; the completion commits its OWN
     // derived-class commit and the next wave serves the value — the
@@ -2518,7 +2518,7 @@ describe("stage F serving loop", () => {
     );
     const pokeTx = clientRuntime.edit();
     poke.withTx(pokeTx).set({ n: 1 });
-    expect((await pokeTx.commit()).error).toBeUndefined();
+    expect((await pokeTx.commit().settled).error).toBeUndefined();
     // Captured AT the poke commit: a read after re-activation could
     // capture the recovered loop's own derived commit's seq, which W
     // never covers (self-echo is not coverage-owed input — the
@@ -2547,7 +2547,7 @@ describe("stage F serving loop", () => {
     // count stays put until the inputs change again.
     const failTx = clientRuntime.edit();
     clientArg.withTx(failTx).set({ url: "https://stage-g.test/fails" });
-    expect((await failTx.commit()).error).toBeUndefined();
+    expect((await failTx.commit().settled).error).toBeUndefined();
     await waitForCellValue(
       clientRuntime,
       clientResult.key("fetch").key("error"),
@@ -2577,7 +2577,7 @@ describe("stage F serving loop", () => {
       const seqBefore = Engine.serverSeq(engine);
       const probeTx = clientRuntime.edit();
       retryProbe.withTx(probeTx).set({ n: i });
-      expect((await probeTx.commit()).error).toBeUndefined();
+      expect((await probeTx.commit().settled).error).toBeUndefined();
       await awaitAdmitted(server, () => readWatermarkSeq(engine) > seqBefore);
     }
     expect(calls.filter((url) => url.endsWith("/fails")).length).toBe(1);
@@ -2586,7 +2586,7 @@ describe("stage F serving loop", () => {
     // effectful node recovers.
     const retryTx = clientRuntime.edit();
     clientArg.withTx(retryTx).set({ url: "https://stage-g.test/two" });
-    expect((await retryTx.commit()).error).toBeUndefined();
+    expect((await retryTx.commit().settled).error).toBeUndefined();
     await waitForCellValue(
       clientRuntime,
       clientResult.key("fetch").key("result"),
@@ -2655,7 +2655,7 @@ describe("stage F serving loop", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -2687,7 +2687,7 @@ describe("stage F serving loop", () => {
     const writeUrl = async (leg: string) => {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ url: `https://stage-g.test/${leg}` });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     // A: served and observed (30 s legs: real-clock file — under load
@@ -2781,7 +2781,7 @@ describe("stage F serving loop", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -2809,7 +2809,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ url: "https://stage-g.test/shared" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     // BOTH nodes' cells serve. The pre-fix tree wedges exactly one of
     // these waits (whichever node's closure was admitted second).
@@ -2879,7 +2879,7 @@ describe("stage F serving loop", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -2908,7 +2908,7 @@ describe("stage F serving loop", () => {
     for (const leg of ["n1", "n2", "n3"]) {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ url: `https://stage-g.test/${leg}` });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await waitForCellValue(
         clientRuntime,
         clientResult.key("fetch").key("result"),
@@ -2943,7 +2943,7 @@ describe("stage F serving loop", () => {
     );
     const kickTx = clientRuntime.edit();
     kick.withTx(kickTx).set({ n: 1 });
-    expect((await kickTx.commit()).error).toBeUndefined();
+    expect((await kickTx.commit().settled).error).toBeUndefined();
     await activated();
     const engine = await server.engineForSpace(space);
     const spaceServer = host.spaceServer(space)!;
@@ -2996,7 +2996,7 @@ describe("stage F serving loop", () => {
         serving.trackAsyncWork(work);
       },
     });
-    expect((await originalTx.commit()).error).toBeUndefined();
+    expect((await originalTx.commit().settled).error).toBeUndefined();
     await completed.promise;
 
     // The completion commit: derived-class under the holder, carrying
@@ -3100,7 +3100,7 @@ describe("stage F serving loop", () => {
     await kick.sync();
     const kickTx = clientRuntime.edit();
     kick.withTx(kickTx).set({ n: 1 });
-    expect((await kickTx.commit()).error).toBeUndefined();
+    expect((await kickTx.commit().settled).error).toBeUndefined();
     await activated();
     const engine = await server.engineForSpace(space);
     const serving = servingRuntime!;
@@ -3199,7 +3199,7 @@ describe("stage F serving loop", () => {
         serving.trackAsyncWork(work);
       },
     });
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
     await completed.promise;
 
     type AnnotationRow = {
@@ -3285,7 +3285,7 @@ describe("stage F serving loop", () => {
     await kick.sync();
     const kickTx = clientRuntime.edit();
     kick.withTx(kickTx).set({ n: 1 });
-    expect((await kickTx.commit()).error).toBeUndefined();
+    expect((await kickTx.commit().settled).error).toBeUndefined();
     await activated();
     const engine = await server.engineForSpace(space);
     const serving = servingRuntime!;
@@ -3358,7 +3358,7 @@ describe("stage F serving loop", () => {
           serving.trackAsyncWork(work);
         },
       });
-      expect((await runTx.commit()).error).toBeUndefined();
+      expect((await runTx.commit().settled).error).toBeUndefined();
     }
     await Promise.all(completions);
 
@@ -3445,7 +3445,7 @@ describe("stage F serving loop", () => {
       await kick.sync();
       const kickTx = clientRuntime.edit();
       kick.withTx(kickTx).set({ n: 1 });
-      expect((await kickTx.commit()).error).toBeUndefined();
+      expect((await kickTx.commit().settled).error).toBeUndefined();
       await activated();
 
       // The server-side watch registry carries BOTH identities…
@@ -3518,7 +3518,7 @@ describe("stage F serving loop", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -3576,7 +3576,7 @@ describe("stage F serving loop", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 41 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const typedArg = clientRuntime.getCell<{ mine: number }>(
       space,
       "p2f-supply-arg",
@@ -3585,7 +3585,7 @@ describe("stage F serving loop", () => {
     await typedArg.sync();
     const mineTx = clientRuntime.edit();
     typedArg.key("mine").withTx(mineTx).set(5);
-    expect((await mineTx.commit()).error).toBeUndefined();
+    expect((await mineTx.commit().settled).error).toBeUndefined();
     // No seq-target staging wait here: a serverSeq read after the
     // commit RACES the loop's own wave commit (when the wave lands
     // first, the read includes the wave's own seq, which W never

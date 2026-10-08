@@ -47,13 +47,15 @@ describe("deprecated-spelling", () => {
       // while pinning nothing; a whole-message comparison fails loudly
       // instead.
       const lines: string[] = [];
-      warnDeprecatedCommandSpelling("piece set-home", "space set-home", {
-        writeError: (text) => lines.push(text),
-      });
+      warnDeprecatedCommandSpelling(
+        "piece recreate-root",
+        "space recreate-root",
+        { writeError: (text) => lines.push(text) },
+      );
       expect(lines).toEqual([
-        "'cf piece set-home' is deprecated; spell it 'cf space set-home'. " +
-        "The 'cf piece set-home' spelling is not guaranteed to work after " +
-        "2026-09-11.",
+        "'cf piece recreate-root' is deprecated; spell it " +
+        "'cf space recreate-root'. The 'cf piece recreate-root' spelling is " +
+        "not guaranteed to work after 2026-09-11.",
       ]);
     });
 

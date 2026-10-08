@@ -60,7 +60,7 @@ async function expectServedBump(writer: Runtime, reader: Runtime) {
     );
     const start = writer.edit();
     writer.run(start, pattern, {}, result);
-    expect((await start.commit()).error).toBeUndefined();
+    expect((await start.commit().settled).error).toBeUndefined();
     cancels.push(result.sink(() => {}));
     await waitForCellValue<Counter>(writer, result, (v) => v?.count === 0);
     result.key("bump").send({});
@@ -133,11 +133,11 @@ describe("serving-memory-server", () => {
         );
         const start = writer.edit();
         writer.run(start, pattern, {}, result);
-        expect((await start.commit()).error).toBeUndefined();
+        expect((await start.commit().settled).error).toBeUndefined();
         cancels.push(result.sink(() => {}));
         const seed = writer.edit();
         result.withTx(seed).key("count").set(5);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         await waitForCellValue<Counter>(writer, result, (v) => v?.count === 5);
         result.key("bump").send({});
 

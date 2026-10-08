@@ -48,9 +48,16 @@ import {
 import {
   cfcLabelViewForCell,
   type CfcWriteFloorMode,
+  hostGestureProvenance,
   markRendererTrustedEvent,
+  reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
 import { Identity } from "@commonfabric/identity";
+import {
+  ensurePrivateInboxOf,
+  type ShareIntake,
+  startShareIntakeOf,
+} from "@commonfabric/piece/ops";
 import {
   commitSnapshotShare,
   prepareSnapshotShare,
@@ -88,6 +95,9 @@ let watchPaths: readonly (readonly (string | number)[])[] = [[]];
  * opened afresh by the next command naming it.
  */
 const addressedResults = new Map<string, Cell<any>>();
+
+/** The share intakes `startShareIntake` started, which `dispose` stops. */
+const shareIntakes: ShareIntake[] = [];
 
 /**
  * Every commit this runtime had refused since the last `clearRejections`,
@@ -406,11 +416,7 @@ function componentBinding(
 function shareClick() {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "ShareSnapshot" },
-    },
+    provenance: hostGestureProvenance("ShareSnapshot"),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -525,15 +531,7 @@ const handlers: Record<
       eventValue = {
         type: "click",
         ...(isObjectNotArray(event) ? event : {}),
-        provenance: {
-          origin: "dom",
-          trusted: true,
-          ui: {
-            pattern: trusted.surface,
-            eventIntegrity: [trusted.surface],
-            uiContractDataset: { uiAction: trusted.action },
-          },
-        },
+        provenance: reviewedActionProvenance("dom", trusted),
       };
       markRendererTrustedEvent(eventValue);
     }
@@ -589,7 +587,7 @@ const handlers: Record<
     cell.withTx(tx).set(value as never);
     unmarkUiInputBlindWriteTx(tx);
     runtime.prepareTxForCommit(tx);
-    const res = await tx.commit() as {
+    const res = await tx.commit().settled as {
       error?: { name?: string; message?: string };
     };
     if (doIdle !== false) await idle();
@@ -621,7 +619,7 @@ const handlers: Record<
     const tx = runtime.edit();
     cell.withTx(tx).set([...current, value] as never);
     runtime.prepareTxForCommit(tx);
-    const res = await tx.commit() as {
+    const res = await tx.commit().settled as {
       error?: { name?: string; message?: string };
     };
     if (doIdle !== false) await idle();
@@ -647,7 +645,7 @@ const handlers: Record<
     defaultPattern.key("agentQueue").set({ entries: [] });
     home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
       .key("defaultPattern").set(defaultPattern);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw error;
     await idle();
     return true;
@@ -693,7 +691,7 @@ const handlers: Record<
       ifc: { confidentiality: [cfcAtom.user(runtime.userIdentityDID)] },
     }, tx);
     source.set(value);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw error;
     const prepared = prepareSnapshotShare(source.withTx(undefined), {
       space: result().key("originator"),
@@ -776,7 +774,7 @@ const handlers: Record<
       value: result().key("selected"),
     });
     runtime.prepareTxForCommit(tx);
-    const written = await tx.commit();
+    const written = await tx.commit().settled;
     if (written.error) throw written.error;
     await idle();
     const sent = await runtime.editWithRetry((eventTx) => {
@@ -795,7 +793,7 @@ const handlers: Record<
       result().key("selected").key("books", 0),
     );
     runtime.prepareTxForCommit(tx);
-    const written = await tx.commit();
+    const written = await tx.commit().settled;
     if (written.error) throw written.error;
     await idle();
     return true;
@@ -890,10 +888,10 @@ const handlers: Record<
       tx,
     );
     defaultPattern.key("profiles").set([profile]);
-    defaultPattern.key("defaultProfile").set(profile);
+    defaultPattern.key("defaultProfile").set({ profile });
     home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
       .key("defaultPattern").set(defaultPattern);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw error;
     await idle();
     return {};
@@ -991,12 +989,117 @@ const handlers: Record<
       ok?: { value?: FabricValue };
       error?: { message?: string };
     };
-    await tx.commit();
+    await tx.commit().settled;
     return {
       ok: res.error === undefined,
       value: res.ok?.value,
       error: res.error?.message,
     };
+  },
+
+  /**
+   * Has the host give the Home stand-in reached from the piece result by
+   * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
+   * the identity's Home its own, and answers what the host found, naming an
+   * adopted or refused inbox, and the profile that decided it, by its link.
+   */
+  async ensurePrivateInbox({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const found = await ensurePrivateInboxOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    await idle();
+    const inbox = "inbox" in found
+      ? found.inbox.getAsNormalizedFullLink()
+      : undefined;
+    const profile = "profile" in found
+      ? found.profile?.getAsNormalizedFullLink()
+      : undefined;
+    return {
+      outcome: found.outcome,
+      ...("reason" in found ? { reason: found.reason } : {}),
+      ...(inbox === undefined
+        ? {}
+        : { inbox: { id: inbox.id, space: inbox.space } }),
+      ...(profile === undefined
+        ? {}
+        : { profile: { id: profile.id, space: profile.space } }),
+    };
+  },
+
+  /**
+   * Starts the host's share intake over the Home stand-in reached from the
+   * piece result by `path`, as `PiecesController.startShareIntake()` starts
+   * the identity's own Home's, following it until the session is disposed.
+   * Answers whether it started.
+   */
+  async startShareIntake({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const intake = startShareIntakeOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    if (intake !== undefined) shareIntakes.push(intake);
+    return { started: intake !== undefined };
+  },
+
+  /**
+   * Answers what the share intakes `startShareIntake` started last decided
+   * about each row naming `from` and `id`, once each has taken up the changes
+   * it was told of.
+   */
+  async shareIntakeDecisions({ from, id }) {
+    const decisions: string[] = [];
+    for (const intake of shareIntakes) {
+      await intake.idle();
+      for (
+        const decision of intake.accessForTestingOnly.decisionsFor(
+          from as string,
+          id as string,
+        )
+      ) decisions.push(decision);
+    }
+    return { decisions };
+  },
+
+  /**
+   * Links the root of `space` to a fresh document in it, in place of the root
+   * it had, as any member with `WRITE` there can.
+   */
+  async repointSpaceRoot({ space }) {
+    const runtime = controller().runtime;
+    const elsewhere = runtime.getCell<FabricValue>(
+      space as MemorySpace,
+      crypto.randomUUID(),
+    );
+    const { error } = await runtime.editWithRetry((tx) => {
+      elsewhere.withTx(tx).set({ elsewhere: true });
+      runtime.getSpaceCell(space as MemorySpace).withTx(tx).key(
+        "defaultPattern",
+      ).set(elsewhere as never);
+    });
+    if (error) {
+      throw new Error(`repointSpaceRoot failed: ${error.message}`);
+    }
+    await idle();
+    return {};
   },
 
   /** Reads an explicit held address with the same stored-label gate as any Cell. */
@@ -1149,6 +1252,7 @@ const handlers: Record<
   },
 
   async dispose() {
+    for (const intake of shareIntakes.splice(0)) intake.stop();
     resultSinkCancel?.();
     resultSinkCancel = undefined;
     piece = undefined;

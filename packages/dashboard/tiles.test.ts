@@ -40,6 +40,7 @@ import { projectMonthly, settled } from "./spend.ts";
 import { modelSpend } from "./tiles/model-spend.ts";
 import { benchmark, trendPct, trendStatus } from "./tiles/benchmark.ts";
 import { TILES } from "./registry.ts";
+import { REPOS_PATH } from "./repo-page-href.ts";
 import {
   byUrl,
   collectFromWorkingRuns,
@@ -121,6 +122,21 @@ Deno.test("labs ci trust: only first-attempt success counts as green", async () 
       assertEquals(v.sub, "first-try green · last 4 runs");
     },
   );
+});
+
+Deno.test("ci trust: each tile links to its repository's page, and each cell to its run", async () => {
+  const cases = [
+    { tile: labsCiTrust, page: "/repos?name=labs" },
+    { tile: loomCiTrust, page: "/repos?name=loom" },
+    { tile: weaverCiTrust, page: "/repos?name=commonfabric-weaver" },
+  ];
+  for (const { tile, page } of cases) {
+    const passed = run({ html_url: `https://github.com/${tile.repo}/actions/runs/1` });
+    const v = await tile.collect(ctx([passed]));
+    assertEquals(v.href, page);
+    assertEquals(v.hint, "repository ↗");
+    assertStringIncludes(v.extra ?? "", `href="${passed.html_url}"`);
+  }
 });
 
 Deno.test("labs and loom ci trust: a cancelled run that never started is left out of the share", async () => {
@@ -789,7 +805,6 @@ Deno.test("recent runs: duration opens every successful run for the commit", asy
       href.replaceAll("&", "&amp;")
     }"`,
   );
-  assertStringIncludes(html, 'class="evtxt" data-focus-key="pr-title-41"');
   assertStringIncludes(
     html,
     '>3m 05s</a><a class="evarrow" data-focus-key="pr-arrow-41"',
@@ -851,6 +866,8 @@ Deno.test("recent runs: labs and loom runs interleave chronologically, each tagg
       repo,
       run_started_at: new Date(now - minsAgo * 60_000).toISOString(),
       head_commit: { message: msg },
+      id: minsAgo,
+      html_url: `https://github.com/${repo}/actions/runs/${minsAgo}`,
     });
   const byRepo = (repo: string) =>
     repo === LOOM_REPO
@@ -860,11 +877,21 @@ Deno.test("recent runs: labs and loom runs interleave chronologically, each tagg
   // Newest-first interleave across repos: labs 5m, loom 10m, labs 20m, loom 30m.
   const order = [
     ...(v.extra ?? "").matchAll(
-      /class="evtxt" data-focus-key="pr-title-\d+" href="[^"]*\/pull\/(\d+)/g,
+      /<a class="pr" data-focus-key="title-\d+-1" href="[^"]*\/pull\/(\d+)"/g,
     ),
   ]
     .map((match) => match[1]);
   assertEquals(order, ["3", "7", "2", "6"]);
+  // The row's text links to its run, its pull request number to the pull
+  // request, and its arrow to the pull request that landed the commit.
+  assertStringIncludes(
+    v.extra ?? "",
+    `<span class="evtxt"><a data-focus-key="title-5-0" href="https://github.com/${REPO}/actions/runs/5" target="_blank" rel="noopener">labs · green · labs c </a><a class="pr" data-focus-key="title-5-1" href="https://github.com/${REPO}/pull/3" target="_blank" rel="noopener">(#3)</a></span>`,
+  );
+  assertStringIncludes(
+    v.extra ?? "",
+    `href="https://github.com/${REPO}/pull/3" target="_blank" rel="noopener" aria-label="Open landed change on GitHub"`,
+  );
   assertStringIncludes(v.extra ?? "", "labs · ");
   assertStringIncludes(v.extra ?? "", "loom · ");
   assertStringIncludes(v.aside ?? "", ">4 in window</span>");
@@ -1091,9 +1118,11 @@ Deno.test("registry: unique labels and positive intervals", () => {
 Deno.test("every tile's drill-down link reaches a route the dashboard serves", () => {
   // An unrecognized path falls through to the dashboard itself, so a tile
   // linking at a page nobody serves lands the viewer back where they started.
-  const served = new Set(
-    TILES.flatMap((tile) => tile.routes ?? []).map((route) => route.path),
-  );
+  // The server serves the repository pages beside the tiles' own routes.
+  const served = new Set([
+    ...TILES.flatMap((tile) => tile.routes ?? []).map((route) => route.path),
+    REPOS_PATH,
+  ]);
   for (const { label, view } of TILE_LAYOUT_FIXTURES) {
     if (view.href === undefined || /^https?:/.test(view.href)) continue;
     const path = new URL(view.href, "http://dashboard").pathname;

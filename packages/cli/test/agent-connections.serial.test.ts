@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
+import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -24,8 +25,8 @@ import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { startAgentRunner } from "../commands/agent.ts";
+import { getAcl } from "../lib/acl.ts";
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
-import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
 import { loadIdentity } from "../lib/identity.ts";
 
 const HOME_PATH = "/api/patterns/system/home.tsx";
@@ -114,11 +115,16 @@ describe("agent-connections", () => {
         requester: identity.did(),
         workRoot: directory,
         allowedTools: ["describe_handle"],
+        readSpaceAcl: (host, space) =>
+          getAcl({ apiUrl: host, space, identity: identityPath }),
         report: (message) => messages.push(message),
         harnessDeps: {
           env: {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
             CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+            // Named, so the run does not take the default of the machine the
+            // suite runs on, which on macOS is that machine's native runtime.
+            CF_HARNESS_SANDBOX_RUNTIME: "docker",
           },
           createPromptLoop: (options) => ({
             runPrompt: async () => {

@@ -14,10 +14,12 @@ import {
   prepareSnapshotShare,
   type SnapshotShareConsent,
 } from "../src/cfc/share-snapshot.ts";
+import { hostGestureProvenance } from "../src/cfc/host-review.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const visitor = await Identity.fromPassphrase("snapshot-share-visitor");
 const owner = await Identity.fromPassphrase("snapshot-share-owner");
@@ -27,11 +29,7 @@ const third = await Identity.fromPassphrase("snapshot-share-third");
 const trustedClick = () => {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "ShareSnapshot" },
-    },
+    provenance: hostGestureProvenance("ShareSnapshot"),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -69,7 +67,7 @@ const setup = async () => {
     },
   }, authorTx);
   recipient.set({});
-  expect((await authorTx.commit()).error).toBeUndefined();
+  expect((await authorTx.commit().settled).error).toBeUndefined();
   const tx = reader.edit();
   const source = reader.getCell<{ title: string; author: string }>(
     visitor.did(),
@@ -83,7 +81,7 @@ const setup = async () => {
     tx,
   );
   source.set({ title: "Solaris", author: "Stanisław Lem" });
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   await source.sync();
   await recipient.sync();
   await storage.synced();
@@ -156,7 +154,7 @@ describe("cfc-share-snapshot", () => {
         ifc: { confidentiality: [cfcAtom.user(owner.did())] },
       }, linkedTx);
       linked.set("The linked title");
-      expect((await linkedTx.commit()).error).toBeUndefined();
+      expect((await linkedTx.commit().settled).error).toBeUndefined();
       const tx = author.edit();
       const privateBook = author.getCell(visitor.did(), "author-private-book", {
         type: "object",
@@ -166,7 +164,7 @@ describe("cfc-share-snapshot", () => {
       privateBook.set({
         reference: linked,
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await privateBook.sync();
       expect(() =>
         prepareSnapshotShare(
@@ -208,7 +206,7 @@ describe("cfc-share-snapshot", () => {
           ifc: { confidentiality: [cfcAtom.user(visitor.did())] },
         }, tx);
         source.set(value);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await source.sync();
         const prepared = prepareSnapshotShare(source.withTx(undefined), {
           user: fixture.recipient,
@@ -245,7 +243,7 @@ describe("cfc-share-snapshot", () => {
         properties: { book: { asCell: ["readonly"] } },
       }, tx);
       source.set({ book: fixture.source });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await source.sync();
       expect(() =>
         prepareSnapshotShare(source.withTx(undefined), {
@@ -429,11 +427,7 @@ describe("cfc-share-snapshot", () => {
       });
       await expect(commitSnapshotShare(untrusted.consent, {
         type: "click",
-        provenance: {
-          origin: "dom",
-          trusted: true,
-          ui: { pattern: "ShareSnapshot" },
-        },
+        provenance: hostGestureProvenance("ShareSnapshot"),
       })).rejects.toThrow(/trusted host share gesture/);
       const genuine = prepareSnapshotShare(fixture.source, {
         user: fixture.recipient,
@@ -454,7 +448,7 @@ describe("cfc-share-snapshot", () => {
       });
       const tx = fixture.runtimes[0].edit();
       fixture.source.withTx(tx).key("title").set("A different private title");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await fixture.storage.synced();
       await expect(commitSnapshotShare(prepared.consent, trustedClick()))
         .rejects.toThrow(/review is stale/);
@@ -506,7 +500,7 @@ describe("cfc-share-snapshot", () => {
           },
         },
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await linking.sync();
       expect(() =>
         prepareSnapshotShare(fixture.source, {
@@ -545,7 +539,7 @@ describe("cfc-share-snapshot", () => {
         tx,
       );
       another.set({});
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await another.sync();
       target.user = another.withTx(undefined);
       await expect(commitSnapshotShare(prepared.consent, trustedClick()))
@@ -563,7 +557,7 @@ describe("cfc-share-snapshot", () => {
         type: "object",
       }, tx);
       target.set({});
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await target.sync();
       const forged = target.withTx(undefined).asSchema({
         ifc: {
@@ -614,7 +608,7 @@ describe("cfc-share-snapshot", () => {
           tx,
         );
         protectedValue.set("not yours to release");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await protectedValue.sync();
         const target = broad.getCellFromLink(
           fixture.recipient.getAsNormalizedFullLink(),
@@ -680,7 +674,7 @@ describe("cfc-share-snapshot", () => {
       await fixture.storage.synced();
       const tx = fixture.runtimes[0].edit();
       shared.withTx(tx).set({ title: "Replacement", author: "Mallory" });
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("writeAuthorizedBy");
       expect(shared.get()).toEqual(prepared.value);
     } finally {
@@ -700,15 +694,16 @@ describe("cfc-share-snapshot", () => {
         const tx = edit(...args);
         if (++edits === 2) {
           const commit = tx.commit.bind(tx);
-          tx.commit = async () => {
-            const change = edit();
-            fixture.source.withTx(change).key("title").set(
-              "Changed after verification",
-            );
-            expect((await change.commit()).error).toBeUndefined();
-            await fixture.storage.synced();
-            return await commit();
-          };
+          tx.commit = () =>
+            createTransactionCommitReceipt((async () => {
+              const change = edit();
+              fixture.source.withTx(change).key("title").set(
+                "Changed after verification",
+              );
+              expect((await change.commit().settled).error).toBeUndefined();
+              await fixture.storage.synced();
+              return await commit().settled;
+            })());
         }
         return tx;
       };
@@ -766,7 +761,7 @@ describe("cfc-share-snapshot", () => {
         tx,
       );
       suggestions.set({ title: "Solaris" });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await suggestions.sync();
       const target = reader.getCellFromLink(
         fixture.recipient.getAsNormalizedFullLink(),
@@ -810,7 +805,7 @@ describe("cfc-share-snapshot", () => {
         createOutsider,
       );
       outsider.set({});
-      expect((await createOutsider.commit()).error).toBeUndefined();
+      expect((await createOutsider.commit().settled).error).toBeUndefined();
       await outsider.sync();
       expect(() =>
         prepareSnapshotShare(suggestions.withTx(undefined), {

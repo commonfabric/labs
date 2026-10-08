@@ -87,7 +87,7 @@ describe("PolicyOf label-time binding", () => {
     cell.set("secret");
     tx.prepareCfc();
     expect(tx.getCfcState().consultedPolicyManifests).toHaveLength(1);
-    await tx.commit();
+    await tx.commit().settled;
 
     const readTx = runtime.edit();
     const link = cell.getAsNormalizedFullLink();
@@ -112,7 +112,7 @@ describe("PolicyOf label-time binding", () => {
     // the commit rejects with the diagnostic — same fail-closed, observable
     // failure.
     expect(tx.prepareCfc()).toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(String(result.error?.message)).toContain("is not installed");
   });
 
@@ -135,7 +135,7 @@ describe("PolicyOf label-time binding", () => {
     );
     // OW50: crash -> recorded reason -> rejected commit (see above).
     expect(tx.prepareCfc()).toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(String(result.error?.message)).toContain(
       "malformed PolicyOf schema marker",
     );
@@ -146,7 +146,7 @@ describe("PolicyOf label-time binding", () => {
     const installTx = runtime.edit();
     runtime.getCell(space, "immutable-policy", schema, installTx).set("secret");
     installTx.prepareCfc();
-    expect((await installTx.commit()).ok).toBeDefined();
+    expect((await installTx.commit().settled).ok).toBeDefined();
 
     const manifestId = cfcPolicyManifestDocId(artifact.policyDigest);
     const overwrite = runtime.edit();
@@ -181,7 +181,7 @@ describe("PolicyOf label-time binding", () => {
     const installTx = runtime.edit();
     runtime.getCell(space, "tamper-policy", schema, installTx).set("secret");
     installTx.prepareCfc();
-    expect((await installTx.commit()).ok).toBeDefined();
+    expect((await installTx.commit().settled).ok).toBeDefined();
 
     const reference = {
       type: CFC_ATOM_TYPE.Policy,
@@ -208,9 +208,9 @@ describe("PolicyOf label-time binding", () => {
       path: ["value"],
     }, { forged: true });
     expect(tamperResult.ok).toBeDefined();
-    expect((await tamper.commit()).ok).toBeDefined();
+    expect((await tamper.commit().settled).ok).toBeDefined();
 
-    expect((await decision.commit()).error).toBeDefined();
+    expect((await decision.commit().settled).error).toBeDefined();
   });
 
   it("rejects a zero-write prepared miss when the manifest appears", async () => {
@@ -239,9 +239,9 @@ describe("PolicyOf label-time binding", () => {
       path: ["value"],
     }, { appeared: true });
     expect(writeResult.ok).toBeDefined();
-    expect((await writer.commit()).ok).toBeDefined();
+    expect((await writer.commit().settled).ok).toBeDefined();
 
-    expect((await decision.commit()).error).toBeDefined();
+    expect((await decision.commit().settled).error).toBeDefined();
   });
 
   it("rejects a raw module-policy object in authored schema metadata", async () => {
@@ -263,7 +263,7 @@ describe("PolicyOf label-time binding", () => {
     runtime.getCell(space, "forged-policy", forgedSchema, tx).set("secret");
     // OW50: crash -> recorded reason -> rejected commit (see above).
     expect(tx.prepareCfc()).toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(String(result.error?.message)).toContain(
       "compiler-lowered PolicyOf",
     );
@@ -317,7 +317,7 @@ describe("PolicyOf label-time binding", () => {
     );
     cell.set("secret");
     tx.prepareCfc();
-    await tx.commit();
+    await tx.commit().settled;
 
     const readTx = runtime.edit();
     const metadata = readStoredCfcMetadata(
@@ -371,7 +371,7 @@ describe("PolicyOf label-time binding", () => {
       "secret",
     );
     installTx.prepareCfc();
-    expect((await installTx.commit()).ok).toBeDefined();
+    expect((await installTx.commit().settled).ok).toBeDefined();
 
     const coldRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -387,7 +387,7 @@ describe("PolicyOf label-time binding", () => {
       );
       coldCell.set("secret after restart");
       coldTx.prepareCfc();
-      expect((await coldTx.commit()).error).toBeUndefined();
+      expect((await coldTx.commit().settled).error).toBeUndefined();
 
       const evaluationTx = coldRuntime.edit();
       const metadata = readStoredCfcMetadata(
@@ -448,7 +448,7 @@ describe("PolicyOf label-time binding", () => {
         "secret",
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     }
 
     const coldRuntime = new Runtime({
@@ -490,7 +490,7 @@ describe("PolicyOf label-time binding", () => {
     const source = runtime.getCell(space, "policy-source", schema, sourceTx);
     source.set("secret");
     sourceTx.prepareCfc();
-    expect((await sourceTx.commit()).ok).toBeDefined();
+    expect((await sourceTx.commit().settled).ok).toBeDefined();
 
     const boundReference = {
       type: CFC_ATOM_TYPE.Policy,
@@ -532,7 +532,7 @@ describe("PolicyOf label-time binding", () => {
       source: { ...sourceLink, path: [] },
     });
     copyTx.prepareCfc();
-    expect((await copyTx.commit()).ok).toBeDefined();
+    expect((await copyTx.commit().settled).ok).toBeDefined();
 
     const coldRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -586,7 +586,7 @@ describe("PolicyOf label-time binding", () => {
       "secret",
     );
     installTx.prepareCfc();
-    expect((await installTx.commit()).ok).toBeDefined();
+    expect((await installTx.commit().settled).ok).toBeDefined();
 
     const destinationSchema = internSchema(
       {
@@ -644,7 +644,7 @@ describe("PolicyOf label-time binding", () => {
         path: [],
       }, { value: destinationSchema.schema }).ok,
     ).toBeDefined();
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
 
     const sinkRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -681,7 +681,7 @@ describe("PolicyOf label-time binding", () => {
         },
       );
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(flushed).toBe(false);
     } finally {
@@ -700,7 +700,7 @@ describe("PolicyOf label-time binding", () => {
       const installTx = runtime.edit();
       runtime.getCell(origin, id, schema, installTx).set("secret");
       installTx.prepareCfc();
-      expect((await installTx.commit()).ok).toBeDefined();
+      expect((await installTx.commit().settled).ok).toBeDefined();
     }
 
     const sinkRuntime = new Runtime({
@@ -747,9 +747,9 @@ describe("PolicyOf label-time binding", () => {
           path: ["value"],
         }, { forged: true }).ok,
       ).toBeDefined();
-      expect((await tamper.commit()).ok).toBeDefined();
+      expect((await tamper.commit().settled).ok).toBeDefined();
 
-      expect((await decision.commit()).error).toBeDefined();
+      expect((await decision.commit().settled).error).toBeDefined();
       expect(flushed).toBe(false);
     } finally {
       await sinkRuntime.dispose();

@@ -69,7 +69,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [...clauses] },
     }, tx);
     cell.set({ secret: "withheld content" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await cell.sync();
     return cell.getAsNormalizedFullLink();
   };
@@ -99,7 +99,7 @@ describe("cfc-cell-read-ceiling", () => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return link;
   };
 
@@ -119,7 +119,7 @@ describe("cfc-cell-read-ceiling", () => {
       create,
     );
     privatePointer.set(target.getAsWriteRedirectLink());
-    expect((await create.commit()).error).toBeUndefined();
+    expect((await create.commit().settled).error).toBeUndefined();
     const reader = readerFor([A]);
     const pointer = reader.getCellFromLink(
       privatePointer.getAsNormalizedFullLink(),
@@ -152,6 +152,86 @@ describe("cfc-cell-read-ceiling", () => {
     expect(() => cell.getRaw()).toThrow(/read ceiling/);
     expect(() => cell.getRaw({ nonRecursive: true })).toThrow(/read ceiling/);
     expect(() => cell.key("secret").get()).toThrow(/read ceiling/);
+  });
+
+  it("withholds a scoped instance its broader instance's label puts outside the ceiling", async () => {
+    // The user instance stores its own value and no envelope, beside a space
+    // instance labeled at the same position: the shape a write narrowed into
+    // the user instance left before it stamped that instance's envelope.
+    const tx = writer.edit();
+    const link = writer.getCell(
+      signer.did(),
+      `scoped read ceiling ${crypto.randomUUID()}`,
+      undefined,
+      tx,
+    ).getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: { notes: "slot" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{ path: ["notes"], label: { confidentiality: [B] } }],
+        },
+      },
+    });
+    const scoped = toMemorySpaceAddress({ ...link, scope: "user" });
+    seedStoredEnvelope(tx, { ...scoped, path: [] }, {
+      value: { notes: "narrowed content" },
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+
+    const readTx = readerFor([A]).edit();
+    try {
+      expect(() => readTx.read({ ...scoped, path: ["value", "notes"] }))
+        .toThrow(/read ceiling/);
+    } finally {
+      readTx.abort();
+    }
+  });
+
+  it("reads a scoped instance whose broader instance labels only the pointer it holds", async () => {
+    // The label on the broader slot's pointer copies whichever user's
+    // instance the redirect was written for, so it does not gate a read of
+    // this instance's content.
+    const tx = writer.edit();
+    const link = writer.getCell(
+      signer.did(),
+      `scoped pointer ceiling ${crypto.randomUUID()}`,
+      undefined,
+      tx,
+    ).getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: { notes: "slot" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["notes"],
+            label: { confidentiality: [B] },
+            origin: "link",
+          }],
+        },
+      },
+    });
+    const scoped = toMemorySpaceAddress({ ...link, scope: "user" });
+    seedStoredEnvelope(tx, { ...scoped, path: [] }, {
+      value: { notes: "narrowed content" },
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+
+    const readTx = readerFor([A]).edit();
+    try {
+      expect(readTx.read({ ...scoped, path: ["value", "notes"] }).ok?.value)
+        .toBe("narrowed content");
+    } finally {
+      readTx.abort();
+    }
   });
 
   it("withholds direct transaction reads of protected content", async () => {
@@ -218,7 +298,7 @@ describe("cfc-cell-read-ceiling", () => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const readTx = readerFor([A]).edit();
     try {
@@ -293,7 +373,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B] },
     }, create);
     inbox.set(["withheld content"]);
-    expect((await create.commit()).error).toBeUndefined();
+    expect((await create.commit().settled).error).toBeUndefined();
     const link = inbox.getAsNormalizedFullLink();
     const reader = readerFor([A]);
     const destination = reader.getCellFromLink<string[]>(link);
@@ -366,7 +446,7 @@ describe("cfc-cell-read-ceiling", () => {
       },
     }, tx);
     cell.set({ public: "public content", private: "private content" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(
       cell.getAsNormalizedFullLink(),
     );
@@ -386,7 +466,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B], observes: "enumerate" },
     }, tx);
     cell.set(["public element"]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const reader = readerFor([A]);
     const projected = reader.getCellFromLink(cell.getAsNormalizedFullLink());
     await projected.sync();
@@ -412,7 +492,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B], observes: "value" },
     }, tx);
     cell.set(["private element"]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(
       cell.getAsNormalizedFullLink(),
     );
@@ -443,7 +523,7 @@ describe("cfc-cell-read-ceiling", () => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(link);
     await projected.sync();
 
@@ -459,7 +539,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B], observes: "enumerate" },
     }, tx);
     cell.set({ length: 17 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(
       cell.getAsNormalizedFullLink(),
     );

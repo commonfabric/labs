@@ -144,7 +144,7 @@ describe("scheduler child action lifetime", () => {
       >(space, "sliding-window-argument", undefined, tx);
       argument.set({ items, start: 0, size: WINDOW_SIZE });
       runtime.run(tx, compiled, argument, result);
-      await tx.commit();
+      await tx.commit().settled;
       // The list projects on demand, so hold a reader open for the whole run.
       const stopReading = result.key("rows").sink(() => {});
       await runtime.idle();
@@ -153,7 +153,7 @@ describe("scheduler child action lifetime", () => {
       const moveWindow = async (start: number) => {
         const moveTx = runtime.edit();
         argument.withTx(moveTx).key("start").set(start);
-        await moveTx.commit();
+        await moveTx.commit().settled;
         await runtime.idle();
       };
 

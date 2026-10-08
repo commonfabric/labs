@@ -1066,11 +1066,12 @@ export function journalCell(
 }
 
 /**
- * Durably append a batch of opaque records to the channel's partition cell,
- * minting one ExternalIngest mark per POST. The read-append runs inside
- * `custodyIngest.update`'s retry, so concurrent POSTs to the same partition
- * don't lose each other. No dedup here — idempotency on the record key is the
- * read side's (loom's) job. Returns the number of records appended.
+ * Durably appends a batch of opaque records to the channel's partition cell,
+ * minting one ExternalIngest mark per POST, bound to the records that POST
+ * carried. The records already in the cell are left untouched, and concurrent
+ * POSTs to the same partition do not lose each other. No dedup here —
+ * idempotency on the record key is the read side's (loom's) job. Returns the
+ * number of records appended.
  */
 export async function appendToJournal(
   runtime: Runtime,
@@ -1085,11 +1086,7 @@ export async function appendToJournal(
     channel: registration.space,
     audience: registration.installId,
   };
-  await custodyIngest.update(
-    cell,
-    (current) => [...(current ?? []), ...records],
-    channel,
-  );
+  await custodyIngest.appendAll(cell, records, channel);
   return records.length;
 }
 

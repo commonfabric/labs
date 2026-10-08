@@ -14,7 +14,7 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { defer } from "@commonfabric/utils/defer";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
-import { spaceAccess } from "../../src/builder/space-access.ts";
+import { spaceAccess, spaceAccessOf } from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
@@ -270,6 +270,43 @@ describe("spaceAccess()", () => {
       }
     });
 
+    it("returns another principal's level through `spaceAccessOf()`, by the list alone", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+
+      const runtime = clientRuntime(alice);
+      await syncAcl(runtime);
+      const target = runtime.getCell<unknown>(space, "space-access here");
+      const ask = (
+        principal: unknown,
+        kind: "lift" | "handler" = "handler",
+      ) => {
+        const tx = runtime.edit();
+        const frame = pushFrame({ runtime, tx, space, frameKind: kind });
+        try {
+          return { level: spaceAccessOf(target, principal as never), tx };
+        } finally {
+          popFrame(frame);
+        }
+      };
+      expect(ask(bob.did()).level).toBe("WRITE");
+      expect(ask(carol.did()).level).toBe("READ");
+      expect(ask(dave.did()).level).toBe("none");
+      expect(ask(alice.did()).level).toBe("OWNER");
+      // The answer does not depend on who asks, so a computation asking
+      // about a named principal keeps its scope.
+      const asked = ask(bob.did(), "lift");
+      expect(asked.level).toBe("WRITE");
+      expect(asked.tx.getNarrowestReadScope()).not.toBe("user");
+      for (const principal of [undefined, "*", "bob", 42, null]) {
+        expect(() => ask(principal)).toThrow("takes a principal's DID");
+      }
+    });
+
     it("returns the `*` entry's level to a principal the list does not name, and a named entry over it", async () => {
       const setAcl = await aclWriter();
       await setAcl({
@@ -362,7 +399,7 @@ describe("spaceAccess()", () => {
         tx,
       );
       link.set(runtime.getCell<unknown>(space, "space-access target"));
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
         callIn(runtime, runtime.edit(), { frameSpace: home, target: link }),
@@ -386,7 +423,7 @@ describe("spaceAccess()", () => {
         tx,
       );
       link.set(runtime.getCell<unknown>(space, "space-access target"));
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
         callIn(runtime, runtime.edit(), {
@@ -588,7 +625,7 @@ describe("spaceAccess()", () => {
       );
       const target = runtime.getCell<unknown>(space, "space-access target");
       const result = runtime.run(tx, levelPattern, { target }, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       return result as Cell<{ level?: string; derived?: string }>;
     }
 
@@ -828,7 +865,7 @@ describe("spaceAccess()", () => {
           (runtime.run(tx, notePattern, { target }, resultCell) as Cell<
             { note?: string }
           >).key("note");
-        await tx.commit();
+        await tx.commit().settled;
         await waitForCellValue(runtime, note, (v) => v === "unread", {
           stuckLabel: "dave's note to arrive as `unread`",
         });
@@ -1001,12 +1038,12 @@ describe("spaceAccess()", () => {
       {
         const tx = aliceRuntime.edit();
         argument.withTx(tx).set({ anchor: "here" });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = aliceRuntime.edit();
         aliceRuntime.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await aliceRuntime.idle();
       await aliceRuntime.storageManager.synced();

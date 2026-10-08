@@ -132,7 +132,7 @@ async function fixture(
         }
         input.withTx(tx).set({ messages, builtinTools: false });
         action(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
       },
       stage(
@@ -268,7 +268,7 @@ describe("llm-dialog-served", () => {
     try {
       await f.select("user");
       const start = f.stage("user", "accepted");
-      expect((await start.commit()).error).toBeUndefined();
+      expect((await start.commit().settled).error).toBeUndefined();
       await start.postCommitEffectsSettled();
       await f.issued(1);
       f.runtime.installSealDestination({
@@ -281,7 +281,7 @@ describe("llm-dialog-served", () => {
         kind: "derivation",
       });
       f.cancel(cancel, "user");
-      expect((await cancel.commit()).error).toBeUndefined();
+      expect((await cancel.commit().settled).error).toBeUndefined();
       f.runtime.clearSealDestination();
       wave.abandon("Withdraw cancellation");
       await waveSettlementOf(cancel);
@@ -311,12 +311,12 @@ describe("llm-dialog-served", () => {
       try {
         await f.select("space");
         const first = f.stage("space", "first");
-        expect((await first.commit()).error).toBeUndefined();
+        expect((await first.commit().settled).error).toBeUndefined();
         await first.postCommitEffectsSettled();
         await f.issued(1);
         await f.select("user");
         const second = f.stage("user", "second");
-        expect((await second.commit()).error).toBeUndefined();
+        expect((await second.commit().settled).error).toBeUndefined();
         await second.postCommitEffectsSettled();
         await f.issued(2);
         await f.select("space");
@@ -359,7 +359,7 @@ describe("llm-dialog-served", () => {
       for (const scope of ["space", "user"] as const) {
         await f.select(scope);
         const tx = f.stage(scope, scope);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await tx.postCommitEffectsSettled();
       }
       await f.issued(2);
@@ -389,7 +389,7 @@ describe("llm-dialog-served", () => {
     try {
       await f.select("user");
       const tx = f.stage("user", "fails");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       await f.issued(1);
       f.runtime.editWithRetry = (fn, maxRetries, options) => {
@@ -461,7 +461,7 @@ describe("llm-dialog-served", () => {
       const clear = f.runtime.edit();
       clear.tx.scopeKeyIdentity = alice;
       f.parent.withTx(clear).set(undefined);
-      expect((await clear.commit()).error).toBeUndefined();
+      expect((await clear.commit().settled).error).toBeUndefined();
       const old = f.stage("space", "refused", alice);
       f.action(old);
       await f.select("space", bob);
@@ -481,7 +481,7 @@ describe("llm-dialog-served", () => {
     try {
       await f.select("user");
       const tx = f.stage("user", "held", undefined, true);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       expect(f.requests).toHaveLength(0);
       f.cancellations[0]();
@@ -503,20 +503,20 @@ describe("llm-dialog-served", () => {
         await f.select("user");
         if (activePredecessor) {
           const predecessor = f.stage("user", "predecessor");
-          expect((await predecessor.commit()).error).toBeUndefined();
+          expect((await predecessor.commit().settled).error).toBeUndefined();
           await predecessor.postCommitEffectsSettled();
           await f.issued(1);
           const cancel = f.runtime.edit();
           f.cancel(cancel, "user");
-          expect((await cancel.commit()).error).toBeUndefined();
+          expect((await cancel.commit().settled).error).toBeUndefined();
         }
         const first = f.stage("user", "held", undefined, true);
-        expect((await first.commit()).error).toBeUndefined();
+        expect((await first.commit().settled).error).toBeUndefined();
         await first.postCommitEffectsSettled();
         await clock.tick(6 * 60 * 1000);
         const second = f.stage("user", "ignored", undefined, true);
         expect(second.getCfcState().outbox).toHaveLength(0);
-        expect((await second.commit()).error).toBeUndefined();
+        expect((await second.commit().settled).error).toBeUndefined();
         await f.held[0]();
         await f.issued(activePredecessor ? 2 : 1);
       } finally {
@@ -530,7 +530,7 @@ describe("llm-dialog-served", () => {
     try {
       await f.select("user");
       const tx = f.stage("user", "rejected release", undefined, true);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       expect(f.output.key("pending").get()).toBe(true);
       let rejected = 0;
@@ -572,7 +572,7 @@ describe("llm-dialog-served", () => {
       await f.select("user");
       const tx = f.stage("user", "late acceptance", undefined, true);
       f.cancellations[0]();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       await f.runtime.settled();
       expect(f.output.key("pending").get()).toBe(false);
@@ -592,7 +592,7 @@ describe("llm-dialog-served", () => {
     try {
       await f.select("user");
       const tx = f.stage("user", "active");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       await f.issued(1);
       f.runtime.edit = (...args) => {
@@ -642,7 +642,7 @@ describe("llm-dialog-served", () => {
       });
       f.input.withTx(publish).set(userInputs);
       f.action(publish);
-      expect((await publish.commit()).error).toBeUndefined();
+      expect((await publish.commit().settled).error).toBeUndefined();
       f.runtime.clearSealDestination();
       wave.abandon("Withdraw publication");
       await waveSettlementOf(publish);
@@ -692,7 +692,7 @@ describe("llm-dialog-served", () => {
     try {
       await f.select("user");
       const tx = f.stage("user", "held", undefined, true);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       await f.held[0]();
       await f.issued(1);
@@ -735,10 +735,10 @@ describe("llm-dialog-served", () => {
       await f.select("user");
       const pending = f.runtime.edit();
       f.output.withTx(pending).key("pending").set(true);
-      expect((await pending.commit()).error).toBeUndefined();
+      expect((await pending.commit().settled).error).toBeUndefined();
       const tx = f.stage("user", "recovered");
       expect(tx.getCfcState().outbox).toHaveLength(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       await f.issued(1);
     } finally {

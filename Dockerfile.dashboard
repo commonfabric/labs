@@ -3,8 +3,9 @@
 # Build context is the labs repo ROOT: the "/bench?view=gantt" drill-down shells
 # out to scripts/ci-gantt.ts, so the repo source must be in the image (modeled on
 # Dockerfile.toolshed). Every backend is reached over its REST API — the GitHub
-# tiles with GH_TOKEN and the cloud-spend tile via BigQuery using the workload's
-# own service account (Workload Identity) — so no cloud CLI is installed.
+# tiles as a GitHub App or with GH_TOKEN, and the cloud-spend tile via BigQuery
+# using the workload's own service account (Workload Identity) — so no cloud CLI
+# is installed.
 #
 # The GKE nodes are linux/amd64, so the image is pinned to that platform. Build
 # it on any host — an Apple-Silicon Mac emulates amd64 through QEMU:

@@ -143,6 +143,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["history-limit", "an operation history row count"],
   ["max-concurrent", "how many agent runs one runner holds; a count"],
   ["lease-seconds", "a lease length in seconds"],
+  [
+    "max-concurrent-local",
+    "how many local jobs one runner runs at once; a count",
+  ],
   ["submission-after-seq", "a revision sequence number"],
   // Identifiers the caller brings from outside, or coins.
   ["did", "a DID, pasted from elsewhere"],

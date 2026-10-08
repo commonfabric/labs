@@ -196,7 +196,7 @@ describe("scheduler event drop predicate", () => {
     setResultCell(eventsCell, resultCell);
     setResultCell(seenCell, resultCell);
     argumentCell.set({ value: 1 });
-    await tx.commit();
+    await tx.commit().settled;
 
     restoreTransact = rejectNextTransact(runtime, {
       name: "ConflictError",

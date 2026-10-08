@@ -273,8 +273,7 @@ of trust is the whole unlock.
 
 The layers are at different stages, and each is useful without the ones
 above it. The runtime, the compiler, and the sandboxing work today. The
-flow checking runs, enforcing at explicit boundaries by default and
-hardening toward strict; the trusted base is still larger than the
+flow checking runs, strict by default; the trusted base is still larger than the
 microkernel it is meant to shrink to, and shrinking it is part of the
 work. Confidential hardware is provisioned and every release binary
 carries signed provenance; the attestation protocol that would let a

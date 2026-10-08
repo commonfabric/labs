@@ -265,7 +265,7 @@ async function resumeOverEmptiedSpot(
       tx0,
     );
     rt1.run(tx0, compiled, { items: [1, 2, 3] }, rc1);
-    expect((await tx0.commit()).error).toBeUndefined();
+    expect((await tx0.commit().settled).error).toBeUndefined();
     await rc1.pull();
     await rt1.settled();
     await rt1.patternManager.flushCompileCacheWrites();
@@ -293,7 +293,7 @@ async function resumeOverEmptiedSpot(
     const clearTx = rt1.edit();
     rt1.getCellFromLink(spotLink, undefined, clearTx).setRaw(undefined);
     rt1.prepareTxForCommit(clearTx);
-    expect((await clearTx.commit()).error).toBeUndefined();
+    expect((await clearTx.commit().settled).error).toBeUndefined();
     await rt1.settled();
     await sm1.synced();
     expect(
@@ -324,7 +324,7 @@ async function resumeOverEmptiedSpot(
       compiled2.resultSchema,
       tx,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     expect(await rt2.start(rc2)).toBe(true);
     await rc2.pull();

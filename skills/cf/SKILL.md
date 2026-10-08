@@ -338,16 +338,15 @@ intentional breaking migration.
 
 ### Source location metadata
 
-The local-source deployment commands `piece new`, `piece setsrc`, and custom
-`space set-home` accept repeatable `--test` flags as well as `--root` and
-`--repository`. Attach every authored pattern test. Use the repository checkout
-root for `--root`; this preserves `source.entry` as a path inside the
-repository. `--repository` is stored exactly as supplied in `source.repository`
-and is never inferred from Git configuration. On `setsrc`, omitting
-`--repository` preserves the existing value; supplying it replaces the value.
-Test flags are different: every source update must repeat the complete list.
-`piece inspect --json` and `piece ls --json` expose the resulting structured
-source locator.
+The local-source deployment commands `piece new` and `piece setsrc` accept
+repeatable `--test` flags as well as `--root` and `--repository`. Attach every
+authored pattern test. Use the repository checkout root for `--root`; this
+preserves `source.entry` as a path inside the repository. `--repository` is
+stored exactly as supplied in `source.repository` and is never inferred from Git
+configuration. On `setsrc`, omitting `--repository` preserves the existing
+value; supplying it replaces the value. Test flags are different: every source
+update must repeat the complete list. `piece inspect --json` and
+`piece ls --json` expose the resulting structured source locator.
 
 ## JSON Input Format
 

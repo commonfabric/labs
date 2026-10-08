@@ -1,3 +1,4 @@
+import { NestedRenderReferenceSchema } from "@commonfabric/runner/component-read-contract";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 
 /** What a `LinkTargetWatch` reports to, and consults, as its target moves. */
@@ -116,7 +117,7 @@ export class LinkTargetWatch {
     // This schema reports the current target as a Cell. The subscription can
     // also wake for a write within that target, so the callback compares target
     // identity before reporting a retarget.
-    const linkCell = cell.asSchema<CellHandle>({ asCell: ["cell"] });
+    const linkCell = cell.asSchema<CellHandle>(NestedRenderReferenceSchema);
     try {
       const synchronizedTarget = await linkCell.sync();
       if (this.#token !== token) return undefined;
@@ -130,8 +131,7 @@ export class LinkTargetWatch {
         ? synchronizedTarget
         : undefined;
       this.#observed = observedTarget;
-      const unsubscribe = linkCell.subscribe((nextTarget) => {
-        const validTarget = isCellHandle(nextTarget) ? nextTarget : undefined;
+      const retarget = (validTarget: CellHandle | undefined) => {
         if (
           validTarget === undefined
             ? observedTarget === undefined
@@ -144,7 +144,14 @@ export class LinkTargetWatch {
         observedTarget = validTarget;
         this.#observed = validTarget;
         this.#onRetarget(validTarget);
-      });
+      };
+      const unsubscribe = linkCell.subscribe(
+        (nextTarget) =>
+          retarget(isCellHandle(nextTarget) ? nextTarget : undefined),
+        // A link the worker will not show names no target the host may
+        // follow, so the watch reports none rather than keep the last.
+        { onRefused: () => retarget(undefined) },
+      );
       if (this.#token === token) {
         this.#unsubscribe = unsubscribe;
       } else {

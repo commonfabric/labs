@@ -93,6 +93,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads every principal a cell's label attests, as `principalOf` reads the
+  // one, and returns a plain array of DIDs. It builds no graph node.
+  {
+    exportName: "principalsOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads the key of the event the running handler handles, and returns a
   // plain string rather than a reactive value.
   {
@@ -304,6 +311,21 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // so it is a plain call inside the computation or handler that makes it.
   {
     exportName: "spaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // spaceAccessOf(target, principal) reads a named principal's level the same
+  // way, and builds no graph node either.
+  {
+    exportName: "spaceAccessOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // spaceOf(target) returns the DID of the space a cell's value lives in, or
+  // `undefined`. It builds no graph node, so it is a plain call inside the
+  // computation or handler that makes it.
+  {
+    exportName: "spaceOf",
     category: "ignored",
     reactiveOrigin: false,
   },

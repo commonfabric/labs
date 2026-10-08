@@ -11,6 +11,7 @@ import { themedChartSeries } from "../theme.ts";
 import { githubCiSpend } from "./github-ci-spend.ts";
 
 const ORG = "acme";
+const ENTERPRISE = "acme-enterprise";
 const D = 86_400_000;
 
 const themedSwatch = (color: string) =>
@@ -69,9 +70,34 @@ const productBudget = (sku: string, amount: number) => ({
 
 const usagePath = (year: number, month: number, org = ORG) =>
   `organizations/${org}/settings/billing/usage?year=${year}&month=${month}`;
-const budgetsPath = (org = ORG) =>
-  `organizations/${org}/settings/billing/budgets`;
+const budgetsPath = (org = ORG, page = 1) =>
+  `organizations/${org}/settings/billing/budgets?` +
+  `per_page=100&scope=organization&page=${page}`;
 const classicPath = (org = ORG) => `orgs/${org}/settings/billing/actions`;
+const enterpriseSummaryPath = (
+  year: number,
+  month: number,
+  day: number,
+) =>
+  `enterprises/${ENTERPRISE}/settings/billing/usage/summary?` +
+  `year=${year}&month=${month}&day=${day}`;
+const enterpriseBudgetsPath = (page = 1) =>
+  `enterprises/${ENTERPRISE}/settings/billing/budgets?` +
+  `per_page=100&scope=enterprise&page=${page}`;
+
+function enterpriseSummaryRoutes(
+  year: number,
+  month: number,
+  throughDay: number,
+  items: Readonly<Record<number, { product: string; netAmount: number }[]>>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Array.from({ length: throughDay }, (_, index) => index + 1).map((day) => [
+      enterpriseSummaryPath(year, month, day),
+      { usageItems: items[day] ?? [] },
+    ]),
+  );
+}
 
 class RejectedRoute {
   constructor(readonly reason: unknown) {}
@@ -93,6 +119,7 @@ async function view(
   now: string,
   routes: Record<string, unknown>,
   env: Record<string, string> = { GH_TOKEN: "gh_pat_x", GH_BILLING_ORG: ORG },
+  observe?: (path: string, init: RequestInit | undefined) => void,
 ): Promise<TileView> {
   const RealDate = Date;
   const realFetch = globalThis.fetch;
@@ -103,9 +130,10 @@ async function view(
       super(args.length === 0 ? fixed : (args[0] as number));
     }
   } as DateConstructor;
-  globalThis.fetch = (input: URL | Request | string) => {
+  globalThis.fetch = (input: URL | Request | string, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const key = url.pathname.slice(1) + url.search;
+    observe?.(key, init);
     if (!(key in routes)) {
       return Promise.resolve(new Response(null, { status: 404 }));
     }
@@ -132,12 +160,295 @@ Deno.test("github spend: without a token the tile is gray and names what it need
   const v = await githubCiSpend.collect(ctx({}));
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
+  assertStringIncludes(v.sub ?? "", "GH_BILLING_TOKEN");
   assertStringIncludes(v.sub ?? "", "GH_TOKEN");
-  assertStringIncludes(v.sub ?? "", "org billing read"); // the extra right this tile needs
 });
 
 Deno.test("github spend: a projection with no observed rate window preserves the measured total", () => {
   assertEquals(projectMonthly(37, 0, 31, []), 37);
+});
+
+Deno.test("github spend: enterprise summary includes all cost centers and enterprise budgets", async () => {
+  const requests: {
+    path: string;
+    token: string | null;
+    version: string | null;
+  }[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      ...enterpriseSummaryRoutes(2026, 1, 20, {
+        1: [{ product: "actions", netAmount: 18 }],
+        2: [{ product: "actions", netAmount: 18 }],
+        3: [{ product: "actions", netAmount: 18 }],
+        4: [{ product: "actions", netAmount: 18 }],
+        5: [
+          { product: "actions", netAmount: 18 },
+          { product: "packages", netAmount: 100 },
+        ],
+        6: [{ product: "actions", netAmount: 18 }],
+        7: [{ product: "actions", netAmount: 18 }],
+        8: [{ product: "actions", netAmount: 18 }],
+        9: [{ product: "actions", netAmount: 18 }],
+        10: [{ product: "actions", netAmount: 18 }],
+        18: [{ product: "actions", netAmount: 0 }],
+      }),
+      [enterpriseBudgetsPath()]: {
+        budgets: [
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["actions"],
+            budget_scope: "enterprise",
+            budget_amount: 400,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["packages"],
+            budget_scope: "enterprise",
+            budget_amount: 200,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["actions"],
+            budget_scope: "organization",
+            budget_amount: 10_000,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["actions", "packages"],
+            budget_scope: "enterprise",
+            budget_amount: 10_000,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: [null],
+            budget_scope: "enterprise",
+            budget_amount: 10_000,
+          },
+        ],
+      },
+    },
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+      GH_TOKEN: "ordinary-github",
+    },
+    (path, init) => {
+      const headers = new Headers(init?.headers);
+      requests.push({
+        path,
+        token: headers.get("authorization"),
+        version: headers.get("x-github-api-version"),
+      });
+    },
+  );
+
+  assertEquals(v.value, "~$482/mo");
+  assertEquals(
+    v.aside,
+    '<span class="hfacet" title="$280 MTD">$280 MTD</span>',
+  );
+  assertStringIncludes(v.extra ?? "", "Budget $600");
+  assertEquals(v.status, "good");
+  assertEquals(
+    v.href,
+    `https://github.com/enterprises/${ENTERPRISE}/settings/billing`,
+  );
+  assert(
+    requests.some(({ path }) =>
+      path === enterpriseSummaryPath(2026, 1, 5)
+    ),
+  );
+  assertEquals(
+    requests.filter(({ path }) =>
+      path.startsWith(
+        `enterprises/${ENTERPRISE}/settings/billing/usage/summary?`,
+      )
+    ).length,
+    51,
+  );
+  assertEquals(
+    requests.every(({ token }) => token === "Bearer enterprise-billing"),
+    true,
+  );
+  assertEquals(
+    requests.every(({ version }) => version === "2026-03-10"),
+    true,
+  );
+});
+
+Deno.test("github spend: a GitHub App reads enterprise billing with its enterprise installation's token", async () => {
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign"],
+  );
+  const pkcs8 = new Uint8Array(
+    await crypto.subtle.exportKey("pkcs8", pair.privateKey),
+  );
+  const privateKey = `-----BEGIN PRIVATE KEY-----\n${
+    btoa(Array.from(pkcs8, (byte) => String.fromCharCode(byte)).join(""))
+  }\n-----END PRIVATE KEY-----\n`;
+  const requests: { path: string; authorization: string }[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      ...enterpriseSummaryRoutes(2026, 1, 20, {
+        5: [{ product: "actions", netAmount: 18 }],
+        18: [{ product: "actions", netAmount: 0 }],
+      }),
+      "app/installations?per_page=100&page=1": [
+        { id: 3, target_type: "Organization", account: { login: ORG } },
+        { id: 9, target_type: "Enterprise", account: { slug: ENTERPRISE } },
+      ],
+      "app/installations/9/access_tokens": {
+        token: "enterprise-installation",
+        expires_at: "2999-01-01T00:00:00Z",
+      },
+    },
+    {
+      GH_APP_CLIENT_ID: "Iv23spend",
+      GH_APP_PRIVATE_KEY: privateKey,
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+    },
+    (path, init) => {
+      requests.push({
+        path,
+        authorization: new Headers(init?.headers).get("authorization") ?? "",
+      });
+    },
+  );
+
+  assertEquals(v.value, "~$31/mo");
+  const app = requests.filter(({ path }) => path.startsWith("app/"));
+  assertEquals(app.map(({ path }) => path), [
+    "app/installations?per_page=100&page=1",
+    "app/installations/9/access_tokens",
+  ]);
+  assert(app.every(({ authorization }) => authorization.split(".").length === 3));
+  const billing = requests.filter(({ path }) => path.startsWith("enterprises/"));
+  assert(billing.length > 0);
+  assert(
+    billing.every(({ authorization }) =>
+      authorization === "Bearer enterprise-installation"
+    ),
+  );
+});
+
+Deno.test("github spend: an organization's billing is not read through a GitHub App", async () => {
+  const requests: string[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {},
+    {
+      GH_APP_CLIENT_ID: "Iv23spend",
+      GH_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
+      GH_BILLING_ORG: ORG,
+    },
+    (path) => requests.push(path),
+  );
+
+  assertEquals(v.status, "unknown");
+  assertEquals(v.sub, "set GH_BILLING_TOKEN or GH_TOKEN");
+  assertEquals(requests, []);
+});
+
+Deno.test("github spend: an unavailable enterprise day leaves a partial, gray projection", async () => {
+  const routes = enterpriseSummaryRoutes(2026, 1, 20, {
+    1: [{ product: "actions", netAmount: 18 }],
+    2: [{ product: "actions", netAmount: 18 }],
+    3: [{ product: "actions", netAmount: 18 }],
+    4: [{ product: "actions", netAmount: 18 }],
+    5: [{ product: "actions", netAmount: 18 }],
+    6: [{ product: "actions", netAmount: 18 }],
+    7: [{ product: "actions", netAmount: 18 }],
+    8: [{ product: "actions", netAmount: 18 }],
+    9: [{ product: "actions", netAmount: 18 }],
+    10: [{ product: "actions", netAmount: 18 }],
+  });
+  routes[enterpriseSummaryPath(2026, 1, 6)] = {};
+
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    routes,
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+    },
+  );
+
+  assertEquals(v.status, "unknown");
+  assertEquals(v.value, "~$295/mo");
+  assertEquals(
+    v.aside,
+    '<span class="hfacet" title="$162 partial MTD">$162 partial MTD</span>',
+  );
+  assertEquals(v.sub, "1 billing day unavailable");
+  // The missing 6th breaks the line, while all 17 sampled days stay
+  // highlighted rather than dropping the 1st from the rate window.
+  assertEquals((v.extra ?? "").match(/<polyline/g)?.length, 2);
+});
+
+Deno.test("github spend: one unavailable prior enterprise day preserves the rest of its month", async () => {
+  const december = enterpriseSummaryRoutes(
+    2025,
+    12,
+    31,
+    Object.fromEntries(
+      Array.from({ length: 31 }, (_, index) => [
+        index + 1,
+        [{ product: "actions", netAmount: 10 }],
+      ]),
+    ),
+  );
+  december[enterpriseSummaryPath(2025, 12, 20)] = {};
+  const v = await view(
+    "2026-01-03T09:00:00Z",
+    {
+      ...december,
+      ...enterpriseSummaryRoutes(2026, 1, 3, {
+        1: [{ product: "actions", netAmount: 20 }],
+        2: [{ product: "actions", netAmount: 20 }],
+      }),
+    },
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+    },
+  );
+
+  assertEquals(v.status, "good");
+  assertEquals(v.value, "~$332/mo");
+  assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
+  assertStringIncludes(v.extra ?? "", "<polyline");
+});
+
+Deno.test("github spend: enterprise scope never falls back to organization minutes", async () => {
+  const requests: string[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      [classicPath()]: {
+        total_minutes_used: 1000,
+        included_minutes: 3000,
+        total_paid_minutes_used: 0,
+      },
+    },
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+    },
+    (path) => requests.push(path),
+  );
+
+  assertEquals(v.status, "unknown");
+  assertEquals(v.value, "—");
+  assertEquals(requests.some((path) => path === classicPath()), false);
 });
 
 Deno.test("github spend: projects the month from the settled daily rate, against the GitHub budget", async () => {
@@ -341,6 +652,40 @@ Deno.test("github spend: a budget carrying no amount is no ceiling, not a $0 one
     assertEquals((v.extra ?? "").includes("Budget"), false);
     assertEquals(v.status, "good");
   }
+});
+
+Deno.test("github spend: reads product budgets from every page", async () => {
+  const requests: string[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      [usagePath(2026, 1)]: {
+        usageItems: [
+          ...days(2026, 1, 1, 10, 18),
+          stillReporting("2026-01-18"),
+        ],
+      },
+      [budgetsPath()]: {
+        budgets: [{
+          budget_type: "SkuPricing",
+          budget_product_sku: "actions_linux",
+          budget_scope: "organization",
+          budget_amount: 10,
+        }],
+        has_next_page: true,
+      },
+      [budgetsPath(ORG, 2)]: {
+        budgets: [productBudget("actions", 400)],
+        has_next_page: false,
+      },
+    },
+    undefined,
+    (path) => requests.push(path),
+  );
+
+  assertStringIncludes(v.extra ?? "", "Budget $400");
+  assertEquals(v.status, "good");
+  assert(requests.includes(budgetsPath(ORG, 2)));
 });
 
 Deno.test("github spend: one product budgeted twice sets one ceiling, not two", async () => {

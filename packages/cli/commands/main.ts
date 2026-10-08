@@ -45,13 +45,11 @@ function envStatus(): string {
     // a space and do not read this, so a blanket "no need to pass --space"
     // would be wrong exactly where a caller is most surprised to be asked.
     //
-    // `space` is named by subcommand for the same reason, and by the one
-    // subcommand rather than by two: `recreate-root` resolves the target space
-    // and refuses without one, while `clone`, `verify`, `reset` and
-    // `fingerprint` each name their target themselves, and `set-home` acts on
-    // the identity's own home space — it declares the option through the
-    // shared target flags and never reads it. Declaring is not consuming,
-    // which is the way an entry here goes wrong without going missing.
+    // `space` is named by subcommand for the same reason: `recreate-root`
+    // resolves the target space and refuses without one, while `clone`,
+    // `verify`, `reset` and `fingerprint` each name their target themselves.
+    // Declaring the option is not consuming it, which is the way an entry
+    // here goes wrong without going missing.
     lines.push(
       `  CF_SPACE    = ${space} (set, no need to pass --space on cell, ` +
         `piece, wish, acl, deps, space recreate-root)`,

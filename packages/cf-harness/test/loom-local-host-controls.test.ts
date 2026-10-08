@@ -6,7 +6,7 @@ import {
   createCfHarnessCliCapabilities,
   formatCfHarnessCliUsage,
 } from "../src/cli.ts";
-import { createLoomLocalCfHarnessHost } from "../src/loom-local-host.ts";
+import { createLoomLocalCfHarnessHost } from "./support/on-linux.ts";
 import { runLoomLocalCfHarnessHostMain } from "../src/loom-local-host-main.ts";
 import type {
   CreateHarnessPromptLoopOptions,
