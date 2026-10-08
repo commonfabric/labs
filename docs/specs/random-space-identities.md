@@ -107,8 +107,8 @@ records its own DID:
   resolves no name and creates no space, rather than creating one owned by the
   service. Under server execution a client creates no space at all: its run of
   a handler is a speculative echo of the serving runtime's, which creates the
-  space, so the client resolves a name only through its record and otherwise
-  withdraws its run.
+  space. The client resolves a name only through its record, and its echo of a
+  handler naming one that has none withdraws.
 
   An allocation record is one document per name, addressed by a canonical cause
   over the calling space and the name, and immutable once written. A
