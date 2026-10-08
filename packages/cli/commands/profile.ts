@@ -183,7 +183,9 @@ export async function profileRepairRootAction(
 
 /**
  * Connection flags shared by `cf profile` verbs. Create and show use the
- * identity's home space; repair takes the profile's explicit full address.
+ * identity's home space. `repair-name-protection` takes one profile's explicit
+ * full address; `repair-root` takes its profiles from a store snapshot, or
+ * only the full addresses repeated `--cell` flags name.
  */
 // Typed as the other subcommand builders are: cliffy's `.command()` overloads
 // take a `Command<any>`, and a builder returning the narrowed option type is

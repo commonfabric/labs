@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
+import { join } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -22,6 +23,7 @@ import {
   Runtime,
   spaceRootPatternConfig,
 } from "@commonfabric/runner";
+import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   contentFingerprint,
   diffFingerprints,
@@ -47,15 +49,7 @@ const rootedOwner = await Identity.fromPassphrase("repair-root rooted");
 const unlistedOwner = await Identity.fromPassphrase("repair-root unlisted");
 const admin = await Identity.fromPassphrase("repair-root admin");
 
-/** The planted root: an empty registry, as an open of the space makes one. */
-const PLANTED_ROOT = [
-  "import { pattern, Writable } from 'commonfabric';",
-  "export default pattern(() => {",
-  "  const pieceRegistry = new Writable<string[]>([]).for('pieceRegistry');",
-  "  return { pieceRegistry };",
-  "});",
-  "",
-].join("\n");
+const patternsRoot = join(import.meta.dirname!, "..", "..", "patterns");
 
 describe("profileSpaceRoot()", () => {
   let storeDir: string;
@@ -150,13 +144,19 @@ describe("profileSpaceRoot()", () => {
     });
 
     // The planted profile's space gets the root an open of it would have
-    // made, written by the admin.
+    // made, the real default app, written by the admin.
     const plantRuntime = runtimeAs(admin);
     const space = planted.space as MemorySpace;
-    const pattern = await plantRuntime.patternManager.compilePattern({
-      main: "/planted.tsx",
-      files: [{ name: "/planted.tsx", contents: PLANTED_ROOT }],
-    }, { space });
+    const program = await resolveLocalProgram(
+      (resolver) => plantRuntime.harness.resolve(resolver),
+      {
+        main: join(patternsRoot, "system", "default-app.tsx"),
+        root: patternsRoot,
+      },
+    );
+    const pattern = await plantRuntime.patternManager.compilePattern(program, {
+      space,
+    });
     const { error } = await plantRuntime.editWithRetry((tx) => {
       const root: Cell<unknown> = plantRuntime.getCell(
         space,
@@ -325,6 +325,42 @@ describe("profileSpaceRoot()", () => {
       { load },
     );
     expect(await rootIdOf(unlisted.space)).toBe(await profileIdOf(unlisted));
+  });
+
+  it("returns one row for a profile named twice", async () => {
+    const cell = `//${unrooted.space}/${unrooted.id}`;
+    const plan = await profileSpaceRoot(config({ cells: [cell, cell] }), {
+      load,
+    });
+    expect(plan.rows.map((row) => row.status)).toEqual(["unrooted"]);
+  });
+
+  it("leaves a profile whose inspection failed alone when it applies, reporting it failed", async () => {
+    // The connection to one profile's space is refused for both inspections,
+    // the plan's and the apply's own, and accepted after that.
+    let refusals = 2;
+    const flaky = (spaceConfig: SpaceConfig) => {
+      if (spaceConfig.space === unrooted.space && refusals > 0) {
+        refusals--;
+        return Promise.reject(new Error("the connection was refused"));
+      }
+      return load(spaceConfig);
+    };
+    const plan = await profileSpaceRoot(config(), { load: flaky });
+    const failedRow = plan.rows.find((row) =>
+      row.named.space === unrooted.space
+    );
+    expect(failedRow?.status).toBe("failed");
+
+    const applied = await profileSpaceRoot(
+      config({ expectedInspection: plan.inspection }),
+      { load: flaky },
+    );
+    const appliedRow = applied.rows.find((row) =>
+      row.named.space === unrooted.space
+    );
+    expect(appliedRow?.status).toBe("failed");
+    expect(await rootIdOf(unrooted.space)).toBeUndefined();
   });
 
   it("refuses to apply a receipt from another plan, and changes nothing", async () => {

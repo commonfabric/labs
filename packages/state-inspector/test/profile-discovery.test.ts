@@ -106,6 +106,22 @@ describe("discoverProfiles()", () => {
     });
   });
 
+  it("skips a SQLite database that holds no memory space", () => {
+    const path = `${dir}/${OTHER}.sqlite`;
+    const db = new Database(path, { create: true });
+    try {
+      db.exec("CREATE TABLE unrelated (x INTEGER)");
+    } finally {
+      db.close();
+    }
+    discovered.push({ did: OTHER, path, sizeBytes: 0, mtimeMs: 0 });
+    space(STRAY, [["of:stray-profile", PROFILE_VALUE]]);
+
+    expect(discoverProfiles(discovered).unlisted).toEqual([
+      { space: STRAY, id: "of:stray-profile" },
+    ]);
+  });
+
   it("skips a file that is not a space database", async () => {
     const path = `${dir}/${OTHER}.sqlite`;
     await Deno.writeTextFile(path, "not a database");

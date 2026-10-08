@@ -58,8 +58,8 @@ function isProfileResultValue(value: FabricValue): boolean {
  * `listed` holds each link a Home's `profiles` list stores. `unlisted` holds
  * each profile-shaped piece in a space no listed link names, which a
  * snapshot can hold when the Home listing it is absent from the snapshot or
- * no longer lists it. A space that is not a readable memory database is
- * skipped.
+ * no longer lists it. A file that is not a readable memory database is
+ * skipped, whether or not it opens as SQLite.
  */
 export function discoverProfiles(
   discovered: readonly DiscoveredSpace[],
@@ -76,10 +76,12 @@ export function discoverProfiles(
     } catch {
       continue;
     }
+    const spaceListed: ListedProfile[] = [];
+    const spaceShaped: UnlistedProfile[] = [];
     try {
       for (const link of homeProfileLinks(space, { branch, scope }) ?? []) {
         if (link.space && link.id) {
-          listed.push({ home: d.did, space: link.space, id: link.id });
+          spaceListed.push({ home: d.did, space: link.space, id: link.id });
         }
       }
       for (
@@ -95,11 +97,19 @@ export function discoverProfiles(
         } catch {
           continue;
         }
-        if (isProfileResultValue(doc?.value)) shaped.push({ space: d.did, id });
+        if (isProfileResultValue(doc?.value)) {
+          spaceShaped.push({ space: d.did, id });
+        }
       }
+    } catch {
+      // A file that opens as SQLite but holds no memory space is skipped
+      // whole, so nothing half-read from it is reported.
+      continue;
     } finally {
       space.close();
     }
+    for (const profile of spaceListed) listed.push(profile);
+    for (const profile of spaceShaped) shaped.push(profile);
   }
   const listedSpaces = new Set(listed.map((p) => p.space));
   const order = <T extends { space: string; id: string }>(a: T, b: T) =>

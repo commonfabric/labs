@@ -105,8 +105,8 @@ function namedTarget(cell: string): Target {
  * profile-shaped piece no Home lists, which is skipped. With
  * `config.expectedInspection`, it inspects again first, and applies the plan
  * only when the run's receipt is the one given, profile by profile; a
- * profile whose own receipt has changed by the time its turn comes is
- * reported as `failed` and left alone.
+ * profile whose own receipt has changed by the time its turn comes, or whose
+ * inspection failed, is reported as `failed` and left alone.
  *
  * @throws Error when the snapshot holds no space database, when a named
  *   address is not a full profile address, or when the run's receipt differs
@@ -126,14 +126,22 @@ export async function profileSpaceRoot(
   }
   const { listed, unlisted } = discoverProfiles(discovered);
   const homeOf = new Map(listed.map((p) => [`${p.space} ${p.id}`, p.home]));
-  const targets: Target[] = config.cells === undefined
-    ? listed
-    : config.cells.map(namedTarget).map((t) => ({
-      ...t,
-      ...(homeOf.has(`${t.space} ${t.id}`)
-        ? { home: homeOf.get(`${t.space} ${t.id}`) }
-        : {}),
-    }));
+  // One target per profile address, however many times a Home's list or the
+  // command line names it.
+  const targets = [
+    ...new Map(
+      (config.cells === undefined ? listed : config.cells.map(namedTarget))
+        .map((t): [string, Target] => {
+          const key = `${t.space} ${t.id}`;
+          const home = homeOf.get(key);
+          return [key, {
+            space: t.space,
+            id: t.id,
+            ...(home === undefined ? {} : { home }),
+          }];
+        }),
+    ).values(),
+  ];
   const skipped: ProfileSpaceRootRow[] = config.cells === undefined
     ? unlisted.map((p) => ({
       named: { space: p.space, id: p.id },
@@ -211,7 +219,7 @@ export async function profileSpaceRoot(
       const row = inspected.rows[index];
       return "inspection" in row
         ? repairProfileSpaceRoot(pieces, target.id, row.inspection)
-        : inspectProfileSpaceRoot(pieces, target.id);
+        : Promise.reject(new Error(row.reason));
     }),
     true,
   );
