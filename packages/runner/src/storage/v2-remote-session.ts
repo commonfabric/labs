@@ -80,6 +80,17 @@ export interface SessionFactory {
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
 
   /**
+   * The flags the memory server serving `space` advertises, read from a
+   * handshake alone. No session is opened on `space`, so nothing a server
+   * does when a session opens there, such as starting to serve the space,
+   * happens. `null` when the handshake carries none.
+   */
+  serverFlags?(
+    space: MemorySpace,
+    signal?: AbortSignal,
+  ): Promise<MemoryProtocolFlags | null>;
+
+  /**
    * Calls `observer` with each `session/admissible` a connection the factory
    * opened is sent: a space that refused `principal` on that connection and
    * would now admit it. Returns the function that ends the subscription.
@@ -945,6 +956,41 @@ export class RemoteSessionFactory implements SessionFactory {
     return await abortable(dialed.client, signal);
   }
 
+  /** @inheritDoc */
+  async serverFlags(
+    space: MemorySpace,
+    signal?: AbortSignal,
+  ): Promise<MemoryProtocolFlags | null> {
+    if (this.#sharedConnections) {
+      return (await this.#sharedClient(this.#resolveAddress(space), signal))
+        .serverFlags;
+    }
+    const transport = this.#dedicatedTransport(space);
+    let client: MemoryClient.Client | undefined;
+    try {
+      client = await MemoryClient.connect({ transport, signal });
+      return client.serverFlags;
+    } finally {
+      await (client?.close() ?? transport.close()).catch(() => {});
+    }
+  }
+
+  /**
+   * Helper for `#createDedicated()` and `serverFlags()`, which makes the
+   * transport of a connection for one space alone, naming the space in its
+   * address.
+   */
+  #dedicatedTransport(space: MemorySpace): WebSocketTransport {
+    const transport = new WebSocketTransport(
+      toSpaceWebSocketAddress(this.#resolveAddress(space), space),
+      this.#compressionEnabled,
+      () => this.#transports.delete(transport),
+      this.#createSocket,
+    );
+    this.#transports.add(transport);
+    return transport;
+  }
+
   /**
    * Helper for `create()`, which dials a connection for this session alone,
    * naming the space in its address.
@@ -955,13 +1001,7 @@ export class RemoteSessionFactory implements SessionFactory {
     mountOptions: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ) {
-    const transport = new WebSocketTransport(
-      toSpaceWebSocketAddress(this.#resolveAddress(space), space),
-      this.#compressionEnabled,
-      () => this.#transports.delete(transport),
-      this.#createSocket,
-    );
-    this.#transports.add(transport);
+    const transport = this.#dedicatedTransport(space);
     let client: MemoryClient.Client | undefined;
     const abortError = (): Error =>
       signal?.reason instanceof Error
