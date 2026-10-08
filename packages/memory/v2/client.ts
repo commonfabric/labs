@@ -172,6 +172,10 @@ export type ConnectionState =
 export type MountOptions = {
   /** Require the space's complete persisted custom-root intent. */
   genesisRoot?: GenesisRoot;
+
+  /** Require the space's sealed declared kind. */
+  spaceKind?: string;
+
   sessionId?: string;
   seenSeq?: number;
   sessionToken?: string;
@@ -598,6 +602,8 @@ export class Client {
       options.actingAs,
       options.readCeiling,
       options.genesisRoot,
+      options.spaceKind,
+      result.spaceKind,
     );
     this.#spaces.add(session);
     return session;
@@ -736,6 +742,13 @@ export class Client {
     ) {
       throw protocolError(
         "memory server does not support a custom root intent",
+      );
+    }
+    if (
+      session.spaceKind !== undefined && this.serverFlags?.spaceKind !== true
+    ) {
+      throw protocolError(
+        "memory server does not seal a space's declared kind",
       );
     }
     // A drop while an open is being signed leaves it with a challenge of
@@ -1526,6 +1539,8 @@ export class SpaceSession {
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
   readonly #genesisRoot?: GenesisRoot;
+  readonly #spaceKindIntent?: string;
+  #spaceKind?: string;
 
   constructor(
     client: Client,
@@ -1538,6 +1553,8 @@ export class SpaceSession {
     actingAs?: "space-owner",
     readCeiling?: SessionReadCeiling,
     genesisRoot?: GenesisRoot,
+    spaceKindIntent?: string,
+    spaceKind?: string,
   ) {
     this.#client = client;
     this.#auth = auth;
@@ -1547,6 +1564,8 @@ export class SpaceSession {
     this.#genesisRoot = genesisRoot === undefined
       ? undefined
       : cloneIfNecessary(genesisRoot, { frozen: false });
+    this.#spaceKindIntent = spaceKindIntent;
+    this.#spaceKind = spaceKind;
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
     this.#serverSeq = serverSeq;
@@ -1568,6 +1587,16 @@ export class SpaceSession {
 
   get serverSeq(): number {
     return this.#serverSeq;
+  }
+
+  /**
+   * The kind the space's genesis commit declares, as the server reported it
+   * when this session last opened, or `undefined` when it reported none: the
+   * space declares no kind, had no genesis commit yet, or is served by a
+   * server that does not advertise `spaceKind`.
+   */
+  get spaceKind(): string | undefined {
+    return this.#spaceKind;
   }
 
   /** The error this session was terminated with, or undefined while it is open.
@@ -2978,6 +3007,9 @@ export class SpaceSession {
       ...(this.#genesisRoot === undefined
         ? {}
         : { genesisRoot: this.#genesisRoot }),
+      ...(this.#spaceKindIntent === undefined
+        ? {}
+        : { spaceKind: this.#spaceKindIntent }),
       sessionId: this.#sessionId,
       seenSeq: this.#serverSeq,
       sessionToken: this.#sessionToken,
@@ -3010,6 +3042,7 @@ export class SpaceSession {
     const sessionReplaced = sessionChanged || restored.resumed !== true;
     this.#sessionId = restored.sessionId;
     this.#sessionToken = restored.sessionToken ?? this.#sessionToken;
+    this.#spaceKind = restored.spaceKind;
     this.#noteResult(restored.serverSeq);
 
     if (sessionReplaced) {

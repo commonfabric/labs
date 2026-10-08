@@ -132,6 +132,7 @@ export function routedIdentifier(value: unknown): asserts value is string {
 
 const flags = new Set([
   "genesisRoot",
+  "spaceKind",
   "modernCellRep",
   "stableExpressionResultIds",
   "commitPreconditions",

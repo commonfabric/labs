@@ -3939,6 +3939,105 @@ Deno.test("memory v2 client refuses root expectations without server capability"
   }
 });
 
+Deno.test("memory v2 client refuses a space-kind expectation without server capability", async () => {
+  const client = await connect({
+    transport: handshakeTransport({
+      ...HELLO_OK,
+      flags: { ...HELLO_OK.flags, spaceKind: false },
+    }),
+  });
+  try {
+    await assertRejects(
+      () =>
+        client.mount("did:key:unsupported-kind-host", {
+          spaceKind: "fabrichat-room",
+        }),
+      Error,
+      "does not seal a space's declared kind",
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+/**
+ * A handshake transport whose `session.open` results report the kind
+ * `reported()` returns, and which records the kind each `session.open`
+ * descriptor declares.
+ */
+const spaceKindTransport = (reported: () => string | undefined) => {
+  const transport = handshakeTransport(HELLO_OK);
+  const declared: unknown[] = [];
+  const send = transport.send.bind(transport);
+  transport.send = (payload) => {
+    const message = decodeMemoryBoundary(payload) as {
+      type: string;
+      session?: Record<string, unknown>;
+    };
+    if (message.type === "session.open") {
+      declared.push(
+        Object.hasOwn(message.session ?? {}, "spaceKind")
+          ? message.session?.spaceKind
+          : "(none)",
+      );
+    }
+    return send(payload);
+  };
+  const setReceiver = transport.setReceiver.bind(transport);
+  transport.setReceiver = (next) =>
+    setReceiver((payload) => {
+      const message = decodeMemoryBoundary(payload) as {
+        type: string;
+        ok?: Record<string, FabricValue>;
+      };
+      const spaceKind = reported();
+      next(
+        message.type === "response" && message.ok?.sessionOpen !== undefined &&
+          spaceKind !== undefined
+          ? encodeMemoryBoundary({
+            ...message,
+            ok: { ...message.ok, spaceKind },
+          })
+          : payload,
+      );
+    });
+  return { transport, declared };
+};
+
+Deno.test("memory v2 client reports the kind its latest open result carries, and declares none of its own", async () => {
+  let reported: string | undefined = "fabrichat-room";
+  const { transport, declared } = spaceKindTransport(() => reported);
+  const client = await connect({ transport });
+  try {
+    const session = await client.mount("did:key:reported-kind");
+    assertEquals(session.spaceKind, "fabrichat-room");
+    reported = undefined;
+    await session.restore();
+    assertEquals(session.spaceKind, undefined);
+    assertEquals(declared, ["(none)", "(none)"]);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("memory v2 client declares its kind intent on every open, and reports the kind once a result carries it", async () => {
+  let reported: string | undefined = undefined;
+  const { transport, declared } = spaceKindTransport(() => reported);
+  const client = await connect({ transport });
+  try {
+    const session = await client.mount("did:key:declared-kind", {
+      spaceKind: "fabrichat-room",
+    });
+    assertEquals(session.spaceKind, undefined);
+    reported = "fabrichat-room";
+    await session.restore();
+    assertEquals(session.spaceKind, "fabrichat-room");
+    assertEquals(declared, ["fabrichat-room", "fabrichat-room"]);
+  } finally {
+    await client.close();
+  }
+});
+
 Deno.test("memory v2 client retains its original root intent across caller mutation and reopen", async () => {
   const transport = handshakeTransport({
     ...HELLO_OK,
