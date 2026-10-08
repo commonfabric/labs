@@ -28,6 +28,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
+- [Release gates without an integrity union](cfc-release-gate-integrity.md)
+  stops one consumed value's evidence from releasing another value's clause.
+  Today the write, sink and display gates evaluate exchange rules against
+  integrity unioned across entries and reads. The plan moves them to the
+  per-access, class-aware join §5.3 and §8.12.8 describe. The value-intrinsic
+  carry keeps honest releases, and the gates are staged from `observe` to
+  `enforce`.
 - [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
   refuses a stand-in fed to code a rule endorses, by checking the integrity
   each argument declares against the reads made through it. The declaration is

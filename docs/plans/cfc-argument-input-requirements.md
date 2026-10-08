@@ -231,11 +231,11 @@ keeps a fixed threshold:
 
 ## Plan
 
-- [ ] **Per-value guard evaluation at the release gate**, under its own plan
-      and pull request. It comes first. The gate unions integrity across
-      everything one read consumes, so a document holding two outputs satisfies
-      a guard that neither output satisfies alone. That bites every
-      witness-guarded rule today.
+- [ ] **Per-value guard evaluation at the release gate**, under
+      [its own plan](cfc-release-gate-integrity.md) and pull request. It comes
+      first. The gates union integrity across everything an access consumes, so
+      a document holding two outputs satisfies a guard that neither output
+      satisfies alone. That bites every witness-guarded rule today.
 - [ ] **Specs.**
   - A narrow ruling pull request on question 1 (classification item 1),
     independent of specs#51. Its Lean adds a `decide`-checked case: a
