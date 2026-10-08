@@ -6,11 +6,15 @@ import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import { resolveLink } from "../link-resolution.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
 import {
   exactPrincipalAttestations,
   PRINCIPAL_CLAIM_KINDS,
   type PrincipalClaimKind,
 } from "../cfc/represents-principal.ts";
+import type { Runtime } from "../runtime.ts";
+import { entityKey } from "../scheduler/keys.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
 import { cellOfTarget } from "./space-access.ts";
 
@@ -175,8 +179,39 @@ function attestedPrincipals(
     id: link.id,
     scope: link.scope,
   });
+  if (frame.frameKind === "handler") {
+    withdrawWhileLabelLoads(runtime, tx, link);
+  }
   return exactPrincipalAttestations(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
     claimKind,
   );
+}
+
+/**
+ * Helper for `attestedPrincipals()`, which withdraws the running handler when
+ * the replica has no local basis for the document whose label it read, not
+ * even a confirmed absence, and that document's load is in flight. The read
+ * then found no label because the label has not arrived, which is not the
+ * document's state, and a handler runs once per event: the scheduler runs a
+ * withdrawn one again once the load lands (`dispatchedHandlerNotRun`). A
+ * document with no load in flight reads as unlabeled, as one that does not
+ * exist or whose read the manager refuses must, so a withdrawal always has a
+ * load to wait on. A reactive computation needs none of this, since the
+ * load's arrival runs it again.
+ */
+function withdrawWhileLabelLoads(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): void {
+  const { storageManager } = runtime;
+  const key = entityKey(link, runtime.scopeKeyIdentity);
+  if (storageManager.pendingLoadGeneration?.(key) === undefined) return;
+  const { replica } = storageManager.open(link.space);
+  if (replica.hasLocalDocumentCoverage?.(link.id, link.scope) === true) return;
+  tx.dispatchedHandlerNotRun ??= {
+    reason:
+      `the label of \`${link.id}\` was read while its document was still loading`,
+  };
 }
