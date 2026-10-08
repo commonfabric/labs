@@ -4462,6 +4462,10 @@ export class Runtime {
    * space while it constructs the graph. On `undefined` the caller records the
    * name as pending, and the runner resolves it with
    * {@link resolveInSpaceName} before running the handler or action again.
+   * Under server execution a client leaves a name with no record unresolved
+   * instead: a handler's speculative echo withdraws rather than running again,
+   * and a reactive action runs again only a bounded number of times (see
+   * {@link InSpaceTargetUnresolved}).
    */
   resolveInSpaceNameSync(
     space: MemorySpace,
@@ -4509,6 +4513,8 @@ export class Runtime {
    * access-control document, which names its owner, and with
    * `options.root` its root reservation, which nothing places a root for.
    *
+   * @throws {InSpaceTargetUnresolved} Under server execution, on a client,
+   *   if no record names the space.
    * @throws If the record names a DID that is not a space, if loading what
    *   decides that fails, or if creating a space fails.
    */

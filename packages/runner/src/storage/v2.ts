@@ -2642,8 +2642,10 @@ export class StorageManager implements IStorageManager {
     // The runner's explicit-instance read (server-execution v2 stage A):
     // a served per-instance run's load of a scoped doc NAMES that
     // principal's instance — the load registers, travels, and lands per
-    // instance. Own-identity loads (every client, the OFF arm) name
-    // nothing and take exactly the pre-stage-A path.
+    // instance. A load of a foreign space's scoped doc, which a serving
+    // manager refuses by construction, travels but registers nothing
+    // (`#registerPendingLoad()`). Own-identity loads (every client, the
+    // OFF arm) name nothing and take exactly the pre-stage-A path.
     const instance = this.#foreignInstanceKey(scope, options?.scopeKeyIdentity);
     const releaseLoad = this.#registerPendingLoad({
       space,
@@ -2692,7 +2694,10 @@ export class StorageManager implements IStorageManager {
    * server-execution v2 stage A): the transaction layer's kick for a
    * served per-instance run's read of a scoped instance the replica has
    * never seen. Registered like syncCell's load (the preflight park
-   * cross-matches the instance-keyed address) and named on the wire.
+   * cross-matches the instance-keyed address) and named on the wire,
+   * except that a read this manager refuses by construction
+   * (`refusesReadByConstruction()`) registers nothing for a preflight to
+   * park on.
    * Own-identity or space-scope addresses name nothing and take the
    * ordinary root pull; a load that fails hands back the pull-kick
    * reservation so a later read may retry.
