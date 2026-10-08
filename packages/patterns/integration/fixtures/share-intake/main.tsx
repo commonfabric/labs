@@ -33,6 +33,7 @@ import {
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
   type PrivateInboxOutput,
+  type PrivateInboxRefusalHolder,
   type RetainedPrivateInboxes,
 } from "../../../system/private-inbox.tsx";
 import {
@@ -219,6 +220,7 @@ export interface MainOutput {
   [UI]: VNode;
   privateInbox: PrivateInboxHolder;
   retainedPrivateInboxes: RetainedPrivateInboxes;
+  privateInboxRefusal: PrivateInboxRefusalHolder;
   profiles: ProfileHomeOutput[];
   offered: OfferedSpace[];
   sharedSpaceCatalog: SharedSpaceCatalog;
@@ -254,6 +256,9 @@ export default pattern<MainInput, MainOutput>((
   const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
     "retainedPrivateInboxes",
   );
+  const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
+    "privateInboxRefusal",
+  );
   const catalog = new Writable<SharedSpaceCatalogStorage>({
     entries: {},
     offers: {},
@@ -263,6 +268,7 @@ export default pattern<MainInput, MainOutput>((
     [UI]: <div>share intake fixture</div>,
     privateInbox,
     retainedPrivateInboxes,
+    privateInboxRefusal,
     profiles,
     offered,
     sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
@@ -271,6 +277,7 @@ export default pattern<MainInput, MainOutput>((
     ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
       retainedPrivateInboxes,
+      privateInboxRefusal,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
       pointProfiles: pointProfilesAtPrivateInbox({

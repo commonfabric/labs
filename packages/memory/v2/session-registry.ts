@@ -23,6 +23,10 @@ export type SessionState = {
   readCeiling?: SessionReadCeiling;
   /** Immutable root intent authenticated by this session's latest open. */
   genesisRoot?: SessionDescriptor["genesisRoot"];
+
+  /** Immutable kind intent authenticated by this session's latest open. */
+  spaceKind?: SessionDescriptor["spaceKind"];
+
   seenSeq: number;
   lastSyncedSeq: number;
   watches: WatchSpec[];
@@ -230,6 +234,9 @@ export class SessionRegistry {
         : {}),
       ...(session.genesisRoot !== undefined
         ? { genesisRoot: session.genesisRoot }
+        : {}),
+      ...(session.spaceKind !== undefined
+        ? { spaceKind: session.spaceKind }
         : {}),
       // Fresh per open (never inherited): the binding reflects THIS
       // open's resolution against the current ACL; an open without the

@@ -2256,8 +2256,9 @@ export class PiecesController<T = unknown> {
    * and otherwise adopts the deciding profile's inbox when it passes vetting,
    * retaining the one it held. It creates one when it holds none and
    * no profile advertises one, and otherwise keeps what it holds or holds
-   * none, with the refusal logged. Sending it again creates, re-points and
-   * retains nothing. A Home pattern without that stream is left as it is. This
+   * none, with the refusal logged and sent for Home to record in its
+   * `privateInboxRefusal`. Sending it again creates, re-points and retains
+   * nothing. A Home pattern without that stream is left as it is. This
    * controller must be over the identity's Home space.
    *
    * Resolves once the event is sent, which is before Home's handler runs, so

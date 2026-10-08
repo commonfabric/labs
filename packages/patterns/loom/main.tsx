@@ -4,6 +4,7 @@ import {
   handler,
   NAME,
   pattern,
+  spaceOf,
   type Stream,
   UI,
   type VNode,
@@ -12,6 +13,8 @@ import {
 } from "commonfabric";
 import { admitPanel, externalUrl, insertionIndex } from "./admission.tsx";
 import type {
+  ChatRoomCell,
+  ChatRoomChoice,
   LoomInput,
   LoomOutput,
   Panel,
@@ -28,6 +31,8 @@ type State = {
   presentation: Writable<Presentation>;
 };
 
+type RemovalState = State & { chatRoom: ChatRoomCell };
+
 /** Return occurrences whose target differs from the complete piece link. */
 function withoutPiece(
   list: readonly Writable<Panel>[],
@@ -39,10 +44,40 @@ function withoutPiece(
   });
 }
 
-const removePiece = handler<{ piece: Writable<unknown> }, State>(
-  ({ piece }, { panels, presentation }) => {
-    const next = withoutPiece(panels.get(), piece);
+/** Whether `list` holds a piece panel showing the room `chatRoom` names. */
+function holdsRoom(
+  list: readonly Writable<Panel>[],
+  chatRoom: ChatRoomCell,
+): boolean {
+  const room = chatRoom.get().room;
+  if (room === undefined) return false;
+  return list.some((panel) => {
+    const value = panel.get();
+    return value.kind === "piece" && room.equals(value.piece);
+  });
+}
+
+/**
+ * Helper for the removal handlers, which clears `chatRoom` when a removal took
+ * the last piece panel showing the room it names. A room that was never a
+ * panel stays named.
+ */
+function forgetRemovedRoom(
+  list: readonly Writable<Panel>[],
+  next: readonly Writable<Panel>[],
+  chatRoom: ChatRoomCell,
+): void {
+  if (holdsRoom(list, chatRoom) && !holdsRoom(next, chatRoom)) {
+    chatRoom.set({});
+  }
+}
+
+const removePiece = handler<{ piece: Writable<unknown> }, RemovalState>(
+  ({ piece }, { panels, presentation, chatRoom }) => {
+    const list = panels.get();
+    const next = withoutPiece(list, piece);
     panels.set(next);
+    forgetRemovedRoom(list, next, chatRoom);
     const current = presentation.get();
     presentation.set({
       stagedPanels: current.stagedPanels.filter((panel) =>
@@ -56,10 +91,12 @@ const removePiece = handler<{ piece: Writable<unknown> }, State>(
   },
 );
 
-const removePanel = handler<{ panel: Writable<Panel> }, State>(
-  ({ panel }, { panels, presentation }) => {
+const removePanel = handler<{ panel: Writable<Panel> }, RemovalState>(
+  ({ panel }, { panels, presentation, chatRoom }) => {
     const list = panels.get();
-    panels.set(list.filter((existing) => !existing.equals(panel)));
+    const next = list.filter((existing) => !existing.equals(panel));
+    panels.set(next);
+    forgetRemovedRoom(list, next, chatRoom);
     const current = presentation.get();
     presentation.set({
       stagedPanels: current.stagedPanels.filter((existing) =>
@@ -108,6 +145,25 @@ const setPresentation = handler<Presentation, State>(
       stagedPanels: staged,
       ...(event.focusedPanel ? { focusedPanel: event.focusedPanel } : {}),
     });
+  },
+);
+
+/**
+ * Names `room` as the Loom's chat room, or clears it when the event names
+ * none. The room must live in the Loom's own space, so that its members are
+ * the Loom's: a room takes its access list and its participants from its
+ * space.
+ *
+ * @throws When `room` lives in another space.
+ */
+const setChatRoom = handler<ChatRoomChoice, { chatRoom: ChatRoomCell }>(
+  ({ room }, { chatRoom }) => {
+    // `chatRoom` holds a record rather than a link, so its space is the
+    // Loom's.
+    if (room !== undefined && spaceOf(room) !== spaceOf(chatRoom)) {
+      throw new Error("The chat room must be in this Loom's space");
+    }
+    chatRoom.set(room === undefined ? {} : { room });
   },
 );
 
@@ -225,7 +281,7 @@ const selectPanel = handler<
 });
 
 export default pattern<LoomInput, LoomOutput>(
-  ({ title, panels, presentation, participants }) => {
+  ({ title, panels, presentation, participants, chatRoom }) => {
     const pieceRegistry = computed(() =>
       panels.get().flatMap((panel) => {
         const value = panel.get();
@@ -233,9 +289,11 @@ export default pattern<LoomInput, LoomOutput>(
       })
     );
     const roster = computed(() => participantEntries(participants));
+    const room = computed(() => chatRoom.get().room);
     const state = { panels, presentation };
+    const removal = { panels, presentation, chatRoom };
     const viewerState = new Writable.perSession<ViewerState>({});
-    const remove = removePanel(state);
+    const remove = removePanel(removal);
     const move = movePanel(state);
     const duplicate = admitPanel({ panels, mode: "duplicate" });
     const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
@@ -336,7 +394,7 @@ export default pattern<LoomInput, LoomOutput>(
       pieceRegistry,
       viewerState,
       addPiece: admitPanel({ panels, mode: "piece" }),
-      removePiece: removePiece(state),
+      removePiece: removePiece(removal),
       addPanel: admitPanel({ panels, mode: "panel" }),
       removePanel: remove,
       movePanel: move,
@@ -344,6 +402,8 @@ export default pattern<LoomInput, LoomOutput>(
       setPresentation: present,
       participants: roster,
       addParticipant: addParticipant({ roster: participants }),
+      chatRoom: room,
+      setChatRoom: setChatRoom({ chatRoom }),
     };
   },
 );

@@ -156,21 +156,31 @@ adopts it if it passes, and moves an inbox it held to
 delivered there stays readable. The host's share intake follows the offers in
 the inbox Home holds and in each one it retains, vets each as the user, and
 registers each one that passes in Home's shared-space catalog through Home's
-`registerSharedSpace` stream; it leaves every offer in its inbox. Home
-creates an inbox from `packages/patterns/system/private-inbox.tsx` only when it
-holds none and no profile points at one. An inbox that fails vetting is neither
+`registerSharedSpace` stream; it leaves every offer in its inbox. Home creates
+an inbox from `packages/patterns/system/private-inbox.tsx` only when it holds
+none and no profile points at one. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home
 holds an inbox, it points each profile that points at no inbox at it, through
 the profile's `inbox` field, which is how a sender finds it, and leaves a
 profile pointing at another inbox as it is. While it holds none, as after a
-failed vetting, a profile that points at no inbox stays unpointed. A profile
-created once Home holds the inbox is pointed at it as it is created; one created
-earlier is pointed by the next ensure. Home decides only when an ensure runs, so
-a pointer that moves is decided at the first bring-up of Home in the next
-runtime worker to start, once the current worker's ensure has succeeded. A loom
-daemon does the same in the other direction, adopting the inbox a profile
-advertises and never replacing a pointer to a different one. [The private
-inbox](../../features/private-inbox.md) describes the whole arrangement.
+failed vetting, a profile that points at no inbox stays unpointed. A failed
+vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
+the host's reason code, a link to the refused inbox, and when Home first
+recorded it. Each ensure, which is to say the next bring-up of Home in a runtime
+worker, clears it when Home adopts or creates an inbox, when the deciding
+profile points at the inbox Home holds, or when no profile points at the refused
+inbox any longer. Nothing else clears it automatically in between, though the
+owner's own code can also clear it, or record a refusal, by sending Home's
+`ensurePrivateInbox` stream. It is read from Home's root like any other field of
+Home, the root being the link the `#default` wish answers with, as "Custom Home
+Pattern" below says. A profile created once Home holds the inbox is pointed at
+it as it is created; one created earlier is pointed by the next ensure. Home
+decides only when an ensure runs, so a pointer that moves is decided at the
+first bring-up of Home in the next runtime worker to start, once the current
+worker's ensure has succeeded. A loom daemon does the same in the other
+direction, adopting the inbox a profile advertises and never replacing a pointer
+to a different one. [The private inbox](../../features/private-inbox.md)
+describes the whole arrangement.
 
 ## Spaces
 

@@ -2598,6 +2598,16 @@ export interface InSpaceOptions {
    * space-scoped.
    */
   root?: boolean;
+
+  /**
+   * The kind the space declares, sealed in the genesis commit of the space
+   * the call creates and never changed afterward, as `fabrichat-room` is. A
+   * kind is a lowercase word, or several joined by single hyphens, of at most
+   * 32 characters. A DID or a cell names a space that already exists, so
+   * `inSpace()` refuses `spaceKind` with either, and it refuses a kind of
+   * any other form.
+   */
+  spaceKind?: string;
 }
 
 export type PatternFactory<T, R> =

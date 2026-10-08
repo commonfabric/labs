@@ -50,6 +50,7 @@ const buildOpen = async (
     seenSeq?: number;
     sessionToken?: string;
     genesisRoot?: FabricValue;
+    spaceKind?: string;
   } = {},
 ) => {
   const sub = space.did();
@@ -124,6 +125,49 @@ describe("verifySessionOpenAuthorization", () => {
       }, verifyOptions())
     );
   });
+  it("binds the declared space kind to the signed descriptor", async () => {
+    const message = await buildOpen(signedFields(), alice, {
+      spaceKind: "fabrichat-room",
+    });
+    assertEquals(
+      await verifySessionOpenAuthorization(message, verifyOptions()),
+      alice.did(),
+    );
+    for (const session of [{}, { spaceKind: "notebook" }]) {
+      await assertRejects(
+        () =>
+          verifySessionOpenAuthorization(
+            { ...message, session },
+            verifyOptions(),
+          ),
+        Error,
+        "authorization mismatch",
+      );
+    }
+    const malformed = await buildOpen(signedFields(), alice, {
+      spaceKind: 7 as unknown as string,
+    });
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...malformed, session: {} },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
+    const unsigned = await buildOpen(signedFields());
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...unsigned, session: { spaceKind: "fabrichat-room" } },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
+  });
+
   it("accepts a valid signed open and returns the issuer principal", async () => {
     assertEquals(
       await verifySessionOpenAuthorization(

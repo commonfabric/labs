@@ -1022,7 +1022,7 @@ const handlers: Record<
       ? found.inbox.getAsNormalizedFullLink()
       : undefined;
     const profile = "profile" in found
-      ? found.profile.getAsNormalizedFullLink()
+      ? found.profile?.getAsNormalizedFullLink()
       : undefined;
     return {
       outcome: found.outcome,

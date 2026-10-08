@@ -142,8 +142,11 @@ the pattern's rendered surface. It always waits for the handler's run, as
 same refusals. The event is a trusted gesture, as a DOM event on the pattern's
 rendered surface is, so it meets what `grantSpaceAccess()` and
 `revokeSpaceAccess()` require of a handler's event; the change they stage is
-still held to every other check. It mints trusted events, so it is for the
-host's own code alone;
+still held to every other check.
+[Host embedding, §11](../../docs/features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)
+records the principle that a native reviewed act counts wherever a trusted
+gesture does. `sendReviewed()` mints trusted events, so it is for the host's own
+code alone;
 [host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
 says what it owes in exchange.
 

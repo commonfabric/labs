@@ -4,7 +4,8 @@
 `schemas.tsx` defines its public contract and re-exports the participant
 roster's types from `participants.tsx`, which also holds the roster's one
 writer, `addParticipant`. The shared inputs are `title`, `panels`,
-`presentation`, and `participants`; `viewerState` belongs to one session.
+`presentation`, `participants`, and `chatRoom`; `viewerState` belongs to one
+session.
 
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
@@ -146,7 +147,25 @@ and drops a removed member without deleting their entry. The root does not
 render the list: it holds claims, and only a consumer that can read the access
 list can say which are participants.
 
-Run and attach all seven tests when deploying or updating source:
+`chatRoom` links the Loom's chat room, so every member finds it in the Loom's
+shared state. It is a link to a room piece in the Loom's own space, typed as
+`LinkedChatRoom`, which declares only the room's name: a reader of the Loom
+loads nothing of the conversation, and a client opens the room through the link
+under its own access. A Loom that names no room, including a root whose state
+holds no `chatRoom` field, reads the link's value as `undefined`.
+`setChatRoom({room?})` names the room, or clears it when `room` is omitted;
+sending the same event again leaves the same state. It refuses a room in another
+space. A FabriChat room takes its access list from its space, and its
+participants from its space's default pattern, which in the Loom's space is this
+root's `participants`, so a room in the Loom's space has the Loom's members.
+Whoever may change the Loom's panels may change `chatRoom`: the space's access
+list decides both. `removePanel` and `removePiece` clear it when they remove the
+last piece panel showing the room; a room that is not a panel stays named. The
+input holds the link in a record, `{ room? }`, because a handler's cell for a
+field holding a link writes through it, so replacing the link there would write
+into the room.
+
+Run and attach all eight tests when deploying or updating source:
 
 ```sh
 deno task cf test packages/patterns/loom/main.test.tsx
@@ -156,6 +175,7 @@ deno task cf test packages/patterns/loom/participant-labels.test.tsx
 deno task cf test packages/patterns/loom/url-view.test.tsx
 deno task cf test packages/patterns/loom/adder-profile.test.tsx
 deno task cf test packages/patterns/loom/actor-attribution.test.tsx
+deno task cf test packages/patterns/loom/chat-room.test.tsx
 
 deno task cf piece new packages/patterns/loom/main.tsx \
   --root packages/patterns \
@@ -165,7 +185,8 @@ deno task cf piece new packages/patterns/loom/main.tsx \
   --test packages/patterns/loom/participant-labels.test.tsx \
   --test packages/patterns/loom/url-view.test.tsx \
   --test packages/patterns/loom/adder-profile.test.tsx \
-  --test packages/patterns/loom/actor-attribution.test.tsx
+  --test packages/patterns/loom/actor-attribution.test.tsx \
+  --test packages/patterns/loom/chat-room.test.tsx
 ```
 
 Repeat all `--test` arguments with every `piece setsrc`. A source closure for

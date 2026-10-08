@@ -536,12 +536,9 @@ describe("Phase 5 cross-space serving", () => {
           actingTx,
         ),
       ).rejects.toThrow("Resolving in-space target spaces");
-      const did = serving.resolveInSpaceNameSync(
-        homeSpace,
-        name,
-        actingTx,
+      const did = serving.resolveInSpaceNameSync(homeSpace, name, actingTx, {
         grants,
-      );
+      });
       actingTx.abort(new Error("test-only"));
 
       expect(did).toBeDefined();
