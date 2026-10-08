@@ -235,9 +235,10 @@ When no trusted key is readable, the builtin obtains one before it computes:
 
 The policy's endorsed function, `drawWinner` above, reads hashes like any other
 input and computes its decision. It reads each hash as an input of its own: a
-list of hashes carries no witness (see below). The rule releases the decision because the
-endorsed function computed it, and requires, through its input witness, that
-every confidential input the function read was a hash the builtin wrote.
+list `.map()` builds carries no witness (see below). The rule releases the
+decision because the endorsed function computed it, and requires, through its
+input witness, that every confidential input the function read was a hash the
+builtin wrote.
 
 The witness is what refuses a stand-in. Code can derive from a hash a value that
 selects one of two outcomes by one bit of the hash, and feed it to the endorsed
@@ -269,16 +270,17 @@ policy's clause is, and no better.
 - **The sandbox.** No code reads the key only as long as pattern code cannot
   reach a runtime transaction or the storage beneath it. The pattern sandbox's
   isolation from host objects is that boundary.
-- **A list of hashes.** A list that a write carrying the policy's clause
-  creates gets an existence entry, frozen at creation, under that clause and
-  without the writer's `TransformedBy`. An endorsed function that reads a list
-  of hashes, whether built by mapping `policySecretHash` over items or
-  otherwise, therefore reads a confidential location without the builtin's
-  witness, and a rule requiring the witness refuses its result. A decision over
-  hashes is witness-guarded today only when the endorsed function takes each
-  hash as an input of its own, so a fixed set of candidates rather than a
-  list. Carrying the creating writer's stamp onto the existence entry it
-  creates is the runtime change that lifts this.
+- **A list of hashes built by `.map()`.** Mapping `policySecretHash` over items
+  builds a list of references. The `map` builtin writes each slot in a
+  transaction that read nothing labeled, under the clause the list's type
+  declares for its members, and a per-item result holding a reference sits
+  between the slot and the hash. Each is a confidential input whose writer is
+  unattributed, so a rule requiring the builtin's witness refuses whatever the
+  endorsed function computes over the list
+  ([input witnesses](cfc-transformed-by-input-witnesses.md), "An unattributed
+  input"). A decision over hashes is witness-guarded only when the endorsed
+  function takes each hash as an input of its own, so a fixed set of
+  candidates rather than a list.
 - **Chosen inputs.** The builtin hashes any input any code passes it, so any
   code holds the hash of any input it can name, under the policy's clause. An
   endorsed function that compares a hash against a caller-chosen number is an

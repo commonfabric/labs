@@ -475,10 +475,11 @@ describe("policySecretHash()", () => {
     });
   });
 
-  it("releases nothing computed from a list of hashes, which carries no witness", async () => {
-    // A list a labeled write creates gets an existence entry under the
-    // writer's clause and without its stamp, so a rule requiring the
-    // builtin's witness finds none on the list, however it was built.
+  it("releases nothing computed from a list of hashes `.map()` builds, which carries no witness", async () => {
+    // `.map()` builds a list of references the `map` builtin writes in a
+    // transaction that read nothing labeled, under the clause the list's type
+    // declares for its members, so each slot is a confidential input with no
+    // writer's stamp, and a rule requiring the builtin's witness finds none.
 
     await withRuntime("enforce-strict", async (runtime) => {
       await runDraw(runtime, "draw-mapped", async ({ result, send, read }) => {
