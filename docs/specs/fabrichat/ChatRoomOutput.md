@@ -59,12 +59,12 @@ interface ChatRoomOutput {
 
 ## Where a room lives
 
-A room is the chat of a shared space (see [shared
-spaces](README.md#shared-spaces)): a piece in that space, and a space has at
+A room is the chat of a social space (see [social
+spaces](README.md#social-spaces)): a piece in that space, and a space has at
 most one. A conversation the user starts, direct or group, gets a space of its
 own, which the user's chat manager ([`ChatManagerOutput`](ChatManagerOutput.md))
 creates with the room as its chat, and never a placement, an adapter, or a
-container. An existing shared space's chat is created in it by whatever sets the
+container. An existing social space's chat is created in it by whatever sets the
 space up. Either way the space's default pattern, not the room, is its root.
 
 When the manager creates a space for a conversation, the creator and each
