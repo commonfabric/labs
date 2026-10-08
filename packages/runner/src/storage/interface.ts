@@ -379,8 +379,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * for nothing else, and is never stored, returned, or logged.
    *
    * `acl` must name a concrete OWNER, and must grant this manager's signer at
-   * least READ if this manager will open the space. `genesis.root` requires a
-   * host that supports root reservations; its complete source, cause,
+   * least READ if this manager will open the space. `genesis.root` is the
+   * reservation itself, or a function computing it from the new space's DID,
+   * which nothing knows before the key is generated. It requires a host that
+   * supports root reservations; its complete source, cause,
    * arguments, and attached source roots are snapshotted in the genesis
    * receipt, and a later mount that declares a root intent must match it.
    * `genesis.spaceKind` requires a host that advertises `spaceKind`, and is
@@ -391,7 +393,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    */
   createSpace?(
     acl: ACL,
-    genesis?: { root?: GenesisRoot; spaceKind?: string },
+    genesis?: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
   ): Promise<MemorySpace>;
 
   /**

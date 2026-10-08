@@ -14,7 +14,7 @@ import {
   resolveSpaceRootPattern,
 } from "../src/ensure-space-root.ts";
 import { parseLink } from "../src/link-utils.ts";
-import { IN_SPACE_ROOT_CAUSE } from "../src/runner.ts";
+import { inSpaceRootCause } from "../src/runner.ts";
 import { Runtime, type RuntimeFetch } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import {
@@ -88,7 +88,7 @@ describe("in-space root", () => {
 
   /** The address the genesis reservation of an `inSpace` root names. */
   const reservedRootOf = (reader: Runtime, space: MemorySpace) =>
-    reader.getCell(space, IN_SPACE_ROOT_CAUSE);
+    reader.getCell(space, inSpaceRootCause(space));
 
   /**
    * Runs a root pattern whose `create` handler appends the children `make`
@@ -181,7 +181,7 @@ describe("in-space root", () => {
     const [space] = await root.spaces();
     expect(space).not.toBe(home);
     expect(readGenesisRoot(await server.engineForSpace(space))).toEqual({
-      cause: IN_SPACE_ROOT_CAUSE,
+      cause: inSpaceRootCause(space),
     });
     const reader = openRuntime();
     const linked = await rootOf(reader, space);
@@ -341,7 +341,9 @@ describe("in-space root", () => {
       root: true,
     });
     const engine = await server.engineForSpace(space);
-    expect(readGenesisRoot(engine)).toEqual({ cause: IN_SPACE_ROOT_CAUSE });
+    expect(readGenesisRoot(engine)).toEqual({
+      cause: inSpaceRootCause(space),
+    });
     expect((await server.readDocument(space, `of:${space}`))?.value).toEqual({
       [aliceSigner.did()]: "OWNER",
     });
