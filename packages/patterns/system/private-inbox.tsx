@@ -545,10 +545,6 @@ export const ensurePrivateInbox = handler<
   if (replaced) {
     privateInboxRefusal.set({});
   } else if (
-    deciding !== undefined && held !== undefined && equals(held, deciding)
-  ) {
-    privateInboxRefusal.set({});
-  } else if (
     refused !== undefined && deciding !== undefined &&
     equals(refused.inbox, deciding) &&
     (held === undefined || !equals(held, refused.inbox))
@@ -560,6 +556,10 @@ export const ensurePrivateInbox = handler<
         refusedAt: Date.now(),
       },
     });
+  } else if (
+    deciding !== undefined && held !== undefined && equals(held, deciding)
+  ) {
+    privateInboxRefusal.set({});
   } else {
     // A recorded refusal says the deciding profile points at the refused
     // inbox, so it ends once no profile in the list points there.
