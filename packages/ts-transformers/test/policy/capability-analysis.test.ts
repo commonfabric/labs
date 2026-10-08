@@ -449,29 +449,32 @@ Deno.test("Capability analysis treats array assignment patterns as wildcard", ()
   assertEquals(input.wildcard, true);
 });
 
-Deno.test("Capability analysis treats dynamic alias keys as wildcard", () => {
+Deno.test("Capability analysis reads the prefix above a dynamic alias key in full", () => {
   const fn = parseFirstCallback(
     `const fn = (input, key) => {
-      const alias = input;
+      const alias = input.offers;
       return alias[key];
     };`,
   );
   const summary = analyzeFunctionCapabilities(fn);
   const input = getPaths(summary, "input");
 
-  assertEquals(input.wildcard, true);
+  assertEquals(input.wildcard, false);
+  assertEquals(input.readPaths, ["offers"]);
+  assertEquals(input.fullShapePaths, ["offers"]);
 });
 
 Deno.test(
-  "Capability analysis: wildcard does not erase non-overlapping identity paths",
+  "Capability analysis: an unknown access does not erase non-overlapping identity paths",
   () => {
-    // Closure captures share one synthetic root state, so a wildcard-marking
-    // expression (here a dynamic element access) used to blanket-erase the
-    // identity/comparable markings of UNRELATED captures — degrading an
-    // equals()-only [SELF] capture to a full-value demand of the piece's own
-    // result, which can never satisfy, so the consuming node silently never
-    // ran (PR #4714). The wildcard must keep suppressing identityOnly, but
-    // identity paths that no tracked value access overlaps survive.
+    // Closure captures share one synthetic root state, so an unknown access
+    // (here a dynamic element access, a read of the prefix `items`) used to
+    // blanket-erase the identity/comparable markings of UNRELATED captures —
+    // degrading an equals()-only [SELF] capture to a full-value demand of the
+    // piece's own result, which can never satisfy, so the consuming node
+    // silently never ran (PR #4714). The unknown access must keep suppressing
+    // identityOnly, but identity paths that no tracked value access overlaps
+    // survive.
     const fn = parseFirstCallback(
       `const fn = (input, key) => {
         const { list, self } = input;
@@ -482,7 +485,8 @@ Deno.test(
     const summary = analyzeFunctionCapabilities(fn);
     const input = getPaths(summary, "input");
 
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assert(input.fullShapePaths.includes("items"));
     assertEquals(input.identityOnly, false);
     assert(input.identityPaths.includes("list"));
     assert(input.identityPaths.includes("self"));
@@ -492,7 +496,7 @@ Deno.test(
 );
 
 Deno.test(
-  "Capability analysis: a root-scoped wildcard still erases element identity paths",
+  "Capability analysis: a root-scoped unknown access still erases element identity paths",
   () => {
     // The CT-1639 removal idiom: a dynamic element access through a
     // whole-root alias means the unknown access can value-read any element,
@@ -511,16 +515,17 @@ Deno.test(
     const summary = analyzeFunctionCapabilities(fn);
     const input = getPaths(summary, "input");
 
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assert(input.fullShapePaths.includes(""));
     assertEquals(input.identityPaths.length, 0);
   },
 );
 
 Deno.test(
-  "Capability analysis: wildcard still erases the root-length identity path",
+  "Capability analysis: an unknown access still erases the root-length identity path",
   () => {
-    // The whole-root comparison overlaps whatever the wildcard may read, so
-    // it stays conservative: value semantics win at the root.
+    // The whole-root comparison overlaps whatever the unknown access may
+    // read, so it stays conservative: value semantics win at the root.
     const fn = parseFirstCallback(
       `const fn = (input, other, key) => {
         const item = input[key];
@@ -531,7 +536,8 @@ Deno.test(
     const summary = analyzeFunctionCapabilities(fn);
     const input = getPaths(summary, "input");
 
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assert(input.fullShapePaths.includes(""));
     assertEquals(input.identityPaths.length, 0);
   },
 );
@@ -3186,6 +3192,21 @@ Deno.test(
   () => {
     const input = analyzeInputWithSelf(
       `pattern((input: Input) => [equals(input, other), input[SELF]?.title]);`,
+      true,
+    );
+
+    assertEquals(input.capability, "comparable");
+    assertEquals(input.identityOnly, true);
+    assertEquals(input.readPaths, []);
+  },
+);
+
+Deno.test(
+  "Capability analysis keeps a pattern callback's input identity-only beside a dynamic-key read under SELF",
+  () => {
+    const input = analyzeInputWithSelf(
+      `declare const at: number;
+      pattern((input: Input) => [equals(input, other), input[SELF]?.title[at]]);`,
       true,
     );
 

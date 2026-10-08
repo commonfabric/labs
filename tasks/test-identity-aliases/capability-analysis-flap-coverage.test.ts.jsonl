@@ -1,0 +1,2 @@
+{"date": "2026-10-08", "from": {"k": "unit", "s": "ts-transformers", "n": "identity call on a dynamic alias widens the parameter root to wildcard"}, "to": {"k": "unit", "s": "ts-transformers", "n": "identity call on a dynamic alias reads the static prefix above the key"}}
+{"date": "2026-10-08", "from": {"k": "unit", "s": "ts-transformers", "n": "equals() on a dynamic alias also widens the parameter root to wildcard"}, "to": {"k": "unit", "s": "ts-transformers", "n": "equals() on a dynamic alias also reads the static prefix above the key"}}

@@ -95,10 +95,11 @@ interface MutableCapabilityState {
   passthrough: boolean;
   wildcard: boolean;
 
-  /** Static path prefixes at which unknown (wildcard) accesses occurred.
-   * `[]` means the whole root. Lets the identity-path filter erase only
-   * identity paths the unknown access can actually cover, instead of
-   * blanket-erasing every capture sharing this root state (#4714). */
+  /** Static path prefixes at which unknown accesses occurred: a wildcard's,
+   * and a read through a key that can name any member. `[]` means the whole
+   * root. Lets the identity-path filter erase only identity paths the
+   * unknown access can actually cover, instead of blanket-erasing every
+   * capture sharing this root state (#4714). */
   readonly wildcardPaths: Set<string>;
 
   hasIdentityUse: boolean;
@@ -149,6 +150,12 @@ interface AccessPathInfo {
 interface SourceRef {
   readonly root: string;
   readonly path: readonly string[];
+
+  /**
+   * Whether the access goes on below `path` through a key that can name any
+   * member. `path` is then the static prefix above that member, and nothing
+   * extends it, since where the access goes on to depends on the member.
+   */
   readonly dynamic: boolean;
   readonly arrayElement?: boolean;
   readonly elementResult?: boolean;
@@ -161,7 +168,7 @@ interface AliasShape {
 type AliasBinding = SourceRef | AliasShape;
 
 function materializeSourceRef(ref: SourceRef): SourceRef {
-  if (!ref.arrayElement) {
+  if (!ref.arrayElement || ref.dynamic) {
     return ref;
   }
   return {
@@ -177,6 +184,9 @@ function extendSourceRef(
   path: readonly string[],
 ): SourceRef {
   const base = materializeSourceRef(ref);
+  if (base.dynamic) {
+    return { root: base.root, path: base.path, dynamic: true };
+  }
   return {
     root: base.root,
     path: [...base.path, ...path],
@@ -757,6 +767,9 @@ function extractAccessPath(
       if (key !== undefined) {
         path.unshift(key);
       } else {
+        // The segments gathered so far lie below a member this key picks,
+        // so the path keeps only the static prefix above it.
+        path.length = 0;
         dynamic = true;
       }
       current = unwrapExpression(current.expression);
@@ -816,6 +829,28 @@ function memberSpineContainsCall(expression: ts.Expression): boolean {
     current = unwrapExpression(current.expression);
   }
   return ts.isCallExpression(current);
+}
+
+/**
+ * The keys of the element accesses on the member spine `resolveSourceRef`
+ * walks to reach a root, as far as a call: `table[pick(row)].first` has
+ * `pick(row)`. Ref resolution consumes those keys without descending into
+ * them, though each is evaluated, so a key that reads a capture is a read a
+ * caller resolving the ref in place of visiting the expression has to visit.
+ */
+function memberSpineElementKeys(expression: ts.Expression): ts.Expression[] {
+  const keys: ts.Expression[] = [];
+  let current = unwrapExpression(expression);
+  while (
+    ts.isPropertyAccessExpression(current) ||
+    ts.isElementAccessExpression(current)
+  ) {
+    if (ts.isElementAccessExpression(current)) {
+      keys.push(current.argumentExpression);
+    }
+    current = unwrapExpression(current.expression);
+  }
+  return keys;
 }
 
 function isDeclarationIdentifier(node: ts.Identifier): boolean {
@@ -2004,6 +2039,22 @@ export function analyzeFunctionCapabilities(
       state.hasNonIdentityUse = true;
     };
 
+    // A read through a key that can name any member, below the static
+    // prefix `path`. Any member under the prefix can be the one read, so the
+    // prefix is read in full, and it is recorded as a place an unknown access
+    // reaches, so the identity markings it covers are erased as a wildcard's
+    // are. Unlike a wildcard, it leaves shrinking elsewhere in the root and
+    // the scheduler-scope summary as they are.
+    const trackDynamicRead = (
+      name: string,
+      path: readonly string[],
+    ): void => {
+      if (isSelfReference(name, path)) return;
+      trackRead(name, path);
+      trackFullShapeRead(name, path);
+      ensureState(name).wildcardPaths.add(encodePath(path));
+    };
+
     // Unlike markWildcard this does NOT change shrinking or identity
     // classification — it only poisons write-exhaustiveness for consumers
     // that need `writes` to be a closed-world record
@@ -2427,6 +2478,18 @@ export function analyzeFunctionCapabilities(
           }
           return resolveShapePath(innerBinding, [key]);
         }
+        // An element access by a key that can name any member resolves to
+        // the static prefix it reads below.
+        if (
+          innerBinding && key === undefined &&
+          isSourceRefBinding(innerBinding)
+        ) {
+          if (ts.isCallExpression(current.expression)) {
+            pendingResolvedGetCalls?.push(current.expression);
+          }
+          const prefix = materializeSourceRef(innerBinding);
+          return { root: prefix.root, path: prefix.path, dynamic: true };
+        }
       }
 
       if (
@@ -2760,7 +2823,7 @@ export function analyzeFunctionCapabilities(
       options?: { identityOnly?: boolean },
     ): void => {
       if (ref.dynamic) {
-        markWildcard(ref.root, ref.path);
+        trackDynamicRead(ref.root, ref.path);
         return;
       }
       trackRead(ref.root, ref.path, options);
@@ -2776,7 +2839,7 @@ export function analyzeFunctionCapabilities(
 
     const trackFullShapeReadRef = (ref: SourceRef): void => {
       if (ref.dynamic) {
-        markWildcard(ref.root, ref.path);
+        trackDynamicRead(ref.root, ref.path);
         return;
       }
       trackFullShapeRead(ref.root, ref.path);
@@ -2911,7 +2974,10 @@ export function analyzeFunctionCapabilities(
         ? recordComparablePath
         : recordIdentityPath;
       if (ref.dynamic) {
-        markWildcard(ref.root, ref.path);
+        // No identity path names a member a key picks at run time, so the use
+        // is taken for a read of the whole prefix above the key, which covers
+        // comparing any member under it.
+        trackDynamicRead(ref.root, ref.path);
       } else if (ref.path.length === 0) {
         record(ref.root, [], { cellLike });
         markPassthrough(ref.root, { identityOnly: true });
@@ -3264,7 +3330,9 @@ export function analyzeFunctionCapabilities(
           const leftRef = resolveSourceRef(node.left);
           if (leftRef) {
             if (leftRef.dynamic) {
-              markWildcard(leftRef.root);
+              // A read through a key that can name any member reads its
+              // whole prefix, which covers the value leaving whole too.
+              trackReadRef(leftRef);
             } else if (leftRef.path.length === 0) {
               markPassthrough(leftRef.root);
               if (helperReturnsToCaller && escapesWhole(node.left)) {
@@ -3292,6 +3360,10 @@ export function analyzeFunctionCapabilities(
             // a set entry, so recording it twice costs nothing.
             if (memberSpineContainsCall(node.left)) {
               visit(node.left);
+            } else {
+              for (const key of memberSpineElementKeys(node.left)) {
+                visit(key);
+              }
             }
           } else {
             visit(node.left);
@@ -4045,7 +4117,7 @@ export function analyzeFunctionCapabilities(
             : undefined;
         if (iterableRef) {
           if (iterableRef.dynamic) {
-            markWildcard(iterableRef.root);
+            trackReadRef(iterableRef);
           } else if (iterableRef.path.length === 0) {
             markPassthrough(iterableRef.root);
           } else {
@@ -4054,6 +4126,10 @@ export function analyzeFunctionCapabilities(
           }
           if (ts.isCallExpression(iterableExpression)) {
             visit(node.expression);
+          } else {
+            for (const key of memberSpineElementKeys(node.expression)) {
+              visit(key);
+            }
           }
         } else {
           visit(node.expression);

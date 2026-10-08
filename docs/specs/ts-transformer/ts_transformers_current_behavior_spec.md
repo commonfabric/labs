@@ -2057,12 +2057,25 @@ adjustments:
   `test/policy/capability-analysis-static-keys.test.ts`). A key that can name
   any member (`offers[key.get()]`, a `string`-typed variable or a widened
   `let`, a callback parameter, a union of literal types, a key the rule above
-  does not fix) leaves the chain unresolved.
+  does not fix) makes the access a read of the whole static prefix above the
+  key, `["offers"]` for `x.get().offers[key].space`, the same however the
+  access is spelled: through the `.get()` chain, an alias of a member above the
+  key, `.key("offers").get()`, a fallback's operand, an identity call, or a
+  `for..of` (an alias of the whole `.get()` result, `const c = x.get()`, still
+  reads the whole value, as it does before a static key). The prefix is read
+  in full and recorded where a wildcard's prefix
+  is, so the identity markings under it are erased as a wildcard's are, but it
+  is not a wildcard: the rest of the root still shrinks, and the
+  scheduler-scope marker is kept. A key that reads a capture
+  (`items[selected.get()]`) is a read of its own wherever the access sits. A
+  write through such a key, a `.key()` call with one, and an argument passed to
+  a callee whose signature or summary gives it a capability stay wildcards, as
+  does a destructuring by a computed key (`const { [key]: value } = x`).
   The suppression applies only to the calls of a chain that resolves in full,
-  including a chain nested in a fallback that resolves by its other operand
-  (`a.get().p ?? x.get().offers[key].space`), so an unresolved chain keeps the
-  blanket read: its `.get()` receiver is read in full
-  (`policy/capability-analysis.ts`; fixtures
+  judged for each operand of a fallback on its own, so a chain that does not
+  resolve keeps the blanket read: its `.get()` receiver is read in full
+  (`policy/capability-analysis.ts`;
+  `test/policy/capability-analysis-dynamic-keys.test.ts`; fixtures
   `closures/computed-element-access-*`,
   `handler-schema/handler-element-access-dynamic-key`,
   `schema-injection/lift-element-access-dynamic-key`)
