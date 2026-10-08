@@ -1054,7 +1054,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // A manager's index entry gained `revision`, the revision of the room's
-    // entry in the user's catalog, which forgetting the room names. The
+    // entry in the user's catalog, which a request to forget the room names,
+    // so that a choice made since by another client is not overridden. The
     // recorded entry left extra fields open, so a stored request outcome's
     // entry admitted a `revision` of any type; the candidate types it as a
     // string. No recorded outcome holds one.
