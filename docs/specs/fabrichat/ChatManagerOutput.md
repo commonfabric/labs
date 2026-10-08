@@ -137,6 +137,8 @@ These rules hold for every stream:
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
 - A request that is interrupted is resumed by sending the same event again with
   the same `requestId`. It never creates a second room.
+- An admitted request missing a key its stream needs is refused, with a reason
+  that says which, rather than ignored.
 - Every stream changes only this user's own manager, except `openDirect` and
   `createGroup`, which also create a room and grant other people access to it.
 
@@ -197,8 +199,8 @@ Creates a group room. This is an outward act: it grants other people access.
 - **Effect:** always creates a new space, with a new room as its chat, even when
   another group room has the same members. Grants each member access, produces a
   notice for each, and records the entry in `rooms`.
-- **Outcome:** `done` with the entry, or `refused` if `title` is empty or a
-  member is not a principal's DID.
+- **Outcome:** `done` with the entry, or `refused` if `title` is empty,
+  `members` is absent, or a member is not a principal's DID.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string)`
 
@@ -225,10 +227,11 @@ Records a room this user has been admitted to.
   a member. For a direct room, it also records the entry in `direct`, unless
   `direct` already has an entry for `counterpart`, in which case that entry
   stays, as under [crossing creations](#crossing-creations).
-- **Outcome:** `done` with the entry, or `refused` if this user can't read the
-  room, or if the room is direct and its label names no creator, names this
-  user, or names someone other than a `counterpart` sent, or, once there are
-  member sets, the counterpart isn't a member.
+- **Outcome:** `done` with the entry, or `refused` if the request names no
+  room, or this user can't read the room, or if the room is direct and its
+  label names no creator, names this user, or names someone other than a
+  `counterpart` sent, or, once there are member sets, the counterpart isn't a
+  member.
 
 A client also sends `accept` when the user first opens the chat of an existing
 shared space, which is created with its space and not by a manager.
@@ -246,7 +249,8 @@ Removes a room from this user's list.
 - **Effect:** removes the entry from `rooms`. A direct room's entry stays in
   `direct`, so a later `openDirect` with the same person returns the same room.
   The room, and this user's access to it, are untouched.
-- **Outcome:** `done`, with no entry.
+- **Outcome:** `done`, with no entry, or `refused` if the request names no
+  room.
 
 ### `delivered(requestId: string, id: string)`
 
@@ -259,7 +263,7 @@ Reports that a notice in `outgoingNotices` has been delivered.
 
 - **Admitted:** without a reviewed gesture.
 - **Effect:** removes the notice from `outgoingNotices`. It records no outcome
-  in `requests`.
+  in `requests`, except `refused` when the request names no notice.
 
 ## Creating a room: partial states
 

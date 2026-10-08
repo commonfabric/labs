@@ -403,6 +403,27 @@ export default pattern(() => {
           groupRooms.get().length === 1
         ),
       },
+      // A request missing what its stream needs is refused, with why, rather
+      // than dropped: an event's type doesn't refuse it.
+      { action: group.forget, event: { requestId: "f-none" } },
+      { action: group.accept, event: { requestId: "a-none" } },
+      { action: group.delivered, event: { requestId: "n-none" } },
+      {
+        action: group.createGroup,
+        event: { requestId: "g-none", title: "No members" },
+        trustedUi: startGesture,
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(groupRequests, "f-none") === "The request names no room." &&
+          reasonOf(groupRequests, "a-none") === "The request names no room." &&
+          reasonOf(groupRequests, "n-none") ===
+            "The request names no notice." &&
+          reasonOf(groupRequests, "g-none") ===
+            "A group's members must be listed." &&
+          groupRooms.get().length === 1
+        ),
+      },
       // A profile that attests no principal offers no chat address.
       {
         assertion: assert(() =>
