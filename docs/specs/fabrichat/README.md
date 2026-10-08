@@ -333,18 +333,21 @@ from this design, as below.
   times, activity and its numbering, and each session's windows) has a write
   policy listing the handlers that write it (`WritePolicyAnyOf`), so no other
   code can write it, even code a member runs in the room's space.
-- **A start is checked where it creates a room.** `openDirect` and
-  `createGroup` are performed by a handler of their own, `commitStart`, and the
-  record a manager-created room keeps about itself names that handler and
-  `ChatStart` on `ChatStartSurface` as its only writer, so a start that creates
-  a room commits only from that reviewed gesture; without it, its run is
-  refused whole, and records no outcome. A start that creates none,
-  `openDirect` finding a direct room already shared or a start that is
-  refused, commits without one, and grants no one access. The manager's other
-  acts are performed by `commitManager`, with no gesture. A participant's chip
-  in a room sends its click to the viewer's manager's `openDirect` itself,
-  naming the participant's principal as `target.dataset.counterpart`, since a
-  reviewed gesture does not carry across a `send` from another handler.
+- **A start is checked where it creates a room.** `openDirect` and `createGroup`
+  are performed by a handler of their own, `commitStart`, and the record a
+  manager-created room keeps about itself names that handler and `ChatStart` on
+  `ChatStartSurface` as its only writer, so a start that creates a room commits
+  only from that reviewed gesture; without it, its run is refused whole, and
+  records no outcome. A start that creates none, `openDirect` finding a direct
+  room already shared or a start that is refused, commits without one, and
+  grants no one access. The manager's other acts are performed by
+  `commitManager`, with no gesture. A participant's chip in a room sends its
+  click to the viewer's manager's `openDirect` itself, since a reviewed gesture
+  does not carry across a `send` from another handler. It names the participant
+  by their profile, bound as its control's `name`, which crosses into the
+  click's event as the profile's cell; the manager reads the counterpart from
+  the profile's `represents-principal` label, and offers the room through the
+  share inbox the profile points at.
 - **Labels without a gesture.** Messages and reactions are labeled
   `authored-by` under a reviewed gesture, as the design says, and so is
   `about.record`, under the start that created the room. A `recentActivity`
@@ -375,9 +378,11 @@ from this design, as below.
   ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)), but
   the manager lists only the rooms it records itself, not the catalog's, so the
   offered room reaches the recipient's chats only as a notice's room does,
-  through `accept`. And only an `openDirect` that names `profile` offers a room:
-  the rendered start controls name a counterpart by principal, and a group's
-  members are principals. Nothing delivers a notice yet (see [first
+  through `accept`. A room is offered only to someone the request names by
+  profile: an `openDirect` naming `profile`, or a participant's chip, whose
+  click names the participant's profile. The manager's own start controls name a
+  counterpart by principal, and a group's members are principals. Nothing
+  delivers a notice yet (see [first
   contact](FabriChatManager.md#first-contact)), so the manager's rendering shows
   each queued notice with a link to its room, for the room's creator to send on.
   And a room shows a viewer whose manager doesn't list it a control that asks
