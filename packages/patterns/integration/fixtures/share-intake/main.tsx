@@ -315,6 +315,11 @@ export default pattern<MainInput, MainOutput>((
   const chats = FabriChatManagerCore({
     myProfile: Writable.of<StandInProfile>({ name: "Sender" }),
     rooms,
+    // The sender's own catalog, apart from the one the intake registers in.
+    sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
+      entries: {},
+      offers: {},
+    }),
     direct,
     requests,
     outgoingNotices,
