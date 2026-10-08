@@ -136,7 +136,9 @@ provide, the document says so, under the heading "Prerequisites".
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
 - **Container.** A space that shows chats among other things, such as a space
-  whose root is the `loom` pattern (`packages/patterns/loom/`).
+  whose root is the `loom` pattern (`packages/patterns/loom/`). A container
+  may name its own chat, a room in its space, as the `loom` pattern's root
+  does with its `chatRoom` link.
 - **Placement.** One room placed in a container: a `FabriChatPlacement` piece in
   the container's space, holding a link to the room. It has no rendering.
 - **Adapter.** A `FabriChatAdapter` piece that renders one placement for hosts
