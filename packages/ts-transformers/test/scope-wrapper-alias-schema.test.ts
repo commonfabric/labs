@@ -566,6 +566,37 @@ export default pattern(() => {
       );
     });
 
+    it("reads a generic lift's parameter that two wrappers of one scope type as the payload in that scope", async () => {
+      // The intersection keeps neither wrapper's alias, and the brand around
+      // the type parameter is a conditional type the checker defers. The
+      // result is inferred, so it declares no scope.
+      const [input, result] = callSchemas(
+        await transformed(
+          `import { lift, pattern, type PerUser } from "commonfabric";
+const helper = lift(<T extends string>(r: PerUser<T> & PerUser<T>) => r);
+export default pattern<{ r: string }, { out: string }>(({ r }) => ({
+  out: helper(r),
+}));`,
+        ),
+        "lift",
+      );
+
+      expect(input).toEqual({ type: "string", scope: "user" });
+      expect(result).toEqual({ type: "string" });
+    });
+
+    it("refuses a generic lift's parameter that wrappers of two scopes type", async () => {
+      await expect(transformed(
+        `import { lift, pattern, type PerSession, type PerUser } from "commonfabric";
+const helper = lift(<T extends string>(r: PerUser<T> & PerSession<T>) => r);
+export default pattern<{ r: string }, { out: string }>(({ r }) => ({
+  out: helper(r),
+}));`,
+      )).rejects.toThrow(
+        "Nested scope wrappers require a cell boundary between scopes.",
+      );
+    });
+
     for (
       const [use, body] of [
         ["read by a computed", "({ out: computed(() => draft.get()) })"],

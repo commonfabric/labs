@@ -93,6 +93,100 @@ interface SchemaRoot {
         required: ["value"],
       });
     });
+
+    it("returns the payload of a type parameter two scope wrappers brand", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot<T extends string> = PerUser<T> & PerSpace<T>;`,
+        "SchemaRoot",
+      );
+
+      expect(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          declaresNoScope: true,
+        }),
+      ).toEqual({ type: "string" });
+    });
+  });
+
+  describe("scope wrappers around a type parameter, intersected", () => {
+    // While its payload holds a type parameter, a wrapper's brand is a
+    // conditional type the checker defers, and an intersection of wrappers
+    // keeps no wrapper's alias, so the brand names the scope.
+
+    it("emits the payload's schema in the scope of two wrappers of one scope", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `type SchemaRoot<T extends string> = PerUser<T> & PerUser<T>;`,
+        "SchemaRoot",
+      );
+
+      expect(new SchemaGenerator().generateSchema(type, checker, typeNode))
+        .toEqual({ type: "string", scope: "user" });
+    });
+
+    it("emits the scope of a property two wrappers of one scope type", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot<T extends { a: string }> = {
+  value: PerUser<T> & PerUser<T>;
+};`,
+        "SchemaRoot",
+      );
+
+      expect(
+        asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+          .properties?.value,
+      ).toEqual({
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        scope: "user",
+      });
+    });
+
+    it("throws for wrappers of two scopes", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `type SchemaRoot<T extends string> = PerUser<T> & PerSession<T>;`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      )
+        .toThrow(
+          "Nested scope wrappers require a cell boundary between scopes.",
+        );
+    });
+  });
+
+  describe("a scope wrapper around `unknown` read by its type", () => {
+    // The checker drops `unknown` from the wrapper's intersection, leaving
+    // the brand alone, which is the wrapper around `unknown`.
+
+    it("emits `unknown` in the scope for the values of a record", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot = Record<string, PerUser<unknown>>;`,
+        "SchemaRoot",
+      );
+
+      expect(
+        asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+          .additionalProperties,
+      ).toEqual({ type: "unknown", scope: "user" });
+    });
+
+    it("emits `unknown` in the scope for a property an alias of it types", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Anything = PerSession<unknown>;
+interface SchemaRoot {
+  value: Anything;
+}`,
+        "SchemaRoot",
+      );
+
+      expect(
+        asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+          .properties?.value,
+      ).toEqual({ type: "unknown", scope: "session" });
+    });
   });
 
   it("caps a cell that two wrappers of one scope hold with that scope", async () => {

@@ -2,9 +2,11 @@
  * Recognizes the brand a scope wrapper leaves on the type it resolves to.
  * `PerUser<T>` is `T & { readonly [SCOPE_BRAND]?: "user" }` for a `T` that is
  * not `null` or `undefined`, and holds the `null` and `undefined` of a `T`
- * that has them beside it (`Scoped` in `packages/api/index.ts`). So a resolved
- * type carries its scope in that member however the wrapper was reached:
- * written in place, or through any chain of aliases.
+ * that has them beside it (`Scoped` in `packages/api/index.ts`). While `T`
+ * holds a type parameter, the checker defers the brand as the conditional
+ * `ScopeTag<T, "user">`. So a resolved type carries its scope in that member
+ * however the wrapper was reached: written in place, or through any chain of
+ * aliases.
  *
  * The transformer reads a wrapper this way where it holds only a resolved type,
  * and schema generation where no node or alias names the wrapper as a whole,
@@ -46,7 +48,9 @@ export interface ScopeBrand {
    * distributed over, and one for any other payload. Each lists the members
    * the brand is intersected with, which intersect to that alternative, except
    * a `null` or `undefined` alternative, which `Scoped` keeps outside the brand
-   * and which lists itself alone.
+   * and which lists itself alone. A brand with no member beside it, as
+   * `PerUser<unknown>` resolves to, lists `unknown`, the payload the checker
+   * dropped from its intersection.
    */
   readonly payload: readonly (readonly ts.Type[])[];
 }
@@ -66,8 +70,7 @@ export function getScopeBrand(
   checker: ts.TypeChecker,
 ): ScopeBrand | undefined {
   if (!type.isUnion()) {
-    const brand = brandOfWrapperAlias(type, checker) ??
-      brandOfIntersection(type, checker);
+    const brand = brandOfMember(type, checker);
     return brand && { scope: brand.scope, payload: [brand.members] };
   }
   const payload: (readonly ts.Type[])[] = [];
@@ -77,8 +80,7 @@ export function getScopeBrand(
       payload.push([member]);
       continue;
     }
-    const brand = brandOfWrapperAlias(member, checker) ??
-      brandOfIntersection(member, checker);
+    const brand = brandOfMember(member, checker);
     if (!brand || (scope !== undefined && brand.scope !== scope)) {
       return undefined;
     }
@@ -134,7 +136,8 @@ export function hasNestedScopeBrands(
 
 /**
  * Whether `member`, a member of an intersection, is a scope wrapper's brand
- * `{ readonly [SCOPE_BRAND]?: S }`, which holds no part of the value.
+ * `{ readonly [SCOPE_BRAND]?: S }`, or the `ScopeTag<T, S>` the checker defers
+ * it as, which holds no part of the value.
  */
 export function isScopeBrandMember(
   member: ts.Type,
@@ -145,6 +148,23 @@ export function isScopeBrandMember(
 
 /** The flags of a member `Scoped` keeps outside the brand. */
 const NULLISH = ts.TypeFlags.Null | ts.TypeFlags.Undefined;
+
+/**
+ * Helper for `getScopeBrand()`, which returns the scope and payload of
+ * `type`, a type that is not a union, where it is a scope wrapper: named by
+ * the wrapper's alias, an intersection holding the brand, or the brand alone,
+ * which is the wrapper around `unknown`.
+ */
+function brandOfMember(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): { scope: SchemaScope; members: readonly ts.Type[] } | undefined {
+  const brand = brandOfWrapperAlias(type, checker) ??
+    brandOfIntersection(type, checker);
+  if (brand) return brand;
+  const scope = scopeOfBrandMember(type, checker);
+  return scope && { scope, members: [checker.getUnknownType()] };
+}
 
 /**
  * Helper for `getScopeBrand()`, which returns the scope an intersection's
@@ -174,9 +194,7 @@ function brandOfIntersection(
 /**
  * Helper for `getScopeBrand()`, which returns the scope and payload of `type`
  * where its alias is one of `commonfabric`'s scope wrappers, `PerUser<A>` or
- * `Scoped<A, "user">`, or `undefined` for any other type. While `A` holds a
- * type parameter the brand member is deferred, so the alias is all that names
- * the wrapper.
+ * `Scoped<A, "user">`, or `undefined` for any other type.
  */
 function brandOfWrapperAlias(
   type: ts.Type,
@@ -189,31 +207,52 @@ function brandOfWrapperAlias(
   if (wrapperScope !== undefined) {
     return { scope: wrapperScope, members: [payload] };
   }
-  const literal = scope && checker.getNonNullableType(scope);
-  return alias.getName() === "Scoped" && literal?.isStringLiteral() &&
-      Object.hasOwn(SCOPE_WRAPPER_FOR_SCOPE, literal.value)
-    ? { scope: literal.value as SchemaScope, members: [payload] }
+  const literalScope = scope && scopeOfLiteral(scope, checker);
+  return alias.getName() === "Scoped" && literalScope
+    ? { scope: literalScope, members: [payload] }
     : undefined;
 }
 
 /**
- * The scope that `member` declares when it is the brand member
- * `{ readonly [SCOPE_BRAND]?: S }`, and `undefined` for any other type.
+ * The scope that `member` declares when it is the brand member: the object
+ * `{ readonly [SCOPE_BRAND]?: S }`, or, while the payload `T` holds a type
+ * parameter, the conditional `ScopeTag<T, S>` the checker defers, which has no
+ * members to read and is named by its alias alone. `undefined` for any other
+ * type.
  */
 function scopeOfBrandMember(
   member: ts.Type,
   checker: ts.TypeChecker,
 ): SchemaScope | undefined {
+  if ((member.flags & ts.TypeFlags.Conditional) !== 0) {
+    const alias = member.aliasSymbol;
+    const scope = member.aliasTypeArguments?.[1];
+    return alias?.getName() === "ScopeTag" && scope &&
+        isCommonFabricSymbol(alias)
+      ? scopeOfLiteral(scope, checker)
+      : undefined;
+  }
   if ((member.flags & ts.TypeFlags.Object) === 0) return undefined;
   const properties = checker.getPropertiesOfType(member);
   if (properties.length !== 1) return undefined;
   const brand = properties[0]!;
   if (!isScopeBrandProperty(brand, checker)) return undefined;
-  const brandType = checker.getNonNullableType(checker.getTypeOfSymbol(brand));
-  if (!brandType.isStringLiteral()) return undefined;
-  const scope = brandType.value;
-  return Object.hasOwn(SCOPE_WRAPPER_FOR_SCOPE, scope)
-    ? scope as SchemaScope
+  return scopeOfLiteral(checker.getTypeOfSymbol(brand), checker);
+}
+
+/**
+ * The scope `type`, the scope argument of `Scoped` or of the brand, names: a
+ * string literal naming a scope, beside the `undefined` an optional brand
+ * property adds. `undefined` for any other type.
+ */
+function scopeOfLiteral(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): SchemaScope | undefined {
+  const literal = checker.getNonNullableType(type);
+  return literal.isStringLiteral() &&
+      Object.hasOwn(SCOPE_WRAPPER_FOR_SCOPE, literal.value)
+    ? literal.value as SchemaScope
     : undefined;
 }
 

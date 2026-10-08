@@ -207,5 +207,35 @@ describe("runner", () => {
 
       expect(storedAt(result.key("a"))).toEqual({ scope: "space", value: 42 });
     });
+
+    it("stores at the user scope the result of a compiled generic lift whose parameter two wrappers of one scope type", async () => {
+      // The parameter's schema is its payload's in the user scope; the
+      // compiled lift reads the input through it.
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            "import { lift, pattern, type PerUser } from 'commonfabric';",
+            "const helper = lift(",
+            "  <T extends string>(r: PerUser<T> & PerUser<T>) => r,",
+            ");",
+            "export default pattern<{ r: string }, { out: string }>(",
+            "  ({ r }) => ({ out: helper(r) }),",
+            ");",
+          ].join("\n"),
+        }],
+      }, { space });
+      const result = await run(
+        compiled,
+        { r: scopedCell("generic input", "hello", "user") },
+        "generic lift",
+      );
+
+      expect(storedAt(result.key("out"))).toEqual({
+        scope: "user",
+        value: "hello",
+      });
+    });
   });
 });

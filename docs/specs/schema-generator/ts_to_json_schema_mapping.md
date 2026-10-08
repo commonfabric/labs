@@ -972,7 +972,14 @@ no alias, as assignment narrows `PerUser<boolean> | null` to the brand over
 `PerUser<A> | null`. A member of such a union that a scope wrapper's alias names
 is read by that alias, its scope from the wrapper's name and its payload as the
 argument written for it, so a generic `PerUser<T> | null`, whose brand is a
-deferred type, is read as `PerUser<T | null>` is. The payload of a wrapper
+deferred type, is read as `PerUser<T | null>` is. That deferred brand is the
+conditional `ScopeTag<T, S>`, named by its alias, so a generic wrapper no
+alias names, as the intersection `PerUser<T> & PerUser<T>`, is read by it:
+`<T extends string>` → `{ type: "string", scope: "user" }`. The brand with
+nothing beside it, as `PerUser<unknown>` resolves to once the checker drops
+`unknown` from its intersection, is the wrapper around `unknown`:
+`{ type: "unknown", scope: "user" }`, as a node naming the wrapper reads it.
+The payload of a wrapper
 read by its brand is its branded members with the brand taken off, each
 alternative a member intersected with the brand read as that member
 (`scopePayloadType`, `GenerationContext.scopeBrandRead`). A payload the
