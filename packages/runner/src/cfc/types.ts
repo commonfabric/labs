@@ -6,6 +6,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import type { Metadata } from "../storage/interface.ts";
+import type { ConsumedLocation } from "./access-integrity.ts";
 import type { CfcConfClause } from "./clause.ts";
 import type {
   CfcLabelView,
@@ -853,6 +854,14 @@ export type CfcExternalContentObservation = {
   readonly source: CfcAddress;
   readonly flow: IFCLabel;
   readonly consumed: IFCLabel;
+
+  /**
+   * The labeled locations the content's reads consumed, as the release
+   * gates' per-access join reads them (`access-integrity.ts`). Absent, the
+   * content is one location vouched for by its flow join's integrity.
+   */
+  readonly locations?: readonly ConsumedLocation[];
+
   readonly labeledSpaces: readonly MemorySpace[];
   readonly sources: readonly {
     readonly atom: CfcConfClause;

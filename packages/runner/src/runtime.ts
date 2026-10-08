@@ -3929,6 +3929,7 @@ export class Runtime {
           confidentiality: [...consumed.confidentiality],
           integrity: [...consumed.integrity],
         },
+        locations: consumed.locations(),
         labeledSpaces: [...(flow.labeledSpaces ?? [])],
         sources: consumed.sources.map((entry) => ({
           atom: entry.atom,

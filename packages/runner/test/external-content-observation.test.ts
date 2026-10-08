@@ -63,6 +63,7 @@ const withRuntime = async (
   options: {
     cfcWriteFloor?: "off" | "observe" | "enforce";
     cfcEnforcementMode?: "disabled" | "enforce-explicit";
+    cfcReleaseGateIntegrity?: "off" | "observe" | "enforce";
   } = {},
 ): Promise<void> => {
   const storageManager = StorageManager.emulate({ as: signer });
@@ -72,6 +73,7 @@ const withRuntime = async (
     cfcEnforcementMode: options.cfcEnforcementMode ?? "enforce-explicit",
     cfcFlowLabels: "persist",
     cfcWriteFloor: options.cfcWriteFloor,
+    cfcReleaseGateIntegrity: options.cfcReleaseGateIntegrity,
     cfcSinkMaxConfidentiality: { fetchJson: [] },
   });
   try {
@@ -712,7 +714,7 @@ describe("external content observation", () => {
       runtime.prepareTxForCommit(targetTx);
       expect(targetTx.getCfcState().prepare.status).toBe("prepared");
       expect((await targetTx.commit().settled).error).toBeUndefined();
-    }, { cfcWriteFloor: "off" });
+    }, { cfcWriteFloor: "off", cfcReleaseGateIntegrity: "enforce" });
   });
 
   it("meets hereditary integrity with an observed empty-integrity row", async () => {

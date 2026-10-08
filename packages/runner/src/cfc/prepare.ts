@@ -215,6 +215,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
+  type CfcExternalContentObservation,
   type CfcLabelView,
   type CfcMetadata,
   type IFCLabel,
@@ -862,6 +863,17 @@ type ResolvedLocation = {
  * speak for its siblings. `only` selects the locations whose label carries
  * confidentiality, or every location whose label carries anything.
  *
+ * A location's integrity never comes from the runtime's concrete existence
+ * stamps. An existence stamp is minted once, when its path is first stamped,
+ * and carried through every later overwrite; left in, it would shadow the
+ * value stamp of whatever later wrote over its path whole. `templates` says
+ * what a runtime-minted `*` template's integrity is: `"witness"` takes none
+ * from it, as an input witness must, since a template labels membership and
+ * slots rather than a written value; `"evidence"` keeps it, as a release
+ * gate does for the clause the template itself carries, which
+ * `carriedStampLabel` keeps honest by withdrawing the template's
+ * `TransformedBy` once another writer writes in its container.
+ *
  * `entries` are the ones the observation consumed. They decide a location's
  * label, as they decide the confidentiality the observation contributes to
  * the join. `evidence`, when given, is what a location's integrity is
@@ -879,6 +891,7 @@ function* resolvedLocations(
   path: readonly string[],
   nonRecursive: boolean | undefined,
   only: "confidential" | "labeled",
+  templates: "witness" | "evidence",
   evidence?: readonly LabelMapEntry[],
 ): Generator<ResolvedLocation> {
   const locations = new Map<string, readonly string[]>([
@@ -912,7 +925,8 @@ function* resolvedLocations(
     if (
       held === undefined &&
       evidenceAt.every((entry) =>
-        isWitnessEvidence(entry) && !isRuntimeMintedTemplate(entry)
+        isWitnessEvidence(entry) &&
+        (templates === "evidence" || !isRuntimeMintedTemplate(entry))
       )
     ) {
       yield {
@@ -923,9 +937,9 @@ function* resolvedLocations(
       };
       continue;
     }
-    const witnessed = evidenceAt.filter(isWitnessEvidence).map(
-      asWitnessEvidence,
-    );
+    const witnessed = templates === "evidence"
+      ? evidenceAt.filter(isWitnessEvidence)
+      : evidenceAt.filter(isWitnessEvidence).map(asWitnessEvidence);
     yield {
       path: location,
       label,
@@ -961,6 +975,7 @@ const observationInputWitnesses = (
       path,
       nonRecursive,
       "confidential",
+      "witness",
       evidence,
     )
   ) {
@@ -989,7 +1004,7 @@ const consumedLocations = (
   nonRecursive: boolean | undefined,
 ): ConsumedLocation[] =>
   Array.from(
-    resolvedLocations(entries, path, nonRecursive, "labeled"),
+    resolvedLocations(entries, path, nonRecursive, "labeled", "evidence"),
     ({ path: location, label, evidence, integrity }) => {
       const suppliers = (integrity?.length ?? 0) === 0
         ? []
@@ -1012,6 +1027,25 @@ const consumedLocations = (
       };
     },
   );
+
+/**
+ * The locations an external content observation consumed, as the per-access
+ * join reads them: those its reads recorded, or, where it recorded none, one
+ * location vouched for by its flow join's integrity, a meet over what the
+ * content consumed that names a stamp no other location shares. `index`
+ * tells the observation from the transaction's others.
+ */
+const externalContentLocations = (
+  observation: CfcExternalContentObservation,
+  index: number,
+): readonly ConsumedLocation[] =>
+  observation.locations ?? [{
+    confidentiality: observation.consumed.confidentiality ?? [],
+    integrity: (observation.flow.integrity ?? []).map((atom) => ({
+      atom,
+      stamps: [stringTupleKey(["external-content", String(index)])],
+    })),
+  }];
 
 /**
  * The labeled locations a whole read of the value `view` labels consumes, as
@@ -6989,16 +7023,7 @@ const verifyInputRequirements = (
         meta: {},
         journalIndex: -Infinity,
         label: gateLabel,
-        // The content is one location to the per-access join. Its flow
-        // join's integrity is a meet over what the content consumed, so it
-        // overstates no input, and no other location names its stamp.
-        locations: () => [{
-          confidentiality: observation.flow.confidentiality ?? [],
-          integrity: (observation.flow.integrity ?? []).map((atom) => ({
-            atom,
-            stamps: [stringTupleKey(["external-content", String(index)])],
-          })),
-        }],
+        locations: () => externalContentLocations(observation, index),
       });
     }
     return gatedReads;
@@ -7300,6 +7325,7 @@ const verifyInputRequirements = (
               [],
               (rewritten) =>
                 atomsOutsideCeiling(rewritten, maxConfidentiality).length === 0,
+              "consuming",
               target.space,
             );
           }
@@ -9990,15 +10016,9 @@ const collectConsumedLabelImpl = (
       tx.getCfcState().externalContentObservations ?? []
     ).entries()
   ) {
-    // The content is one location to the per-access join, vouched for by its
-    // flow join's integrity, a meet over what the content consumed.
-    otherLocations.push({
-      confidentiality: observation.consumed.confidentiality ?? [],
-      integrity: (observation.flow.integrity ?? []).map((atom) => ({
-        atom,
-        stamps: [stringTupleKey(["external-content", String(index)])],
-      })),
-    });
+    for (const location of externalContentLocations(observation, index)) {
+      otherLocations.push(location);
+    }
     for (const atom of observation.consumed.confidentiality ?? []) {
       atoms.push(atom);
     }
@@ -10198,8 +10218,11 @@ const evaluateGatedConfidentiality = (
  * the pooled integrity admits and the per-access join would refuse
  * (`access-integrity.ts`). `site` names the release, `pooled` is the
  * integrity it was admitted on, `locations` returns what the access
- * consumed, and `fits` decides a rewritten label against the site's ceiling. Evaluates
- * as an observing site, so it spends no grant.
+ * consumed, and `fits` decides a rewritten label against the site's ceiling.
+ * It evaluates in the grant context `consumption` names, the one the decision
+ * was made in: under it a single-use grant the decision resolved resolves
+ * again, and stages no second receipt, since a transaction claims a grant
+ * once however often it resolves it.
  *
  * The diagnostic also says whether each confidential location, evaluated on
  * its own integrity, would be admitted: a release that holds that way rests
@@ -10215,6 +10238,7 @@ const noteReleaseGateDivergence = (
   locations: () => readonly ConsumedLocation[],
   boundary: readonly CfcAtom[],
   fits: (rewritten: readonly CfcConfClause[]) => boolean,
+  consumption: CfcGrantConsumptionContext,
   destinationSpace?:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
@@ -10236,7 +10260,7 @@ const noteReleaseGateDivergence = (
       clauses,
       integrity,
       boundary,
-      "observing",
+      consumption,
       destinationSpace,
     );
     return !outcome.exhausted && fits(outcome.confidentiality);
@@ -10379,6 +10403,7 @@ const verifySinkRequestCeilings = (
             consumed.locations,
             boundary,
             (rewritten) => atomsOutsideCeiling(rewritten, ceiling).length === 0,
+            "consuming",
             destinationSpace,
           );
         }

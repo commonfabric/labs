@@ -97,6 +97,9 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
       // The counts documents stand in for a lift's result document, which
       // takes the join its lift wrote without declaring a ceiling for it.
       cfcEnforcementMode: "enforce-explicit",
+      // The rule must release what its function wrote through the join of
+      // the integrity at every location a publish reads, not through a pool.
+      cfcReleaseGateIntegrity: "enforce",
     });
     runtime.registerCfcPolicyManifests(space, [artifact]);
     const seed = runtime.edit();

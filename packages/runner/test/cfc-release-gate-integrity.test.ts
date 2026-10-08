@@ -117,6 +117,11 @@ const TALLIED_STORE_SCHEMA = {
   required: ["out"],
 } as const satisfies JSONSchema;
 
+const LIST_SCHEMA = {
+  type: "array",
+  items: { type: "string" },
+} as const satisfies JSONSchema;
+
 const SINK = "fetchJson";
 
 const withRuntime = async (
@@ -299,6 +304,66 @@ const seedSharedRoom = async (runtime: Runtime): Promise<void> => {
   );
 };
 
+/** Appends what `compute` makes of `inputs` to the list `output`, under `identity`. */
+const pushAs = async (
+  runtime: Runtime,
+  identity: ImplementationIdentity,
+  inputs: readonly string[],
+  output: string,
+  compute: (values: unknown[]) => string,
+): Promise<void> => {
+  const tx = runtime.edit();
+  setCfcImplementationIdentity(tx, identity);
+  const values = inputs.map((cause) =>
+    runtime.getCell(space, cause, undefined, tx).getRaw()
+  );
+  runtime.getCell<string[]>(space, output, LIST_SCHEMA, tx).push(
+    compute(values),
+  );
+  tx.prepareCfc();
+  expect((await tx.commit().settled).error).toBeUndefined();
+};
+
+/**
+ * The room's list as the attack leaves it: the tally appends its endorsed
+ * count, and other code appends Alice's note after it.
+ */
+const seedSharedList = async (runtime: Runtime): Promise<void> => {
+  await seedSecret(runtime, "alice-note", "alice-secret");
+  await seedSecret(runtime, "bob-note", "bob-secret");
+  await transform(
+    runtime,
+    COMMIT,
+    ["alice-note", "bob-note"],
+    "committed",
+    () => ({ votes: ["approve", "reject"] }),
+  );
+  await seedPublic(runtime, "list", []);
+  await pushAs(runtime, TALLY, ["committed"], "list", tally);
+  await pushAs(
+    runtime,
+    ATTACKER,
+    ["alice-note"],
+    "list",
+    ([alice]) => (alice as { note: string }).note,
+  );
+};
+
+/** A list the tally alone appended its count to. */
+const seedTalliedList = async (runtime: Runtime): Promise<void> => {
+  await seedSecret(runtime, "alice-note", "alice-secret");
+  await seedSecret(runtime, "bob-note", "bob-secret");
+  await transform(
+    runtime,
+    COMMIT,
+    ["alice-note", "bob-note"],
+    "committed",
+    () => ({ votes: ["approve", "reject"] }),
+  );
+  await seedPublic(runtime, "list", []);
+  await pushAs(runtime, TALLY, ["committed"], "list", tally);
+};
+
 /** The tally's count on its own, in a document of its own. */
 const seedBallot = async (runtime: Runtime): Promise<void> => {
   await seedSecret(runtime, "alice-note", "alice-secret");
@@ -420,6 +485,15 @@ describe("release-gate integrity", () => {
         });
       });
 
+      it("releases a secret appended after an endorsed output, read whole", async () => {
+        await withRuntime("off", async (runtime) => {
+          await seedSharedList(runtime);
+          const result = publish(runtime, "list");
+          expect(result.reasons).toEqual([]);
+          expect(result.published).toBe('["1","alice-secret"]');
+        });
+      });
+
       it("passes a floor on the tally for a secret written beside its output, read whole", async () => {
         await withRuntime("off", async (runtime) => {
           await seedSharedRoom(runtime);
@@ -536,6 +610,19 @@ describe("release-gate integrity", () => {
       });
     });
 
+    it("records that a list only the tally appended to would be refused, and admitted per location", async () => {
+      await withRuntime("observe", async (runtime) => {
+        await seedTalliedList(runtime);
+        const result = publish(runtime, "list");
+        expect(result.reasons).toEqual([]);
+        expect(divergences(result)).toEqual([
+          "release-gate-integrity(observe): the per-access join would " +
+          "refuse maxConfidentiality at /out reading " +
+          `${result.readId} /; evaluated per location, it would admit it`,
+        ]);
+      });
+    });
+
     it("records nothing for the endorsed output read on its own", async () => {
       await withRuntime("observe", async (runtime) => {
         await seedSharedRoom(runtime);
@@ -566,6 +653,25 @@ describe("release-gate integrity", () => {
         await withRuntime("enforce", async (runtime) => {
           await seedSharedRoom(runtime);
           expect(publish(runtime, "shared", ["a"]).reasons).toEqual([]);
+        });
+      });
+
+      it("refuses a secret appended after an endorsed output, read whole", async () => {
+        await withRuntime("enforce", async (runtime) => {
+          await seedSharedList(runtime);
+          expect(refusedByCeiling(publish(runtime, "list"))).toBe(true);
+        });
+      });
+
+      it("refuses a list only the tally appended to, read whole", async () => {
+        // An honest release the join refuses: the append stamps the element
+        // and the list's length apart, so no one stamp supplies the tally's
+        // `TransformedBy` at both, and the join drops it. Each location
+        // evaluated on its own would be admitted.
+
+        await withRuntime("enforce", async (runtime) => {
+          await seedTalliedList(runtime);
+          expect(refusedByCeiling(publish(runtime, "list"))).toBe(true);
         });
       });
 
