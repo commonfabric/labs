@@ -15,6 +15,7 @@ import {
 import {
   buildCfcPolicyArtifactManifest,
   createRenderConfidentialityResolver,
+  type ListMembershipProvider,
   PROMPT_CAVEAT_FAMILY_KINDS,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -3918,6 +3919,120 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
               .includes("Team note"),
             false,
           );
+          assertEquals(
+            collector.getOpsOfType("create-text").map((op) => op.text)
+              .includes("Content hidden by policy"),
+            true,
+          );
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "re-renders a Members cell when its list adds and removes the viewer",
+      async () => {
+        // Spec §4.9.5: a cell labeled `Members(list, …)` subscribes to the
+        // list, so a member added after the mount sees the value without a
+        // new value on the cell, and one removed loses it.
+        const list = {
+          space: signer.did(),
+          id: "of:cfc-list-reactive",
+          path: ["liveList"],
+        };
+        const seedTx = runtime.edit();
+        const sharedCell = runtime.getCell<string>(
+          signer.did(),
+          "cfc-list-reactive-note",
+          undefined,
+          seedTx,
+        );
+        const sharedLink = sharedCell.getAsNormalizedFullLink();
+        writeSeedEnvelopeDoc(seedTx, signer.did());
+        seedStoredEnvelope(seedTx, {
+          space: signer.did(),
+          id: sharedLink.id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: "Shared fix",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: {
+                  confidentiality: [cfcAtom.members(list, "did:key:home")],
+                },
+              }],
+            },
+          },
+        });
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
+        const shared = runtime.getCell<string>(
+          signer.did(),
+          "cfc-list-reactive-note",
+        );
+
+        let listed = false;
+        const listeners: Array<() => void> = [];
+        const provider: ListMembershipProvider = {
+          listed: () => listed,
+          subscribe: (_list, onChange) => {
+            listeners.push(onChange);
+            return () => {
+              const index = listeners.indexOf(onChange);
+              if (index >= 0) listeners.splice(index, 1);
+            };
+          },
+        };
+        const fireList = () => {
+          for (const listener of [...listeners]) listener();
+        };
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          renderConfidentialityCeiling: {
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+            ],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            listMembershipProvider: provider,
+          }),
+          listMembershipProvider: provider,
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [shared as never],
+        });
+        const rendered = () =>
+          collector.getOpsOfType("create-text").map((op) => op.text)
+            .includes("Shared fix");
+        try {
+          await t.settle();
+          assertEquals(rendered(), false);
+          assertEquals(listeners.length, 1);
+
+          listed = true;
+          collector.clear();
+          fireList();
+          await t.settle();
+          assertEquals(rendered(), true);
+
+          listed = false;
+          collector.clear();
+          fireList();
+          await t.settle();
+          assertEquals(rendered(), false);
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Content hidden by policy"),

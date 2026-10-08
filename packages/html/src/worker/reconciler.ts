@@ -424,6 +424,7 @@ export class WorkerReconciler {
     this.#fitSources = {
       resolveConfidentiality: options.resolveRenderConfidentiality,
       membership: options.membershipProvider,
+      listMembership: options.listMembershipProvider,
       modulePolicies: options.modulePolicySource,
     };
     this.#spaceAccess = options.spaceAccess;
