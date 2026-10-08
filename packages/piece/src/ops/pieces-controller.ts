@@ -39,6 +39,7 @@ import {
   getPatternSource,
   getPieceSourceSnapshot,
   idStringForEntityAddress,
+  IN_SPACE_ROOT_CAUSE,
   isCell,
   isLink,
   isStoredArgumentSchemaRefusal,
@@ -587,10 +588,10 @@ export class PiecesController<T = unknown> {
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
       // root HERE. Opening it already reconciled it against its origin, so a
       // start that still failed is not out of date; the one remaining rescue
-      // is for a root that records no origin at all and whose stored pattern
-      // this runtime cannot load. Roll that one forward to the space's
-      // official system root and retry the start ONCE. Every other failure
-      // rethrows untouched.
+      // is for a root that records no origin at all, that no `inSpace()` call
+      // placed, and whose stored pattern this runtime cannot load. Roll that
+      // one forward to the space's official system root and retry the start
+      // ONCE. Every other failure rethrows untouched.
       if (!start) throw error;
       let healed: Cell<NameSchema>;
       try {
@@ -646,7 +647,8 @@ export class PiecesController<T = unknown> {
    * runnable pattern, and rolling it forward changes no source. A root
    * following anything else has an owner's choice behind it, and replacing its
    * source with the system default would discard that choice rather than
-   * repair anything.
+   * repair anything. So does a root an `inSpace()` call placed
+   * ({@link #isInSpaceRoot}), origin or none.
    *
    * A by-identity load probe is the evidence this rests on, and with CFC
    * enforcement disabled that probe reports every artifact outside the
@@ -654,9 +656,25 @@ export class PiecesController<T = unknown> {
    */
   #rootNeedsRollForward(root: Cell<NameSchema>): boolean {
     if (this.runtime.cfcEnforcementMode === "disabled") return false;
+    if (this.#isInSpaceRoot(root)) return false;
     const origin = getPatternSource(root);
     return origin === undefined ||
       origin === deriveSystemPatternSource(this.#space, this.runtime);
+  }
+
+  /**
+   * Whether `root` is at the address the space's genesis commit reserves for
+   * the root an `inSpace(..., { root: true })` call places. Such a root was
+   * placed by its creator's pattern, so the space's system root is no
+   * replacement for it. It reads the address, not the space's genesis
+   * reservation, which no client can read: a writer who places a root at that
+   * address in a space that reserved none makes it fail closed, as a root
+   * following any other origin already does.
+   */
+  #isInSpaceRoot(root: Cell<NameSchema>): boolean {
+    return root.equalLinks(
+      this.runtime.getCell(this.#space, IN_SPACE_ROOT_CAUSE),
+    );
   }
 
   /** The root's `pieceRegistry` export, addressed but not yet synced. */
@@ -2533,6 +2551,8 @@ export class PiecesController<T = unknown> {
         // for its kind. One that follows an origin keeps what its owner chose:
         // opening it already tried that origin, and replacing its source with
         // the system default would discard the choice rather than repair it.
+        // One an `inSpace()` call placed keeps its creator's pattern the same
+        // way, and fails closed.
         if (!this.#rootNeedsRollForward(rootToStart)) throw startError;
         return new PieceController<NameSchema>(
           this,
@@ -2613,6 +2633,20 @@ export class PiecesController<T = unknown> {
             () => [
               "startEnsuredDefaultPattern: setup repair failed for an " +
               "unrelated reason; surfacing the original start error",
+              `${ref.identity}#${ref.symbol}`,
+              repairError,
+            ],
+          );
+          throw startError;
+        }
+        if (this.#isInSpaceRoot(rootToStart)) {
+          // The system root is no replacement for a root an `inSpace()` call
+          // placed, so this one fails closed like any other refused repair.
+          pieceUpdateLogger.warn(
+            "cold-start-setup-repair-in-space-root",
+            () => [
+              "startEnsuredDefaultPattern: setup repair rejected for a root " +
+              "an `inSpace()` call placed; surfacing the original start error",
               `${ref.identity}#${ref.symbol}`,
               repairError,
             ],
