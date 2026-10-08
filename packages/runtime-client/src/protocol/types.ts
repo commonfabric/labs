@@ -1411,7 +1411,8 @@ export type CustodySealPreview = {
 
   /**
    * The people the value was drawn from data shared with, such as a
-   * conversation: one sorted group per clause naming them beside the actor.
+   * conversation: one sorted group per distinct set of people a clause names
+   * beside the actor.
    */
   heldWith: DID[][];
 

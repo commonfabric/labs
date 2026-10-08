@@ -209,8 +209,8 @@ export interface PreparedCustodySeal {
 
   /**
    * The people the value was drawn from data shared with, such as a
-   * conversation: one sorted group per clause of its label that names them
-   * beside the actor, the groups sorted. Empty when no clause names anyone
+   * conversation: one sorted group per distinct set of people a clause of
+   * its label names beside the actor, the groups sorted. Empty when no clause names anyone
    * else. The receipt records them; the box entry does not.
    */
   readonly heldWith: readonly (readonly DID[])[];
@@ -437,8 +437,8 @@ interface ActorLabel {
   /** The actor's own `Context` and `Resource` sources the value draws on. */
   readonly sources: CfcAtom[];
   /**
-   * The other people each clause shared with them names, one sorted group
-   * per clause.
+   * The other people the shared clauses name: one sorted group per distinct
+   * set of people.
    */
   readonly heldWith: DID[][];
 }

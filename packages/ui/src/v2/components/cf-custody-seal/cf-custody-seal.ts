@@ -382,7 +382,9 @@ export class CFCustodySeal extends BaseElement {
     const summary = preview ? summarizeCustodyTerms(preview.terms) : undefined;
     const heldWith = preview?.heldWith ?? [];
     const readsRoom = (person: string) =>
-      (preview?.readers ?? []).some((reader) => reader.principal === person);
+      (preview?.readers ?? []).some((reader) =>
+        reader.principal === person || reader.principal === "*"
+      );
     // The bound on what an answer reveals is shown only when the worker found
     // the room's release witnessed. A preview that does not say so, including
     // one from a worker that predates the field, gets the warning instead.

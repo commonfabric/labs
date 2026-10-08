@@ -278,6 +278,23 @@ describe("CFCustodySeal workflow", () => {
         .toEqual(["you", "you", "reads the room"]);
     }
     {
+      // A room anyone can read is read by every person named.
+      using state = setup({
+        prepare: () =>
+          Promise.resolve({
+            ...preview,
+            readers: [
+              ...preview.readers,
+              { principal: "*", role: "reader" as const },
+            ],
+            heldWith: [["did:key:outsider"]],
+          }),
+      });
+      await state.element.accessForTestingOnly.prepare();
+      expect(interpolatedInto(state.element, '<span class="annotation"'))
+        .toContain("reads the room");
+    }
+    {
       using state = setup();
       await state.element.accessForTestingOnly.prepare();
       expect(renderedText(state.element)).not.toContain(

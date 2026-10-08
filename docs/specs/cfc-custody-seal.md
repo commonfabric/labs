@@ -90,8 +90,9 @@ if any holds something else, so the value checked is the value committed.
     actor as well.
 
   The preview names the people a value was drawn from data shared with
-  (`heldWith`): one sorted group per shared clause, so two conversations stay
-  two groups. The dialog lists them; the actor-private receipt records them;
+  (`heldWith`): one sorted group per distinct set of people a shared clause
+  names, so conversations with different people stay apart. Two conversations
+  with the same people carry identical clauses, which a label holds once. The dialog lists them; the actor-private receipt records them;
   the box entry does not.
 
   When an owner-shaped alternative names another DID, the refusal names both
