@@ -357,9 +357,11 @@ from this design, as below.
 - **Notices and offers.** A manager's notice id is `[recipient, requestId]` as
   JSON, and an offer's `id` is the `requestId` alone. An offer reaches the
   recipient's inbox, but their host's share intake admits a `fabrichat-room`
-  offer only when the room is its space's root
-  ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
-  which a manager's room isn't yet, so each offer stays in the inbox, refused.
+  offer only when the room's space declares that kind, and the room is the
+  space's root
+  ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)).
+  A manager's room space declares no kind yet, so each offer is refused as
+  `space-kind-undeclared`, which is final, and stays in the inbox.
   And only an `openDirect` that names `profile` offers a room: the rendered
   start controls name a counterpart by principal, and a group's members are
   principals. Nothing delivers a notice yet (see
