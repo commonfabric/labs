@@ -171,6 +171,7 @@ describe("commit-rates", () => {
           expect(tracker.report()).toEqual({
             storm,
             activeSpaces: 0,
+            storms: 0,
             spaces: [],
           });
         });
@@ -223,8 +224,25 @@ describe("commit-rates", () => {
           expect(tracker.report()).toEqual({
             storm,
             activeSpaces: 0,
+            storms: 0,
             spaces: [],
           });
+        });
+
+        it("drops a writer that went quiet while another kept its space active", () => {
+          const time = clock();
+          const tracker = new CommitRateTracker({ now: time.now, storm });
+          commit(tracker, { session: "session:a" });
+          commit(tracker, { session: "session:b" });
+          time.advance(599_000);
+          commit(tracker, { session: "session:b" });
+          time.advance(1_000);
+          const rates = spaceOf(tracker.report(), space);
+          expect(rates.activeWriters).toBe(1);
+          expect(rates.writers.map((writer) => writer.session)).toEqual([
+            "session:b",
+          ]);
+          expect(rates.tenMinutes).toEqual(counts(1, 0, 1));
         });
 
         it("counts a commit recorded after the clock stepped backwards", () => {
@@ -319,6 +337,27 @@ describe("commit-rates", () => {
             .toEqual(["session:b", "session:c"]);
         });
 
+        it("keeps the writer that committed last among writers active in one second", () => {
+          const time = clock();
+          const tracker = new CommitRateTracker({
+            now: time.now,
+            storm,
+            maxWritersPerSpace: 2,
+          });
+          commit(tracker, { session: "session:hot" });
+          time.advance(100);
+          commit(tracker, { session: "session:cold" });
+          time.advance(100);
+          for (let i = 0; i < 100; i++) {
+            commit(tracker, { session: "session:hot" });
+          }
+          time.advance(100);
+          commit(tracker, { session: "session:new" });
+          const rates = spaceOf(tracker.report(), space);
+          expect(rates.writers.map((writer) => writer.session).sort())
+            .toEqual(["session:hot", "session:new"]);
+        });
+
         it("evicts the space that committed least recently once the tracker holds the cap", () => {
           const time = clock();
           const tracker = new CommitRateTracker({
@@ -333,6 +372,62 @@ describe("commit-rates", () => {
           commit(tracker, { space: "did:c" });
           expect(tracker.report().spaces.map((entry) => entry.space).sort())
             .toEqual(["did:b", "did:c"]);
+        });
+
+        it("ends a run that a dip between commits broke, whether or not a report observed the dip", () => {
+          // Three commits start the run; two more at thirty seconds keep
+          // the minute at five; at sixty the first three expire and the
+          // minute dips to two; three at sixty-one restore it, then one a
+          // second holds it. The run restarted at sixty-one, so the storm
+          // matures at seventy-one and not before, with or without a report
+          // reading the tracker during the dip.
+          const outcomes = (reportDuringDip: boolean) => {
+            const time = clock();
+            const tracker = new CommitRateTracker({ now: time.now, storm });
+            for (let i = 0; i < 3; i++) commit(tracker);
+            time.advance(30_000);
+            commit(tracker);
+            commit(tracker);
+            time.advance(30_000);
+            if (reportDuringDip) {
+              expect(spaceOf(tracker.report(), space).minute).toEqual(
+                counts(2, 0, 2),
+              );
+            }
+            time.advance(1_000);
+            commit(tracker);
+            commit(tracker);
+            commit(tracker);
+            const seen: boolean[] = [];
+            for (let second = 62; second <= 71; second++) {
+              time.advance(1_000);
+              seen.push(commit(tracker).storm);
+            }
+            return seen;
+          };
+          const expected = [...Array(9).fill(false), true];
+          expect(outcomes(false)).toEqual(expected);
+          expect(outcomes(true)).toEqual(expected);
+        });
+
+        it("counts a storm in `storms` even when its space is not among the listed ones", () => {
+          const time = clock();
+          const tracker = new CommitRateTracker({
+            now: time.now,
+            storm,
+            topSpaces: 1,
+          });
+          for (let i = 0; i < 3; i++) commit(tracker, { space: "did:a" });
+          for (let second = 1; second <= 10; second++) {
+            time.advance(1_000);
+            commit(tracker, { space: "did:a" });
+          }
+          expect(spaceOf(tracker.report(), "did:a").storm).toBeDefined();
+          for (let i = 0; i < 100; i++) commit(tracker, { space: "did:b" });
+          const report = tracker.report();
+          expect(report.spaces.map((entry) => entry.space)).toEqual(["did:b"]);
+          expect(report.storms).toBe(1);
+          expect(report.activeSpaces).toBe(2);
         });
 
         it("reports a storm with when its run began, and clears it on a later report once the minute has fallen under the threshold", () => {

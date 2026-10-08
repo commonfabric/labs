@@ -6,7 +6,7 @@
  * and whether a space has run past the storm threshold for the sustained
  * window. Memory is bounded by construction: a writer holds at most one
  * bucket per second of the long window, and the writers of a space and the
- * spaces themselves are capped, with the least recently committing one
+ * spaces themselves are capped, with the one that committed longest ago
  * evicted past the cap.
  */
 
@@ -85,7 +85,10 @@ export type CommitSpaceRates = {
    * run over the threshold began. */
   storm?: { since: number };
 
-  /** Writers with a commit in the last ten minutes, listed or not. */
+  /** Writers with a commit in the last ten minutes, listed or not, among
+   * the ones retained: a space keeps at most 256 writers and evicts the
+   * one that committed longest ago past that, so at the cap this is the
+   * cap rather than the count. */
   activeWriters: number;
 
   /** The top writers over each window, as one list: the union of the top N
@@ -110,8 +113,14 @@ export type CommitRatesReport = {
   /** The storm thresholds in effect. */
   storm: CommitStormThresholds;
 
-  /** Spaces with a commit in the last ten minutes, listed or not. */
+  /** Spaces with a commit in the last ten minutes, listed or not, among
+   * the ones retained: the tracker keeps at most 1,024 spaces and evicts
+   * the one that committed longest ago past that, so at the cap this is
+   * the cap rather than the count. */
   activeSpaces: number;
+
+  /** Retained spaces in a storm right now, listed or not. */
+  storms: number;
 
   /** The top spaces over each window, ranked the way a space ranks its
    * writers. */
@@ -222,12 +231,6 @@ class CommitSeries {
     return this.#buckets.length > 0;
   }
 
-  /** When the newest commit was recorded, or `undefined` with none. */
-  get newestAt(): number | undefined {
-    const newest = this.#buckets.at(-1);
-    return newest === undefined ? undefined : newest.index * BUCKET_MS;
-  }
-
   /** The commits inside the last `windowMs` as of `now`: the buckets whose
    * whole second began no earlier than `now - windowMs`. */
   counts(now: number, windowMs: number): CommitWindowCounts {
@@ -248,8 +251,15 @@ class CommitSeries {
   }
 }
 
+/** What eviction ranks by: the tracker-wide sequence number of the entry's
+ * latest commit, which orders two commits in one second the way their
+ * arrival did, and is untouched by a clock that steps. */
+type Recency = {
+  lastRecorded: number;
+};
+
 /** One writer of a space: a session, with its principal when known. */
-type Writer = {
+type Writer = Recency & {
   session: string;
   principal?: string;
   series: CommitSeries;
@@ -257,7 +267,7 @@ type Writer = {
 
 /** One space's commits and writers, and where it stands against the storm
  * threshold. */
-type SpaceWindow = {
+type SpaceWindow = Recency & {
   series: CommitSeries;
   writers: Map<string, Writer>;
 
@@ -294,16 +304,13 @@ const topByEachWindow = <T extends Windows>(entries: T[], n: number): T[] => {
   );
 };
 
-/** Evicts from `map` the entry whose series committed least recently. */
-const evictQuietest = <T extends { series: CommitSeries }>(
-  map: Map<string, T>,
-): void => {
+/** Evicts from `map` the entry that committed longest ago. */
+const evictQuietest = <T extends Recency>(map: Map<string, T>): void => {
   let quietestKey: string | undefined;
-  let quietestAt = Infinity;
+  let quietest = Infinity;
   for (const [key, entry] of map) {
-    const at = entry.series.newestAt ?? -Infinity;
-    if (at < quietestAt) {
-      quietestAt = at;
+    if (entry.lastRecorded < quietest) {
+      quietest = entry.lastRecorded;
       quietestKey = key;
     }
   }
@@ -326,6 +333,10 @@ export class CommitRateTracker {
   readonly #topSpaces: number;
   readonly #topWriters: number;
   readonly #spaces = new Map<string, SpaceWindow>();
+
+  /** Commits recorded so far; the latest one's number is what eviction
+   * ranks a space or writer by. */
+  #sequence = 0;
 
   /**
    * Constructs an instance judging storms by `storm`, reading the time
@@ -361,12 +372,17 @@ export class CommitRateTracker {
   record(commit: RecordedCommit): { storm: boolean } {
     const now = this.#now();
     const space = this.#space(commit.space);
+    // A run over the threshold ends the moment expiry takes the minute
+    // under it, whether or not anything read the tracker then. Judging the
+    // minute as it stands before this commit ends such a run; judging it
+    // again after decides whether this commit starts or continues one.
+    this.#judgeStorm(space, now);
+    const sequence = ++this.#sequence;
+    space.lastRecorded = sequence;
     space.series.add(now, commit.accepted, commit.operations);
-    this.#writer(space, commit).series.add(
-      now,
-      commit.accepted,
-      commit.operations,
-    );
+    const writer = this.#writer(space, commit);
+    writer.lastRecorded = sequence;
+    writer.series.add(now, commit.accepted, commit.operations);
     return { storm: this.#judgeStorm(space, now) };
   }
 
@@ -375,6 +391,7 @@ export class CommitRateTracker {
   report(): CommitRatesReport {
     const now = this.#now();
     const spaces: CommitSpaceRates[] = [];
+    let storms = 0;
     for (const [key, space] of this.#spaces) {
       if (!space.series.active(now)) {
         this.#spaces.delete(key);
@@ -395,6 +412,7 @@ export class CommitRateTracker {
         });
       }
       const storm = this.#judgeStorm(space, now);
+      if (storm) storms++;
       const since = space.overSince;
       spaces.push({
         space: key,
@@ -407,6 +425,7 @@ export class CommitRateTracker {
     return {
       storm: { ...this.#storm },
       activeSpaces: spaces.length,
+      storms,
       spaces: topByEachWindow(spaces, this.#topSpaces),
     };
   }
@@ -417,7 +436,11 @@ export class CommitRateTracker {
     let space = this.#spaces.get(key);
     if (space === undefined) {
       if (this.#spaces.size >= this.#maxSpaces) evictQuietest(this.#spaces);
-      space = { series: new CommitSeries(), writers: new Map() };
+      space = {
+        lastRecorded: this.#sequence,
+        series: new CommitSeries(),
+        writers: new Map(),
+      };
       this.#spaces.set(key, space);
     }
     return space;
@@ -433,6 +456,7 @@ export class CommitRateTracker {
         evictQuietest(space.writers);
       }
       writer = {
+        lastRecorded: this.#sequence,
         session: commit.session,
         ...(commit.principal === undefined
           ? {}
@@ -446,7 +470,9 @@ export class CommitRateTracker {
 
   /** Helper for `record()` and `report()`, which moves the space's run over
    * the threshold along by its commits in the last minute as of `now`, and
-   * returns whether that run has lasted the sustained window. */
+   * returns whether that run has lasted the sustained window. A count under
+   * the threshold ends the run, and one at or over it begins one where none
+   * is under way. */
   #judgeStorm(space: SpaceWindow, now: number): boolean {
     const perMinute = totalCommits(space.series.counts(now, MINUTE_MS));
     if (perMinute >= this.#storm.commitsPerMinute) {

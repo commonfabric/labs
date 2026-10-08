@@ -2,7 +2,13 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { connect, loopback } from "../v2/client.ts";
+import { applyCommit, applyWaveCommit, serverSeq } from "../v2/engine.ts";
+import {
+  acquireExecutionLease,
+  executionLeaseHolder,
+} from "../v2/execution-lease.ts";
 import { getCommitRates, Server } from "../v2/server.ts";
+import { resetServerExecutionConfig, setServerExecutionConfig } from "../v2.ts";
 import {
   TEST_SESSION_OPEN_PRINCIPAL,
   testSessionOpenAuthFactory,
@@ -111,6 +117,93 @@ describe("server", () => {
         minute: { accepted: 0, rejected: 1, operations: 1 },
         tenMinutes: { accepted: 0, rejected: 1, operations: 1 },
       }]);
+    });
+
+    it("reports the server's own direct writes under its direct session, without a principal", async () => {
+      await server.writeDocument(space, "of:direct", { written: true });
+      const [rates] = server.commitRates().spaces;
+      expect(rates.space).toBe(space);
+      expect(rates.minute).toEqual({
+        accepted: 1,
+        rejected: 0,
+        operations: 1,
+      });
+      expect(rates.writers.length).toBe(1);
+      expect(rates.writers[0].session.startsWith("server:")).toBe(true);
+      expect(rates.writers[0].principal).toBeUndefined();
+    });
+
+    it("reports commits applied to the space's engine directly, as a served wave commit is", async () => {
+      // The serving loop's sink commits through the engine's entry points
+      // rather than through `transact()`, under the service session that
+      // holds the space's execution lease.
+      const engine = await server.engineForSpace(space);
+      const holder = executionLeaseHolder("did:key:z6Mk-commit-rates-service");
+      expect(acquireExecutionLease(engine, { space, holder })).toBeTruthy();
+      applyCommit(engine, {
+        sessionId: holder,
+        space,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [setOperation("of:served-one")],
+        },
+      });
+      // A derived-class commit is admitted only with server execution on.
+      setServerExecutionConfig(true);
+      try {
+        applyWaveCommit(engine, {
+          sessionId: holder,
+          space,
+          commitClass: "derived",
+          holder,
+          commit: {
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              setOperation("of:served-two"),
+              setOperation("of:served-three"),
+            ],
+          },
+          waveBasis: { basisSeq: serverSeq(engine), rebasedHeads: [] },
+        });
+      } finally {
+        resetServerExecutionConfig();
+      }
+      expect(() =>
+        applyCommit(engine, {
+          sessionId: holder,
+          space,
+          commit: {
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            preconditions: [{ kind: "entity-absent", id: "of:served-one" }],
+            operations: [setOperation("of:served-four")],
+          },
+        })
+      ).toThrow();
+      const [rates] = server.commitRates().spaces;
+      expect(rates.writers).toStrictEqual([{
+        session: holder,
+        minute: { accepted: 2, rejected: 1, operations: 4 },
+        tenMinutes: { accepted: 2, rejected: 1, operations: 4 },
+      }]);
+    });
+
+    it("reports a commit that named no space under the engine's own space", async () => {
+      const engine = await server.engineForSpace(space);
+      applyCommit(engine, {
+        sessionId: "session:unnamed",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [setOperation("of:unnamed")],
+        },
+      });
+      const report = server.commitRates();
+      expect(report.spaces.map((entry) => entry.space)).toEqual([space]);
+      expect(report.spaces[0].writers.map((writer) => writer.session))
+        .toEqual(["session:unnamed"]);
     });
 
     it("is what `getCommitRates()` reports for the newest live server, until that server closes", async () => {

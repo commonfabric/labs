@@ -263,8 +263,8 @@ const commitCount = operationMeter.createCounter(
   "ct.memory.commits",
   {
     description:
-      "Decided commits by space, by outcome, and by whether the space was " +
-      "in a write storm at the time.",
+      "Commits decided on every path, by space, by outcome, and by whether " +
+      "the space was in a write storm at the time.",
   },
 );
 
@@ -763,6 +763,10 @@ type PublishTransactVerdict = (
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
   postCommit?: () => Promise<void>;
+
+  /** Whether the engine decided the commit, and so reported it to the
+   * server's commit observer; false for one refused before reaching it. */
+  engineDecided: boolean;
 };
 
 type SessionOpenAuthContext = {
@@ -2642,6 +2646,28 @@ export class Server {
    * gone quiet. */
   commitRates(): CommitRatesReport {
     return this.#commitRates.report();
+  }
+
+  /** Helper for the engines' commit observer and for `transact()`'s own
+   * refusals, which counts one decided commit toward its space's rate and
+   * the `ct.memory.commits` counter, under the session and, where known,
+   * the principal it came from (an anonymous session carries none). */
+  #observeCommit(decision: Engine.CommitDecision & { space: string }): void {
+    const principal = decision.principal;
+    const { storm } = this.#commitRates.record({
+      space: decision.space,
+      session: decision.sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      accepted: decision.accepted,
+      operations: decision.operations,
+    });
+    commitCount.add(1, {
+      "space.did": decision.space,
+      outcome: decision.accepted ? "ok" : "rejected",
+      storm,
+    });
   }
 
   memoryProtocolFlags(): MemoryProtocolFlags {
@@ -4928,8 +4954,10 @@ export class Server {
     return await this.#withSpacePublicationLock(message.space, async () => {
       const lockWaitMs = performance.now() - requestedAt;
       let outcome = "threw";
+      let engineDecided = false;
       try {
         const decision = await this.#decideTransaction(message, originating);
+        engineDecided = decision.engineDecided;
         outcome = decision.response.error?.name ?? "ok";
         let verdictError: { value: unknown } | undefined;
         try {
@@ -4971,26 +4999,22 @@ export class Server {
           readsPending: count(commit.reads?.pending),
           outcome,
         });
-        // Every decision counts toward the space's commit rate, slow or
-        // not, keyed by the session and the principal it was opened as
-        // (an anonymous session carries none).
-        const principal = originating?.principal;
-        const { storm } = this.#commitRates.record({
-          space: message.space,
-          session: message.sessionId,
-          ...(principal === undefined || principal === ANYONE_USER
-            ? {}
-            : { principal }),
-          accepted: outcome === "ok",
-          operations: operations ?? 0,
-        });
-        commitCount.add(1, {
-          "space.did": message.space,
-          outcome: outcome === "ok" || outcome === "threw"
-            ? outcome
-            : "rejected",
-          storm,
-        });
+        // The engine reports every commit it decides to this server's
+        // commit observer, whichever path brought it. A commit refused
+        // before reaching the engine (an unknown session, a denied
+        // capability, a decision that threw) is counted here instead, so
+        // every decision counts exactly once, slow or not.
+        if (!engineDecided) {
+          this.#observeCommit({
+            space: message.space,
+            sessionId: message.sessionId,
+            ...(originating?.principal === undefined
+              ? {}
+              : { principal: originating.principal }),
+            accepted: outcome === "ok",
+            operations: operations ?? 0,
+          });
+        }
       }
     });
   }
@@ -5310,6 +5334,7 @@ export class Server {
     originating: SessionState | null,
   ): Promise<TransactDecision> {
     let postCommit: (() => Promise<void>) | undefined;
+    let engineDecided = false;
     const response = await tracer.startActiveSpan(
       "memory.transact",
       async (span): Promise<ResponseMessage<Engine.AppliedCommit>> => {
@@ -5443,6 +5468,7 @@ export class Server {
               "memory.commit.persist",
               (persistSpan) => {
                 try {
+                  engineDecided = true;
                   return Engine.applyCommit(engine, {
                     sessionId: message.sessionId,
                     space: message.space,
@@ -5675,7 +5701,7 @@ export class Server {
         }
       },
     );
-    return { response, postCommit };
+    return { response, postCommit, engineDecided };
   }
 
   async graphQuery(
@@ -9407,6 +9433,11 @@ export class Server {
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
         documentCacheCoordinator: this.#documentCacheCoordinator,
+        // Every commit this engine decides, on whichever path, counts
+        // toward the space's commit rate; the engine is this space's, so
+        // the space is known here whatever the committing caller named.
+        commitObserver: (decision) =>
+          this.#observeCommit({ ...decision, space }),
       });
     })();
     // The SYNC engine view (server-execution v2 Phase 5): the read-row

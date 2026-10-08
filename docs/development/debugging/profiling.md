@@ -593,30 +593,40 @@ process:
   a snapshot has no row before it to resume from, so roughly one rebuild per
   snapshot interval is a non-resume for a reason unrelated to residency.
 - `commitRates` — the memory server's commit rates (`CommitRateTracker` in
-  `packages/memory/v2/commit-rates.ts`): every space with a commit in the
-  last ten minutes, and for each the sessions that committed to it. A space
-  and a writer both carry `minute` and `tenMinutes`, the commits of the last
-  sixty seconds and of the last ten minutes, each as `accepted`, `rejected`
-  (refused, or evaluation threw) and `operations`, the operations those
-  commits carried whether or not they were applied. The ratio of operations
-  to commits is the shape of the traffic: a person's edit is a few commits of
-  several operations, and a loop is many commits of one. A writer is a
-  session together with the principal it was opened as, so one session
-  reopened under another identity is two writers, and a commit from a
-  session the server does not know is counted under its id with no
-  principal. `storm` on a space is present while its commits per minute have
-  stayed at or over the threshold for the sustained window, and names when
-  that run began; the thresholds in effect ride along as the report's own
-  `storm`, from `CF_COMMIT_STORM_PER_MINUTE` and
-  `CF_COMMIT_STORM_SUSTAINED_SECONDS`
-  ([`CONFIGURATION.md`](../CONFIGURATION.md#memory-store)). The response
+  `packages/memory/v2/commit-rates.ts`): the busiest of the spaces with a
+  commit in the last ten minutes, and for each the busiest of the sessions
+  that committed to it. A space and a writer both carry `minute` and
+  `tenMinutes`, the commits of the last sixty seconds and of the last ten
+  minutes, each as `accepted`, `rejected` and `operations`, the operations
+  those commits carried whether or not they were applied. The ratio of
+  operations to commits is the shape of the traffic: a person's edit is a
+  few commits of several operations, and a loop is many commits of one.
+  Every commit the engine decides counts, whichever path brought it: a
+  client's `transact`, the server's own direct writes under its `server:`
+  session, a delegated append, a served access-list change, and the serving
+  loop's wave commits under the service session they are recorded under; a
+  `transact` the server refuses before it reaches the engine counts too, as
+  rejected. A writer is a session together with the principal the commit
+  named, so one session reopened under another identity is two writers, and
+  a commit from a session the server does not know is counted under its id
+  with no principal. `storm` on a space is present while its commits per
+  minute have stayed at or over the threshold for the sustained window, and
+  names when that run began; a run ends the moment expiry takes the minute
+  under the threshold, whether or not anything read the tracker then. The
+  thresholds in effect ride along as the report's own `storm`, from
+  `CF_COMMIT_STORM_PER_MINUTE` and `CF_COMMIT_STORM_SUSTAINED_SECONDS`
+  ([`CONFIGURATION.md`](../CONFIGURATION.md#memory-store)), and `storms` is
+  how many retained spaces are in one right now, listed or not. The response
   stays bounded whatever the process serves: `spaces` is the union of the
   top sixteen by the minute and the top sixteen by the ten minutes, ordered
   by the minute's commits and then the ten minutes', a space's `writers` is
   the same union of its top eight, and `activeSpaces` and `activeWriters`
-  say how many there were to choose from. A count is exact to the second a
-  commit landed in. [Alerting on a write storm](#alerting-on-a-write-storm)
-  says what to do with it.
+  say how many there were to choose from among the ones retained. The
+  tracker keeps at most 1,024 spaces and 256 writers per space, evicting the
+  one that committed longest ago past that, so at a cap the count is the
+  cap. A count is exact to the second a commit landed in.
+  [Alerting on a write storm](#alerting-on-a-write-storm) says what to do
+  with it.
 - `servingLoop` — the serving loop's counters
   ([`serving-loop.md` §7](../../specs/server-side-execution/serving-loop.md)),
   present only when this process serves. `settle.series` is a ready-made
@@ -690,25 +700,38 @@ over `CF_COMMIT_STORM_PER_MINUTE` for `CF_COMMIT_STORM_SUSTAINED_SECONDS`
 (120 and 300 unless set) is in one until that count falls under the threshold.
 The same decision leaves the process as the `storm` attribute of the
 `ct.memory.commits` counter, which every decided commit increments with the
-space DID (`space.did`) and its `outcome` (`ok`, `rejected`, or `threw`), on
-the memory server's `memory-server` meter beside `ct.memory.operation.*`.
+space DID (`space.did`) and its `outcome` (`ok` or `rejected`), on the memory
+server's `memory-server` meter beside `ct.memory.operation.*`.
 Under Deno's native OpenTelemetry (`OTEL_DENO` with `--unstable-otel`, which
 the deployed toolshed runs under) the counter reaches the host's collector
 and SigNoz with the rest of the meter; with `OTEL_ENABLED` alone it is an API
 no-op, as the runtime bridge's instruments are.
 
 The alert rule itself lives in SigNoz, which this repository does not
-configure, so wiring it is a step on the host rather than a change here. In
-PromQL terms, an alert on `sum by (space.did) (rate(ct.memory.commits{storm="true"}[1m]))`
-being above zero fires for exactly the spaces the server has judged in a
-storm, and needs no sustain of its own because the server has applied one. A
-rule over the raw rate, `sum by (space.did) (rate(ct.memory.commits[1m])) * 60`
+configure, so wiring it is a step on the host rather than a change here.
+SigNoz keeps the dotted OpenTelemetry names, and its PromQL quotes them. An
+alert on
+
+```promql
+sum by ("space.did") (rate({"ct.memory.commits",storm="true"}[1m])) > 0
+```
+
+fires for exactly the spaces the server has judged in a storm, and needs no
+sustain of its own because the server has applied one. A rule over the raw
+rate,
+
+```promql
+sum by ("space.did") (rate({"ct.memory.commits"}[1m])) * 60
+```
+
 above the threshold for the sustained window, says the same thing with the
 thresholds held in SigNoz rather than in the server's environment, and is the
-one to reach for when the two should differ. The host's netdata and the ops
-agent watch the process, not this counter: a CPU alarm from either says an
-instance is busy, and `commitRates` on that instance says which space and
-whose sessions made it so.
+one to reach for when the two should differ. A collector configured to
+normalize names instead exposes the same series under its own spelling, and
+the rule names that one. The host's netdata and the ops agent watch the
+process, not this counter: a CPU alarm from either says an instance is busy,
+and `commitRates` on that instance says which space and whose sessions made it
+so.
 
 ### Profile the process
 

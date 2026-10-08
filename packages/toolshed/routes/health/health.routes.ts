@@ -69,6 +69,7 @@ export const stats = createRoute({
             sustainedSeconds: z.number().positive(),
           }),
           activeSpaces: z.number().int().nonnegative(),
+          storms: z.number().int().nonnegative(),
           spaces: z.array(
             z.object({
               space: z.string(),

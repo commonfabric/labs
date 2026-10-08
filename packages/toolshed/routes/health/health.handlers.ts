@@ -217,7 +217,7 @@ function renderSummary(data) {
   if (data.serverStart) serverStart = data.serverStart;
   const totalLogs = typeof data.logCounts?.total === "number" ? data.logCounts.total : 0;
   const slowCount = Array.isArray(data.slowQueries) ? data.slowQueries.length : 0;
-  const storms = Array.isArray(data.commitRates?.spaces) ? data.commitRates.spaces.filter((s) => s.storm).length : 0;
+  const storms = typeof data.commitRates?.storms === "number" ? data.commitRates.storms : 0;
   let timingOps = 0;
   if (data.timingStats) {
     for (const logger of Object.values(data.timingStats)) {
@@ -327,7 +327,7 @@ function renderRates(rates) {
   const commits = (w) => (w.accepted + w.rejected).toLocaleString() + (w.rejected > 0 ? ' (' + w.rejected.toLocaleString() + ' rejected)' : '');
   const ops = (w) => w.operations.toLocaleString();
   let h = '<div class="meta">Storm threshold: ' + rates.storm.commitsPerMinute + ' commits/min sustained for ' + rates.storm.sustainedSeconds + ' s. '
-    + rates.activeSpaces + ' active space' + (rates.activeSpaces === 1 ? '' : 's') + '.</div>';
+    + rates.activeSpaces + ' active space' + (rates.activeSpaces === 1 ? '' : 's') + ', ' + rates.storms + ' in a storm.</div>';
   h += '<table><thead><tr>'
     + '<th title="DID of the memory space committed to. Click to copy.">Space</th>'
     + '<th class="num" title="Commits in the last 60 seconds, accepted and rejected">1 min</th>'

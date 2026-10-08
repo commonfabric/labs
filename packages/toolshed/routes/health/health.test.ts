@@ -137,6 +137,7 @@ Deno.test("health routes", async (t) => {
         expect(empty.commitRates).toEqual({
           storm: empty.commitRates.storm,
           activeSpaces: 0,
+          storms: 0,
           spaces: [],
         });
         expect(empty.commitRates.storm.commitsPerMinute).toBeGreaterThan(0);
