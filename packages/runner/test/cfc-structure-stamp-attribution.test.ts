@@ -1,21 +1,11 @@
 import { expect } from "@std/expect";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  it,
-} from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import type {
-  CfcReleaseGateIntegrityMode,
-  ImplementationIdentity,
-} from "../src/cfc/mod.ts";
+import type { ImplementationIdentity } from "../src/cfc/mod.ts";
 import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -98,8 +88,6 @@ type Counts = { approve: number; reject: number };
 describe("TransformedBy on the stamps of an object a function wrote", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
-  // The default rung unless a block below says otherwise.
-  let releaseGateIntegrity: CfcReleaseGateIntegrityMode | undefined;
 
   beforeEach(async () => {
     storageManager = StorageManager.emulate({ as: signer });
@@ -109,7 +97,6 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
       // The counts documents stand in for a lift's result document, which
       // takes the join its lift wrote without declaring a ceiling for it.
       cfcEnforcementMode: "enforce-explicit",
-      cfcReleaseGateIntegrity: releaseGateIntegrity,
     });
     runtime.registerCfcPolicyManifests(space, [artifact]);
     const seed = runtime.edit();
@@ -305,37 +292,5 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     await tallyInto("counts", TALLY);
     await writeKeyAs(HAND_COUNT, "counts", () => "reject");
     expect(await publishCounts("counts")).toBe(false);
-  });
-
-  describe("under the per-access join", () => {
-    // The rule must release what its function wrote through the join of the
-    // integrity at every location a publish reads, not through a pool: the
-    // structure templates are the stamp that vouches for every field.
-
-    beforeAll(() => {
-      releaseGateIntegrity = "enforce";
-    });
-
-    afterAll(() => {
-      releaseGateIntegrity = undefined;
-    });
-
-    it("releases an object written field by field by the named function", async () => {
-      await tallyInto("counts", TALLY);
-      expect(await publishCounts("counts")).toBe(true);
-      expect(await publishKeys("counts")).toBe(true);
-    });
-
-    it("releases an object after the named function writes a field again", async () => {
-      await tallyInto("counts", TALLY);
-      await writeKeyAs(TALLY, "counts", () => "approve");
-      expect(await publishCounts("counts")).toBe(true);
-    });
-
-    it("refuses an object written by another function of the same module", async () => {
-      await tallyInto("counts", HAND_COUNT);
-      expect(await publishCounts("counts")).toBe(false);
-      expect(await publishKeys("counts")).toBe(false);
-    });
   });
 });

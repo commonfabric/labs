@@ -78,7 +78,6 @@ import type {
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
-  CfcReleaseGateIntegrityMode,
   CfcTriggerReadGating,
   CfcTxState,
   CfcWriteFloorMode,
@@ -2130,12 +2129,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Anti-downgrade pinned: once `enforce`, weakening throws.
    */
   setCfcDeclaredMonotonicityMode(mode: CfcDeclaredMonotonicityMode): void;
-
-  /**
-   * Set the release-gate integrity dial (spec §5.3, §8.12.8, §8.10.1.1).
-   * Anti-downgrade pinned: once `enforce`, weakening throws.
-   */
-  setCfcReleaseGateIntegrityMode(mode: CfcReleaseGateIntegrityMode): void;
 
   /**
    * Exempt exactly one (doc, path, clauseDigest) triple from the

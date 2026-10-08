@@ -60,7 +60,6 @@ import type {
   CfcFlowLabelsMode,
   CfcLabelMetadataProtectionMode,
   CfcPolicyEvaluationMode,
-  CfcReleaseGateIntegrityMode,
   CfcTriggerReadGating,
   CfcWriteFloorMode,
 } from "./types.ts";
@@ -141,7 +140,6 @@ export interface CfcPostureReport {
   readonly policyEvaluation: CfcDialReport;
   readonly labelMetadataProtection: CfcDialReport;
   readonly declaredMonotonicity: CfcDialReport;
-  readonly releaseGateIntegrity: CfcDialReport;
 
   /** Digest of the deployment's policy snapshot; `null` when none is configured. */
   readonly policyDigest: string | null;
@@ -169,7 +167,6 @@ export interface CfcPostureSource {
   readonly cfcPolicyEvaluation: CfcPolicyEvaluationMode;
   readonly cfcLabelMetadataProtection: CfcLabelMetadataProtectionMode;
   readonly cfcDeclaredMonotonicity: CfcDeclaredMonotonicityMode;
-  readonly cfcReleaseGateIntegrity: CfcReleaseGateIntegrityMode;
   readonly cfcPolicySnapshot: PolicySnapshot | undefined;
   readonly cfcSinkMaxConfidentiality: SinkMaxConfidentiality;
 }
@@ -217,17 +214,6 @@ const DECLARED_MONOTONICITY_DECIDES: Record<
   off: "nothing; a declared-monotonicity violation is not checked",
   observe: "nothing; a monotonicity violation is a diagnostic",
   enforce: "the declared monotonicity of the written value",
-};
-
-const RELEASE_GATE_INTEGRITY_DECIDES: Record<
-  CfcReleaseGateIntegrityMode,
-  string
-> = {
-  off: "the integrity of everything an access consumed, pooled",
-  observe:
-    "the pooled integrity; where the per-access join would decide otherwise, a diagnostic",
-  enforce:
-    "the class-aware join of the integrity at an access's confidential locations",
 };
 
 /** A rung whose findings change no outcome. */
@@ -306,16 +292,15 @@ export interface ResolvedCfcDials {
   readonly cfcPolicyEvaluation: CfcPolicyEvaluationMode;
   readonly cfcLabelMetadataProtection: CfcLabelMetadataProtectionMode;
   readonly cfcDeclaredMonotonicity: CfcDeclaredMonotonicityMode;
-  readonly cfcReleaseGateIntegrity: CfcReleaseGateIntegrityMode;
 }
 
 /**
  * What each dial resolves to when a construction leaves it unset.
  *
- * The Runtime's defaults, in one place, rather than a `??` arm per dial
- * inside a constructor no other host can reach. `DEFAULT_CFC_*` in `types.ts`
- * are not these: those are the per-transaction floors an unconfigured
- * transaction carries, which is a different question with a different answer.
+ * The Runtime's defaults, in one place, rather than nine `??` arms inside a
+ * constructor no other host can reach. `DEFAULT_CFC_*` in `types.ts` are not
+ * these: those are the per-transaction floors an unconfigured transaction
+ * carries, which is a different question with a different answer.
  */
 export const RUNTIME_CFC_DIAL_DEFAULTS: ResolvedCfcDials = Object.freeze({
   cfcEnforcementMode: "enforce-strict",
@@ -327,7 +312,6 @@ export const RUNTIME_CFC_DIAL_DEFAULTS: ResolvedCfcDials = Object.freeze({
   cfcPolicyEvaluation: "enforce",
   cfcLabelMetadataProtection: "enforce",
   cfcDeclaredMonotonicity: "observe",
-  cfcReleaseGateIntegrity: "observe",
 });
 
 /** A dial whose values are the named rungs of a ladder. */
@@ -361,7 +345,6 @@ export const CFC_DIAL_LADDERS = Object.freeze({
   cfcPolicyEvaluation: Object.freeze(POLICY_EVALUATION_DECIDES),
   cfcLabelMetadataProtection: Object.freeze(LABEL_METADATA_DECIDES),
   cfcDeclaredMonotonicity: Object.freeze(DECLARED_MONOTONICITY_DECIDES),
-  cfcReleaseGateIntegrity: Object.freeze(RELEASE_GATE_INTEGRITY_DECIDES),
 }) satisfies { [K in LadderDial]: Record<ResolvedCfcDials[K], string> };
 
 /**
@@ -467,10 +450,6 @@ export const resolveCfcDials = (
     "cfcDeclaredMonotonicity",
     options.cfcDeclaredMonotonicity,
   ),
-  cfcReleaseGateIntegrity: resolveRung(
-    "cfcReleaseGateIntegrity",
-    options.cfcReleaseGateIntegrity,
-  ),
 });
 
 /** The values of a record, whichever way its provenance was arrived at. */
@@ -505,10 +484,6 @@ const buildReport = (
   declaredMonotonicity: dial(
     source.cfcDeclaredMonotonicity,
     DECLARED_MONOTONICITY_DECIDES[source.cfcDeclaredMonotonicity],
-  ),
-  releaseGateIntegrity: dial(
-    source.cfcReleaseGateIntegrity,
-    RELEASE_GATE_INTEGRITY_DECIDES[source.cfcReleaseGateIntegrity],
   ),
   policyDigest: source.cfcPolicySnapshot?.digest ?? null,
   sinks: sinkReports(source.cfcSinkMaxConfidentiality),

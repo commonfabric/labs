@@ -12,6 +12,7 @@ import { clauseAlternatives } from "./clause.ts";
 import {
   type CfcGrantResolver,
   evaluateExchangeRules,
+  isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 import {
   buildCfcPolicySnapshot,
@@ -240,6 +241,12 @@ export type RenderLabelInput = {
    * a label that selects a module policy stays sealed.
    */
   readonly spaces?: () => readonly string[];
+
+  /**
+   * Evaluates only the value-intrinsic rules (`isValueIntrinsicExchangeRule`),
+   * as for one location the render read, on that location's own evidence.
+   */
+  readonly valueIntrinsicOnly?: boolean;
 };
 
 /**
@@ -312,6 +319,9 @@ export const createRenderConfidentialityResolver = (
           ? undefined
           : (reference) =>
             modulePolicyResolver(reference, spaces ??= label.spaces?.() ?? []),
+        ...(label.valueIntrinsicOnly === true
+          ? { admitsRule: isValueIntrinsicExchangeRule }
+          : {}),
       },
     );
     return (result.exhausted

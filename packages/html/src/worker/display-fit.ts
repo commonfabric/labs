@@ -23,19 +23,15 @@ import {
   type JSONSchema,
   type SinkConsumedLabel,
 } from "@commonfabric/runner";
-import type {
-  CfcConfClause,
-  CfcReleaseGateIntegrityMode,
-  ConsumedLocation,
-} from "@commonfabric/runner/cfc";
+import type { CfcConfClause } from "@commonfabric/runner/cfc";
 import {
-  accessIntegrity,
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
   type CfcLabelView,
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
+  joinLocationIntegrity,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
@@ -67,23 +63,6 @@ export type DisplayFitSources = {
   readonly resolveConfidentiality?: RenderConfidentialityResolver;
   readonly membership?: SpaceMembershipProvider;
   readonly modulePolicies?: WorkerReconcilerOptions["modulePolicySource"];
-
-  /**
-   * The runtime's `cfcReleaseGateIntegrity` rung, which says what integrity
-   * the labels the reads behind a value consumed are fitted with. At `off`,
-   * and when absent, it is everything those reads consumed, pooled; at
-   * `enforce`, the per-access join of the integrity at the confidential
-   * locations they consumed. `observe` fits as `off` does, and where
-   * `noteReleaseGateDivergence` is given, reports to it each label the join
-   * would refuse. A cell's stored label is fitted pooled at every rung.
-   */
-  readonly releaseGateIntegrity?: CfcReleaseGateIntegrityMode;
-
-  /**
-   * Receives, under `observe`, each label the per-access join would refuse.
-   * Absent, `observe` computes no join.
-   */
-  readonly noteReleaseGateDivergence?: (refusal: RenderLabelSummary) => void;
 };
 
 /**
@@ -167,81 +146,84 @@ export function readRefusal(
       ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
       : { labelSource: "consumed", confidentiality, integrity };
   }
-  // The reads behind one rendered value are one access, so the per-access
-  // join takes the locations of all of them together.
-  const refusal = fitWithReleaseGateIntegrity(
+  // The reads behind one rendered value are one access.
+  const access = exchangedAccessLabel(
     confidentiality,
     integrity,
-    () => reads.flatMap((read) => read?.locations() ?? []),
+    reads,
     () => spaces,
     policy,
     sources,
-    watch,
   );
-  return refusal ??
-    cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch);
-}
-
-/**
- * Fits the labels reads consumed as `sources.releaseGateIntegrity` says,
- * returning the refusal or undefined when the policy admits them. `pooled` is
- * the integrity of everything the reads consumed, and `locations` what they
- * consumed, from which the per-access join is taken.
- */
-function fitWithReleaseGateIntegrity(
-  confidentiality: readonly CfcConfClause[],
-  pooled: readonly CfcAtom[],
-  locations: () => readonly ConsumedLocation[],
-  spaces: () => readonly string[],
-  policy: RenderPolicy,
-  sources: DisplayFitSources,
-  watch: FitWatch | undefined,
-): RenderLabelSummary | undefined {
-  const rung = sources.releaseGateIntegrity ?? "off";
-  const mode = rung === "observe" &&
-      sources.noteReleaseGateDivergence === undefined
-    ? "off"
-    : rung;
-  // The join keeps a subset of the pooled atoms, so with none pooled it is
-  // empty too, and nothing needs resolving.
-  const joined = mode === "off"
-    ? undefined
-    : pooled.length === 0
-    ? []
-    : accessIntegrity(locations());
-  const integrity = mode === "enforce" ? joined! : pooled;
-  if (
-    !canRenderLabelUnderPolicy(
-      confidentiality,
-      integrity,
-      spaces,
+  return canRenderLabelUnderPolicy(
+      access.confidentiality,
+      access.integrity,
+      () => spaces,
       policy,
       sources,
       watch,
     )
-  ) {
-    return { labelSource: "consumed", confidentiality, integrity };
-  }
-  // The join keeps a subset of the pooled atoms, and a guard matches no more
-  // given less, so a join that keeps every pooled atom fits alike.
+    ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
+    : { labelSource: "consumed", confidentiality, integrity: access.integrity };
+}
+
+/**
+ * The label the reads behind one rendered value consumed, as a release
+ * boundary evaluates it (spec §5.3, §4.6.3): the value-intrinsic rules run at
+ * each location the reads consumed, on that location's own evidence, through
+ * the resolver among `sources`, and the result carries what they left, with
+ * any clause of `confidentiality` no location resolved kept as it was read,
+ * and the class-aware join of the locations' integrity (§3.1.6.2), over which
+ * every rule then runs. With no resolver or no ceiling the label is fitted
+ * atom by atom, which reads no integrity, and with none of it consumed no
+ * rule could fire; either way the label is the one the reads consumed.
+ */
+function exchangedAccessLabel(
+  confidentiality: readonly CfcConfClause[],
+  integrity: readonly CfcAtom[],
+  reads: readonly (SinkConsumedLabel | undefined)[],
+  spaces: () => readonly string[],
+  policy: RenderPolicy,
+  sources: DisplayFitSources,
+): {
+  confidentiality: readonly CfcConfClause[];
+  integrity: readonly CfcAtom[];
+} {
+  const resolve = sources.resolveConfidentiality;
   if (
-    mode === "observe" &&
-    !pooled.every((atom) => joined!.some((kept) => deepEqual(kept, atom))) &&
-    !canRenderLabelUnderPolicy(
-      confidentiality,
-      joined!,
-      spaces,
-      policy,
-      sources,
-    )
+    resolve === undefined || policy.maxConfidentiality === undefined ||
+    integrity.length === 0
   ) {
-    sources.noteReleaseGateDivergence?.({
-      labelSource: "consumed",
-      confidentiality,
-      integrity: joined!,
-    });
+    return { confidentiality, integrity };
   }
-  return undefined;
+  const locations = reads.flatMap((read) => read?.locations() ?? []);
+  const exchanged: CfcConfClause[] = [];
+  const resolved: CfcConfClause[] = [];
+  for (const location of locations) {
+    if (location.confidentiality.length === 0) continue;
+    for (const clause of location.confidentiality) resolved.push(clause);
+    for (
+      const clause of resolve({
+        confidentiality: location.confidentiality,
+        integrity: location.evidence,
+        spaces,
+        valueIntrinsicOnly: true,
+      })
+    ) {
+      exchanged.push(clause);
+    }
+  }
+  for (const clause of confidentiality) {
+    if (!resolved.some((other) => deepEqual(other, clause))) {
+      exchanged.push(clause);
+    }
+  }
+  return {
+    confidentiality: ContextualFlowControl.uniqueAtoms(
+      exchanged,
+    ) as readonly CfcConfClause[],
+    integrity: joinLocationIntegrity(locations),
+  };
 }
 
 /** Whether `policy` admits `cell`'s labels, as {@link cellLabelRefusal} decides. */
@@ -290,11 +272,10 @@ export function cellLabelRefusal(
         integrity: [],
       };
   }
-  // A stored label is fitted on the integrity at its root whatever
-  // `releaseGateIntegrity` says. A label view carries no origin, folds an
-  // ancestor's entry in beside a narrower cell's own, and merges a linked
-  // target's view into the slot's, so a per-access join over it would claim
-  // too much in one case and too little in another.
+  // A stored label is fitted on the integrity at its root. A label view
+  // carries no origin, folds an ancestor's entry in beside a narrower cell's
+  // own, and merges a linked target's view into the slot's, so it cannot be
+  // resolved location by location as the reads behind a value are.
   for (const { view, spaces } of labelSources) {
     if (view === undefined) continue;
     const confidentiality = confidentialityLabels(view);

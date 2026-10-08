@@ -1035,22 +1035,6 @@ export const DEFAULT_CFC_DECLARED_MONOTONICITY_MODE:
   CfcDeclaredMonotonicityMode = "off";
 
 /**
- * Which integrity the release gates match exchange-rule guards against
- * (spec §5.3, §8.12.8, §8.10.1.1). Under `off` it is the union of everything
- * the access consumed: the write input gate's gated read, a sink request's
- * whole transaction, the reads behind a rendered value. `observe` decides as
- * `off` does, and records a diagnostic wherever the per-access join would
- * decide otherwise. `enforce` decides on the per-access join: the class-aware
- * join (§3.1.6.2) of the integrity at the access's confidential locations,
- * and, for the write input gate's `requiredIntegrity`, a witness shared by
- * every labeled location the read consumed (§8.10.3).
- */
-export type CfcReleaseGateIntegrityMode = "off" | "observe" | "enforce";
-
-export const DEFAULT_CFC_RELEASE_GATE_INTEGRITY_MODE:
-  CfcReleaseGateIntegrityMode = "off";
-
-/**
  * Per-transaction privileged marker exempting exactly ONE (doc, path,
  * clauseDigest) triple from the declared-monotonicity gate (the seam for the
  * §8.12.7 route 2b declassification event; docs/specs/
@@ -1080,7 +1064,6 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
-  releaseGateIntegrityMode: CfcReleaseGateIntegrityMode;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),

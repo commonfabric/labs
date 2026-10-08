@@ -75,7 +75,6 @@ import {
   type CfcPolicyRecordInput,
   type CfcPrefixProvenanceSummary,
   type CfcReadOnExceed,
-  type CfcReleaseGateIntegrityMode,
   type CfcTriggerReadGating,
   type CfcTrustConfig,
   type CfcTrustConfigInput,
@@ -781,17 +780,6 @@ export interface RuntimeOptions {
   cfcDeclaredMonotonicity?: CfcDeclaredMonotonicityMode;
 
   /**
-   * Release-gate integrity dial (spec §5.3, §8.12.8, §8.10.1.1). Defaults to
-   * `observe`. `off` matches exchange-rule guards at the write input gate, at
-   * sink egress, and at the display fit against the integrity of everything
-   * the access consumed, pooled; `observe` decides the same way and records a
-   * diagnostic wherever the per-access join decides otherwise; `enforce`
-   * decides on that join. `docs/development/EXPERIMENTAL_OPTIONS.md` says
-   * what the join keeps.
-   */
-  cfcReleaseGateIntegrity?: CfcReleaseGateIntegrityMode;
-
-  /**
    * Per-prepare D4 write-prefix precision counters (value-level provenance
    * Stage 0 — docs/specs/cfc-value-level-provenance.md §6, SC-24). Defaults
    * to `false`: the prepare gate then skips all measurement, paying a single
@@ -1194,7 +1182,6 @@ const externalObservationPosture = (
   state.policyEvaluationMode,
   state.labelMetadataProtectionMode,
   state.declaredMonotonicityMode,
-  state.releaseGateIntegrityMode,
 ];
 
 const moduleDelegationsEqual = (
@@ -1306,7 +1293,6 @@ export class Runtime {
   readonly cfcPolicyEvaluation: CfcPolicyEvaluationMode;
   readonly cfcLabelMetadataProtection: CfcLabelMetadataProtectionMode;
   readonly cfcDeclaredMonotonicity: CfcDeclaredMonotonicityMode;
-  readonly cfcReleaseGateIntegrity: CfcReleaseGateIntegrityMode;
   readonly cfcPrefixProvenanceStats: boolean;
   readonly cfcSinkMaxConfidentiality: SinkMaxConfidentiality;
 
@@ -2069,7 +2055,6 @@ export class Runtime {
       this.cfcPolicyEvaluation = dials.cfcPolicyEvaluation;
       this.cfcLabelMetadataProtection = dials.cfcLabelMetadataProtection;
       this.cfcDeclaredMonotonicity = dials.cfcDeclaredMonotonicity;
-      this.cfcReleaseGateIntegrity = dials.cfcReleaseGateIntegrity;
       this.cfcPrefixProvenanceStats = options.cfcPrefixProvenanceStats ?? false;
       this.#cfcInstrumentation = this.#buildCfcInstrumentation();
       // Deep-freeze: the ceiling is CFC enforcement config, so a caller must not
@@ -2679,7 +2664,6 @@ export class Runtime {
     wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
     wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
     wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
-    wrapped.setCfcReleaseGateIntegrityMode(this.cfcReleaseGateIntegrity);
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);
@@ -3929,11 +3913,7 @@ export class Runtime {
           confidentiality: [...consumed.confidentiality],
           integrity: [...consumed.integrity],
         },
-        // The release gates' per-access join reads these; at `off` nothing
-        // does, so the receipt carries none.
-        ...(finalPreparedState.releaseGateIntegrityMode === "off"
-          ? {}
-          : { locations: consumed.locations() }),
+        locations: consumed.locations(),
         labeledSpaces: [...(flow.labeledSpaces ?? [])],
         sources: consumed.sources.map((entry) => ({
           atom: entry.atom,

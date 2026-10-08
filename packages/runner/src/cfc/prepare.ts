@@ -114,7 +114,10 @@ import {
   getTransactionWriteAttempts,
   getTransactionWrittenSpaces,
 } from "../storage/transaction-inspection.ts";
-import { accessIntegrity, type ConsumedLocation } from "./access-integrity.ts";
+import {
+  type ConsumedLocation,
+  joinLocationIntegrity,
+} from "./access-integrity.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
   PRINCIPAL_CLAIM_KINDS,
@@ -138,8 +141,8 @@ import { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import { collectDeclaredMonotonicityViolations } from "./declared-monotonicity.ts";
 import {
   type CfcGrantConsumptionContext,
-  type CfcGrantResolver,
   evaluateExchangeRules,
+  isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
 import {
@@ -193,7 +196,7 @@ import {
   clauseBearsReadFailedMarker,
   uniqueCfcAtoms,
 } from "./observation.ts";
-import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./policy.ts";
+import { CFC_POLICY_MANIFEST_ID_PREFIX, type ExchangeRule } from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
 import { sinkClassOf } from "./sink-inventory.ts";
@@ -991,18 +994,25 @@ const observationInputWitnesses = (
 };
 
 /**
+ * Whether an entry's integrity is evidence about the value currently at its
+ * path, which a value-intrinsic exchange rule may be matched against (spec
+ * §5.3): the flow stamps (`derived`, `structure`) and the writer's own stamps
+ * (`minted`), whose evidence a later write withdraws. A `declared` entry is
+ * store policy, whose integrity a schema states and no write withdraws; a
+ * `link` entry copies what its target carried when the reference was written;
+ * an `external-ingest` mark is not checked against the value it names.
+ */
+const bindsCurrentValueEvidence = (entry: LabelMapEntry): boolean =>
+  entry.origin === "derived" || entry.origin === "structure" ||
+  entry.origin === MINTED_ORIGIN;
+
+/**
  * The labeled locations one observation of the document `document` consumed,
- * as the release gates' per-access join reads them (`access-integrity.ts`).
- * A `TransformedBy` atom names the derived and structure entries that supply
- * it at its location, by the document and the entry's own path, origin and
- * observation class, so two locations resolving one stamp name it alike.
- * Those are the stamps `carriedStampLabel` withdraws the atom from once
- * another writer writes at, above or below them, which is what lets one such
- * stamp speak for every location it resolves at. Every atom also names its
- * location, a link probe's being the slot it probes, so observing one
- * location twice is observing one value; an atom no such stamp supplies
- * survives a join only over that one location. The other arguments are
- * `resolvedLocations()`'s.
+ * as a release gate reads them (`access-integrity.ts`). A location is keyed
+ * by the document and its path, a link probe's being the slot it probes, so
+ * observing one location twice is observing one value. Its evidence is the
+ * integrity of the entries resolving there that bind the current value. The
+ * other arguments are `resolvedLocations()`'s.
  */
 const consumedLocations = (
   document: string,
@@ -1012,59 +1022,48 @@ const consumedLocations = (
 ): ConsumedLocation[] =>
   Array.from(
     resolvedLocations(entries, path, nonRecursive, "labeled", "evidence"),
-    ({ path: location, label, evidence, integrity }) => {
-      const suppliers = (integrity?.length ?? 0) === 0
-        ? []
-        : entriesResolvedAtPath(evidence, location);
-      // A probe of whether a slot holds a link observes that slot.
-      const here = stringTupleKey([
-        document,
-        "location",
-        pathKey(probedSlotPath(location)),
-      ]);
-      return {
-        confidentiality: label.confidentiality ?? [],
-        integrity: (integrity ?? []).map((atom) => ({
-          atom,
-          stamps: [
-            here,
-            ...suppliers.filter((entry) =>
-              isTransformedByAtom(atom) &&
-              (entry.origin === "derived" || entry.origin === "structure") &&
-              entry.label.integrity?.some((held) => deepEqual(held, atom))
-            ).map((entry) =>
-              stringTupleKey([
-                document,
-                "stamp",
-                pathKey(entry.path),
-                entry.origin!,
-                entry.observes ?? "",
-              ])
-            ),
-          ],
-        })),
-      };
-    },
+    ({ path: location, label, evidence, integrity }) => ({
+      key: stringTupleKey([document, pathKey(probedSlotPath(location))]),
+      confidentiality: label.confidentiality ?? [],
+      integrity: integrity ?? [],
+      evidence: labelForEntriesAtPath(
+        evidence.filter(bindsCurrentValueEvidence),
+        location,
+      )?.integrity ?? [],
+    }),
   );
 
 /**
- * The locations an external content observation consumed, as the per-access
- * join reads them: those its reads recorded, or, where it recorded none, one
- * location vouched for by its flow join's integrity, a meet over what the
- * content consumed that names a stamp no other location shares. `index`
- * tells the observation from the transaction's others.
+ * The locations an external content observation consumed, as a release gate
+ * reads them: those its reads recorded, or, where it recorded none, one
+ * location carrying its flow join's integrity, a meet over what the content
+ * consumed, and no evidence. `index` tells the observation from the
+ * transaction's others.
  */
 const externalContentLocations = (
   observation: CfcExternalContentObservation,
   index: number,
 ): readonly ConsumedLocation[] =>
   observation.locations ?? [{
+    key: stringTupleKey(["external-content", String(index)]),
     confidentiality: observation.consumed.confidentiality ?? [],
-    integrity: (observation.flow.integrity ?? []).map((atom) => ({
-      atom,
-      stamps: [stringTupleKey(["external-content", String(index)])],
-    })),
+    integrity: observation.flow.integrity ?? [],
+    evidence: [],
   }];
+
+/**
+ * The location a label-metadata observation consumed: its clauses, and no
+ * integrity, since metadata carries no evidence.
+ */
+const labelMetadataLocation = (
+  confidentiality: readonly CfcConfClause[],
+  index: number,
+): ConsumedLocation => ({
+  key: stringTupleKey(["label-metadata", String(index)]),
+  confidentiality,
+  integrity: [],
+  evidence: [],
+});
 
 // Read-like shape (space/id/scope/path + a recursive read profile) for the
 // addresses whose invalidating writes scheduled this run — the §8.9.2 trigger
@@ -7017,7 +7016,10 @@ const verifyInputRequirements = (
     // introspection-using code ever records one (no existing flow regresses).
     // Confidentiality-only records: never provenance-only, never a floor
     // witness.
-    for (const observation of tx.getCfcState().labelMetadataObservations) {
+    for (
+      const [index, observation] of tx.getCfcState().labelMetadataObservations
+        .entries()
+    ) {
       gatedReads.push({
         space: observation.target.space,
         id: observation.target.id as URI,
@@ -7027,10 +7029,9 @@ const verifyInputRequirements = (
         meta: {},
         journalIndex: -Infinity,
         label: { confidentiality: [...observation.confidentiality] },
-        locations: () => [{
-          confidentiality: observation.confidentiality,
-          integrity: [],
-        }],
+        locations: () => [
+          labelMetadataLocation(observation.confidentiality, index),
+        ],
       });
     }
     for (
@@ -7241,45 +7242,14 @@ const verifyInputRequirements = (
       // is not "the inputs were screened". The single-read case reduces to
       // the plain floor. Quantifies over D4's per-write prefix `gating`, not
       // the transaction-global gate-visible read set.
-      const trust = cfcFloorTrustContext(tx);
-      const pooled = cfcIntegritySatisfiesFloorCoherently(
-        gating.map((read) => read.label?.integrity ?? []),
+      // Each gated read is one materialized value, labeled by the join of
+      // the locations it consumed (§8.10.1.1, §3.1.6.2), so its witness is
+      // what that join keeps, not what some location of it carries.
+      const ok = cfcIntegritySatisfiesFloorCoherently(
+        gating.map((read) => joinLocationIntegrity(read.locations())),
         requiredIntegrity,
-        trust,
+        cfcFloorTrustContext(tx),
       );
-      // Per access, the shared witness is one every labeled location of
-      // every gated read carries (§8.10.3), not one some location of each
-      // read carries. A location that is provenance plumbing is exempt, as a
-      // read that is (audit S7).
-      // The join can only refuse more: a witness every location carries is
-      // also one every read's union carries, and checking both keeps an
-      // exemption that differs between the two from admitting more.
-      const gateMode = tx.getCfcState().releaseGateIntegrityMode;
-      const perAccess = gateMode === "off" || !pooled ? pooled : (() => {
-        const witnessed = gating.flatMap((read) =>
-          read.locations().flatMap((location) => {
-            const integrity = location.integrity.map(({ atom }) => atom);
-            return isProvenanceOnlyConsumedLabel({
-                confidentiality: location.confidentiality,
-                integrity,
-              })
-              ? []
-              : [integrity];
-          })
-        );
-        return cfcIntegritySatisfiesFloorCoherently(
-          witnessed,
-          requiredIntegrity,
-          trust,
-        );
-      })();
-      if (gateMode === "observe" && perAccess !== pooled) {
-        tx.noteCfcDiagnostic(
-          `release-gate-integrity(observe): the per-access join would ` +
-            `fail requiredIntegrity at /${entry.path.join("/")}`,
-        );
-      }
-      const ok = gateMode === "enforce" ? perAccess : pooled;
       if (!ok) {
         return {
           reason: `requiredIntegrity failed at /${entry.path.join("/")}`,
@@ -7326,18 +7296,14 @@ const verifyInputRequirements = (
         // WRITE is a consuming site for single-use grants — the ceiling
         // decision persists with the written value — but only under the
         // enforce dial, where this evaluation's outcome IS the decision.
-        const gateMode = tx.getCfcState().releaseGateIntegrityMode;
-        const grantLog = new Map<string, readonly CfcAtom[]>();
-        const outcome = evaluateGatedConfidentiality(
+        const outcome = evaluateAccessExchange(
           tx,
           confidentiality,
-          gateMode === "enforce" && (read.label?.integrity?.length ?? 0) > 0
-            ? accessIntegrity(read.locations())
-            : read.label?.integrity ?? [],
+          read.label?.integrity ?? [],
+          read.locations,
           [],
           mode === "enforce" ? "consuming" : "observing",
           target.space,
-          gateMode === "observe" ? { log: grantLog, replay: false } : undefined,
         );
         if (mode === "enforce") {
           // Exhaustion fails closed; otherwise subsumption-fit the REWRITTEN
@@ -7346,22 +7312,6 @@ const verifyInputRequirements = (
           const fits = outcome.exhausted === false &&
             atomsOutsideCeiling(outcome.confidentiality, maxConfidentiality)
                 .length === 0;
-          if (gateMode === "observe" && fits) {
-            noteReleaseGateDivergence(
-              tx,
-              `maxConfidentiality at /${entry.path.join("/")} reading ` +
-                `${read.id} /${read.path.join("/")}`,
-              confidentiality,
-              read.label?.integrity ?? [],
-              read.locations,
-              [],
-              (rewritten) =>
-                atomsOutsideCeiling(rewritten, maxConfidentiality).length === 0,
-              "consuming",
-              grantLog,
-              target.space,
-            );
-          }
           if (
             !fits &&
             (outcome.resolutionFailures.length > 0 ||
@@ -10034,15 +9984,17 @@ const collectConsumedLabelImpl = (
   // protected value. Confidentiality only: a metadata observation carries no
   // evidence, so it contributes nothing to the exchange evaluator's guard
   // pool.
-  for (const observation of tx.getCfcState().labelMetadataObservations) {
+  for (
+    const [index, observation] of tx.getCfcState().labelMetadataObservations
+      .entries()
+  ) {
     for (const atom of observation.confidentiality) atoms.push(atom);
     for (const atom of observation.confidentiality) {
       noteSource(atom, observation.target, observation.target.path);
     }
-    otherLocations.push({
-      confidentiality: observation.confidentiality,
-      integrity: [],
-    });
+    otherLocations.push(
+      labelMetadataLocation(observation.confidentiality, index),
+    );
   }
   for (
     const [index, observation] of (
@@ -10180,9 +10132,7 @@ export const describeSinkReleaseRefusal = (
  * writes at the end of `prepareBoundaryCommit` (the same pass), so
  * consumption commits atomically with the release.
  *
- * `grants`, when given, records what the transaction's grant resolver
- * returns into its log, or, with `replay`, answers from that log alone and
- * resolves nothing itself (`GrantLog`).
+ * `admitsRule`, when given, restricts the evaluation to the rules it admits.
  */
 const evaluateGatedConfidentiality = (
   tx: IExtendedStorageTransaction,
@@ -10193,7 +10143,7 @@ const evaluateGatedConfidentiality = (
   destinationSpace?:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
-  grants?: GrantLog,
+  admitsRule?: (rule: ExchangeRule) => boolean,
 ): {
   confidentiality: readonly CfcConfClause[];
   exhausted: boolean;
@@ -10222,13 +10172,11 @@ const evaluateGatedConfidentiality = (
       // consulted address+digest into the prepare state for the B5-style
       // digest binding. Rides the same cfcPolicyEvaluation dial as the rest
       // of this evaluation — this function only runs when the dial is on.
-      grantResolver: grants?.replay === true
-        ? (query) => grants.log.get(deepEqualKey(query)) ?? []
-        : loggedGrantResolver(
-          createTxCfcGrantResolver(tx, { availability: grantAvailability }),
-          grants?.log,
-        ),
+      grantResolver: createTxCfcGrantResolver(tx, {
+        availability: grantAvailability,
+      }),
       grantConsumption: consumption,
+      ...(admitsRule === undefined ? {} : { admitsRule }),
       modulePolicyResolver: createTxCfcModulePolicyResolver(
         tx,
         (reference) => {
@@ -10255,101 +10203,101 @@ const evaluateGatedConfidentiality = (
 };
 
 /**
- * Under the `observe` rung of `cfcReleaseGateIntegrity`, records a release
- * the pooled integrity admits and the per-access join would refuse
- * (`access-integrity.ts`). `site` names the release, `pooled` is the
- * integrity it was admitted on, `locations` returns what the access
- * consumed, and `fits` decides a rewritten label against the site's ceiling.
- * It evaluates in the grant context `consumption` names, the one the decision
- * was made in, answering each grant lookup from `grantLog`, what the
- * decision's own lookups returned, so it reads, records and stages no grant
- * the decision did not. A grant only the join would have consulted resolves
- * nothing here, so such a release can be reported that a grant would have
- * admitted. Module policies resolve as the decision's do: a location's
- * references are among the access's, and a manifest consulted twice is
- * recorded once.
+ * Evaluates the exchange rules over what one access consumed, as a release
+ * gate does (`access-integrity.ts`): the value-intrinsic rules at each
+ * location `locations` returns, each matched against that location's own
+ * evidence, then every rule over the join, whose integrity is
+ * `joinLocationIntegrity()`'s and whose confidentiality is what the
+ * per-location evaluations left, with any clause of `confidentiality` no
+ * location resolved kept as it was read. A location whose evaluation runs
+ * out of fuel keeps its clauses and marks the whole outcome exhausted, and
+ * its resolution failures are the outcome's. The other arguments are
+ * `evaluateGatedConfidentiality()`'s.
  *
- * The diagnostic also says whether each confidential location, evaluated on
- * its own integrity, would be admitted: a release that holds that way rests
- * on evidence each value carries, which value-intrinsic exchange at
- * observation preserves (§5.3), while one that does not rests on one value's
- * evidence vouching for another.
+ * With no rule that could fire, or no integrity consumed for a rule to
+ * match, the access is evaluated as consumed, with `pooled` as its
+ * integrity, and its locations are not resolved: that evaluation decides
+ * alike.
  */
-const noteReleaseGateDivergence = (
+const evaluateAccessExchange = (
   tx: IExtendedStorageTransaction,
-  site: string,
   confidentiality: readonly CfcConfClause[],
   pooled: readonly CfcAtom[],
   locations: () => readonly ConsumedLocation[],
   boundary: readonly CfcAtom[],
-  fits: (rewritten: readonly CfcConfClause[]) => boolean,
   consumption: CfcGrantConsumptionContext,
-  grantLog: Map<string, readonly CfcAtom[]>,
   destinationSpace?:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
-): void => {
-  // The join keeps a subset of the pooled atoms, and a guard matches no more
-  // given less, so a join that keeps every pooled atom decides alike.
-  if (pooled.length === 0) return;
-  const consumed = locations();
-  const joined = accessIntegrity(consumed);
-  if (pooled.every((atom) => joined.some((kept) => deepEqual(kept, atom)))) {
-    return;
-  }
-  const admits = (
-    clauses: readonly CfcConfClause[],
-    integrity: readonly CfcAtom[],
-  ): boolean => {
-    const outcome = evaluateGatedConfidentiality(
+): ReturnType<typeof evaluateGatedConfidentiality> => {
+  if (
+    confidentiality.length === 0 || pooled.length === 0 ||
+    ((tx.getCfcState().policySnapshot?.records.length ?? 0) === 0 &&
+      modulePolicyReferencesIn(confidentiality).length === 0)
+  ) {
+    return evaluateGatedConfidentiality(
       tx,
-      clauses,
-      integrity,
+      confidentiality,
+      pooled,
       boundary,
       consumption,
       destinationSpace,
-      { log: grantLog, replay: true },
     );
-    return !outcome.exhausted && fits(outcome.confidentiality);
-  };
-  if (admits(confidentiality, joined)) return;
-  const perLocation = consumed.every((location) =>
-    location.confidentiality.length === 0 ||
-    admits(
+  }
+  const consumed = locations();
+  const exchanged: CfcConfClause[] = [];
+  const resolved: CfcConfClause[] = [];
+  const resolutionFailures: ReturnType<
+    typeof evaluateGatedConfidentiality
+  >["resolutionFailures"][number][] = [];
+  let exhausted = false;
+  let firings = 0;
+  for (const location of consumed) {
+    if (location.confidentiality.length === 0) continue;
+    for (const clause of location.confidentiality) resolved.push(clause);
+    const outcome = evaluateGatedConfidentiality(
+      tx,
       location.confidentiality,
-      location.integrity.map(({ atom }) => atom),
-    )
+      location.evidence,
+      [],
+      "observing",
+      destinationSpace,
+      isValueIntrinsicExchangeRule,
+    );
+    exhausted ||= outcome.exhausted;
+    firings += outcome.firings;
+    for (const failure of outcome.resolutionFailures) {
+      resolutionFailures.push(failure);
+    }
+    for (const clause of outcome.confidentiality) exchanged.push(clause);
+  }
+  // Every clause the access consumed resolves at one of its locations; one
+  // that did not stays as it was read.
+  for (const clause of confidentiality) {
+    if (!resolved.some((other) => deepEqual(other, clause))) {
+      exchanged.push(clause);
+    }
+  }
+  const joined = evaluateGatedConfidentiality(
+    tx,
+    uniqueCfcAtoms(exchanged) as CfcConfClause[],
+    joinLocationIntegrity(consumed),
+    boundary,
+    consumption,
+    destinationSpace,
   );
-  tx.noteCfcDiagnostic(
-    `release-gate-integrity(observe): the per-access join would refuse ` +
-      `${site}; evaluated per location, it would ` +
-      `${perLocation ? "admit" : "refuse"} it`,
-  );
-};
-
-/**
- * What a gate decision's grant lookups returned, by query, so that an
- * evaluation beside the decision can be answered from them. `replay` says
- * which side an evaluation is on: `false` records into `log` through the
- * transaction's grant resolver; `true` answers from `log` alone, resolving no
- * grant the decision did not, so the evaluation reads, records and stages
- * nothing. A query the decision never made resolves nothing.
- */
-type GrantLog = {
-  readonly log: Map<string, readonly CfcAtom[]>;
-  readonly replay: boolean;
-};
-
-/** `resolver`, recording each answer into `log` when one is given. */
-const loggedGrantResolver = (
-  resolver: CfcGrantResolver,
-  log: Map<string, readonly CfcAtom[]> | undefined,
-): CfcGrantResolver =>
-  log === undefined ? resolver : (query) => {
-    const facts = resolver(query);
-    log.set(deepEqualKey(query), facts);
-    return facts;
+  for (const failure of joined.resolutionFailures) {
+    resolutionFailures.push(failure);
+  }
+  return {
+    ...joined,
+    // An exhausted location keeps its clauses, so the confidentiality is
+    // never a partial rewrite; the flag fails the access closed.
+    exhausted: exhausted || joined.exhausted,
+    firings: firings + joined.firings,
+    resolutionFailures,
   };
+};
 
 const noteModulePolicyResolutionFailures = (
   tx: IExtendedStorageTransaction,
@@ -10420,7 +10368,6 @@ const verifySinkRequestCeilings = (
       // (design §2.2) under the enforce dial — the rewritten label decides
       // whether the request flushes past the ceiling. Observe evaluates for
       // diagnostics only and must never spend a grant.
-      const gateMode = state.releaseGateIntegrityMode;
       const destinationSpace = (reference: unknown) => {
         const key = modulePolicyArtifactKey(reference);
         const spaces = [...(consumed.modulePolicySpaces.get(key) ?? [])]
@@ -10439,17 +10386,14 @@ const verifySinkRequestCeilings = (
         }
         return spaces[0];
       };
-      const grantLog = new Map<string, readonly CfcAtom[]>();
-      const outcome = evaluateGatedConfidentiality(
+      const outcome = evaluateAccessExchange(
         tx,
         consumed.confidentiality,
-        gateMode === "enforce" && consumed.integrity.length > 0
-          ? accessIntegrity(consumed.locations())
-          : consumed.integrity,
+        consumed.integrity,
+        consumed.locations,
         boundary,
         mode === "enforce" ? "consuming" : "observing",
         destinationSpace,
-        gateMode === "observe" ? { log: grantLog, replay: false } : undefined,
       );
       if (mode === "enforce") {
         if (outcome.exhausted) {
@@ -10464,23 +10408,6 @@ const verifySinkRequestCeilings = (
         effective = outcome.confidentiality;
         verdict = outcome.resolutionFailures.length === 0 &&
           !outcome.grantResolutionUnavailable;
-        if (
-          gateMode === "observe" &&
-          atomsOutsideCeiling(effective, ceiling).length === 0
-        ) {
-          noteReleaseGateDivergence(
-            tx,
-            `sink-request ${sink}`,
-            consumed.confidentiality,
-            consumed.integrity,
-            consumed.locations,
-            boundary,
-            (rewritten) => atomsOutsideCeiling(rewritten, ceiling).length === 0,
-            "consuming",
-            grantLog,
-            destinationSpace,
-          );
-        }
       } else {
         // observe: decide exactly as `off` would; diagnose what enforce
         // would have done differently.

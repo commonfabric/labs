@@ -119,7 +119,6 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   cfcPolicyEvaluation: { treat: "core-pinned", value: "enforce" },
   cfcLabelMetadataProtection: { treat: "core-pinned", value: "enforce" },
   cfcDeclaredMonotonicity: { treat: "core-pinned", value: "observe" },
-  cfcReleaseGateIntegrity: { treat: "core-pinned", value: "observe" },
   // Deployment-facing runtimes point patterns at the deployment itself;
   // local presets keep the builder-env default (localhost fall-through).
   patternEnvironment: {

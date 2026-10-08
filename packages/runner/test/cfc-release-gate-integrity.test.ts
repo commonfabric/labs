@@ -23,7 +23,6 @@ import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import { STANDARD_PROMPT_CAVEAT_POLICY } from "../src/cfc/standard-profile.ts";
 import type {
-  CfcReleaseGateIntegrityMode,
   ImplementationIdentity,
   LabelMapEntry,
 } from "../src/cfc/types.ts";
@@ -127,7 +126,6 @@ const LIST_SCHEMA = {
 const SINK = "fetchJson";
 
 const withRuntime = async (
-  mode: CfcReleaseGateIntegrityMode,
   body: (runtime: Runtime) => Promise<void>,
   policyRecords: readonly CfcPolicyRecordInput[] = RELEASE_RULE,
 ): Promise<void> => {
@@ -138,7 +136,6 @@ const withRuntime = async (
     cfcFlowLabels: "persist",
     cfcPolicyRecords: policyRecords,
     cfcPolicyEvaluation: "enforce",
-    cfcReleaseGateIntegrity: mode,
     cfcSinkMaxConfidentiality: { [SINK]: [] },
     // The tallied store's floor is on what a write read. The written value's
     // own floor, which the publishing transaction does not meet, is another
@@ -380,41 +377,6 @@ const SCREENED_RELEASE: CfcPolicyRecordInput[] = [{
   }],
 }];
 
-// The tally's release, and a share grant consulted for an owner's clause.
-const OWNER_CLAUSE = cfcAtom.user(signer.did());
-const GRANTED_RELEASE: CfcPolicyRecordInput[] = [{
-  id: "granted-release",
-  rules: [
-    {
-      id: "a-release-owner",
-      appliesTo: { type: CFC_ATOM_TYPE.User, subject: { var: "$o" } },
-      preCondition: { integrity: [WITNESSED_GUARD] },
-      post: { dropClause: true },
-    },
-    {
-      id: "a-release-room",
-      appliesTo: ROOM,
-      preCondition: { integrity: [WITNESSED_GUARD] },
-      post: { dropClause: true },
-    },
-    {
-      id: "b-share",
-      appliesTo: { type: CFC_ATOM_TYPE.User, subject: { var: "$owner" } },
-      preCondition: {
-        policyState: [{
-          kind: "ShareGrant",
-          owner: { var: "$owner" },
-          resource: "of:photo",
-          audience: { type: CFC_ATOM_TYPE.User, subject: { var: "$r" } },
-        }],
-      },
-      post: {
-        addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: { var: "$r" } }],
-      },
-    },
-  ],
-}];
-
 // A floor on an evidence family no runtime code mints, so only seeded labels
 // carry it.
 const VOUCHED = { type: "https://example.com/atoms/Vouched" };
@@ -522,440 +484,356 @@ const refusedAtSink = ({ reasons }: Prepared): boolean =>
 const refusedByFloor = ({ reasons }: Prepared): boolean =>
   reasons.some((reason) => reason.includes("requiredIntegrity failed"));
 
-/** The release-gate diagnostics an observe-rung prepare recorded. */
-const divergences = ({ diagnostics }: Prepared): string[] =>
-  diagnostics.filter((diagnostic) =>
-    diagnostic.startsWith("release-gate-integrity(observe)")
+/** Fields the tally wrote one at a time into `cause`, created public and empty. */
+const seedTalliedFields = async (
+  runtime: Runtime,
+  cause: string,
+): Promise<void> => {
+  await seedSecret(runtime, "alice-note", "alice-secret");
+  await seedSecret(runtime, "bob-note", "bob-secret");
+  await transform(
+    runtime,
+    COMMIT,
+    ["alice-note", "bob-note"],
+    "committed",
+    () => ({ votes: ["approve", "reject"] }),
   );
+  await seedPublic(runtime, cause, {});
+  await transform(runtime, TALLY, ["committed"], cause, tally, ["a"]);
+  await transform(runtime, TALLY, ["committed"], cause, tally, ["b"]);
+};
+
+// The tally's release, scoped to the sink a request goes to.
+const SINK_SCOPED_RELEASE: CfcPolicyRecordInput[] = [{
+  id: "sink-scoped-release",
+  rules: [{
+    id: "release-ballot-to-sink",
+    appliesTo: ROOM,
+    preCondition: {
+      integrity: [WITNESSED_GUARD],
+      boundary: [cfcAtom.boundaryContext("sink", SINK)],
+    },
+    post: { dropClause: true },
+  }],
+}];
+
+// A clause a store may hold, and the tally's release conditioned on it being
+// present beside the room clause.
+const OTHER = cfcAtom.builtin("other-audience");
+const OTHER_STORE_SCHEMA = {
+  type: "object",
+  properties: {
+    out: { type: "string", ifc: { maxConfidentiality: [OTHER] } },
+  },
+  required: ["out"],
+} as const satisfies JSONSchema;
+const CONDITIONED_RELEASE: CfcPolicyRecordInput[] = [{
+  id: "conditioned-release",
+  rules: [{
+    id: "release-ballot-beside-other",
+    appliesTo: ROOM,
+    preConfScope: "anywhere",
+    preCondition: { confidentiality: [OTHER], integrity: [WITNESSED_GUARD] },
+    post: { dropClause: true },
+  }],
+}];
+
+const TALLY_STAMP = {
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: TALLY,
+  inputWitness: { type: CFC_ATOM_TYPE.TransformedBy, identity: COMMIT },
+};
 
 describe("release-gate integrity", () => {
-  describe("off", () => {
-    // What the gates release under the integrity union: they pool the
-    // integrity of everything an access consumed, so the tally's
-    // `TransformedBy` at `/a` releases the room clause Alice's copied note
-    // carries at `/b`. Each release below is the behavior to remove; the
-    // controls beside them show the secret read on its own is refused.
+  // A gate runs the value-intrinsic rules at each location an access
+  // consumed, on that location's own evidence, and every rule over the join
+  // of what they leave (§5.3, §4.6.3, §8.10.1.1). The tally's `TransformedBy`
+  // releases the room clause where the tally wrote, and nowhere else.
 
-    describe("at the write input gate", () => {
-      it("releases a secret written beside an endorsed output, read whole", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedSharedRoom(runtime);
-          const result = publish(runtime, "shared");
-          expect(result.reasons).toEqual([]);
-          expect(result.published).toBe('{"a":"1","b":"alice-secret"}');
-          expect(divergences(result)).toEqual([]);
-        });
-      });
-
-      it("refuses the secret read on its own", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(refusedByCeiling(publish(runtime, "shared", ["b"]))).toBe(
-            true,
-          );
-        });
-      });
-
-      it("releases the endorsed output read on its own", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(publish(runtime, "shared", ["a"]).reasons).toEqual([]);
-        });
-      });
-
-      it("releases a secret appended after an endorsed output, read whole", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedSharedList(runtime);
-          const result = publish(runtime, "list");
-          expect(result.reasons).toEqual([]);
-          expect(result.published).toBe('["1","alice-secret"]');
-        });
-      });
-
-      it("passes a floor on the tally for a secret written beside its output, read whole", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(
-            publish(runtime, "shared", [], TALLIED_STORE_SCHEMA).reasons,
-          ).toEqual([]);
-        });
-      });
-
-      it("fails the floor on the tally for the secret read on its own", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(
-            refusedByFloor(
-              publish(runtime, "shared", ["b"], TALLIED_STORE_SCHEMA),
-            ),
-          ).toBe(true);
-        });
-      });
-    });
-
-    describe("at sink egress", () => {
-      it("releases a secret read beside an endorsed output in another document", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedBallot(runtime);
-          expect(
-            refusedAtSink(
-              send(runtime, [["ballot", []], ["alice-note", []]]),
-            ),
-          ).toBe(false);
-        });
-      });
-
-      it("releases a secret written beside an endorsed output, read whole", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(refusedAtSink(send(runtime, [["shared", []]]))).toBe(false);
-        });
-      });
-
-      it("refuses the secret read on its own", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedBallot(runtime);
-          expect(refusedAtSink(send(runtime, [["alice-note", []]]))).toBe(
-            true,
-          );
-        });
-      });
-
-      it("releases the endorsed output read on its own", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedBallot(runtime);
-          expect(refusedAtSink(send(runtime, [["ballot", []]]))).toBe(false);
-        });
-      });
-
-      it("discharges an unscreened item's caveat sent beside a screened item from its source", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedInbox(runtime);
-          expect(
-            refusedAtSink(send(runtime, [["item-1", []], ["item-2", []]])),
-          ).toBe(false);
-        }, STANDARD_PROMPT_CAVEAT_POLICY);
-      });
-
-      it("refuses the unscreened item sent on its own", async () => {
-        await withRuntime("off", async (runtime) => {
-          await seedInbox(runtime);
-          expect(refusedAtSink(send(runtime, [["item-2", []]]))).toBe(true);
-        }, STANDARD_PROMPT_CAVEAT_POLICY);
-      });
-    });
-  });
-
-  describe("observe", () => {
-    // Decides as `off` does, and records each release the per-access join
-    // would refuse.
-
-    it("releases a secret read whole beside an endorsed output, and records that the join would refuse it", async () => {
-      await withRuntime("observe", async (runtime) => {
+  describe("at the write input gate", () => {
+    it("refuses a secret written beside an endorsed output, read whole", async () => {
+      await withRuntime(async (runtime) => {
         await seedSharedRoom(runtime);
-        const result = publish(runtime, "shared");
-        expect(result.reasons).toEqual([]);
-        expect(divergences(result)).toEqual([
-          "release-gate-integrity(observe): the per-access join would " +
-          "refuse maxConfidentiality at /out reading " +
-          `${result.readId} /; evaluated per location, it would refuse it`,
-        ]);
+        expect(refusedByCeiling(publish(runtime, "shared"))).toBe(true);
       });
     });
 
-    it("records that the join would fail the floor on the tally for a secret read whole beside its output", async () => {
-      await withRuntime("observe", async (runtime) => {
+    it("refuses the secret read on its own", async () => {
+      await withRuntime(async (runtime) => {
         await seedSharedRoom(runtime);
-        const result = publish(runtime, "shared", [], TALLIED_STORE_SCHEMA);
-        expect(result.reasons).toEqual([]);
-        expect(divergences(result)).toEqual([
-          "release-gate-integrity(observe): the per-access join would " +
-          "fail requiredIntegrity at /out",
-        ]);
+        expect(refusedByCeiling(publish(runtime, "shared", ["b"]))).toBe(true);
       });
     });
 
-    it("releases a request built from an endorsed output and a secret, and records that the join would refuse it", async () => {
-      await withRuntime("observe", async (runtime) => {
+    it("releases the endorsed output read on its own", async () => {
+      await withRuntime(async (runtime) => {
+        await seedSharedRoom(runtime);
+        expect(publish(runtime, "shared", ["a"]).reasons).toEqual([]);
+      });
+    });
+
+    it("releases an endorsed output read whole", async () => {
+      await withRuntime(async (runtime) => {
         await seedBallot(runtime);
-        const result = send(runtime, [["ballot", []], ["alice-note", []]]);
-        expect(refusedAtSink(result)).toBe(false);
-        expect(divergences(result)).toEqual([
-          "release-gate-integrity(observe): the per-access join would " +
-          `refuse sink-request ${SINK}; evaluated per location, it would ` +
-          "refuse it",
-        ]);
+        expect(publish(runtime, "ballot").reasons).toEqual([]);
       });
     });
 
-    it("records that a list only the tally appended to would be refused, and admitted per location", async () => {
-      await withRuntime("observe", async (runtime) => {
+    it("releases fields the tally wrote one at a time, read whole", async () => {
+      await withRuntime(async (runtime) => {
+        await seedTalliedFields(runtime, "fields");
+        const result = publish(runtime, "fields");
+        expect(result.reasons).toEqual([]);
+        expect(result.published).toBe('{"a":"1","b":"1"}');
+      });
+    });
+
+    it("refuses a secret appended after an endorsed output, read whole", async () => {
+      await withRuntime(async (runtime) => {
+        await seedSharedList(runtime);
+        expect(refusedByCeiling(publish(runtime, "list"))).toBe(true);
+      });
+    });
+
+    it("releases a list only the tally appended to, read whole", async () => {
+      // The append stamps the element and the list's length apart; each
+      // carries the tally's evidence for its own value.
+
+      await withRuntime(async (runtime) => {
         await seedTalliedList(runtime);
-        const result = publish(runtime, "list");
-        expect(result.reasons).toEqual([]);
-        expect(divergences(result)).toEqual([
-          "release-gate-integrity(observe): the per-access join would " +
-          "refuse maxConfidentiality at /out reading " +
-          `${result.readId} /; evaluated per location, it would admit it`,
-        ]);
+        expect(publish(runtime, "list").reasons).toEqual([]);
       });
     });
 
-    it("consults no grant the decision did not", async () => {
-      // Under the pooled integrity the tally's evidence drops the owner's
-      // clause before the grant rule is tried; under the join it does not,
-      // and the grant rule would be.
+    it("releases a field the evidence of its document's root stamp describes", async () => {
+      // No other writer stamped `/b`, so the root's stamp is the record of
+      // the value there, and its screening releases the clause the store
+      // declares at `/b`.
 
-      for (const mode of ["off", "observe"] as const) {
-        await withRuntime(mode, async (runtime) => {
-          await seedBallot(runtime);
-          await seedLabeled(runtime, "owned", "mine", {
-            confidentiality: [OWNER_CLAUSE],
-          });
-          const tx = runtime.edit();
-          runtime.getCell(space, "ballot", undefined, tx).getRaw();
-          runtime.getCell(space, "owned", undefined, tx).getRaw();
-          enqueueSinkRequestPostCommitEffect(
-            tx,
-            SINK,
-            `${SINK}:grants`,
-            createFrozenRequestSnapshot({ url: "https://example.com/x" }),
-            `${SINK}-start`,
-            () => {},
-          );
-          tx.prepareCfc();
-          expect(tx.getCfcState().consultedGrants).toEqual([]);
-          tx.abort();
-        }, GRANTED_RELEASE);
-      }
+      await withRuntime(async (runtime) => {
+        await seedEntries(runtime, "screened-root", {
+          a: "screened",
+          b: "screened too",
+        }, [{
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [ROOM], integrity: [SCREENED] },
+        }, {
+          path: ["b"],
+          origin: "declared",
+          label: { confidentiality: [ROOM] },
+        }]);
+        expect(publish(runtime, "screened-root").reasons).toEqual([]);
+      }, SCREENED_RELEASE);
     });
 
-    it("records nothing for the endorsed output read on its own", async () => {
-      await withRuntime("observe", async (runtime) => {
+    it("refuses a field another writer stamped beneath a screened root", async () => {
+      await withRuntime(async (runtime) => {
+        await seedEntries(runtime, "screened-root", {
+          a: "screened",
+          b: "alice-secret",
+        }, [{
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [ROOM], integrity: [SCREENED] },
+        }, {
+          path: ["b"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [ROOM] },
+        }]);
+        expect(refusedByCeiling(publish(runtime, "screened-root"))).toBe(
+          true,
+        );
+      }, SCREENED_RELEASE);
+    });
+
+    it("does not fire on a side condition another location carries", async () => {
+      // The rule drops the room clause where the tally's evidence sits
+      // beside `OTHER`, and the two sit at different locations.
+
+      await withRuntime(async (runtime) => {
+        await seedEntries(runtime, "split", { a: "1", b: "other" }, [{
+          path: ["a"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [ROOM], integrity: [TALLY_STAMP] },
+        }, {
+          path: ["b"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [OTHER] },
+        }]);
+        expect(
+          refusedByCeiling(publish(runtime, "split", [], OTHER_STORE_SCHEMA)),
+        ).toBe(true);
+      }, CONDITIONED_RELEASE);
+    });
+  });
+
+  describe("at the requiredIntegrity floor", () => {
+    // A gated read is one materialized value, whose witness is what the join
+    // of the locations it consumed keeps (§8.10.1.1, §3.1.6.2, §8.10.3).
+
+    it("passes the floor on the tally for its output read on its own", async () => {
+      await withRuntime(async (runtime) => {
         await seedSharedRoom(runtime);
-        const published = publish(runtime, "shared", ["a"]);
-        expect(published.reasons).toEqual([]);
-        expect(divergences(published)).toEqual([]);
-        await seedBallot(runtime);
-        const sent = send(runtime, [["ballot", []]]);
-        expect(refusedAtSink(sent)).toBe(false);
-        expect(divergences(sent)).toEqual([]);
+        expect(
+          publish(runtime, "shared", ["a"], TALLIED_STORE_SCHEMA).reasons,
+        ).toEqual([]);
+      });
+    });
+
+    it("fails the floor on the tally for a secret written beside its output, read whole", async () => {
+      await withRuntime(async (runtime) => {
+        await seedSharedRoom(runtime);
+        expect(
+          refusedByFloor(publish(runtime, "shared", [], TALLIED_STORE_SCHEMA)),
+        ).toBe(true);
+      });
+    });
+
+    it("fails the floor on the tally for the secret read on its own", async () => {
+      await withRuntime(async (runtime) => {
+        await seedSharedRoom(runtime);
+        expect(
+          refusedByFloor(
+            publish(runtime, "shared", ["b"], TALLIED_STORE_SCHEMA),
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it("fails the floor on the tally for fields it wrote one at a time, read whole", async () => {
+      // The join of two values keeps no value-bound atom, however each was
+      // stamped.
+
+      await withRuntime(async (runtime) => {
+        await seedTalliedFields(runtime, "fields");
+        expect(
+          refusedByFloor(publish(runtime, "fields", [], TALLIED_STORE_SCHEMA)),
+        ).toBe(true);
+      });
+    });
+
+    it("fails a floor no location's integrity meets", async () => {
+      // The location the read consumed carries a template's integrity beside
+      // a link's `Origin`, neither of which is `Vouched`.
+
+      await withRuntime(async (runtime) => {
+        await seedEntries(runtime, "templated", { items: ["a"] }, [{
+          path: ["items", "*"],
+          origin: "derived",
+          observes: "value",
+          label: { integrity: [{ type: "https://example.com/atoms/Other" }] },
+        }, {
+          path: ["items", "0"],
+          origin: "link",
+          label: {
+            integrity: [{ type: CFC_ATOM_TYPE.Origin, source: "probe" }],
+          },
+        }]);
+        expect(
+          refusedByFloor(
+            publish(runtime, "templated", ["items", "0"], VOUCHED_STORE_SCHEMA),
+          ),
+        ).toBe(true);
       });
     });
   });
 
-  describe("enforce", () => {
-    // Decides on the per-access join: the integrity at every confidential
-    // location the access consumed, joined as §3.1.6.2 joins values.
-
-    describe("at the write input gate", () => {
-      it("refuses a secret written beside an endorsed output, read whole", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(refusedByCeiling(publish(runtime, "shared"))).toBe(true);
-        });
-      });
-
-      it("releases the endorsed output read on its own", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(publish(runtime, "shared", ["a"]).reasons).toEqual([]);
-        });
-      });
-
-      it("refuses a secret appended after an endorsed output, read whole", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedSharedList(runtime);
-          expect(refusedByCeiling(publish(runtime, "list"))).toBe(true);
-        });
-      });
-
-      it("refuses a list only the tally appended to, read whole", async () => {
-        // An honest release the join refuses: the append stamps the element
-        // and the list's length apart, so no one stamp supplies the tally's
-        // `TransformedBy` at both, and the join drops it. Each location
-        // evaluated on its own would be admitted.
-
-        await withRuntime("enforce", async (runtime) => {
-          await seedTalliedList(runtime);
-          expect(refusedByCeiling(publish(runtime, "list"))).toBe(true);
-        });
-      });
-
-      it("releases an endorsed output read whole", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedBallot(runtime);
-          expect(publish(runtime, "ballot").reasons).toEqual([]);
-        });
-      });
-
-      it("fails the floor on the tally for a secret written beside its output, read whole", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(
-            refusedByFloor(
-              publish(runtime, "shared", [], TALLIED_STORE_SCHEMA),
-            ),
-          ).toBe(true);
-        });
-      });
-
-      it("fails a floor that `off` fails when a consumed location reads as provenance plumbing", async () => {
-        // The read's own label carries no `Vouched`, so the pooled floor
-        // fails. Its one labeled location carries a template's integrity
-        // beside a link's `Origin`, which the join must not take for
-        // plumbing and pass.
-
-        for (const mode of ["off", "enforce"] as const) {
-          await withRuntime(mode, async (runtime) => {
-            await seedEntries(runtime, "templated", { items: ["a"] }, [{
-              path: ["items", "*"],
-              origin: "derived",
-              observes: "value",
-              label: {
-                integrity: [{ type: "https://example.com/atoms/Other" }],
-              },
-            }, {
-              path: ["items", "0"],
-              origin: "link",
-              label: {
-                integrity: [{ type: CFC_ATOM_TYPE.Origin, source: "probe" }],
-              },
-            }]);
-            expect(
-              refusedByFloor(
-                publish(
-                  runtime,
-                  "templated",
-                  ["items", "0"],
-                  VOUCHED_STORE_SCHEMA,
-                ),
-              ),
-            ).toBe(true);
-          });
-        }
-      });
-
-      it("refuses a child's clause that evidence other than `TransformedBy` on an ancestor stamp vouches for", async () => {
-        // `carriedStampLabel` withdraws only `TransformedBy` from a stamp
-        // another writer writes beneath, so no other atom on the root stamp
-        // speaks for `/b`, which the root resolves at.
-
-        await withRuntime("enforce", async (runtime) => {
-          await seedEntries(runtime, "screened-root", {
-            a: "screened",
-            b: "alice-secret",
-          }, [{
-            path: [],
-            origin: "derived",
-            observes: "value",
-            label: { confidentiality: [ROOM], integrity: [SCREENED] },
-          }, {
-            path: ["b"],
-            origin: "declared",
-            label: { confidentiality: [ROOM] },
-          }]);
-          expect(refusedByCeiling(publish(runtime, "screened-root"))).toBe(
-            true,
-          );
-        }, SCREENED_RELEASE);
-      });
-
-      it("passes the floor on the tally for its output read on its own", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(
-            publish(runtime, "shared", ["a"], TALLIED_STORE_SCHEMA).reasons,
-          ).toEqual([]);
-        });
+  describe("at sink egress", () => {
+    it("refuses a secret read beside an endorsed output in another document", async () => {
+      await withRuntime(async (runtime) => {
+        await seedBallot(runtime);
+        expect(
+          refusedAtSink(send(runtime, [["ballot", []], ["alice-note", []]])),
+        ).toBe(true);
       });
     });
 
-    describe("at sink egress", () => {
-      it("refuses a secret read beside an endorsed output in another document", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedBallot(runtime);
-          expect(
-            refusedAtSink(
-              send(runtime, [["ballot", []], ["alice-note", []]]),
-            ),
-          ).toBe(true);
-        });
+    it("refuses a secret written beside an endorsed output, read whole", async () => {
+      await withRuntime(async (runtime) => {
+        await seedSharedRoom(runtime);
+        expect(refusedAtSink(send(runtime, [["shared", []]]))).toBe(true);
       });
+    });
 
-      it("refuses a secret written beside an endorsed output, read whole", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedSharedRoom(runtime);
-          expect(refusedAtSink(send(runtime, [["shared", []]]))).toBe(true);
-        });
+    it("refuses the secret read on its own", async () => {
+      await withRuntime(async (runtime) => {
+        await seedBallot(runtime);
+        expect(refusedAtSink(send(runtime, [["alice-note", []]]))).toBe(true);
       });
+    });
+
+    it("releases the endorsed output read on its own", async () => {
+      await withRuntime(async (runtime) => {
+        await seedBallot(runtime);
+        expect(refusedAtSink(send(runtime, [["ballot", []]]))).toBe(false);
+      });
+    });
+
+    it("releases an endorsed output read twice", async () => {
+      await withRuntime(async (runtime) => {
+        await seedBallot(runtime);
+        expect(
+          refusedAtSink(send(runtime, [["ballot", []], ["ballot", []]])),
+        ).toBe(false);
+      });
+    });
+
+    it("releases two endorsed outputs in one request", async () => {
+      await withRuntime(async (runtime) => {
+        await seedBallot(runtime);
+        await transform(runtime, TALLY, ["committed"], "ballot-2", tally);
+        expect(
+          refusedAtSink(send(runtime, [["ballot", []], ["ballot-2", []]])),
+        ).toBe(false);
+      });
+    });
+
+    it("releases fields the tally wrote one at a time, read whole", async () => {
+      await withRuntime(async (runtime) => {
+        await seedTalliedFields(runtime, "fields");
+        expect(refusedAtSink(send(runtime, [["fields", []]]))).toBe(false);
+      });
+    });
+
+    it("refuses an unscreened item sent beside a screened item from its source", async () => {
+      await withRuntime(async (runtime) => {
+        await seedInbox(runtime);
+        expect(
+          refusedAtSink(send(runtime, [["item-1", []], ["item-2", []]])),
+        ).toBe(true);
+      }, STANDARD_PROMPT_CAVEAT_POLICY);
+    });
+
+    it("discharges the screened item sent on its own", async () => {
+      await withRuntime(async (runtime) => {
+        await seedInbox(runtime);
+        expect(refusedAtSink(send(runtime, [["item-1", []]]))).toBe(false);
+      }, STANDARD_PROMPT_CAVEAT_POLICY);
+    });
+
+    describe("under a rule scoped to the sink", () => {
+      // A rule with a boundary guard is evaluated only at the access, over the
+      // join (§5.3), so it sees a `TransformedBy` only where the access
+      // observed one location.
 
       it("releases the endorsed output read on its own", async () => {
-        await withRuntime("enforce", async (runtime) => {
+        await withRuntime(async (runtime) => {
           await seedBallot(runtime);
           expect(refusedAtSink(send(runtime, [["ballot", []]]))).toBe(false);
-        });
+        }, SINK_SCOPED_RELEASE);
       });
 
-      it("refuses an unscreened item sent beside a screened item from its source", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedInbox(runtime);
-          expect(
-            refusedAtSink(send(runtime, [["item-1", []], ["item-2", []]])),
-          ).toBe(true);
-        }, STANDARD_PROMPT_CAVEAT_POLICY);
-      });
-
-      it("discharges the screened item sent on its own", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedInbox(runtime);
-          expect(refusedAtSink(send(runtime, [["item-1", []]]))).toBe(false);
-        }, STANDARD_PROMPT_CAVEAT_POLICY);
-      });
-
-      it("releases an endorsed output read twice", async () => {
-        await withRuntime("enforce", async (runtime) => {
-          await seedBallot(runtime);
-          expect(
-            refusedAtSink(send(runtime, [["ballot", []], ["ballot", []]])),
-          ).toBe(false);
-        });
-      });
-    });
-  });
-
-  describe("the dial", () => {
-    it("throws when a transaction pinned at `enforce` is weakened", async () => {
-      await withRuntime("enforce", (runtime) => {
-        const tx = runtime.edit();
-        expect(() => tx.setCfcReleaseGateIntegrityMode("observe")).toThrow(
-          "cannot be weakened",
-        );
-        expect(() => tx.setCfcReleaseGateIntegrityMode("off")).toThrow(
-          "cannot be weakened",
-        );
-        tx.setCfcReleaseGateIntegrityMode("enforce");
-        expect(tx.getCfcState().releaseGateIntegrityMode).toBe("enforce");
-        tx.abort();
-        return Promise.resolve();
-      });
-    });
-
-    it("invalidates a prepared transaction when its rung changes", async () => {
-      await withRuntime("observe", async (runtime) => {
-        await seedBallot(runtime);
-        const tx = runtime.edit();
-        runtime.getCell(space, "ballot", undefined, tx).getRaw();
-        runtime.getCell(space, "ballot-store", PUBLIC_STORE_SCHEMA, tx).set({
-          out: "1",
-        });
-        tx.prepareCfc();
-        expect(tx.getCfcState().prepare.status).toBe("prepared");
-        tx.setCfcReleaseGateIntegrityMode("observe");
-        expect(tx.getCfcState().prepare.status).toBe("prepared");
-        tx.setCfcReleaseGateIntegrityMode("enforce");
-        expect(tx.getCfcState().prepare.status).toBe("invalidated");
-        tx.abort();
+      it("refuses fields the tally wrote one at a time, read whole", async () => {
+        await withRuntime(async (runtime) => {
+          await seedTalliedFields(runtime, "fields");
+          expect(refusedAtSink(send(runtime, [["fields", []]]))).toBe(true);
+        }, SINK_SCOPED_RELEASE);
       });
     });
   });

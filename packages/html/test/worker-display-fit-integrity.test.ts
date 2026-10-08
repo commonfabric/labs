@@ -1,9 +1,9 @@
 /**
  * What the display boundary releases when a rendered value rests on an
  * endorsed output and on a secret nothing endorsed wrote. An exchange rule
- * releases the room clause on evidence that the tally wrote a value; read
- * through one access, the tally's count and Alice's note are fitted against
- * the evidence both of them carry between them.
+ * releases the room clause on evidence that the tally wrote a value; it runs
+ * at each location the reads behind the value consumed, so the tally's count
+ * is released and Alice's note beside it is not.
  *
  * `Deno.test` rather than `describe`/`it`: this package installs its fake
  * clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
@@ -24,6 +24,7 @@ import {
 import {
   buildCfcPolicySnapshot,
   evaluateExchangeRules,
+  isValueIntrinsicExchangeRule,
   type RenderConfidentialityResolver,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -36,9 +37,7 @@ import {
 import {
   cellLabelRefusal,
   cellLabelSources,
-  type DisplayFitSources,
   readRefusal,
-  type RenderLabelSummary,
 } from "../src/worker/display-fit.ts";
 import type { RenderPolicy } from "../src/worker/types.ts";
 
@@ -58,11 +57,6 @@ const PUBLIC_ONLY: RenderPolicy = {
 };
 
 Deno.test("display fit release-gate integrity", async (t) => {
-  // Under `off`, the display fit pools the integrity of every read behind a
-  // rendered value, so the tally's `TransformedBy` releases the room clause on
-  // Alice's note. Each such release is the behavior to remove; `enforce`
-  // refuses it, and the controls show the note read on its own is refused.
-
   const signer = await Identity.fromPassphrase("display fit integrity");
   const space = signer.did();
   const room = cfcAtom.space(space);
@@ -89,16 +83,11 @@ Deno.test("display fit release-gate integrity", async (t) => {
         integrity: [...(label.integrity ?? [])],
       },
       snapshot,
+      label.valueIntrinsicOnly === true
+        ? { admitsRule: isValueIntrinsicExchangeRule }
+        : {},
     ).label.confidentiality ?? [];
-  const divergences: RenderLabelSummary[] = [];
-  const sourcesAt = (
-    releaseGateIntegrity?: DisplayFitSources["releaseGateIntegrity"],
-  ): DisplayFitSources => ({
-    resolveConfidentiality,
-    releaseGateIntegrity,
-    noteReleaseGateDivergence: (refusal) => divergences.push(refusal),
-  });
-  const sources = sourcesAt();
+  const sources = { resolveConfidentiality };
 
   /** Stores `value` as the document `cause`, with `entries` as its label map. */
   const seedEntries = async (
@@ -119,8 +108,11 @@ Deno.test("display fit release-gate integrity", async (t) => {
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
+          // Each entry is a flow stamp, as a write under the tally stores one.
           entries: entries.map(({ path, integrity }) => ({
             path,
+            origin: "derived" as const,
+            observes: "value" as const,
             label: {
               confidentiality: [room],
               integrity: [...(integrity ?? [])],
@@ -163,24 +155,24 @@ Deno.test("display fit release-gate integrity", async (t) => {
     });
 
     await t.step(
-      "admits a value read across an endorsed output and a secret",
+      "refuses a value read across an endorsed output and a secret",
       () => {
         const read = readProjected(view, hostValueOf);
         expect(JSON.stringify(read.value)).toContain("alice-secret");
-        expect(read.consumed.confidentiality).toContainEqual(room);
         expect(readRefusal(view, [read.consumed], PUBLIC_ONLY, sources))
-          .toBeUndefined();
+          .toMatchObject({ labelSource: "consumed" });
       },
     );
 
     await t.step(
-      "admits a secret decided together with a separate read of an endorsed output",
+      "refuses a secret decided together with a separate read of an endorsed output",
       () => {
         const reads = [
           readProjected(ballot, hostValueOf).consumed,
           readProjected(note, hostValueOf).consumed,
         ];
-        expect(readRefusal(view, reads, PUBLIC_ONLY, sources)).toBeUndefined();
+        expect(readRefusal(view, reads, PUBLIC_ONLY, sources))
+          .toMatchObject({ labelSource: "consumed" });
       },
     );
 
@@ -190,9 +182,24 @@ Deno.test("display fit release-gate integrity", async (t) => {
         .toMatchObject({ labelSource: "consumed" });
     });
 
+    await t.step("admits the endorsed output read on its own", () => {
+      const read = readProjected(ballot, hostValueOf);
+      expect(readRefusal(ballot, [read.consumed], PUBLIC_ONLY, sources))
+        .toBeUndefined();
+    });
+
+    const second = await seed("ballot-2", "2", [TALLY]);
+
+    await t.step("admits two endorsed outputs decided together", () => {
+      const reads = [
+        readProjected(ballot, hostValueOf).consumed,
+        readProjected(second, hostValueOf).consumed,
+      ];
+      expect(readRefusal(view, reads, PUBLIC_ONLY, sources)).toBeUndefined();
+    });
+
     // A stored label whose root carries the tally's evidence and whose `/b`
-    // carries the room clause on its own. How a store comes to hold it is
-    // the writers' business; the fit decides on what the label says.
+    // carries the room clause on its own.
     const mixed = await seedEntries(
       "mixed",
       { a: "1", b: "alice-secret" },
@@ -202,93 +209,17 @@ Deno.test("display fit release-gate integrity", async (t) => {
     await t.step(
       "admits a stored label whose root evidence vouches for a child's clause",
       () => {
+        // A label view carries no origin and folds an ancestor's entry in
+        // beside a narrower cell's own, so a cell's stored label is fitted on
+        // its root's integrity. The reads behind a rendered value are what
+        // the boundary decides location by location.
+
         expect(
           cellLabelRefusal(
             mixed,
             cellLabelSources(mixed),
             PUBLIC_ONLY,
             sources,
-          ),
-        ).toBeUndefined();
-      },
-    );
-
-    await t.step(
-      "observe: admits a value read across an endorsed output and a secret, and reports the join's refusal",
-      () => {
-        divergences.length = 0;
-        const read = readProjected(view, hostValueOf);
-        expect(
-          readRefusal(view, [read.consumed], PUBLIC_ONLY, sourcesAt("observe")),
-        ).toBeUndefined();
-        expect(divergences).toEqual([{
-          labelSource: "consumed",
-          confidentiality: [room],
-          integrity: [],
-        }]);
-      },
-    );
-
-    await t.step(
-      "observe: reports nothing for the endorsed output read on its own",
-      () => {
-        divergences.length = 0;
-        const read = readProjected(ballot, hostValueOf);
-        expect(
-          readRefusal(
-            ballot,
-            [read.consumed],
-            PUBLIC_ONLY,
-            sourcesAt("observe"),
-          ),
-        ).toBeUndefined();
-        expect(divergences).toEqual([]);
-      },
-    );
-
-    await t.step(
-      "enforce: refuses a value read across an endorsed output and a secret",
-      () => {
-        const read = readProjected(view, hostValueOf);
-        expect(
-          readRefusal(view, [read.consumed], PUBLIC_ONLY, sourcesAt("enforce")),
-        ).toMatchObject({ labelSource: "consumed" });
-      },
-    );
-
-    await t.step(
-      "enforce: refuses a secret decided together with a separate read of an endorsed output",
-      () => {
-        const reads = [
-          readProjected(ballot, hostValueOf).consumed,
-          readProjected(note, hostValueOf).consumed,
-        ];
-        expect(readRefusal(view, reads, PUBLIC_ONLY, sourcesAt("enforce")))
-          .toMatchObject({ labelSource: "consumed" });
-      },
-    );
-
-    await t.step("enforce: admits the endorsed output read on its own", () => {
-      const read = readProjected(ballot, hostValueOf);
-      expect(
-        readRefusal(ballot, [read.consumed], PUBLIC_ONLY, sourcesAt("enforce")),
-      ).toBeUndefined();
-    });
-
-    await t.step(
-      "enforce: still admits a stored label whose root evidence vouches for a child's clause",
-      () => {
-        // A label view carries no origin and folds an ancestor's entry in
-        // beside a narrower cell's own, so the stored fit stays pooled at
-        // every rung. The reads behind a rendered value are what the join
-        // decides.
-
-        expect(
-          cellLabelRefusal(
-            mixed,
-            cellLabelSources(mixed),
-            PUBLIC_ONLY,
-            sourcesAt("enforce"),
           ),
         ).toBeUndefined();
       },

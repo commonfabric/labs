@@ -77,9 +77,6 @@
  * | cfcLabelMetadataProtection | core-pinned `"enforce"` (inv-12 Stage 1)         |
  * | cfcDeclaredMonotonicity    | core-pinned `"observe"` (WP5 §8.12.1; `enforce`  |
  * |                            | once per-principal mints move to `derived`)      |
- * | cfcReleaseGateIntegrity    | core-pinned `"observe"` (§5.3, §8.12.8; its      |
- * |                            | `enforce` refuses releases that rest on          |
- * |                            | integrity pooled across values, honest ones too) |
  * | cfcPolicyRecords           | core-default (none declared) — flip in           |
  * |                            | coreOptions when a first-party rollout begins    |
  * | cfcPrefixProvenanceStats   | core-default (off) — measurement opt-in, per     |
@@ -217,7 +214,6 @@ export const RUNTIME_OPTION_KEYS = [
   "cfcPolicyEvaluation",
   "cfcLabelMetadataProtection",
   "cfcDeclaredMonotonicity",
-  "cfcReleaseGateIntegrity",
   "cfcPolicyRecords",
   "cfcPrefixProvenanceStats",
   "cfcTrustConfig",
@@ -359,9 +355,6 @@ export const MAX_ENFORCEMENT_SINK_CEILINGS: SinkMaxConfidentiality =
  * - `cfcTrustConfig` — deployment-specific declarations; nothing generic to
  *   bundle.
  * - `cfcPrefixProvenanceStats` — measurement, not enforcement.
- * - `cfcReleaseGateIntegrity` — its `enforce` rung refuses every release
- *   that rests on integrity pooled across values, honest ones among them,
- *   such as a list whose element and length were stamped apart.
  */
 export const MAX_ENFORCEMENT_CFC_OPTIONS = Object.freeze(
   {
@@ -409,7 +402,6 @@ export const presetCfcOptions = (
   cfcPolicyEvaluation: "enforce",
   cfcLabelMetadataProtection: "enforce",
   cfcDeclaredMonotonicity: "observe",
-  cfcReleaseGateIntegrity: "observe",
   ...(params.cfcPosture === "max-enforcement"
     ? MAX_ENFORCEMENT_CFC_OPTIONS
     : {}),

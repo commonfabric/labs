@@ -86,7 +86,6 @@ Deno.test("meta routes", async (t) => {
         cfcPolicyEvaluation: "enforce",
         cfcLabelMetadataProtection: "enforce",
         cfcDeclaredMonotonicity: "enforce",
-        cfcReleaseGateIntegrity: "observe",
         cfcPolicySnapshot: { records: [], digest: "digest-1" },
         cfcSinkMaxConfidentiality: { fetchText: [], fetchJson: [] },
       });
@@ -108,7 +107,6 @@ Deno.test("meta routes", async (t) => {
             cfcPolicyEvaluation: "enforce",
             cfcLabelMetadataProtection: "enforce",
             cfcDeclaredMonotonicity: "enforce",
-            cfcReleaseGateIntegrity: "observe",
             cfcPolicySnapshot: { records: [], digest: "digest-1" },
             cfcSinkMaxConfidentiality: { fetchText: [], fetchJson: [] },
           }))),

@@ -10,7 +10,6 @@ import type { Cancel, Cell, JSONSchema } from "@commonfabric/runner";
 import type {
   CfcConfClause,
   CfcModulePolicySource,
-  CfcReleaseGateIntegrityMode,
   RenderConfidentialityResolver,
   SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -471,13 +470,6 @@ export interface WorkerReconcilerOptions {
    * no reactive upgrade; the sync snapshot still gates soundly.
    */
   modulePolicySource?: Pick<CfcModulePolicySource, "subscribe">;
-
-  /**
-   * The runtime's `cfcReleaseGateIntegrity` rung, which decides what
-   * integrity a rendered value's labels are fitted with (see
-   * `DisplayFitSources.releaseGateIntegrity`). Absent fits as `off` does.
-   */
-  releaseGateIntegrity?: CfcReleaseGateIntegrityMode;
 }
 
 /**

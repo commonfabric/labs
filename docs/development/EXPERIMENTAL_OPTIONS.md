@@ -21,7 +21,7 @@ in the same change.
 flags](#appendix-a-removed-and-never-shipped-flags) rather than deleting the
 > record, so the history stays discoverable.
 
-**Last reviewed:** 2026-10-08. Each flag's section carries the date its status
+**Last reviewed:** 2026-09-29. Each flag's section carries the date its status
 was last checked against the code.
 
 ## Summary table
@@ -49,7 +49,6 @@ was last checked against the code.
 | [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `false`                                                                              | Bernhard Seefeld                                      | move toward `true` once every deployed reader interprets version-2 envelopes                                                                                                                                                     | implemented, off by default                                                     |
 | [`cfcPolicyEvaluation`](#cfcpolicyevaluation)                               | `RuntimeOptions.cfcPolicyEvaluation`                                                                                                            | `enforce`                                                                            | Bernhard Seefeld (#4566)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcDeclaredMonotonicity`](#cfcdeclaredmonotonicity)                       | `RuntimeOptions.cfcDeclaredMonotonicity`                                                                                                        | `observe`                                                                            | Bernhard Seefeld (#4647)                              | `observe` first, then `enforce` (must soak before the §8.12.7 route 2b event ships)                                                                                                                                               | implemented, on by default at `observe`                                         |
-| [`cfcReleaseGateIntegrity`](#cfcreleasegateintegrity) | `RuntimeOptions.cfcReleaseGateIntegrity` | `observe` | Alex Komoroske (2026-10-08) | `observe` first, then `enforce` gate by gate once the specification rules on what the join keeps and the honest releases the integrity union carries have another route | implemented, on by default at `observe` |
 | [`cfcPrefixProvenanceStats`](#cfcprefixprovenancestats)                     | `RuntimeOptions.cfcPrefixProvenanceStats` (per-deployment; not env-wired)                                                                       | `false`                                                                              | Bernhard Seefeld (#4623)                              | stays a measurement opt-in; fold in or remove after Stage 0                                                                                                                                                                       | implemented, off by default, measurement only                                   |
 | [`cfcLabelMetadataProtection`](#cfclabelmetadataprotection)                 | `RuntimeOptions.cfcLabelMetadataProtection`                                                                                                     | `enforce`                                                                            | Bernhard Seefeld (#4638)                              | `observe` (divergence counting) first, then `enforce`                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`conflictAdmissionMode`](#conflictadmissionmode)                           | `CF_CONFLICT_ADMISSION` env, or `setConflictAdmissionMode()`                                                                                    | `off`                                                                                | William Kelly (#4237); `hold` removed CT-1925 (#5110) | keep `preempt` as a tuning dial or remove after re-measurement                                                                                                                                                                    | implemented, off by default, measured net-negative                              |
@@ -850,7 +849,7 @@ They are not wired to environment variables. Instead, the first-party posture is
 set once in `coreOptions`, the shared core that every construction preset
 composes, in
 [`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts).
-`coreOptions` pins eight CFC dials at the rungs the constructor also defaults
+`coreOptions` pins seven CFC dials at the rungs the constructor also defaults
 to, so a changed constructor default cannot silently relax a preset;
 `cfcDecomposedEnvelopes`, `cfcPolicyRecords`, `cfcTrustConfig` and the ceiling
 dials are left on their constructor defaults (`off` or none) there, with a
@@ -899,8 +898,8 @@ deployment that wants a confidentiality gate on sqlite reads declares a
 ceiling for the sink, which the seam then applies.
 The bundle names no enforcement mode, so a runtime taking it keeps the core's
 `enforce-strict` pin, and it leaves `cfcDecomposedEnvelopes`,
-`cfcContentAddressedLabels`, `cfcTrustConfig`, `cfcPrefixProvenanceStats`
-and `cfcReleaseGateIntegrity` alone. What it adds over the core pins is the
+`cfcContentAddressedLabels`, `cfcTrustConfig` and
+`cfcPrefixProvenanceStats` alone. What it adds over the core pins is the
 deployment configuration — the standard prompt-caveat policy records and the
 per-sink confidentiality ceilings — plus `cfcDeclaredMonotonicity` at
 `enforce`. It is opt-in per runtime, never a fleet
@@ -1180,52 +1179,6 @@ the per-epic implementation notes).
   store invariant. Once `enforce` has soaked, the dial could settle there and
   the `off`/`observe` rungs remain for diagnostics, mirroring the enforcement
   ladder.
-
-### `cfcReleaseGateIntegrity`
-
-- **Toggle via.** `RuntimeOptions.cfcReleaseGateIntegrity`, pinned for
-  first-party processes in `coreOptions` (see the category note). The worker
-  hands the same rung to the display fit through
-  `WorkerReconcilerOptions.releaseGateIntegrity`.
-- **Added by.** Alex Komoroske, in "release gates without an integrity union"
-  (2026-10-08).
-- **Purpose.** Decides which integrity an exchange rule's guard is matched
-  against at three release gates: the write input gate (a gated read's
-  `maxConfidentiality` fit and its `requiredIntegrity` floor), sink egress,
-  and the display fit of the reads behind a rendered value. Values are `off`,
-  `observe`, and `enforce`. `off` matches against the integrity of everything
-  the access consumed, pooled, so one consumed value's evidence can release a
-  clause another value carries. `enforce` matches against the per-access join
-  (`cfc/access-integrity.ts`): over the access's confidential locations, a
-  hereditary atom survives where every location carries it, and any other
-  atom only where one location is observed, or, for `TransformedBy`, where one
-  derived or structure stamp supplies it at every location. The floor needs a
-  witness every labeled location carries as well as the pooled one, so it
-  refuses only more. Spec §5.3, §8.12.8 and §8.10.1.1 describe the join; the
-  stamp rule and leaving out locations with no confidentiality go beyond
-  §3.1.6.2's literal join and wait on a specification ruling. `observe`
-  decides as `off` does and, wherever the join would refuse, records a
-  `release-gate-integrity(observe)` diagnostic on the transaction, saying also
-  whether each confidential location evaluated on its own would be admitted.
-  Its evaluations answer grant lookups from the decision's own, so it reads,
-  records and stages nothing the decision did not. At the display, `observe`
-  computes the join only for a host that supplies
-  `DisplayFitSources.noteReleaseGateDivergence`, and the worker supplies none.
-  A cell's stored label is fitted pooled at every rung, since a label view
-  carries no origin. At the `maxConfidentiality` fit and at sink egress the
-  rung changes nothing unless `cfcPolicyEvaluation` is `enforce`, the only
-  rung where a rule decides. Within one location, the join of a label's
-  components is unchanged.
-- **Current default and planned end state.** `observe` by default. The target
-  is `enforce`, gate by gate, once the specification rules on what the join
-  keeps and the honest releases that rest on the union are carried another
-  way; the plan is
-  [`../plans/cfc-release-gate-integrity.md`](../plans/cfc-release-gate-integrity.md).
-- **Status on 2026-10-08.** Implemented, observing. Covered by
-  `packages/runner/test/cfc-release-gate-integrity.test.ts` and
-  `packages/html/test/worker-display-fit-integrity.test.ts`.
-- **Path to removal.** Once `enforce` has soaked at every gate, the dial and
-  the union it keeps alive can go.
 
 ### `cfcPrefixProvenanceStats`
 

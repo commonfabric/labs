@@ -1,28 +1,18 @@
 /**
- * The integrity an access holds evidence for when an exchange rule is matched
- * against it (spec §5.3): the class-aware join (§3.1.6.2) of the integrity at
- * every confidential location the access consumed. A clause comes from one of
- * those locations, and a rule may release it only on evidence about the value
- * the access materializes (§8.10.1.1), which an atom one location carries and
- * another lacks is not.
+ * What a release gate evaluates exchange rules over (spec §5.3): the label an
+ * access consumed, taken one observation at a time. §4.6.3 has no primitive
+ * read of a whole structured value — "Structured materialization is a
+ * derived traversal over primitive observations, and the resulting label is
+ * the join of the observations actually consumed" — and §5.3 applies a
+ * value-intrinsic rule "at observation", on the evidence bound to the value
+ * observed there, because "the class-aware meet drops it at the next
+ * transformation". So a gate runs the value-intrinsic rules at each location
+ * an access consumed, on that location's own label, joins what they leave,
+ * and runs every rule over the join (§8.10.1.1).
  *
- * A hereditary atom survives when every location carries it. Any other atom
- * is a claim about one exact value, which a join of two values drops; it
- * survives only where one label stamp supplies it at every location, which
- * makes those locations parts of the one value that stamp labels. A location
- * names its stamps by keys its producer chooses, so two locations share a
- * stamp exactly when their producer says they do.
- *
- * Integrity at a location the access consumed with no confidentiality does
- * not enter the join: such a location holds no clause to release, and its
- * value is released whatever a rule decides.
- *
- * Neither the stamp a location names nor leaving out the locations with no
- * confidentiality is in §3.1.6.2, whose join takes every input and drops
- * every value-bound atom from a join of two. The specification does not say
- * whether locations resolving one stamp are one input, nor whether an input
- * with nothing to release is one. Each departure keeps more than the literal
- * join, and less than the union the gates pool when this join is not chosen.
+ * The join's integrity is §3.1.6.2's class-aware join of every location's
+ * integrity: a hereditary atom survives where every location carries it, and
+ * any other atom only where the access observed one location.
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
@@ -31,67 +21,47 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { atomPropagationClass } from "./atom-classes.ts";
 import type { CfcConfClause } from "./clause.ts";
 
-/** One integrity atom at a location, with the stamps supplying it there. */
-export type LocatedIntegrityAtom = {
-  readonly atom: CfcAtom;
-
-  /**
-   * Keys naming the label stamps that supply the atom at this location. Two
-   * locations name one stamp by one key.
-   */
-  readonly stamps: readonly string[];
-};
-
-/** One location an access consumed, as the per-access join reads it. */
+/** One location an access consumed, as a release gate reads it. */
 export type ConsumedLocation = {
+  /**
+   * Names the value observed: the document and the path within it. Two
+   * observations of one location observe one value.
+   */
+  readonly key: string;
+
   /** The clauses the access consumed here. */
   readonly confidentiality: readonly CfcConfClause[];
 
-  /** The integrity that vouches for the value here. */
-  readonly integrity: readonly LocatedIntegrityAtom[];
+  /** The integrity the access consumed here, which the join is taken over. */
+  readonly integrity: readonly CfcAtom[];
+
+  /**
+   * The integrity here that is evidence about the value currently at this
+   * location, which the value-intrinsic rules are matched against.
+   */
+  readonly evidence: readonly CfcAtom[];
 };
 
 /**
- * The integrity an access consumed at `locations` holds evidence for: the
- * class-aware join over the ones carrying confidentiality, or nothing when
- * none does.
+ * §3.1.6.2's class-aware join of the integrity at `locations`, with two
+ * observations of one location counted once: nothing when there are no
+ * locations, a location's own integrity when there is one, and otherwise the
+ * hereditary atoms every location carries.
  */
-export const accessIntegrity = (
+export const joinLocationIntegrity = (
   locations: readonly ConsumedLocation[],
 ): CfcAtom[] => {
-  let joined: LocatedIntegrityAtom[] | undefined;
+  const distinct = new Map<string, ConsumedLocation>();
   for (const location of locations) {
-    if (location.confidentiality.length === 0) continue;
-    if (joined === undefined) {
-      joined = [...location.integrity];
-    } else {
-      joined = meetLocated(joined, location.integrity);
-    }
-    // Nothing survives a join with a location carrying nothing in common.
-    if (joined.length === 0) return [];
+    if (!distinct.has(location.key)) distinct.set(location.key, location);
   }
-  return (joined ?? []).map(({ atom }) => atom);
-};
-
-/**
- * The atoms of `left` that the join with `right` keeps: a hereditary atom
- * `right` also carries, and any other atom `right` carries from a stamp
- * supplying it in `left`, narrowed to the stamps the two share.
- */
-const meetLocated = (
-  left: readonly LocatedIntegrityAtom[],
-  right: readonly LocatedIntegrityAtom[],
-): LocatedIntegrityAtom[] => {
-  const kept: LocatedIntegrityAtom[] = [];
-  for (const entry of left) {
-    const other = right.find(({ atom }) => deepEqual(atom, entry.atom));
-    if (other === undefined) continue;
-    if (atomPropagationClass(entry.atom) === "hereditary") {
-      kept.push(entry);
-      continue;
-    }
-    const stamps = entry.stamps.filter((stamp) => other.stamps.includes(stamp));
-    if (stamps.length > 0) kept.push({ atom: entry.atom, stamps });
-  }
-  return kept;
+  const [first, ...rest] = distinct.values();
+  if (first === undefined) return [];
+  if (rest.length === 0) return [...first.integrity];
+  return first.integrity.filter((atom) =>
+    atomPropagationClass(atom) === "hereditary" &&
+    rest.every((location) =>
+      location.integrity.some((other) => deepEqual(other, atom))
+    )
+  );
 };
