@@ -231,7 +231,7 @@ Records a room this user has been admitted to.
   member sets, the counterpart isn't a member.
 
 A client also sends `accept` when the user first opens the chat of an existing
-shared space, which is created with its space and not by a manager.
+social space, which is created with its space and not by a manager.
 
 ### `forget(requestId: string, room: Cell<ChatRoomOutput>)`
 

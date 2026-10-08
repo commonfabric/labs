@@ -60,8 +60,8 @@ is what labels it `authored-by` this user.
   `represents-principal` label, which
   `principalOf(profile, "represents-principal")` reads
   ([reading the principal a label attests](../../features/principal-of.md)).
-  A shared space's member set pairs each principal with a profile (see [shared
-  spaces](README.md#shared-spaces)), so starting a conversation with someone
+  A social space's member set pairs each principal with a profile (see [social
+  spaces](README.md#social-spaces)), so starting a conversation with someone
   found in one needs nothing more.
 
 ### First contact

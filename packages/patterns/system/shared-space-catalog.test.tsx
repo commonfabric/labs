@@ -9,15 +9,19 @@ import {
 } from "commonfabric";
 
 import {
+  changeSharedSpaceMembershipIn,
   readSharedSpaceCatalog,
   registerSharedSpaceIn,
   type SharedSpaceCatalogStorage,
+  type SharedSpaceMembershipChange,
+  type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
 } from "./shared-space-catalog.ts";
 
 const ROOM = "did:key:catalog-core-room";
 const ARCHIVED = "did:key:catalog-core-archived";
+const SAVED = "did:key:catalog-core-saved";
 const FROM = "did:key:catalog-core-sender";
 const HOST = "https://room.example";
 const FIRST_OFFER = JSON.stringify([FROM, "first"]);
@@ -41,6 +45,23 @@ const createAndRegister = handler<
   results.push(registerSharedSpaceIn(catalog, event));
 });
 
+/**
+ * Applies the event's membership choice in `catalog` from a handler of its
+ * own, which also records the space the choice is for and the outcome, all in
+ * one transaction, as forgetting a room archives its entry.
+ */
+const chooseAndRecord = handler<
+  SharedSpaceMembershipChange,
+  {
+    catalog: Writable<SharedSpaceCatalogStorage>;
+    chosen: Writable<string[]>;
+    outcomes: Writable<SharedSpaceMembershipResult[]>;
+  }
+>((event, { catalog, chosen, outcomes }) => {
+  chosen.push(event.space);
+  outcomes.push(changeSharedSpaceMembershipIn(catalog, event));
+});
+
 export default pattern(() => {
   const catalog = new Writable<SharedSpaceCatalogStorage>({
     entries: {
@@ -51,12 +72,22 @@ export default pattern(() => {
         state: "archived",
         revision: "2:archived",
       },
+      [SAVED]: {
+        space: SAVED,
+        host: HOST,
+        kind: "fabrichat-room",
+        state: "saved",
+        revision: "1:saved",
+      },
     },
     offers: {},
   });
   const rooms = new Writable<string[]>([]);
   const results = new Writable<SharedSpaceRegistrationResult[]>([]);
   const register = createAndRegister({ catalog, rooms, results });
+  const chosen = new Writable<string[]>([]);
+  const outcomes = new Writable<SharedSpaceMembershipResult[]>([]);
+  const choose = chooseAndRecord({ catalog, chosen, outcomes });
   // Assertions read the catalog as Home's result does, validated.
   const view = computed(() => readSharedSpaceCatalog(catalog));
 
@@ -124,6 +155,51 @@ export default pattern(() => {
     Object.keys(view.offers).length === 2
   );
 
+  const action_archive = action(() => {
+    choose.send({
+      space: SAVED,
+      id: "archive",
+      expectedRevision: "1:saved",
+      state: "archived",
+    });
+  });
+  const assert_archived_with_own_write = assert(() =>
+    outcomes.get()[0]?.status === "applied" &&
+    chosen.get()[0] === SAVED &&
+    view.entries[SAVED]?.state === "archived" &&
+    view.entries[SAVED]?.revision.startsWith("2:") === true
+  );
+
+  const action_archive_again = action(() => {
+    choose.send({
+      space: SAVED,
+      id: "archive",
+      expectedRevision: "1:saved",
+      state: "archived",
+    });
+  });
+  const assert_repeat_confirmed = assert(() =>
+    outcomes.get()[1]?.status === "confirmed" &&
+    chosen.get().length === 2 &&
+    view.entries[SAVED]?.state === "archived"
+  );
+
+  const action_restore_stale = action(() => {
+    choose.send({
+      space: SAVED,
+      id: "restore",
+      expectedRevision: "1:saved",
+      state: "saved",
+    });
+  });
+  const assert_stale_writes_nothing = assert(() => {
+    const outcome = outcomes.get()[2];
+    return outcome?.status === "conflict" && outcome.reason === "revision" &&
+      chosen.get().length === 3 &&
+      view.entries[SAVED]?.state === "archived" &&
+      view.entries[SAVED]?.revision.startsWith("2:") === true;
+  });
+
   return {
     [TESTS]: [
       { action: action_register },
@@ -134,6 +210,12 @@ export default pattern(() => {
       { assertion: assert_archived_stays_archived },
       { action: action_conflicting_kind },
       { assertion: assert_conflict_writes_nothing },
+      { action: action_archive },
+      { assertion: assert_archived_with_own_write },
+      { action: action_archive_again },
+      { assertion: assert_repeat_confirmed },
+      { action: action_restore_stale },
+      { assertion: assert_stale_writes_nothing },
     ],
   };
 });

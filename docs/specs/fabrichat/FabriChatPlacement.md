@@ -36,7 +36,7 @@ that a room exists.
 A client MUST NOT place a direct room in a container that admits anyone besides
 the room's two members. Even an unreadable link to it tells the container's
 other members that the conversation exists. A client learns whom a container
-admits from its member set (see [shared spaces](README.md#shared-spaces)). A
+admits from its member set (see [social spaces](README.md#social-spaces)). A
 client that can't learn it MUST treat the container as admitting others.
 
 ## Outputs
