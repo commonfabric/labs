@@ -21,6 +21,9 @@ interface OriginRecord {
 export class SpeculationLineage {
   #byOrigin = new Map<IExtendedStorageTransaction, OriginRecord>();
 
+  /** The origins whose work the scheduler runs again once they fail. */
+  #runsAgain = new WeakSet<IExtendedStorageTransaction>();
+
   readonly #hooks: {
     /**
      * Drop and settle a not-yet-dispatched event from the queue, logging
@@ -142,12 +145,21 @@ export class SpeculationLineage {
    * so the follow-up events its failure drops are logged at debug rather than
    * as warnings. Called before the settle callback that does the dropping:
    * ahead of an abort to run again, and from the origin's verdict ahead of a
-   * stale-basis retry. An origin with no recorded launches has nothing to
-   * note.
+   * stale-basis retry. {@link runsAgain} reports the note afterwards, for a
+   * follow-up that dispatched before its origin failed.
    */
   noteRerun(origin: IExtendedStorageTransaction): void {
+    this.#runsAgain.add(origin);
     const record = this.#byOrigin.get(origin);
     if (record) record.rerun = true;
+  }
+
+  /**
+   * Whether {@link noteRerun} noted that the scheduler runs `origin`'s work
+   * again once it fails.
+   */
+  runsAgain(origin: IExtendedStorageTransaction): boolean {
+    return this.#runsAgain.has(origin);
   }
 
   /** Called when an event is dispatched or dropped. */

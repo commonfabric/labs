@@ -1013,8 +1013,11 @@ export interface SchedulerEventExecutionState {
     event: QueuedEvent,
   ) => void;
 
-  /** Notes that the dispatch aborts `originTx` in order to run it again. */
+  /** Notes that the dispatch runs `originTx`'s work again once it fails. */
   readonly noteLineageRerun: (originTx: IExtendedStorageTransaction) => void;
+
+  /** Whether the dispatch noted that it runs `originTx`'s work again. */
+  readonly lineageRunsAgain: (originTx: IExtendedStorageTransaction) => boolean;
   readonly getOriginLocalSeq: (
     originTx: IExtendedStorageTransaction,
     space: MemorySpace,
@@ -1502,6 +1505,7 @@ export async function processPullQueuedEventDuringExecute(
     recordLineageEvent: (originTx, event) =>
       state.recordLineageEvent(originTx, event),
     noteLineageRerun: (originTx) => state.noteLineageRerun(originTx),
+    lineageRunsAgain: (originTx) => state.lineageRunsAgain(originTx),
     getOriginLocalSeq: (originTx, space) =>
       state.getOriginLocalSeq(originTx, space),
     collectPendingLoadParkKeys: (event, log) =>
@@ -1534,8 +1538,11 @@ export async function dispatchQueuedEvent(state: {
     event: QueuedEvent,
   ) => void;
 
-  /** Notes that the dispatch aborts `originTx` in order to run it again. */
+  /** Notes that the dispatch runs `originTx`'s work again once it fails. */
   readonly noteLineageRerun: (originTx: IExtendedStorageTransaction) => void;
+
+  /** Whether the dispatch noted that it runs `originTx`'s work again. */
+  readonly lineageRunsAgain: (originTx: IExtendedStorageTransaction) => boolean;
   readonly getOriginLocalSeq: (
     originTx: IExtendedStorageTransaction,
     space: MemorySpace,
@@ -1621,9 +1628,7 @@ export async function dispatchQueuedEvent(state: {
   // that is coming — a stale-basis rejection backing off to run the handler
   // again — is noted on the lineage before the lineage's own settle callback
   // drops the follow-ups this attempt sent: the re-run sends its own.
-  let verdictDisposition:
-    | { readonly error: unknown; readonly disposition: CommitDisposition }
-    | undefined;
+  let verdictDisposition: CommitDisposition | undefined;
   tx.addVerdictCallback((_tx, result) => {
     if (result.error === undefined) return;
     const disposition = classifyCommitDisposition(
@@ -1631,7 +1636,7 @@ export async function dispatchQueuedEvent(state: {
       queuedEvent,
       state.backpressure,
     );
-    verdictDisposition = { error: result.error, disposition };
+    verdictDisposition = disposition;
     if (disposition.kind === "backoff") state.noteLineageRerun(tx);
   });
   let viewHandler = presyncedImplementation ?? handler;
@@ -2279,8 +2284,8 @@ export async function dispatchQueuedEvent(state: {
         // write surfaces a terminal error. A rejection the verdict already
         // classified keeps that classification, which the lineage acted on.
         const disposition =
-          error !== undefined && verdictDisposition?.error === error
-            ? verdictDisposition.disposition
+          error !== undefined && verdictDisposition !== undefined
+            ? verdictDisposition
             : classifyCommitDisposition(
               error,
               queuedEvent,
@@ -2505,6 +2510,22 @@ export async function dispatchQueuedEvent(state: {
                   { eventId: queuedEvent.id, handlerId },
                 ],
               );
+            }
+            // A follow-up whose origin failed and is run again is refused by
+            // its origin-committed precondition as a matter of course: the
+            // origin's next run sends its own.
+            if (
+              permanentRejection === "origin-committed" &&
+              queuedEvent.originTx !== undefined &&
+              state.lineageRunsAgain(queuedEvent.originTx)
+            ) {
+              logger.debug(
+                "scheduler",
+                "Event handler commit refused: its origin failed and runs " +
+                  "again; not retrying",
+                { error, handlerId },
+              );
+              break;
             }
             logger.warn(
               "scheduler",

@@ -3323,6 +3323,7 @@ export class Scheduler {
       noteLineageRerun: (originTx) => {
         this.#lineage.noteRerun(originTx);
       },
+      lineageRunsAgain: (originTx) => this.#lineage.runsAgain(originTx),
       getOriginLocalSeq: (originTx, targetSpace) =>
         getCommitLocalSeq(originTx.tx, targetSpace),
       snapshotEventPreflightTraceContext: (trace) =>

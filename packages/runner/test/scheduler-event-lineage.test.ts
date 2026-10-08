@@ -233,10 +233,10 @@ describe("scheduler event lineage", () => {
    * stream in `followUpSpace`, the origin's own space by default. The
    * origin event is sent with `retries`, after `beforeSend` runs, and the run
    * is over once `settled` resolves (it is handed the count of attempts so
-   * far), or by default once the origin has run as
+   * far and the warnings so far), or by default once the origin has run as
    * often as `retries` allows a `RetryImmediately` origin to. Returns how many
-   * attempts ran, the follow-up payloads delivered, and the warnings
-   * reporting a dropped event.
+   * attempts ran, the follow-up payloads delivered, the warnings reporting a
+   * dropped event, and every warning.
    */
   async function runOrigin(
     label: string,
@@ -248,12 +248,16 @@ describe("scheduler event lineage", () => {
       retries?: boolean;
       followUpSpace?: typeof space;
       beforeSend?: () => void;
-      settled?: (attempts: () => number) => Promise<void>;
+      settled?: (
+        attempts: () => number,
+        warnings: () => readonly string[],
+      ) => Promise<void>;
     } = {},
   ): Promise<{
     originAttempts: number;
     delivered: readonly unknown[];
     dropWarnings: string[];
+    warnings: string[];
   }> {
     const {
       retries = true,
@@ -334,7 +338,7 @@ describe("scheduler event lineage", () => {
         retries,
       );
       if (settled !== undefined) {
-        await settled(() => originAttempts);
+        await settled(() => originAttempts, () => warnings);
       } else {
         await waitForSchedulerCondition(
           runtime,
@@ -351,6 +355,7 @@ describe("scheduler event lineage", () => {
       originAttempts,
       delivered: payloads.get(),
       dropWarnings: warnings.filter((line) => line.includes("Event dropped")),
+      warnings,
     };
   }
 
@@ -766,11 +771,11 @@ describe("scheduler event lineage", () => {
     // A stale-basis rejection backs off and runs the handler again within the
     // retry window, and the retry sends its follow-ups again under its own
     // transaction. The rejected attempt's follow-ups drop either way
-    // (scheduler-v2 §7.6, item 3); what these cases pin is how loudly. Each
-    // follow-up goes to another space, so it parks until its origin confirms
-    // and is still queued when the rejection drops it; a same-space follow-up
-    // has dispatched by then, and its origin-committed precondition refuses
-    // it instead.
+    // (scheduler-v2 §7.6, item 3); what these cases pin is how loudly. A
+    // follow-up to another space parks until its origin confirms and is
+    // still queued when the rejection drops it. A same-space follow-up has
+    // dispatched by then, and its origin-committed precondition refuses it
+    // instead.
 
     it("drops the rejected attempt's follow-up without a warning, and delivers the retry's once", async () => {
       let rejection: ReturnType<typeof rejectNextServerTransact> | undefined;
@@ -816,6 +821,65 @@ describe("scheduler event lineage", () => {
         expect(result.dropWarnings[0]).toContain(
           "speculative origin failed before",
         );
+      } finally {
+        rejection?.restore();
+      }
+    });
+
+    it("refuses a same-space follow-up of the rejected attempt without a warning, and delivers the retry's once", async () => {
+      // A same-space follow-up dispatches at once, and its origin-committed
+      // precondition refuses its commit when the origin is rejected.
+      let rejection: ReturnType<typeof rejectNextServerTransact> | undefined;
+      try {
+        const result = await runOrigin(
+          "lineage stale retry same space",
+          (attempt, sendFollowUp) => sendFollowUp(attempt),
+          {
+            beforeSend: () => {
+              rejection = rejectNextServerTransact(storageManager);
+            },
+          },
+        );
+
+        expect(result.originAttempts).toBe(2);
+        expect(result.delivered).toEqual([2]);
+        expect(result.warnings).toEqual([]);
+      } finally {
+        rejection?.restore();
+      }
+    });
+
+    it("warns of a refused same-space follow-up when the event opted out of retrying", async () => {
+      let rejection: ReturnType<typeof rejectNextServerTransact> | undefined;
+      try {
+        const result = await runOrigin(
+          "lineage stale retry same space opted out",
+          (attempt, sendFollowUp) => sendFollowUp(attempt),
+          {
+            retries: false,
+            beforeSend: () => {
+              rejection = rejectNextServerTransact(storageManager);
+            },
+            // The follow-up's own commit settles after the origin's
+            // rejection, so the run is over once its refusal is reported.
+            settled: (_attempts, warnings) =>
+              waitForSchedulerCondition(
+                runtime,
+                () =>
+                  warnings().some((line) =>
+                    line.includes("permanently rejected")
+                  ),
+                "the follow-up's refusal was not reported",
+              ),
+          },
+        );
+
+        expect(result.originAttempts).toBe(1);
+        expect(
+          result.warnings.filter((line) =>
+            line.includes("permanently rejected")
+          ),
+        ).toHaveLength(1);
       } finally {
         rejection?.restore();
       }
