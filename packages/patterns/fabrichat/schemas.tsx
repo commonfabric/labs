@@ -445,6 +445,13 @@ export type ChatRequestOutcome =
     reason: string;
   };
 
+/**
+ * The `kind` of a room's own space, as the space declares it, and as an offer
+ * of the room to a member's share inbox and a user's shared-space catalog name
+ * it.
+ */
+export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
+
 /** A notice a manager's request produced, for a client to deliver. */
 export interface ChatManagerNotice {
   /** The notice's id, unique in the manager. */

@@ -8,6 +8,7 @@
  */
 import {
   action,
+  type AddIntegrity,
   assert,
   currentPrincipal,
   equals,
@@ -36,9 +37,17 @@ import {
   type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomLink,
+  type ProfileCell,
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
+// because a room's participants link only a document that carries a label.
+type TestProfile = AddIntegrity<
+  ChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
 
 /** The gesture a start takes, as a client's start control makes it. */
 const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
@@ -49,7 +58,7 @@ const CAROL = "did:key:z6MkCaro1";
 
 /** A room held apart from the index, which forgetting it changes. */
 interface HeldRoom {
-  room?: Writable<ChatRoomLink>;
+  room?: Writable<ChatRoomLink & { participants?: ProfileCell[] }>;
 }
 
 const statusOf = (
@@ -105,7 +114,7 @@ const recipientsOf = (notices: Writable<ChatManagerNotice[]>): string =>
   (notices.get() ?? []).map((notice) => notice.recipient).join(",");
 
 export default pattern(() => {
-  const profile = Writable.of<ChatProfile>({ name: "Tester" });
+  const profile = Writable.of<TestProfile>({ name: "Tester" });
 
   // A direct room: one per counterpart, found again after it is forgotten.
   const directRooms = Writable.of<ChatIndexEntry[]>([]);
@@ -240,6 +249,11 @@ export default pattern(() => {
         assertion: assert(() =>
           directRooms.get().length === 1 &&
           directRooms.get()[0]?.counterpart === BOB &&
+          // Its creator is listed among its participants without a step of
+          // their own.
+          (directHeld.key("room").get()?.get()?.participants ?? []).some((
+            known,
+          ) => equals(known, profile)) &&
           recipientsOf(directNotices) === BOB
         ),
       },
