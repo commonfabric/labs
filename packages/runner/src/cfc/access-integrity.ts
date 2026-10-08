@@ -46,8 +46,8 @@ export type ConsumedLocation = {
 /**
  * `locations` with two observations of one location counted once. An
  * observation under a key already kept is dropped when it consumed the same
- * integrity, and kept beside the first when it did not, since the two then did
- * not observe one value.
+ * label and evidence, and kept beside the first when it did not, since the
+ * two then did not observe one value.
  */
 const distinctLocations = (
   locations: readonly ConsumedLocation[],
@@ -59,7 +59,11 @@ const distinctLocations = (
     if (kept === undefined) {
       byKey.set(location.key, [location]);
     } else if (
-      kept.some((other) => deepEqual(other.integrity, location.integrity))
+      kept.some((other) =>
+        deepEqual(other.integrity, location.integrity) &&
+        deepEqual(other.evidence, location.evidence) &&
+        deepEqual(other.confidentiality, location.confidentiality)
+      )
     ) {
       continue;
     } else {

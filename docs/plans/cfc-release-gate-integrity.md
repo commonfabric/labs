@@ -38,8 +38,9 @@ on the gates holding.
   no origin and folds an ancestor's entry in beside a narrower cell's own, so
   it cannot be resolved location by location until views carry origins.
 - Within one location, `labelForEntriesAtPath` unions integrity across
-  components. The component that declares the store's policy carries none in
-  practice, so the union there equals the one component that carries any. The
+  components. The declared component carries integrity where a write's
+  schema mints it (`addIntegrity`) or carries it (`exactCopyOf`, a
+  projection), beside the derived and minted components' stamps. The
   question is what §8.12.8's join means when a component makes no integrity
   claim. Read literally, the join drops every per-value claim wherever a
   policy is declared, and the formal model behind §8.12.8 gives every path a
@@ -86,7 +87,9 @@ value:
    run over that location's own clauses, matched against the integrity of the
    entries there that bind the current value: flow stamps and the writer's
    own stamps, not existence stamps, declared policy, link copies, or ingest
-   marks. A location with no such evidence keeps its clauses as read.
+   marks. A location with no such evidence keeps its clauses as read. An
+   exact copy's carried integrity is in the declared component, which no
+   later write withdraws, so a value-intrinsic rule does not see it either.
 3. The results are joined. A clause no location resolved stays as it was
    read. The integrity is §3.1.6.2's class-aware join of every location:
    hereditary atoms every location carries, and anything else only where the
@@ -98,7 +101,8 @@ So a rule that is not value-intrinsic and guards on a value-bound or
 provenance atom never fires on an access that consumed two or more locations,
 since the join keeps only hereditary atoms. The standard profile's influence
 discharges, which guard on `DisclosureRendered` and `DisclosureAcknowledged`,
-are such rules.
+are such rules. A value-intrinsic rule runs only at observation, so no rule
+the join stage fires can enable one.
 
 The `requiredIntegrity` floor needs one witness key shared by every location
 each gated read consumed and by the read's own label. A cell's stored label at
@@ -127,6 +131,9 @@ gates. Each is a separate change; none is fixed here.
   read prefix to it, so a literal written into a floored list passes.
 - **A link written at a payload field named `internal`** leaves the root
   stamp's `TransformedBy` in place.
+- **A schema's `addIntegrity` at a container mints at every position a write
+  landed inside**, the container's own included, so its stamp resolves as
+  current-value evidence at a sibling another writer wrote.
 
 ## Plan
 
