@@ -965,7 +965,7 @@ history from absence.
    where the 180 ms claim is tested rather than inferred, and where the
    question "is compaction still needed for latency, or only for disk?" gets
    its answer; it needs a fresh snapshot from the host.
-2. **The basis guard (I9)** — done (PR_PLACEHOLDER). `known: false` for a
+2. **The basis guard (I9)** — done ([labs#8643](https://github.com/commonfabric/labs/pull/8643)). `known: false` for a
    confirmed or pending read whose basis predates an instance's oldest
    surviving row when that row points at a compaction commit. Tests: the
    last two protocol cases of §3 in all three variants — patch-headed,
