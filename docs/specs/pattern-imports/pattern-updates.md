@@ -43,7 +43,7 @@ during that implementation are archived at
 
 ## Last Updated
 
-2026-08-27
+2026-10-09
 
 ## Motivation
 
@@ -143,9 +143,9 @@ Two decisions carry the whole design:
 CLI `piece ls`, FUSE mount, and shell list cell goes through — carries the
 root's last rescue. A root that already followed its origin and still cannot
 start, and that records no origin or the same official system source, is rolled
-forward to that source and started once more. Without it an unopenable root
-takes every listing down with it (the 2026-07-29 cf-cell-context retirement,
-caught by the loom vendor gate).
+forward to the identity that source's origin advertises and started once more.
+Without it an unopenable root takes every listing down with it (the 2026-07-29
+cf-cell-context retirement, caught by the loom vendor gate).
 
 That rescue is narrow on purpose:
 
@@ -161,6 +161,14 @@ That rescue is narrow on purpose:
 - A root following anything else keeps what its owner chose. Replacing its
   source with the system default would discard that choice rather than repair
   anything.
+- It adopts only what following the origin would: source that compiles to the
+  identity the `?identity` route advertises. When that route does not answer, or
+  the source compiles to another identity or not at all, the root stays pinned
+  and opening the space fails with the reason, because a root moved to an
+  identity the host does not advertise would be moved back by the next client
+  that agrees with the host. A client whose runtime compiles the source
+  differently cannot open such a space until it is updated; one that reaches the
+  host part-way through a deployment can once the deployment finishes.
 - The replaced root records the displaced `{ identity, symbol, displacedAt }`
   under `displacedPattern` meta. This is an audit and forensic pointer — the
   displaced program's compiled artifacts remain content-addressed in the
@@ -526,10 +534,12 @@ with that exact identity.
 This also fails closed across a rolling deployment. If `?identity`, the entry
 source, or any import comes from a different revision, the assembled closure
 normally hashes to a different entry identity and the pattern pointer is not
-written. The same rule covers an identity-algorithm incompatibility between an
-older worker and a newer toolshed: disagreement prevents the update. No
-`/api/meta` request, git-SHA comparison, pattern response build header, or
-worker-to-shell version-skew signal is part of the authorization path.
+written. The piece records an identity-mismatch refusal, which lasts only until
+the deployment finishes. The same rule covers an identity-algorithm
+incompatibility between an older worker and a newer toolshed: disagreement
+prevents the update. No `/api/meta` request, git-SHA comparison, pattern
+response build header, or worker-to-shell version-skew signal is part of the
+authorization path.
 
 Authored identity deliberately does not fingerprint bare runtime imports or the
 runtime's implementation. Local compilation and evaluation are a capability

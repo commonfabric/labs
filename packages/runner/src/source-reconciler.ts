@@ -102,11 +102,14 @@ const logger = getLogger("runner.source-reconcile", {
  * - `migrated`: the origin was rewritten into its canonical spelling; the
  *   pattern is unchanged.
  * - `updated`: the piece adopted new source.
- * - `refused`: the origin resolved and offered source the piece refused,
- *   and offering it again gets the same answer: the source did not compile,
- *   did not produce the identity its origin advertised, or cannot replace what
- *   the piece runs and its owner has not said to take it anyway. The record
- *   the reconciliation leaves names which.
+ * - `refused`: the origin resolved and offered source the piece refused: the
+ *   source did not compile, did not produce the identity its origin
+ *   advertised, or cannot replace what the piece runs and its owner has not
+ *   said to take it anyway. The record the reconciliation leaves names which.
+ *   The first and last are refused again for as long as the origin offers the
+ *   same source. A mismatch with the advertised identity lasts until a
+ *   deployment in progress at the host finishes, or until this runtime and the
+ *   host's compile that source alike.
  * - `unavailable`: the origin's current source could not be adopted this
  *   time — it could not be reached, or the piece changed underneath the
  *   attempt and the write it was going to make no longer describes it.
@@ -150,7 +153,10 @@ export type SystemSourceCandidate =
   | CompiledCandidate
   /**
    * It was refused, as reconciliation refuses it, and `offered` names the
-   * identity the origin advertised.
+   * identity the origin advertised. Source that does not compile is refused
+   * for as long as the origin serves it. A mismatch with the advertised
+   * identity lasts until a deployment in progress at the host finishes, or
+   * until this runtime and the host's compile the source alike.
    */
   | (SourceRefusal & { readonly offered: PatternRef })
   /**
@@ -485,9 +491,9 @@ export class SourceReconciler {
   /**
    * Compiles the source a `system:` origin currently names into `space`,
    * selecting its `symbol` export, and holds it to the identity the host
-   * serving `space` advertises for that origin. Returns the pattern, or why
-   * there is none: a refusal recurs whenever the same source is offered, and
-   * anything else may not. Never throws.
+   * serving `space` advertises for that origin. Returns the pattern, the
+   * refusal reconciliation would record for that source, or why there is
+   * neither this time. Never throws.
    *
    * Every call asks the host which identity it advertises. Calls for the same
    * space, origin, and advertised identity share the downloaded source, and the
