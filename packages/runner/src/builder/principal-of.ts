@@ -26,10 +26,12 @@ import { cellOfTarget } from "./space-access.ts";
  * Returns `undefined` when the label names no verified single principal of
  * that kind: when it attests none, when it attests more than one, when a claim
  * there is in any form but the one a runtime mints, and for a `target` passed
- * as `undefined`. It never guesses. A label it cannot read is not one of
- * those: that read throws, so a labeled document never reads as unlabeled.
- * Nor is a label still loading, in a handler: the handler is withdrawn and
- * runs again once its document arrives.
+ * as `undefined`. It never guesses. A label the caller cannot observe, one
+ * whose read is refused by construction or by the storage manager, also
+ * returns `undefined`, as missing metadata does, which is the normalization
+ * of hidden cases that CFC spec §4.6.4.1 requires. A label still loading is
+ * not one of them, in a handler: the handler is withdrawn and runs again once
+ * its document arrives.
  *
  * The read is of `target`'s label: the value's cell is followed through any
  * links it holds, which reads the pointers along the way and no other value
@@ -59,10 +61,10 @@ import { cellOfTarget } from "./space-access.ts";
  *   `kind` that is not a principal claim kind, with a `target` that is
  *   neither a cell nor `undefined`, or with `options` that is not an object
  *   whose `label`, if present, is `"written"` or `"resolved"`; if the target's
- *   label cannot be read,
- *   including one stored in a form this build cannot interpret
- *   (`StoredCfcMetadataError`); and if the label-metadata classification
- *   makes a claim's subject anything but public.
+ *   label is stored in a form this build cannot interpret
+ *   (`StoredCfcMetadataError`), or the transaction's read of it fails; and if
+ *   the label-metadata classification makes a claim's subject anything but
+ *   public.
  */
 export function principalOf(
   // Typed `unknown` here, though the declared API types both, so that the
@@ -85,8 +87,10 @@ export function principalOf(
  * `kind` name rather than only a single one, so that a caller can tell a
  * label that attests no principal from one that attests several.
  *
- * Returns `[]` when the label attests none, and the DIDs it attests, in the
- * order they first appear, when it attests one or more. Returns `undefined`
+ * Returns `[]` when the label attests none, and for a label the caller cannot
+ * observe, as `principalOf()` normalizes one with missing metadata; and the
+ * DIDs it attests, in the order they first appear, when it attests one or
+ * more. Returns `undefined`
  * when a claim there is in any form but the one a runtime mints, since no
  * principal can then be read from it, and for a `target` passed as
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,

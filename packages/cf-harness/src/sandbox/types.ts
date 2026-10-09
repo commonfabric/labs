@@ -257,14 +257,21 @@ export type SandboxRuntimeKind = "docker" | "runsc";
  */
 export type SandboxPlatform = typeof Deno.build.os;
 
-/** The platform whose default sandbox runtime is the native one. */
-export type NativeRuntimePlatform = "darwin";
+/**
+ * A processor architecture, as `Deno.build.arch` writes it. On macOS it
+ * decides whether the native runtime can run at all: its VM runs on Apple
+ * silicon alone.
+ */
+export type SandboxArch = typeof Deno.build.arch;
+
+/** The platforms whose default sandbox runtime is the native one. */
+export type NativeRuntimePlatform = "darwin" | "linux";
 
 /**
  * How a selection came to its runtime, kept so that a run and the console can
  * tell a runtime someone named from one the platform defaulted to. Each
- * default is its platform's, so a defaulted Docker on macOS, and a defaulted
- * native runtime anywhere else, are not choices there can be.
+ * default is its platform's, so a defaulted Docker on macOS or Linux, and a
+ * defaulted native runtime anywhere else, are not choices there can be.
  */
 export type SandboxRuntimeChoice =
   /** A flag or the environment named the runtime. */
@@ -276,8 +283,9 @@ export type SandboxRuntimeChoice =
     platform: Exclude<SandboxPlatform, NativeRuntimePlatform>;
   }
   /**
-   * Nothing named one, on the platform whose default is the native runtime,
-   * which runs from the cfc-vm store at `nativeStore`.
+   * Nothing named one, on a platform whose default is the native runtime,
+   * which runs from the store at `nativeStore`: the cfc-vm store on macOS,
+   * and on Linux the store gVisor's Linux installer writes.
    */
   | {
     runtime: "runsc";

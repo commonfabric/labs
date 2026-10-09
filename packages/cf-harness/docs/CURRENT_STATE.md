@@ -27,18 +27,19 @@ The runtime has four main boundaries:
 3. Most tool execution runs in a gVisor sandbox through one of two drivers: one
    drives Docker with a configurable Docker-registered runtime, normally
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
-   A run names one. Where it names none, macOS takes the direct driver and every
-   other platform takes Docker, except that the Loom local host, and a console
-   launched for a Loom instance, refuse. [Sandbox runtimes](#sandbox-runtimes)
-   describes both. The browser child is a constrained host-adjacent profile
-   whose typed `browser` tool the harness sends to a browser host attached to
-   the run, such as the Weaver, or else binds to a leased local CDP endpoint
-   itself. The optional `run_pattern` tool is a distinct trusted-host path whose
-   Fabric identity stays outside the sandbox. It runs pieces in the configured
-   space and admits input references from that space or foreign DIDs the
-   operator lists with their hosts. The agent result writer is a second such
-   path, invoked by a host caller rather than by the model, writing a run's
-   structured result into the configured space.
+   A run names one. Where it names none, macOS and Linux take the direct driver
+   and every other platform takes Docker, except that the Loom local host, and a
+   console launched for a Loom instance, refuse.
+   [Sandbox runtimes](#sandbox-runtimes) describes both. The browser child is a
+   constrained host-adjacent profile whose typed `browser` tool the harness
+   sends to a browser host attached to the run, such as the Weaver, or else
+   binds to a leased local CDP endpoint itself. The optional `run_pattern` tool
+   is a distinct trusted-host path whose Fabric identity stays outside the
+   sandbox. It runs pieces in the configured space and admits input references
+   from that space or foreign DIDs the operator lists with their hosts. The
+   agent result writer is a second such path, invoked by a host caller rather
+   than by the model, writing a run's structured result into the configured
+   space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child
@@ -71,8 +72,11 @@ label string beside an empty structured label is withheld under both.
   context and the result travel through two host sidecar directories that the
   runtime's registration names.
 - The **direct driver** writes an OCI bundle and invokes a `runsc` binary
-  itself, with the same command line on Linux and on macOS. On Linux that binary
-  is expected to be gVisor's `runsc`. On macOS it is expected to be the darwin
+  itself, with the same command line on Linux and on macOS but for two things on
+  Linux: `--rootless` where the selection runs it rootless, and, under pasta's
+  network (below), `--network=host` inside pasta's namespace, with the whole
+  command started through `pasta` and `setpriv`. On Linux that binary is
+  expected to be gVisor's `runsc`. On macOS it is expected to be the darwin
   build from the sibling `gvisor` repository, which is expected to forward the
   command line into one VM that every run on the machine shares; the forwarding
   and the VM are that build's behavior and not the harness's. Where a CFC policy
@@ -108,13 +112,34 @@ from one driver to the other:
   directory `CFC_VM_HOME` names, which must be an absolute path, and otherwise
   `Library/Application Support/cfc-vm` under the home. Where the store cannot
   provide the runtime the entrypoint is refused before it runs, serves, or
-  launches anything.
-- On every other platform that default is Docker. The native runtime is the
-  macOS `runsc`, which runs in a VM only macOS has, so the platform alone
-  decides this; no other platform has a default direct driver.
+  launches anything. That VM runs on Apple silicon alone: on any other Mac
+  (`Deno.build.arch` other than `aarch64`) the default is refused before
+  anything else is looked at, saying so and how to select Docker.
+- On Linux that default is the direct driver with the **native runtime** too:
+  gVisor's own `runsc`, the unpacked kitchen-sink rootfs and the CFC policy of
+  the store gVisor's Linux installer writes at `.local/share/runsc-cfc` under
+  the home. For a process whose user id (`Deno.uid()`) is 0 that `runsc` runs as
+  it is; for any other it runs with `--rootless`, in a user namespace of its
+  own, which the selection first checks the host allows: it reads
+  `user.max_user_namespaces`, `kernel.unprivileged_userns_clone` and
+  `kernel.apparmor_restrict_unprivileged_userns` from `/proc/sys`, and refuses
+  the default, before the store is looked for, where one is 0, 0 or 1, naming it
+  and the `sysctl -w` that lifts it, or running as root. A parameter the kernel
+  lacks keeps nothing from it; one that cannot be read refuses the default, and
+  so does a user id that cannot be read. A binary named by
+  `CF_HARNESS_RUNSC_BINARY` is run as it is, without `--rootless` and without
+  that check for its sake; under pasta's default network a process that is not
+  root still has pasta make a user namespace, and is checked and refused the
+  same way for that, unless it names a `none` or `host` network. It is refused
+  where there is no home, or the home is not an absolute path.
+- Each refusal of a default says it is the default of its platform, `macOS` or
+  `Linux`, what is in the way, and how Docker is selected.
+- On every other platform that default is Docker. No other platform has a native
+  runtime, so the platform alone decides this; no other platform has a default
+  direct driver.
 
-The store provides the runtime when it holds each of these, and the refusal
-lists every one that is not there:
+The macOS store provides the runtime when it holds each of these, and the
+refusal lists every one that is not there:
 
 | In the store            | What has to be there | Not needed where                                                |
 | ----------------------- | -------------------- | --------------------------------------------------------------- |
@@ -140,8 +165,58 @@ while that `runsc` knows its store's pieces by their paths in the store, and
 none of gVisor's installer scripts makes a link. The policy is looked at through
 links, as a file anywhere would be.
 
-The macOS default is refused for three more things, each checked before the
-pieces above:
+The Linux store provides the runtime when it holds each of these, and the
+refusal lists every one that is not there:
+
+| Under `.local/share/runsc-cfc` | What has to be there | Not needed where                     |
+| ------------------------------ | -------------------- | ------------------------------------ |
+| `bin/runsc`                    | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one  |
+| `images/kitchensink`           | a directory          | a rootfs is named                    |
+| `cfc-policy.json`              | a file               | a policy is named, the empty one too |
+
+The driver executes `bin/runsc` and names `images/kitchensink`, the image's
+unpacked tree, as each container's rootfs. Linux's `runsc` is handed both by the
+paths their links lead to and reads nothing by its path in the store, so pieces
+are looked at through links, and the store's path is taken as given. A piece is
+otherwise read as on macOS: one that cannot be examined counts as not there,
+with the reason, and one this process cannot read or execute is refused for
+that. The store's policy is the home's default policy, so the selection looks
+for it once.
+
+The Linux default's `sandbox` network, unless `CF_HARNESS_DOCKER_NETWORK_MODE`
+names another, is `pasta`'s, from passt, found on `PATH` as the selection runs;
+with none there the default is refused, naming passt and the two networks,
+`none` and `host`, that need none of `pasta`, `setpriv` or `unshare`. Those two
+do not lift the user-namespace check above: a process that is not root runs the
+store's `runsc` rootless whatever the network. The driver starts each container
+inside `pasta --config-net --quiet -4 -a 10.0.2.15 -n 24 -g 10.0.2.2` with every
+port forward off (`-t none -u none -T none -U none`) and its log in
+`--log-file <scratch>/pasta.log` (for root with `--netns-only --runas 0`, inside
+`unshare --mount --propagation private`, since pasta then mounts its own `/proc`
+in the mount namespace it runs in, and refused where no `unshare` is on `PATH`;
+whoever else runs, a named `runsc` included, has pasta make a user namespace),
+runs runsc there through `setpriv --pdeathsig KILL` (util-linux, refused where
+no `setpriv` is on `PATH`) with `--network=host` and a bundle with no network
+namespace of its own, and binds a hosts file over `/etc/hosts` that names the
+gateway, which pasta maps to the host's loopback, `host.docker.internal`. The
+container has egress and the host, and sees none of the host's interfaces. Pasta
+starts what it runs in a PID namespace of its own, so a session's container
+started under it would record pids that `exec` and the control commands, run
+outside it, cannot find: under pasta's network the runtime describes no
+sessions, the `bash` tool offers no `session`, and a session asked of the
+runtime directly is refused as `start-failed`. For the same reason no control
+command reaches a container under pasta from outside. Pasta clears the
+parent-death signal of what it runs, so `setpriv` sets one, SIGKILL: when pasta
+goes (a call's timeout, a close of the runtime, which stops each call in flight
+through its pasta), the first process of its PID namespace dies, and every
+process of the namespace, the container's included, with it. Each such container
+keeps its state in a runsc root of its own call's, which goes when the call
+ends. A mount at or over `/etc/hosts` is refused under pasta's network. `none`
+gives the container loopback alone, and `host` the host's own network, with no
+network namespace of its own either.
+
+The macOS default is refused for three more things, and the Linux default for
+the first and the last, each checked before the pieces above:
 
 - **A setting of the Docker driver.** Each of `--sandbox-image`,
   `--sandbox-docker-runtime`, `--cfc-result-dir` and
@@ -168,25 +243,28 @@ pieces above:
   home that is not a directory, since nothing can be at such a path. A policy
   that is there is opened before it is taken, so one this process cannot read is
   refused here, by name, rather than failing inside `runsc`. Any other failure
-  to look or to open refuses the default, naming the file and the failure, so
-  that the store's own policy never stands in for one under the home that might
-  be there. A named `runsc` is refused the same way, without the way to Docker,
-  since nothing about it is a default.
+  to look or to open refuses the default, naming the file and the failure. On
+  macOS that keeps the store's own policy from ever standing in for one under
+  the home that might be there. On Linux the home's default policy is the
+  store's own, one path, which the selection looks for once. A named `runsc` is
+  refused the same way, without the way to Docker, since nothing about it is a
+  default.
 
 Each refusal is a `HarnessControlError` with the code `invalid-request`. The
 message of a refused default says that no runtime is named and the default on
-macOS is the native runtime, says what is in the way, and says how Docker is
-selected: by `--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`
-on the batch CLI, and by the variable alone on the entrypoints that take no
-selection flag. `cf agent` runs the batch CLI with an argument list it writes
-itself, so its operator can pass no flag, and it asks for the variable alone
-too, from either of its lanes. `cf agent runner` derives the selection once as
-it starts, through `selectCfHarnessCliSandboxRuntime()`, before either lane
-serves, and exits with the refusal where each of its jobs would get it. The Loom
-local host's own refusal names the flag and the variable on its batch lane and
-the variable alone on its interactive lane. Through the batch lane a refusal is
-a host failure carrying the message, and through the interactive lane a
-chat-protocol `internal_error` carrying it.
+macOS or Linux is the native runtime, says what is in the way, and says how
+Docker is selected: by `--sandbox-runtime docker` or
+`CF_HARNESS_SANDBOX_RUNTIME=docker` on the batch CLI, and by the variable alone
+on the entrypoints that take no selection flag. `cf agent` runs the batch CLI
+with an argument list it writes itself, so its operator can pass no flag, and it
+asks for the variable alone too, from either of its lanes. `cf agent runner`
+derives the selection once as it starts, through
+`selectCfHarnessCliSandboxRuntime()`, before either lane serves, and exits with
+the refusal where each of its jobs would get it. The Loom local host's own
+refusal names the flag and the variable on its batch lane and the variable alone
+on its interactive lane. Through the batch lane a refusal is a host failure
+carrying the message, and through the interactive lane a chat-protocol
+`internal_error` carrying it.
 
 `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy` are flags of
 the batch CLI, which the batch lane of the Loom local host also hands its
@@ -274,15 +352,15 @@ or the turn, cannot be told to be on the same driver. Nothing reads an unknown
 name as Docker.
 
 The settings below describe the direct driver and are read only when it is
-selected, by name or by the macOS default. A setting that is named means the
-same under both; what an unnamed one falls to differs:
+selected, by name or by the macOS or Linux default. A setting that is named
+means the same under all three; what an unnamed one falls to differs:
 
-| Setting        | Batch CLI flag         | Environment                      | Unnamed, for a named `runsc`                                                                                                     | Unnamed, for the macOS default                                                                                       |
-| -------------- | ---------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the store `CFC_VM_HOME` names, else in the one under the home. On Linux, the run is refused. | `images/kitchensink` in the store.                                                                                   |
-| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                                           | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. |
-| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it.                     | `bin/runsc` in the store.                                                                                            |
-| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                       | `sandbox`.                                                                                                           |
+| Setting        | Batch CLI flag         | Environment                      | Unnamed, for a named `runsc`                                                                                                                                                                                              | Unnamed, for the macOS default                                                                                       | Unnamed, for the Linux default                                                                                         |
+| -------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the store `CFC_VM_HOME` names, else in the one under the home. On Linux, `images/kitchensink` in the Linux store under the home, where there is a home; with none the run is refused. | `images/kitchensink` in the store.                                                                                   | `images/kitchensink` in the store.                                                                                     |
+| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                                                                                                                                    | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. | `cfc-policy.json` in the store, which is that file, where it exists; otherwise the default is refused.                 |
+| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it.                                                                                                              | `bin/runsc` in the store.                                                                                            | `bin/runsc` in the store, with `--rootless` for a process that is not root, where the host allows it a user namespace. |
+| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                                                                                                                | `sandbox`.                                                                                                           | `sandbox`, which pasta gives: egress and `host.docker.internal`.                                                       |
 
 The macOS default requires a policy because a run enforces CFC unless told
 otherwise, and an enforcing run with none is refused as it starts. The selection
@@ -323,7 +401,7 @@ Each driver describes itself, and the description is recorded in
 | Field                                     | Docker driver                                           | Direct driver                                  |
 | ----------------------------------------- | ------------------------------------------------------- | ---------------------------------------------- |
 | `kind`                                    | `docker-runsc-cfc`                                      | `runsc-cfc`                                    |
-| `sessions`                                | absent                                                  | `true`                                         |
+| `sessions`                                | absent                                                  | `true`, and `false` under pasta's network      |
 | `cfc.runtimeRequested`                    | `true`                                                  | `true` exactly when a CFC policy is configured |
 | `cfc.runtimeName`                         | the Docker runtime's name, normally `runsc-cfc`         | absent                                         |
 | `cfc.image`                               | the Docker image                                        | the rootfs path                                |
@@ -337,22 +415,26 @@ Each driver describes itself, and the description is recorded in
 the selection its entrypoint derived, and a child run carries its parent's. It
 holds `runtime`, `docker` or `runsc`, and `source`, which is `flag`,
 `environment`, or `default`. A default also holds the `platform` whose default
-applied, and the native runtime macOS defaulted to holds `nativeStore`, its
-store. It is absent for an engine a caller built without a selection. The batch
-CLI prints the same account on the `sandbox` line of its operator summary, as
-`runsc (default on macOS: the native store at <store>)`,
-`docker (default on linux: the native runtime is macOS only)`, or the runtime
-followed by `(named by --sandbox-runtime)` or
+applied, and the native runtime macOS or Linux defaulted to holds `nativeStore`,
+its store. It is absent for an engine a caller built without a selection. The
+batch CLI prints the same account on the `sandbox` line of its operator summary,
+as `runsc (default on macOS: the native store at <store>)`,
+`runsc (default on Linux: the native store at <store>)`,
+`docker (default on freebsd: the native runtime is macOS and Linux only)`, or
+the runtime followed by `(named by --sandbox-runtime)` or
 `(named by CF_HARNESS_SANDBOX_RUNTIME)`.
 
 `runsc-cfc` therefore names two different things, and the field it appears in
 says which. As a `kind` it is the direct driver. As a `cfc.runtimeName` it is
 the Docker-registered runtime, and the `kind` beside it is `docker-runsc-cfc`.
 
-`sandbox` is a network mode only the direct driver reports. It is `runsc`'s own
-network stack, the direct driver's default and the counterpart of Docker's
-`bridge`. `CF_HARNESS_DOCKER_NETWORK_MODE` is shared by both drivers and is
-written in Docker's vocabulary, which maps onto the direct driver's as follows:
+`sandbox` is a network mode only the direct driver reports, the direct driver's
+default and the counterpart of Docker's `bridge`. On macOS it is the VM's
+network. On Linux under the default it is `pasta`'s network namespace, taken as
+runsc's host network, with egress and the host at `host.docker.internal`; with
+no `pasta` configured it is runsc's own network stack, loopback alone.
+`CF_HARNESS_DOCKER_NETWORK_MODE` is shared by both drivers and is written in
+Docker's vocabulary, which maps onto the direct driver's as follows:
 
 | `CF_HARNESS_DOCKER_NETWORK_MODE` | Docker driver | Direct driver |
 | -------------------------------- | ------------- | ------------- |
@@ -379,9 +461,9 @@ CFC enforcement mode. Before each model request the prompt loop reads the
 sandbox's description and the run's mode, and offers the descriptor that fits
 them:
 
-- where the description reports `sessions`, which is the direct driver, and the
-  mode allows a session, which is `disabled` or `observe`, `bash` takes an
-  optional `session` argument;
+- where the description reports `sessions`, which is the direct driver on any
+  network but pasta's, and the mode allows a session, which is `disabled` or
+  `observe`, `bash` takes an optional `session` argument;
 - otherwise `bash` takes `command`, `cwd`, and `timeoutMs` and no `session`: the
   Docker driver in every mode, and the direct driver in the enforcing modes,
   which refuse every session. `enforce-strict`, the default, is one of them, so
@@ -505,6 +587,13 @@ runtime macOS defaulted to, whose three files nobody named, the refusal adds
 that no runtime is named, where the store is, and that Docker is selected with
 `CF_HARNESS_SANDBOX_RUNTIME=docker`. A run whose workspace is the home directory
 gets it, since the default store is under the home.
+
+The other way round, a writable mount is refused where it lies inside the
+rootfs, since the sandbox could rewrite the image later containers start from.
+The native store is held both ways too: on macOS the cfc-vm store, and on Linux,
+given a home, the runsc-cfc store under it, may not lie inside a writable mount,
+and no writable mount may lie inside it, so no image of the store, one this run
+does not use included, can be rewritten for a later run.
 
 Each of the three is resolved once, when the configuration is resolved, to the
 path the filesystem leads to, and that path is both what is compared with the

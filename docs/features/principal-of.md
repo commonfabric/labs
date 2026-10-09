@@ -72,7 +72,8 @@ other keys are not read.
 | `undefined` | a claim of `kind` there is in any other form: extra keys, a padded subject, a subject that is not a DID |
 | `undefined` | a claim of either kind there is in the string form `<kind>:<subject>` |
 | `undefined` | `target` was passed as `undefined` |
-| throws | the stored label cannot be read: its read fails or is refused, or it is stored in a form this build cannot interpret |
+| `undefined` | the label cannot be observed: the document is missing, or its read is refused, by construction or by the storage manager |
+| throws | the stored label is in a form this build cannot interpret, or the transaction's read of it fails |
 
 `undefined` means that the label names no verified single principal of that
 kind, and a caller refuses whatever needs one. It never guesses. A label that
@@ -81,17 +82,26 @@ have spelled, gives no answer rather than the first or the likeliest one. A
 `target` of `undefined` is one not known yet: a computation taking its target
 by value reads `undefined` while the value cannot be read.
 
-A label that cannot be read is not reported as `undefined`, since that would
-make a labeled document read as an unlabeled one; the read's error propagates.
-A `kind` other than the two above, or a `target` that is neither a cell nor
-`undefined`, throws too.
+A label the caller cannot observe gives `undefined` too, as missing metadata
+does. That covers a read refused by construction, as a serving runtime refuses
+another space's scoped instances, a read the storage manager refuses, as it
+does a space whose access list denies the reader, and any other target whose
+label the caller cannot see. CFC spec §4.6.4.1, Label Metadata Observation
+Profile, has label introspection normalize these hidden cases rather than tell
+them apart from missing metadata, and `principalOf()` follows it, so an
+unobservable label and an absent one read alike. A label that is stored but in a form this build
+cannot interpret is not one of them: that read throws, as does a failure of
+the transaction's read itself. A `kind` other than the two above, or a
+`target` that is neither a cell nor `undefined`, throws too.
 
 ## Every principal a label attests
 
 `principalsOf(target, kind)`, exported beside `principalOf()`, reads the same
 claims in the same places and returns all of them: `[]` when the label attests
 none of `kind`, and the DIDs it attests, in the order they first appear, when it
-attests one or more. It returns `undefined` where `principalOf()` does for a
+attests one or more. A label the caller cannot observe gives `[]` as well,
+normalized with missing metadata as it is for `principalOf()`, since neither
+leaves a claim to read. It returns `undefined` where `principalOf()` does for a
 claim in any other form and for a `target` of `undefined`, and it throws where
 `principalOf()` throws. It can be called where `principalOf()` can, and reads
 what `principalOf()` reads.

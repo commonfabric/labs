@@ -52,4 +52,42 @@ describe("Ingest route (smoke: wired up + transport paths)", () => {
     });
     expect(res.status).toBe(502);
   });
+
+  describe("addressed through the channel's space", () => {
+    const path =
+      "/api/spaces/did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA/ingest/ing_nope";
+
+    it("returns 401 for a write without a bearer token", async () => {
+      const res = await app.request(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partition: "2026-07-01", records: [{ x: 1 }] }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 502 for a write with a bearer token, the runtime being unavailable under test", async () => {
+      const res = await app.request(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer x",
+        },
+        body: JSON.stringify({ partition: "2026-07-01", records: [{ x: 1 }] }),
+      });
+      expect(res.status).toBe(502);
+    });
+
+    it("returns 413 for an oversized body", async () => {
+      const res = await app.request(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer x",
+        },
+        body: "x".repeat(1_100_000),
+      });
+      expect(res.status).toBe(413);
+    });
+  });
 });

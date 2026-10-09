@@ -89,6 +89,7 @@ import {
   ciJobHistoryResponse,
 } from "../ci-job-history.ts";
 import { RunLists } from "../github-runs.ts";
+import { dashboardCacheFile } from "../history-files.ts";
 import {
   concDot,
   dashboardGitHubCredential,
@@ -158,15 +159,19 @@ const BENCHMARK_FETCH_CONCURRENCY = 8;
 
 interface BenchmarkGitHub extends GitHubJson {
   download(path: string, credential: GitHubCredential): Promise<GitHubDownload>;
+  /** The file in the cache directory that keeps the runs this client read. */
+  runLists: string;
 }
 
 const ordinaryBenchmarkGitHub: BenchmarkGitHub = {
   json: github,
   download: githubDownload,
+  runLists: "fabric-wall-run-lists-benchmarks.json",
 };
 const performanceBenchmarkGitHub: BenchmarkGitHub = {
   json: performanceGithub,
   download: performanceGithubDownload,
+  runLists: "fabric-wall-run-lists-benchmarks-drill-down.json",
 };
 
 // deno bench reports these seven timings per benchmark (all nanoseconds).
@@ -216,6 +221,8 @@ let snapshot: BenchmarkSeries[] = [];
 // performance views' rate budget. Each keeps its own, so that neither waits
 // behind the other's reading.
 let benchmarkRuns = new WeakMap<BenchmarkGitHub, RunLists>();
+// Whether those runs are kept in the cache directory as well as in memory.
+let benchmarkRunsSaved = true;
 // The last benchmarks.yml run list a collection paged. The drill-down reads it
 // to name the run its rerun hand-off points at. Only a fetch that worked
 // replaces it, so the hand-off keeps naming the failed run while a later fetch
@@ -424,7 +431,9 @@ async function pageBenchmarkRuns(
   const read = ++benchmarkReadsStarted;
   let lists = benchmarkRuns.get(github);
   if (!lists) {
-    lists = new RunLists();
+    lists = new RunLists(
+      benchmarkRunsSaved ? dashboardCacheFile(github.runLists) : undefined,
+    );
     benchmarkRuns.set(github, lists);
   }
   const runs = await lists.runs(
@@ -1405,11 +1414,13 @@ function benchmarkLastRequestError(): string | null {
 }
 
 /**
- * Makes the tiles hold no runs, so that the next list paged is read afresh
- * rather than joined to the runs an earlier test listed.
+ * Makes the tiles hold no runs, and keep the runs they read from then on in
+ * memory alone, so that the next list paged is read afresh rather than joined
+ * to the runs an earlier test listed, whether in memory or in a file.
  */
 export function forgetBenchmarkRunsForTest(): void {
   benchmarkRuns = new WeakMap();
+  benchmarkRunsSaved = false;
   latestBenchmarkRuns = [];
 }
 

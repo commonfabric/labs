@@ -1582,7 +1582,7 @@ describe("agent runner", () => {
               : { CF_HARNESS_SANDBOX_RUNTIME: "docker" }),
           },
           ...(options.unnamedSandbox !== undefined
-            ? { platform: options.unnamedSandbox.platform }
+            ? { platform: options.unnamedSandbox.platform, arch: "aarch64" }
             : {}),
           fabricSessionFactory: () => Promise.resolve({ pieces }),
           createPromptLoop: (options) => ({
