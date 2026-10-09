@@ -9,9 +9,12 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 
+import { getValueAtPath } from "../path-utils.ts";
+import { arraysOverlap } from "../reactive-dependencies.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
+  TransactionWriteDetail,
 } from "../storage/interface.ts";
 import { entityKey } from "./keys.ts";
 import type { ReactivityLog } from "./types.ts";
@@ -110,15 +113,36 @@ export function echoBackoffDelayMs(streak: number): number {
 }
 
 /**
- * Classifies a reactive run as echo and convergence steps
- * (docs/plans/scheduler-remote-echo-breaker.md §1). The candidates are the
- * documents among the addresses that triggered the run (`invalidCauses`) that
- * the run also read — the self-referential shape, which the write path's
- * diff-base read satisfies. A candidate the run changed is an echo step; one
- * it did not change is a convergence step. Storage drops a write of an equal
- * value before it reaches the write details, so a candidate with no changed
- * write detail is a convergence whether the run wrote the same value again or
- * did not write it at all.
+ * A committing run as the breaker needs it once the commit lands: the
+ * triggers it changed, read off the transaction's write details while they
+ * are still staged, and what classifying the rest takes.
+ */
+export interface EchoRun {
+  /** The complete identities of the documents that triggered the run. */
+  readonly causeKeys: ReadonlySet<string>;
+
+  /** Those of them the run changed where it was triggered. */
+  readonly changed: ReadonlySet<string>;
+
+  /** The run's reactivity log, whose reads pick the candidates. */
+  readonly log: ReactivityLog;
+
+  /** The identity the run's addresses resolve against. */
+  readonly identity: ScopeKeyIdentity;
+}
+
+/**
+ * Captures what classifying a reactive run takes, at commit kickoff, while the
+ * transaction's write details are still staged — a committed transaction no
+ * longer exposes them — or `undefined` for a run nothing triggered.
+ *
+ * A trigger counts as changed when a write the run made both differs from
+ * what it replaced and reaches the path that triggered the run: a write at or
+ * below that path, or one above it whose value differs at it. A run that
+ * reads one field of a document and writes another field of it has not
+ * overwritten its trigger, however often the field it reads changes. A run
+ * triggered at the whole document cannot be told apart that way, so any
+ * changing write to the document counts for it.
  *
  * Every address is compared by its complete identity — space, scope instance,
  * and id — resolved against `identity`, the one identity the transaction
@@ -130,52 +154,101 @@ export function echoBackoffDelayMs(streak: number): number {
  * triggered by the echo of its OWN commit, so a cause that reaches here is
  * another writer.
  */
-export function computeEchoSteps(
+export function captureEchoRun(
   tx: Pick<IExtendedStorageTransaction, "getWriteDetails">,
   log: ReactivityLog,
   invalidCauses: readonly IMemorySpaceAddress[] | undefined,
   identity: ScopeKeyIdentity,
-): EchoStep[] {
-  if (invalidCauses === undefined || invalidCauses.length === 0) return [];
-  const causeKeys = new Set<string>();
+): EchoRun | undefined {
+  if (invalidCauses === undefined || invalidCauses.length === 0) {
+    return undefined;
+  }
+  const causePaths = new Map<string, (readonly string[])[]>();
   for (const cause of invalidCauses) {
-    causeKeys.add(entityKey(cause, identity));
+    const key = entityKey(cause, identity);
+    const paths = causePaths.get(key);
+    if (paths === undefined) causePaths.set(key, [cause.path]);
+    else paths.push(cause.path);
   }
 
-  const candidates = new Map<string, EchoDocument>();
-  for (const read of [...log.reads, ...log.shallowReads]) {
-    const key = entityKey(read, identity);
-    if (causeKeys.has(key) && !candidates.has(key)) {
-      candidates.set(key, {
-        space: read.space,
-        id: read.id,
-        scopeKey: read.scopeKey ?? resolveScopeKey(read.scope, identity),
-      });
-    }
-  }
-  if (candidates.size === 0) return [];
-
+  // A run's writes and its triggers are both few, so this pass is cheap.
   const changed = new Set<string>();
   for (const space of new Set(log.writes.map((write) => write.space))) {
     for (const detail of tx.getWriteDetails?.(space) ?? []) {
       const key = entityKey(detail.address, identity);
-      if (
-        candidates.has(key) &&
-        !valueEqual(
-          detail.previousValue as FabricValue,
-          detail.value as FabricValue,
-        )
-      ) {
-        changed.add(key);
-      }
+      if (changed.has(key)) continue;
+      const paths = causePaths.get(key);
+      if (paths?.some((path) => overwrites(detail, path))) changed.add(key);
+    }
+  }
+  return { causeKeys: new Set(causePaths.keys()), changed, log, identity };
+}
+
+/**
+ * Classifies a committed run as echo and convergence steps
+ * (docs/plans/scheduler-remote-echo-breaker.md §1). The candidates are the
+ * documents that triggered the run that the run also read — the
+ * self-referential shape, which the write path's diff-base read satisfies. A
+ * candidate the run changed is an echo step; one it did not change is a
+ * convergence step. Storage drops a write of an equal value before it
+ * reaches the write details, so a candidate with no changed write detail is a
+ * convergence whether the run wrote the same value again or did not write it
+ * at all.
+ *
+ * `options.tracked` says whether the breaker holds a pair of the run's action
+ * now, as the commit lands, rather than when the run began: another run of
+ * the action may have started counting in between. An untracked action can
+ * only begin counting, which takes an echo step, so only its changed triggers
+ * are classified and its reads are scanned only when it has one. The common
+ * run — of an action the breaker is not tracking, that did not overwrite its
+ * own trigger — costs nothing here.
+ */
+export function computeEchoSteps(
+  run: EchoRun,
+  options: { tracked: boolean },
+): EchoStep[] {
+  if (!options.tracked && run.changed.size === 0) return [];
+
+  // An untracked action needs only its changed triggers confirmed; a tracked
+  // one needs every trigger it read, since one it did not change is the
+  // convergence that clears a pair.
+  const wanted = options.tracked ? run.causeKeys : run.changed;
+  const candidates = new Map<string, EchoDocument>();
+  for (const read of [...run.log.reads, ...run.log.shallowReads]) {
+    const key = entityKey(read, run.identity);
+    if (wanted.has(key) && !candidates.has(key)) {
+      candidates.set(key, {
+        space: read.space,
+        id: read.id,
+        scopeKey: read.scopeKey ?? resolveScopeKey(read.scope, run.identity),
+      });
     }
   }
 
   return [...candidates].map(([docKey, document]) => ({
     docKey,
     document,
-    changed: changed.has(docKey),
+    changed: run.changed.has(docKey),
   }));
+}
+
+/**
+ * Whether `detail` changed what `path`, a path of the same document that
+ * triggered the run, addresses. A write at or below `path` changed it when it
+ * changed anything; a write above it, when its value differs at `path`; a
+ * write beside it never did.
+ */
+function overwrites(
+  detail: TransactionWriteDetail,
+  path: readonly string[],
+): boolean {
+  const written: readonly string[] = detail.address.path;
+  if (!arraysOverlap(written, path)) return false;
+  const below = path.slice(written.length);
+  return !valueEqual(
+    getValueAtPath(detail.previousValue, below) as FabricValue,
+    getValueAtPath(detail.value, below) as FabricValue,
+  );
 }
 
 interface EchoPairState {
@@ -235,11 +308,16 @@ export class RemoteEchoBreaker {
 
   readonly #pairs = new BoundedKeyMap<string, EchoPairState>(MAX_ECHO_PAIRS, {
     onEvict: (key, state) => {
+      const actionId = actionIdOf(key);
+      this.#countPair(actionId, -1);
       if (state.backoffStreak > 0) {
-        this.#cleared(actionIdOf(key), state, "evicted", this.#observedAt);
+        this.#cleared(actionId, state, "evicted", this.#observedAt);
       }
     },
   });
+
+  /** How many pairs each action holds, so `tracks()` is one lookup. */
+  readonly #pairsByAction = new Map<string, number>();
 
   readonly #onEvent: ((event: EchoBreakerEvent) => void) | undefined;
 
@@ -299,6 +377,7 @@ export class RemoteEchoBreaker {
           this.#cleared(actionId, existing, "convergence", now);
         }
         this.#pairs.delete(key);
+        this.#countPair(actionId, -1);
         continue;
       }
 
@@ -351,6 +430,7 @@ export class RemoteEchoBreaker {
       if (state.backoffStreak > 0) {
         maxDeadline = Math.max(maxDeadline ?? 0, state.deadline);
       }
+      if (existing === undefined) this.#countPair(actionId, 1);
       this.#pairs.set(key, state);
     }
 
@@ -374,6 +454,12 @@ export class RemoteEchoBreaker {
       }
       this.#pairs.delete(key);
     }
+    this.#pairsByAction.delete(actionId);
+  }
+
+  /** Whether the breaker holds any pair of `actionId`. */
+  tracks(actionId: string): boolean {
+    return this.#pairsByAction.has(actionId);
   }
 
   /**
@@ -391,6 +477,13 @@ export class RemoteEchoBreaker {
       trips: this.#trips,
       cyclesObserved: this.#cyclesObserved,
     };
+  }
+
+  /** Adjusts the pairs `actionId` holds by `delta`, forgetting it at none. */
+  #countPair(actionId: string, delta: number): void {
+    const count = (this.#pairsByAction.get(actionId) ?? 0) + delta;
+    if (count > 0) this.#pairsByAction.set(actionId, count);
+    else this.#pairsByAction.delete(actionId);
   }
 
   /** Tells the owner a tripped pair cleared at `now`, and how. */

@@ -148,9 +148,11 @@ import {
 } from "./registration.ts";
 import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
 import {
+  captureEchoRun,
+  computeEchoSteps,
   type EchoBreakerEvent,
   type EchoBreakerStats,
-  type EchoStep,
+  type EchoRun,
   RemoteEchoBreaker,
 } from "./echo-breaker.ts";
 import {
@@ -474,8 +476,8 @@ export class Scheduler {
    * Bounds the remote-echo write loop
    * (docs/plans/scheduler-remote-echo-breaker.md). Fed a committed reactive
    * run's echo steps on success, it backs an action off through the gate once
-   * its re-runs sustain against a remote writer. Inert unless the
-   * `remoteEchoBreaker` flag wires `observeRemoteEcho` into the run state.
+   * its re-runs sustain against a remote writer, and reports each trip and
+   * clear to the memory server holding the document's space.
    */
   readonly #echoBreaker = new RemoteEchoBreaker({
     onEvent: (event) => this.#reportEchoBreakerEvent(event),
@@ -3446,28 +3448,31 @@ export class Scheduler {
         this.#executingAction = null;
         this.#currentActionId = undefined;
       },
-      // Wired only under the flag, so the off arm keeps its exact behavior and
-      // pays one optional-call check per successful reactive commit.
-      ...(this.runtime.experimental.remoteEchoBreaker === true
-        ? {
-          observeRemoteEcho: (action, actionId, steps) =>
-            this.#observeRemoteEcho(action, actionId, steps),
-        }
-        : {}),
+      captureRemoteEcho: (tx, log, invalidCauses) =>
+        captureEchoRun(
+          tx,
+          log,
+          invalidCauses,
+          tx.tx.scopeKeyIdentity ?? this.runtime.scopeKeyIdentity,
+        ),
+      observeRemoteEcho: (action, actionId, run) =>
+        this.#observeRemoteEcho(action, actionId, run),
     };
   }
 
   /**
-   * Feed a successful reactive commit's echo steps to the remote-echo breaker
-   * and apply its verdict to the action's gate: a positive deadline defers the
-   * action's re-runs (a tripped loop), `0` lifts the deferral (a convergence
-   * that ended the loop), and `undefined` leaves the gate untouched.
+   * Classify a successful reactive commit's run, captured at kickoff, against
+   * the pairs the remote-echo breaker holds as the commit lands, feed its echo
+   * steps to the breaker, and apply its verdict to the action's gate: a
+   * positive deadline defers the action's re-runs (a tripped loop), `0` lifts
+   * the deferral (a convergence that ended the loop), and `undefined` leaves
+   * the gate untouched.
    */
-  #observeRemoteEcho(
-    action: Action,
-    actionId: string,
-    steps: readonly EchoStep[],
-  ): void {
+  #observeRemoteEcho(action: Action, actionId: string, run: EchoRun): void {
+    const steps = computeEchoSteps(run, {
+      tracked: this.#echoBreaker.tracks(actionId),
+    });
+    if (steps.length === 0) return;
     const deadline = this.#echoBreaker.observe(
       actionId,
       steps,
@@ -3515,8 +3520,7 @@ export class Scheduler {
   /**
    * The remote-echo breaker's visible counts
    * (docs/plans/scheduler-remote-echo-breaker.md §3): pairs whose backoff is in
-   * force now, the cumulative trip count, and echo cycles counted. All zero
-   * unless the `remoteEchoBreaker` flag is on.
+   * force now, the cumulative trip count, and echo cycles counted.
    */
   getEchoBreakerStats(): EchoBreakerStats {
     return this.#echoBreaker.stats(performance.now());

@@ -1,9 +1,12 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import {
+  PatternIndexClient,
+  type PatternIndexPublishRequest,
+} from "@commonfabric/pattern-index/client";
 import { Identity } from "@commonfabric/identity";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
-import { PatternIndexClient } from "../src/pattern-index/client.ts";
-import type { PatternIndexPublishRequest } from "../src/pattern-index/client.ts";
+
 import {
   createPatternIndexLedger,
   patternCapabilityKey,

@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { Identity } from "@commonfabric/identity";
 import {
   askCfcVmStatus,
@@ -20,7 +21,6 @@ import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { join } from "@std/path";
 import { ConsoleHealth } from "../../console/health.ts";
-import { PatternIndexClient } from "../../src/pattern-index/client.ts";
 
 const signer = await Identity.fromPassphrase("console health observations");
 

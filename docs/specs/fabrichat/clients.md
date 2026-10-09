@@ -122,6 +122,11 @@ A client that draws natively sends `addMember` through
 in a direct room, and `addRequests`, where each add's outcome is recorded under
 its `requestId` (see
 [`ChatRoomOutput`](ChatRoomOutput.md#addmemberrequestid-string-target--value-string-)).
+To leave the people already in the room out of its add control, it reads the
+room's `participantPrincipals`, the principal each participant's profile
+attests. It is a best-effort set to leave out, not an access list: someone who
+has been added but has never joined isn't among them, and neither is a
+participant whose profile the reader can't read.
 
 A client sends to the room's own streams, never through a placement or an
 adapter.

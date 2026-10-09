@@ -58,11 +58,41 @@ something about a change or something about the test. A failure is a
 - The identity failed across at least `ENVIRONMENTAL_MIN_SOURCES` distinct
   sources within `CATCH_BREADTH_WINDOW_DAYS`. That is the environment or a
   dependency, not any one change.
+- The run that saw it newly broke at least `MASS_FAILURE_MIN_IDENTITIES`
+  identities. That is the run, or the change as a whole, and not any one
+  test.
 
 Each catch is attributed to the pair of the commit and the source that saw
 it, so re-running one broken commit ten times counts once. A source is the
 branch for a continuous-integration run and the reporting person's login
 for a local one.
+
+A test is worth a place in a pull request for the breakage it finds that
+the rest of the selection would miss. A breakage that a crowd of tests
+sees is found by whichever of them a pull request runs, so it says nothing
+about any one of them. Crediting each would raise every test in the crowd
+by the same amount, which tells none of them apart and dilutes the score
+of every test that does find something alone. A failure in a crowd is
+still a failure, and churn counts it.
+
+A run, for this rule, is what one source saw at one point, and on a
+workstation, what one invocation saw. A workstation runs its uncommitted
+changes on top of the commit it names, so two of its runs at one commit
+ran two different trees. A failure counts toward its run's crowd when
+none of the other rules above sets it aside and it is new: on the default
+branch, an identity whose previous run there did not fail; anywhere else,
+one the default branch was not already failing. So a pull request run
+while the default branch is red for a hundred tests is judged by what it
+broke itself.
+
+On the default branch the crowd is judged at the failure that began a
+breakage, and a failure continuing it belongs to the same breakage until
+the branch passes, since the catch would be dated to the first failure.
+
+The publisher folds the objects one continuous-integration run uploaded
+in one batch, and carries what each run newly broke from one batch to
+the next for `SAME_COMMIT_REACH_DAYS`. A part of a run arriving in a later
+publisher run is judged with what was counted before it.
 
 A failure on the default branch cannot be judged when it happens. Every
 push there is a distinct commit with one run. When a test fails in that
@@ -806,7 +836,19 @@ the ones it looked at.
 A manifest declaring an earlier shape is read forward field by field. So
 is the publisher's own rolling aggregate, and for a stronger reason: the
 aggregate is where every catch a test has been credited with lives, over
-unbounded history, and no window of records gives those back.
+unbounded history, and no window of records the publisher ordinarily reads
+gives those back.
+
+The rules that decide whether a failure is a catch change, and the
+aggregate holds catches as counts rather than as the failures they came
+from, so a count credited under other rules cannot be judged again by
+itself. The aggregate therefore names the set of rules its catches were
+credited under, as `CATCH_RULE`. A publisher reading an aggregate that
+names another set, or none, folds every day that aggregate's history
+holds again into an empty aggregate. Records carry no retention, so
+every record those catches came from is folded again under the rules in
+force. What that costs is one run reading the whole history, which has
+to fit inside one job.
 
 A stored aggregate the publisher cannot read is passed over for the
 newest one behind it that it can. Nothing but the publisher creates an

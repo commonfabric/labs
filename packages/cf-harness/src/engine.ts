@@ -162,7 +162,7 @@ import {
   cacheHarnessPatternIndexClientFactory,
   createHarnessPatternIndexClientFactory,
   type HarnessPatternIndexClientFactory,
-} from "./pattern-index/client.ts";
+} from "./pattern-index/factory.ts";
 import {
   createPatternIndexLedger,
   type PatternIndexLedger,

@@ -19,11 +19,11 @@
  * time someone publishes.
  */
 
-import { Identity } from "@commonfabric/identity";
 import {
   PatternIndexClient,
   type PatternIndexListedPattern,
-} from "../src/pattern-index/client.ts";
+} from "@commonfabric/pattern-index/client";
+import { Identity } from "@commonfabric/identity";
 import {
   contentWords,
   descriptionOverlap,

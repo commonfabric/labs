@@ -18,6 +18,9 @@ interface ChatRoomOutput {
   /** The room's participants, plus any author it doesn't list. */
   participants: Cell<ChatProfile>[];
 
+  /** The principal each participant's profile attests, once each. */
+  participantPrincipals: string[];
+
   /** Adds a profile to those who joined the room, once. */
   addParticipant: Stream<{ profile: Cell<ChatProfile> }>;
 
@@ -151,6 +154,15 @@ space.
 - **`participants`** are links to profiles, compared with `equals()`: the
   profiles its space's root lists, as [membership](#membership) says, plus any
   author none of them is, each once. They are not proof of access.
+- **`participantPrincipals`** names the principal each of `participants` stands
+  for, as its profile's `represents-principal` label attests it: each once, in
+  the order of `participants`. A profile that attests none is left out, and so
+  is one whose label can't be read where the list is derived, as when the
+  profile's space refuses the reader, so two readers can read different lists.
+  It holds only the principals whose profiles can be read for the reader, so it
+  is a best-effort list of who is already in the room, not an access list, and
+  like `participants` it is a claim, not proof of access. A client uses it to
+  leave the people already in the room out of its own add control.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, and `latest`, the newest messages of
   the main conversation, which every member can read, a READ member included. It
@@ -192,9 +204,10 @@ client:
   streams. These are the room: a link to the room names them, and passing the
   link around, to another component or another person, passes the room.
 - **`PerSession`**: one instance per memory session in the room's space. That is
-  only `messages.windows`, the windows a session has opened onto the messages
-  (see [`ChatMessageList`](ChatMessageList.md#scope)). Passing the room's link
-  to someone else never passes a session's windows: they read their own.
+  `messages.windows`, the windows a session has opened onto the messages (see
+  [`ChatMessageList`](ChatMessageList.md#scope)), and `participantPrincipals`,
+  which each session derives under its own access. Passing the room's link to
+  someone else never passes a session's windows: they read their own.
 - **`PerUser`**: one instance per user, which follows them across sessions.
   That is only `addRequests`, the outcomes of the reader's own adds. No one
   else reads them.
