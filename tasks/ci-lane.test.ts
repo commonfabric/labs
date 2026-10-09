@@ -74,10 +74,11 @@ import {
   type PricedManifest,
   standIn,
 } from "./test-selection/census.ts";
-import type {
-  CommandContext,
-  Suite,
-  UnitRequest,
+import {
+  type CommandContext,
+  denoTestCommand,
+  type Suite,
+  type UnitRequest,
 } from "./test-topology/suite.ts";
 import {
   plan,
@@ -3612,6 +3613,125 @@ describe("reading a batch's records against what it was asked to run", () => {
         [],
         [key("glaze > cools")],
       ]);
+    });
+
+    it("keeps a step unaccounted for beneath a test its unit registered", async () => {
+      // A test names its steps as its body runs, and the registration
+      // preload sees only the test. Here the first step is withheld as
+      // flaky and fails, the test returns before the second, and the
+      // second is still in the tree. A real `deno test` under the real
+      // preload is what decides what the name map holds, so the run is
+      // one; a sibling the tree does not hold is asked for beside it.
+      const dir = await Deno.makeTempDir({ prefix: "lane-registrations-" });
+      const file = "glaze.test.ts";
+      try {
+        await Deno.mkdir(`${dir}/.git`);
+        await Deno.writeTextFile(
+          `${dir}/deno.json`,
+          JSON.stringify({
+            imports: {
+              "@std/path": "jsr:@std/path@^1.1.6",
+              "@std/testing": "jsr:@std/testing@^1.0.19",
+              "@std/testing/bdd": new URL(
+                "../packages/test-support/src/records/bdd.ts",
+                import.meta.url,
+              ).href,
+              "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
+              "@std/ulid": "jsr:@std/ulid@^1.0.0",
+            },
+          }),
+        );
+        await Deno.writeTextFile(
+          `${dir}/${file}`,
+          `import { describe, it } from "@std/testing/bdd";
+describe("glaze", () => {
+  it("sets", async (t) => {
+    const completed = await t.step("first", () => {
+      throw new Error("flaky first step");
+    });
+    if (!completed) return;
+    await t.step("second", () => {});
+  });
+});
+`,
+        );
+        const real = {
+          suite: suite({
+            id: "workspace-unit",
+            units: [file],
+            locate: (record) =>
+              record.test.s === "bakery" && record.file === file
+                ? { level: "unit" as const, unit: file }
+                : undefined,
+            command: (_units, context) => {
+              const junit = `${context.outputDir}/report.xml`;
+              return Promise.resolve([{
+                // The run fails on purpose, and what it prints would read
+                // in this suite's log as a failure of its own.
+                command: [
+                  "sh",
+                  "-c",
+                  '"$@" >/dev/null 2>&1',
+                  "sh",
+                  ...denoTestCommand(
+                    ["--allow-read", "--allow-write", "--allow-env"],
+                    context,
+                    junit,
+                    [file],
+                  ),
+                ],
+                cwd: dir,
+                // A lane running this file hands it a skip list of its
+                // own, which this run must not read.
+                env: { CF_TEST_SKIP_LIST: "" },
+                junit: [{ path: junit, kind: "unit", scope: "bakery" }],
+              }]);
+            },
+          }),
+          units: [{ unit: file, skip: [] }],
+          runs: new Map([[file, 1]]),
+          projected: 0,
+        };
+        const log = console.log;
+        console.log = () => {};
+        let result;
+        try {
+          result = await runBatch(
+            real,
+            { root: dir } as LaneOptions,
+            dir,
+            undefined,
+            {},
+          );
+        } finally {
+          console.log = log;
+        }
+        const asking = (n: string) =>
+          asked(n).map((selection) => ({
+            ...selection,
+            entry: { ...selection.entry, unit: file },
+          }));
+        const found = accountFor(
+          real,
+          [
+            ...asking("glaze > sets > first"),
+            ...asking("glaze > sets > second"),
+            ...asking("glaze > cools"),
+          ],
+          [...result.records, ...result.passedOver],
+          new Set([key("glaze > sets > first")]),
+          result.registered,
+        );
+        expect(found).toEqual({
+          gating: [],
+          excused: [key("glaze > sets > first")],
+          unaccounted: [key("glaze > sets > second")],
+          absent: [key("glaze > cools")],
+          failedUnits: [file],
+        });
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 });

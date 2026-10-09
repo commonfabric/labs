@@ -492,11 +492,13 @@ manifest holds every identity any run recorded in a file the tree still
 holds, so it names tests renamed since it was published and tests only a
 branch ever ran, and no run of this tree can record one of those. Where a
 unit's processes registered no test by an identity's name and none inside
-it, that identity is absent, so long as the registrations reach its depth:
-they name tests inside its outermost group, or do not name that group at
-all. Registrations naming a group and nothing inside it say nothing about
-what the group holds. An absent identity's missing record says nothing
-about whether the invocation stopped. Only a registration shows a test
+it, that identity is absent, so long as everything they registered that
+encloses it is a group they registered a test inside. A registered test
+can record steps it names only as it runs, so a registration says
+nothing about what lies beneath a test, and a group registered with
+nothing inside it says nothing about what the group holds. An absent
+identity's missing record says nothing about whether the invocation
+stopped. Only a registration shows a test
 absent. A process that died before it could say what it registered shows
 nothing, and an identity it left unrecorded withdraws the excusal like any
 other.

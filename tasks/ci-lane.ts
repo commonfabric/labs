@@ -1174,26 +1174,32 @@ export function accountFor(
  * A name is held where it was registered, and where it encloses a name
  * that was: the bdd re-export records each leaf's whole chain and not the
  * `describe` blocks along it, so a nested `describe` is known by the
- * leaves inside it. A leaf missing from the registrations shows it absent
- * only where the registrations hold leaves under its outermost
- * `describe`, or do not hold that `describe` at all. A process whose bdd
- * re-export recorded no leaves registered each outermost `describe` and
- * nothing beneath it, and a leaf missing from that says nothing.
+ * leaves inside it.
+ *
+ * A name is shown absent only where everything registered that encloses
+ * it is a `describe`, which a registered name is where another
+ * registered name lies inside it. A registered test holds more than its
+ * registration says: the steps its body names as it runs are recorded
+ * beneath it and registered nowhere. And a `describe` registered with
+ * nothing inside it reads as such a test, which is right, since that is
+ * what a process whose bdd re-export recorded no leaves leaves behind,
+ * and a leaf missing from it says nothing.
  */
 function registersNoSuchTest(
   registered: ReadonlySet<string> | undefined,
   name: string,
 ): boolean {
   if (registered === undefined) return false;
-  const outermost = name.split(NAME_SEPARATOR)[0]!;
-  let leavesRecorded = outermost === name;
-  for (const other of registered) {
-    if (other === name || other.startsWith(name + NAME_SEPARATOR)) {
-      return false;
+  const holdsInside = (outer: string): boolean => {
+    for (const other of registered) {
+      if (other.startsWith(outer + NAME_SEPARATOR)) return true;
     }
-    if (other.startsWith(outermost + NAME_SEPARATOR)) leavesRecorded = true;
-  }
-  return leavesRecorded || !registered.has(outermost);
+    return false;
+  };
+  if (registered.has(name) || holdsInside(name)) return false;
+  return enclosingNames(name).every((outer) =>
+    !registered.has(outer) || holdsInside(outer)
+  );
 }
 
 /** Says what a batch's records came to, where they came to anything. */
