@@ -560,6 +560,164 @@ Deno.test("a second mount right after a refusal for now sends the refused statem
   }
 });
 
+/**
+ * A router that refuses the first `refusals` statements for now and admits
+ * the rest; it records when each statement and challenge request came.
+ */
+function refusingAtFirst(refusals: number) {
+  const log: { type: string; at: number; statement?: unknown }[] = [];
+  let auths = 0;
+  const p = peer(frame(hello()), (body, push) => {
+    if (body.type === "connection.challenge") {
+      log.push({ type: "challenge", at: Date.now() });
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: { challenge: challenge() },
+      });
+    } else if (body.type === "connection.auth") {
+      log.push({ type: "auth", at: Date.now(), statement: body.statement });
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ...(++auths <= refusals
+          ? {
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+              retriable: true,
+            },
+          }
+          : {
+            ok: {
+              principal: identity.did(),
+              expiresAt: Math.floor(Date.now() / 1000) + 600,
+            },
+          }),
+      });
+    } else if (body.type === "session.open") {
+      log.push({ type: "open", at: Date.now() });
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          sessionId: `sdk-session-${body.space}`,
+          sessionToken: "sdk-token",
+          serverSeq: 0,
+        },
+      });
+    } else push({ type: "response", requestId: body.requestId, ok: {} });
+  });
+  return { p, log };
+}
+
+Deno.test("a mount whose statement is refused for now sends it again a second later and resolves", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // Refused once, as at the source's authentication rate, then admitted.
+  const { p, log } = refusingAtFirst(1);
+  const client = await connect({ transport: p.transport });
+  try {
+    // The caller mounts once and does not retry.
+    const mounting = client.mount(identity.did(), {}, principal());
+    let failure: unknown;
+    mounting.catch((error) => {
+      failure = error;
+    });
+    for (
+      let i = 0;
+      i < 400 && failure === undefined && !log.some((e) => e.type === "open");
+      i++
+    ) await time.tickAsync(25);
+    assertEquals(failure, undefined);
+    const session = await mounting;
+    const [refused, again] = log.filter((e) => e.type === "auth");
+    assertEquals(log.filter((e) => e.type === "auth").length, 2);
+    assertEquals(again.statement, refused.statement);
+    // One wait of the second a router's refusal takes to pass, not two.
+    const waited = again.at - refused.at;
+    assert(waited >= 1000 && waited < 1100, `${waited} ms`);
+    assertEquals(log.filter((e) => e.type === "challenge").length, 0);
+    assertEquals(session.closeError, undefined);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("two mounts as one key both outlast a refusal for now of the statement they share", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log } = refusingAtFirst(1);
+  const client = await connect({ transport: p.transport });
+  try {
+    // The second mount waits for the first's `connection.auth` and is
+    // refused with it.
+    const mounting = Promise.allSettled([
+      client.mount(identity.did(), {}, principal()),
+      client.mount(elsewhere, {}, principal()),
+    ]);
+    for (
+      let i = 0;
+      i < 400 && log.filter((e) => e.type === "open").length < 2;
+      i++
+    ) await time.tickAsync(25);
+    assertEquals(
+      (await mounting).map((result) => result.status),
+      ["fulfilled", "fulfilled"],
+    );
+    // The statement went twice in all: neither mount sent one of its own.
+    const auths = log.filter((e) => e.type === "auth");
+    assertEquals(auths.length, 2);
+    assertEquals(auths[1].statement, auths[0].statement);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount gives up on a refused statement once it may not be sent again", async (t) => {
+  setModernCellRepConfig(true);
+  for (
+    const [name, helloLife, statements] of [
+      // The refused statement, then the same statement three more times.
+      ["after three resends", 60, 4],
+      // Four seconds, under the five a resend needs left.
+      ["at once when its challenge will not last", 4, 1],
+    ] as const
+  ) {
+    await t.step(name, async () => {
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      const { p, log } = refusingFromTheStart(helloLife);
+      const client = await connect({ transport: p.transport });
+      try {
+        let failure: unknown;
+        client.mount(identity.did(), {}, principal()).catch((error) => {
+          failure = error;
+        });
+        for (let i = 0; i < 400 && failure === undefined; i++) {
+          await time.tickAsync(25);
+        }
+        // The caller gets the router's refusal, marked as one that passes.
+        assertEquals((failure as Error).name, "AuthorizationError");
+        assertEquals((failure as { retriable?: boolean }).retriable, true);
+        const auths = log.filter((e) => e.type === "auth");
+        assertEquals(auths.length, statements);
+        assert(auths.every((e) => e.statement === auths[0].statement));
+        for (let i = 1; i < auths.length; i++) {
+          const waited = auths[i].at - auths[i - 1].at;
+          assert(waited >= 1000 && waited < 1100, `${waited} ms`);
+        }
+        // The mount asked for no challenge of its own.
+        assertEquals(log.filter((e) => e.type === "challenge").length, 0);
+      } finally {
+        await client.close();
+        time.restore();
+      }
+    });
+  }
+});
+
 Deno.test("a refused statement whose challenge will not last takes a new challenge at once", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));

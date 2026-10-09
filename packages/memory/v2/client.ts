@@ -367,6 +367,18 @@ const ROUTED_RESEND_MARGIN_S = 5;
 const ROUTED_RESENDS = 3;
 /** Marks an error a router's refusal of a routed authentication. */
 const ROUTED_AUTH_REFUSAL: unique symbol = Symbol("routed auth refusal");
+/**
+ * A statement a router refused for now: the challenge it answers, when that
+ * challenge expires (unix seconds), when it was refused (milliseconds) and
+ * how often it has been sent again since.
+ */
+type RefusedStatement = {
+  context: SessionOpenAuthContext;
+  signed: ConnectionAuth;
+  expiresAt: number;
+  at: number;
+  resends: number;
+};
 const RECONNECT_JITTER_RATIO = 0.2;
 
 const reconnectDelayMs = (attempt: number): number => {
@@ -505,13 +517,7 @@ export class Client {
    * Statements a router refused for now, by principal, with the challenge
    * they answer and when they were refused; see `#authenticate`.
    */
-  #refusedStatements = new Map<string, {
-    context: SessionOpenAuthContext;
-    signed: ConnectionAuth;
-    expiresAt: number;
-    at: number;
-    resends: number;
-  }>();
+  #refusedStatements = new Map<string, RefusedStatement>();
 
   /**
    * Settles once every signed `session.open` issued so far has been
@@ -852,7 +858,29 @@ export class Client {
       if (
         typeof auth === "object" && this.serverFlags?.connectionAuth === true
       ) {
-        const principal = await this.#authenticate(auth, whileConnected);
+        const epoch = this.#connectionEpoch;
+        let principal: string | typeof STALE;
+        try {
+          principal = await this.#authenticate(auth, whileConnected);
+        } catch (error) {
+          // A router's refusal for now of the key's statement passes over
+          // seconds, and `#authenticate` keeps the statement to send again
+          // on the key's next attempt. A reopen fails here, and its session
+          // holds and makes that attempt; so does a renewal's backoff.
+          // Nothing does for a mount, whose caller would be told the mount
+          // failed. So a mount makes the attempt itself: asking again waits
+          // out the second after the refusal and sends the same statement,
+          // or waits for whoever is already sending it. Once the statement
+          // may not be sent again the refusal goes to the caller, as does
+          // a refused request for a challenge, which keeps no statement.
+          const refused = this.#refusedStatements.get(auth.did);
+          if (
+            !whileConnected && isRetriableAuthorizationError(error) &&
+            !this.#staleSince(epoch) && refused !== undefined &&
+            this.#resendable(refused)
+          ) continue;
+          throw error;
+        }
         if (principal === STALE) {
           await this.#ensureConnected();
           continue;
@@ -1047,13 +1075,7 @@ export class Client {
         held.deployment !== undefined
       ? this.#refusedStatements.get(principal.did)
       : undefined;
-    // Sent again only if its challenge still has the margin left once the
-    // wait after the refusal is over.
-    const lasts = (r: NonNullable<typeof refused>) =>
-      r.expiresAt * 1000 - Math.max(Date.now(), r.at + ROUTED_RETRY_FLOOR_MS) >=
-        ROUTED_RESEND_MARGIN_S * 1000;
-    let resend = refused !== undefined && refused.resends < ROUTED_RESENDS &&
-      lasts(refused);
+    let resend = refused !== undefined && this.#resendable(refused);
     const needsChallenge = !resend && (routedChallenge !== undefined ||
       freshChallenge || this.#challengeSigners.has(principal.did) ||
       held.challenge.expiresAt <= Math.floor(Date.now() / 1000));
@@ -1068,7 +1090,7 @@ export class Client {
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         // The wait may have taken longer than asked; the challenge is
         // checked again before the statement goes.
-        resend = lasts(refused!);
+        resend = this.#resendable(refused!);
       }
       if (resend) {
         ({ context, signed } = refused!);
@@ -1147,6 +1169,17 @@ export class Client {
       }
       throw error;
     }
+  }
+
+  /**
+   * Whether a statement a router refused for now may be sent again: it has
+   * been sent again fewer than `ROUTED_RESENDS` times, and its challenge
+   * still has the margin left once the wait after the refusal is over.
+   */
+  #resendable(refused: RefusedStatement): boolean {
+    const sentAt = Math.max(Date.now(), refused.at + ROUTED_RETRY_FLOOR_MS);
+    return refused.resends < ROUTED_RESENDS &&
+      refused.expiresAt * 1000 - sentAt >= ROUTED_RESEND_MARGIN_S * 1000;
   }
 
   /**
