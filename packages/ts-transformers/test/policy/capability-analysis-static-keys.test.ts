@@ -396,6 +396,17 @@ const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
       expect(usage.readPaths).not.toEqual([]);
     });
 
+    it("reads past a key destructured from a nested pattern", () => {
+      const usage = catalogUsage(
+        `const { inner: { key } } = { inner: { key: "a" } } as const;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`,
+      );
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
     it("reads past a key destructured from an array", () => {
       const usage = catalogUsage(`const [key] = ["a"] as const;
 const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
