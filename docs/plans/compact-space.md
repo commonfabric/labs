@@ -183,8 +183,31 @@ and 183,857 rows each, the same measurement:
 | after stage 1 | 66 ms (14 ms first run) | 5.6 ms (1.5 ms first run) |
 
 Both sides replayed 47 patch rows there. That is the engine's share of what
-a cold read of a storm document cost; the board-load and `transact` numbers
-through a served clone are the rest of stage 1. Compaction still writes
+a cold read of a storm document cost.
+
+**Through a served clone of the same snapshot** (a local toolshed on each
+engine, the same reads and writes through `cf`, the store reset between):
+
+| | main | stage 1 |
+| --- | ---: | ---: |
+| cold read of the board (934 topics), wall clock | 21.9 s | 20.2 s |
+| the board's root walk (`session.watch.add`, server) | 11.4 s, 20,489 reads | 11.2 s, 20,489 reads |
+| patch rows replayed by that load | 44,931 | 44,928 |
+| five topic reads, each | 0.6 to 0.9 s | 0.7 to 1.4 s |
+| `addTopic` through the board, server `transact` frames | 111 to 369 ms | 116 to 302 ms |
+| one patch commit on a 184,000-row storm document, engine-direct, warm | 132 to 141 ms (977 ms first) | 1 to 5 ms |
+
+The board load does not move: it is a traversal over 21,901 documents with
+234,908 schema traversals in one root walk, and its replay count is the same
+on both engines, so neither stage 1 nor compaction is the lever for it.
+What moves is the per-document history penalty, which is the storm's own
+shape: a commit that touches a storm document cost the base engine about
+135 ms per document warm, which is the 180 ms `transact` the investigation
+recorded, and costs the bounded engine single milliseconds. The `addTopic`
+verb does not touch those documents, so its frames are the same on both
+sides. Stage 1 is therefore the fix for what a storm does to the space it
+hits; what remains for compaction is disk, and the board's own load time is
+a traversal problem outside this plan. Compaction still writes
 the `set` that makes the history itself small; what stage 1 removed is the
 reason a long history degraded every read and every commit of the document
 that carried it.
@@ -913,10 +936,11 @@ decision should be made against; and the basis guard, because no store may
 be compacted until the engine can tell compacted history from absence.
 
 1. **The snapshot-bounded base search** — done ([labs#8628](https://github.com/commonfabric/labs/pull/8628)), measured on
-   the August copy and on the 2026-10-09 production snapshot as the tables
-   above show. What remains of this stage is the measurement through a served
-   clone of that snapshot: cold board load and `transact` round trips before
-   and after, on the uncompacted store. That is
+   the August copy, on the 2026-10-09 production snapshot, and through a
+   served clone of it, as the tables above show. The measurement answered
+   the stage's question: a storm's per-document penalty is gone, the board
+   load is traversal-bound and unchanged, and compaction's remaining case is
+   disk. That is
    where the 180 ms claim is tested rather than inferred, and where the
    question "is compaction still needed for latency, or only for disk?" gets
    its answer; it needs a fresh snapshot from the host.
@@ -962,7 +986,7 @@ be compacted until the engine can tell compacted history from absence.
 6. **Rehearsal on a clone of the current Topics file**, with the same
    timings as stage 1 taken after compaction.
 7. **The production run**, by the operator, from the rehearsed flag set, with
-   the owner's agreement, only if stage 1's measurement leaves a reason
-   beyond disk, or disk is the reason.
+   the owner's agreement. Stage 1's measurement left disk as the reason:
+   22.7 GB with 13.6 GB in payloads of commits that own no head.
 8. **Faithful replay of hollowed commits and explicit refusal of reads
    below the cut**, the two engine changes of §5.
