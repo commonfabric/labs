@@ -245,7 +245,8 @@ address appears in a cell id, and neither the address nor the key appears in
 a log line.
 
 - A mailbox binds to at most eight channels at once, so several installs of
-  one syncer can each have their own. Binding past that answers 409.
+  one syncer can each have their own. Binding past that answers 409, with
+  nothing minted.
 - A channel binds to at most one mailbox. Minting it again with a proof for
   another mailbox moves it.
 - A proof and a target mint a gmail channel; a proof on a device channel

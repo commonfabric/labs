@@ -272,7 +272,8 @@ Three facts decide the shape.
 ## Where the code is
 
 - [`packages/toolshed/routes/ingest-push/`](../../packages/toolshed/routes/ingest-push/)
-  holds the push endpoint, token verification, and the binding store.
+  holds the push endpoint, token verification, and the mailbox lists a push
+  is delivered through.
 - [`packages/toolshed/routes/ingest-channels/`](../../packages/toolshed/routes/ingest-channels/)
   holds the control plane, whose mint takes the mailbox proof.
 - [`packages/toolshed/routes/ingest/`](../../packages/toolshed/routes/ingest/)
