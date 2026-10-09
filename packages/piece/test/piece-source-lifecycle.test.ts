@@ -672,7 +672,7 @@ describe("piece source lifecycle", () => {
     });
   });
 
-  it("refuses to point a piece at source that does not compile to what its origin advertises", async () => {
+  it("throws and records nothing when repointed at source that does not compile to what its origin advertises", async () => {
     webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
     webAdvertised["/api/patterns/entered.tsx"] = "advertised-elsewhere";
     const piece = await pieces.create(versionProgram("v1"), { input: {} });

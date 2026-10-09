@@ -4770,7 +4770,11 @@ describe("describeFollowState", () => {
 
   it("offers to override only what an override could fix", () => {
     const refusal = (
-      reason: "incompatible-schema" | "source-invalid" | "argument-mismatch",
+      reason:
+        | "incompatible-schema"
+        | "source-invalid"
+        | "identity-mismatch"
+        | "argument-mismatch",
     ) =>
       describeFollowState({
         ...SOURCE,
@@ -4788,6 +4792,8 @@ describe("describeFollowState", () => {
     expect(refusal("incompatible-schema").canForce).toBe(true);
     expect(refusal("source-invalid").canUpdate).toBe(false);
     expect(refusal("source-invalid").canForce).toBe(false);
+    expect(refusal("identity-mismatch").canUpdate).toBe(false);
+    expect(refusal("identity-mismatch").canForce).toBe(false);
     expect(refusal("argument-mismatch").canUpdate).toBe(false);
     expect(refusal("argument-mismatch").canForce).toBe(false);
   });
