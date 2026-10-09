@@ -194,19 +194,12 @@ export const mint = createRoute({
             ),
             name: z.string().optional(),
             ttlDays: z.number().int().positive().max(MAX_TTL_DAYS).optional(),
-            target: z.object({
-              "/": z.object({
-                "link@1": z.object({
-                  id: z.string(),
-                  space: z.string(),
-                  path: z.array(z.string()).optional(),
-                }).passthrough(),
-              }),
-            }).optional().describe(
-              "The cell a gmail channel writes, as a link into the space the " +
-                "mint is addressed to. Comes with `gmail`; the two make the " +
-                "channel a gmail channel, and without them it is a device " +
-                "channel.",
+            target: z.string().optional().describe(
+              "The cell a gmail channel writes, as a serialized cell link " +
+                '(`fcl1:{"id":"of:…","space":"did:key:…",' +
+                '"path":[…]}`) into the space the mint is addressed to. ' +
+                "Comes with `gmail`; the two make the channel a gmail " +
+                "channel, and without them it is a device channel.",
             ),
             gmail: gmailProof.optional(),
             requestId: requestIdField,

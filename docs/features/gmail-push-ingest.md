@@ -103,14 +103,18 @@ Gmail push is not configured.
 ```json
 {
   "installId": "gmail-1",
-  "target": { "/": { "link@1": { "id": "of:…", "space": "did:key:…", "path": ["inbox"] } } },
+  "target": "fcl1:{\"id\":\"of:…\",\"space\":\"did:key:…\",\"path\":[\"inbox\"]}",
   "gmail": { "accessToken": "ya29…" },
   "requestId": "…"
 }
 ```
 
 `target` is a link to the cell the notifications are written to, in the
-space the mint is addressed to. The caller chooses it, and is the one
+space the mint is addressed to, in the `fcl1:` wire form a cell link takes
+when it leaves the runtime: the document id, the space, and the path, which
+`linkRefPayloadToString()` from `@commonfabric/runner/shared` writes and the
+mint reads back through `linkRefFrom()`. The id is a document id, and the
+link is space-scoped. The caller chooses the cell, and is the one
 keeping it from colliding with anything else in the space; two channels
 naming one cell write the same cell. It cannot change once the channel
 exists, since it is what the syncer watches.

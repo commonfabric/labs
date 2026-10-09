@@ -6,6 +6,11 @@ import type {
   Runtime,
 } from "@commonfabric/runner";
 import { isLink, type NormalizedLink, parseLink } from "@commonfabric/runner";
+import {
+  linkRefFrom,
+  linkRefPayloadFromString,
+  type WireLinkRefPayload,
+} from "@commonfabric/runner/shared";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -148,15 +153,47 @@ export function cellTargetOf(link: NormalizedLink): CellTarget {
 
 /** Returns the link a `CellTarget` holds the parts of. */
 export function linkOfCellTarget(target: CellTarget): NormalizedLink {
-  const link = parseLink({
-    "/": {
-      "link@1": { id: target.id, space: target.space, path: target.path },
-    },
-  });
+  const link = parseLink(
+    linkRefFrom({ id: target.id, space: target.space, path: target.path }),
+  );
   if (link === undefined) {
     throw new Error(
       `cell target ${target.id} in ${target.space} is not a link`,
     );
+  }
+  return link;
+}
+
+/**
+ * Reads a cell link off the wire, where it travels as the `fcl1:` string that
+ * `linkRefPayloadToString()` writes, and returns it as the link the runtime
+ * resolves. The payload may name only a document id, a space, a path, and the
+ * space scope; a target cell is nothing else. Throws, naming the fault, on a
+ * string that is not a wire link or a payload that is not such a cell.
+ */
+export function parseWireCellLink(wire: string): NormalizedLink {
+  const payload: WireLinkRefPayload = linkRefPayloadFromString(wire);
+  for (const key of Object.keys(payload)) {
+    if (!["id", "space", "path", "scope"].includes(key)) {
+      throw new Error(`a target cell link has no field ${JSON.stringify(key)}`);
+    }
+  }
+  const { id, space, path, scope } = payload;
+  if (typeof id !== "string" || !id.startsWith("of:")) {
+    throw new Error("a target cell link names its document by an of: id");
+  }
+  if (typeof space !== "string") {
+    throw new Error("a target cell link names its space");
+  }
+  if (path !== undefined && typeof path === "string") {
+    throw new Error("a target cell link's path is a list of segments");
+  }
+  if (scope !== undefined && scope !== "space") {
+    throw new Error("a target cell must be space-scoped");
+  }
+  const link = parseLink(linkRefFrom({ id, space, path: path ?? [] }));
+  if (link === undefined) {
+    throw new Error("a target cell link did not parse as a link");
   }
   return link;
 }

@@ -66,16 +66,14 @@ export type IngestChannelKind = "device" | "gmail";
 
 /**
  * The cell a gmail channel writes, as the parts of a link: the space, the
- * document id, and the path within it.
+ * document id, and the path within it. A mint names it as the `fcl1:` wire
+ * string `linkRefPayloadToString()` writes from these parts.
  */
 export interface CellTarget {
   space: string;
   id: string;
   path: string[];
 }
-
-/** A link to a cell, as a mint names the cell a gmail channel writes. */
-export type CellTargetLink = { "/": { "link@1": CellTarget } };
 
 export interface ChannelSummary {
   id: string;
@@ -205,8 +203,8 @@ export function mintChannel(
     name?: string;
     ttlDays?: number;
 
-    /** With `gmail`, the cell the gmail channel writes. */
-    target?: CellTargetLink;
+    /** With `gmail`, the cell the gmail channel writes, as a wire link string. */
+    target?: string;
     gmail?: GmailProof;
     requestId: string;
   },

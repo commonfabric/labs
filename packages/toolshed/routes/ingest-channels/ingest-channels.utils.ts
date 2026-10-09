@@ -17,7 +17,7 @@
 //   4. claim the request id (replay defense)
 //   5. only then mint or mutate
 
-import { parseLink, type Runtime } from "@commonfabric/runner";
+import type { Runtime } from "@commonfabric/runner";
 import {
   authorizeSpaceOwner,
   isValidSpaceDid,
@@ -43,6 +43,7 @@ import {
   LifetimeChannelCapError,
   LiveChannelCapError,
   MAX_REVOCATION_HISTORY,
+  parseWireCellLink,
   peekMintRequest,
   RegistrationConflictError,
   RequestAlreadyClaimedError,
@@ -513,13 +514,14 @@ export interface MintInput {
   ttlDays?: number;
 
   /**
-   * The cell a gmail channel writes, as a link the caller names, in the space
-   * the mint is addressed to. Comes with `gmail`, and the two together make a
-   * new channel a gmail channel; a new mint without them makes a device
-   * channel. A re-mint keeps the channel's kind whatever it carries, and one
-   * carrying neither keeps a gmail channel's binding and target too.
+   * The cell a gmail channel writes, as a cell link in its `fcl1:` wire form,
+   * in the space the mint is addressed to. Comes with `gmail`, and the two
+   * together make a new channel a gmail channel; a new mint without them
+   * makes a device channel. A re-mint keeps the channel's kind whatever it
+   * carries, and one carrying neither keeps a gmail channel's binding and
+   * target too.
    */
-  target?: unknown;
+  target?: string;
 
   /**
    * Binds the channel to the Gmail mailbox the proof is for, in the same
@@ -547,7 +549,7 @@ export async function processMint(
     );
   }
   let target: CellTarget | undefined;
-  if (input.gmail !== undefined) {
+  if (input.gmail !== undefined && input.target !== undefined) {
     const proofs = [input.gmail.accessToken, input.gmail.idToken]
       .filter((proof) => proof !== undefined);
     if (proofs.length !== 1) {
@@ -556,17 +558,15 @@ export async function processMint(
     if (input.causePrefix !== undefined) {
       return bad("A gmail channel has a target cell, not a cause prefix");
     }
-    const link = parseLink(input.target);
-    if (
-      link === undefined || link.id === undefined || link.space === undefined
-    ) {
-      return bad("The target is not a complete cell link");
-    }
-    if (link.scope !== undefined && link.scope !== "space") {
-      return bad("The target cell must be space-scoped");
-    }
-    if (!link.id.startsWith("of:")) {
-      return bad("The target id is not a document id");
+    let link;
+    try {
+      link = parseWireCellLink(input.target);
+    } catch (error) {
+      return bad(
+        `The target is not a cell link: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
     target = cellTargetOf(link);
     // The mint is addressed to one space and authorized against it, so a cell

@@ -30,6 +30,7 @@ import {
   processIngest,
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
+import { linkRefPayloadToString } from "@commonfabric/runner/shared";
 import {
   BindingConflictError,
   bindMailbox,
@@ -254,17 +255,16 @@ describe("ingest-channels control plane", () => {
     const bound = (address = MAILBOX) =>
       getMailboxChannels(runtime, operator.did(), address);
 
-    /** A link to the cell with cause `name` in `inSpace`, as a mint names it. */
-    const targetLink = (name: string, inSpace = space) => ({
-      "/": {
-        "link@1": {
-          id: runtime.getCell(inSpace as MemorySpace, name)
-            .getAsNormalizedFullLink().id,
-          space: inSpace,
-          path: [],
-        },
-      },
+    /** The parts of the link to the cell with cause `name` in `inSpace`. */
+    const targetParts = (name: string, inSpace = space) => ({
+      id: runtime.getCell(inSpace as MemorySpace, name)
+        .getAsNormalizedFullLink().id,
+      space: inSpace,
+      path: [] as string[],
     });
+    /** That link as a mint names it, in its wire form. */
+    const targetLink = (name: string, inSpace = space) =>
+      linkRefPayloadToString(targetParts(name, inSpace));
     const gmailMint = (
       requestId: string,
       over: Partial<MintInput> = {},
@@ -292,12 +292,12 @@ describe("ingest-channels control plane", () => {
       expect(ok(res).token).toBeUndefined();
       expect(ok(res).url).toBeUndefined();
       expect(ok(res).causePrefix).toBeUndefined();
-      expect(ok(res).target).toEqual(targetLink("gmail-1")["/"]["link@1"]);
+      expect(ok(res).target).toEqual(targetParts("gmail-1"));
       expect(proofs).toEqual(["access:ya29.token"]);
       expect(await bound()).toEqual([ok(res).id]);
       const stored = await getRegistration(runtime, operator.did(), ok(res).id);
       expect(stored?.kind).toBe("gmail");
-      expect(stored?.target).toEqual(targetLink("gmail-1")["/"]["link@1"]);
+      expect(stored?.target).toEqual(targetParts("gmail-1"));
       expect(stored?.causePrefix).toBeUndefined();
     });
 
@@ -319,7 +319,7 @@ describe("ingest-channels control plane", () => {
       const byId = new Map(listed.map((c) => [c.id, c]));
       expect(byId.get(gmail.id)).toMatchObject({
         kind: "gmail",
-        target: targetLink("gmail-1")["/"]["link@1"],
+        target: targetParts("gmail-1"),
       });
       expect(byId.get(gmail.id)?.causePrefix).toBeUndefined();
       expect(byId.get(device.id)).toMatchObject({
@@ -394,18 +394,21 @@ describe("ingest-channels control plane", () => {
       expect(await bound()).toContain(first.id);
     });
 
-    it("returns 400 for a target that is not space-scoped, or whose id is not a document id", async () => {
-      const scoped = structuredClone(targetLink("gmail-1")) as {
-        "/": { "link@1": Record<string, unknown> };
-      };
-      scoped["/"]["link@1"].scope = "user";
+    it("returns 400 for a target that is not space-scoped, not a document, or not a wire link", async () => {
+      const scoped = linkRefPayloadToString({
+        ...targetParts("gmail-1"),
+        scope: "user",
+      });
       expect((await gmailMint("req-1", { target: scoped })).status).toBe(400);
 
-      const slug = structuredClone(targetLink("gmail-1")) as {
-        "/": { "link@1": Record<string, unknown> };
-      };
-      slug["/"]["link@1"].id = "my-piece";
+      const slug = linkRefPayloadToString({
+        ...targetParts("gmail-1"),
+        id: "my-piece",
+      });
       expect((await gmailMint("req-2", { target: slug })).status).toBe(400);
+
+      expect((await gmailMint("req-3", { target: "not-a-link" })).status)
+        .toBe(400);
 
       expect(proofs).toEqual([]);
     });

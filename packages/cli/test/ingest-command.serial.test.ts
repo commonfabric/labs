@@ -16,6 +16,7 @@ import { Identity } from "@commonfabric/identity";
 import { decode } from "@commonfabric/utils/encoding";
 import { ingest } from "../commands/ingest.ts";
 import { resolveSpaceDid } from "../lib/ingest-channels.ts";
+import { linkRefPayloadToString } from "@commonfabric/runner/shared";
 import { stripAnsi, withEnv } from "./utils.ts";
 
 const API_URL = "http://ingest-command-test.invalid:9999";
@@ -326,9 +327,13 @@ describe("cf ingest mint", () => {
     ], { mint: { ...gmailMinted, emailAddress: "alice@example.com" } });
 
     expect(calls[0].body.gmail).toEqual({ accessToken: "ya29.token" });
-    expect(calls[0].body.target).toEqual({
-      "/": { "link@1": { id: TARGET_ID, space: SPACE_DID, path: ["inbox"] } },
-    });
+    expect(calls[0].body.target).toBe(
+      linkRefPayloadToString({
+        id: TARGET_ID,
+        space: SPACE_DID,
+        path: ["inbox"],
+      }),
+    );
     expect(output).toContain("mailbox:     alice@example.com");
     expect(output).toContain("users.watch");
     expect(output).not.toContain("token (shown once");
@@ -351,9 +356,9 @@ describe("cf ingest mint", () => {
       ], { mint: gmailMinted });
 
       expect(calls[0].body.gmail).toEqual({ idToken: "eyJ.from-env" });
-      expect(calls[0].body.target).toEqual({
-        "/": { "link@1": { id: TARGET_ID, space: SPACE_DID, path: [] } },
-      });
+      expect(calls[0].body.target).toBe(
+        linkRefPayloadToString({ id: TARGET_ID, space: SPACE_DID, path: [] }),
+      );
     });
   });
 
@@ -375,9 +380,9 @@ describe("cf ingest mint", () => {
     ], { mint: gmailMinted });
 
     const space = await resolveSpaceDid(keyPath, "ingest-command-space");
-    expect(calls[0].body.target).toEqual({
-      "/": { "link@1": { id: TARGET_ID, space, path: [] } },
-    });
+    expect(calls[0].body.target).toBe(
+      linkRefPayloadToString({ id: TARGET_ID, space, path: [] }),
+    );
   });
 
   it("rejects a target that names a piece slug rather than a document", async () => {

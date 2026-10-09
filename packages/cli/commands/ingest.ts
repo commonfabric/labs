@@ -1,5 +1,6 @@
 import { Command, ValidationError } from "@cliffy/command";
 import {
+  linkRefPayloadToString,
   parseCellReference,
   renderCellReference,
 } from "@commonfabric/runner/shared";
@@ -8,7 +9,6 @@ import { cliText } from "../lib/cli-name.ts";
 import { render } from "../lib/render.ts";
 import {
   type CellTarget,
-  type CellTargetLink,
   type ChannelConfig,
   type GmailProof,
   listChannels,
@@ -91,17 +91,18 @@ const renderTarget = (target: CellTarget): string =>
   renderCellReference(target, { scope: "space" });
 
 /**
- * Reads `--target`, a cell reference in the channel's space, into the link a
- * mint names. The reference names a document by its id, `of:…`, since a
- * piece slug is resolved against a session this command does not hold. It
- * may carry the space, as a DID or a name, in which case it has to resolve
- * to the channel's; a member, scope, or pin is not a cell to write.
+ * Reads `--target`, a cell reference in the channel's space, into the wire
+ * string a mint names the cell by. The reference names a document by its
+ * id, `of:…`, since a piece slug is resolved against a session this command
+ * does not hold. It may carry the space, as a DID or a name, in which case
+ * it has to resolve to the channel's; a member, scope, or pin is not a cell
+ * to write.
  */
 const targetLinkOf = async (
   config: ChannelConfig,
   reference: string | undefined,
   space: string,
-): Promise<CellTargetLink | undefined> => {
+): Promise<string | undefined> => {
   if (reference === undefined) return undefined;
   const parts = parseCellReference(reference);
   if (
@@ -130,7 +131,7 @@ const targetLinkOf = async (
       );
     }
   }
-  return { "/": { "link@1": { id: parts.id, space, path: parts.path } } };
+  return linkRefPayloadToString({ id: parts.id, space, path: parts.path });
 };
 
 /**
