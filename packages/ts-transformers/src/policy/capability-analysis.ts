@@ -2218,7 +2218,8 @@ export function analyzeFunctionCapabilities(
     // to a local, or written into a local collection, stays tracked. An
     // argument stays tracked when the callee's summary or declared signature
     // charged it, when the callee binds it by reference — a runtime call, a
-    // write through a cell — or when the callee only asks its shape. A value
+    // write through a cell — when it only compares it by identity, or when
+    // it only asks its shape. A value
     // a builder's callback returns is handed on by reference, this function's
     // own included when it is one; a helper's return is a value its caller
     // goes on to read. A value read where it stands is charged there.
@@ -2239,9 +2240,21 @@ export function analyzeFunctionCapabilities(
             !signatureCapabilityArgumentUses.has(destination.argument) &&
             !isLocalCollectionWrite(destination.call, destination.argument) &&
             !isRuntimeCall(destination.call) &&
+            !(
+              ts.isCallExpression(destination.call) &&
+              isKnownIdentityArgumentCall(destination.call, checker)
+            ) &&
             !isCellWrite(destination.call) &&
             !isArrayIsArrayCall(destination.call, checker);
       }
+    };
+
+    // Whether `usage` is an argument that a known identity call only compares.
+    const isIdentityOnlyArgument = (usage: ts.Expression): boolean => {
+      const parent = usage.parent;
+      return !!parent && ts.isCallExpression(parent) &&
+        parent.arguments.includes(usage) &&
+        isKnownIdentityArgumentCall(parent, checker);
     };
 
     const getIdentifierName = (
@@ -3335,12 +3348,7 @@ export function analyzeFunctionCapabilities(
             const resolvedSource = materializeSourceRef(source);
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
-            const identityOnlyArgumentUse = !!(
-              parent &&
-              ts.isCallExpression(parent) &&
-              parent.arguments.includes(usage) &&
-              isKnownIdentityArgumentCall(parent, checker)
-            );
+            const identityOnlyArgumentUse = isIdentityOnlyArgument(usage);
             // A value below the root that leaves the analysis whole is read
             // in full wherever it lands, so it is charged as a full-shape
             // read rather than a plain one: a plain read at a path keeps the
@@ -3357,8 +3365,7 @@ export function analyzeFunctionCapabilities(
             // whatever it reaches may read anything beneath it.
             if (
               !resolvedSource.dynamic && resolvedSource.path.length === 0 &&
-              !wholeValueEscape && !identityOnlyArgumentUse &&
-              escapesWhole(node)
+              !wholeValueEscape && escapesWhole(node)
             ) {
               recordEscape(resolvedSource.root, []);
             }
@@ -3533,7 +3540,10 @@ export function analyzeFunctionCapabilities(
             // destructured identifier; don't add a second read here.
             !signatureCapabilityArgumentUses.has(
               outermostTransparentWrapper(node),
-            )
+            ) &&
+            // A member a known identity call only compares is an identity use,
+            // recorded where the call is visited; a read here would end it.
+            !isIdentityOnlyArgument(outermostTransparentWrapper(node))
           ) {
             const ref = resolveSourceRef(node);
             if (ref) {

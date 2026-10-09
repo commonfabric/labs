@@ -2252,7 +2252,9 @@ computation's input schema:
   use. Bare helpers are accepted only when symbol resolution proves Common
   Fabric provenance; receiver methods require a cell-like receiver when a
   checker is available (`policy/capability-analysis.ts`,
-  `isKnownIdentityArgumentCall`).
+  `isKnownIdentityArgumentCall`). An argument is an identity use whether it is
+  a binding or a member access (`equals(state.selected, x)`), and is not
+  charged a read (fixture `handler-schema/identity-member-argument`).
 - A whole-root identity use records path `[]` and passthrough. `identityOnly` is
   true only when that root identity path survives normalization and the root has
   no non-identity use, ordinary reads/writes, or wildcard. Nested uses populate
@@ -2272,7 +2274,8 @@ computation's input schema:
   (`test/policy/capability-analysis.test.ts`).
 - A value whose whole leaves the function (returned to a caller, put in a
   collection, or handed to a callee with no summary, directly or as the operand
-  of a `??`/`||` fallback) records an escaped path, and normalization drops
+  of a `??`/`||` fallback; a known identity call only compares what it is
+  handed, so a value handed to one does not leave) records an escaped path, and normalization drops
   every identity path at or below it, since whatever received the value may
   read anything beneath. It is charged a full-shape read as well, except a root
   a builder's callback passes through, which keeps its passthrough accounting. A
