@@ -20,7 +20,7 @@ const UNFINISHED = ["queued", "in_progress", "waiting", "requested", "pending"];
 export function publisherRunning(ctx: Ctx): Promise<boolean | undefined> {
   let read = readers.get(ctx);
   if (!read) {
-    const lists = new RunLists();
+    const lists = ctx.runLists ?? new RunLists();
     read = memo(20_000, async () => {
       const credential = dashboardGitHubCredential(ctx);
       if (!credential) return undefined;

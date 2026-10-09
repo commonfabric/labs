@@ -241,7 +241,8 @@ no `--space`.
 | Shape a result     | `deno task cf piece call --cell ID addTopic ... -- --select topic.title`                                                                             |
 | List verbs         | `deno task cf piece verbs --cell ID --json ...` (`--all` adds wrapper/deprecated; `hidden` counts them)                                              |
 | Trigger recompute  | `deno task cf piece step --cell ID ...`                                                                                                              |
-| Mint a session     | `export CF_INVOCATION_SESSION="$(deno task cf invocation-session new)"` (once per run; ids deduplicate only within it)                               |
+| Mint a session     | `(umask 077 && set -C && s="$(deno task cf invocation-session new)" && echo "$s" > '<run session file>')` (once per run; a fresh path each run)      |
+| Carry the session  | `export CF_INVOCATION_SESSION="$(cat '<run session file>')"` (in every shell that passes `--invocation`; a call naming an id without it is refused)  |
 | Replayable call    | `deno task cf piece call --cell ID --invocation my-id-1 handlerName ...` (same pair retries settle on the original outcome)                          |
 | Detached call      | `deno task cf piece call --cell ID --no-wait --invocation my-id-1 handlerName ...` (exits at commit with `receipt` address)                          |
 | Collect a receipt  | `deno task cf cell get --cell <receipt> ...` (the envelope's `receipt` string, later, from any process)                                              |

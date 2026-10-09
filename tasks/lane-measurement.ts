@@ -33,19 +33,16 @@ export { isLaneMeasurement, LANE_MEASUREMENT_PREFIX, LANE_MEASUREMENT_SURFACE };
  */
 export const MEASURED_BATCH_SUFFIX = " with coverage";
 
-/** What each of a batch's eight measurements is, as its name says it. */
+/** What each of a batch's five measurements is, as its name says it. */
 export type BatchMeasurementKind =
   | "spent"
   | "ran"
   | "units"
-  | "longest"
   | "passes"
-  | "start"
-  | "processes"
   | "projected";
 
 /**
- * The word a measurement's name carries to say which of the eight it is.
+ * The word a measurement's name carries to say which of the five it is.
  * What a batch spent is the one the lane has always written, and it is
  * unmarked. No name a word makes starts the way a name of another kind
  * does, or the way a capability's setup measurement does, so a reader
@@ -56,25 +53,20 @@ const BATCH_MEASUREMENT_LEAD: Record<BatchMeasurementKind, string> = {
   spent: "",
   ran: "ran ",
   units: "units ",
-  longest: "longest ",
   passes: "passes ",
-  start: "start ",
-  processes: "processes ",
   projected: "projected ",
 };
 
 /**
  * What a lane's measurement of one batch is called.
  *
- * A lane writes eight of these per batch: what the batch spent, what its
- * tests took between them, how many times it opened a unit, what the
- * longest unit of each of its passes took added together, how many passes
- * it made, what the processes it started spent before their units began,
- * how many of those processes it started, and what the packer charged the
- * lane for the batch. A batch that repeats a unit makes one pass per run,
- * each a fresh invocation of the suite's command over the units still
- * running. The first seven are what the calibration is fitted from; the
- * eighth is what says how far the calibration it was charged by was out.
+ * A lane writes five of these per batch: what the batch spent, what its
+ * tests took between them, how many times it opened a unit, how many
+ * passes it made, and what the packer charged the lane for the batch. A
+ * batch that repeats a unit makes one pass per run, each a fresh
+ * invocation of the suite's command over the units still running. The
+ * first four are what the calibration is fitted from; the fifth is what
+ * says how far the calibration it was charged by was out.
  */
 export function batchMeasurementName(
   suite: string,
@@ -87,7 +79,7 @@ export function batchMeasurementName(
 
 /**
  * The suite one batch measurement names, whether coverage was on for it,
- * and which of the eight figures it carries. Nothing else for the name: a
+ * and which of the five figures it carries. Nothing else for the name: a
  * reader that took it apart itself would be a second answer to how it is
  * composed, and the two would part company the first time either moved.
  *
@@ -106,10 +98,7 @@ export function batchMeasurement(
     const kind of [
       "ran",
       "units",
-      "longest",
       "passes",
-      "start",
-      "processes",
       "projected",
       "spent",
     ] as const

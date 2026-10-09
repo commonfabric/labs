@@ -63,6 +63,7 @@ import {
 } from "../src/sandbox/docker-runsc.ts";
 import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
 import {
+  NATIVE_RUNTIME_PLATFORM_NAMES,
   nativeStoreCfcPolicy,
   resolveSandboxRuntimeSelection,
   RUNSC_BINARY_ENV,
@@ -70,6 +71,8 @@ import {
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
+  type SandboxProcess,
+  sandboxProcessOf,
   type SandboxRuntimeChoice,
   sandboxRuntimeChoiceReason,
   type SandboxRuntimeSelection,
@@ -546,9 +549,10 @@ export const resolveConsoleLaunchPlan = (
       const choice = runsc.selection.sandboxRuntimeChoice;
       throw new Error(
         `\`${named}\` names a sidecar directory of the Docker driver, and ` +
-          (choice.source === "default"
+          (choice.source === "default" && choice.runtime === "runsc"
             ? "this console is on the direct runsc driver, the default on " +
-              "macOS, which reads none"
+              `${NATIVE_RUNTIME_PLATFORM_NAMES[choice.platform]}, which ` +
+              "reads none"
             : `\`${SANDBOX_RUNTIME_ENV}\` puts this console on the direct ` +
               "runsc driver, which reads none") +
           `; drop the flag, or set \`${SANDBOX_RUNTIME_ENV}=docker\` to run ` +
@@ -789,9 +793,10 @@ const runscResolvedValues = (
 ): ResolvedValue[] => {
   const { selection } = sandbox;
   const choice = selection.sandboxRuntimeChoice;
-  const store = choice.source === "default" && choice.runtime === "runsc"
-    ? choice.nativeStore
+  const native = choice.source === "default" && choice.runtime === "runsc"
+    ? choice
     : undefined;
+  const store = native?.nativeStore;
   const fromStore = store === undefined
     ? "harness default"
     : `the native store at \`${store}\``;
@@ -819,8 +824,9 @@ const runscResolvedValues = (
     // store's own is one only a defaulted native runtime takes.
     source: sandbox.policyNamed
       ? inherited(RUNSC_CFC_POLICY_ENV)
-      : store !== undefined &&
-          selection.sandboxCfcPolicy === nativeStoreCfcPolicy(store)
+      : native !== undefined &&
+          selection.sandboxCfcPolicy ===
+            nativeStoreCfcPolicy(native.platform, native.nativeStore)
       ? fromStore
       : "harness default",
   }];
@@ -1000,19 +1006,20 @@ const INSTANCE_RUNTIME_NAMED_BY = "Loom";
  * it, stopping short of serving: the plan, and the arguments after `--` that
  * belong to the console rather than to this launcher. `host.platform` is the
  * platform whose default sandbox runtime applies where `env` names none, as
- * `Deno.build.os` writes it, which it is when absent. A launch with
+ * `Deno.build.os` writes it, which it is when absent, and `host.arch` and
+ * `host.uid` describe the process that default is for. A launch with
  * `--instance` takes no such default, and returns in `sandboxRuntimeNamedBy`
  * who has to name the runtime, for the console it serves to hold to as well.
  *
  * @throws HarnessControlError where `env` names no sandbox runtime and the
- * launch is for a Loom instance; and where it names none on macOS and the
+ * launch is for a Loom instance; and where it names none on macOS or Linux and the
  * native runtime cannot be provided.
  */
 export const prepareConsoleLaunch = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   io: ConsoleLaunchIo = REAL_IO,
-  host: { platform?: SandboxPlatform } = {},
+  host: SandboxProcess & { platform?: SandboxPlatform } = {},
 ): Promise<{
   plan: ConsoleLaunchPlan;
   consoleArgs: string[];
@@ -1125,6 +1132,7 @@ export const prepareConsoleLaunch = async (
     ...(sandboxRuntimeNamedBy !== undefined
       ? { namedBy: sandboxRuntimeNamedBy }
       : { platform: host.platform ?? Deno.build.os }),
+    ...sandboxProcessOf(host),
     flags: false,
     cwd: Deno.cwd(),
   });
@@ -1242,9 +1250,10 @@ export const prepareConsoleLaunch = async (
  * and serves under it. Where `args` ask for help it prints the usage instead,
  * and reads and serves nothing. `host.platform` is the platform whose default
  * sandbox runtime applies to the launch and to the console it serves, as
- * `Deno.build.os` writes it, which it is when absent. `serve` is handed what
- * the console is to be told of where it runs: that platform, and, for a
- * launch with `--instance`, who has to name the runtime.
+ * `Deno.build.os` writes it, which it is when absent, with the process that
+ * default is for in `host.arch` and `host.uid`. `serve` is handed what the
+ * console is to be told of where it runs: that platform and process, and,
+ * for a launch with `--instance`, who has to name the runtime.
  */
 export const launchConsole = async (
   args: readonly string[] = Deno.args,
@@ -1256,7 +1265,7 @@ export const launchConsole = async (
   ) => Promise<void> = (consoleArgs, health, consoleHost) =>
     startConsoleServer(consoleArgs, undefined, undefined, health, consoleHost),
   io: ConsoleLaunchIo = REAL_IO,
-  host: { platform?: SandboxPlatform } = {},
+  host: SandboxProcess & { platform?: SandboxPlatform } = {},
 ): Promise<void> => {
   // A flag with no value first, on either side of `--`: the `-h` it leaves
   // behind is not a question.

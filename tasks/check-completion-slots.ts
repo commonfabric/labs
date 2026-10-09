@@ -73,6 +73,8 @@ export const NO_CANDIDATES = new Map<string, string>([
   ["id from-mnemonic:mnemonic", "the same"],
   ["ingest revoke:id", "an ingest key id, held by whoever minted it"],
   ["ingest rotate:id", "the same"],
+  ["ingest gmail-bind:id", "the same"],
+  ["ingest gmail-unbind:id", "the same"],
   // Words the caller is coining or composing.
   ["acl set:capability", "a capability string, composed rather than chosen"],
   ["piece search:query", "a search query"],
@@ -112,6 +114,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "the receipt from the operator-reviewed inspection",
   ],
   ["piece new:request-key", "an opaque caller retry key"],
+  [
+    "ingest gmail-bind:gmail-access-token",
+    "a secret; a candidate list is the wrong place",
+  ],
   ["space invite create:ttl", "an admission lifetime in seconds"],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],

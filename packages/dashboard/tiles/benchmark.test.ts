@@ -3801,6 +3801,11 @@ Deno.test("benchmark: a failed drill-down cache write does not gray the tile", a
         return Promise.resolve(handler(url));
       }) as typeof fetch;
       Deno.rename = ((oldpath, newpath) => {
+        // The run list the collection reads is saved too, and is not the
+        // write this test fails.
+        if (String(newpath).includes("fabric-wall-run-lists")) {
+          return rename(oldpath, newpath);
+        }
         renames++;
         return renames === failedRename
           ? Promise.reject(new Error(`rename ${failedRename} failed`))
