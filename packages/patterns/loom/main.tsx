@@ -34,7 +34,7 @@ import type {
   PrivatePanel,
   ViewerState,
 } from "./schemas.tsx";
-import { addParticipant, participantEntries } from "./participants.tsx";
+import { addParticipant, rosterProfiles } from "./participants.tsx";
 
 type State = {
   panels: Writable<Writable<Panel>[]>;
@@ -543,7 +543,7 @@ export default pattern<LoomInput, LoomOutput>(
         return value.kind === "piece" ? [value.piece] : [];
       })
     );
-    const roster = computed(() => participantEntries(participants));
+    const roster = computed(() => rosterProfiles(participants));
     const room = computed(() => chatRoom.get().room);
     const viewerPanels = computed(() =>
       viewerList(panels.get(), hiddenPanels.get(), privatePanels.get())

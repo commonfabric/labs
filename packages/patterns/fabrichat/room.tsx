@@ -42,8 +42,8 @@ import {
 } from "commonfabric";
 import {
   addParticipant,
-  participantEntries,
   type ParticipantRosterCell,
+  rosterProfiles,
 } from "../loom/participants.tsx";
 import {
   isSharedSpaceCatalog,
@@ -777,7 +777,7 @@ export const FabriChatRoomCore = pattern<
   // its own; a space whose root isn't there yet lists none.
   const space = wish<{ participants?: ProfileCell[] }>({ query: "#default" });
   const joined = computed(() =>
-    roster === undefined ? [] : participantEntries(roster)
+    roster === undefined ? [] : rosterProfiles(roster)
   );
   const listed = computed((): ProfileCell[] =>
     ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
@@ -787,11 +787,11 @@ export const FabriChatRoomCore = pattern<
   // that space refuses, so the entries, and the principals taken from them,
   // are derived per session: one instance for every reader is one their
   // runtimes hold differently.
-  const pairedParticipants = computed((): PerSession<ParticipantEntry[]> =>
+  const participantEntries = computed((): PerSession<ParticipantEntry[]> =>
     participantEntriesOf(participants)
   );
   const participantPrincipals = computed((): PerSession<string[]> =>
-    principalsOf(pairedParticipants)
+    principalsOf(participantEntries)
   );
   const join = addParticipant({ roster });
   const canSend = computed(() => canActIn(messages, myProfile));
@@ -890,7 +890,7 @@ export const FabriChatRoomCore = pattern<
     recentActivity: activity,
     recentActivityExpiredThrough: expiredThrough,
     participants,
-    participantEntries: pairedParticipants,
+    participantEntries,
     participantPrincipals,
     addParticipant: join,
     messages: messageList,

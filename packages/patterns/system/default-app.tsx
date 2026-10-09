@@ -15,9 +15,9 @@ import {
 
 import {
   addParticipant,
-  participantEntries,
   type ParticipantProfile,
   type ParticipantRoster,
+  rosterProfiles,
 } from "../loom/participants.tsx";
 import { default as Note, type NotePiece } from "../notes/note.tsx";
 
@@ -179,7 +179,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   // Changes only through `addParticipant`, the one writer the roster's write
   // contract admits.
   const participants = new Writable<ParticipantRoster>({});
-  const roster = computed(() => participantEntries(participants));
+  const roster = computed(() => rosterProfiles(participants));
   const join = addParticipant({ roster: participants });
   const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
   const viewerName = wish<string>({ query: "#profileName" });
