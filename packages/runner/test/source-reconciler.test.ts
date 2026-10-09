@@ -25,6 +25,7 @@ import {
   type RuntimeFetch,
   type RuntimeProgram,
   setPatternSource,
+  type SourceRefusal,
   systemPatternSource,
   type SystemPieceOrigin,
 } from "../src/index.ts";
@@ -355,8 +356,15 @@ describe("piece source reconciliation", () => {
           await runtime.setup(undefined, initial, {}, piece);
           const originalRef = getPatternIdentityRef(piece)!;
           await stampSource(piece, PARENT_SOURCE);
-          expect(await reconcile(piece)).toBe(
-            mode === "entry-only host" ? "refused" : mode,
+          // A host that drops the roots advertises the entry alone, which is
+          // not the identity this client compiles with its roots attached.
+          expect(await reconcile(piece)).toEqual(
+            mode === "entry-only host"
+              ? expect.objectContaining({
+                outcome: "refused",
+                reason: "identity-mismatch",
+              })
+              : mode,
           );
           const currentRef = getPatternIdentityRef(piece)!;
           if (mode !== "updated") expect(currentRef).toEqual(originalRef);
@@ -497,7 +505,7 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
 
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceReconciliation(piece)).toMatchObject({
@@ -563,7 +571,7 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceReconciliation(piece)).toMatchObject({
         outcome: "refused",
@@ -738,7 +746,7 @@ describe("piece source reconciliation", () => {
       const origin = `cf:pattern:${changedRef.identity}`;
       await stampSource(piece, origin);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
 
       // A refusal leaves no revision, so without this record it would look
       // exactly like a piece running what its origin offers.
@@ -798,7 +806,7 @@ describe("piece source reconciliation", () => {
       expect(getPieceReconciliation(piece)?.detail).toContain(
         "notDeclaredAnywhere",
       );
-      expect(outcome).toBe("refused");
+      expect(outcome).toMatchObject({ outcome: "refused" });
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
@@ -820,7 +828,7 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
 
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceReconciliation(piece)).toMatchObject({
@@ -842,7 +850,7 @@ describe("piece source reconciliation", () => {
       );
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
 
       expect(getPieceReconciliation(piece)).toMatchObject({
         outcome: "refused",
@@ -885,7 +893,7 @@ describe("piece source reconciliation", () => {
       });
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
 
       expect(getPieceReconciliation(piece)).toMatchObject({
         outcome: "refused",
@@ -1298,7 +1306,7 @@ describe("piece source reconciliation", () => {
       const changedRef = runtime.patternManager.getArtifactEntryRef(changed)!;
       await stampSource(piece, `cf:pattern:${changedRef.identity}`);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceSourceRevisions(piece)).toEqual([]);
     });
@@ -1316,7 +1324,7 @@ describe("piece source reconciliation", () => {
       const grownRef = runtime.patternManager.getArtifactEntryRef(grown)!;
       await stampSource(piece, `cf:pattern:${grownRef.identity}`);
 
-      expect(await reconcile(piece)).toBe("refused");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
@@ -1442,11 +1450,12 @@ describe("piece source reconciliation", () => {
   });
 
   describe("compileSystemSource()", () => {
-    function compile(symbol = SYMBOL) {
+    function compile(symbol = SYMBOL, refused?: SourceRefusal) {
       return runtime.sourceReconciler.compileSystemSource(
         signer.did(),
         PARENT_ORIGIN,
         symbol,
+        refused,
       );
     }
 
@@ -1481,6 +1490,75 @@ describe("piece source reconciliation", () => {
         outcome: "refused",
         reason: "source-invalid",
         offered: { identity: v2Identity, symbol: "NotExported" },
+      });
+    });
+
+    describe("given a refusal it already holds", () => {
+      // What following the origin has just returned, in the same lookup.
+
+      let v2Identity: string;
+      let downloads: string[];
+
+      beforeEach(async () => {
+        v2Identity = await identityFor(source("v2"));
+        downloads = [];
+        createRuntime(
+          servingFetch(() => v2Identity, () => source("v2"), (url) => {
+            if (!url.searchParams.has("identity")) downloads.push(url.pathname);
+          }),
+        );
+      });
+
+      /** A refusal of `symbol` at `identity`, for `reason`. */
+      function refusal(
+        identity: string,
+        symbol: string,
+        reason: SourceRefusal["reason"] = "identity-mismatch",
+      ): SourceRefusal {
+        return {
+          outcome: "refused",
+          reason,
+          detail: "refused while following the origin",
+          offered: { identity, symbol },
+        };
+      }
+
+      it("returns it without downloading the source while the host advertises the identity it names", async () => {
+        const held = refusal(v2Identity, SYMBOL);
+
+        expect(await compile(SYMBOL, held)).toEqual(held);
+        expect(downloads).toEqual([]);
+      });
+
+      it("compiles the source when the host advertises another identity", async () => {
+        const held = refusal(
+          "an-identity-the-host-no-longer-advertises",
+          SYMBOL,
+        );
+
+        expect(await compile(SYMBOL, held)).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: v2Identity, symbol: SYMBOL },
+        });
+        expect(downloads).not.toEqual([]);
+      });
+
+      it("compiles the source when the refusal is of another export", async () => {
+        const held = refusal(v2Identity, "default");
+
+        expect(await compile(SYMBOL, held)).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: v2Identity, symbol: SYMBOL },
+        });
+      });
+
+      it("compiles the source when the refusal is of a kind a compile does not make", async () => {
+        const held = refusal(v2Identity, SYMBOL, "incompatible-schema");
+
+        expect(await compile(SYMBOL, held)).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: v2Identity, symbol: SYMBOL },
+        });
       });
     });
 

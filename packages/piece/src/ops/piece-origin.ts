@@ -25,7 +25,7 @@ import {
   parseFabricRef,
   type Pattern,
   type PieceReconciliation,
-  type ReconcileOutcome,
+  type ReconcileResult,
   resolveSystemPatternSource,
   type Runtime,
   type RuntimeProgram,
@@ -143,7 +143,7 @@ export interface PieceSourceRevisionState {
 export function reconcilePieceSource(
   runtime: Runtime,
   piece: Cell<unknown>,
-): Promise<ReconcileOutcome> {
+): Promise<ReconcileResult> {
   return runtime.sourceReconciler.reconcile(piece);
 }
 
@@ -160,11 +160,7 @@ export class PieceOriginError extends Error {
  * at all. `refusal` is what a reconciliation records for it.
  */
 export class PieceOriginRefusedError extends PieceOriginError {
-  constructor(
-    readonly refusal: SourceRefusal & {
-      readonly offered: { identity: string; symbol: string };
-    },
-  ) {
+  constructor(readonly refusal: SourceRefusal) {
     super(refusal.detail);
     this.name = "PieceOriginRefusedError";
   }

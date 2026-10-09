@@ -37,7 +37,6 @@ import {
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
-  getPieceReconciliation,
   getPieceSourceSnapshot,
   idStringForEntityAddress,
   inSpaceRootCause,
@@ -59,6 +58,7 @@ import {
   PatternSetupPostCommitError,
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
+  type ReconcileResult,
   Runtime,
   runtimePresets,
   RuntimeProgram,
@@ -147,17 +147,26 @@ export type PieceOpen = { reconcile: boolean; start: boolean };
 const normalizePieceOpen = (open: boolean | PieceOpen): PieceOpen =>
   typeof open === "boolean" ? { reconcile: open, start: open } : open;
 
+/**
+ * What opening a piece found on the way, for a caller that acts on it when the
+ * start fails.
+ */
+type PieceOpenReport = {
+  /** What following the piece's origin came to, when the open followed it. */
+  followed?: ReconcileResult;
+};
+
 // Timing stats record even while the logger is disabled, so every phase is
 // visible in the load summaries (browser worker included, where the
 // CF_CLI_TRACE_TIMINGS console path cannot run) as `piece/phase/<label>`.
 const pieceTimingLogger = getLogger("piece", { enabled: false });
-/** The export of its space's official system source that a space root runs. */
-const ROLL_FORWARD_EXPORT = "default";
-
 const pieceUpdateLogger = getLogger("piece.update", {
   enabled: true,
   level: "warn",
 });
+
+/** The export of its space's official system source that a space root runs. */
+const ROLL_FORWARD_EXPORT = "default";
 
 async function timePiecePhase<T>(
   label: string,
@@ -578,14 +587,17 @@ export class PiecesController<T = unknown> {
     ) {
       return undefined;
     }
+    const opened: PieceOpenReport = {};
     try {
       return await timePiecePhase(
         `getDefaultPattern.get(reconcile=${reconcile},start=${start})`,
         () =>
-          this.getPieceCell(
+          this.#getPieceCell<NameSchema>(
             defaultPattern,
             { reconcile, start },
             nameSchema,
+            undefined,
+            opened,
           ),
       );
     } catch (error) {
@@ -624,7 +636,7 @@ export class PiecesController<T = unknown> {
         pinnedRef,
         error,
         "unloadable",
-        reconcile,
+        opened.followed,
       );
       pieceUpdateLogger.warn("default-root-healed-on-load-failure", () => [
         "getDefaultPattern: start failed, the root rolled forward to the",
@@ -921,6 +933,20 @@ export class PiecesController<T = unknown> {
     asSchema?: JSONSchema,
     scope?: CellScope,
   ): Promise<Cell<T>> {
+    return await this.#getPieceCell<T>(id, open, asSchema, scope);
+  }
+
+  /**
+   * Helper for {@link getPieceCell}, which also fills in `report` with what
+   * opening the piece found before any failure to start it.
+   */
+  async #getPieceCell<T>(
+    id: string | Cell<unknown>,
+    open: boolean | PieceOpen,
+    asSchema: JSONSchema | undefined,
+    scope: CellScope | undefined,
+    report: PieceOpenReport = {},
+  ): Promise<Cell<T>> {
     const { reconcile, start } = normalizePieceOpen(open);
     // Get the piece cell
     const addressed: Cell<unknown> = isCell(id)
@@ -963,6 +989,7 @@ export class PiecesController<T = unknown> {
         "get.reconcileSource",
         () => reconcilePieceSource(this.runtime, piece),
       );
+      report.followed = outcome;
       if (outcome === "updated") {
         // The transition committed through a transaction view, and the caller
         // may have handed us a cell bound to a read transaction older than it.
@@ -2472,8 +2499,9 @@ export class PiecesController<T = unknown> {
     reconcileBeforeStart: boolean,
   ): Promise<PieceController<NameSchema>> {
     let rootToStart = root;
+    let followed: ReconcileResult | undefined;
     if (reconcileBeforeStart) {
-      const outcome = await timePiecePhase(
+      followed = await timePiecePhase(
         "ensureDefaultPattern.reconcileSource",
         () => reconcilePieceSource(this.runtime, root),
       );
@@ -2487,7 +2515,7 @@ export class PiecesController<T = unknown> {
       // pattern. A root the origin did not confirm may be pinned to a pattern
       // that is simply wrong for it, and re-staging that one buys nothing the
       // repair below cannot do with the failure in hand.
-      if (outcome === "current" || outcome === "migrated") {
+      if (followed === "current" || followed === "migrated") {
         rootToStart = await this.#restageRootSetupIfStale(rootToStart);
       }
     }
@@ -2571,6 +2599,7 @@ export class PiecesController<T = unknown> {
             ref,
             startError,
             "unloadable",
+            followed,
           ),
         );
       }
@@ -2677,6 +2706,8 @@ export class PiecesController<T = unknown> {
           rootToStart,
           ref,
           repairError,
+          "unrunnable",
+          followed,
         );
       }
     }
@@ -2805,17 +2836,18 @@ export class PiecesController<T = unknown> {
    * Returns the healed root cell so the caller starts/returns the swapped-in
    * pattern rather than the stale pinned view.
    *
-   * `justFollowed` says the caller's lookup has just followed the root's
-   * origin. When that refused the official source for the export the
-   * roll-forward takes, the refusal is the answer, and the source is not
-   * downloaded and compiled again to reach it.
+   * `followed` is what following the root's origin came to in the caller's
+   * lookup, when it followed it. A refusal there of the official source, for
+   * the export the roll-forward takes and at the identity the host still
+   * advertises, is the answer, and the source is not downloaded and compiled
+   * again to reach it.
    */
   async #healDefaultRootByRollForward(
     rootToStart: Cell<NameSchema>,
     pinnedRef: { identity: string; symbol: string },
     migrationError: unknown,
-    reason: "unloadable" | "unrunnable" = "unrunnable",
-    justFollowed = false,
+    reason: "unloadable" | "unrunnable",
+    followed: ReconcileResult | undefined,
   ): Promise<Cell<NameSchema>> {
     const runtime = this.runtime;
     const space = this.getSpace();
@@ -2855,25 +2887,11 @@ export class PiecesController<T = unknown> {
           `host runs`,
         migrationError,
       );
-    // Following this origin in the same lookup, for the export the
-    // roll-forward selects, compiled the same source and refused it, which
-    // is the answer compiling it again would reach.
-    const followed = justFollowed
-      ? getPieceReconciliation(rootToStart.withTx())
-      : undefined;
-    if (
-      followed?.outcome === "refused" && followed.origin === official.ref &&
-      followed.offered?.symbol === ROLL_FORWARD_EXPORT &&
-      (followed.reason === "identity-mismatch" ||
-        followed.reason === "source-invalid") &&
-      followed.detail !== undefined
-    ) {
-      throw refused(followed.detail);
-    }
     const candidate = await runtime.sourceReconciler.compileSystemSource(
       space,
       official,
       ROLL_FORWARD_EXPORT,
+      typeof followed === "string" ? undefined : followed,
     );
     if (candidate.outcome === "unreachable") {
       throw clearError(

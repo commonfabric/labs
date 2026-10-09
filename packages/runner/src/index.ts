@@ -232,6 +232,7 @@ export {
 } from "./piece-origin-kind.ts";
 export {
   type ReconcileOutcome,
+  type ReconcileResult,
   SourceReconciler,
   type SourceRefusal,
   type SystemSourceCandidate,

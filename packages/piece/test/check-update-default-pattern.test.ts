@@ -200,6 +200,10 @@ interface StubControls {
   setImport(path: string, source: string): void;
   setIdentityImport(path: string, source: string): void;
   failIdentity(fail: boolean): void;
+
+  /** Runs `then` once, after the next answer the identity route gives. */
+  afterNextIdentityAnswer(then: () => void): void;
+
   identityFetches(): number;
   sourceFetches(): number;
   requestedHrefs(): string[];
@@ -217,6 +221,7 @@ function installFetchStub(): StubControls {
   const identityImports: Record<string, string> = {};
   let identityResponse: { body: string; status: number } | undefined;
   let failIdentityFetch = false;
+  let afterIdentityAnswer: (() => void) | undefined;
   let identityFetchCount = 0;
   let sourceFetchCount = 0;
   const requestedHrefs: string[] = [];
@@ -252,7 +257,7 @@ function installFetchStub(): StubControls {
             headers: { "content-type": "text/plain" },
           });
         }
-        return new Response(
+        const answer = new Response(
           await identityForSource(
             identitySource ?? source,
             { ...imports, ...identityImports },
@@ -260,6 +265,10 @@ function installFetchStub(): StubControls {
           ),
           { headers: { "content-type": "text/plain" } },
         );
+        const then = afterIdentityAnswer;
+        afterIdentityAnswer = undefined;
+        then?.();
+        return answer;
       }
       sourceFetchCount++;
       return new Response(source, {
@@ -302,6 +311,7 @@ function installFetchStub(): StubControls {
     setImport: (path, s) => (imports[path] = s),
     setIdentityImport: (path, s) => (identityImports[path] = s),
     failIdentity: (f) => (failIdentityFetch = f),
+    afterNextIdentityAnswer: (then) => (afterIdentityAnswer = then),
     identityFetches: () => identityFetchCount,
     sourceFetches: () => sourceFetchCount,
     requestedHrefs: () => [...requestedHrefs],
@@ -1218,6 +1228,34 @@ describe("opening a space root", () => {
       expect(message).toContain("until this client is updated");
     });
 
+    it("downloads the official source once on `ensureDefaultPattern()` when following it was refused in the same lookup", async () => {
+      await pinRootTheClientCannotReplace();
+      stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
+      const sourceFetchesBefore = stub.sourceFetches();
+
+      await expect(controller.ensureDefaultPattern()).rejects.toThrow(
+        "was refused",
+      );
+
+      expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 1);
+    });
+
+    it("rolls a root forward when the host finishes deploying between following its origin and the roll-forward", async () => {
+      // Following the origin is refused while the host advertises another
+      // identity than it serves. By the time the roll-forward asks, the host
+      // advertises what it serves, so that refusal is no longer the answer.
+      await pinRootTheClientCannotReplace();
+      stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
+      stub.afterNextIdentityAnswer(() => stub.setIdentitySource(SOURCE_V2));
+
+      const healed = await controller.getDefaultPattern(true);
+
+      expect(getPatternIdentityRef(healed!)).toEqual({
+        identity: await identityForSource(SOURCE_V2),
+        symbol: "default",
+      });
+    });
+
     it("rolls forward a root whose refused export is not the one the roll-forward takes", async () => {
       // The source has no `gone` export, so following the origin for it was
       // refused; the roll-forward takes `default`, which it does have.
@@ -1648,7 +1686,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("refused");
+    ).toMatchObject({ outcome: "refused", reason: "identity-mismatch" });
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 1);
@@ -1680,7 +1718,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("refused");
+    ).toMatchObject({ outcome: "refused", reason: "identity-mismatch" });
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 2);
@@ -1874,7 +1912,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("refused");
+    ).toMatchObject({ outcome: "refused", reason: "source-invalid" });
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
   });
 

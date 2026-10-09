@@ -117,25 +117,26 @@ async function uncompiledEntryIdentity(
 }
 
 /**
- * The refusal of source whose identity is `served` where its origin advertises
- * `advertised`, which names both so a reader can tell which side moved.
+ * The refusal of source whose identity is `served` where its origin offered
+ * `offered`, which names both identities so a reader can tell which side moved.
  */
 function identityMismatch(
   space: MemorySpace,
   served: string,
-  advertised: string,
+  offered: PatternRef,
 ): SourceRefusal {
   logger.warn("advertised-identity-mismatch", () => [
     "the origin's source is not the identity it advertises",
     space,
-    advertised,
+    offered,
     served,
   ]);
   return {
     outcome: "refused",
     reason: "identity-mismatch",
-    detail: `the source is ${served}, not the ${advertised} its origin ` +
-      `advertises`,
+    detail: `the source is ${served}, not the ${offered.identity} its ` +
+      `origin advertises`,
+    offered,
   };
 }
 
@@ -175,22 +176,48 @@ export type ReconcileOutcome =
 
 /**
  * Why a piece did not take what its origin offered, in the terms the record a
- * reconciliation leaves keeps: the kind of refusal, and what the attempt
- * reported in its own words.
+ * reconciliation leaves keeps.
  */
 export type SourceRefusal = {
+  /** Always `refused`, which tells a refusal from the results beside it. */
   readonly outcome: "refused";
+
+  /** The kind of refusal, which says what would end it. */
   readonly reason: PieceReconciliationReason;
+
+  /** What the attempt reported, in its own words. */
   readonly detail: string;
+
+  /** The export the origin offered, under the identity it advertised. */
+  readonly offered: PatternRef;
 };
 
+/**
+ * What one reconciliation came to: one of its outcomes, or for a refusal, the
+ * refusal itself.
+ */
+export type ReconcileResult =
+  | Exclude<ReconcileOutcome, "refused">
+  | SourceRefusal;
+
 /** A pattern export, by the identity of its source and the name it exports. */
-type PatternRef = { identity: string; symbol: string };
+type PatternRef = {
+  /** The identity of the source's entry module. */
+  identity: string;
+
+  /** The name the pattern is exported under. */
+  symbol: string;
+};
 
 /** A candidate compiled into a space, and the export it selected there. */
 type CompiledCandidate = {
+  /** Always `compiled`, which tells this from the other candidates. */
   readonly outcome: "compiled";
+
+  /** The pattern the export compiled to in the space. */
   readonly pattern: Pattern;
+
+  /** The export, under the identity it compiled to. */
   readonly ref: PatternRef;
 };
 
@@ -202,27 +229,27 @@ export type SystemSourceCandidate =
   /** It compiled to the identity the origin advertises. */
   | CompiledCandidate
   /**
-   * It was refused, as reconciliation refuses it, and `offered` names the
-   * identity the origin advertised. A mismatch with that identity lasts until
-   * a deployment in progress at the host finishes, or until this runtime
-   * compiles the source as the host's runtime does. Advertised source that
-   * does not compile lasts until the host serves other source, or until this
-   * runtime is updated to one that compiles it.
+   * It was refused, as reconciliation refuses it. A mismatch with the
+   * advertised identity lasts until a deployment in progress at the host
+   * finishes, or until this runtime compiles the source as the host's runtime
+   * does. Advertised source that does not compile lasts until the host serves
+   * other source, or until this runtime is updated to one that compiles it.
    */
-  | (SourceRefusal & { readonly offered: PatternRef })
+  | SourceRefusal
   /**
    * The origin could not be reached, or the source could not be downloaded
-   * or compiled for a reason that may not recur. `offered` names the identity
-   * the origin advertised, once it has.
+   * or compiled for a reason that may not recur.
    */
   | {
+    /** Always `unreachable`, which tells this from the other candidates. */
     readonly outcome: "unreachable";
+
+    /** What went wrong, in its own words. */
     readonly detail: string;
+
+    /** The export the origin offered, once it has advertised an identity. */
     readonly offered?: PatternRef;
   };
-
-/** What following an origin came to, with a refusal saying why. */
-type FollowResult = Exclude<ReconcileOutcome, "refused"> | SourceRefusal;
 
 /**
  * What each reconciliation result but a refusal becomes on the piece, and which
@@ -248,15 +275,14 @@ const RECORDED_OUTCOME: Record<
 /** What a reconciliation's result leaves on the piece it ran for. */
 function reconciliationFor(
   state: FollowedPieceState,
-  result: FollowResult,
+  result: ReconcileResult,
 ): PieceReconciliation | undefined {
-  const offered = state.offered === undefined ? {} : { offered: state.offered };
   if (typeof result !== "string") {
     return {
       outcome: result.outcome,
       at: Date.now(),
       origin: state.storedSource,
-      ...offered,
+      offered: result.offered,
       reason: result.reason,
       detail: result.detail,
     };
@@ -267,7 +293,7 @@ function reconciliationFor(
     outcome: recorded,
     at: Date.now(),
     origin: state.storedSource,
-    ...offered,
+    ...(state.offered === undefined ? {} : { offered: state.offered }),
     ...(state.detail === undefined ? {} : { detail: state.detail }),
   };
 }
@@ -290,7 +316,7 @@ async function abortable<T>(
 type PendingReconcile = {
   abort: AbortController;
   reschedule: boolean;
-  promise: Promise<ReconcileOutcome>;
+  promise: Promise<ReconcileResult>;
 };
 
 type FabricFollower = {
@@ -428,9 +454,10 @@ export class SourceReconciler {
    *
    * Awaited: a piece being opened reconciles before it starts, so it never runs
    * source that its own origin has already replaced. Failures never throw — a
-   * piece whose origin cannot be reached keeps running what it has.
+   * piece whose origin cannot be reached keeps running what it has. Returns
+   * what the reconciliation came to, and a refusal says why.
    */
-  reconcile(resultCell: Cell<unknown>): Promise<ReconcileOutcome> {
+  reconcile(resultCell: Cell<unknown>): Promise<ReconcileResult> {
     if (this.#disposed) return Promise.resolve("detached");
     this.#stoppedFabricFollowers.delete(this.#followerKey(resultCell));
     return this.#singleFlight(resultCell);
@@ -552,16 +579,23 @@ export class SourceReconciler {
    * source-closure persistence of a compiler cache hit. Later calls for that
    * export in the same schema registry epoch return the verified pattern,
    * whose closure the space already holds.
+   *
+   * `refused` is a refusal the caller already holds for this origin's source,
+   * such as the one following the origin has just returned. While the host
+   * advertises the identity it names, and for the export it names, it is
+   * returned in place of downloading and compiling the same source again. A
+   * refusal of a kind this compile does not make is not reused.
    */
   async compileSystemSource(
     space: MemorySpace,
     origin: SystemPieceOrigin,
     symbol: string,
+    refused?: SourceRefusal,
   ): Promise<SystemSourceCandidate> {
     // The pass returns a candidate for every failure but its own abort, so it
     // returns nothing only when disposal stopped it.
     return await this.#track((signal) =>
-      this.#compileSystemSource(space, origin, symbol, signal)
+      this.#compileSystemSource(space, origin, symbol, refused, signal)
     ) ?? {
       outcome: "unreachable",
       detail: "the runtime stopped before the origin answered",
@@ -601,7 +635,7 @@ export class SourceReconciler {
     this.#unwatchFabricSource(resultCell);
   }
 
-  #singleFlight(resultCell: Cell<unknown>): Promise<ReconcileOutcome> {
+  #singleFlight(resultCell: Cell<unknown>): Promise<ReconcileResult> {
     const key = this.#followerKey(resultCell);
     const existing = this.#pending.get(key);
     if (existing !== undefined) {
@@ -614,13 +648,13 @@ export class SourceReconciler {
     pending.abort = abort;
     pending.reschedule = false;
     pending.promise = this.#reconcile(resultCell, abort.signal)
-      .catch((error) => {
+      .catch((error): ReconcileResult => {
         logger.warn("reconcile-failed", () => [
           "source reconciliation failed",
           resultCell.space,
           error,
         ]);
-        return "unavailable" as ReconcileOutcome;
+        return "unavailable";
       })
       .finally(() => {
         if (this.#pending.get(key) === pending) this.#pending.delete(key);
@@ -653,7 +687,7 @@ export class SourceReconciler {
   async #reconcile(
     resultCell: Cell<unknown>,
     signal: AbortSignal,
-  ): Promise<ReconcileOutcome> {
+  ): Promise<ReconcileResult> {
     const running = getPatternIdentityRef(resultCell);
     const storedSource = getPatternSource(resultCell);
     if (running === undefined || storedSource === undefined) {
@@ -675,7 +709,7 @@ export class SourceReconciler {
     // failure a reader most needs recorded is the one that records nothing.
     // A cancelled reconciliation is not an outcome at all, and keeps whatever
     // the piece already said.
-    let result: FollowResult;
+    let result: ReconcileResult;
     try {
       result = await this.#dispatch(resultCell, state, signal);
     } catch (error) {
@@ -689,7 +723,7 @@ export class SourceReconciler {
       throw error;
     }
     await this.#record(resultCell, state, result, signal);
-    return typeof result === "string" ? result : result.outcome;
+    return result;
   }
 
   /**
@@ -713,7 +747,7 @@ export class SourceReconciler {
   async #record(
     resultCell: Cell<unknown>,
     state: FollowedPieceState,
-    result: FollowResult,
+    result: ReconcileResult,
     signal: AbortSignal,
   ): Promise<void> {
     const recorded = reconciliationFor(state, result);
@@ -732,7 +766,7 @@ export class SourceReconciler {
     resultCell: Cell<unknown>,
     state: FollowedPieceState,
     signal: AbortSignal,
-  ): Promise<FollowResult> {
+  ): Promise<ReconcileResult> {
     const host = this.#runtime.hostForSpace(state.space).href;
     let origin = classifyPieceOriginString(state.storedSource, host);
 
@@ -774,7 +808,7 @@ export class SourceReconciler {
     state: FollowedPieceState,
     origin: PieceOriginKind,
     signal: AbortSignal,
-  ): Promise<FollowResult> {
+  ): Promise<ReconcileResult> {
     switch (origin.kind) {
       case "unusable":
         logger.warn("unusable-origin", () => [
@@ -812,7 +846,7 @@ export class SourceReconciler {
     origin: SystemPieceOrigin,
     signal: AbortSignal,
     claim?: OriginClaim,
-  ): Promise<FollowResult> {
+  ): Promise<ReconcileResult> {
     const fetch = this.#revalidatingFetch(signal);
     const target = this.#systemSourceUrl(origin.route, state.space);
     let answer = await this.#advertisedIdentity(target, fetch, signal);
@@ -941,6 +975,7 @@ export class SourceReconciler {
     space: MemorySpace,
     origin: SystemPieceOrigin,
     symbol: string,
+    refused: SourceRefusal | undefined,
     signal: AbortSignal,
   ): Promise<SystemSourceCandidate> {
     let offered: PatternRef | undefined;
@@ -953,6 +988,13 @@ export class SourceReconciler {
         return { outcome: "unreachable", detail: answer.detail };
       }
       offered = { identity: answer.identity, symbol };
+      if (
+        refused !== undefined &&
+        (refused.reason === "identity-mismatch" ||
+          refused.reason === "source-invalid") &&
+        refused.offered.identity === answer.identity &&
+        refused.offered.symbol === symbol
+      ) return refused;
       const key = stringTupleKey([space, target.href, answer.identity]);
       const resolved = await this.#resolveSuppliedSource(
         key,
@@ -981,7 +1023,7 @@ export class SourceReconciler {
       signal.throwIfAborted();
       if (candidate.outcome === "refused") {
         this.#forgetSuppliedSource(key, resolved);
-        return { ...candidate, offered };
+        return candidate;
       }
       // A pattern compiled across a registry clear carries references the
       // clear retired, so it is returned but not kept.
@@ -1159,7 +1201,7 @@ export class SourceReconciler {
       { kind: "fabric-entity" | "fabric-pattern" }
     >,
     signal: AbortSignal,
-  ): Promise<FollowResult> {
+  ): Promise<ReconcileResult> {
     const runtime = this.#runtime;
     const destinationSpace = state.space;
     const ref = origin.ref;
@@ -1261,7 +1303,7 @@ export class SourceReconciler {
     signal: AbortSignal,
     advertised: string,
     claim?: OriginClaim,
-  ): Promise<FollowResult> {
+  ): Promise<ReconcileResult> {
     const runtime = this.#runtime;
     if (signal.aborted) return "unavailable";
     const compiled = await this.#compileCandidate(
@@ -1292,6 +1334,7 @@ export class SourceReconciler {
         outcome: "refused",
         reason: "incompatible-schema",
         detail: refusal,
+        offered: candidateRef,
       };
     }
 
@@ -1385,6 +1428,10 @@ export class SourceReconciler {
     advertised: string,
   ): Promise<CompiledCandidate | SourceRefusal> {
     const manager = this.#runtime.patternManager;
+    const offered = {
+      identity: advertised,
+      symbol: program.mainExport ?? "default",
+    };
     let pattern: Pattern;
     try {
       pattern = await manager.compilePattern(program, { space });
@@ -1400,7 +1447,7 @@ export class SourceReconciler {
       // not the source its origin advertises, and is refused as that.
       const served = await uncompiledEntryIdentity(program);
       if (served !== undefined && served !== advertised) {
-        return identityMismatch(space, served, advertised);
+        return identityMismatch(space, served, offered);
       }
       logger.warn("candidate-did-not-compile", () => [
         "the origin's current source did not compile",
@@ -1412,6 +1459,7 @@ export class SourceReconciler {
         outcome: "refused",
         reason: "source-invalid",
         detail: reconciliationDetail(error),
+        offered,
       };
     }
     const ref = manager.getArtifactEntryRef(pattern);
@@ -1424,13 +1472,12 @@ export class SourceReconciler {
       return {
         outcome: "refused",
         reason: "source-invalid",
-        detail: `the source's \`${
-          program.mainExport ?? "default"
-        }\` export is not a pattern`,
+        detail: `the source's \`${offered.symbol}\` export is not a pattern`,
+        offered,
       };
     }
     if (ref.identity !== advertised) {
-      return identityMismatch(space, ref.identity, advertised);
+      return identityMismatch(space, ref.identity, offered);
     }
     return { outcome: "compiled", pattern, ref };
   }
