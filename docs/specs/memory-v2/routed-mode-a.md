@@ -44,9 +44,17 @@ change awaiting a router restart, is temporary: a refused open is marked
 `retriable`, so the SDK holds that session and retries its open on the same
 connection, and a refused frame of an open session closes the connection, so the
 SDK reconnects; either way it replays the session's pending commits rather than
-ending the session. The marker shows whether the toolshed a DID maps to is down
-or saturated, not whether a space exists or what its ACL grants; without an
-`unlisted` rule it also shows that a DID is listed while its toolshed is down.
+ending the session. A first mount refused that way has no session yet, and the
+SDK holds it the same: it tries the mount again on the same connection, a second
+or more apart at the reconnect backoff and with no limit on how often, until the
+mount is admitted or refused for good, its caller cancels it, or the client
+closes or fails for good. That covers a refusal for now of the open, of the
+key's statement and of a challenge for it. A connection that drops while the
+mount waits is followed onto the next one; a connection that drops under a
+request the mount has sent fails the mount, as in direct mode. The marker shows
+whether the toolshed a DID maps to is down or saturated, not whether a space
+exists or what its ACL grants; without an `unlisted` rule it also shows that a
+DID is listed while its toolshed is down.
 
 `sharedMemoryConnection` controls the runner's socket topology. Both topologies
 supply a `SessionPrincipal`, so authentication follows the peer's advertised

@@ -380,6 +380,12 @@ const reconnectDelayMs = (attempt: number): number => {
   );
 };
 
+/** The error a mount fails with when its caller's `signal` has aborted. */
+const mountCancelled = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error
+    ? signal.reason
+    : new Error("memory session mount cancelled");
+
 /**
  * A statement a router refused for now: the challenge it answers, when that
  * challenge expires (unix seconds), when it was refused (milliseconds) and
@@ -523,6 +529,12 @@ export class Client {
   #challengeSigners = new Set<string>();
   /** Statements a router refused for now, by principal; see `#authenticate`. */
   #refusedStatements = new Map<string, RefusedStatement>();
+  /**
+   * Ends the wait of each mount a router has refused for now and rejects
+   * the mount with the error given. `close()` calls them, and so does a
+   * connection failure that is permanent. See `#holdMount`.
+   */
+  #heldMounts = new Set<(error: Error) => void>();
 
   /**
    * Settles once every signed `session.open` issued so far has been
@@ -647,6 +659,7 @@ export class Client {
     this.#noteStateChange();
     this.#cancelReconnectDelay?.();
     this.#cancelRenewals();
+    this.#endHeldMounts(new Error("memory client closed"));
     this.#rejectPending(new Error("memory client closed"));
     await Promise.all([...this.#spaces].map((space) => space.close()));
     this.#spaces.clear();
@@ -672,7 +685,9 @@ export class Client {
       result = await runWithAbortSignal(
         signal,
         "memory session mount cancelled",
-        () => (opening = this.openSession(space, options, auth)),
+        () => (opening = this.openSession(space, options, auth, undefined, {
+          signal,
+        })),
       );
       if (signal?.aborted) {
         throw signal.reason instanceof Error
@@ -789,7 +804,8 @@ export class Client {
   /**
    * Ends the authentication of the key `did` on the current connection.
    * Sessions mounted as it stay open, and a later mount as it authenticates
-   * again. Sends nothing for a key this connection has not authenticated.
+   * again, as does a mount as it that is still under way. Sends nothing for
+   * a key this connection has not authenticated.
    */
   async release(did: string): Promise<void> {
     this.#cancelRenewal(did);
@@ -808,14 +824,18 @@ export class Client {
    * principal the connection has authenticated where the server advertises
    * `connectionAuth`, and otherwise signed for this one session. A reopen
    * that a session's restore makes sets `options.restoring`, and is then
-   * rejected with a `ConnectionError` if the connection drops under it.
+   * rejected with a `ConnectionError` if the connection drops under it. A
+   * mount that a router refuses for now is tried again on the same
+   * connection until it is admitted or refused for good, the client closes
+   * or fails for good, or `options.signal` aborts. A connection that drops
+   * under a request the mount has sent still fails the mount.
    */
   async openSession(
     space: string,
     session: MountOptions,
     auth?: SessionAuth,
     holdings?: SessionHolding[],
-    options: { restoring?: boolean } = {},
+    options: { restoring?: boolean; signal?: AbortSignal } = {},
   ): Promise<SessionOpenResult> {
     const whileConnected = options.restoring === true;
     // A mount made while the connection is down waits for the reconnect to
@@ -831,31 +851,40 @@ export class Client {
     // held to the server it is declared to. A server that does not
     // advertise `sessionReadCeiling` would accept the descriptor and serve
     // every query unbounded.
-    if (
-      session.readCeiling !== undefined &&
-      this.serverFlags?.sessionReadCeiling !== true
-    ) {
-      throw protocolError(
-        "memory server does not record a session's read ceiling " +
-          "(`sessionReadCeiling` is not among its protocol flags), so a " +
-          "session declaring one cannot be bounded by it",
-      );
-    }
-    if (
-      session.genesisRoot !== undefined &&
-      this.serverFlags?.genesisRoot !== true
-    ) {
-      throw protocolError(
-        "memory server does not support a custom root intent",
-      );
-    }
-    if (
-      session.spaceKind !== undefined && this.serverFlags?.spaceKind !== true
-    ) {
-      throw protocolError(
-        "memory server does not seal a space's declared kind",
-      );
-    }
+    const requireCapabilities = (): void => {
+      if (
+        session.readCeiling !== undefined &&
+        this.serverFlags?.sessionReadCeiling !== true
+      ) {
+        throw protocolError(
+          "memory server does not record a session's read ceiling " +
+            "(`sessionReadCeiling` is not among its protocol flags), so a " +
+            "session declaring one cannot be bounded by it",
+        );
+      }
+      if (
+        session.genesisRoot !== undefined &&
+        this.serverFlags?.genesisRoot !== true
+      ) {
+        throw protocolError(
+          "memory server does not support a custom root intent",
+        );
+      }
+      if (
+        session.spaceKind !== undefined && this.serverFlags?.spaceKind !== true
+      ) {
+        throw protocolError(
+          "memory server does not seal a space's declared kind",
+        );
+      }
+    };
+    requireCapabilities();
+    // A mount whose caller has cancelled it sends nothing more.
+    const requireUncancelled = (): void => {
+      if (options.signal?.aborted) throw mountCancelled(options.signal);
+    };
+    // The refusals for now a mount has waited after; see `#holdMount`.
+    let refusals = 0;
     // A drop while an open is being signed leaves it with a challenge of
     // the connection that is gone. A reopen fails then, for its reconnect
     // to retry; a mount waits for the reconnect and signs again.
@@ -863,40 +892,47 @@ export class Client {
       if (
         typeof auth === "object" && this.serverFlags?.connectionAuth === true
       ) {
-        let principal: string | typeof STALE;
         try {
-          principal = await this.#authenticate(auth, whileConnected);
+          requireUncancelled();
+          // A mount held below may have waited through a reconnect, and
+          // the next connection's server may advertise other capabilities.
+          requireCapabilities();
+          const principal = await this.#authenticate(auth, whileConnected);
+          if (principal !== STALE) {
+            requireUncancelled();
+            return await this.request<SessionOpenResult>({
+              type: "session.open",
+              requestId: this.#nextRequestId(),
+              space,
+              principal,
+              session,
+              ...(holdings !== undefined ? { holdings } : {}),
+            }, { whileConnected });
+          }
         } catch (error) {
-          // A router's refusal for now of the key's statement passes over
-          // seconds, and `#authenticate` keeps the statement to send again
-          // on the key's next attempt. A reopen fails here, and its session
-          // holds and makes that attempt. Nothing does for a mount, whose
-          // caller would be told the mount failed, so a mount makes the
-          // attempt itself: asking again waits until a second after the
-          // refusal and sends the same statement, or waits for whoever is
-          // already sending it. Once the statement may not be sent again
-          // the refusal goes to the caller, as does a refused request for a
-          // challenge, which keeps no statement.
-          const refused = this.#refusedStatements.get(auth.did);
+          // A router's refusal for now passes without a new connection,
+          // whether of a challenge for the key, of its statement or of the
+          // open: a source's authentication rate refills, and a toolshed
+          // that is down or restarting comes back. A reopen fails here, and
+          // its session holds and tries again. Nothing does that for a
+          // mount, whose caller would be told the space failed to open, so
+          // a mount is held here instead: it waits, then goes round again
+          // on this connection, as often as it takes, since a held session
+          // has no limit either. `#authenticate` then sends the statement
+          // it kept, or signs a new challenge once that statement may not
+          // be sent again. If the connection drops while the mount waits,
+          // the next round waits for the reconnect and starts over; a drop
+          // under a request the mount has sent fails it, as it does any
+          // mount. A direct server's denial goes to the caller as before.
           if (
-            !whileConnected && isRetriableAuthorizationError(error) &&
-            refused !== undefined && resendable(refused)
-          ) continue;
-          throw error;
-        }
-        if (principal === STALE) {
-          await this.#ensureConnected();
+            whileConnected || !isRetriableAuthorizationError(error) ||
+            this.#sessionOpenAuthContext?.deployment === undefined
+          ) throw error;
+          await this.#holdMount(refusals++, options.signal);
           continue;
         }
-        const result = await this.request<SessionOpenResult>({
-          type: "session.open",
-          requestId: this.#nextRequestId(),
-          space,
-          principal,
-          session,
-          ...(holdings !== undefined ? { holdings } : {}),
-        }, { whileConnected });
-        return result;
+        await this.#ensureConnected();
+        continue;
       }
       const sign = typeof auth === "object" ? auth.authorizeSessionOpen : auth;
       const opened = this.#signedOpens.then(
@@ -935,6 +971,42 @@ export class Client {
       }
       return result;
     }
+  }
+
+  /**
+   * Helper for `openSession()`, which waits before a mount tries again
+   * after a router's refusal for now. `refusals` counts the refusals the
+   * mount has already waited after. The wait is the reconnect backoff for
+   * that count on top of a second, so mounts refused together do not all
+   * try again in the same millisecond. The wait ends early, and rejects,
+   * when the client closes or fails for good or when `signal` aborts, so no
+   * timer outlives any of those.
+   */
+  #holdMount(refusals: number, signal?: AbortSignal): Promise<void> {
+    if (this.#closed) return Promise.reject(new Error("memory client closed"));
+    if (this.#fatalError) return Promise.reject(this.#fatalError);
+    if (signal?.aborted) return Promise.reject(mountCancelled(signal));
+    return new Promise<void>((resolve, reject) => {
+      const settle = (error?: Error): void => {
+        clearTimeout(timer);
+        this.#heldMounts.delete(settle);
+        signal?.removeEventListener("abort", abort);
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      const abort = (): void => settle(mountCancelled(signal!));
+      const timer = setTimeout(
+        () => settle(),
+        ROUTED_RETRY_FLOOR_MS + reconnectDelayMs(refusals),
+      );
+      this.#heldMounts.add(settle);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
+  /** Ends the wait of every held mount and rejects each with `error`. */
+  #endHeldMounts(error: Error): void {
+    for (const end of [...this.#heldMounts]) end(error);
   }
 
   /**
@@ -1514,15 +1586,15 @@ export class Client {
         void this.#authenticate(principal, false, true, context.challenge)
           .catch((error) => {
             // Refused for now: the router has refused the opens waiting for
-            // this signature for now too. A session's reopen among them is
-            // held and retried, which authenticates the key again. A
-            // mount's open is not retried, and no open may have been
-            // waiting; the renewal cancelled above was then the key's only
-            // other authentication, and without one its lease runs out and
-            // its sessions are denied for good. So another attempt is
-            // armed, as after a renewal refused for now. Refused for good:
-            // only the sessions mounted as this key end, as when a renewal
-            // is. Neither touches the connection's other requests.
+            // this signature for now too, and the session or the mount
+            // behind each tries again, which authenticates the key again.
+            // No open may have been waiting, though; the renewal cancelled
+            // above was then the key's only other authentication, and
+            // without one its lease runs out and its sessions are denied
+            // for good. So another attempt is armed, as after a renewal
+            // refused for now. Refused for good: only the sessions mounted
+            // as this key end, as when a renewal is. Neither touches the
+            // connection's other requests.
             if (isRetriableAuthorizationError(error)) {
               this.#retryRenewal(principal, epoch, 1);
               return;
@@ -1722,6 +1794,7 @@ export class Client {
       // notification covering it, and that rule is what lets the write
       // sites be checked rather than reasoned about one by one.
       this.#noteStateChange();
+      this.#endHeldMounts(err);
       this.#rejectPending(err);
       for (const session of this.#spaces) {
         session.handleConnectionFailure(err);

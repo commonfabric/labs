@@ -42,7 +42,7 @@ const hello = (sessionOpen: unknown = metadata(), selected = flags()) => ({
 });
 
 function peer(
-  greeting: string,
+  greeting: string | ((hello: number) => string | undefined),
   respond?: (
     body: Record<string, unknown>,
     push: (body: unknown) => void,
@@ -51,6 +51,7 @@ function peer(
   let receiver = (_: string) => {};
   let closeReceiver = (_?: Error) => {};
   let closed = 0;
+  let hellos = 0;
   let enabled = false;
   const push = (body: unknown) => receiver(frame(body));
   const transport: Transport = {
@@ -69,8 +70,15 @@ function peer(
     },
     send: (payload) => {
       const body = JSON.parse(payload.slice(5));
-      if (body.type === "hello") receiver(greeting);
-      else respond?.(body, push);
+      if (body.type === "hello") {
+        hellos++;
+        // A greeting function that returns nothing leaves the hello
+        // unanswered, for the test to answer with `raw`.
+        const answer = typeof greeting === "string"
+          ? greeting
+          : greeting(hellos);
+        if (answer !== undefined) receiver(answer);
+      } else respond?.(body, push);
       return Promise.resolve();
     },
   };
@@ -81,6 +89,8 @@ function peer(
     /** Drops the connection; the client's next hello is greeted again. */
     drop: () => closeReceiver(new Error("connection dropped")),
     closed: () => closed,
+    /** How many handshakes the client has sent. */
+    hellos: () => hellos,
     enabled: () => enabled,
   };
 }
@@ -494,6 +504,8 @@ Deno.test("a renewal refused for now waits a second, and takes a new challenge w
 });
 
 const elsewhere = (await Identity.fromRaw(new Uint8Array(32).fill(153))).did();
+const elsewhereToo = (await Identity.fromRaw(new Uint8Array(32).fill(154)))
+  .did();
 
 /** A router that refuses every `connection.auth` for now, its hello's
  * challenge lasting `helloLife` seconds. */
@@ -545,7 +557,7 @@ async function mountTwice(
   await time.tickAsync(0);
 }
 
-Deno.test("a second mount right after a refusal for now waits for the statement the first mount sends again a second later", async () => {
+Deno.test("a second mount right after a refusal for now sends the refused statement a second later", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log } = refusingFromTheStart(60);
@@ -868,18 +880,56 @@ Deno.test("a pushed challenge's signature refused for now leaves the connection'
 /**
  * A router that refuses for now the statements `refused` picks, counting
  * them from 1, and admits the rest for ten minutes. It logs when each
- * statement, challenge request and open came. The answers `held` picks, by
- * request type and that type's count, are sent only when the test calls
- * `release`.
+ * statement, challenge request and open came. The options pick requests by
+ * type and that type's count.
  */
 function routedPeer(
   refused: (statement: number) => boolean,
-  held: (type: string, count: number) => boolean = () => false,
+  {
+    held = () => false,
+    refusedToo = () => false,
+    helloLife = 60,
+    laterFlags,
+    ungreeted = () => false,
+  }: {
+    /** Answers sent only when the test calls `release`. */
+    held?: (type: string, count: number) => boolean;
+    /** Challenge requests and opens refused for now as well. */
+    refusedToo?: (type: string, count: number) => boolean;
+    /** How long the hello's challenge lasts, in seconds. */
+    helloLife?: number;
+    /** The flags every hello after the first is greeted with. */
+    laterFlags?: ReturnType<typeof flags>;
+    /** Hellos left unanswered until the test calls `greet`. */
+    ungreeted?: (hello: number) => boolean;
+  } = {},
 ) {
   const log: { type: string; at: number; statement?: unknown }[] = [];
   const counts = new Map<string, number>();
   const waiting: (() => void)[] = [];
-  const p = peer(frame(hello()), (body, push) => {
+  const forNow = {
+    error: {
+      name: "AuthorizationError",
+      message: "Routed memory request denied",
+      retriable: true,
+    },
+  };
+  const greeting = (selected = flags()) =>
+    frame(hello({
+      ...metadata(),
+      challenge: {
+        value: "11".repeat(32),
+        expiresAt: Math.floor(Date.now() / 1000) + helloLife,
+      },
+    }, selected));
+  const first = greeting();
+  const greet = (n: number) =>
+    ungreeted(n)
+      ? undefined
+      : n === 1 || laterFlags === undefined
+      ? first
+      : greeting(laterFlags);
+  const p = peer(greet, (body, push) => {
     const type = String(body.type);
     const count = (counts.get(type) ?? 0) + 1;
     counts.set(type, count);
@@ -891,34 +941,37 @@ function routedPeer(
     };
     if (type === "connection.challenge") {
       log.push({ type: "challenge", at: Date.now() });
-      respond(() => ({ ok: { challenge: challenge() } }));
+      respond(() =>
+        refusedToo(type, count) ? forNow : {
+          ok: {
+            challenge: {
+              value: "22".repeat(32),
+              expiresAt: Math.floor(Date.now() / 1000) + 60,
+            },
+          },
+        }
+      );
     } else if (type === "connection.auth") {
       log.push({ type: "auth", at: Date.now(), statement: body.statement });
       respond(() =>
-        refused(count)
-          ? {
-            error: {
-              name: "AuthorizationError",
-              message: "Routed memory request denied",
-              retriable: true,
-            },
-          }
-          : {
-            ok: {
-              principal: identity.did(),
-              expiresAt: Math.floor(Date.now() / 1000) + 600,
-            },
-          }
+        refused(count) ? forNow : {
+          ok: {
+            principal: identity.did(),
+            expiresAt: Math.floor(Date.now() / 1000) + 600,
+          },
+        }
       );
     } else if (type === "session.open") {
       log.push({ type: "open", at: Date.now() });
-      respond(() => ({
-        ok: {
-          sessionId: `sdk-session-${body.space}`,
-          sessionToken: "sdk-token",
-          serverSeq: 0,
-        },
-      }));
+      respond(() =>
+        refusedToo(type, count) ? forNow : {
+          ok: {
+            sessionId: `sdk-session-${body.space}`,
+            sessionToken: "sdk-token",
+            serverSeq: 0,
+          },
+        }
+      );
     } else respond(() => ({ ok: {} }));
   });
   return {
@@ -926,6 +979,8 @@ function routedPeer(
     log,
     /** The statements sent so far, in order. */
     auths: () => log.filter((e) => e.type === "auth"),
+    /** Answers a hello that was left unanswered. */
+    greet: () => p.raw(first),
     /** Sends the answers held back so far. */
     release: () => {
       for (const answer of waiting.splice(0)) answer();
@@ -941,6 +996,18 @@ function routedPeer(
         },
       }),
   };
+}
+
+/** Records how `promise` settles, for a test that advances the clock until it has. */
+function settling(promise: Promise<unknown>) {
+  const state: { settled: boolean; failure?: unknown } = { settled: false };
+  promise.then(() => {
+    state.settled = true;
+  }, (error) => {
+    state.settled = true;
+    state.failure = error;
+  });
+  return state;
 }
 
 /** Advances the fake clock in `stepMs` steps until `done` holds, at most `steps` times. */
@@ -1052,7 +1119,7 @@ Deno.test("a key released while a refusal for now is on its way is not authentic
       // released.
       const { p, auths, pushChallenge, release } = routedPeer(
         (n) => n === 2,
-        (type, count) => type === "connection.auth" && count === 2,
+        { held: (type, count) => type === "connection.auth" && count === 2 },
       );
       const client = await connect({ transport: p.transport });
       try {
@@ -1088,7 +1155,7 @@ Deno.test("a renewal refused for now after a pushed challenge was admitted leave
   // the renewal then signs is the third, and is refused for now.
   const { p, log, auths, pushChallenge, release } = routedPeer(
     (n) => n === 3,
-    (type, count) => type === "connection.challenge" && count === 1,
+    { held: (type, count) => type === "connection.challenge" && count === 1 },
   );
   const client = await connect({ transport: p.transport });
   try {
@@ -1187,32 +1254,35 @@ Deno.test("two mounts as one key both resolve after a refusal for now of the sta
   }
 });
 
-Deno.test("two mounts as one key both resolve when the connection drops before their statement is sent again", async () => {
+Deno.test("mounts waiting to send one refused statement all resolve when the connection drops first", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer((n) => n === 1);
   const client = await connect({ transport: p.transport });
   try {
-    const mounting = Promise.allSettled([
-      client.mount(identity.did(), {}, principal()),
-      client.mount(elsewhere, {}, principal()),
-    ]);
+    // The first mount is refused and held. The second, made right after,
+    // is the one that will send the refused statement again, a second
+    // after the refusal; the third waits for the second's authentication.
+    const mounts = [settling(client.mount(identity.did(), {}, principal()))];
     await tickUntil(time, () => auths().length >= 1, 0, 40);
     assertEquals(auths().length, 1);
-    // Half way through the second both mounts wait, the connection drops
-    // and the client connects again. The refused statement answered a
-    // challenge of the connection that is gone, so neither mount sends it:
-    // each waits for the new connection and signs for it.
+    mounts.push(
+      settling(client.mount(elsewhere, {}, principal())),
+      settling(client.mount(elsewhereToo, {}, principal())),
+    );
+    // Half way through that second the connection drops and the client
+    // connects again. The refused statement answered a challenge of the
+    // connection that is gone, so it is not sent: each mount waits for the
+    // new connection, and one statement is signed for it.
     await time.tickAsync(500);
     p.drop();
-    await tickUntil(
-      time,
-      () => log.filter((e) => e.type === "open").length >= 2,
-    );
-    assertEquals(
-      (await mounting).map((result) => result.status),
-      ["fulfilled", "fulfilled"],
-    );
+    await tickUntil(time, () => mounts.every((mount) => mount.settled));
+    assertEquals(mounts, [
+      { settled: true },
+      { settled: true },
+      { settled: true },
+    ]);
+    assertEquals(log.filter((e) => e.type === "open").length, 3);
     assertEquals(auths().length, 2);
     assert(auths()[1].statement !== auths()[0].statement);
     assertEquals(client.isConnected(), true);
@@ -1222,38 +1292,416 @@ Deno.test("two mounts as one key both resolve when the connection drops before t
   }
 });
 
-Deno.test("a mount fails with the refusal once its statement may not be sent again", async (t) => {
+Deno.test("a mount whose refused statement may not be sent again signs a new challenge and goes on", async (t) => {
+  setModernCellRepConfig(true);
+  await t.step("after three resends", async () => {
+    const time = new FakeTime(Date.UTC(2026, 9, 1));
+    // The statement and its three resends are refused, and so is the first
+    // statement over the new challenge; that one's resend is admitted.
+    const { p, log, auths } = routedPeer((n) => n <= 5);
+    const client = await connect({ transport: p.transport });
+    try {
+      const mount = settling(client.mount(identity.did(), {}, principal()));
+      await tickUntil(time, () => mount.settled);
+      assertEquals(mount, { settled: true });
+      const sent = auths();
+      assertEquals(sent.length, 6);
+      assert(sent.slice(0, 4).every((e) => e.statement === sent[0].statement));
+      assert(sent[4].statement !== sent[0].statement);
+      assertEquals(sent[5].statement, sent[4].statement);
+      // Each statement is sent a second or more after the one before it.
+      for (let i = 1; i < sent.length; i++) {
+        const waited = sent[i].at - sent[i - 1].at;
+        assert(waited >= 1000, `statement ${i + 1} after ${waited} ms`);
+      }
+      // One challenge was asked for, once the first statement was spent.
+      const challenges = log.filter((e) => e.type === "challenge");
+      assertEquals(challenges.length, 1);
+      assert(challenges[0].at > sent[3].at);
+    } finally {
+      await client.close();
+      time.restore();
+    }
+  });
+  await t.step("when its challenge will not last", async () => {
+    const time = new FakeTime(Date.UTC(2026, 9, 1));
+    // The hello's challenge lasts four seconds, under the five a resend
+    // needs left, so the refused statement is not sent again.
+    const { p, log, auths } = routedPeer((n) => n === 1, { helloLife: 4 });
+    const client = await connect({ transport: p.transport });
+    try {
+      const mount = settling(client.mount(identity.did(), {}, principal()));
+      await tickUntil(time, () => mount.settled);
+      assertEquals(mount, { settled: true });
+      const sent = auths();
+      assertEquals(sent.length, 2);
+      assert(sent[1].statement !== sent[0].statement);
+      // The mount still waits a second before it asks for the challenge.
+      const challenges = log.filter((e) => e.type === "challenge");
+      assertEquals(challenges.length, 1);
+      const waited = challenges[0].at - sent[0].at;
+      assert(waited >= 1000 && waited < 1100, `${waited} ms`);
+    } finally {
+      await client.close();
+      time.restore();
+    }
+  });
+});
+
+Deno.test("a mount whose request for a challenge is refused for now asks again a second later", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // The first request for a challenge is refused, as when the connection
+  // holds all the unexpired challenges it may.
+  const { p, log, auths } = routedPeer(() => false, {
+    refusedToo: (type, count) => type === "connection.challenge" && count === 1,
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    // The hello's challenge has expired, so the mount asks for one.
+    await time.tickAsync(61_000);
+    const mount = settling(client.mount(identity.did(), {}, principal()));
+    await tickUntil(time, () => mount.settled);
+    assertEquals(mount, { settled: true });
+    const challenges = log.filter((e) => e.type === "challenge");
+    assertEquals(challenges.length, 2);
+    const waited = challenges[1].at - challenges[0].at;
+    assert(waited >= 1000 && waited < 1100, `${waited} ms`);
+    assertEquals(auths().length, 1);
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount whose open is refused for now is tried again on the same connection until it is admitted", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // The space's toolshed is down for the first three opens.
+  const { p, log, auths } = routedPeer(() => false, {
+    refusedToo: (type, count) => type === "session.open" && count <= 3,
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const mount = settling(client.mount(identity.did(), {}, principal()));
+    await tickUntil(time, () => mount.settled);
+    assertEquals(mount, { settled: true });
+    const opens = log.filter((e) => e.type === "open");
+    assertEquals(opens.length, 4);
+    for (let i = 1; i < opens.length; i++) {
+      const waited = opens[i].at - opens[i - 1].at;
+      assert(waited >= 1000, `open ${i + 1} after ${waited} ms`);
+    }
+    // The key authenticated once, and the connection was not replaced.
+    assertEquals(auths().length, 1);
+    assertEquals(p.hellos(), 1);
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount held after a refusal for now starts over on the next connection when this one drops", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log, auths } = routedPeer(() => false, {
+    refusedToo: (type, count) => type === "session.open" && count === 1,
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const mount = settling(client.mount(identity.did(), {}, principal()));
+    const opens = () => log.filter((e) => e.type === "open").length;
+    await tickUntil(time, () => opens() >= 1, 0, 40);
+    assertEquals(mount, { settled: false });
+    // The connection drops while the mount waits. A new connection has
+    // authenticated nobody, so the mount signs for it before it opens.
+    await time.tickAsync(500);
+    p.drop();
+    await tickUntil(time, () => mount.settled);
+    assertEquals(mount, { settled: true });
+    assertEquals(p.hellos(), 2);
+    assertEquals(auths().length, 2);
+    assertEquals(opens(), 2);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount held after a refusal for now ends when its caller cancels it or the client closes", async (t) => {
   setModernCellRepConfig(true);
   for (
-    const [name, helloLife, statements] of [
-      // The refused statement, then the same statement three more times.
-      ["after three resends", 60, 4],
-      // Four seconds, under the five a resend needs left.
-      ["at once when its challenge will not last", 4, 1],
+    const ending of [
+      "the caller's signal aborts",
+      "the caller's signal aborts while an open is unanswered",
+      "the client closes",
+    ] as const
+  ) {
+    await t.step(ending, async () => {
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      // The spaces' toolshed stays down: every open is refused for now. In
+      // the second ending the refusal of the fifth open is held back.
+      const { p, log, release } = routedPeer(() => false, {
+        refusedToo: (type) => type === "session.open",
+        held: (type, count) =>
+          ending.endsWith("unanswered") && type === "session.open" &&
+          count === 5,
+      });
+      const client = await connect({ transport: p.transport });
+      try {
+        const caller = new AbortController();
+        // Two mounts are held at once, as one key.
+        const mounts = [identity.did(), elsewhere].map((space) =>
+          settling(client.mount(space, {}, principal(), caller.signal))
+        );
+        const opens = () => log.filter((e) => e.type === "open").length;
+        await tickUntil(time, () => opens() >= 6);
+        // Held, not failed.
+        assertEquals(mounts, [{ settled: false }, { settled: false }]);
+        if (ending === "the client closes") await client.close();
+        else {
+          caller.abort(new Error("the spaces were closed"));
+          // With the key released, its renewal is not on a timer either.
+          await client.release(identity.did());
+        }
+        // The refusal held back reaches a mount that is already cancelled.
+        release();
+        await time.tickAsync(0);
+        await tickUntil(time, () => mounts.every((m) => m.settled), 0, 40);
+        const message = ending === "the client closes"
+          ? "memory client closed"
+          : "the spaces were closed";
+        assertEquals(
+          mounts.map((mount) => (mount.failure as Error).message),
+          [message, message],
+        );
+        // The waits are over with the mounts: the client has no timer left,
+        // and a minute passes with no open sent.
+        const sent = opens();
+        assertEquals(time.next(), false);
+        await tickUntil(time, () => false, 1000, 60);
+        assertEquals(opens(), sent);
+      } finally {
+        await client.close();
+        time.restore();
+      }
+    });
+  }
+});
+
+Deno.test("a mount cancelled while its refused statement waits sends nothing more", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log, auths } = routedPeer((n) => n === 1);
+  const client = await connect({ transport: p.transport });
+  try {
+    const caller = new AbortController();
+    const mount = settling(
+      client.mount(identity.did(), {}, principal(), caller.signal),
+    );
+    await tickUntil(time, () => auths().length >= 1, 0, 40);
+    assertEquals(mount, { settled: false });
+    // Half a second into the wait the caller gives the mount up and
+    // releases its key.
+    await time.tickAsync(500);
+    caller.abort(new Error("the space was closed"));
+    await client.release(identity.did());
+    // The wait ended with the mount, so the client has no timer left; the
+    // statement is not sent again and no open follows.
+    assertEquals(time.next(), false);
+    await tickUntil(time, () => false, 1000, 10);
+    assertEquals((mount.failure as Error).message, "the space was closed");
+    assertEquals(auths().length, 1);
+    assertEquals(log.filter((e) => e.type === "open").length, 0);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount cancelled while its key is being authenticated sends no open", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log, auths } = routedPeer((n) => n === 1);
+  const client = await connect({ transport: p.transport });
+  try {
+    // The first mount is refused and held. The second, made right after,
+    // is the one waiting to send the refused statement again.
+    const first = settling(client.mount(identity.did(), {}, principal()));
+    await tickUntil(time, () => auths().length >= 1, 0, 40);
+    const caller = new AbortController();
+    const second = settling(
+      client.mount(elsewhere, {}, principal(), caller.signal),
+    );
+    // The second mount's caller cancels it before the statement is sent.
+    // The statement is still sent, for the first mount, but the second
+    // opens nothing.
+    await time.tickAsync(500);
+    caller.abort(new Error("the space was closed"));
+    await tickUntil(time, () => first.settled);
+    await tickUntil(time, () => false, 1000, 3);
+    assertEquals(first, { settled: true });
+    assertEquals((second.failure as Error)?.message, "the space was closed");
+    assertEquals(auths().length, 2);
+    assertEquals(log.filter((e) => e.type === "open").length, 1);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount cancelled while it waits for the reconnect sends nothing on the next connection", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // The reconnect's hello is answered only when the test says.
+  const { p, log, auths, greet } = routedPeer(() => false, {
+    ungreeted: (hello) => hello === 2,
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    p.drop();
+    await time.tickAsync(0);
+    assertEquals(p.hellos(), 2);
+    const caller = new AbortController();
+    const mount = settling(
+      client.mount(identity.did(), {}, principal(), caller.signal),
+    );
+    await time.tickAsync(0);
+    caller.abort(new Error("the space was closed"));
+    greet();
+    await tickUntil(time, () => false, 1000, 3);
+    assertEquals(client.isConnected(), true);
+    assertEquals((mount.failure as Error)?.message, "the space was closed");
+    assertEquals(auths().length, 0);
+    assertEquals(log.filter((e) => e.type === "open").length, 0);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount held through a reconnect is held to the next connection's capabilities", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // The server the client reconnects to does not seal a space's kind.
+  const { p, log } = routedPeer(() => false, {
+    refusedToo: (type, count) => type === "session.open" && count === 1,
+    laterFlags: { ...flags(), spaceKind: false },
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const mount = settling(
+      client.mount(identity.did(), { spaceKind: "notes" }, principal()),
+    );
+    const opens = () => log.filter((e) => e.type === "open").length;
+    await tickUntil(time, () => opens() >= 1, 0, 40);
+    assertEquals(mount, { settled: false });
+    await time.tickAsync(500);
+    p.drop();
+    await tickUntil(time, () => mount.settled);
+    assertEquals((mount.failure as Error)?.name, "ProtocolError");
+    // The open that declares a kind is not sent to that server.
+    assertEquals(opens(), 1);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount held after a refusal for now fails when the connection fails for good", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // The server the client reconnects to cannot be used at all.
+  const { p, log } = routedPeer(() => false, {
+    refusedToo: (type) => type === "session.open",
+    laterFlags: { ...flags(), stableExpressionResultIds: false },
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const mount = settling(client.mount(identity.did(), {}, principal()));
+    await tickUntil(
+      time,
+      () => log.filter((e) => e.type === "open").length >= 1,
+      0,
+      40,
+    );
+    assertEquals(mount, { settled: false });
+    p.drop();
+    await tickUntil(time, () => mount.settled, 0, 40);
+    // The mount fails with the connection, not when its wait would end,
+    // and no timer is left.
+    assertEquals((mount.failure as Error)?.name, "ProtocolError");
+    assertEquals(client.connectionState, "failed");
+    assertEquals(time.next(), false);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a mount whose open is refused for good, or by a direct server, fails at once", async (t) => {
+  setModernCellRepConfig(true);
+  const direct: SessionPrincipal = {
+    did: identity.did(),
+    authorizeSessionOpen: () => {
+      throw new Error("Direct session uses connection authority");
+    },
+    authorizeConnection: () =>
+      Promise.resolve({ statement: "direct" } as never),
+  };
+  for (
+    const [name, greeting, signer, retriable] of [
+      ["a router's refusal for good", frame(hello()), principal(), false],
+      [
+        "a direct server's refusal marked retriable",
+        frame(hello({ audience: identity.did(), challenge: challenge() }, {
+          ...flags(),
+          routedAuthV1: false,
+        })),
+        direct,
+        true,
+      ],
     ] as const
   ) {
     await t.step(name, async () => {
       const time = new FakeTime(Date.UTC(2026, 9, 1));
-      const { p, log } = refusingFromTheStart(helloLife);
+      let opens = 0;
+      const p = peer(greeting, (body, push) => {
+        if (body.type === "connection.auth") {
+          push({
+            type: "response",
+            requestId: body.requestId,
+            ok: {
+              principal: identity.did(),
+              expiresAt: Math.floor(Date.now() / 1000) + 600,
+            },
+          });
+        } else if (body.type === "session.open") {
+          opens++;
+          push({
+            type: "response",
+            requestId: body.requestId,
+            error: {
+              name: "AuthorizationError",
+              message: "Memory request denied",
+              ...(retriable ? { retriable: true } : {}),
+            },
+          });
+        } else push({ type: "response", requestId: body.requestId, ok: {} });
+      });
       const client = await connect({ transport: p.transport });
       try {
         let failure: unknown;
-        client.mount(identity.did(), {}, principal()).catch((error) => {
+        client.mount(identity.did(), {}, signer).catch((error) => {
           failure = error;
         });
-        await tickUntil(time, () => failure !== undefined);
-        // The caller gets the router's refusal, marked as one that passes.
-        assertEquals((failure as Error).name, "AuthorizationError");
-        assertEquals((failure as { retriable?: boolean }).retriable, true);
-        const auths = log.filter((e) => e.type === "auth");
-        assertEquals(auths.length, statements);
-        assert(auths.every((e) => e.statement === auths[0].statement));
-        for (let i = 1; i < auths.length; i++) {
-          const waited = auths[i].at - auths[i - 1].at;
-          assert(waited >= 1000 && waited < 1100, `${waited} ms`);
-        }
-        // The mount asked for no challenge of its own.
-        assertEquals(log.filter((e) => e.type === "challenge").length, 0);
+        await tickUntil(time, () => failure !== undefined, 0, 40);
+        assertEquals((failure as Error).message, "Memory request denied");
+        // It is not tried again.
+        await tickUntil(time, () => false, 1000, 10);
+        assertEquals(opens, 1);
       } finally {
         await client.close();
         time.restore();
