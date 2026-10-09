@@ -532,6 +532,7 @@ measurement to look at rather than a setting to fix.
 | `CATCH_WEIGHT_MAIN` | 1.5 | multiplier | chosen | Up when an escape should pull harder on what gets selected next; down when the failures on `main` are mostly environmental rather than real. |
 | `BREADTH_SATURATION` | 2 | sources | chosen | Where the `breadth` term reaches half its ceiling. Up when the term should go on telling eight sources from four; down when one source should already be worth nearly all it can give. |
 | `ENVIRONMENTAL_MIN_SOURCES` | 5 | sources | chosen | How many distinct sources a failure must span inside `CATCH_BREADTH_WINDOW_DAYS` before it reads as the environment. Up when a genuinely broad regression is written off; down when a broken runner's failures still count as catches. |
+| `MASS_FAILURE_MIN_IDENTITIES` | 50 | identities | chosen | How many identities one run must newly break before none of those failures is a catch. Up when a breakage that reached many tests still escaped the pull requests that ran some of them; down when one broken run still credits a catch to a whole suite. |
 | `CHURN_HALF_LIFE_DAYS` | 14 | days | chosen | Up when recent trouble should stay relevant for longer; down when a problem already fixed keeps its tests selected for weeks afterwards. |
 | `CHURN_WINDOW_DAYS` | 60 | days | chosen | How far back the decayed counts are read. Past this the weight is under one part in sixteen, so moving it is a performance decision rather than a policy one. |
 | `FLAKE_HALF_LIFE_RUNS` | 200 | runs | chosen | How many runs without disagreeing halve what a disagreement counts for. It is also how much evidence the share is measured over, so far below one over `FLAKE_EXCLUSION_RATE` the share swings about on too little: up when it does; down when a test that has plainly settled is still judged by what it did. |
@@ -622,6 +623,19 @@ day's sample is stored does not change `COST_RULE`: the days already
 stored are read forward into the new form, at or above what they held,
 and keep the stamp of the rules that sealed them.
 
+An aggregate also carries the set of rules its catches were credited
+under, as `CATCH_RULE`, and an aggregate carrying none was written before
+that stamp began. Changing what decides whether a failure is a catch, or
+which run and day one is attributed to, means changing `CATCH_RULE` in the
+same change. The next run then reads an aggregate naming another set, and
+rather than folding onto it, folds every day from the first one that
+aggregate's history holds into an empty aggregate, saying so in its log.
+That run takes about as long as a bootstrap over the same days. Nothing
+is lost: records carry no retention, so the whole history is still there
+to fold. Changing a weight that multiplies the counts does not change
+`CATCH_RULE`, since the counts are the same and the weights are applied
+when a manifest is scored.
+
 A change to what a manifest or an aggregate holds needs no cold start.
 The area both are written under is named rather than numbered and does
 not move, so a run finds the aggregate the run before it left; a stored
@@ -687,8 +701,7 @@ happens, naming what it passed over and what it folded onto. The newest
 state is read whatever day it carries, since taking it is not a choice
 between two aggregates.
 
-A cold start cannot read the whole window in one job, and is asked for
-deliberately: the bootstrap is a manual dispatch with the bootstrap input
+A cold start is asked for deliberately: the bootstrap is a manual dispatch with the bootstrap input
 set, run once, and an incremental run that finds no aggregate at all says
 so and stops. After that the incremental path keeps up. A store holding
 no aggregate is the whole of what asks for a bootstrap. A change to what
@@ -761,15 +774,16 @@ same place.
 Reading a day the long way costs more than the one run it happens on.
 Every object of that day goes into the aggregate's list of folded
 objects, where the rollup path would have written one receipt, and that
-list is carried in every state object written from then on. The day is
-also folded after the rollup days that follow it, because every rollup
-day is read before the raw pass begins. The rules that decide whether a
-failure is a catch look a day or two either side of it, and the fold has
-by then aged its cross-batch context past the day being folded, so that
-evidence is not in view. Every local submission of every day is folded
-after every rollup day for the same reason. The day's own records are all
-there and none of them is counted twice; what the day loses is some of
-the evidence that would have classified them.
+list is carried in every state object written from then on.
+
+The window is folded one day at a time, oldest first, whichever way each
+day is read. The rules that decide whether a failure is a catch look a
+day or two either side of it, and back at what the default branch last
+said, so a day folded after a later one would be judged against what
+happened after it. A day read from its rollup is folded in one batch
+with that day's local submissions, which the fold replays in time order.
+A day read the long way is folded in chunks of whole workflow runs, its
+local submissions among them.
 
 What the fallback rests on is that the shards that did read reached the
 batch and nothing else. Replaying the spooled observations is a read of

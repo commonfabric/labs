@@ -29,7 +29,7 @@ import {
   unwrapExpression,
 } from "../utils/expression.ts";
 import { decodePath, encodePath } from "../utils/path-serialization.ts";
-import { getKnownComputedKeyPathSegment } from "../utils/reactive-keys.ts";
+import { getCommonFabricKeyName } from "../utils/reactive-keys.ts";
 import {
   createMergeablePushClassifier,
   type MergeableCollectionSite,
@@ -95,10 +95,11 @@ interface MutableCapabilityState {
   passthrough: boolean;
   wildcard: boolean;
 
-  /** Static path prefixes at which unknown (wildcard) accesses occurred.
-   * `[]` means the whole root. Lets the identity-path filter erase only
-   * identity paths the unknown access can actually cover, instead of
-   * blanket-erasing every capture sharing this root state (#4714). */
+  /** Static path prefixes at which unknown accesses occurred: a wildcard's,
+   * and a read through a key that can name any member. `[]` means the whole
+   * root. Lets the identity-path filter erase only identity paths the
+   * unknown access can actually cover, instead of blanket-erasing every
+   * capture sharing this root state (#4714). */
   readonly wildcardPaths: Set<string>;
 
   /** Paths whose whole value left the function — returned to a caller, put
@@ -156,6 +157,12 @@ interface AccessPathInfo {
 interface SourceRef {
   readonly root: string;
   readonly path: readonly string[];
+
+  /**
+   * Whether the access goes on below `path` through a key that can name any
+   * member. `path` is then the static prefix above that member, and nothing
+   * extends it, since where the access goes on to depends on the member.
+   */
   readonly dynamic: boolean;
   readonly arrayElement?: boolean;
   readonly elementResult?: boolean;
@@ -168,7 +175,7 @@ interface AliasShape {
 type AliasBinding = SourceRef | AliasShape;
 
 function materializeSourceRef(ref: SourceRef): SourceRef {
-  if (!ref.arrayElement) {
+  if (!ref.arrayElement || ref.dynamic) {
     return ref;
   }
   return {
@@ -184,6 +191,9 @@ function extendSourceRef(
   path: readonly string[],
 ): SourceRef {
   const base = materializeSourceRef(ref);
+  if (base.dynamic) {
+    return { root: base.root, path: base.path, dynamic: true };
+  }
   return {
     root: base.root,
     path: [...base.path, ...path],
@@ -263,6 +273,12 @@ const FALLBACK_OPERATORS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.QuestionQuestionToken,
   ts.SyntaxKind.BarBarToken,
 ]);
+
+/**
+ * The methods ref resolution steps through on a member spine: a cell's
+ * `.get()`, `.key()` and `.elementById()`, and a local map's `.get()`.
+ */
+const REF_RESOLVING_METHODS = new Set(["get", "key", "elementById"]);
 const PRECISE_CHAIN_METHODS = new Set([
   "map",
   "mapWithPattern",
@@ -590,19 +606,249 @@ function getLiteralElementText(
 }
 
 /**
- * Path segment an element access's key denotes, when the key is a literal or
- * an expression whose type fixes it (`const KEY = "k"`, a Common Fabric key).
- * Returns `undefined` for a key that can name any member, which makes the
- * access dynamic.
+ * Path segment a key expression denotes when the code fixes it, or
+ * `undefined` for a key that can name any member, which makes the access
+ * dynamic. A literal and a Common Fabric key (`NAME`) fix it, and so does a
+ * key whose declared type is a single string or number literal: a
+ * `const KEY = "k"`, an enum member, a parameter typed `"k"`
+ * (`getDeclaredType()`). A type assertion is not taken for the key's value,
+ * whether at the key (`key as "k"`) or anywhere on the way from the key to the
+ * declarations that type it.
+ */
+function getStaticPathKey(
+  expression: ts.Expression,
+  checker?: ts.TypeChecker,
+): string | undefined {
+  const key = skipKeyWrappers(expression);
+  if (isLiteralElement(key)) {
+    return getLiteralElementText(key);
+  }
+  const commonFabricKey = getCommonFabricKeyName(key, checker);
+  if (commonFabricKey) {
+    return `$${commonFabricKey}`;
+  }
+  if (!checker) {
+    return undefined;
+  }
+  const type = getDeclaredType(key, checker);
+  return type && getLiteralKeyText(type);
+}
+
+/**
+ * The path segment `type` names when it is a single string or number literal,
+ * or `undefined` for any other type.
+ */
+function getLiteralKeyText(type: ts.Type): string | undefined {
+  if (type.flags & ts.TypeFlags.StringLiteral) {
+    return (type as ts.StringLiteralType).value;
+  }
+  if (type.flags & ts.TypeFlags.NumberLiteral) {
+    return String((type as ts.NumberLiteralType).value);
+  }
+  return undefined;
+}
+
+/**
+ * `expression` without the parentheses and `satisfies` around it, neither of
+ * which changes a key's value or the type it is judged by.
+ */
+function skipKeyWrappers(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) || ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * The type `expression` is judged by when its type comes from declarations
+ * alone, or `undefined` when it does not; a key is judged by it, and so is
+ * the receiver of a property a key reads. A literal and `as const` state
+ * their own type, and an object literal, a `new` expression and `this` take
+ * theirs from declarations, the members they hold judged where they are read.
+ * A reference to a variable, parameter, enum member or property is judged by
+ * the type it is declared with (`getDeclaredSymbolType()`), not the type flow
+ * narrowing gives it at this use, since a narrowing can go stale: a call
+ * between the test and the use can assign the variable again; a property
+ * counts only when its receiver does, and is the one the receiver's declared
+ * type has, not the one a narrowing of the receiver picks: a union's property
+ * holds every member's type. A non-null assertion is judged by its
+ * operand, less `null` and `undefined`, and a call by the return type its
+ * signature writes. Anything else, a type assertion for a value, an element
+ * access or an operator among them, is judged by nothing, and so is an
+ * expression that reaches one on the way to its declarations:
+ * `const key = raw as "a"`, a `const` initialized from that one, and a
+ * property of a value cast to a type that declares it.
+ */
+function getDeclaredType(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Symbol> = new Set(),
+): ts.Type | undefined {
+  const node = skipKeyWrappers(expression);
+  if (
+    isLiteralElement(node) || ts.isObjectLiteralExpression(node) ||
+    ts.isNewExpression(node) || node.kind === ts.SyntaxKind.ThisKeyword
+  ) {
+    return checker.getTypeAtLocation(node);
+  }
+  if (
+    (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
+    ts.isConstTypeReference(node.type)
+  ) {
+    return getDeclaredType(node.expression, checker, seen) &&
+      checker.getTypeAtLocation(node);
+  }
+  if (ts.isNonNullExpression(node)) {
+    const declared = getDeclaredType(node.expression, checker, seen);
+    return declared && checker.getNonNullableType(declared);
+  }
+  if (ts.isPropertyAccessExpression(node)) {
+    const receiver = getDeclaredType(node.expression, checker, seen);
+    const property = receiver &&
+      checker.getPropertyOfType(receiver, node.name.text);
+    return property && getDeclaredSymbolType(property, checker, seen);
+  }
+  if (ts.isIdentifier(node)) {
+    const symbol = checker.getSymbolAtLocation(node);
+    return symbol && getDeclaredSymbolType(symbol, checker, seen);
+  }
+  if (ts.isCallExpression(node)) {
+    const declaration = checker.getResolvedSignature(node)?.declaration;
+    return declaration && !ts.isJSDocSignature(declaration) && declaration.type
+      ? checker.getTypeFromTypeNode(declaration.type)
+      : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The type a reference to `symbol` is judged by (`getDeclaredType()`): the
+ * type `symbol` is declared with, when the declaration writes it, as a
+ * parameter, a property signature and an annotated variable do, or takes it
+ * from an initializer that is itself judged by something, as a `const`, an
+ * object literal's property and a class field without an annotation do. An
+ * enum, an enum member, a namespace, a class and a function are their own
+ * declarations, and a destructured name is judged by the property it binds.
+ * The literal the symbol holds has to be the one its declaration states: a
+ * property a generic type declares as `T` holds whatever its instantiation,
+ * which a cast can drive, makes `T`. A declaration whose initializer is judged
+ * by nothing, one with neither an initializer nor a written type, such as a
+ * callback's parameter typed by its context, and any other kind of
+ * declaration are judged by nothing. `seen` holds the symbols on the way, and
+ * one met again is judged by nothing.
+ */
+function getDeclaredSymbolType(
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Symbol>,
+): ts.Type | undefined {
+  const declared = symbol.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+  const declaration = declared.valueDeclaration;
+  if (!declaration || seen.has(declared)) return undefined;
+  seen.add(declared);
+  const type = checker.getTypeOfSymbol(declared);
+  if (
+    declared.flags &
+    (ts.SymbolFlags.Enum | ts.SymbolFlags.EnumMember |
+      ts.SymbolFlags.ValueModule | ts.SymbolFlags.Class |
+      ts.SymbolFlags.Function)
+  ) {
+    const initializer = ts.isEnumMember(declaration)
+      ? declaration.initializer
+      : undefined;
+    return !initializer || getDeclaredType(initializer, checker, seen)
+      ? type
+      : undefined;
+  }
+  if (ts.isShorthandPropertyAssignment(declaration)) {
+    const value = checker.getShorthandAssignmentValueSymbol(declaration);
+    return value && getDeclaredSymbolType(value, checker, seen);
+  }
+  let initializer: ts.Expression | undefined;
+  let written: ts.Type | undefined;
+  if (ts.isBindingElement(declaration)) {
+    const property = getBoundPropertySymbol(declaration, checker, seen);
+    written = property && getDeclaredSymbolType(property, checker, seen);
+    if (!written) return undefined;
+    initializer = declaration.initializer;
+  } else if (ts.isPropertySignature(declaration)) {
+    written = declaration.type && checker.getTypeFromTypeNode(declaration.type);
+  } else if (
+    ts.isVariableDeclaration(declaration) || ts.isParameter(declaration) ||
+    ts.isPropertyDeclaration(declaration)
+  ) {
+    initializer = declaration.initializer;
+    written = declaration.type && checker.getTypeFromTypeNode(declaration.type);
+  } else if (ts.isPropertyAssignment(declaration)) {
+    initializer = declaration.initializer;
+  } else {
+    return undefined;
+  }
+  if (initializer) {
+    const judged = getDeclaredType(initializer, checker, seen);
+    if (!judged) return undefined;
+    written ??= judged;
+  }
+  if (!written) return undefined;
+  const held = getLiteralKeyText(checker.getNonNullableType(type));
+  return held === undefined ||
+      held === getLiteralKeyText(checker.getNonNullableType(written))
+    ? type
+    : undefined;
+}
+
+/**
+ * The property `element` binds from the value an object pattern destructures,
+ * as that value's declared type has it, which a narrowing of the value does
+ * not change; or `undefined` for an element of an array pattern, a rest
+ * element, one keyed
+ * by a computed name, one nested in another pattern, and one whose
+ * destructured value is judged by nothing (`getDeclaredType()`):
+ * `source as { key: "a" }` states a type the value need not have.
+ */
+function getBoundPropertySymbol(
+  element: ts.BindingElement,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Symbol>,
+): ts.Symbol | undefined {
+  const pattern = element.parent;
+  if (!ts.isObjectBindingPattern(pattern) || element.dotDotDotToken) {
+    return undefined;
+  }
+  const name = element.propertyName ?? element.name;
+  if (
+    !ts.isIdentifier(name) && !ts.isStringLiteral(name) &&
+    !ts.isNumericLiteral(name)
+  ) {
+    return undefined;
+  }
+  const source = pattern.parent;
+  if (!ts.isVariableDeclaration(source) && !ts.isParameter(source)) {
+    return undefined;
+  }
+  const judged = source.initializer &&
+    getDeclaredType(source.initializer, checker, seen);
+  if (source.initializer && !judged) return undefined;
+  const sourceType = source.type
+    ? checker.getTypeFromTypeNode(source.type)
+    : judged;
+  return sourceType && checker.getPropertyOfType(sourceType, name.text);
+}
+
+/**
+ * Path segment an element access's key denotes, or `undefined` for a key that
+ * can name any member, which makes the access dynamic (`getStaticPathKey()`).
  */
 function getStaticElementKey(
   argument: ts.Expression | undefined,
   checker?: ts.TypeChecker,
 ): string | undefined {
-  if (isLiteralElement(argument)) {
-    return getLiteralElementText(argument);
-  }
-  return argument && getKnownComputedKeyPathSegment(argument, checker);
+  return argument && getStaticPathKey(argument, checker);
 }
 
 function extractLiteralPathArguments(
@@ -611,20 +857,11 @@ function extractLiteralPathArguments(
 ): { path: readonly string[]; dynamic: boolean } {
   const path: string[] = [];
   for (const arg of args) {
-    if (ts.isStringLiteral(arg) || ts.isNumericLiteral(arg)) {
-      path.push(arg.text);
-      continue;
+    const key = getStaticPathKey(arg, checker);
+    if (key === undefined) {
+      return { path, dynamic: true };
     }
-    if (ts.isNoSubstitutionTemplateLiteral(arg)) {
-      path.push(arg.text);
-      continue;
-    }
-    const knownKey = getKnownComputedKeyPathSegment(arg, checker);
-    if (knownKey) {
-      path.push(knownKey);
-      continue;
-    }
-    return { path, dynamic: true };
+    path.push(key);
   }
   return { path, dynamic: false };
 }
@@ -642,10 +879,7 @@ function getStaticPropertyKeyText(
   }
 
   if (ts.isComputedPropertyName(name)) {
-    return getKnownComputedKeyPathSegment(name.expression, checker) ??
-      (isLiteralElement(name.expression)
-        ? getLiteralElementText(name.expression)
-        : undefined);
+    return getStaticPathKey(name.expression, checker);
   }
 
   return undefined;
@@ -674,6 +908,9 @@ function extractAccessPath(
       if (key !== undefined) {
         path.unshift(key);
       } else {
+        // The segments gathered so far lie below a member this key picks,
+        // so the path keeps only the static prefix above it.
+        path.length = 0;
         dynamic = true;
       }
       current = unwrapExpression(current.expression);
@@ -1944,6 +2181,22 @@ export function analyzeFunctionCapabilities(
       state.hasNonIdentityUse = true;
     };
 
+    // A read through a key that can name any member, below the static
+    // prefix `path`. Any member under the prefix can be the one read, so the
+    // prefix is read in full, and it is recorded as a place an unknown access
+    // reaches, so the identity markings it covers are erased as a wildcard's
+    // are. Unlike a wildcard, it leaves shrinking elsewhere in the root and
+    // the scheduler-scope summary as they are.
+    const trackDynamicRead = (
+      name: string,
+      path: readonly string[],
+    ): void => {
+      if (isSelfReference(name, path)) return;
+      trackRead(name, path);
+      trackFullShapeRead(name, path);
+      ensureState(name).wildcardPaths.add(encodePath(path));
+    };
+
     // Unlike markWildcard this does NOT change shrinking or identity
     // classification — it only poisons write-exhaustiveness for consumers
     // that need `writes` to be a closed-world record
@@ -2218,7 +2471,8 @@ export function analyzeFunctionCapabilities(
     // to a local, or written into a local collection, stays tracked. An
     // argument stays tracked when the callee's summary or declared signature
     // charged it, when the callee binds it by reference — a runtime call, a
-    // write through a cell — or when the callee only asks its shape. A value
+    // write through a cell — when it only compares it by identity, or when
+    // it only asks its shape. A value
     // a builder's callback returns is handed on by reference, this function's
     // own included when it is one; a helper's return is a value its caller
     // goes on to read. A value read where it stands is charged there.
@@ -2239,9 +2493,21 @@ export function analyzeFunctionCapabilities(
             !signatureCapabilityArgumentUses.has(destination.argument) &&
             !isLocalCollectionWrite(destination.call, destination.argument) &&
             !isRuntimeCall(destination.call) &&
+            !(
+              ts.isCallExpression(destination.call) &&
+              isKnownIdentityArgumentCall(destination.call, checker)
+            ) &&
             !isCellWrite(destination.call) &&
             !isArrayIsArrayCall(destination.call, checker);
       }
+    };
+
+    // Whether `usage` is an argument that a known identity call only compares.
+    const isIdentityOnlyArgument = (usage: ts.Expression): boolean => {
+      const parent = usage.parent;
+      return !!parent && ts.isCallExpression(parent) &&
+        parent.arguments.includes(usage) &&
+        isKnownIdentityArgumentCall(parent, checker);
     };
 
     const getIdentifierName = (
@@ -2366,6 +2632,18 @@ export function analyzeFunctionCapabilities(
             pendingResolvedGetCalls?.push(current.expression);
           }
           return resolveShapePath(innerBinding, [key]);
+        }
+        // An element access by a key that can name any member resolves to
+        // the static prefix it reads below.
+        if (
+          innerBinding && key === undefined &&
+          isSourceRefBinding(innerBinding)
+        ) {
+          if (ts.isCallExpression(current.expression)) {
+            pendingResolvedGetCalls?.push(current.expression);
+          }
+          const prefix = materializeSourceRef(innerBinding);
+          return { root: prefix.root, path: prefix.path, dynamic: true };
         }
       }
 
@@ -2700,7 +2978,7 @@ export function analyzeFunctionCapabilities(
       options?: { identityOnly?: boolean },
     ): void => {
       if (ref.dynamic) {
-        markWildcard(ref.root, ref.path);
+        trackDynamicRead(ref.root, ref.path);
         return;
       }
       trackRead(ref.root, ref.path, options);
@@ -2708,7 +2986,11 @@ export function analyzeFunctionCapabilities(
 
     const trackWriteRef = (ref: SourceRef): void => {
       if (ref.dynamic) {
+        // Which member is written is known only at run time, so the write
+        // stays a wildcard, and it is a write of the prefix above the key,
+        // so the prefix's capability says that it is written.
         markWildcard(ref.root, ref.path);
+        trackWrite(ref.root, ref.path);
         return;
       }
       trackWrite(ref.root, ref.path);
@@ -2716,7 +2998,7 @@ export function analyzeFunctionCapabilities(
 
     const trackFullShapeReadRef = (ref: SourceRef): void => {
       if (ref.dynamic) {
-        markWildcard(ref.root, ref.path);
+        trackDynamicRead(ref.root, ref.path);
         return;
       }
       trackFullShapeRead(ref.root, ref.path);
@@ -2842,7 +3124,6 @@ export function analyzeFunctionCapabilities(
       if (!ref) return;
       if (ref.dynamic) {
         markWildcard(ref.root, ref.path);
-        return;
       }
       marker(ref.root, ref.path);
     };
@@ -2859,7 +3140,10 @@ export function analyzeFunctionCapabilities(
         ? recordComparablePath
         : recordIdentityPath;
       if (ref.dynamic) {
-        markWildcard(ref.root, ref.path);
+        // No identity path names a member a key picks at run time, so the use
+        // is taken for a read of the whole prefix above the key, which covers
+        // comparing any member under it.
+        trackDynamicRead(ref.root, ref.path);
       } else if (ref.path.length === 0) {
         record(ref.root, [], { cellLike });
         markPassthrough(ref.root, { identityOnly: true });
@@ -3190,6 +3474,73 @@ export function analyzeFunctionCapabilities(
       );
     };
 
+    // Visits what resolving `expression` to a ref, in place of visiting it,
+    // leaves unvisited though it is evaluated, walking down the member spine:
+    // the key of each element access, and each operand of a fallback wherever
+    // on the spine it sits. A spine that passes through a call is walked
+    // whole, as the expression it belongs to would be, which visits the
+    // call's arguments and callbacks:
+    // `table.find((row) => equals(self, row.topic))` in
+    // `table.find(…)?.mentionedBy ?? []` among them; a read the walk repeats
+    // is a set entry, so recording it twice costs nothing. Below a fallback,
+    // which ref resolution walks through and nothing else visits, a call it
+    // steps through (`.get()`, `.key()`, `.elementById()`) has only its
+    // arguments visited and its receiver walked: walking the `people.get()`
+    // in `(people.get() ?? [])[0]?.name` whole would read all of `people`,
+    // where the ref reads `name`.
+    const visitOperandsOfResolvedRef = (
+      expression: ts.Expression,
+      belowFallback = false,
+    ): void => {
+      const current = unwrapExpression(expression);
+      if (
+        ts.isBinaryExpression(current) &&
+        FALLBACK_OPERATORS.has(current.operatorToken.kind)
+      ) {
+        for (const operand of [current.left, current.right]) {
+          if (resolveSourceRef(operand)) {
+            visitOperandsOfResolvedRef(operand, true);
+          } else {
+            visit(operand);
+          }
+        }
+        return;
+      }
+      if (!belowFallback && memberSpineContainsCall(current)) {
+        visit(current);
+        return;
+      }
+      if (
+        ts.isPropertyAccessExpression(current) ||
+        ts.isElementAccessExpression(current)
+      ) {
+        if (ts.isElementAccessExpression(current)) {
+          visit(current.argumentExpression);
+        }
+        visitOperandsOfResolvedRef(current.expression, belowFallback);
+        return;
+      }
+      if (ts.isCallExpression(current)) {
+        const target = unwrapExpression(current.expression);
+        if (
+          ts.isPropertyAccessExpression(target) &&
+          REF_RESOLVING_METHODS.has(target.name.text)
+        ) {
+          // A `.get()` is still a read of its receiver for the
+          // read-then-mergeable-`push` check, though not one of its whole
+          // shape.
+          const receiver = READER_METHODS.has(target.name.text)
+            ? resolveSourceRef(target.expression)
+            : undefined;
+          if (receiver) recordMergeableReadSite(receiver, current);
+          current.arguments.forEach(visit);
+          visitOperandsOfResolvedRef(target.expression, belowFallback);
+        } else {
+          visit(current);
+        }
+      }
+    };
+
     const visit = (node: ts.Node): void => {
       if (node !== fn && isCapabilityAnalyzableFunction(node)) {
         if (includeNestedCallbacks) {
@@ -3212,7 +3563,9 @@ export function analyzeFunctionCapabilities(
           const leftRef = resolveSourceRef(node.left);
           if (leftRef) {
             if (leftRef.dynamic) {
-              markWildcard(leftRef.root);
+              // A read through a key that can name any member reads its
+              // whole prefix, which covers the value leaving whole too.
+              trackReadRef(leftRef);
             } else if (leftRef.path.length === 0) {
               markPassthrough(leftRef.root);
               if (escapesWhole(node.left)) {
@@ -3232,16 +3585,12 @@ export function analyzeFunctionCapabilities(
               }
             }
             // Resolving the ref stood in for walking the operand, so a call on
-            // its spine has gone unvisited and the reads inside that call's
-            // arguments are still unrecorded — the ref for
+            // its spine and the keys on it have gone unvisited and the reads
+            // inside them are still unrecorded — the ref for
             // `table.find((row) => equals(self, row.topic))?.mentionedBy ?? []`
-            // records `mentionedBy` and drops both `self` and each row's
-            // `topic`, shrinking them out of the schema. Walk it, as the for..of
-            // iterable below does for the same reason; the read tracked above is
-            // a set entry, so recording it twice costs nothing.
-            if (memberSpineContainsCall(node.left)) {
-              visit(node.left);
-            }
+            // records `mentionedBy` and would drop both `self` and each row's
+            // `topic`, shrinking them out of the schema.
+            visitOperandsOfResolvedRef(node.left);
           } else {
             visit(node.left);
           }
@@ -3335,12 +3684,7 @@ export function analyzeFunctionCapabilities(
             const resolvedSource = materializeSourceRef(source);
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
-            const identityOnlyArgumentUse = !!(
-              parent &&
-              ts.isCallExpression(parent) &&
-              parent.arguments.includes(usage) &&
-              isKnownIdentityArgumentCall(parent, checker)
-            );
+            const identityOnlyArgumentUse = isIdentityOnlyArgument(usage);
             // A value below the root that leaves the analysis whole is read
             // in full wherever it lands, so it is charged as a full-shape
             // read rather than a plain one: a plain read at a path keeps the
@@ -3357,8 +3701,7 @@ export function analyzeFunctionCapabilities(
             // whatever it reaches may read anything beneath it.
             if (
               !resolvedSource.dynamic && resolvedSource.path.length === 0 &&
-              !wholeValueEscape && !identityOnlyArgumentUse &&
-              escapesWhole(node)
+              !wholeValueEscape && escapesWhole(node)
             ) {
               recordEscape(resolvedSource.root, []);
             }
@@ -3533,7 +3876,10 @@ export function analyzeFunctionCapabilities(
             // destructured identifier; don't add a second read here.
             !signatureCapabilityArgumentUses.has(
               outermostTransparentWrapper(node),
-            )
+            ) &&
+            // A member a known identity call only compares is an identity use,
+            // recorded where the call is visited; a read here would end it.
+            !isIdentityOnlyArgument(outermostTransparentWrapper(node))
           ) {
             const ref = resolveSourceRef(node);
             if (ref) {
@@ -4004,7 +4350,6 @@ export function analyzeFunctionCapabilities(
       }
 
       if (ts.isForOfStatement(node)) {
-        const iterableExpression = unwrapExpression(node.expression);
         const iterableBinding = resolveArrayElementBinding(node.expression);
         const iterableRef =
           iterableBinding && isSourceRefBinding(iterableBinding)
@@ -4012,16 +4357,17 @@ export function analyzeFunctionCapabilities(
             : undefined;
         if (iterableRef) {
           if (iterableRef.dynamic) {
-            markWildcard(iterableRef.root);
+            trackReadRef(iterableRef);
           } else if (iterableRef.path.length === 0) {
             markPassthrough(iterableRef.root);
           } else {
             trackReadRef(iterableRef);
             recordMergeableReadSite(iterableRef, node.expression);
           }
-          if (ts.isCallExpression(iterableExpression)) {
-            visit(node.expression);
-          }
+          // The ref stood in for walking the iterable, which can be a
+          // fallback (`state.lists[state.selected.get()] ?? []`) or pass
+          // through a call (`table.filter((row) => row.topic === self)[0]`).
+          visitOperandsOfResolvedRef(node.expression);
         } else {
           visit(node.expression);
         }
