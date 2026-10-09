@@ -37,6 +37,7 @@ import {
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
+  getPieceReconciliation,
   getPieceSourceSnapshot,
   idStringForEntityAddress,
   inSpaceRootCause,
@@ -592,43 +593,39 @@ export class PiecesController<T = unknown> {
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
       // root HERE. Opening it already reconciled it against its origin, so a
       // start that still failed is not out of date; the one remaining rescue
-      // is for a root that records no origin at all, that no `inSpace()` call
-      // placed, and whose stored pattern this runtime cannot load. Roll that
-      // one forward to the space's official system root and retry the start
-      // ONCE. Every other failure rethrows untouched.
+      // is for a root that records no origin or the official system source,
+      // that no `inSpace()` call placed, and whose stored pattern this runtime
+      // cannot load. Roll that one forward to the space's official system root
+      // and retry the start ONCE. Every other failure rethrows untouched.
       if (!start) throw error;
-      let healed: Cell<NameSchema>;
+      let root: Cell<NameSchema>;
+      let pinnedRef: { identity: string; symbol: string } | undefined;
       try {
-        const root = await this.getPieceCell(defaultPattern, false, nameSchema);
-        const pinnedRef = getPatternIdentityRef(root);
-        if (pinnedRef === undefined || !this.#rootNeedsRollForward(root)) {
-          throw error;
-        }
+        root = await this.getPieceCell(defaultPattern, false, nameSchema);
+        pinnedRef = getPatternIdentityRef(root);
         if (
+          pinnedRef === undefined || !this.#rootNeedsRollForward(root) ||
           await this.runtime.patternManager.loadPatternByIdentity(
-            pinnedRef.identity,
-            pinnedRef.symbol,
-            this.#space,
-          ) !== undefined
+              pinnedRef.identity,
+              pinnedRef.symbol,
+              this.#space,
+            ) !== undefined
         ) throw error;
-        healed = await this.#healDefaultRootByRollForward(
-          root,
-          pinnedRef,
-          error,
-          "unloadable",
-        );
-      } catch (healError) {
-        // The start failure is what the caller sees; a roll-forward that
-        // refused says why only here.
-        if (healError !== error) {
-          pieceUpdateLogger.warn("default-root-heal-refused", () => [
-            "getDefaultPattern: start failed and the root was not rolled",
-            `forward (${this.#space})`,
-            healError,
-          ]);
-        }
+      } catch {
+        // A load that throws is a failed check, not evidence that the root's
+        // pattern is gone, so it keeps the start failure as a root the rescue
+        // does not cover does.
         throw error;
       }
+      // A roll-forward that does not happen says why, and carries the start
+      // failure in its message.
+      const healed = await this.#healDefaultRootByRollForward(
+        root,
+        pinnedRef,
+        error,
+        "unloadable",
+        reconcile,
+      );
       pieceUpdateLogger.warn("default-root-healed-on-load-failure", () => [
         "getDefaultPattern: start failed, the root rolled forward to the",
         `space's official system root; retrying start once (${this.#space})`,
@@ -2807,12 +2804,18 @@ export class PiecesController<T = unknown> {
    *
    * Returns the healed root cell so the caller starts/returns the swapped-in
    * pattern rather than the stale pinned view.
+   *
+   * `justFollowed` says the caller's lookup has just followed the root's
+   * origin. When that refused the official source for the export the
+   * roll-forward takes, the refusal is the answer, and the source is not
+   * downloaded and compiled again to reach it.
    */
   async #healDefaultRootByRollForward(
     rootToStart: Cell<NameSchema>,
     pinnedRef: { identity: string; symbol: string },
     migrationError: unknown,
     reason: "unloadable" | "unrunnable" = "unrunnable",
+    justFollowed = false,
   ): Promise<Cell<NameSchema>> {
     const runtime = this.runtime;
     const space = this.getSpace();
@@ -2845,6 +2848,28 @@ export class PiecesController<T = unknown> {
     // moved there would be moved back by the next client that agrees with the
     // host, so the roll-forward takes what following the origin would, or
     // nothing.
+    const refused = (detail: string) =>
+      clearError(
+        `was refused (${detail}); that lasts until the host's deployment ` +
+          `finishes, or until this client is updated to the runtime the ` +
+          `host runs`,
+        migrationError,
+      );
+    // Following this origin in the same lookup, for the export the
+    // roll-forward selects, compiled the same source and refused it, which
+    // is the answer compiling it again would reach.
+    const followed = justFollowed
+      ? getPieceReconciliation(rootToStart.withTx())
+      : undefined;
+    if (
+      followed?.outcome === "refused" && followed.origin === official.ref &&
+      followed.offered?.symbol === ROLL_FORWARD_EXPORT &&
+      (followed.reason === "identity-mismatch" ||
+        followed.reason === "source-invalid") &&
+      followed.detail !== undefined
+    ) {
+      throw refused(followed.detail);
+    }
     const candidate = await runtime.sourceReconciler.compileSystemSource(
       space,
       official,
@@ -2856,9 +2881,7 @@ export class PiecesController<T = unknown> {
         migrationError,
       );
     }
-    if (candidate.outcome === "refused") {
-      throw clearError(`was refused (${candidate.detail})`, migrationError);
-    }
+    if (candidate.outcome === "refused") throw refused(candidate.detail);
     const { pattern: officialPattern, ref: officialRef } = candidate;
 
     // Already current: the pinned pattern IS the official entry (same identity
