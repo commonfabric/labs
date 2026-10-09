@@ -399,8 +399,9 @@ row at or below it (the boundary is now the base), and leave every row above
 the boundary untouched — a head above a bounded cut stays a `patch` over the
 new base, under its original commit, exactly as it was. Nothing but the
 boundary is ever rewritten or re-attributed. Then hollow the
-`original` of every commit row that no surviving revision or `op_*` row
-references and that falls outside the retained window (I6). The compaction
+`original` of every commit row outside the retained window except seq 1
+and the commits an `op_*` row references, whether or not a surviving
+revision still points at the commit (I6). The compaction
 commit is inserted first, at `max(seq) + 1`, with the run's report as its
 `original`, and `branch.head_seq` advances to it so the head read keeps using
 the head statement. Keeps I1 through I8.
