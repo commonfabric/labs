@@ -1444,6 +1444,34 @@ describe("piece source reconciliation", () => {
       });
     });
 
+    it("returns unreachable, with what went wrong, when the identity route's answer cannot be read", async () => {
+      createRuntime((input) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        if (!url.searchParams.has("identity")) {
+          return Promise.resolve(new Response("not found", { status: 404 }));
+        }
+        // An answer whose body fails partway, as one does when the connection
+        // drops while it is being read.
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.error(new Error("the connection dropped"));
+          },
+        });
+        return Promise.resolve(new Response(body));
+      });
+
+      expect(await compile()).toEqual({
+        outcome: "unreachable",
+        detail: "the connection dropped",
+      });
+    });
+
     it("returns unreachable when the runtime stops before the origin answers", async () => {
       identityGate = defer();
       const requested = defer();

@@ -507,6 +507,8 @@ export class SourceReconciler {
     origin: SystemPieceOrigin,
     symbol: string,
   ): Promise<SystemSourceCandidate> {
+    // The pass returns a candidate for every failure but its own abort, so it
+    // returns nothing only when disposal stopped it.
     return await this.#track((signal) =>
       this.#compileSystemSource(space, origin, symbol, signal)
     ) ?? {
@@ -890,17 +892,24 @@ export class SourceReconciler {
     symbol: string,
     signal: AbortSignal,
   ): Promise<SystemSourceCandidate> {
-    const fetch = this.#revalidatingFetch(signal);
-    const target = this.#systemSourceUrl(origin.route, space);
-    const answer = await this.#advertisedIdentity(target, fetch, signal);
-    if ("detail" in answer) {
-      return { outcome: "unreachable", detail: answer.detail };
-    }
-    const offered = { identity: answer.identity, symbol };
-    const key = stringTupleKey([space, target.href, answer.identity]);
-    let resolved: SuppliedSource | undefined;
+    let offered: PatternRef | undefined;
+    let held: { key: string; resolved: SuppliedSource } | undefined;
     try {
-      resolved = await this.#resolveSuppliedSource(key, target, fetch, signal);
+      const fetch = this.#revalidatingFetch(signal);
+      const target = this.#systemSourceUrl(origin.route, space);
+      const answer = await this.#advertisedIdentity(target, fetch, signal);
+      if ("detail" in answer) {
+        return { outcome: "unreachable", detail: answer.detail };
+      }
+      offered = { identity: answer.identity, symbol };
+      const key = stringTupleKey([space, target.href, answer.identity]);
+      const resolved = await this.#resolveSuppliedSource(
+        key,
+        target,
+        fetch,
+        signal,
+      );
+      held = { key, resolved };
       // A stopped pass answers with nothing, kept pattern or not.
       signal.throwIfAborted();
       const epoch = schemaRegistryEpoch();
@@ -935,7 +944,9 @@ export class SourceReconciler {
       }
       return candidate;
     } catch (error) {
-      if (resolved !== undefined) this.#forgetSuppliedSource(key, resolved);
+      if (held !== undefined) {
+        this.#forgetSuppliedSource(held.key, held.resolved);
+      }
       signal.throwIfAborted();
       logger.warn("system-source-failed", () => [
         "the source a system origin names could not be had",
@@ -946,7 +957,7 @@ export class SourceReconciler {
       return {
         outcome: "unreachable",
         detail: reconciliationDetail(error),
-        offered,
+        ...(offered === undefined ? {} : { offered }),
       };
     }
   }
