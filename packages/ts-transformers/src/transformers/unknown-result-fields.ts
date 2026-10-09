@@ -464,13 +464,14 @@ function resolveAlias(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
 /**
  * The declared positions of the value bound to `symbol`. A type written out
  * for the binding declares what it holds, which anything assigned to it or
- * changed through it must satisfy, and so does the binding's own type where
- * it is an object type an author wrote, however the binding came by it. A
- * binding something reassigns declares nothing more. One nothing reassigns
- * holds what the trace reads of its value with the binding holding it:
- * whatever is done through the binding can change that value's own structure,
- * so the structure declares nothing, while a written type or a reactive value
- * it holds still declares its parts.
+ * changed through it must satisfy, and so do the written parts of the
+ * binding's own type, however the binding came by it, as `writtenPositions()`
+ * reads them. A binding something reassigns declares nothing more. One
+ * nothing reassigns also holds what the trace reads of its value with the
+ * binding holding it: whatever is done through the binding can change that
+ * value's own structure, so the structure declares nothing, while a written
+ * type or a reactive value it holds still declares its parts. A position
+ * either of the two declares is declared.
  */
 function symbolPositions(
   symbol: ts.Symbol | undefined,
@@ -531,7 +532,28 @@ function symbolPositions(
   } else {
     return false;
   }
-  return !wholly(positions) && wholly(ownType) ? true : positions;
+  return eitherDeclares(positions, ownType);
+}
+
+/**
+ * The positions declared for a value both `a` and `b` describe: a position
+ * either declares is declared, and a part one of them shows the value lacks
+ * is one the value does not have.
+ */
+function eitherDeclares(
+  a: DeclaredPositions,
+  b: DeclaredPositions,
+): DeclaredPositions {
+  if (a === true || b === false) return a;
+  if (b === true || a === false) return b;
+  const either = new Map<PositionKey, DeclaredPositions>();
+  for (const key of new Set([...a.keys(), ...b.keys()])) {
+    either.set(
+      key,
+      eitherDeclares(partAt(a, key) ?? true, partAt(b, key) ?? true),
+    );
+  }
+  return either;
 }
 
 /**
@@ -605,9 +627,9 @@ function destructuredPositions(
 
 /**
  * The declared positions of member `key` of a value with `object`, read by
- * `access`. A member of a value with nothing declared is still declared when
- * its own declaration writes its type out, or when the type of what it holds
- * is written out.
+ * `access`. A member of a value with nothing declared still declares what its
+ * type does: read as written where the member's own declaration writes it,
+ * and as `writtenPositions()` reads it otherwise.
  */
 function memberPositions(
   object: DeclaredPositions,
@@ -620,8 +642,10 @@ function memberPositions(
   const name = ts.isPropertyAccessExpression(access)
     ? access.name
     : access.argumentExpression;
-  return writesOwnType(checker.getSymbolAtLocation(name), checker) ||
-    writtenPositions(checker.getTypeAtLocation(access), checker);
+  const type = checker.getTypeAtLocation(access);
+  return writesOwnType(checker.getSymbolAtLocation(name), checker)
+    ? typePositions(type, checker, true)
+    : writtenPositions(type, checker);
 }
 
 /**
@@ -672,10 +696,11 @@ function infersOwnType(member: ts.Symbol): boolean {
 
 /**
  * The declared positions of the instance `construction` makes, by field. A
- * class declares a field of its instances when the field's declaration writes
- * its type out; a field whose type is inferred from its initializer declares
- * nothing. A type naming a type parameter declares the field only where every
- * parameter it names is fixed in writing, by `typeParametersWritten()`.
+ * field whose declaration writes its type declares what that type gives it,
+ * when every type parameter the type names is fixed in writing, by
+ * `typeParametersWritten()`. Any other field, one whose type is inferred from
+ * its initializer or through a parameter nothing writes, declares only what
+ * `writtenPositions()` reads of its type.
  */
 function instancePositions(
   construction: ts.NewExpression,
@@ -685,23 +710,22 @@ function instancePositions(
   const constructed = definitionOf(construction.expression, checker);
   const written = constructed &&
       (ts.isClassDeclaration(constructed) || ts.isClassExpression(constructed))
-    ? typeParametersWritten(
-      constructed,
-      !!construction.typeArguments?.length,
-      checker,
-    )
+    ? typeParametersWritten(constructed, construction, checker)
     : new Set<ts.TypeParameterDeclaration>();
   const positions = new Map<PositionKey, DeclaredPositions>();
   for (
     const member of checker.getTypeAtLocation(construction).getProperties()
   ) {
-    const type = memberTypeNode(member);
+    const node = memberTypeNode(member);
+    const type = checker.getTypeOfSymbol(member);
     positions.set(
       member.name,
-      !!type &&
-        typeParametersIn(type, checker).every((parameter) =>
+      node &&
+        typeParametersIn(node, checker).every((parameter) =>
           parameter !== undefined && written.has(parameter)
-        ),
+        )
+        ? typePositions(type, checker, true)
+        : writtenPositions(type, checker),
     );
   }
   return positions;
@@ -709,19 +733,41 @@ function instancePositions(
 
 /**
  * The type parameters of `constructed` and of the classes above it whose
- * arguments are written out for an instance of it: the class's own when
- * `argumentsWritten` at the construction, and an inherited one when the
- * `extends` clause that fixes it writes an argument, or the parameter's
- * declaration writes a default, naming only parameters already fixed so.
+ * arguments are written out for the instance `construction` makes: the
+ * class's own when the construction writes its type arguments, or, where it
+ * passes no argument to infer one from, when the parameter's default is what
+ * the instance takes; and an inherited one when the `extends` clause that
+ * fixes it writes an argument, or the parameter's declaration writes a
+ * default. Either way the argument or default names only parameters already
+ * fixed so.
  */
 function typeParametersWritten(
   constructed: ts.ClassLikeDeclaration,
-  argumentsWritten: boolean,
+  construction: ts.NewExpression,
   checker: ts.TypeChecker,
 ): ReadonlySet<ts.TypeParameterDeclaration> {
+  const own = constructed.typeParameters ?? [];
   const written = new Set<ts.TypeParameterDeclaration>(
-    argumentsWritten ? constructed.typeParameters ?? [] : [],
+    construction.typeArguments?.length ? own : [],
   );
+  if (!construction.typeArguments?.length && !construction.arguments?.length) {
+    // With no argument to infer it from, a parameter takes its default.
+    const instance = checker.getTypeAtLocation(construction);
+    const chosen = (instance.flags & ts.TypeFlags.Object) !== 0 &&
+        ((instance as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) !==
+          0
+      ? checker.getTypeArguments(instance as ts.TypeReference)
+      : [];
+    own.forEach((parameter, index) => {
+      // A default naming another parameter is never the very type chosen.
+      if (
+        parameter.default &&
+        chosen[index] === checker.getTypeFromTypeNode(parameter.default)
+      ) {
+        written.add(parameter);
+      }
+    });
+  }
   const visited = new Set<ts.Node>();
   let current: ts.ClassLikeDeclaration = constructed;
   while (!visited.has(current)) {
@@ -1175,33 +1221,53 @@ function signaturePositions(
 }
 
 /**
- * The positions a value of `type`, a type an author wrote, declares. A field
- * whose declaration writes its type declares what that type gives it:
- * `unknown` as a field's type, or as its array's elements, declares a
- * reference, while `unknown` as the whole value's type, or as its array's
- * elements, declares nothing there. A field whose type was inferred, as an
- * object literal's members' are, declares only what `writtenPositions()`
- * reads of its type, however the written type reaches it: through `typeof`,
- * `ReturnType<…>`, or `this`. Reactive wrappers are read through, as schema
- * generation reads them.
+ * The positions a value of `type`, a type an author wrote, declares, where
+ * `inField` says whether the value is a field's. `unknown` as a field's type,
+ * or as its array's elements, declares a reference, while `unknown` as the
+ * whole value's type, or as its array's elements, declares nothing there. A
+ * member is read as `objectTypePositions()` reads one. Reactive wrappers are
+ * read through, as schema generation reads them.
  */
 function typePositions(
   type: ts.Type,
   checker: ts.TypeChecker,
   inField = false,
-  reading: TypeReading = {
-    open: new Map(),
-    nested: new Map(),
-    read: [new Map(), new Map()],
-    reachedOpen: Infinity,
-  },
+): DeclaredPositions {
+  return readType(type, checker, inField ? "field" : "written", newReading());
+}
+
+/**
+ * The positions a value of `type`, a type that may have been inferred,
+ * declares: only those its written parts declare, as `objectTypePositions()`
+ * finds them. `unknown` declares nothing, and neither does a type naming a
+ * type parameter, whose argument may have been inferred.
+ */
+function writtenPositions(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): DeclaredPositions {
+  return readType(type, checker, "inferred", newReading());
+}
+
+/**
+ * How `readType()` reads a type: as one an author wrote, for a whole value or
+ * for a field, or as one that may have been inferred.
+ */
+type ReadingMode = "written" | "field" | "inferred";
+
+/** The positions a value of `type` declares, read in `mode`. */
+function readType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  mode: ReadingMode,
+  reading: TypeReading,
 ): DeclaredPositions {
   const value = unwrapOpaqueLikeType(type, checker) ?? type;
-  if ((value.flags & ts.TypeFlags.Unknown) !== 0) return inField;
+  if ((value.flags & ts.TypeFlags.Unknown) !== 0) return mode === "field";
   // A type still naming a type parameter is whatever its argument turns out to
   // be, which may have been inferred.
   if ((value.flags & ts.TypeFlags.Instantiable) !== 0) return false;
-  const read = reading.read[inField ? 1 : 0];
+  const read = reading.read[mode];
   const known = read.get(value);
   if (known !== undefined) return known;
   const openAt = reading.open.get(value);
@@ -1233,7 +1299,7 @@ function typePositions(
     for (const member of value.types) {
       positions = alternatives(
         positions,
-        typePositions(member, checker, inField, reading),
+        readType(member, checker, mode, reading),
       );
     }
   } else if (checker.isArrayType(value) || checker.isTupleType(value)) {
@@ -1241,22 +1307,12 @@ function typePositions(
     for (const element of checker.getTypeArguments(value as ts.TypeReference)) {
       elements = alternatives(
         elements,
-        typePositions(element, checker, inField, reading),
+        readType(element, checker, mode, reading),
       );
     }
     positions = new Map([[ELEMENT_POSITIONS, elements]]);
   } else if ((value.flags & ts.TypeFlags.Object) !== 0) {
-    const fields = new Map<PositionKey, DeclaredPositions>();
-    for (const property of value.getProperties()) {
-      const type = checker.getTypeOfSymbol(property);
-      fields.set(
-        property.name,
-        infersOwnType(property)
-          ? writtenPositions(type, checker)
-          : typePositions(type, checker, true, reading),
-      );
-    }
-    positions = wholly(fields) ? true : fields;
+    positions = objectTypePositions(value, checker, mode, reading);
   }
   reading.open.delete(value);
   if (declaration) {
@@ -1271,16 +1327,72 @@ function typePositions(
 }
 
 /**
- * How many instantiations of one declaration `typePositions()` reads nested in
- * one another before it takes the innermost for a recursion without end.
+ * The positions an object type's members and index signatures declare, read
+ * in `mode`. A part read as written is read as a field. In a written type, a
+ * member is read as written unless its declaration infers its type. In an
+ * inferred one, and in an object literal's type however a written type reaches
+ * it (`typeof x`, `ReturnType<typeof f>`, a method's `this`), only a part whose
+ * declaration writes its type, naming no type parameter, is.
+ */
+function objectTypePositions(
+  value: ts.Type,
+  checker: ts.TypeChecker,
+  mode: ReadingMode,
+  reading: TypeReading,
+): DeclaredPositions {
+  const inferred = mode === "inferred" ||
+    !!value.symbol?.declarations?.some(ts.isObjectLiteralExpression);
+  const fields = new Map<PositionKey, DeclaredPositions>();
+  for (const property of value.getProperties()) {
+    const written = inferred
+      ? writesOwnType(property, checker)
+      : !infersOwnType(property);
+    fields.set(
+      property.name,
+      readType(
+        checker.getTypeOfSymbol(property),
+        checker,
+        written ? "field" : "inferred",
+        reading,
+      ),
+    );
+  }
+  for (const index of checker.getIndexInfosOfType(value)) {
+    const declared = index.declaration?.type;
+    const written = !inferred ||
+      (!!declared && !mentionsTypeParameter(declared, checker));
+    fields.set(
+      UNNAMED_POSITIONS,
+      alternatives(
+        fields.get(UNNAMED_POSITIONS) ?? true,
+        readType(index.type, checker, written ? "field" : "inferred", reading),
+      ),
+    );
+  }
+  return wholly(fields) ? true : fields;
+}
+
+/** A read of a type with nothing read yet. */
+function newReading(): TypeReading {
+  return {
+    open: new Map(),
+    nested: new Map(),
+    read: { written: new Map(), field: new Map(), inferred: new Map() },
+    reachedOpen: Infinity,
+  };
+}
+
+/**
+ * How many instantiations of one declaration `readType()` reads nested in one
+ * another before it takes the innermost for a recursion without end.
  */
 const MAX_TYPE_NESTING = 3;
 
 /**
- * What one read by `typePositions()` carries from part to part. A type that
- * holds itself is taken as declared where the read reaches it again, which
- * holds only on the path that reached it, so only a read that reaches no type
- * open above it is kept for reuse.
+ * What one read by `readType()` carries from part to part. A type that holds
+ * itself is taken as declared where the read reaches it again, which holds
+ * only on the path that reached it, so only a read that reaches no type open
+ * above it is kept for reuse.
  */
 interface TypeReading {
   /** The types being read, each by its depth in the read. */
@@ -1289,87 +1401,11 @@ interface TypeReading {
   /** The depths of the types being read, by the declaration each instantiates. */
   readonly nested: Map<ts.Symbol, readonly number[]>;
 
-  /** The positions read so far, outside a field and inside one. */
-  readonly read: readonly [
-    Map<ts.Type, DeclaredPositions>,
-    Map<ts.Type, DeclaredPositions>,
-  ];
+  /** The positions read so far, by the mode each was read in. */
+  readonly read: Readonly<Record<ReadingMode, Map<ts.Type, DeclaredPositions>>>;
 
   /** The shallowest depth of an open type the read has reached again. */
   reachedOpen: number;
-}
-
-/**
- * The positions a value of `type`, inferred or written, declares by the parts
- * of `type` that are written out: an object type an author wrote, as an
- * interface or a type literal, declares its fields, whatever made the value.
- * An object type inferred from a literal, an instance of a class, and an
- * instance of a generic type, whose arguments may have been inferred, declare
- * nothing, and neither does `unknown`. An intersection declares only what every
- * one of its parts does.
- */
-function writtenPositions(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-  seen = new Set<ts.Type>(),
-): DeclaredPositions {
-  const value = unwrapOpaqueLikeType(type, checker) ?? type;
-  // A type still naming a type parameter is whatever its argument turns out to
-  // be, which may have been inferred.
-  if (
-    (value.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.Instantiable)) !== 0
-  ) {
-    return false;
-  }
-  if (seen.has(value)) return true;
-  seen.add(value);
-  let positions: DeclaredPositions = true;
-  if (value.isUnion()) {
-    for (const member of value.types) {
-      positions = alternatives(
-        positions,
-        writtenPositions(member, checker, seen),
-      );
-    }
-  } else if (checker.isArrayType(value) || checker.isTupleType(value)) {
-    let elements: DeclaredPositions = true;
-    for (const element of checker.getTypeArguments(value as ts.TypeReference)) {
-      elements = alternatives(
-        elements,
-        writtenPositions(element, checker, seen),
-      );
-    }
-    positions = new Map([[ELEMENT_POSITIONS, elements]]);
-  } else if (value.isIntersection()) {
-    // Every part of an intersection describes the same value.
-    for (const part of value.types) {
-      positions = alternatives(
-        positions,
-        writtenPositions(part, checker, seen),
-      );
-    }
-  } else if ((value.flags & ts.TypeFlags.Object) !== 0) {
-    positions = isWrittenObjectType(value, checker);
-  }
-  seen.delete(value);
-  return positions;
-}
-
-/**
- * Whether the object type `type` is one an author wrote out, as a
- * non-generic interface, or as a type literal naming no type parameter. A
- * generic one may be instantiated with an inferred argument.
- */
-function isWrittenObjectType(type: ts.Type, checker: ts.TypeChecker): boolean {
-  if (type.aliasTypeArguments?.length) return false;
-  const declarations = type.symbol?.declarations ?? [];
-  return declarations.length > 0 &&
-    declarations.every((declaration) =>
-      (ts.isTypeLiteralNode(declaration) &&
-        !mentionsTypeParameter(declaration, checker)) ||
-      (ts.isInterfaceDeclaration(declaration) &&
-        !declaration.typeParameters?.length)
-    );
 }
 
 /**

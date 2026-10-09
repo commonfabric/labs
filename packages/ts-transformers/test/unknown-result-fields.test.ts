@@ -383,9 +383,21 @@ export default pattern<{ ref: Ref }>(({ ref }) => ({ ref, refs: [ref] }));`),
       expect(
         await reportedPaths(`interface Note { mention: unknown }
 function load(): { ref: unknown } { return { ref: 1 }; }
+class Maker {
+  make() {
+    return { held: load() };
+  }
+}
 export default pattern<{ n: number }>(({ n }) => {
   const note: Note = { mention: n };
-  return { note, cast: { v: n } as { v: unknown }, loaded: load() };
+  const bag: Record<string, unknown> = { a: n };
+  return {
+    note,
+    cast: { v: n } as { v: unknown },
+    loaded: load(),
+    bag,
+    picked: new Maker().make().held,
+  };
 });`),
       ).toEqual([]);
     });
@@ -404,6 +416,12 @@ function held(): typeof holder { return holder; }
 class Box { ref = op(); }
 class Ring { next!: Link; own = op(); }
 class Link { ring!: Ring; own = op(); }
+class Holder { inner: typeof sample = sample; }
+interface Wrapper { inner: typeof sample }
+function wrapper(): Wrapper { return { inner: sample }; }
+function identity<T>(x: T): T { return x; }
+const key = "k" as string;
+const keyed = { [key]: op() };
 export default pattern(() => ({
   result: computed(() => {
     const annotated: typeof sample = { ref: op() };
@@ -414,13 +432,23 @@ export default pattern(() => ({
       link: new Link(),
       ring: new Ring(),
     };
-    return { annotated, nested, joined, boxed, cycle };
+    const made = wrapper();
+    const wrapping = { wrapped: wrapper() };
+    const indexed: typeof keyed = keyed;
+    const copiedKeys = keyed;
+    return {
+      annotated, nested, joined, boxed, cycle, indexed, copiedKeys,
+      fromMade: made.inner.ref,
+      fromMember: wrapping.wrapped.inner.ref,
+    };
   }),
   again: again(),
   aliased: aliased(),
   held: held(),
   cast: { ref: op() } as Sample,
   sorted: [{ ref: op() }].sort(),
+  member: new Holder().inner.ref,
+  generic: identity(wrapper()).inner.ref,
 }));`),
       ).toEqual([[
         "result.annotated.ref",
@@ -431,10 +459,16 @@ export default pattern(() => ({
         "result.cycle.link.own",
         "result.cycle.ring.next.own",
         "result.cycle.ring.own",
+        "result.indexed.*",
+        "result.copiedKeys.*",
+        "result.fromMade",
+        "result.fromMember",
         "again.ref",
         "aliased.ref",
         "cast.ref",
         "sorted[].ref",
+        "member",
+        "generic",
       ]]);
     });
 
@@ -675,8 +709,8 @@ export default pattern<{ notes: { ref: unknown }[] }>(({ notes }) => ({
     const mapped = [note().ref].map((r) => r);
     mapped.push(op());
     const merged = Object.assign({}, note(), { extra: op() });
-    const echoed = notes.map((n) => ({ n }));
-    echoed.push({ n: { ref: op() } });
+    const echoed = notes.map((n) => ({ ref: n.ref }));
+    echoed.push({ ref: op() });
     return {
       box, xs, p, q, aliased, accumulated, receiver, touched, mapped, merged,
       echoed,
@@ -700,9 +734,8 @@ export default pattern<{ notes: { ref: unknown }[] }>(({ notes }) => ({
         "result.receiver.ref",
         "result.touched.ref",
         "result.mapped[]",
-        "result.merged.ref",
         "result.merged.extra",
-        "result.echoed[].n.ref",
+        "result.echoed[].ref",
         "result.inline.ref",
       ]]);
     });
@@ -711,6 +744,7 @@ export default pattern<{ notes: { ref: unknown }[] }>(({ notes }) => ({
       expect(
         await reportedPaths(`interface Out { mentions: unknown[] }
 const Sub = pattern<{ seed: string }, Out>(() => ({ mentions: [] }));
+function op(): unknown { return 1; }
 interface Note { ref: unknown }
 function note(): Note { return { ref: 1 }; }
 function loose(): { ref: unknown } { return { ref: 1 }; }
@@ -725,9 +759,12 @@ export default pattern<{ seed: string }>(({ seed }) => {
   const shown = when(seed, { ref: note().ref });
   const list = computed(() => [{ ref: note().ref }]);
   const listed = list.map((item) => ({ item }));
+  const wrapped = { note: note() };
+  const wrappedList = [{ note: note() }];
+  const mixed = { bad: op(), note: note() };
   return {
     literal, copied, typed, viaTypeLiteral, annotated, instance, derived,
-    shown, listed,
+    shown, listed, wrapped, wrappedList, mixed,
     fromGetter: {
       get ref() {
         return note().ref;
@@ -735,7 +772,7 @@ export default pattern<{ seed: string }>(({ seed }) => {
     },
   };
 });`),
-      ).toEqual([["literal.ref", "copied.ref"]]);
+      ).toEqual([["literal.ref", "mixed.bad"]]);
     });
 
     it("reports nothing for another pattern's instance or a computed's result passed to a function, which can change neither", async () => {
@@ -952,6 +989,11 @@ class DefaultBox<T = unknown> {
   constructor(public value: T) {}
 }
 class Defaulted extends DefaultBox {}
+class Chosen<T = unknown> {
+  constructor(public value: T = undefined as T) {}
+}
+function load(): { ref: unknown } { return { ref: 1 }; }
+class Loaded { held = load(); }
 export default pattern(() => ({
   inferred: new Inferred(),
   written: new Written(2),
@@ -963,8 +1005,16 @@ export default pattern(() => ({
   aliased: new Aliased(op()),
   anonymous: new Anonymous(op()),
   defaulted: new Defaulted(op()),
+  chosen: new Chosen(),
+  supplied: new Chosen(op()),
+  loaded: new Loaded(),
 }));`),
-      ).toEqual([["inferred.ref", "boxed.value", "passed.value"]]);
+      ).toEqual([[
+        "inferred.ref",
+        "boxed.value",
+        "passed.value",
+        "supplied.value",
+      ]]);
     });
 
     it("reports nothing for a value of a recursive type written out", async () => {

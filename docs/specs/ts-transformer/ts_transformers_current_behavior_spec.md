@@ -874,18 +874,22 @@ not known, and declares nothing. So these are declared:
   method's `this`. A type that holds itself, or that instantiates its own
   declaration more than three deep, as `Nest<T[]>` inside `Nest<T>` does, is
   read as declared where it repeats
-- a member read through its own declaration, when that declaration writes its
-  type without naming a type parameter
-- a field of a class instance, when the class's declaration of the field
-  writes its type, as a property, a parameter property, or a getter's return
-  type; a type naming a type parameter counts only when every parameter it
-  names is fixed in writing, by the construction's type arguments or by the
-  `extends` clause above, whichever fixes it, followed through a constructor's
-  aliases and class expressions
-- a value whose type is an object type an author wrote out, as a non-generic
-  interface or a type literal naming no type parameter, which declares its
-  fields however the value was made; an intersection counts only as far as
-  every one of its parts does
+- what a member's own declaration writes for it, read by the rule for a type
+  written out, when that declaration writes its type without naming a type
+  parameter
+- what a class instance's field declares by its declaration's written type, as a
+  property, a parameter property, or a getter's return type; a type naming a
+  type parameter counts only when every parameter it names is fixed in writing,
+  by the construction's type arguments, by a default the construction takes when
+  it passes no argument to infer one from, or by the `extends` clause above,
+  whichever fixes it, followed through a constructor's aliases and class
+  expressions. A field whose type is inferred, from its initializer or through a
+  parameter nothing writes, declares only what its type's written parts do
+- the written parts of a value's own type, however the value was made: each
+  member, and each index signature, whose declaration writes its type without
+  naming a type parameter declares what that type does, read by the rule for a
+  type written out; an intersection counts only as far as every one of its parts
+  does
 - another pattern's result, which passed this check in its own compile; a
   cell; a literal, a function, or JSX
 
@@ -936,13 +940,14 @@ the method may hand to a callback whose parameter holds each one. An array
 method called anywhere else makes a plain array, which declares nothing held in
 a binding; inside the callback of `computed()` or of a lift, even the pattern's
 input is a plain array. A literal whose getter or setter uses `this` can change
-itself, so its structure declares nothing anywhere. A binding whose type is
-written out, in an annotation or as an object type an author wrote, keeps what
-that type declares, as do the bindings of the pattern's input. A binding
-something reassigns declares nothing more, and a callback or a lift is followed
-through a binding only when nothing reassigns it. Reassignment is read from the
-uses of the binding in the file that declares it, where a mention in a type,
-such as `typeof x`, is not a use.
+itself, so its structure declares nothing anywhere. A binding keeps what its
+annotation declares, and what the written parts of its own type declare,
+position by position alongside what the trace reads of its value; the bindings
+of the pattern's input keep what the input's type declares. A binding something
+reassigns declares nothing more, and a callback or a lift is followed through a
+binding only when nothing reassigns it. Reassignment is read from the uses of
+the binding in the file that declares it, where a mention in a type, such as
+`typeof x`, is not a use.
 
 ### 6.7 Lowerable Expression-Site Categories
 
