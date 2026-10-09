@@ -1362,8 +1362,13 @@ describe("console/server", () => {
         args: readonly string[],
         env: Record<string, string>,
       ) =>
-        (await resolveConsoleConfig([...ARGS, ...args], env, "/console"))
-          .agentRunsRoot;
+        // Docker is named so the native runtime default, which refuses on a
+        // host without runsc set up (Linux CI), plays no part here.
+        (await resolveConsoleConfig(
+          [...ARGS, ...args],
+          { CF_HARNESS_SANDBOX_RUNTIME: "docker", ...env },
+          "/console",
+        )).agentRunsRoot;
       expect(await agentRunsRoot([], { HOME: "/home/a" })).toBe(
         "/home/a/.cf-harness/agent-runs",
       );
