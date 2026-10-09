@@ -90,8 +90,10 @@ export function principalOf(
  * `kind` name rather than only a single one, so that a caller can tell a
  * label that attests no principal from one that attests several.
  *
- * Returns `[]` when the label attests none, and the DIDs it attests, in the
- * order they first appear, when it attests one or more. Returns `undefined`
+ * Returns `[]` when the label attests none, and for a label the caller cannot
+ * observe, as `principalOf()` normalizes one with missing metadata; and the
+ * DIDs it attests, in the order they first appear, when it attests one or
+ * more. Returns `undefined`
  * when a claim there is in any form but the one a runtime mints, since no
  * principal can then be read from it, and for a `target` passed as
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,

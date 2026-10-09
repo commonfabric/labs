@@ -4290,8 +4290,9 @@ export declare function principalOf(
  * caller can tell a label that attests no principal from one that attests
  * several, and refuse the second while admitting the first.
  *
- * `[]` means the label attests none. A non-empty array lists the DIDs it
- * attests, in the order they first appear. `undefined` means a claim there is
+ * `[]` means the label attests none, or that the caller cannot observe it, a
+ * refused read among them, as with missing metadata. A non-empty array lists
+ * the DIDs it attests, in the order they first appear. `undefined` means a claim there is
  * in some other form, from which no principal can be read, or that `target` is
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,
  * `options.label` included; it can be called where `principalOf()` can,

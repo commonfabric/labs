@@ -99,7 +99,9 @@ the transaction's read itself. A `kind` other than the two above, or a
 `principalsOf(target, kind)`, exported beside `principalOf()`, reads the same
 claims in the same places and returns all of them: `[]` when the label attests
 none of `kind`, and the DIDs it attests, in the order they first appear, when it
-attests one or more. It returns `undefined` where `principalOf()` does for a
+attests one or more. A label the caller cannot observe gives `[]` as well,
+normalized with missing metadata as it is for `principalOf()`, since neither
+leaves a claim to read. It returns `undefined` where `principalOf()` does for a
 claim in any other form and for a `target` of `undefined`, and it throws where
 `principalOf()` throws. It can be called where `principalOf()` can, and reads
 what `principalOf()` reads.
