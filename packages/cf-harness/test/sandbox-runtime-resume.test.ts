@@ -73,10 +73,14 @@ const mismatch = (
   `run resumes only on the runtime it started on: name it with ${naming}.`;
 
 describe("sandbox-runtime-resume", () => {
-  /** A directory of the case's own, with a workspace and a native store. */
+  /**
+   * A directory of the case's own, with a workspace and a native store of
+   * each platform's: macOS's, and the Linux one beside it under the same home.
+   */
   let root: string;
   let workspace: string;
   let store: string;
+  let linuxStore: string;
 
   beforeEach(async () => {
     root = await Deno.realPath(await Deno.makeTempDir());
@@ -93,6 +97,14 @@ describe("sandbox-runtime-resume", () => {
     await Deno.mkdir(join(store, "ext4"));
     await Deno.writeTextFile(join(store, "ext4", "kitchensink.ext4"), "");
     await Deno.writeTextFile(join(store, "policy.json"), "{}\n");
+    linuxStore = join(root, "home", ".local", "share", "runsc-cfc");
+    await Deno.mkdir(join(linuxStore, "bin"), { recursive: true });
+    await Deno.writeTextFile(join(linuxStore, "bin", "runsc"), "#!/bin/sh\n");
+    await Deno.chmod(join(linuxStore, "bin", "runsc"), 0o755);
+    await Deno.mkdir(join(linuxStore, "images", "kitchensink"), {
+      recursive: true,
+    });
+    await Deno.writeTextFile(join(linuxStore, "cfc-policy.json"), "{}\n");
   });
 
   afterEach(async () => {
@@ -666,6 +678,13 @@ describe("sandbox-runtime-resume", () => {
         {
           io,
           platform,
+          // Where the native default can run: Apple silicon, as root.
+          arch: "aarch64",
+          uid: () => 0,
+          which: (name: string) =>
+            name === "pasta" || name === "unshare" || name === "setpriv"
+              ? `/usr/bin/${name}`
+              : undefined,
           cwd: root,
           env: { HOME: join(root, "home"), ...extra.env },
           ...(extra.sandboxSelectionFlags !== undefined
@@ -730,13 +749,28 @@ describe("sandbox-runtime-resume", () => {
       ]);
     });
 
-    it("refuses a run started on `runsc` where Linux defaults the resume to Docker", async () => {
-      const { exitCode, resumed, stderr } = await resume("runsc", "linux");
+    it("refuses a run started on Docker where Linux defaults the resume to the native runtime", async () => {
+      const { exitCode, resumed, stderr } = await resume("docker", "linux");
+
+      expect([exitCode, resumed]).toEqual([1, false]);
+      expect(stderr).toEqual([
+        `${
+          mismatch(
+            "docker",
+            `\`runsc\` (default on Linux: the native store at ${linuxStore})`,
+            "`--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`",
+          )
+        }\n`,
+      ]);
+    });
+
+    it("refuses a run started on `runsc` where FreeBSD defaults the resume to Docker", async () => {
+      const { exitCode, resumed, stderr } = await resume("runsc", "freebsd");
 
       expect([exitCode, resumed]).toEqual([1, false]);
       expect(stderr.join("")).toContain(
-        "this resume selects `docker` (default on linux: the native runtime " +
-          "is macOS only)",
+        "this resume selects `docker` (default on freebsd: the native " +
+          "runtime is macOS and Linux only)",
       );
     });
 
@@ -772,7 +806,7 @@ describe("sandbox-runtime-resume", () => {
     it("refuses a record written before runs recorded their runtime, by the runtime it describes", async () => {
       const { exitCode, resumed, stderr } = await resume(
         beforeRecording(await startedOn("runsc")),
-        "linux",
+        "freebsd",
       );
 
       expect([exitCode, resumed]).toEqual([1, false]);
@@ -792,7 +826,7 @@ describe("sandbox-runtime-resume", () => {
       ) {
         const { exitCode, resumed, stderr } = await resume(
           runState,
-          "linux",
+          "freebsd",
           { args },
         );
 
@@ -804,8 +838,9 @@ describe("sandbox-runtime-resume", () => {
     for (
       const [born, platform, args] of [
         ["docker", "darwin", ["--sandbox-runtime", "docker"]],
-        ["docker", "linux", []],
+        ["docker", "freebsd", []],
         ["runsc", "darwin", []],
+        ["runsc", "linux", []],
       ] as const
     ) {
       it(`resumes a run started on \`${born}\` on ${platform} with ${args.length > 0 ? "the runtime named" : "no runtime named"}`, async () => {

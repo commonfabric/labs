@@ -74,7 +74,6 @@ import {
 import {
   capabilitiesBySuite,
   loadTopology,
-  unitProcesses,
   wholeUnits,
 } from "./test-topology.ts";
 import { baselinesOf, mergeBaselines } from "./test-selection/baselines.ts";
@@ -863,13 +862,11 @@ export async function publish(
     }))
   );
   const capabilities = capabilitiesBySuite(suites);
-  const processes = unitProcesses(suites);
   const reference = plan({
     manifest,
     mandatory: new Map(),
     capabilities,
     wholeUnits: wholeUnits(suites),
-    processes,
   });
   // What the packer refused, from the packer, carrying the cost the bound
   // was compared against rather than a raw one that leaves out every
@@ -893,7 +890,6 @@ export async function publish(
     manifest,
     previous,
     capabilities,
-    processes,
     observations: observed,
   });
 

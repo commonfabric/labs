@@ -4,9 +4,9 @@ The contract of test selection: what a test is worth running, what the
 manifest that says so contains, and what a consumer of one may and may
 not conclude from it. This is the normative description of the shipped
 parts; [the operating guide](../development/test-selection.md) says how to
-use them, and
-[the plan this comes from](../plans/pull-request-test-selection.md) carries
-the reasoning and the parts still to be built. It rests on
+use them, and [the archived plan this comes
+from](../history/plans/pull-request-test-selection.md) records the
+reasoning behind it. It rests on
 [test-run records](test-records.md), whose store it reads and beside whose
 dataset area it writes. The implementation is `tasks/test-selection/`, and
 the manifest format itself is
@@ -193,6 +193,11 @@ it, its duration is that net's bound. The bound a safety net carries and
 a lane's bound are the same order of magnitude, so a test that hits one is
 otherwise reported as fitting no lane and held out of every pull request that
 does not touch it.
+
+Only executions on a lane's runner are measured. A workstation is a
+different machine, faster or slower by however it differs, so its record
+counts as evidence about the test and not about what a lane will spend
+running it.
 
 A day records which set of these rules sealed it, and a day carrying no
 such record was sealed before any set was recorded, which reads as
@@ -501,21 +506,21 @@ repeated and fits nowhere runs fewer times, down to once, since all of
 one identity's runs go in one lane and one observation beats none. Down
 to once and never to nothing.
 
-A plan says what a suite costs it, as well as what a test does. A lane
-pays a suite's overhead, what one of its units costs to open, and its
+A plan says what a suite costs it, as well as what a test does. A lane pays
+a suite's overhead, what one of its units costs to open, and its
 capabilities' setup before it runs anything of that suite, and that
-charge is the same for every identity the suite has. A lane that runs a suite
-with coverage on pays what that suite's batches have cost with coverage on,
-where such a fit exists, and otherwise its fit without coverage. The two are
-fitted apart, since instrumenting a run costs it time and how much is a
-property of the suite. Where it alone passes
-what a lane holding two things may take, nothing can share a lane with one of
-the suite's identities, so the suite takes a whole lane for each one it places;
+charge is the same for every identity the suite has. A lane that runs a
+suite with coverage on pays what that suite's batches have cost with
+coverage on, where such a fit exists, and otherwise its fit without
+coverage. The two are fitted apart, since instrumenting a run costs it time
+and how much is a property of the suite. Where it alone passes what a lane
+holding two things may take, nothing can share a lane with one of the
+suite's identities, so the suite takes a whole lane for each one it places;
 where it passes a lane's bound, no lane can hold the suite and every
 discretionary identity it has fits nowhere. Both are reported once for the
 suite, and the identities of a suite in the second case are left out of the
-report that names identities, since the suite's line says what every one of them
-would.
+report that names identities, since the suite's line says what every one of
+them would.
 
 **A unit that runs whole is one choice.** Some units have a runner that
 runs every identity in them, whatever it is asked. The topology lists
@@ -541,13 +546,24 @@ Two rules force a test in.
   grounds that a selector which never runs the unselected starves its own
   data and that a renamed test is an unknown identity until an alias line
   lands.
+
+  What a consumer can see is a unit, so the rule is applied per unit. A
+  unit that no identity the manifest knows in its suite and variant
+  belongs to is represented by a stand-in, and the stand-in must run. A
+  new identity inside a known unit is not forced in. It runs whenever its
+  unit runs, because what a runner is told to skip names only identities
+  the manifest holds. A record a suite writes for itself rather than for
+  one of its units makes no unit known.
 - **What the change touches must run.** A changed test file's identities
   are mandatory. Everything else a change forces in goes through one
   rule, and there is no second rule beside it: a declaration names the
   paths a change reaches something by, and what a change reaches is what
-  it forces. That is how a unit which is not a file — a type-check group,
-  a repository gate, a binary — is reached at all, because only its suite
-  knows what its unit covers. Anything else that has to answer "which
+  it forces. That is how a unit which is not a file — a type-check group
+  or a repository gate — is reached at all, because only its suite knows
+  what its unit covers. A unit whose suite declares nothing, such as the
+  build of a shipped binary, is never forced in by a change. It runs when
+  it is unknown, when the score chooses it, and in a run over the whole
+  corpus. Anything else that has to answer "which
   parts of this repository did the change touch" answers from the same
   declarations, including a consumer deciding not which tests to run but
   which packages to measure. A second mechanism for the same question is
@@ -572,6 +588,85 @@ Two rules force a test in.
   and no `deno test` type-checks anything, so a group left to the score is
   a type error the change may have made that nothing looks for.
 
+## Packing
+
+A run's lanes are filled from a plan, and every lane of the run computes
+the same plan, so packing is part of the contract rather than a detail of
+one consumer.
+
+### What a lane is charged
+
+A lane is charged the setup of each capability it opens, and for each
+suite it holds:
+
+- the suite's `overhead` once for each pass, where a pass is one
+  invocation of the suite's command over the units still asking for runs,
+  so a batch whose identities run three times takes three passes;
+- the suite's `unitOverhead` for each time a pass opens a unit;
+- what its tests take, which is the larger of two figures. One is the
+  suite's `correction` times the tests' own costs, each counted once for
+  each time its unit runs. The other is what the longest unit of each pass
+  takes, added together, since a pass does not finish before its longest
+  unit does. The second is the one that binds for a suite whose runner
+  runs its units side by side.
+
+A suite with no fit is charged no overhead, nothing per unit, and a
+correction of one. A runner that runs units side by side starts the
+costliest first, by the cost the lane hands it with each unit, since the
+second figure assumes nothing long starts last.
+
+A capability's setup is charged at the ninetieth percentile of its
+openings over the cost window. A suite's three figures are fitted to what
+the lanes' own batches of it spent, by least squares with none of them
+below zero: what each batch spent against `overhead` times its passes,
+`unitOverhead` times the units it opened, and `correction` times what the
+tests of its units took. The fit takes no account of the longest-unit
+figure. So a batch is charged what a batch of its shape spends on
+average, and the safety margin `LANE_SAFETY_SECONDS` absorbs a lane that
+spends more than its batches' average.
+
+- What a batch's tests took counts only the records its suite places in
+  a unit. A record placed in no unit, such as one a wrapper writes for a
+  whole invocation, is part of what the batch spent beyond its tests.
+- The correction is fitted only over at least `MIN_CORRECTION_SAMPLES`
+  batches whose tests' times span at least `MIN_CORRECTION_SPAN_SECONDS`,
+  and only where it comes out above zero. Otherwise the correction is
+  one, which is the reading that needs no evidence, and `overhead` and
+  `unitOverhead` are fitted to what the batches spent beyond their tests.
+- Where the batches cannot tell a charge per pass from a charge per unit,
+  as when every batch opens one unit in one pass, `unitOverhead` carries
+  it.
+- A batch that does not say how many passes it made, or whether coverage
+  was on for it, is not read.
+
+### How lanes are filled
+
+The mandatory identities are placed first, the costliest first, with the
+identity's key breaking ties. Each goes in the cheapest lane that can still
+hold it, running fewer times where its repeats fit nowhere, down to once.
+One that fits nowhere even once goes in the lane it leaves shortest. This
+is the only pass that may put a lane past its bound, or past its budget
+with more than one identity in it.
+
+Three passes then spend what is left of the whole run's budget, each up to
+its share of it. `FILL_VALUE_SHARE` is spent in descending score.
+`FILL_DENSITY_SHARE` is spent in descending score per second of what each
+identity would add to the lane it went in, recomputed as placements make
+other identities cheaper. `FILL_EXPLORATION_SHARE` is spent on what
+neither chose, never-run identities first and then the longest unrun,
+with an order shuffled by the manifest's seed breaking ties. A share left
+unspent is available to the passes after it. The shares are of what the
+mandatory pass left rather than of the whole budget, so a change that
+forces in a great deal of work is not given a full budget of
+discretionary work on top of it.
+
+In these passes an identity goes in the cheapest lane that can hold it
+inside its budget, and the emptier lane wins a tie. A lane holding
+nothing may take one identity run once up to the lane's bound, which is
+where an identity costing more than a whole budget runs. An identity that
+would be repeated takes as many of its runs as fit, giving them up one at
+a time down to one.
+
 ## Coverage
 
 Selection breaks a gate on the repository's whole coverage number: a
@@ -594,7 +689,14 @@ units the configuration deliberately does not run is not a set at all,
 since scoring it would score whatever else happened to write into its
 directory.
 
-Four rules hold of every measurement.
+The suite that runs each workspace member's own tests declares one set for
+every member under `packages/` with tests that run under Deno alone, at
+whatever depth the member sits, reached by its own tree less the trees of
+members nested inside it. The repository's `tasks` and `scripts` trees
+carry none. That suite leaves a member out only where the member is named,
+with a reason, on `EXCLUDED_FROM_COVERAGE_GATE`.
+
+Five rules hold of every measurement.
 
 - **Each set is counted on its own.** A set's units write their coverage
   profiles into a directory named for the suite and the member, and a
@@ -614,6 +716,12 @@ Four rules hold of every measurement.
   metric already uses. A member's browser half is not part of any set,
   so that adding a test needing a browser costs a member nothing here,
   and what that half reaches is not counted toward the set.
+- **A change's lanes instrument only what is scored.** They turn coverage
+  on for the members of the sets the gate scores and run everything else
+  unmeasured, since instrumenting a run costs it time and nothing reads a
+  profile no set is scored from. A run over the whole corpus instruments
+  every member, since the baselines and the repository-wide figure come
+  from it.
 - **Nothing about coverage fails a run on the default branch.** That run
   measures every set, which is where the baselines come from, and merges
   every report it produced into the one repository-wide figure, which is
@@ -743,9 +851,13 @@ running, for the reason under [Determinism](#determinism).
 That the manifest may be an ordinary public object rather than a signed
 artifact follows from what it can do. It can only change *which* tests
 run. It cannot change what a test does, what a test asserts, or what the
-repository builds. The worst a corrupted manifest achieves is a change
-that ran fewer tests than it should have, which the full run on the
-default branch catches.
+repository builds. That holds because of what a consumer lets its strings
+reach. The only ones that reach a command are suite and unit names, and
+only those matching a suite and a unit the tree defines. A test's name
+reaches nothing but the list of names a runner is told to skip.
+
+The worst a corrupted manifest achieves is a change that ran fewer tests
+than it should have, which the full run on the default branch catches.
 
 ## Renames
 

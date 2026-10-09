@@ -10,6 +10,9 @@ import { identity } from "@/lib/identity.ts";
 import env from "@/env.ts";
 import { memoryEngineStoreUrl } from "@/routes/storage/memory-store-url.ts";
 import { hostsSpaceInStore } from "@/lib/space-authority.ts";
+import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
+import { fetchGmailMailbox } from "@/routes/ingest-push/gmail-push.utils.ts";
+import { processGmailBind, processGmailUnbind } from "./gmail-binding.utils.ts";
 import {
   type ControlDeps,
   processList,
@@ -18,6 +21,9 @@ import {
   processRotate,
 } from "./ingest-channels.utils.ts";
 import type {
+  GmailBindRoute,
+  GmailUnbindRoute,
+  ListOwnRoute,
   ListRoute,
   MintRoute,
   RevokeRoute,
@@ -33,7 +39,7 @@ const hostsSpace = hostsSpaceInStore(memoryEngineStoreUrl);
 
 const deps = (logger: ControlDeps["logger"]): ControlDeps => ({
   runtime,
-  serviceSpace: identity.did(),
+  serviceSpace: ingestServiceSpace,
   operatorDid: identity.did(),
   serviceDids,
   hostsSpace,
@@ -48,7 +54,7 @@ export const mint: AppRouteHandler<MintRoute> = async (c) => {
   const result = await processMint(
     deps(c.get("logger")),
     callerDid,
-    c.req.valid("json"),
+    { ...c.req.valid("json"), space: c.req.valid("param").space },
   );
   if (result.status === 200) return c.json(result.body, 200);
   return c.json(result.body, result.status);
@@ -60,7 +66,7 @@ export const rotate: AppRouteHandler<RotateRoute> = async (c) => {
   const result = await processRotate(
     deps(c.get("logger")),
     callerDid,
-    c.req.valid("json"),
+    { ...c.req.valid("json"), space: c.req.valid("param").space },
   );
   if (result.status === 200) return c.json(result.body, 200);
   return c.json(result.body, result.status);
@@ -72,7 +78,7 @@ export const revoke: AppRouteHandler<RevokeRoute> = async (c) => {
   const result = await processRevoke(
     deps(c.get("logger")),
     callerDid,
-    c.req.valid("json"),
+    { ...c.req.valid("json"), space: c.req.valid("param").space },
   );
   if (result.status === 200) return c.json(result.body, 200);
   return c.json(result.body, result.status);
@@ -84,7 +90,39 @@ export const list: AppRouteHandler<ListRoute> = async (c) => {
   const result = await processList(
     deps(c.get("logger")),
     callerDid,
-    c.req.valid("json"),
+    { space: c.req.valid("param").space },
+  );
+  if (result.status === 200) return c.json(result.body, 200);
+  return c.json(result.body, result.status);
+};
+
+export const listOwn: AppRouteHandler<ListOwnRoute> = async (c) => {
+  const callerDid = c.get("verifiedUserDid");
+  if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
+  const result = await processList(deps(c.get("logger")), callerDid, {});
+  if (result.status === 200) return c.json(result.body, 200);
+  return c.json(result.body, result.status);
+};
+
+export const gmailBind: AppRouteHandler<GmailBindRoute> = async (c) => {
+  const callerDid = c.get("verifiedUserDid");
+  if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
+  const result = await processGmailBind(
+    { ...deps(c.get("logger")), fetchMailbox: fetchGmailMailbox },
+    callerDid,
+    { ...c.req.valid("json"), space: c.req.valid("param").space },
+  );
+  if (result.status === 200) return c.json(result.body, 200);
+  return c.json(result.body, result.status);
+};
+
+export const gmailUnbind: AppRouteHandler<GmailUnbindRoute> = async (c) => {
+  const callerDid = c.get("verifiedUserDid");
+  if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
+  const result = await processGmailUnbind(
+    deps(c.get("logger")),
+    callerDid,
+    { ...c.req.valid("json"), space: c.req.valid("param").space },
   );
   if (result.status === 200) return c.json(result.body, 200);
   return c.json(result.body, result.status);

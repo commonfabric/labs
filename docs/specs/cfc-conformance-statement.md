@@ -332,7 +332,11 @@ causes to `ExtendedStorageTransaction.addCfcTriggerReads`, which drops `cid:`
 and document-member paths and invalidates a prepared transaction;
 `forEachFlowObservation` in `cfc/prepare.ts` consumes them as recursive value
 reads, with a shape read of a `length` parent, at prepare-time metadata, which
-is their current labels, whatever the gating dial says. With
+is their current labels, whatever the gating dial says. A trigger at the
+sub-path where a link exposes its recognizable form is the invalidation of a
+link probe, and is read as a shallow read of the slot the probe asked about,
+since that sub-path's segments are not child segments (§4.6.3)
+(`triggerReadAt`). With
 `cfcTriggerReadGating` on, the shipped default, `triggerReadSources` adds them
 to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure

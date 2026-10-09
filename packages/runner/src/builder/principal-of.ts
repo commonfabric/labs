@@ -6,11 +6,15 @@ import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import { resolveLink } from "../link-resolution.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
 import {
   exactPrincipalAttestations,
   PRINCIPAL_CLAIM_KINDS,
   type PrincipalClaimKind,
 } from "../cfc/represents-principal.ts";
+import type { Runtime } from "../runtime.ts";
+import { entityKey } from "../scheduler/keys.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
 import { cellOfTarget } from "./space-access.ts";
 
@@ -25,8 +29,12 @@ import { cellOfTarget } from "./space-access.ts";
  * Returns `undefined` when the label names no verified single principal of
  * that kind: when it attests none, when it attests more than one, when a claim
  * there is in any form but the one a runtime mints, and for a `target` passed
- * as `undefined`. It never guesses. A label it cannot read is not one of
- * those: that read throws, so a labeled document never reads as unlabeled.
+ * as `undefined`. It never guesses. A label the caller cannot observe, one
+ * whose read is refused by construction or by the storage manager, also
+ * returns `undefined`, as missing metadata does, which is the normalization
+ * of hidden cases that CFC spec §4.6.4.1 requires. A label still loading is
+ * not one of them, in a handler: the handler is withdrawn and runs again once
+ * its document arrives.
  *
  * The read is of `target`'s label: the value's cell is followed through any
  * links it holds, which reads the pointers along the way and no other value
@@ -56,10 +64,10 @@ import { cellOfTarget } from "./space-access.ts";
  *   `kind` that is not a principal claim kind, with a `target` that is
  *   neither a cell nor `undefined`, or with `options` that is not an object
  *   whose `label`, if present, is `"written"` or `"resolved"`; if the target's
- *   label cannot be read,
- *   including one stored in a form this build cannot interpret
- *   (`StoredCfcMetadataError`); and if the label-metadata classification
- *   makes a claim's subject anything but public.
+ *   label is stored in a form this build cannot interpret
+ *   (`StoredCfcMetadataError`), or the transaction's read of it fails; and if
+ *   the label-metadata classification makes a claim's subject anything but
+ *   public.
  */
 export function principalOf(
   // Typed `unknown` here, though the declared API types both, so that the
@@ -82,8 +90,10 @@ export function principalOf(
  * `kind` name rather than only a single one, so that a caller can tell a
  * label that attests no principal from one that attests several.
  *
- * Returns `[]` when the label attests none, and the DIDs it attests, in the
- * order they first appear, when it attests one or more. Returns `undefined`
+ * Returns `[]` when the label attests none, and for a label the caller cannot
+ * observe, as `principalOf()` normalizes one with missing metadata; and the
+ * DIDs it attests, in the order they first appear, when it attests one or
+ * more. Returns `undefined`
  * when a claim there is in any form but the one a runtime mints, since no
  * principal can then be read from it, and for a `target` passed as
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,
@@ -175,8 +185,47 @@ function attestedPrincipals(
     id: link.id,
     scope: link.scope,
   });
+  if (frame.frameKind === "handler") {
+    withdrawWhileLabelLoads(runtime, tx, link);
+  }
   return exactPrincipalAttestations(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
     claimKind,
   );
+}
+
+/**
+ * Helper for `attestedPrincipals()`, which withdraws the running handler when
+ * the replica has no local basis for the document whose label it read, not
+ * even a confirmed absence, and that document's load is in flight. The read
+ * then found no label because the label has not arrived, which is not the
+ * document's state, and a handler runs once per event: the scheduler runs a
+ * withdrawn one again once the load lands (`dispatchedHandlerNotRun`). A
+ * withdrawal therefore always has a load to wait on, and a document that does
+ * not exist withdraws the handler at most until its absence is confirmed. A
+ * reactive computation needs none of this, since the load's arrival runs it
+ * again.
+ */
+function withdrawWhileLabelLoads(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): void {
+  const { storageManager } = runtime;
+  // The instance a scoped read reaches is the one the transaction demands,
+  // as a served run's is its actor's, so the load and the local basis are
+  // looked up for that instance.
+  const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
+  const key = entityKey(link, identity);
+  if (storageManager.pendingLoadGeneration?.(key) === undefined) return;
+  const { replica } = storageManager.open(link.space);
+  if (
+    replica.hasLocalDocumentCoverage?.(link.id, link.scope, identity) === true
+  ) {
+    return;
+  }
+  tx.dispatchedHandlerNotRun ??= {
+    reason:
+      `the label of \`${link.id}\` was read while its document was still loading`,
+  };
 }

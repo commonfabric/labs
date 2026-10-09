@@ -5,13 +5,13 @@ import { resolveSandboxRuntimeSelection } from "../src/sandbox/runtime-selection
 const never = (): Promise<boolean> => Promise.resolve(false);
 const always = (): Promise<boolean> => Promise.resolve(true);
 
-// Linux, whose default is Docker, so that no case here turns on the machine
+// FreeBSD, whose default is Docker, so that no case here turns on the machine
 // the suite runs on; and an entrypoint that takes the selection flags.
-const LINUX = { platform: "linux", flags: true } as const;
+const FREEBSD = { platform: "freebsd", flags: true } as const;
 const DEFAULTED_DOCKER = {
   runtime: "docker",
   source: "default",
-  platform: "linux",
+  platform: "freebsd",
 } as const;
 const NAMED_RUNSC = { runtime: "runsc", source: "environment" } as const;
 
@@ -33,7 +33,7 @@ Deno.test("a run that names no runtime, or docker, gets no runsc companions", as
   };
   assertEquals(
     await resolveSandboxRuntimeSelection(env, {}, {
-      ...LINUX,
+      ...FREEBSD,
       pathExists: counting,
     }),
     { sandboxRuntimeChoice: DEFAULTED_DOCKER },
@@ -42,7 +42,7 @@ Deno.test("a run that names no runtime, or docker, gets no runsc companions", as
     await resolveSandboxRuntimeSelection(
       { ...env, CF_HARNESS_SANDBOX_RUNTIME: "docker" },
       {},
-      { ...LINUX, pathExists: counting },
+      { ...FREEBSD, pathExists: counting },
     ),
     {
       sandboxRuntimeKind: "docker",
@@ -59,7 +59,7 @@ Deno.test("a run that names no runtime, or docker, gets no runsc companions", as
         CF_HARNESS_DOCKER_NETWORK_MODE: "bridgeish",
       },
       {},
-      LINUX,
+      FREEBSD,
     ),
     { sandboxRuntimeChoice: DEFAULTED_DOCKER },
   );
@@ -79,7 +79,7 @@ Deno.test("explicit rootfs and policy win over the environment and the default",
       sandboxCfcPolicy: "/flag-policy",
     },
     // The default policy exists too, and still does not win.
-    { ...LINUX, pathExists: always },
+    { ...FREEBSD, pathExists: always },
   );
   assertEquals(selected, {
     sandboxRuntimeKind: "runsc",
@@ -96,7 +96,7 @@ Deno.test("explicit rootfs and policy win over the environment and the default",
         CF_HARNESS_RUNSC_CFC_POLICY: "/env-policy",
       },
       {},
-      { ...LINUX, pathExists: always },
+      { ...FREEBSD, pathExists: always },
     )).sandboxCfcPolicy,
     "/env-policy",
   );
@@ -110,7 +110,7 @@ Deno.test("an explicit empty policy means none: not the environment's, not the d
       CF_HARNESS_RUNSC_CFC_POLICY: "/env-policy",
     },
     { sandboxCfcPolicy: "" },
-    { ...LINUX, pathExists: always },
+    { ...FREEBSD, pathExists: always },
   );
   assertEquals(selected, {
     sandboxRuntimeKind: "runsc",
@@ -127,7 +127,7 @@ Deno.test("the default policy is looked up under the host home an entrypoint nam
     const dir = join(home, ".local", "share", "runsc-cfc");
     const policy = join(dir, "cfc-policy.json");
     const env = { CF_HARNESS_SANDBOX_RUNTIME: "runsc", HOME: undefined };
-    assertEquals(await resolveSandboxRuntimeSelection(env, {}, LINUX), {
+    assertEquals(await resolveSandboxRuntimeSelection(env, {}, FREEBSD), {
       sandboxRuntimeKind: "runsc",
       sandboxRuntimeChoice: NAMED_RUNSC,
     });
@@ -135,7 +135,7 @@ Deno.test("the default policy is looked up under the host home an entrypoint nam
     await Deno.mkdir(policy, { recursive: true });
     assertEquals(
       await resolveSandboxRuntimeSelection(env, {}, {
-        ...LINUX,
+        ...FREEBSD,
         homeDir: home,
       }),
       { sandboxRuntimeKind: "runsc", sandboxRuntimeChoice: NAMED_RUNSC },
@@ -144,7 +144,7 @@ Deno.test("the default policy is looked up under the host home an entrypoint nam
     await Deno.writeTextFile(policy, "{}");
     assertEquals(
       await resolveSandboxRuntimeSelection(env, {}, {
-        ...LINUX,
+        ...FREEBSD,
         homeDir: home,
       }),
       {
@@ -163,7 +163,7 @@ Deno.test("relative rootfs and policy paths resolve against the working director
     await resolveSandboxRuntimeSelection(
       { CF_HARNESS_SANDBOX_RUNTIME: "runsc", CF_HARNESS_SANDBOX_ROOTFS: "img" },
       { sandboxCfcPolicy: "policy.json" },
-      { ...LINUX, cwd: "/work/dir", pathExists: never },
+      { ...FREEBSD, cwd: "/work/dir", pathExists: never },
     ),
     {
       sandboxRuntimeKind: "runsc",
@@ -183,7 +183,7 @@ Deno.test("an invalid network mode is refused for the runsc runtime", async () =
           CF_HARNESS_DOCKER_NETWORK_MODE: "bridgeish",
         },
         {},
-        LINUX,
+        FREEBSD,
       ),
     Error,
     "CF_HARNESS_DOCKER_NETWORK_MODE must be one of none, bridge, or host",

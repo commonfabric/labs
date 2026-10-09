@@ -670,35 +670,6 @@ describe("what a run charges a suite it measures", () => {
     ]);
   });
 
-  it("keeps a suite's process fit only where the suite names its processes", () => {
-    // Everything reading a run's census prices a suite from here, so a
-    // process fit this topology cannot charge any setup to is dropped once.
-    const process = { setup: 8, overhead: 1, correction: 1, unitOverhead: 0 };
-    const seen = seenGating([]);
-    const withProcess = {
-      ...seen,
-      manifest: {
-        ...seen.manifest,
-        calibration: {
-          ...seen.manifest.calibration,
-          suites: {
-            "oven-unit": { ...plain, process },
-            "glaze-unit": { ...plain, process },
-          },
-        },
-      },
-    };
-    const named = suite({
-      id: "oven-unit",
-      units: ["packages/bakery/oven.test.ts"],
-      processes: new Map([["packages/bakery/oven.test.ts", "bakery"]]),
-    });
-    const priced = pricedForRun(withProcess, [named, glaze], false);
-    expect(priced.manifest.calibration.suites["oven-unit"])
-      .toEqual({ ...plain, process });
-    expect(priced.manifest.calibration.suites["glaze-unit"]).toEqual(plain);
-  });
-
   it("charges a suite no set measures what it costs without", () => {
     const priced = pricedForRun(seenGating([]), [oven, glaze], false);
     expect(priced.manifest.calibration.suites["oven-unit"]).toEqual(plain);
