@@ -1937,7 +1937,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * that minted a secret in its own transaction could read it back there
    * before its label is stored.
    *
-   * @throws Error without the runtime's authorization.
+   * @throws Error without the runtime's authorization, or when the stored
+   * value's schema cannot be resolved.
    */
   ensureRuntimeSecret(
     space: MemorySpace,

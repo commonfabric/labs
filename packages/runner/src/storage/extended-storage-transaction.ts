@@ -116,7 +116,9 @@ import {
 } from "../reserved-sibling-seam.ts";
 import {
   isRuntimeSecretId,
+  isRuntimeSecretOwnRead,
   readRuntimeSecret,
+  readsRuntimeSecretValue,
   RUNTIME_SECRET_SCHEMA,
   RUNTIME_SECRET_WRITER,
   runtimeSecretLink,
@@ -1707,6 +1709,30 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
+  /**
+   * The read chokepoint of the runtime-secret namespace: no executed code
+   * reads a runtime secret's value, whatever link or id names it. The reads
+   * that pass are `runtime-secret.ts`'s own, whose marker is private to that
+   * module, and reads inside a privileged system write; a read of a document
+   * field other than the value, such as its label envelope, holds nothing
+   * secret and passes too.
+   */
+  #assertRuntimeSecretUnread(
+    address: Pick<IMemorySpaceAddress, "id" | "path">,
+    options: IReadOptions | undefined,
+  ): void {
+    if (
+      !readsRuntimeSecretValue(address) ||
+      this.#privilegedSystemWriteDepth > 0 ||
+      isRuntimeSecretOwnRead(options?.meta)
+    ) {
+      return;
+    }
+    throw new Error(
+      `${address.id} is a runtime secret: only the runtime reads it.`,
+    );
+  }
+
   #prepareRead(address: Pick<IMemorySpaceAddress, "scope">): void {
     this.#noteCfcActivity();
     if (this.#cfcState.prepare.status === "prepared") {
@@ -3280,6 +3306,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): Result<IAttestation, ReadError> {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     return this.tx.read(address, options);
@@ -3292,6 +3319,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
+    for (const path of paths) {
+      this.#assertRuntimeSecretUnread({ id: address.id, path }, readOptions);
+    }
     this.#prepareRead(address);
     if (this.tx.trackReadPaths) {
       return this.tx.trackReadPaths(address, paths, readOptions);
@@ -3312,6 +3342,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): FabricValue {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     const readResult = this.tx.read(address, options);

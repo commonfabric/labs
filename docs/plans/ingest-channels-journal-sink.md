@@ -27,7 +27,7 @@ The missing piece is one generic capability. We already have the trust primitive
 
 You mint an **ingest channel**: a bearer-authed inbound HTTP endpoint bound to a target cell you provide (in your own space). It reuses the webhook *token* machinery — the registry in the toolshed service space, id + secret generation, SHA-256 hash, timing-safe verify with the dummy-hash timing-oracle guard (`webhooks.handlers.ts`, `webhooks.utils.ts`).
 
-The **lifecycle** is its own, and deliberately not webhooks': `mint`/`list`/`rotate`/`revoke` on the `/api/ingest-channels` prefix, authenticated by a first-party request proof and authorized against the target space's ACL. Revocation is a soft disable rather than webhooks' hard delete, because a registration here records who was authorized to write provenance-marked data into a user's space — that record has to survive. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md).
+The **lifecycle** is its own, and deliberately not webhooks': `mint`/`list`/`rotate`/`revoke` on the `/api/spaces/:space/ingest-channels` prefix, authenticated by a first-party request proof and authorized against the target space's ACL. Revocation is a soft disable rather than webhooks' hard delete, because a registration here records who was authorized to write provenance-marked data into a user's space — that record has to survive. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md).
 
 An ingest channel has a **sink** — where an inbound POST lands.
 
@@ -129,7 +129,7 @@ The seam requires these changes on loom's side (Workstream A/D-read):
 ## Open decisions
 
 1. **Packaging** — a generically-named `POST /api/ingest` carrying `sink: "stream" | "journal"` (recommended; `/api/webhooks` misdescribes the general capability) vs. extending the webhook route in place. Either way the auth/registry helpers are shared. *Still open for the `stream` sink.*
-2. ~~**Journal-creation auth**~~ — **RESOLVED.** Creation requires a real caller principal (a first-party request proof) *and* an explicit `OWNER` grant for that DID on the target space's ACL. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md). The control plane is a separate prefix, `/api/ingest-channels`, so the data plane's wildcard CORS never covers it.
+2. ~~**Journal-creation auth**~~ — **RESOLVED.** Creation requires a real caller principal (a first-party request proof) *and* an explicit `OWNER` grant for that DID on the target space's ACL. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md). The control plane sits apart from the data plane, so the data plane's wildcard CORS never covers it: the verbs that act on one space are under `/api/spaces/:space/ingest-channels`, and the caller's own list, which names no space, is at `/api/ingest-channels/list`.
 
 ## Acceptance / test plan
 
@@ -163,7 +163,7 @@ From the branch critique's P2 list — deliberately NOT in this PR; each has a n
 
 - **Extract shared bearer-secret crypto** into `lib/channel-secret.ts` — *trigger: the next PR touching either route.* Webhooks keep their async hex `sha256`, ingest its sync base64url; the two stored-hash encodings must be format-tagged or migrated before any registry merge. (Same item as the shared-crypto bullet in Out of scope.)
 - **Per-partition element-count backstop** (~50k) on the `journal` write, mapped to a loud 413 — *trigger: before any always-on beacon ships.* Checking the count reads the list's length, so an append that checks it conflicts with a concurrent one and retries. Never re-partition server-side. (Same item as the intra-partition size cap in Out of scope.)
-- ~~**Revocation**~~ — **DONE**, and better than the planned `--disable` flag: `POST /api/ingest-channels/revoke` (`cf ingest revoke`) flips `enabled: false` and records `revoked: {at, by}` as an audit record rather than deleting. Rotation is `cf ingest rotate`.
+- ~~**Revocation**~~ — **DONE**, and better than the planned `--disable` flag: `POST /api/spaces/:space/ingest-channels/revoke` (`cf ingest revoke`) flips `enabled: false` and records `revoked: {at, by}` as an audit record rather than deleting. Rotation is `cf ingest rotate`.
 - **Test gaps** (opportunistic): a `>1 MB` `app.request` asserting the 413 bodyLimit body; a second-append test pinning mark coalescing per (path, origin) (`prepare.ts`); dedup the `ingestMarks` test helper into shared support.
 - **Per-install rate limiting** (429) on the *data plane* — loom's `plan.md` Workstream-D step 3 specifies it; ingest still has only the body cap + `MAX_BATCH`. The *control* plane is now rate-limited (`packages/toolshed/lib/rate-limit.ts`, keyed by client address — a DID-keyed bucket is useless since DIDs are free to generate). Still deferred for ingest itself.
 - **Provisioning identity footgun** — the script writes into the service space of whatever identity its `.env` yields; a mismatch provisions into the wrong space and every POST 401s with no diagnostic. Add a usage note: run with the same `.env`/identity as the target toolshed.
