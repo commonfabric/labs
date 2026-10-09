@@ -22,8 +22,9 @@
  *
  * A new room is offered to each other member whose profile the request names,
  * through the share inbox the profile points at, in the envelope a share inbox
- * takes. A notice is queued for every other member all the same, since
- * nothing tells the sender an offer arrived.
+ * takes, and each member it is offered to is added to the room's participants.
+ * A notice is queued for each other member offered nothing: one the request
+ * names only by principal, or whose profile points at no inbox.
  */
 import {
   type Cell,
@@ -224,6 +225,12 @@ export interface ManagerActState {
   /** The direct room shared with each counterpart. */
   direct: DirectCell;
 
+  /**
+   * The rooms this user belongs to and hasn't forgotten, newest first, as
+   * this session lists them.
+   */
+  rooms: Cell<ChatIndexEntry[]>;
+
   /** Each request's outcome. */
   requests: RequestsCell;
 
@@ -355,6 +362,61 @@ function inboxOf(pointer: Cell<ShareInboxPiece>): unknown {
   return pointer;
 }
 
+/** The room's stream that adds a profile to its participants. */
+function joinStreamOf(
+  room: Cell<ChatRoomLink>,
+): Cell<{ addParticipant: Stream<{ profile: Cell<ChatProfile> }> }>;
+function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
+  return room;
+}
+
+/**
+ * Helper for the handlers that follow a room's creation or acceptance, which
+ * adds `profile` to the room's participants, through the room's own
+ * `addParticipant`, the one writer its roster admits. A profile that hasn't
+ * resolved is added to nothing.
+ */
+const addToParticipants = (
+  room: Cell<ChatRoomLink> | undefined,
+  profile: Cell<ChatProfile> | undefined,
+): void => {
+  // TODO(danfuzz): A stop-gap. A member offered nothing, whose manager
+  // neither created nor accepted the room, is never added here, so isn't on
+  // the room's roster, and is shown among its participants only as an author,
+  // once they write. Add each member once their manager lists the room
+  // without a step of their own.
+  const resolved = profile?.resolveAsCell();
+  if (
+    room === undefined || resolved === undefined || resolved.get() === undefined
+  ) {
+    return;
+  }
+  joinStreamOf(room).key("addParticipant").send({ profile: resolved });
+};
+
+/**
+ * The notice telling `recipient` of `room`, which the request `requestId`
+ * created, keyed so that each request has at most one per recipient.
+ */
+const noticeFor = (
+  recipient: string,
+  requestId: string,
+  room: Cell<ChatRoomLink>,
+): ChatManagerNotice => ({
+  id: JSON.stringify([recipient, requestId]),
+  room,
+  recipient,
+});
+
+/** A member a new room is offered to. */
+export interface OfferedMember {
+  /** The member's DID. */
+  recipient: string;
+
+  /** The member's profile, through whose share inbox the room is offered. */
+  profile: Cell<ChatManagerProfile>;
+}
+
 /** What offering a new room asks: the room, and whom to offer it to. */
 export interface OfferRoomEvent {
   /** The room offered. */
@@ -369,24 +431,31 @@ export interface OfferRoomEvent {
   /** A group room's title, or empty for a direct room. */
   title: string;
 
-  /** The profiles of the members to offer it to. */
-  profiles: Cell<ChatManagerProfile>[];
+  /** The members to offer it to. */
+  members: OfferedMember[];
+}
+
+/** What `offerRooms` is bound to. */
+interface OfferRoomsState {
+  /** Notices waiting for a client to deliver them. */
+  outgoingNotices: NoticesCell;
 }
 
 /**
- * Offers a room to each person in the event's `profiles`, through the share
- * inbox each profile points at, in the envelope a share inbox takes; a
- * profile pointing at no inbox is offered nothing. The offer names the room's
- * space and the host serving it, this pattern's own, and the principal
- * sending it as its sender.
+ * Offers a room to each of the event's `members`, through the share inbox
+ * their profile points at, in the envelope a share inbox takes, and adds to
+ * the room's participants each member it offers the room to. A member whose
+ * profile points at no inbox is offered nothing, and a notice for them is
+ * queued instead. The offer names the room's space and the host serving it,
+ * this pattern's own, and the principal sending it as its sender.
  *
  * It runs as an event of its own, queued by the one that creates the room, so
  * that it reads the room's space once the room's creation has committed, and
  * the members' profiles are read apart from that creation. While the space is
  * not known, nothing is sent.
  */
-const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
-  (event) => {
+const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
+  (event, { outgoingNotices }) => {
     const space = spaceOf(event?.room);
     const from = currentPrincipal();
     if (!isWellFormedDID(space) || from === undefined) return;
@@ -401,12 +470,16 @@ const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
       from,
       sharedAt: Date.now(),
     };
-    for (const profile of event.profiles ?? []) {
+    for (const { recipient, profile } of event.members ?? []) {
       // The pointer is read through its parent: a link-typed field read on
       // its own is a cell whether or not anything is stored there.
       const pointer = profile?.key("inbox").get()?.piece;
-      if (pointer === undefined) continue;
+      if (pointer === undefined) {
+        outgoingNotices.push(noticeFor(recipient, event.id, event.room));
+        continue;
+      }
       inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
+      addToParticipants(event.room, profile);
     }
   },
 );
@@ -423,33 +496,14 @@ export interface JoinRoomsEvent {
   profile: Cell<ChatProfile>;
 }
 
-/** The room's stream that adds a profile to its participants. */
-function joinStreamOf(
-  room: Cell<ChatRoomLink>,
-): Cell<{ addParticipant: Stream<{ profile: Cell<ChatProfile> }> }>;
-function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
-  return room;
-}
-
 /**
- * Adds the event's profile to the room's participants, through the room's own
- * `addParticipant`, the one writer its roster admits, so that whoever creates
- * or accepts a room is listed in it without a step of their own. It runs as an
- * event of its own, queued by the one that creates or accepts the room, so
- * that the room's streams exist when it sends. A profile that hasn't resolved
- * is added to nothing.
+ * Adds the event's profile to the room's participants, so that whoever
+ * creates or accepts a room is listed in it without a step of their own. It
+ * runs as an event of its own, queued by the one that creates or accepts the
+ * room, so that the room's streams exist when it sends.
  */
 const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
-  (event) => {
-    // TODO(danfuzz): A stop-gap. A member whose manager neither created nor
-    // accepted the room is never sent here, so isn't on the room's roster,
-    // and is shown among its participants only as an author, once they write.
-    // Add each member once their manager lists the room without a step of
-    // their own.
-    const profile = event?.profile?.resolveAsCell();
-    if (profile === undefined || profile.get() === undefined) return;
-    joinStreamOf(event.room).key("addParticipant").send({ profile });
-  },
+  (event) => addToParticipants(event?.room, event?.profile),
 );
 
 /**
@@ -485,18 +539,18 @@ interface RoomOptions {
    */
   joinableByLink?: boolean;
 
-  /** The profiles of the other members to offer the room to. */
-  offerTo?: readonly Cell<ChatManagerProfile>[];
+  /** The other members to offer the room to. */
+  offerTo?: readonly OfferedMember[];
 }
 
 /**
  * Creates a room in a space of its own, as the space's root, and its notices,
  * records its entry, and registers its space in the user's catalog, all in one
  * transaction: the space's grants and its declared kind are part of creating
- * it, so nothing has to commit apart. A notice for each other member is
- * queued for a client to deliver, and adding this user to the room's
- * participants, and offering the room to each profile in `offerTo`, are queued
- * to follow.
+ * it, so nothing has to commit apart. A notice for each other member not in
+ * `offerTo` is queued for a client to deliver, and adding this user to the
+ * room's participants, and offering the room to each member in `offerTo`, are
+ * queued to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
  * runs again with the name resolved. Nothing is registered or sent until the
@@ -532,13 +586,14 @@ const createRoom = (
       },
     }),
   );
-  members.forEach((recipient) => {
-    state.outgoingNotices.push({
-      id: JSON.stringify([recipient, requestId]),
-      room,
-      recipient,
-    });
-  });
+  // A member offered the room has a notice only if the offer can't be sent,
+  // which `offerRooms` decides, since that reads their profile.
+  const offered = offerTo.map(({ recipient }) => recipient);
+  members.filter((member) => !offered.includes(member)).forEach(
+    (recipient) => {
+      state.outgoingNotices.push(noticeFor(recipient, requestId, room));
+    },
+  );
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
     listRoom(state.catalog, space, { title, since: now });
@@ -550,7 +605,7 @@ const createRoom = (
         room,
         id: requestId,
         title: title ?? "",
-        profiles: [...offerTo],
+        members: [...offerTo],
       });
     }
   }
@@ -559,6 +614,27 @@ const createRoom = (
     kind,
     ...(counterpart === undefined ? {} : { counterpart }),
     since: createdAt,
+  };
+};
+
+/**
+ * The direct room with `counterpart` that `rooms` lists, the newest if there
+ * are several, as an entry `direct` holds: a room another manager created and
+ * offered this user is listed without being in `direct`. The entry names the
+ * room itself, rather than the link the session's listing found it by.
+ */
+const listedDirectWith = (
+  rooms: Cell<ChatIndexEntry[]>,
+  counterpart: string,
+): ChatIndexEntry | undefined => {
+  const listed = (rooms.get() ?? []).find((entry) =>
+    entry.kind === "direct" && entry.counterpart === counterpart
+  );
+  return listed === undefined ? undefined : {
+    room: listed.room.resolveAsCell(),
+    kind: "direct",
+    counterpart,
+    since: listed.since,
   };
 };
 
@@ -694,9 +770,21 @@ const performManagerAct = (
       recordOutcome(state, requestId, { status: "done", entry: known });
       return;
     }
+    // A room listed with the counterpart is theirs, created by them, since
+    // one this manager created would be in `direct`. It is kept there from
+    // now on, as an accepted room is, so a forget doesn't lose it.
+    const listed = listedDirectWith(state.rooms, counterpart);
+    if (listed !== undefined) {
+      direct.key(counterpart).set(listed);
+      recordOutcome(state, requestId, { status: "done", entry: listed });
+      return;
+    }
     const entry = createRoom(state, requestId, "direct", [counterpart], {
       counterpart,
-      offerTo: profile === undefined ? [] : [profile],
+      offerTo: profile === undefined ? [] : [{
+        recipient: counterpart,
+        profile,
+      }],
     });
     direct.key(counterpart).set(entry);
     recordOutcome(state, requestId, { status: "done", entry });
@@ -911,7 +999,7 @@ export interface FabriChatManagerInput {
 
   /**
    * The direct room shared with each counterpart, for the rooms this manager
-   * created or accepted.
+   * created, accepted, or found listed when starting a chat.
    */
   direct?: DirectCell;
 
@@ -1009,9 +1097,9 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(({ space }) => {
 
 /**
  * The other member of the direct room in `space`: the counterpart `direct`
- * holds the room under, for a room this manager created or accepted, or else
- * the room's creator, as its `about.record` is labeled, unless that is `self`.
- * Absent when neither names one, as when the label can't be read.
+ * holds the room under, for a room `direct` holds, or else the room's
+ * creator, as its `about.record` is labeled, unless that is `self`. Absent
+ * when neither names one, as when the label can't be read.
  */
 const counterpartOf = (
   direct: Record<string, ChatIndexEntry>,
@@ -1097,9 +1185,10 @@ export const FabriChatManagerCore = pattern<
       myProfile,
       catalog: sharedSpaceCatalog,
       direct,
+      rooms: newestFirst,
       requests,
       outgoingNotices,
-      offerRooms: offerRooms({}),
+      offerRooms: offerRooms({ outgoingNotices }),
       joinRooms: joinRooms({}),
       draft,
       startRefusal,

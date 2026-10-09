@@ -5,7 +5,8 @@
  * refuses an event naming someone else, and with no counterpart named, records
  * the creator. The room offers its other member the control that asks their
  * manager to list it, until the manager does, and accepting the room lists
- * them among its participants.
+ * them among its participants. A start with the creator finds a room listed
+ * as theirs, preferring the one `direct` holds, rather than creating another.
  */
 import {
   action,
@@ -80,12 +81,19 @@ interface Setup {
 
   /** The direct room Alice created, once she has. */
   held: Writable<{ room?: Cell<HeldRoom> }>;
+
+  /**
+   * A second direct room Alice created with Bob, from another manager, once
+   * she has.
+   */
+  heldAgain: Writable<{ room?: Cell<HeldRoom> }>;
 }
 
 export const setup = pattern(() => ({
   aliceDid: Writable.of<MaybeDID>(""),
   bobDid: Writable.of<MaybeDID>(""),
   held: Writable.of<{ room?: Cell<HeldRoom> }>({}),
+  heldAgain: Writable.of<{ room?: Cell<HeldRoom> }>({}),
 }));
 
 /** What `introduce` is bound to. */
@@ -122,7 +130,8 @@ const reasonOf = (
     : outcome?.status ?? "none";
 };
 
-// Creates a direct room with Bob, and hands it to him through the setup.
+// Creates a direct room with Bob, and hands it to him through the setup, and
+// then a second one, from another manager.
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
@@ -135,6 +144,19 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const action_hand_over = action(() =>
     setup.held.key("room").set(
       requests.key("d-1").key("entry").key("room").resolveAsCell(),
+    )
+  );
+  const againRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const again = FabriChatManagerCore({
+    myProfile: Writable.of<TestProfile>({ name: "Alice, again" }),
+    sharedSpaceCatalog: emptyCatalog(),
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests: againRequests,
+    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+  } as ManagerArg);
+  const action_hand_over_again = action(() =>
+    setup.heldAgain.key("room").set(
+      againRequests.key("d-2").key("entry").key("room").resolveAsCell(),
     )
   );
 
@@ -151,13 +173,21 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() => manager.rooms[0]?.counterpart !== undefined),
       },
+      {
+        action: again.openDirect,
+        event: { requestId: "d-2", counterpart: setup.bobDid },
+        trustedUi: startGesture,
+      },
+      { action: action_hand_over_again },
+      { assertion: assert(() => again.rooms.length === 1) },
       { label: "alice-created" },
       { await: "bob-done" },
     ],
   };
 });
 
-// Accepts the room, with a counterpart that isn't its creator and with none.
+// Accepts the room, with a counterpart that isn't its creator and with none,
+// and starts chats with Alice that find rooms listed as hers.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
@@ -187,11 +217,13 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   // A manager whose catalog lists the room as a host registers an offered
   // one, without `accept`, so `direct` holds nothing for it.
   const offeredCatalog = emptyCatalog();
+  const offeredDirect = Writable.of<Record<string, ChatIndexEntry>>({});
+  const offeredRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const offered = FabriChatManagerCore({
     myProfile: Writable.of<TestProfile>({ name: "Bob, offered" }),
     sharedSpaceCatalog: offeredCatalog,
-    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    direct: offeredDirect,
+    requests: offeredRequests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
   } as ManagerArg);
   const register = registerSharedSpace({ catalog: offeredCatalog });
@@ -201,6 +233,18 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       host: "http://localhost",
       kind: CHAT_ROOM_OFFER_KIND,
       offer: { from: setup.aliceDid.get(), id: "d-1" },
+    })
+  );
+  // Alice's second room, registered as a host registers an offered one, in
+  // the catalog of the manager that accepted her first, as admitted later.
+  const registerAgain = registerSharedSpace({ catalog });
+  const action_register_again = action(() =>
+    registerAgain.send({
+      space: spaceOf(setup.heldAgain.key("room")) ?? "",
+      host: "http://localhost",
+      kind: CHAT_ROOM_OFFER_KIND,
+      offer: { from: setup.aliceDid.get(), id: "d-2" },
+      since: Date.now() + 3_600_000,
     })
   );
 
@@ -268,6 +312,53 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           offered.rooms[0]?.kind === "direct" &&
           offered.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
+      },
+      // A start with Alice finds that room, creates none, and keeps it in
+      // `direct` from then on.
+      {
+        action: offered.openDirect,
+        event: { requestId: "reuse", counterpart: setup.aliceDid },
+        trustedUi: startGesture,
+      },
+      {
+        assertion: assert(() => {
+          const outcome = offeredRequests.get()["reuse"];
+          const space = spaceOf(setup.held.key("room"));
+          return space !== undefined && outcome?.status === "done" &&
+            spaceOf(outcome.entry?.room) === space &&
+            offered.rooms.length === 1 &&
+            Object.keys(readSharedSpaceCatalog(offeredCatalog).entries)
+                .length === 1 &&
+            spaceOf(offeredDirect.get()[setup.aliceDid.get()]?.room) === space;
+        }),
+      },
+      // With a second room of Alice's listed, newest, beside the one `direct`
+      // holds, a start with her finds the one `direct` holds.
+      { action: action_register_again },
+      {
+        assertion: assert(() =>
+          manager.rooms.length === 2 &&
+          spaceOf(manager.rooms[0]?.room) ===
+            spaceOf(setup.heldAgain.key("room")) &&
+          manager.rooms.every((entry) =>
+            entry.counterpart === setup.aliceDid.get()
+          )
+        ),
+      },
+      {
+        action: manager.openDirect,
+        event: { requestId: "direct-wins", counterpart: setup.aliceDid },
+        trustedUi: startGesture,
+      },
+      {
+        assertion: assert(() => {
+          const outcome = requests.get()["direct-wins"];
+          const space = spaceOf(setup.held.key("room"));
+          return space !== undefined && outcome?.status === "done" &&
+            spaceOf(outcome.entry?.room) === space &&
+            manager.rooms.length === 2 &&
+            Object.keys(readSharedSpaceCatalog(catalog).entries).length === 2;
+        }),
       },
       { label: "bob-done" },
     ],
