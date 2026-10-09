@@ -137,10 +137,15 @@ So on the file the tool will actually run against, the 2.1 million commits
 that own no head hold 4.12 GB of payload between them, about 2 KB each; the
 other 9.46 GB of payload sits in the 377,607 commits that still own a head,
 25 KB each on average, and the `computed:` prefix holds two thirds of the
-revisions. Hollowing as §1 defines it — unreferenced commits only — reaches
-the 4.12 GB and the 1.22 GB of revision rows behind heads; whether the
-out-of-window payloads of head-owning commits can be hollowed as well, and
-what fills them, is a question for the next revision of this plan.
+revisions. Two different mechanisms reclaim two different pools: truncation
+removes the 1.22 GB of revision rows behind heads, and hollowing frees only
+eligible payloads, so the 4.12 GB on commits that own no head is an upper
+bound on what hollowing reaches, less whatever the retained window and the
+`op_*` references keep. Of the 13.58 GB of payload overall, 7.27 GB is read
+sets and 6.16 GB is operations; the head-owning commits carry 4.21 GB of
+reads and 5.23 GB of operations, the headless ones 3.06 GB and 0.92 GB.
+Whether the out-of-window payloads of head-owning commits can be hollowed
+as well is a question for the next revision of this plan.
 
 **Most heads are session instances.** Of the 672,073 head rows in
 September, 451,721 are `session:` scope keys and 17,813 are `user:`; the
