@@ -122,7 +122,8 @@ tables empty, every commit `authored`):
 | --- | ---: |
 | commits | 2,482,226 |
 | commits owning a head (the rest are hollowing candidates) | 377,607 |
-| `commit.original` bytes | 13.58 GB |
+| `commit.original` bytes, all commits | 13.58 GB |
+| `commit.original` bytes, commits owning no head | 4.12 GB |
 | revision rows | 3,741,969 (2,546,095 patches, 1,195,874 sets) |
 | `revision.data` bytes | 5.00 GB (3.98 GB in sets) |
 | revision rows behind a head, and their bytes | 2,546,309, 1.22 GB |
@@ -132,9 +133,14 @@ tables empty, every commit `authored`):
 | patch tails over 1,000 rows | 527 (longest 184,390) |
 | snapshots | 4,300 |
 
-So on the file the tool will actually run against, hollowing the payloads
-of the 2.1 million commits that own no head is where the space is, and the
-`computed:` prefix holds two thirds of the revisions.
+So on the file the tool will actually run against, the 2.1 million commits
+that own no head hold 4.12 GB of payload between them, about 2 KB each; the
+other 9.46 GB of payload sits in the 377,607 commits that still own a head,
+25 KB each on average, and the `computed:` prefix holds two thirds of the
+revisions. Hollowing as §1 defines it — unreferenced commits only — reaches
+the 4.12 GB and the 1.22 GB of revision rows behind heads; whether the
+out-of-window payloads of head-owning commits can be hollowed as well, and
+what fills them, is a question for the next revision of this plan.
 
 **Most heads are session instances.** Of the 672,073 head rows in
 September, 451,721 are `session:` scope keys and 17,813 are `user:`; the
@@ -987,6 +993,7 @@ be compacted until the engine can tell compacted history from absence.
    timings as stage 1 taken after compaction.
 7. **The production run**, by the operator, from the rehearsed flag set, with
    the owner's agreement. Stage 1's measurement left disk as the reason:
-   22.7 GB with 13.6 GB in payloads of commits that own no head.
+   22.7 GB, of which 13.6 GB is commit payloads, 4.1 GB of it in commits
+   that own no head.
 8. **Faithful replay of hollowed commits and explicit refusal of reads
    below the cut**, the two engine changes of §5.
