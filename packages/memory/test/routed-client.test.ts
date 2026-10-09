@@ -1481,6 +1481,191 @@ Deno.test("a mount whose open is refused for now is tried again on the same conn
   }
 });
 
+/**
+ * A router that keeps the worker's rule for principals: a `session.open`
+ * naming a key its connection has not authenticated is denied for good, and
+ * one for a space in `down` is denied for now. `flagsOf` gives the flags
+ * each hello is greeted with, by its number. The log names the connection
+ * each request came on.
+ */
+function principalRouter(
+  flagsOf: (hello: number) => ReturnType<typeof flags> = flags,
+) {
+  let hellos = 0;
+  const authenticated = new Set<string>();
+  const down = new Set<string>();
+  const log: {
+    connection: number;
+    type: string;
+    principal?: string;
+    answer?: string;
+    spaceKind?: unknown;
+  }[] = [];
+  const p = peer(
+    (hello) => {
+      hellos = hello;
+      authenticated.clear();
+      return frame(hello_(flagsOf(hello)));
+    },
+    (body, push) => {
+      const respond = (rest: Record<string, unknown>) =>
+        push({ type: "response", requestId: body.requestId, ...rest });
+      const denied = (retriable: boolean) =>
+        respond({
+          error: {
+            name: "AuthorizationError",
+            message: "Routed memory request denied",
+            ...(retriable ? { retriable: true } : {}),
+          },
+        });
+      if (body.type === "connection.auth") {
+        // The statement names its key; see `namedSigner`.
+        const principal = String(body.statement).split("|")[0];
+        authenticated.add(principal);
+        log.push({ connection: hellos, type: "auth", principal });
+        respond({
+          ok: {
+            principal,
+            expiresAt: Math.floor(Date.now() / 1000) + 600,
+          },
+        });
+      } else if (body.type === "session.open") {
+        const principal = String(body.principal);
+        const answer = !authenticated.has(principal)
+          ? "denied for good"
+          : down.has(String(body.space))
+          ? "denied for now"
+          : "admitted";
+        log.push({
+          connection: hellos,
+          type: "open",
+          principal,
+          answer,
+          spaceKind: (body.session as { spaceKind?: unknown }).spaceKind,
+        });
+        if (answer !== "admitted") denied(answer === "denied for now");
+        else {
+          respond({
+            ok: {
+              sessionId: (body.session as { sessionId?: string }).sessionId ??
+                `sdk-session-${body.space}`,
+              sessionToken: "sdk-token",
+              serverSeq: 0,
+            },
+          });
+        }
+      } else respond({ ok: {} });
+    },
+  );
+  const hello_ = (selected: ReturnType<typeof flags>) =>
+    hello(metadata(), selected);
+  return { p, down, log };
+}
+
+/** A signer whose statement names its key, for `principalRouter`. */
+function namedSigner(did: string): SessionPrincipal {
+  let signed = 0;
+  return {
+    did,
+    authorizeSessionOpen: () => {
+      throw new Error("Routed session uses connection authority");
+    },
+    authorizeConnection: (context) =>
+      Promise.resolve(
+        { statement: `${did}|${context.challenge.value}|${signed++}` } as never,
+      ),
+  };
+}
+
+Deno.test("a held mount that wakes between a drop and the next hello signs for the next connection", async (t) => {
+  setModernCellRepConfig(true);
+  for (
+    const [name, laterFlags, mounted] of [
+      // The mount's key is authenticated on the next connection before its
+      // open goes there; the space is still down, so the mount stays held.
+      ["as a key the next connection has not authenticated", flags(), {
+        settled: false,
+      }],
+      // The next connection's server does not seal a space's kind, which
+      // the mount declares.
+      ["against the next connection's capabilities", {
+        ...flags(),
+        spaceKind: false,
+      }, undefined],
+    ] as const
+  ) {
+    await t.step(name, async () => {
+      const random = Math.random;
+      // No jitter: a held mount waits 1,025 ms, and a reconnect while a
+      // session is held waits 25 ms before its hello.
+      Math.random = () => 0;
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      const { p, down, log } = principalRouter((hello) =>
+        hello < 3 ? flags() : laterFlags
+      );
+      const client = await connect({ transport: p.transport });
+      try {
+        // A session whose toolshed goes down and whose connection drops is
+        // held by the reconnect, so the next reconnect waits before its
+        // hello.
+        const session = await client.mount(
+          identity.did(),
+          {},
+          namedSigner(identity.did()),
+        );
+        down.add(identity.did());
+        down.add(elsewhere);
+        p.drop();
+        await tickUntil(time, () => session.held, 0, 40);
+        assertEquals(p.hellos(), 2);
+        // A mount as another key, of a space whose toolshed is down too.
+        const held = Date.now();
+        const mount = settling(
+          client.mount(
+            elsewhere,
+            { spaceKind: "notes" },
+            namedSigner(elsewhere),
+          ),
+        );
+        await tickUntil(
+          time,
+          () => log.some((e) => e.principal === elsewhere && e.type === "open"),
+          0,
+          40,
+        );
+        assertEquals(mount, { settled: false });
+        // The connection drops 10 ms before the mount's wait ends, and the
+        // next hello goes 25 ms after the drop: the mount wakes in between.
+        await time.tickAsync(1015 - (Date.now() - held));
+        p.drop();
+        await time.tickAsync(10);
+        assertEquals(p.hellos(), 2);
+        await time.tickAsync(100);
+        await tickUntil(time, () => false, 0, 20);
+        assertEquals(p.hellos(), 3);
+        const onThird = log.filter((e) =>
+          e.connection === 3 && e.principal === elsewhere
+        ).map((e) => [e.type, e.answer]);
+        if (mounted !== undefined) {
+          assertEquals(onThird, [["auth", undefined], [
+            "open",
+            "denied for now",
+          ]]);
+          assertEquals(mount, mounted);
+        } else {
+          // No open that declares a kind reaches that server.
+          assertEquals(onThird.filter(([type]) => type === "open"), []);
+          assertEquals((mount.failure as Error)?.name, "ProtocolError");
+        }
+      } finally {
+        await client.close();
+        time.restore();
+        Math.random = random;
+      }
+    });
+  }
+});
+
 Deno.test("a mount held after a refusal for now starts over on the next connection when this one drops", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));

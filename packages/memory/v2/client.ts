@@ -1150,6 +1150,15 @@ export class Client {
     routedChallenge?: SessionOpenAuthContext["challenge"],
   ): Promise<string | typeof STALE> {
     this.#routedSigners.set(principal.did, principal);
+    // A connection that is down holds the challenge of the one that is
+    // gone, and its authentications too: `#authenticated` is emptied by the
+    // next hello, which a reconnect may put off, so this is tested before
+    // the map is read. A key found there meanwhile is one the next
+    // connection has not authenticated.
+    if (!this.#connected) {
+      if (whileConnected) throw connectionLostWhileRestoring();
+      return STALE;
+    }
     const existing = this.#authenticated.get(principal.did);
     if (existing !== undefined) {
       try {
@@ -1162,11 +1171,6 @@ export class Client {
         if (whileConnected) throw connectionLostWhileRestoring();
         return STALE;
       }
-    }
-    // A connection that is down holds the challenge of the one that is gone.
-    if (!this.#connected) {
-      if (whileConnected) throw connectionLostWhileRestoring();
-      return STALE;
     }
     const epoch = this.#connectionEpoch;
     const held = this.sessionOpenAuthContext();
