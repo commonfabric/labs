@@ -526,16 +526,28 @@ describe("sandbox-runtime-default", () => {
               { namedBy: "Loom", flags: false },
             ),
           ),
+          // A Mac that is not Apple silicon has no default to take either:
+          // its unnamed runtime is refused.
+          await rejection(
+            resolveSandboxRuntimeSelection(
+              { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+              {},
+              { platform: "darwin", arch: "x86_64", flags: false },
+            ),
+          ),
         ];
 
         expect(
           refusals.map((refusal) => refusal instanceof HarnessControlError),
-        ).toEqual([true, true]);
+        ).toEqual([true, true, true]);
         expect(refusals.map(messageOf)).toEqual([
           "`CF_HARNESS_SANDBOX_RUNTIME=docker` names the Docker driver, which " +
           "this cf-harness no longer has: its one sandbox runtime is " +
           "`runsc`. Name `runsc` with `--sandbox-runtime runsc` or " +
           "`CF_HARNESS_SANDBOX_RUNTIME=runsc`.",
+          "`CF_HARNESS_SANDBOX_RUNTIME=docker` names the Docker driver, which " +
+          "this cf-harness no longer has: its one sandbox runtime is " +
+          "`runsc`. Name `runsc` with `CF_HARNESS_SANDBOX_RUNTIME=runsc`.",
           "`CF_HARNESS_SANDBOX_RUNTIME=docker` names the Docker driver, which " +
           "this cf-harness no longer has: its one sandbox runtime is " +
           "`runsc`. Name `runsc` with `CF_HARNESS_SANDBOX_RUNTIME=runsc`.",

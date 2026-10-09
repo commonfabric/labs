@@ -865,11 +865,17 @@ export const resolveSandboxRuntimeSelection = async (
     ? "flag"
     : "environment";
   if (rawRuntime === DOCKER_RUNTIME_NAME) {
+    // An unnamed runtime is taken only by an entrypoint that takes a default,
+    // on a platform that has one: Linux, and a Mac with Apple silicon.
+    const native = options.namedBy === undefined
+      ? nativeRuntimePlatformOf(options.platform)
+      : undefined;
     throw dockerNamedRefusal(
       namedBy,
       options.flags,
-      options.namedBy === undefined &&
-        nativeRuntimePlatformOf(options.platform) !== undefined,
+      native === "linux" ||
+        (native === "darwin" &&
+          (options.arch ?? Deno.build.arch) === "aarch64"),
     );
   }
   const named = rawRuntime === undefined
