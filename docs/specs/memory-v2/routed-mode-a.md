@@ -137,6 +137,9 @@ same connection, so on a shared socket one toolshed that is down does not stall
 the other spaces.
 
 The router issues a challenge through its link agent's channel-assigned context.
+The SDK shares a challenge among at most 32 different keys, including keys
+released before it expires. The router's `max_principals_per_challenge` must
+therefore be at least 32; configuration validation and preflight enforce this.
 A client completes it within 60 seconds. The agent verifies the fixed-format
 signed statement itself before admitting the worker, hashes its exact bytes and
 signs issuance and receipt evidence; its fixed-format IPC never interprets
@@ -302,9 +305,12 @@ the infra preflight beside the limits it compares already. One is
 `max_watches_per_session == watchesPerSession`, the watch IDs one session may
 hold, default 2,048, which may not exceed `watchesPerContext`. The two are
 sized together: a session is restored by one `session.watch.set` that names
-its whole watch set, so that many watches must fit one frame. At the 42 slots
-a watch measured on the rehearsal, 2,048 watches are about 87,000 slots, inside
-150,000 with room for heavier selectors. A frame's `watches` have no count
+its whole watch set, so that many watches must fit one frame together with
+their selectors, views and holdings. The count limit does not enforce this
+aggregate size: incremental adds can create a set too large to restore, causing
+reconnect attempts to fail. Size the limit against the workload's complete
+restore frame. Raising server caps beyond 150,000 also requires changing the
+SDK ceiling. A frame's `watches` have no count
 bound of their own. The infra router README's capacity section has the
 arithmetic and maps each limit to the router's.
 

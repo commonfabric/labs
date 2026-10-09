@@ -174,6 +174,10 @@ describe("routed untrusted parsers", () => {
       decodeRoutedFrame(encodeRoutedFrame(many, cap), true, cap).body.type,
     ).toBe("session.watch.set");
     expect(() => decodeRoutedFrame(many, false, 5000)).toThrow();
+    for (const watches of [null, 7, true, "watch"]) {
+      expect(() => decodeRoutedFrame(frame({ watches }), false, cap)).toThrow();
+      expect(() => encodeRoutedFrame(frame({ watches }), cap)).toThrow();
+    }
     expect(
       decodeRoutedFrame(frame({ holdings: Array(8192).fill(0) }), false, cap)
         .body.type,

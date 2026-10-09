@@ -165,9 +165,8 @@ export const DEFAULT_ROUTED_HOST_LIMITS: Readonly<RoutedHostLimits> = {
   watchesPerRouter: 262144,
   watchesPerToolshed: 524288,
   watchesPerPrincipal: 81920,
-  // At the 42 slots a watch measured on the rehearsal, 2,048 watches are
-  // about 87,000 slots, inside the default frame of 150,000 with room for
-  // heavier selectors.
+  // Size this count against the workload's complete restore frame, including
+  // selectors, views and holdings; watch count alone does not bound its size.
   watchesPerSession: 2048,
   holdingsPerContext: 327680,
   holdingsPerRouter: 2097152,

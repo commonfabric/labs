@@ -252,6 +252,9 @@ export function parseRoutedText(
   // A frame's `watches` have no count bound of their own: the slot cap and
   // the byte caps bound the frame, and a toolshed's `limits.watchesPerSession`
   // bounds what a session may hold.
+  if (body.watches !== undefined) {
+    requireRouted(Array.isArray(body.watches) || isPlainObject(body.watches));
+  }
   if (body.holdings !== undefined) {
     const holdings = body.holdings;
     requireRouted(
