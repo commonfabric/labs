@@ -397,8 +397,20 @@ function pass(name: string) {
   gates.push(name);
   console.log(JSON.stringify({ gate: name, passed: true }));
 }
-async function waitFile(path: string) {
+/**
+ * Waits for a router role to create `path`. A role that never does, as the
+ * link agent does not while it can open no toolshed link, fails the exercise
+ * after `ms` instead of holding it open. The longest wait a working router
+ * needs is its ten-second startup grace, when it starts with a toolshed down.
+ */
+async function waitFile(path: string, ms = 45_000) {
   const watcher = Deno.watchFs(path.slice(0, path.lastIndexOf("/")));
+  let expired = false;
+  // Closing the watcher ends the loop below.
+  const timer = setTimeout(() => {
+    expired = true;
+    watcher.close();
+  }, ms);
   const exists = () => {
     try {
       Deno.statSync(path);
@@ -417,9 +429,17 @@ async function waitFile(path: string) {
     if (exists()) return;
     for await (const _ of watcher) if (exists()) return;
   } finally {
-    watcher.close();
+    clearTimeout(timer);
+    if (!expired) watcher.close();
   }
-  throw new Error(`readiness watcher closed: ${path}`);
+  // The file may have appeared as the timer fired, after the last event the
+  // loop saw.
+  if (exists()) return;
+  throw new Error(
+    expired
+      ? `not ready after ${ms} ms: ${path}`
+      : `readiness watcher closed: ${path}`,
+  );
 }
 async function listenerReady(child: Deno.ChildProcess) {
   const ready = Promise.withResolvers<void>();
