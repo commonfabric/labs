@@ -1677,9 +1677,19 @@ function defersInitialRunUntilSynced(
   return !!options.awaitSyncBeforeInitialRun;
 }
 
-/** One pattern instance the resume pre-sync visits: the pattern and the
- * result cell it runs under. */
-type ResumePatternInstance = { pattern: Pattern; resultCell: Cell<any> };
+/**
+ * One pattern instance the resume pre-sync visits: the pattern and the
+ * result cell it runs under. A nested instance also carries the inputs its
+ * parent's node binds it to, which stand in for its argument document when
+ * the store holds none: the instance then runs fresh, in its parent's start,
+ * and binding its nodes against what that start supplies names the same
+ * documents the fresh run reads.
+ */
+type ResumePatternInstance = {
+  pattern: Pattern;
+  resultCell: Cell<any>;
+  argumentInputs?: FabricExecValue;
+};
 
 const LIST_OP_INPUT_SCHEMAS = {
   map: MAP_INPUT_SCHEMA,
@@ -8875,6 +8885,16 @@ export class Runner {
    * ends the walk: an instance whose result document never arrived is left
    * unplanned rather than holding the resume, and its own start names what
    * it needs.
+   *
+   * An instance whose result document holds no argument link at all — the
+   * store never received its setup — has no start of its own: its parent's
+   * start sets it up fresh, inline, and reads what its nodes read in the
+   * same transaction. Its nodes are planned against the inputs the parent's
+   * node binds it to, the stand-in a fresh run's pre-sync binds against, so
+   * that a document those nodes read which the store already holds — a
+   * builtin's own cells, written by an earlier session whose setup of the
+   * instance was lost — is local before the parent's start reads it rather
+   * than entering that start's commit at sequence zero.
    */
   async #syncResumeInstanceNodes(
     instances: readonly ResumePatternInstance[],
@@ -8894,8 +8914,11 @@ export class Runner {
       const planTx = this.#runtime.edit();
       if (identity !== undefined) planTx.tx.scopeKeyIdentity = identity;
       try {
-        for (const [key, { pattern, resultCell }] of pending) {
-          const argumentLink = getMetaLink(resultCell, "argument");
+        for (const [key, instance] of pending) {
+          const { pattern, resultCell } = instance;
+          const argumentMetaLink = getMetaLink(resultCell, "argument");
+          const argumentLink = argumentMetaLink ??
+            this.#resumeArgumentStandIn(instance);
           if (argumentLink === undefined) continue;
           pending.delete(key);
           const planned = this.#cellsPatternNodes(
@@ -8906,12 +8929,14 @@ export class Runner {
           );
           for (const cell of planned.cells) cells.push(cell);
           for (const plan of planned.plans) plans.push(plan);
-          cells.push(
-            this.#runtime.getCellFromLink({
-              ...argumentLink,
-              schema: undefined,
-            }),
-          );
+          if (argumentMetaLink !== undefined) {
+            cells.push(
+              this.#runtime.getCellFromLink({
+                ...argumentMetaLink,
+                schema: undefined,
+              }),
+            );
+          }
         }
       } finally {
         planTx.abort("resume instance nodes: read-only planning");
@@ -8931,6 +8956,22 @@ export class Runner {
       logger.time(waveStart, "start", "resumeInstanceNodeSyncWave");
       await this.#syncCrossSpaceReads(plans, identity);
     }
+  }
+
+  /**
+   * The argument link a nested instance with no stored setup is planned
+   * against: an immutable document holding the inputs its parent's node
+   * binds it to, as a fresh run's pre-sync binds against the caller's
+   * argument. `undefined` for the root, which carries no such inputs.
+   */
+  #resumeArgumentStandIn(
+    instance: ResumePatternInstance,
+  ): NormalizedFullLink | undefined {
+    if (instance.argumentInputs === undefined) return undefined;
+    const { space } = instance.resultCell.getAsNormalizedFullLink();
+    return this.#runtime
+      .getImmutableCell(space, instance.argumentInputs, undefined)
+      .getAsNormalizedFullLink();
   }
 
   /**
@@ -9304,13 +9345,20 @@ export class Runner {
     // Every (pattern, result cell) the walk visits, for the pre-sync's
     // second pass over the list coordinators those patterns hold.
     visited?: ResumePatternInstance[],
+    // The inputs the parent's node binds a nested instance to; the root has
+    // none.
+    argumentInputs?: FabricExecValue,
   ): void {
     resultCell = resultCell.withTx(tx);
     const link = resultCell.getAsNormalizedFullLink();
     const key = `${link.space}\0${link.id}\0${link.scope ?? "space"}`;
     if (seen.has(key)) return;
     seen.add(key);
-    visited?.push({ pattern, resultCell });
+    visited?.push({
+      pattern,
+      resultCell,
+      ...(argumentInputs === undefined ? {} : { argumentInputs }),
+    });
 
     for (const descriptor of pattern.derivedInternalCells ?? []) {
       out.push(getDerivedInternalCell(resultCell, descriptor));
@@ -9378,6 +9426,7 @@ export class Runner {
         seen,
         tx,
         visited,
+        plan.inputs,
       );
     }
   }
