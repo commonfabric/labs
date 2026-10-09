@@ -26,6 +26,7 @@ import {
   type RuntimeProgram,
   setPatternSource,
   systemPatternSource,
+  type SystemPieceOrigin,
 } from "../src/index.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
@@ -37,6 +38,11 @@ const PARENT_PATH = "/api/patterns/system/reconcile-parent.tsx";
 const PARENT_SOURCE = systemPatternSource("system/reconcile-parent.tsx");
 const SOURCE_PATH = "/api/patterns/system/reconcile-target.tsx";
 const SYMBOL = "TrackedPattern";
+const PARENT_ORIGIN: SystemPieceOrigin = {
+  kind: "system",
+  ref: PARENT_SOURCE,
+  route: PARENT_PATH,
+};
 
 const parentSource = [
   `import { ${SYMBOL} } from "./reconcile-target.tsx";`,
@@ -879,35 +885,6 @@ describe("piece source reconciliation", () => {
       expect(getPieceReconciliation(piece)?.reason).toBeUndefined();
     });
 
-    it("records an origin whose source could not be downloaded as unreachable", async () => {
-      // The identity route answers and the module it names does not. That is
-      // an origin out of reach, which may come back, not source it refused.
-      const v2Identity = await identityFor(source("v2"));
-      const serving = servingFetch(() => v2Identity, () => source("v2"));
-      const piece = await preparePiece((input, init) => {
-        const url = new URL(
-          input instanceof Request
-            ? input.url
-            : input instanceof URL
-            ? input.href
-            : input,
-        );
-        return url.pathname === SOURCE_PATH
-          ? Promise.resolve(new Response("unavailable", { status: 503 }))
-          : serving(input, init);
-      });
-      await stampSource(piece, PARENT_SOURCE);
-
-      expect(await reconcile(piece)).toBe("unavailable");
-
-      expect(getPieceReconciliation(piece)).toMatchObject({
-        outcome: "unreachable",
-        origin: PARENT_SOURCE,
-        offered: { identity: v2Identity, symbol: SYMBOL },
-      });
-      expect(getPieceReconciliation(piece)?.reason).toBeUndefined();
-    });
-
     it("settles on a failure that arrives without a message", async () => {
       // An empty reason is dropped when the record is read, so recording one
       // would leave every later attempt rewriting the same conclusion.
@@ -1397,6 +1374,95 @@ describe("piece source reconciliation", () => {
         expect(getPatternIdentityRef(piece)).toEqual(originalRef);
         expect(getPatternSource(piece)).toBe(origin);
       }
+    });
+  });
+
+  describe("compileSystemSource()", () => {
+    function compile(symbol = SYMBOL) {
+      return runtime.sourceReconciler.compileSystemSource(
+        signer.did(),
+        PARENT_ORIGIN,
+        symbol,
+      );
+    }
+
+    it("returns the pattern its source compiles to, held to the advertised identity", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v2")));
+
+      expect(await compile()).toMatchObject({
+        outcome: "compiled",
+        ref: { identity: v2Identity, symbol: SYMBOL },
+      });
+    });
+
+    it("refuses source that does not compile to the identity its origin advertises", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      const v3Identity = await identityFor(source("v3"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v3")));
+
+      expect(await compile()).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        offered: { identity: v2Identity, symbol: SYMBOL },
+        detail: expect.stringContaining(v3Identity),
+      });
+    });
+
+    it("refuses an export the source does not have", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v2")));
+
+      expect(await compile("NotExported")).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: v2Identity, symbol: "NotExported" },
+      });
+    });
+
+    it("returns unreachable, naming what was advertised, when the source cannot be downloaded", async () => {
+      // The identity route answers and the module it names does not, which
+      // may come back.
+      const v2Identity = await identityFor(source("v2"));
+      const serving = servingFetch(() => v2Identity, () => source("v2"));
+      createRuntime((input, init) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        return url.pathname === SOURCE_PATH
+          ? Promise.resolve(new Response("unavailable", { status: 503 }))
+          : serving(input, init);
+      });
+
+      expect(await compile()).toMatchObject({
+        outcome: "unreachable",
+        offered: { identity: v2Identity, symbol: SYMBOL },
+      });
+    });
+
+    it("returns unreachable when the runtime stops before the origin answers", async () => {
+      identityGate = defer();
+      const requested = defer();
+      createRuntime(async () => {
+        requested.resolve();
+        await identityGate!.promise;
+        return new Response("not reached", { status: 503 });
+      });
+
+      const compiling = compile();
+      await requested.promise;
+      const disposing = runtime.sourceReconciler.dispose();
+      identityGate.resolve();
+      await disposing;
+
+      expect(await compiling).toEqual({
+        outcome: "unreachable",
+        detail: "the runtime stopped before the origin answered",
+      });
     });
   });
 

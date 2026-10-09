@@ -2851,7 +2851,7 @@ describe("opening a space root", () => {
   it("surfaces a clear error when the official pattern cannot be compiled", async () => {
     // The roll-forward's compile of the official source is a failure surface
     // too: if the toolshed serves un-compilable source, the operator gets one
-    // clear "could not be compiled" error, not a raw compiler stack.
+    // clear error naming the refusal, not a raw compiler stack.
 
     const { oldRef } = await pinOldRequiredHome();
     stub.setSource("this is not valid typescript @@@ export default");
@@ -2870,7 +2870,7 @@ describe("opening a space root", () => {
     }
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     expect(message).toContain("default-root heal failed");
-    expect(message).toContain("could not be compiled");
+    expect(message).toContain("was refused");
   });
 
   it("keeps an unrunnable root pinned when the client cannot reproduce the advertised identity", async () => {
@@ -2900,12 +2900,19 @@ describe("opening a space root", () => {
     expect(getPatternSource(after)).toBeUndefined();
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     expect(message).toContain("default-root heal failed");
-    expect(message).toContain("its origin advertises");
+    expect(message).toContain("was refused");
+    expect(message).toContain(
+      `not the ${await identityForSource(
+        SOURCE_THE_HOST_COMPILES,
+        {},
+        HOME_PATTERN_PATH,
+      )} its origin advertises`,
+    );
   });
 
   it("surfaces a clear error when the official pattern yields no entry identity", async () => {
-    // Defensive branch: compile succeeds but the artifact has no entry ref.
-    // The heal must not proceed with an undefined identity — clear error.
+    // Compile succeeds but the artifact has no entry ref. The heal must not
+    // proceed with an undefined identity — clear error.
 
     const { oldRef } = await pinOldRequiredHome();
     const pm = runtime.patternManager as unknown as {
@@ -2929,7 +2936,8 @@ describe("opening a space root", () => {
     }
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     expect(message).toContain("default-root heal failed");
-    expect(message).toContain("did not yield an entry identity");
+    expect(message).toContain("was refused");
+    expect(message).toContain("`default` export is not a pattern");
   });
 
   it("surfaces a clear error when the identity swap cannot commit", async () => {

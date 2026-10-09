@@ -1,6 +1,12 @@
-import type { MemorySpace, Runtime } from "@commonfabric/runner";
+import type {
+  MemorySpace,
+  Runtime,
+  SystemPieceOrigin,
+} from "@commonfabric/runner";
 import {
+  DEFAULT_APP_PATTERN_ORIGIN,
   DEFAULT_APP_PATTERN_SOURCE,
+  HOME_PATTERN_ORIGIN,
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
 } from "@commonfabric/runner";
@@ -14,10 +20,10 @@ import {
 export { DEFAULT_APP_PATTERN_SOURCE, HOME_PATTERN_SOURCE, patternSourceUrl };
 
 /**
- * The official system space-root pattern ref for a space type — the home DID
- * gets home.tsx, every other space gets the default app. This derivation only
+ * The official system space-root origin for a space type — the home DID gets
+ * home.tsx, every other space gets the default app. This derivation only
  * selects the identity to check; it never proves that a sourceless root tracks
- * that ref. Exact equality with the official content identity supplies
+ * that origin. Exact equality with the official content identity supplies
  * that proof at the check site.
  *
  * CLIENT semantics, deliberately kept out of the runner core: the home
@@ -25,11 +31,19 @@ export { DEFAULT_APP_PATTERN_SOURCE, HOME_PATTERN_SOURCE, patternSourceUrl };
  * runtime is the SERVICE DID — the server-side ensure derives home-ness
  * from the ACL instead (self-owned = home; see ensure-space-root.ts).
  */
+export function deriveSystemPatternOrigin(
+  space: MemorySpace,
+  runtime: Runtime,
+): SystemPieceOrigin {
+  return space === runtime.userIdentityDID
+    ? HOME_PATTERN_ORIGIN
+    : DEFAULT_APP_PATTERN_ORIGIN;
+}
+
+/** Like {@link deriveSystemPatternOrigin}, except it returns the origin's ref. */
 export function deriveSystemPatternSource(
   space: MemorySpace,
   runtime: Runtime,
 ): string {
-  return space === runtime.userIdentityDID
-    ? HOME_PATTERN_SOURCE
-    : DEFAULT_APP_PATTERN_SOURCE;
+  return deriveSystemPatternOrigin(space, runtime).ref;
 }

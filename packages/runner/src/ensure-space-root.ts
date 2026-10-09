@@ -44,6 +44,10 @@ import {
   resolveSystemPatternSource,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
+import {
+  classifyPieceOriginString,
+  type SystemPieceOrigin,
+} from "./piece-origin-kind.ts";
 import { getPatternIdentityRef, setPatternSource } from "./runner.ts";
 import type { Runtime, RuntimeFetch, SpaceCellContents } from "./runtime.ts";
 import { type NameSchema, nameSchema } from "./schemas.ts";
@@ -64,10 +68,25 @@ const logger = getLogger("runner.space-root-ensure", {
 // piece stores). Moved here from packages/piece/src/system-pattern-url.ts
 // (which re-exports them) so the ensure core and the controller share one
 // definition.
-export const HOME_PATTERN_SOURCE = systemPatternSource("system/home.tsx");
-export const DEFAULT_APP_PATTERN_SOURCE = systemPatternSource(
+export const HOME_PATTERN_ORIGIN = systemRootOrigin("system/home.tsx");
+export const DEFAULT_APP_PATTERN_ORIGIN = systemRootOrigin(
   "system/default-app.tsx",
 );
+export const HOME_PATTERN_SOURCE = HOME_PATTERN_ORIGIN.ref;
+export const DEFAULT_APP_PATTERN_SOURCE = DEFAULT_APP_PATTERN_ORIGIN.ref;
+
+/**
+ * The `system:` origin naming `path` under the patterns route. Throws for a
+ * path no `system:` ref can name, which for the constants above is a mistake
+ * in this file.
+ */
+function systemRootOrigin(path: string): SystemPieceOrigin {
+  const origin = classifyPieceOriginString(systemPatternSource(path));
+  if (origin.kind !== "system") {
+    throw new Error(`\`${path}\` is not a file a \`system:\` ref can name`);
+  }
+  return origin;
+}
 
 /**
  * The error opening a DID reports when the DID has no history: no space

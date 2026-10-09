@@ -48,6 +48,7 @@ import type { PreparedSourceUpdate } from "./pattern-manager.ts";
 import {
   classifyPieceOriginString,
   type PieceOriginKind,
+  type SystemPieceOrigin,
 } from "./piece-origin-kind.ts";
 import {
   applyPieceSourceTransition,
@@ -124,11 +125,44 @@ export type ReconcileOutcome =
  * reconciliation leaves keeps: the kind of refusal, and what the attempt
  * reported in its own words.
  */
-type SourceRefusal = {
+export type SourceRefusal = {
   readonly outcome: "refused";
   readonly reason: PieceReconciliationReason;
   readonly detail: string;
 };
+
+/** A pattern export, by the identity of its source and the name it exports. */
+type PatternRef = { identity: string; symbol: string };
+
+/** A candidate compiled into a space, and the export it selected there. */
+type CompiledCandidate = {
+  readonly outcome: "compiled";
+  readonly pattern: Pattern;
+  readonly ref: PatternRef;
+};
+
+/**
+ * What compiling the source a `system:` origin names came to, in the space it
+ * was compiled into.
+ */
+export type SystemSourceCandidate =
+  /** It compiled to the identity the origin advertises. */
+  | CompiledCandidate
+  /**
+   * It was refused, as reconciliation refuses it, and `offered` names the
+   * identity the origin advertised.
+   */
+  | (SourceRefusal & { readonly offered: PatternRef })
+  /**
+   * The origin could not be reached, or the source could not be downloaded
+   * or compiled for a reason that may not recur. `offered` names the identity
+   * the origin advertised, once it has.
+   */
+  | {
+    readonly outcome: "unreachable";
+    readonly detail: string;
+    readonly offered?: PatternRef;
+  };
 
 /** What following an origin came to, with a refusal saying why. */
 type FollowResult = Exclude<ReconcileOutcome, "refused"> | SourceRefusal;
@@ -251,20 +285,26 @@ type SourcePass = {
 };
 
 /**
- * Resolved source for one supplied origin in one destination space, and the
- * pattern it compiled to there once an open has verified it.
+ * Resolved source for one `system:` origin in one destination space, and the
+ * pattern one of its exports compiled to there once it has been verified.
  */
 type SuppliedSource = {
   /** The resolved program, which each compile gets its own containers of. */
   readonly program: RuntimeProgram;
 
   /**
-   * The pattern `program` compiled to in the destination space, with the
-   * advertised identity verified and the source closure persisted there, and
-   * the schema registry epoch it was compiled in. Usable only in that epoch:
-   * its serialized graph carries `cid:` references minted from the registry.
+   * The pattern the `symbol` export of `program` compiled to in the
+   * destination space, with the advertised identity verified and the source
+   * closure persisted there, and the schema registry epoch it was compiled in.
+   * Usable only in that epoch: its serialized graph carries `cid:` references
+   * minted from the registry.
    */
-  compiled?: { pattern: Pattern; epoch: number };
+  compiled?: {
+    pattern: Pattern;
+    ref: PatternRef;
+    symbol: string;
+    epoch: number;
+  };
 };
 
 /** Maximum retained source text and key size, measured in UTF-16 code units. */
@@ -389,7 +429,14 @@ export class SourceReconciler {
       }
       const running = getPatternIdentityRef(piece);
       if (running === undefined) {
-        return await this.#resolveSupplied(piece.space, origin);
+        // Nothing here has a piece to report a refusal on: the surface this is
+        // resolving for does not exist yet.
+        const candidate = await this.compileSystemSource(
+          piece.space,
+          origin,
+          "default",
+        );
+        return candidate.outcome === "compiled" ? candidate.pattern : undefined;
       }
       if (getPatternSource(piece) === undefined) {
         // A piece that records no origin claims the supplied one by retaining
@@ -436,48 +483,30 @@ export class SourceReconciler {
   }
 
   /**
-   * The identity the host serving `space` advertises for a `system:` origin,
-   * or why it did not say.
+   * Compiles the source a `system:` origin currently names into `space`,
+   * selecting its `symbol` export, and holds it to the identity the host
+   * serving `space` advertises for that origin. Returns the pattern, or why
+   * there is none: a refusal recurs whenever the same source is offered, and
+   * anything else may not. Never throws.
    *
-   * Following an origin adopts only source that compiles to the identity the
-   * origin advertises, which keeps every runtime following it on the one
-   * identity the host serves. The default-root roll-forward holds its own
-   * compile to the same check through this; a runtime that compiles those
-   * bytes to another identity would otherwise move the root somewhere the
-   * host's own runtimes move it back from. Other routes that compile a
-   * `system:` origin do not check it yet.
-   *
-   * Throws for any origin but a `system:` ref, which is the one kind that
-   * advertises an identity this way.
+   * Every call asks the host which identity it advertises. Calls for the same
+   * space, origin, and advertised identity share the downloaded source, and the
+   * first to compile an export into that space verifies it, including the
+   * source-closure persistence of a compiler cache hit. Later calls for that
+   * export in the same schema registry epoch return the verified pattern,
+   * whose closure the space already holds.
    */
-  async advertisedIdentity(
+  async compileSystemSource(
     space: MemorySpace,
-    origin: string,
-  ): Promise<{ identity: string } | { detail: string }> {
-    const classified = classifyPieceOriginString(
-      origin,
-      this.#runtime.hostForSpace(space).href,
-    );
-    if (classified.kind !== "system") {
-      throw new Error(`\`${origin}\` is not a \`system:\` origin`);
-    }
-    const target = this.#systemSourceUrl(classified.route, space);
-    // A pass that throws reports why; only a runtime that stopped reports
-    // that it stopped.
-    const answer = await this.#track(async (signal) => {
-      try {
-        return await this.#advertisedIdentity(
-          target,
-          this.#revalidatingFetch(signal),
-          signal,
-        );
-      } catch (error) {
-        if (signal.aborted) throw error;
-        return { detail: reconciliationDetail(error) };
-      }
-    });
-    return answer ??
-      { detail: "the runtime stopped before the origin answered" };
+    origin: SystemPieceOrigin,
+    symbol: string,
+  ): Promise<SystemSourceCandidate> {
+    return await this.#track((signal) =>
+      this.#compileSystemSource(space, origin, symbol, signal)
+    ) ?? {
+      outcome: "unreachable",
+      detail: "the runtime stopped before the origin answered",
+    };
   }
 
   /** Resolve when the passes currently in flight have settled. */
@@ -721,7 +750,7 @@ export class SourceReconciler {
   async #followSystem(
     resultCell: Cell<unknown>,
     state: PieceState,
-    origin: Extract<PieceOriginKind, { kind: "system" }>,
+    origin: SystemPieceOrigin,
     signal: AbortSignal,
     claim?: OriginClaim,
   ): Promise<FollowResult> {
@@ -848,73 +877,72 @@ export class SourceReconciler {
     }
   }
 
-  /**
-   * The pattern a supplied origin currently names, for a piece that does not
-   * exist yet.
-   *
-   * Each open revalidates the advertised identity. Opens for the same
-   * destination, target and advertised identity share resolved source, and
-   * the first to compile it into that destination verifies that it compiles
-   * to the advertised identity, including the source-closure persistence of a
-   * compiler cache hit. Later opens in the same schema registry epoch answer
-   * with that verified pattern, whose closure the destination already holds.
-   */
-  async #resolveSupplied(
+  /** Helper for {@link compileSystemSource}, which runs as one source pass. */
+  async #compileSystemSource(
     space: MemorySpace,
-    origin: Extract<PieceOriginKind, { kind: "system" }>,
-  ): Promise<Pattern | undefined> {
-    return await this.#track(async (signal) => {
-      const fetch = this.#revalidatingFetch(signal);
-      const target = this.#systemSourceUrl(origin.route, space);
-      const answer = await this.#advertisedIdentity(target, fetch, signal);
-      // Nothing here has a piece to report the reason on: the surface this is
-      // resolving for does not exist yet.
-      if ("detail" in answer) return undefined;
-      const advertised = answer.identity;
-      const key = stringTupleKey([space, target.href, advertised]);
-      const resolved = await this.#resolveSuppliedSource(
-        key,
-        target,
-        fetch,
-        signal,
-      );
+    origin: SystemPieceOrigin,
+    symbol: string,
+    signal: AbortSignal,
+  ): Promise<SystemSourceCandidate> {
+    const fetch = this.#revalidatingFetch(signal);
+    const target = this.#systemSourceUrl(origin.route, space);
+    const answer = await this.#advertisedIdentity(target, fetch, signal);
+    if ("detail" in answer) {
+      return { outcome: "unreachable", detail: answer.detail };
+    }
+    const offered = { identity: answer.identity, symbol };
+    const key = stringTupleKey([space, target.href, answer.identity]);
+    let resolved: SuppliedSource | undefined;
+    try {
+      resolved = await this.#resolveSuppliedSource(key, target, fetch, signal);
       // A stopped pass answers with nothing, kept pattern or not.
       signal.throwIfAborted();
       const epoch = schemaRegistryEpoch();
-      if (resolved.compiled?.epoch === epoch) return resolved.compiled.pattern;
+      const kept = resolved.compiled;
+      if (kept?.epoch === epoch && kept.symbol === symbol) {
+        return { outcome: "compiled", pattern: kept.pattern, ref: kept.ref };
+      }
       // The destination must hold the closure behind its creation revision.
       // A compiler hit still performs the destination's persistence work.
       await prepareSourceClosureVerification();
-      try {
-        // Compiling writes to storage; a stopped pass must leave it alone.
-        signal.throwIfAborted();
-        const compiled = await this.#runtime.patternManager.compilePattern(
-          copySourceProgram(resolved.program),
-          { space },
-        );
-        signal.throwIfAborted();
-        const ref = this.#runtime.patternManager.getArtifactEntryRef(compiled);
-        if (ref?.identity !== advertised) {
-          this.#forgetSuppliedSource(key, resolved);
-          logger.warn("advertised-identity-mismatch", () => [
-            "resolved source did not compile to the identity its origin advertises",
-            space,
-            advertised,
-            ref,
-          ]);
-          return undefined;
-        }
-        // A pattern compiled across a registry clear carries references the
-        // clear retired, so it is answered but not kept.
-        if (schemaRegistryEpoch() === epoch) {
-          resolved.compiled = { pattern: compiled, epoch };
-        }
-        return compiled;
-      } catch (error) {
+      // Compiling writes to storage; a stopped pass must leave it alone.
+      signal.throwIfAborted();
+      const candidate = await this.#compileCandidate(
+        { ...copySourceProgram(resolved.program), mainExport: symbol },
+        space,
+        answer.identity,
+      );
+      signal.throwIfAborted();
+      if (candidate.outcome === "refused") {
         this.#forgetSuppliedSource(key, resolved);
-        throw error;
+        return { ...candidate, offered };
       }
-    });
+      // A pattern compiled across a registry clear carries references the
+      // clear retired, so it is returned but not kept.
+      if (schemaRegistryEpoch() === epoch) {
+        resolved.compiled = {
+          pattern: candidate.pattern,
+          ref: candidate.ref,
+          symbol,
+          epoch,
+        };
+      }
+      return candidate;
+    } catch (error) {
+      if (resolved !== undefined) this.#forgetSuppliedSource(key, resolved);
+      signal.throwIfAborted();
+      logger.warn("system-source-failed", () => [
+        "the source a system origin names could not be had",
+        space,
+        origin.ref,
+        error,
+      ]);
+      return {
+        outcome: "unreachable",
+        detail: reconciliationDetail(error),
+        offered,
+      };
+    }
   }
 
   /** Share supplied-source downloads, whose callers share disposal ownership. */
@@ -994,7 +1022,7 @@ export class SourceReconciler {
    */
   async #rescueSupplied(
     piece: Cell<unknown>,
-    origin: Extract<PieceOriginKind, { kind: "system" }>,
+    origin: SystemPieceOrigin,
   ): Promise<boolean> {
     const state: PieceState = {
       space: piece.space,
@@ -1026,7 +1054,7 @@ export class SourceReconciler {
       })
       .catch((error) => {
         logger.warn("source-pass-failed", () => [
-          "resolving supplied source failed",
+          "a source pass stopped without an answer",
           error,
         ]);
         return undefined;
@@ -1173,57 +1201,13 @@ export class SourceReconciler {
   ): Promise<FollowResult> {
     const runtime = this.#runtime;
     if (signal.aborted) return "unavailable";
-    let candidate: Pattern;
-    try {
-      candidate = await runtime.patternManager.compilePattern(program, {
-        space: state.space,
-      });
-    } catch (error) {
-      if (!isDeterministicCompileFailure(error)) throw error;
-      logger.warn("candidate-did-not-compile", () => [
-        "the origin's current source did not compile",
-        state.space,
-        state.storedSource,
-        error,
-      ]);
-      return {
-        outcome: "refused",
-        reason: "source-invalid",
-        detail: reconciliationDetail(error),
-      };
-    }
-    const candidateRef = runtime.patternManager.getArtifactEntryRef(candidate);
-    if (candidateRef === undefined) {
-      logger.warn("candidate-without-identity", () => [
-        "resolved source produced no pattern identity",
-        state.space,
-        state.storedSource,
-      ]);
-      return {
-        outcome: "refused",
-        reason: "source-invalid",
-        detail: `its \`${
-          program.mainExport ?? "default"
-        }\` export is not a pattern`,
-      };
-    }
-    if (
-      advertisedIdentity !== undefined &&
-      candidateRef.identity !== advertisedIdentity
-    ) {
-      logger.warn("advertised-identity-mismatch", () => [
-        "resolved source did not compile to the identity its origin advertises",
-        state.space,
-        advertisedIdentity,
-        candidateRef,
-      ]);
-      return {
-        outcome: "refused",
-        reason: "identity-mismatch",
-        detail: `the source compiled to ${candidateRef.identity}, not the ` +
-          `${advertisedIdentity} its origin advertises`,
-      };
-    }
+    const compiled = await this.#compileCandidate(
+      program,
+      state.space,
+      advertisedIdentity,
+    );
+    if (compiled.outcome === "refused") return compiled;
+    const { pattern: candidate, ref: candidateRef } = compiled;
     state.offered = candidateRef;
     if (
       candidateRef.identity === state.running.identity &&
@@ -1318,6 +1302,71 @@ export class SourceReconciler {
       return true;
     }, sourceUpdate);
     return committed ? "updated" : "unavailable";
+  }
+
+  /**
+   * Helper for `#adopt` and {@link compileSystemSource}, which compiles a
+   * candidate into `space` and holds it to `advertised`, where its origin
+   * advertised an identity.
+   *
+   * Refuses a candidate that does not compile to `advertised`, whose compile
+   * fails in a way that recurs for the same source
+   * ({@link isDeterministicCompileFailure}), or whose selected export is not a
+   * pattern. Any other compile failure throws.
+   */
+  async #compileCandidate(
+    program: RuntimeProgram,
+    space: MemorySpace,
+    advertised: string | undefined,
+  ): Promise<CompiledCandidate | SourceRefusal> {
+    const manager = this.#runtime.patternManager;
+    let pattern: Pattern;
+    try {
+      pattern = await manager.compilePattern(program, { space });
+    } catch (error) {
+      if (!isDeterministicCompileFailure(error)) throw error;
+      logger.warn("candidate-did-not-compile", () => [
+        "the origin's current source did not compile",
+        space,
+        program.main,
+        error,
+      ]);
+      return {
+        outcome: "refused",
+        reason: "source-invalid",
+        detail: reconciliationDetail(error),
+      };
+    }
+    const ref = manager.getArtifactEntryRef(pattern);
+    if (ref === undefined) {
+      logger.warn("candidate-without-identity", () => [
+        "resolved source produced no pattern identity",
+        space,
+        program.main,
+      ]);
+      return {
+        outcome: "refused",
+        reason: "source-invalid",
+        detail: `its \`${
+          program.mainExport ?? "default"
+        }\` export is not a pattern`,
+      };
+    }
+    if (advertised !== undefined && ref.identity !== advertised) {
+      logger.warn("advertised-identity-mismatch", () => [
+        "resolved source did not compile to the identity its origin advertises",
+        space,
+        advertised,
+        ref,
+      ]);
+      return {
+        outcome: "refused",
+        reason: "identity-mismatch",
+        detail: `the source compiled to ${ref.identity}, not the ` +
+          `${advertised} its origin advertises`,
+      };
+    }
+    return { outcome: "compiled", pattern, ref };
   }
 
   /**

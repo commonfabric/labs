@@ -99,6 +99,7 @@ import { pieceId } from "../piece-id.ts";
 // importers.
 import {
   DEFAULT_APP_PATTERN_SOURCE,
+  deriveSystemPatternOrigin,
   deriveSystemPatternSource,
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
@@ -149,6 +150,9 @@ const normalizePieceOpen = (open: boolean | PieceOpen): PieceOpen =>
 // visible in the load summaries (browser worker included, where the
 // CF_CLI_TRACE_TIMINGS console path cannot run) as `piece/phase/<label>`.
 const pieceTimingLogger = getLogger("piece", { enabled: false });
+/** The export of its space's official system source that a space root runs. */
+const ROLL_FORWARD_EXPORT = "default";
+
 const pieceUpdateLogger = getLogger("piece.update", {
   enabled: true,
   level: "warn",
@@ -2812,9 +2816,10 @@ export class PiecesController<T = unknown> {
   ): Promise<Cell<NameSchema>> {
     const runtime = this.runtime;
     const space = this.getSpace();
-    // Reuse the canonical official-URL derivation (home.tsx for the home DID,
-    // default-app.tsx otherwise) — never hard-code home here.
-    const officialUrlPath = deriveSystemPatternSource(space, runtime);
+    // Reuse the canonical official-origin derivation (home.tsx for the home
+    // DID, default-app.tsx otherwise) — never hard-code home here.
+    const official = deriveSystemPatternOrigin(space, runtime);
+    const officialUrlPath = official.ref;
     const msg = (error: unknown) =>
       error instanceof Error ? error.message : String(error);
     // Name the check that actually refused. Two signals escalate to this heal —
@@ -2834,70 +2839,28 @@ export class PiecesController<T = unknown> {
         { cause },
       );
 
-    // The host says which identity its official source compiles to, and a
-    // client whose runtime differs from the host's can compile the same bytes
-    // to another. The host's own clients follow the origin back to what it
-    // advertises, so a root rolled onto anything else would move again every
-    // time either kind of client opened it. The roll-forward takes the
-    // advertised identity or nothing, as following the origin does.
-    const advertised = await runtime.sourceReconciler.advertisedIdentity(
+    // A client whose runtime compiles the official source differently from
+    // the host's, or that fetches it while the host is part-way through a
+    // deployment, can reach an identity the host does not advertise. A root
+    // moved there would be moved back by the next client that agrees with the
+    // host, so the roll-forward takes what following the origin would, or
+    // nothing.
+    const candidate = await runtime.sourceReconciler.compileSystemSource(
       space,
-      officialUrlPath,
+      official,
+      ROLL_FORWARD_EXPORT,
     );
-    if ("detail" in advertised) {
+    if (candidate.outcome === "unreachable") {
       throw clearError(
-        `could not learn which version its origin offers ` +
-          `(${advertised.detail})`,
+        `could not be resolved (${candidate.detail})`,
         migrationError,
       );
     }
+    if (candidate.outcome === "refused") {
+      throw clearError(`was refused (${candidate.detail})`, migrationError);
+    }
+    const { pattern: officialPattern, ref: officialRef } = candidate;
 
-    // Fetch + compile the official source.
-    // Force ETag revalidation (`cache: "no-cache"`): the roll-forward exists to
-    // ESCAPE a stale pinned pattern, so compiling a stale HTTP-cached source
-    // would defeat the heal — it could "roll forward" to the same aged bytes.
-    // A 304 still reuses unchanged bytes; we just never trust the cache blind.
-    const revalidatingFetch: typeof globalThis.fetch = (input, init) =>
-      runtime.fetch(input, { ...init, cache: "no-cache" });
-    // Resolve against the host that actually SERVES this space, not the global
-    // apiUrl. A mapped space is served by its own host (`mappedHostFor`); the
-    // system pattern must be fetched and compiled from there, or a mapped space
-    // could roll forward onto the WRONG host's system pattern.
-    const officialUrl = patternSourceUrl(
-      officialUrlPath,
-      runtime.hostForSpace(space),
-    );
-    let officialPattern;
-    let officialRef;
-    try {
-      const resolved = await runtime.harness.resolve(
-        new HttpProgramResolver(officialUrl.href, revalidatingFetch),
-      );
-      officialPattern = await runtime.patternManager.compilePattern(
-        // Default-root routes select the official `default` export.
-        { ...resolved, mainExport: "default" },
-        { space },
-      );
-      officialRef = runtime.patternManager.getArtifactEntryRef(officialPattern);
-    } catch (compileError) {
-      // Chain the ACTUAL compile failure as `cause` (not the migration error):
-      // the migration reason is already named in the message, and the compile
-      // stack is the new information here.
-      throw clearError(
-        `could not be compiled (${msg(compileError)})`,
-        compileError,
-      );
-    }
-    if (officialRef === undefined) {
-      throw clearError("did not yield an entry identity", migrationError);
-    }
-    if (officialRef.identity !== advertised.identity) {
-      throw clearError(
-        `compiled to ${officialRef.identity}, not the ` +
-          `${advertised.identity} its origin advertises`,
-        migrationError,
-      );
-    }
     // Already current: the pinned pattern IS the official entry (same identity
     // AND symbol) but failed for some other reason. Re-materializing the exact
     // same entry would fail identically, so do not loop — surface the clear
