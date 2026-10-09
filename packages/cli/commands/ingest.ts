@@ -1,12 +1,16 @@
 import { Command, ValidationError } from "@cliffy/command";
+import {
+  parseCellReference,
+  renderCellReference,
+} from "@commonfabric/runner/shared";
 import { Table } from "@cliffy/table";
 import { cliText } from "../lib/cli-name.ts";
 import { render } from "../lib/render.ts";
 import {
+  type CellTarget,
+  type CellTargetLink,
   type ChannelConfig,
   type GmailProof,
-  INGEST_SINKS,
-  type IngestSink,
   listChannels,
   mintChannel,
   type MintedChannel,
@@ -81,17 +85,39 @@ const gmailProof = (
   return undefined;
 };
 
-// `undefined` is left to the server, which mints a journal.
-const requireSink = (sink: string | undefined): IngestSink | undefined => {
-  if (sink === undefined) return undefined;
-  const known = INGEST_SINKS.find((candidate) => candidate === sink);
-  if (known === undefined) {
+// The space scope is the one a target cell has, so the rendering leaves the
+// qualifier off; what it prints is what `--target` reads back.
+const renderTarget = (target: CellTarget): string =>
+  renderCellReference(target, { scope: "space" });
+
+/**
+ * Reads `--target`, a cell reference in the channel's space, into the link a
+ * mint names. The reference may carry the space, in which case it has to be
+ * the channel's; a member, scope, or pin is not a cell to write.
+ */
+const targetLinkOf = (
+  reference: string | undefined,
+  space: string,
+): CellTargetLink | undefined => {
+  if (reference === undefined) return undefined;
+  const parts = parseCellReference(reference);
+  if (
+    parts.member !== undefined ||
+    (parts.scope !== undefined && parts.scope !== "space") || parts.pin
+  ) {
     throw new ValidationError(
-      `Unknown sink "${sink}"; expected one of ${INGEST_SINKS.join(", ")}.`,
+      "--target names a cell by its document and path; it takes no member, " +
+        "scope, or pin.",
       { exitCode: 1 },
     );
   }
-  return known;
+  if (parts.space !== undefined && parts.space !== space) {
+    throw new ValidationError(
+      `--target is in ${parts.space}, not in the channel's space ${space}.`,
+      { exitCode: 1 },
+    );
+  }
+  return { "/": { "link@1": { id: parts.id, space, path: parts.path } } };
 };
 
 /**
@@ -119,14 +145,19 @@ async function channelSpace(
 
 /**
  * The token is returned once and never again — say so where it is printed. A
- * `latest` channel comes with no URL and no token, since nothing POSTs to it;
- * what it is for is binding.
+ * gmail channel comes with no URL and no token, since nothing POSTs to it;
+ * the server writes its target cell.
  */
 const renderMinted = (minted: MintedChannel, verb: string): void => {
   render(`\nIngest channel ${verb}.\n`);
   render(`  id:          ${minted.id}`);
   render(`  space:       ${minted.space}`);
-  render(`  causePrefix: ${minted.causePrefix}`);
+  if (minted.causePrefix !== undefined) {
+    render(`  causePrefix: ${minted.causePrefix}`);
+  }
+  if (minted.target !== undefined) {
+    render(`  target:      ${renderTarget(minted.target)}`);
+  }
   render(`  installId:   ${minted.installId}`);
   if (minted.url !== undefined) render(`  URL:         ${minted.url}`);
   render(`  expires:     ${minted.expiresAt ?? "(none — unexpected)"}`);
@@ -144,15 +175,15 @@ const renderMinted = (minted: MintedChannel, verb: string): void => {
         `record in the channel's cell, once a \`users.watch\` on the ` +
         `mailbox names this deployment's topic.\n`,
     );
-  } else {
+  } else if (minted.target !== undefined) {
     // Whether the channel is bound is not in the response, so the hint
     // covers binding and moving alike.
     render(
-      `\n  A \`latest\` channel: no device URL and no token. To bind it to ` +
-        `a mailbox, or move it, mint again with the proof:\n\n    ` +
+      `\n  A gmail channel: no device URL and no token. To bind it to a ` +
+        `mailbox, or move it, mint again with the proof:\n\n    ` +
         `CF_GMAIL_ACCESS_TOKEN=... ${cliText("cf")} ingest mint --space ` +
-        `${minted.space} --install-id ${minted.installId} --cause-prefix ` +
-        `${minted.causePrefix}\n`,
+        `${minted.space} --install-id ${minted.installId} --target ` +
+        `${renderTarget(minted.target)}\n`,
     );
   }
 };
@@ -178,8 +209,8 @@ export const ingest = new Command()
   /* ingest mint */
   .command(
     "mint",
-    "Mint a channel for a space you own. A journal's token is printed ONCE; " +
-      "a latest channel has none.",
+    "Mint a channel for a space you own. A device channel's token is " +
+      "printed ONCE; a gmail channel has none.",
   )
   .usage(`${commonUsage} --space <space> --install-id <id>`)
   .option(
@@ -202,11 +233,11 @@ export const ingest = new Command()
       "only chooses when.",
   )
   .option(
-    "--sink <kind:string>",
-    "What the channel's writes land in: `journal`, records in per-day " +
-      "partition cells that a device POSTs to (the default), or `latest`, one " +
-      "cell holding the newest record written to it. A mailbox proof " +
-      "makes it `latest`.",
+    "--target <reference:string>",
+    "The cell Gmail push notifications are written to, as a cell reference " +
+      "in the channel's space. Comes with a mailbox proof; the two make a " +
+      "gmail channel, written by the server into that one cell, where a " +
+      "mint without them makes a device channel with a token.",
   )
   // The tokens are credentials, so the environment is the better carrier: an
   // option value is visible in the process list and lands in shell history.
@@ -236,9 +267,9 @@ export const ingest = new Command()
   )
   .example(
     cliText(
-      "CF_GMAIL_ACCESS_TOKEN=... cf ingest mint --space did:key:z6Mk... --install-id gmail-1",
+      "CF_GMAIL_ACCESS_TOKEN=... cf ingest mint --space did:key:z6Mk... --install-id gmail-1 --target /of:fid1:...",
     ),
-    "Mint a channel bound to the mailbox the token reads",
+    "Mint a gmail channel bound to the mailbox the token reads, writing that cell",
   )
   .action(async (options) => {
     const config = parseConfig(options);
@@ -257,7 +288,7 @@ export const ingest = new Command()
       causePrefix: options.causePrefix,
       name: options.name,
       ttlDays: options.ttlDays,
-      sink: requireSink(options.sink),
+      target: targetLinkOf(options.target, space),
       gmail: gmailProof(options.gmailAccessToken, options.gmailIdToken),
       requestId: newRequestId(),
     });
@@ -320,7 +351,8 @@ export const ingest = new Command()
       ttlDays: options.ttlDays,
       requestId: newRequestId(),
     });
-    // A `latest` channel has no device token, so there is no device to tell.
+    // A gmail channel cannot be rotated, so a token is always here; the check
+    // keeps the message tied to the response rather than to that rule.
     if (minted.token !== undefined) {
       render(
         "\nThe previous token stopped working. A device still holding it " +

@@ -48,7 +48,7 @@ describe("ingest channel operator scripts", () => {
     space: "did:key:z6MkspaceAAAA",
     causePrefix: "location",
     installId: "phone-1",
-    sink: "journal",
+    kind: "device",
     secretHash: "hash",
     createdBy: serviceSpace,
     createdAt: "2026-08-01T00:00:00.000Z",

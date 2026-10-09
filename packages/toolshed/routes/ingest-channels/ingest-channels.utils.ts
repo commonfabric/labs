@@ -17,7 +17,7 @@
 //   4. claim the request id (replay defense)
 //   5. only then mint or mutate
 
-import type { Runtime } from "@commonfabric/runner";
+import { parseLink, type Runtime } from "@commonfabric/runner";
 import {
   authorizeSpaceOwner,
   isValidSpaceDid,
@@ -25,6 +25,8 @@ import {
   type SpaceAuthority,
 } from "@/lib/space-authority.ts";
 import {
+  type CellTarget,
+  cellTargetOf,
   channelId,
   ClaimStoreFullError,
   generateIngestSecret,
@@ -33,8 +35,8 @@ import {
   getRegistration,
   getSpaceLifetimeChannelCount,
   getSpaceRegistrationIndex,
+  type IngestChannelKind,
   type IngestRegistration,
-  type IngestSink,
   ingestUrl,
   isValidRequestId,
   isValidSegment,
@@ -165,12 +167,17 @@ export interface MintedChannel {
 
   /**
    * Where a device POSTs records, with `token` as its bearer secret. A
-   * `journal` channel has both; a `latest` channel, which nothing POSTs to,
-   * has neither.
+   * device channel has both; a gmail channel, which nothing POSTs to, has
+   * neither.
    */
   url?: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a `gmail` channel. */
+  causePrefix?: string;
+
+  /** A `gmail` channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
   expiresAt?: string;
   token?: string;
@@ -183,9 +190,10 @@ export interface ChannelView {
   id: string;
   name: string;
   space: string;
-  causePrefix: string;
+  causePrefix?: string;
+  target?: CellTarget;
   installId: string;
-  sink: IngestSink;
+  kind: IngestChannelKind;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -282,9 +290,10 @@ export const channelSummary = (
   id: r.id,
   name: r.name,
   space: r.space,
-  causePrefix: r.causePrefix,
+  ...(r.causePrefix !== undefined ? { causePrefix: r.causePrefix } : {}),
+  ...(r.target !== undefined ? { target: r.target } : {}),
   installId: r.installId,
-  sink: r.sink,
+  kind: r.kind,
   createdAt: r.createdAt,
   enabled: r.enabled,
   ...(r.owner !== undefined ? { owner: r.owner } : {}),
@@ -304,9 +313,13 @@ const persist = async (
     id: string;
     name: string;
     space: string;
-    causePrefix: string;
     installId: string;
-    sink: IngestSink;
+
+    /** A device channel with its cause prefix, or a gmail channel with its cell. */
+    writes: { kind: "device"; causePrefix: string } | {
+      kind: "gmail";
+      target: CellTarget;
+    };
     existing: IngestRegistration | null;
     callerDid: string;
     ttlDays?: number;
@@ -363,9 +376,11 @@ const persist = async (
     id: params.id,
     name: params.name,
     space: params.space,
-    causePrefix: params.causePrefix,
+    ...(params.writes.kind === "device"
+      ? { causePrefix: params.writes.causePrefix }
+      : { target: params.writes.target }),
     installId: params.installId,
-    sink: params.sink,
+    kind: params.writes.kind,
     secretHash,
     createdBy: deps.operatorDid,
     createdAt: params.existing?.createdAt ?? now.toISOString(),
@@ -459,10 +474,10 @@ const persist = async (
     return { status: 502, body: { error: "Storage failure" } };
   }
 
-  // The data plane refuses a `latest` channel, so its URL and secret would
-  // only mislead whoever reads the response. The secret is still minted and
-  // its hash stored: a registration has one whatever its sink.
-  const devicePath = registration.sink === "journal"
+  // The data plane refuses a gmail channel, so its URL and secret would only
+  // mislead whoever reads the response. The secret is still minted and its
+  // hash stored: a registration has one whatever its kind.
+  const devicePath = registration.kind === "device"
     ? {
       url: ingestUrl(deps.apiUrl, registration.space, registration.id),
       // Shown once, here only. Only the hash is ever stored.
@@ -474,7 +489,12 @@ const persist = async (
     body: {
       id: registration.id,
       space: registration.space,
-      causePrefix: registration.causePrefix,
+      ...(registration.causePrefix !== undefined
+        ? { causePrefix: registration.causePrefix }
+        : {}),
+      ...(registration.target !== undefined
+        ? { target: registration.target }
+        : {}),
       installId: registration.installId,
       ...(expiresAt !== undefined ? { expiresAt } : {}),
       ...devicePath,
@@ -485,21 +505,23 @@ const persist = async (
 export interface MintInput {
   space: string;
   installId: string;
+
+  /** A device channel's cause prefix, `location` unless named. Not for a gmail channel. */
   causePrefix?: string;
   name?: string;
   ttlDays?: number;
 
   /**
-   * What the channel's writes land in; a journal unless named, or `latest`
-   * when a mailbox proof is carried.
+   * The cell a gmail channel writes, as a link the caller names, in the space
+   * the mint is addressed to. Comes with `gmail`, and the two together make
+   * the channel a gmail channel; a mint without them makes a device channel.
    */
-  sink?: IngestSink;
+  target?: unknown;
 
   /**
    * Binds the channel to the Gmail mailbox the proof is for, in the same
-   * mint. Only a `latest` channel binds. Minting again with a proof for
-   * another mailbox moves the channel; minting again without one leaves the
-   * binding as it is.
+   * mint. Minting again with a proof for another mailbox moves the channel;
+   * minting again without one leaves the binding as it is.
    */
   gmail?: GmailProof;
   requestId: string;
@@ -510,18 +532,41 @@ export async function processMint(
   callerDid: string,
   input: MintInput,
 ): Promise<ControlResult<MintedChannel>> {
-  const causePrefix = input.causePrefix ?? DEFAULT_CAUSE_PREFIX;
-  // A mailbox binds to a `latest` channel, so a proof decides the sink where
-  // the caller named none.
-  const sink = input.sink ?? (input.gmail === undefined ? undefined : "latest");
+  // A proof and a target come together: the proof says which mailbox wakes
+  // the channel, the target says which cell it wakes. Neither alone means
+  // anything, and together they make the channel a gmail channel. A mint with
+  // neither is a device channel, or a re-mint of whatever the channel is.
+  if ((input.gmail === undefined) !== (input.target === undefined)) {
+    return bad(
+      input.gmail === undefined
+        ? "A target cell is minted with a mailbox proof"
+        : "A mailbox proof needs a target cell to write to",
+    );
+  }
+  let target: CellTarget | undefined;
   if (input.gmail !== undefined) {
-    if (sink !== "latest") {
-      return bad("A mailbox binds to a `latest` channel, not a journal");
-    }
     const proofs = [input.gmail.accessToken, input.gmail.idToken]
       .filter((proof) => proof !== undefined);
     if (proofs.length !== 1) {
       return bad("A mailbox proof is one access token or one ID token");
+    }
+    if (input.causePrefix !== undefined) {
+      return bad("A gmail channel has a target cell, not a cause prefix");
+    }
+    const link = parseLink(input.target);
+    if (
+      link === undefined || link.id === undefined || link.space === undefined
+    ) {
+      return bad("The target is not a complete cell link");
+    }
+    target = cellTargetOf(link);
+    // The mint is addressed to one space and authorized against it, so a cell
+    // elsewhere is refused outright rather than written under another
+    // space's grant.
+    if (target.space !== input.space) {
+      return bad(
+        "The target cell is in another space than the one minted into",
+      );
     }
   }
 
@@ -533,7 +578,9 @@ export async function processMint(
   // impersonating the token-less integration audiences
   // (`did:web:commonfabric.org#oauth2`, `#plaid`), which contain `:` and `#`.
   if (!isValidSegment(input.installId)) return bad("Invalid installId");
-  if (!isValidSegment(causePrefix)) return bad("Invalid causePrefix");
+  if (input.causePrefix !== undefined && !isValidSegment(input.causePrefix)) {
+    return bad("Invalid causePrefix");
+  }
   if (!isValidRequestId(input.requestId)) return bad("Invalid requestId");
 
   const authority = await authorize(deps, input.space, callerDid);
@@ -548,6 +595,11 @@ export async function processMint(
     deps.logger?.error({ error, id }, "ingest-channels: lookup failed");
     return { status: 502, body: { error: "Storage failure" } };
   }
+
+  // A device channel's cause prefix is `location` unless named; a gmail
+  // channel has none, and a re-mint of one that names no prefix keeps it so.
+  const causePrefix = target !== undefined ? undefined : input.causePrefix ??
+    (existing?.kind === "gmail" ? undefined : DEFAULT_CAUSE_PREFIX);
 
   if (existing) {
     // Re-minting is how an owner re-pairs their own device, but the id derives
@@ -580,11 +632,25 @@ export async function processMint(
           `you intend to take it over (the revocation is recorded).`,
       );
     }
-    // Immutable for the life of the (space, installId) pair: changing it would
-    // move where data lands and orphan the existing read path. Revoking does
-    // NOT free it — the registration is retained deliberately — so the only
-    // honest remedy is a different installId.
-    if (existing.causePrefix !== causePrefix) {
+    // Where a channel writes is immutable for the life of the (space,
+    // installId) pair: changing it would move where data lands and orphan the
+    // existing read path. Revoking does NOT free it — the registration is
+    // retained deliberately — so the only honest remedy is a different
+    // installId. A device channel's cause prefix and a gmail channel's
+    // target cell are each held to that, and so is the kind itself.
+    if (input.gmail !== undefined && existing.kind !== "gmail") {
+      return bad(
+        `Channel ${id} is a device channel, and a mailbox binds to a gmail ` +
+          `channel. Use a different --install-id.`,
+      );
+    }
+    if (input.causePrefix !== undefined && existing.kind === "gmail") {
+      return conflict(
+        `Channel ${id} is a gmail channel, which has a target cell and no ` +
+          `cause prefix. Use a different --install-id for a device channel.`,
+      );
+    }
+    if (causePrefix !== undefined && existing.causePrefix !== causePrefix) {
       return conflict(
         `Channel ${id} is registered with cause-prefix ` +
           `'${existing.causePrefix}', and a channel's cause-prefix cannot ` +
@@ -592,20 +658,15 @@ export async function processMint(
           `--install-id to get a channel with cause-prefix '${causePrefix}'.`,
       );
     }
-    // A proof binds a `latest` channel, and this one is a journal for good.
-    if (input.gmail !== undefined && existing.sink !== "latest") {
-      return bad(
-        `Channel ${id} is a journal, and a mailbox binds to a \`latest\` ` +
-          `channel. Use a different --install-id.`,
-      );
-    }
-    // The sink is immutable for the same reason: it decides which cells the
-    // reader watches. A re-mint that names none keeps the channel's own.
-    if (sink !== undefined && existing.sink !== sink) {
+    if (
+      target !== undefined && existing.target !== undefined &&
+      !sameTarget(existing.target, target)
+    ) {
       return conflict(
-        `Channel ${id} is registered with sink '${existing.sink}', and a ` +
-          `channel's sink cannot change. Use a different --install-id to ` +
-          `get a channel with sink '${sink}'.`,
+        `Channel ${id} writes the cell ${existing.target.id}, and a ` +
+          `channel's target cell cannot change (it would orphan the existing ` +
+          `reader). Use a different --install-id for a channel writing ` +
+          `${target.id}.`,
       );
     }
   }
@@ -636,9 +697,8 @@ export async function processMint(
     requestId: input.requestId,
     name: input.name ?? `ingest-${input.installId}`,
     space: input.space,
-    causePrefix,
     installId: input.installId,
-    sink: sink ?? existing?.sink ?? "journal",
+    writes: writesOf({ causePrefix, target }, existing),
     existing,
     callerDid,
     ttlDays: input.ttlDays,
@@ -677,6 +737,43 @@ export async function processMint(
     status: 200,
     body: { ...minted.body, emailAddress: mailbox },
   };
+}
+
+/** Returns whether two cell targets name the same cell. */
+function sameTarget(a: CellTarget, b: CellTarget): boolean {
+  return a.space === b.space && a.id === b.id &&
+    a.path.length === b.path.length &&
+    a.path.every((segment, i) => segment === b.path[i]);
+}
+
+/**
+ * Helper for `processMint()` and `processRotate()`, which returns what the
+ * registration will say it writes: the target the mint named, or the cause
+ * prefix it named, or else what the existing registration already carries.
+ * Throws for an existing registration carrying neither, which no mint writes.
+ */
+function writesOf(
+  named: { causePrefix?: string; target?: CellTarget },
+  existing: IngestRegistration | null,
+): { kind: "device"; causePrefix: string } | {
+  kind: "gmail";
+  target: CellTarget;
+} {
+  if (named.target !== undefined) {
+    return { kind: "gmail", target: named.target };
+  }
+  if (named.causePrefix !== undefined) {
+    return { kind: "device", causePrefix: named.causePrefix };
+  }
+  if (existing?.kind === "gmail" && existing.target !== undefined) {
+    return { kind: "gmail", target: existing.target };
+  }
+  if (existing?.causePrefix !== undefined) {
+    return { kind: "device", causePrefix: existing.causePrefix };
+  }
+  throw new Error(
+    `channel ${existing?.id} carries neither a cause prefix nor a target`,
+  );
 }
 
 /**
@@ -771,6 +868,15 @@ export async function processRotate(
 
   const existing = await loadOwned(deps, callerDid, input.id, input.space);
   if (!existing.ok) return existing.result;
+  // A gmail channel has no token anything uses, so there is nothing to
+  // rotate; what a rotate would incidentally do, re-enable the channel or
+  // extend it, a mint does on purpose and with the mailbox proof.
+  if (existing.registration.kind === "gmail") {
+    return bad(
+      `Channel ${input.id} is a gmail channel, which has no token to ` +
+        `rotate. Mint it again to re-enable or extend it.`,
+    );
+  }
 
   // The SAME takeover protocol mint enforces. `loadOwned` only proves the
   // caller owns the target space, so without this a co-owner could rotate a
@@ -796,9 +902,8 @@ export async function processRotate(
     requestId: input.requestId,
     name: existing.registration.name,
     space: existing.registration.space,
-    causePrefix: existing.registration.causePrefix,
     installId: existing.registration.installId,
-    sink: existing.registration.sink,
+    writes: writesOf({}, existing.registration),
     existing: existing.registration,
     callerDid,
     ttlDays: input.ttlDays,

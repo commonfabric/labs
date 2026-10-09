@@ -3,7 +3,7 @@ import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { Runtime } from "@commonfabric/runner";
+import { type MemorySpace, Runtime } from "@commonfabric/runner";
 import {
   createAclServer,
   genesisAcl,
@@ -14,6 +14,7 @@ import {
   type ControlDeps,
   type ControlResult,
   type MintedChannel,
+  type MintInput,
   processList,
   processMint,
   processRevoke,
@@ -229,28 +230,6 @@ describe("ingest-channels control plane", () => {
     expect(err(res)).toContain("cause-prefix");
   });
 
-  it("stores the sink it was minted with, and a journal when none is named", async () => {
-    const journal = ok(await mint(alice, "req-a"));
-    const latest = ok(
-      await mint(alice, "req-b", { installId: "phone-2", sink: "latest" }),
-    );
-
-    const stored = (id: string) => getRegistration(runtime, operator.did(), id);
-    expect((await stored(journal.id))?.sink).toBe("journal");
-    expect((await stored(latest.id))?.sink).toBe("latest");
-    // Nothing POSTs to a `latest` channel, so it is minted without the data
-    // plane's URL and bearer token; a journal has both.
-    expect(typeof journal.url).toBe("string");
-    expect(typeof journal.token).toBe("string");
-    expect(latest.url).toBeUndefined();
-    expect(latest.token).toBeUndefined();
-    const listed = ok(await processList(deps, alice.did(), {})).channels;
-    expect(listed.map((c) => [c.installId, c.sink]).sort()).toEqual([
-      ["phone-1", "journal"],
-      ["phone-2", "latest"],
-    ]);
-  });
-
   describe("minting with a mailbox proof", () => {
     const MAILBOX = "alice@example.com";
     let proofs: string[];
@@ -273,33 +252,56 @@ describe("ingest-channels control plane", () => {
     const bound = (address = MAILBOX) =>
       getMailboxChannels(runtime, operator.did(), address);
 
+    /** A link to the cell with cause `name` in `inSpace`, as a mint names it. */
+    const targetLink = (name: string, inSpace = space) => ({
+      "/": {
+        "link@1": {
+          id: runtime.getCell(inSpace as MemorySpace, name)
+            .getAsNormalizedFullLink().id,
+          space: inSpace,
+          path: [],
+        },
+      },
+    });
+    const gmailMint = (
+      requestId: string,
+      over: Partial<MintInput> = {},
+      caller = alice,
+      withDeps = withGmail(),
+    ) =>
+      processMint(withDeps, caller.did(), {
+        space,
+        installId: "gmail-1",
+        target: targetLink("gmail-1"),
+        gmail: { accessToken: "ya29.token" },
+        requestId,
+        ...over,
+      });
+
     beforeEach(() => {
       proofs = [];
       lookup = { ok: true, emailAddress: MAILBOX };
     });
 
-    it("binds the mailbox an access token reads, minting a `latest` channel", async () => {
-      const res = await processMint(withGmail(), alice.did(), {
-        space,
-        installId: "gmail-1",
-        gmail: { accessToken: "ya29.token" },
-        requestId: "req-1",
-      });
+    it("mints a gmail channel writing the target cell, bound to the mailbox an access token reads", async () => {
+      const res = await gmailMint("req-1");
 
       expect(ok(res).emailAddress).toBe(MAILBOX);
       expect(ok(res).token).toBeUndefined();
+      expect(ok(res).url).toBeUndefined();
+      expect(ok(res).causePrefix).toBeUndefined();
+      expect(ok(res).target).toEqual(targetLink("gmail-1")["/"]["link@1"]);
       expect(proofs).toEqual(["access:ya29.token"]);
       expect(await bound()).toEqual([ok(res).id]);
       const stored = await getRegistration(runtime, operator.did(), ok(res).id);
-      expect(stored?.sink).toBe("latest");
+      expect(stored?.kind).toBe("gmail");
+      expect(stored?.target).toEqual(targetLink("gmail-1")["/"]["link@1"]);
+      expect(stored?.causePrefix).toBeUndefined();
     });
 
     it("binds the mailbox an ID token names", async () => {
-      const res = await processMint(withGmail(), alice.did(), {
-        space,
-        installId: "gmail-1",
+      const res = await gmailMint("req-1", {
         gmail: { idToken: "eyJ.id.token" },
-        requestId: "req-1",
       });
 
       expect(ok(res).emailAddress).toBe(MAILBOX);
@@ -307,23 +309,29 @@ describe("ingest-channels control plane", () => {
       expect(await bound()).toEqual([ok(res).id]);
     });
 
+    it("lists a gmail channel with its target and a device channel with its cause prefix", async () => {
+      const gmail = ok(await gmailMint("req-a"));
+      const device = ok(await mint(alice, "req-b"));
+
+      const listed = ok(await processList(deps, alice.did(), {})).channels;
+      const byId = new Map(listed.map((c) => [c.id, c]));
+      expect(byId.get(gmail.id)).toMatchObject({
+        kind: "gmail",
+        target: targetLink("gmail-1")["/"]["link@1"],
+      });
+      expect(byId.get(gmail.id)?.causePrefix).toBeUndefined();
+      expect(byId.get(device.id)).toMatchObject({
+        kind: "device",
+        causePrefix: "location",
+      });
+      expect(byId.get(device.id)?.target).toBeUndefined();
+    });
+
     it("moves the channel when minted again with a proof for another mailbox", async () => {
-      const first = ok(
-        await processMint(withGmail(), alice.did(), {
-          space,
-          installId: "gmail-1",
-          gmail: { accessToken: "t1" },
-          requestId: "req-1",
-        }),
-      );
+      const first = ok(await gmailMint("req-1"));
       lookup = { ok: true, emailAddress: "bob@example.com" };
 
-      const again = await processMint(withGmail(), alice.did(), {
-        space,
-        installId: "gmail-1",
-        gmail: { accessToken: "t2" },
-        requestId: "req-2",
-      });
+      const again = await gmailMint("req-2");
 
       expect(ok(again).id).toBe(first.id);
       expect(ok(again).emailAddress).toBe("bob@example.com");
@@ -331,52 +339,86 @@ describe("ingest-channels control plane", () => {
       expect(await bound("bob@example.com")).toEqual([first.id]);
     });
 
-    it("keeps the binding when minted again without a proof", async () => {
-      const first = ok(
-        await processMint(withGmail(), alice.did(), {
-          space,
-          installId: "gmail-1",
-          gmail: { accessToken: "t1" },
-          requestId: "req-1",
-        }),
-      );
+    it("keeps the binding and the target when minted again with neither", async () => {
+      const first = ok(await gmailMint("req-1"));
 
-      const again = await processMint(withGmail(), alice.did(), {
-        space,
-        installId: "gmail-1",
-        requestId: "req-2",
-      });
+      const again = await mint(alice, "req-2", { installId: "gmail-1" });
 
       expect(ok(again).id).toBe(first.id);
       expect(ok(again).emailAddress).toBeUndefined();
+      expect(ok(again).target).toEqual(first.target);
       expect(await bound()).toEqual([first.id]);
     });
 
-    it("returns 400 and mints nothing for a proof on a journal", async () => {
-      const res = await processMint(withGmail(), alice.did(), {
-        space,
-        installId: "gmail-1",
-        sink: "journal",
-        gmail: { accessToken: "t1" },
-        requestId: "req-1",
+    it("refuses to re-mint a gmail channel against another target cell", async () => {
+      const first = ok(await gmailMint("req-1"));
+
+      const moved = await gmailMint("req-2", {
+        target: targetLink("elsewhere"),
       });
 
-      expect(res.status).toBe(400);
-      expect(err(res)).toContain("latest");
+      expect(moved.status).toBe(409);
+      expect(err(moved)).toContain("target cell cannot change");
+      const stored = await getRegistration(runtime, operator.did(), first.id);
+      expect(stored?.target).toEqual(first.target);
+    });
+
+    it("refuses to rotate a gmail channel, and says to mint instead", async () => {
+      const first = ok(await gmailMint("req-1"));
+
+      const rotated = await processRotate(deps, alice.did(), {
+        id: first.id,
+        requestId: "req-rotate",
+      });
+
+      expect(rotated.status).toBe(400);
+      expect(err(rotated)).toContain("Mint it again");
+    });
+
+    it("returns 400 and mints nothing for a proof without a target, or a target without a proof", async () => {
+      const noTarget = await gmailMint("req-1", { target: undefined });
+      expect(noTarget.status).toBe(400);
+      expect(err(noTarget)).toContain("target cell");
+
+      const noProof = await gmailMint("req-2", { gmail: undefined });
+      expect(noProof.status).toBe(400);
+      expect(err(noProof)).toContain("mailbox proof");
+
       expect(proofs).toEqual([]);
       expect(
         await getOwnerRegistrationIndex(runtime, operator.did(), alice.did()),
       ).toEqual([]);
     });
 
+    it("returns 400 for a cause prefix beside a proof, and for a target in another space", async () => {
+      const prefixed = await gmailMint("req-1", { causePrefix: "gmail-push" });
+      expect(prefixed.status).toBe(400);
+      expect(err(prefixed)).toContain("cause prefix");
+
+      const other = await Identity.fromPassphrase("ic-other-space");
+      const elsewhere = await gmailMint("req-2", {
+        target: targetLink("gmail-1", other.did()),
+      });
+      expect(elsewhere.status).toBe(400);
+      expect(err(elsewhere)).toContain("another space");
+
+      expect(proofs).toEqual([]);
+    });
+
+    it("returns 400 and mints nothing for a proof on an existing device channel", async () => {
+      ok(await mint(alice, "req-a", { installId: "gmail-1" }));
+
+      const res = await gmailMint("req-b");
+
+      expect(res.status).toBe(400);
+      expect(err(res)).toContain("device channel");
+      expect(proofs).toEqual([]);
+      expect(await bound()).toEqual([]);
+    });
+
     it("returns 400 and mints nothing for two proofs, or none, in the field", async () => {
       for (const gmail of [{}, { accessToken: "t", idToken: "i" }]) {
-        const res = await processMint(withGmail(), alice.did(), {
-          space,
-          installId: "gmail-1",
-          gmail,
-          requestId: "req-1",
-        });
+        const res = await gmailMint("req-1", { gmail });
         expect(res.status).toBe(400);
       }
       expect(proofs).toEqual([]);
@@ -386,12 +428,7 @@ describe("ingest-channels control plane", () => {
     });
 
     it("returns 400 and mints nothing where Gmail push is not configured", async () => {
-      const res = await processMint(deps, alice.did(), {
-        space,
-        installId: "gmail-1",
-        gmail: { accessToken: "t1" },
-        requestId: "req-1",
-      });
+      const res = await gmailMint("req-1", {}, alice, deps);
 
       expect(res.status).toBe(400);
       expect(err(res)).toContain("not configured");
@@ -403,12 +440,7 @@ describe("ingest-channels control plane", () => {
     it("returns 400 and mints nothing when Google rejects the proof", async () => {
       lookup = { ok: false, reason: "rejected" };
 
-      const res = await processMint(withGmail(), alice.did(), {
-        space,
-        installId: "gmail-1",
-        gmail: { accessToken: "t1" },
-        requestId: "req-1",
-      });
+      const res = await gmailMint("req-1");
 
       expect(res.status).toBe(400);
       expect(
@@ -419,33 +451,15 @@ describe("ingest-channels control plane", () => {
 
     it("returns 400 for an ID token where none is accepted, and 502 when Google cannot be reached", async () => {
       lookup = { ok: false, reason: "unsupported" };
-      expect(
-        (await processMint(withGmail(), alice.did(), {
-          space,
-          installId: "gmail-1",
-          gmail: { idToken: "i" },
-          requestId: "req-1",
-        })).status,
-      ).toBe(400);
+      expect((await gmailMint("req-1", { gmail: { idToken: "i" } })).status)
+        .toBe(400);
 
       lookup = { ok: false, reason: "unavailable" };
-      expect(
-        (await processMint(withGmail(), alice.did(), {
-          space,
-          installId: "gmail-1",
-          gmail: { accessToken: "t" },
-          requestId: "req-2",
-        })).status,
-      ).toBe(502);
+      expect((await gmailMint("req-2")).status).toBe(502);
     });
 
     it("asks Google nothing for a caller who does not own the space", async () => {
-      const res = await processMint(withGmail(), mallory.did(), {
-        space,
-        installId: "gmail-1",
-        gmail: { accessToken: "t1" },
-        requestId: "req-1",
-      });
+      const res = await gmailMint("req-1", {}, mallory);
 
       expect(res.status).toBe(403);
       expect(proofs).toEqual([]);
@@ -454,38 +468,22 @@ describe("ingest-channels control plane", () => {
     it("returns 409 for a mailbox at its channel limit, leaving the channel minted", async () => {
       for (let i = 0; i < MAX_CHANNELS_PER_MAILBOX; i++) {
         ok(
-          await processMint(withGmail(), alice.did(), {
-            space,
+          await gmailMint(`req-${i}`, {
             installId: `gmail-${i}`,
-            gmail: { accessToken: "t" },
-            requestId: `req-${i}`,
+            target: targetLink(`gmail-${i}`),
           }),
         );
       }
 
-      const res = await processMint(withGmail(), alice.did(), {
-        space,
+      const res = await gmailMint("req-extra", {
         installId: "gmail-extra",
-        gmail: { accessToken: "t" },
-        requestId: "req-extra",
+        target: targetLink("gmail-extra"),
       });
 
       expect(res.status).toBe(409);
       expect(err(res)).toContain("minted but not bound");
       expect((await bound()).length).toBe(MAX_CHANNELS_PER_MAILBOX);
     });
-  });
-
-  it("refuses to re-mint under a different sink, and keeps the sink when none is named", async () => {
-    const { id } = ok(await mint(alice, "req-a", { sink: "latest" }));
-
-    const changed = await mint(alice, "req-b", { sink: "journal" });
-    expect(changed.status).toBe(409);
-    expect(err(changed)).toContain("sink");
-
-    expect((await mint(alice, "req-c")).status).toBe(200);
-    const stored = await getRegistration(runtime, operator.did(), id);
-    expect(stored?.sink).toBe("latest");
   });
 
   it("rejects an installId that could impersonate an integration audience", async () => {

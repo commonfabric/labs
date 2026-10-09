@@ -251,10 +251,10 @@ caller, ever. POST-only keeps the door open for a shell/pattern client later.
 
 | Verb | Purpose |
 |---|---|
-| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); for a journal, returns the device URL and token **once**; a `latest` channel has neither |
+| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); for a device channel, returns the device URL and token **once**; a gmail channel has neither |
 | `POST /api/spaces/:space/ingest-channels/list` | every channel targeting the space, whoever minted it, revoked ones included; never returns `secretHash` |
 | `POST /api/ingest-channels/list` | the caller's own live channels, in whichever spaces; never returns `secretHash` |
-| `POST /api/spaces/:space/ingest-channels/rotate` | new token for a journal, same id and target; a `latest` channel's binding is kept and nothing is returned for a device |
+| `POST /api/spaces/:space/ingest-channels/rotate` | new token, same id and target, for a device channel; a gmail channel answers 400, since it has none |
 | `POST /api/spaces/:space/ingest-channels/revoke` | flips `enabled: false` |
 
 The caller's own list takes an empty body and refuses any other, so a request
@@ -287,13 +287,13 @@ otherwise force arbitrary allocation with a garbage signature.
 
 ### Client
 
-`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. A channel is minted
-with a sink, which decides what its writes land in and cannot change
-afterwards: the default `journal`, records in per-day partition cells that a
-device POSTs to, or `latest`, one cell holding the newest record written to
-it. A mint carrying a proof of a Gmail mailbox binds the channel to that
-mailbox and makes it `latest`, as [Gmail push](gmail-push-ingest.md)
-describes. `cf ingest rotate <id>`
+`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. A mint decides what
+kind of channel it makes, which cannot change afterwards: a device channel,
+records in per-day partition cells under a cause prefix that a device POSTs
+to with the token, or, when the mint names a target cell and carries a
+proof of a Gmail mailbox, a gmail channel bound to that mailbox, whose one
+cell toolshed writes, as [Gmail push](gmail-push-ingest.md) describes.
+`cf ingest rotate <id>`
 mints a new token for a channel the caller owns, leaving the channel and its
 grants in place — the spelling for a token that leaked or aged, where revoking
 would take the channel down with it. Rotate and revoke are addressed to the

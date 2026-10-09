@@ -22,13 +22,14 @@ space is a signal that something changed, never mail.
 
 ## The flow
 
-1. The syncer mints an ingest channel into a space it owns, as
+1. The syncer mints a gmail channel into a space it owns, as
    [self-serve-ingest-channels.md](self-serve-ingest-channels.md) describes,
-   carrying a proof of the mailbox: a Google access token that reads it, or
-   a Google ID token naming it. The mint binds the channel to that mailbox.
-   A channel so minted has the `latest` sink: one cell, which holds only the
-   newest notification; a mailbox needs no history of them, and a cell that
-   never grows is one the syncer can watch for as long as it runs.
+   naming the cell the notifications are to be written to and carrying a
+   proof of the mailbox: a Google access token that reads it, or a Google ID
+   token naming it. The mint binds the channel to that mailbox. The cell
+   holds only the newest notification; a mailbox needs no history of them,
+   and a cell that never grows is one the syncer can watch for as long as it
+   runs.
 2. It calls Gmail's `users.watch` with that user's token, naming the Pub/Sub
    topic, and repeats the call before the watch expires.
 3. When the mailbox changes, Gmail publishes to the topic, and the push
@@ -92,15 +93,27 @@ channels the first attempt did not reach are written.
 ### Binding a mailbox, on mint
 
 A mailbox is bound by the mint verb of the
-[ingest-channel control plane](self-serve-ingest-channels.md), which gains an
-optional `gmail` field and nothing else. Mint keeps its first-party request
-proof, its ownership check, its 16 KB body limit, its rate-limit bucket, and
-its gate on `INGEST_SELF_SERVE_ENABLED`. A mint carrying the field answers
-400 where Gmail push is not configured.
+[ingest-channel control plane](self-serve-ingest-channels.md), which gains
+two optional fields that come together, `target` and `gmail`, and nothing
+else. Mint keeps its first-party request proof, its ownership check, its
+16 KB body limit, its rate-limit bucket, and its gate on
+`INGEST_SELF_SERVE_ENABLED`. A mint carrying the fields answers 400 where
+Gmail push is not configured.
 
 ```json
-{ "installId": "gmail-1", "gmail": { "accessToken": "ya29…" }, "requestId": "…" }
+{
+  "installId": "gmail-1",
+  "target": { "/": { "link@1": { "id": "of:…", "space": "did:key:…", "path": ["inbox"] } } },
+  "gmail": { "accessToken": "ya29…" },
+  "requestId": "…"
+}
 ```
+
+`target` is a link to the cell the notifications are written to, in the
+space the mint is addressed to. The caller chooses it, and is the one
+keeping it from colliding with anything else in the space; two channels
+naming one cell write the same cell. It cannot change once the channel
+exists, since it is what the syncer watches.
 
 `gmail` holds exactly one of two proofs that the caller holds the mailbox:
 
@@ -122,9 +135,12 @@ space is checked first, so a caller who does not own it never causes a
 request to Google, and a replayed `requestId` is refused before the proof is
 checked, so a replay costs no request either.
 
-A proof makes the channel a `latest` channel: that is the sink when the mint
-names none, and a proof on a journal answers 400. The response gains
-`emailAddress`, the mailbox bound, and carries no device URL or token.
+The two fields together make the channel a gmail channel, written by
+toolshed into the target cell, where a mint without them makes a device
+channel, written by a device with the token mint returns. One without the
+other answers 400, as does a cause prefix beside them, or a proof on a
+channel minted as a device channel. The response gains `emailAddress`, the
+mailbox bound, and `target`, and carries no device URL or token.
 
 The binding is written after the registration. Minting the same channel
 again with a proof for another mailbox moves it; minting it again with no
@@ -132,25 +148,29 @@ proof leaves the binding as it is. A mint whose registration landed but
 whose binding did not, because the mailbox is at its channel limit or the
 binding changed concurrently, answers 409 naming the channel as minted but
 not bound, and minting again with the same install id and proof binds it.
-Delivery to a channel stops when it is revoked; there is no unbind.
+Delivery to a channel stops when it is revoked; there is no unbind. Rotate
+answers 400 for a gmail channel, which has no token to rotate: minting it
+again is what re-enables or extends it.
 
 | Status | When |
 | --- | --- |
 | 200 | Minted and bound |
-| 400 | Gmail push is not configured here, a proof on a journal, two proofs or none in the field, a proof Google did not accept, or an ID token where none is accepted |
+| 400 | Gmail push is not configured here, a proof without a target or a target without a proof, a cause prefix beside them, a proof on a device channel, a target in another space or not a complete link, two proofs or none in the field, a proof Google did not accept, or an ID token where none is accepted |
 | 403 | Not an owner of the space |
-| 409 | Replayed `requestId`, the channel is another owner's or has another cause prefix or sink, this deployment cannot write to the space, or the channel was minted but the mailbox is at its limit |
+| 409 | Replayed `requestId`, the channel is another owner's or writes another cause prefix or target cell, this deployment cannot write to the space, or the channel was minted but the mailbox is at its limit |
 | 502 | Storage failed, or Google could not be reached |
 
-From the command line, `cf ingest mint` takes `--gmail-access-token` or
-`--gmail-id-token`, or, better for a credential, reads `CF_GMAIL_ACCESS_TOKEN`
-or `CF_GMAIL_ID_TOKEN` from the environment, and prints the mailbox it bound.
+From the command line, `cf ingest mint` takes `--target`, a cell reference
+in the channel's space, and `--gmail-access-token` or `--gmail-id-token`,
+or, better for a credential, reads `CF_GMAIL_ACCESS_TOKEN` or
+`CF_GMAIL_ID_TOKEN` from the environment. It prints the mailbox it bound and
+the target as a reference `--target` reads back.
 
 ## The cell
 
-A `latest` channel's one cell has the cause the channel's `causePrefix`
-names, in the channel's space. Each delivery replaces what the cell holds
-with the notification:
+A gmail channel's one cell is the `target` its mint named, held in the
+registration as the parts of the link: the space, the document id, and the
+path. Each delivery replaces what the cell holds with the notification:
 
 ```json
 {
@@ -199,7 +219,8 @@ a log line.
   one syncer can each have their own. Binding past that answers 409.
 - A channel binds to at most one mailbox. Minting it again with a proof for
   another mailbox moves it.
-- A proof mints a `latest` channel; a proof on a journal answers 400.
+- A proof and a target mint a gmail channel; a proof on a device channel
+  answers 400.
 - A bound channel that is revoked, expired, or gone is skipped on delivery,
   and gives up its place in the mailbox's list at the next mint that binds
   that mailbox. Revoking is how delivery to a channel is stopped.

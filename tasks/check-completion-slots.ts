@@ -113,6 +113,7 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "a secret; a candidate list is the wrong place",
   ],
   ["ingest mint:gmail-id-token", "the same"],
+  ["ingest mint:target", "a cell reference the caller chooses"],
   ["space invite create:ttl", "an admission lifetime in seconds"],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],

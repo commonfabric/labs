@@ -134,7 +134,7 @@ describe("gmail-push.utils", () => {
     ...over,
   });
 
-  /** Saves a live channel writing under `causePrefix`, and returns it. */
+  /** Saves a live gmail channel writing its own cell, and returns it. */
   const channel = async (
     installId: string,
     over: Partial<IngestRegistration> = {},
@@ -143,9 +143,14 @@ describe("gmail-push.utils", () => {
       id: channelId(space, installId),
       name: installId,
       space,
-      causePrefix: `gmail-push-${installId}`,
+      target: {
+        space,
+        id: runtime.getCell(space, `gmail-push-${installId}`)
+          .getAsNormalizedFullLink().id,
+        path: [],
+      },
       installId,
-      sink: "latest",
+      kind: "gmail",
       secretHash: "unused",
       createdBy: space,
       createdAt: "2026-09-01T00:00:00.000Z",
@@ -431,14 +436,18 @@ describe("gmail-push.utils", () => {
         expect(await latest(b)).toMatchObject({ historyId: "4242" });
       });
 
-      it("skips a bound channel that is a journal", async () => {
-        const j = await channel("j", { sink: "journal" });
+      it("skips a bound device channel", async () => {
+        const j = await channel("j", {
+          kind: "device",
+          causePrefix: "gmail-push-j",
+          target: undefined,
+        });
         await bindMailbox(runtime, space, j.id, MAILBOX);
 
-        const result = await push(envelope(notification()));
-
-        expect(result).toEqual({ status: 200, body: { delivered: 0 } });
-        expect(await latest(j)).toBeUndefined();
+        expect(await push(envelope(notification()))).toEqual({
+          status: 200,
+          body: { delivered: 0 },
+        });
       });
 
       it("skips a bound channel that has since been revoked", async () => {

@@ -10,8 +10,8 @@
  * mailbox reaches a space through a binding from its address to an ingest
  * channel, which the channel's owner makes by minting the channel with a
  * proof of the mailbox (`routes/ingest-channels`), and each notification
- * replaces the record in the one cell of every live `latest` channel bound
- * to its mailbox, unless the cell already holds a newer history id. See
+ * replaces the record in the one cell of every live gmail channel bound to
+ * its mailbox, unless the cell already holds a newer history id. See
  * `docs/features/gmail-push-ingest.md`.
  */
 
@@ -490,7 +490,7 @@ function supersedes(
 
 /**
  * The transport-independent core of the push handler. Verifies the push
- * token, then writes the notification to the cell of every live `latest`
+ * token, then writes the notification to the cell of every live gmail
  * channel bound to its mailbox, where it replaces whatever the cell held
  * unless that carries a newer history id.
  *
@@ -536,7 +536,7 @@ export async function processGmailPush(
     for (const id of ids) {
       const registration = await getRegistration(runtime, serviceSpace, id);
       if (
-        registration === null || registration.sink !== "latest" ||
+        registration === null || registration.kind !== "gmail" ||
         channelRefusal(registration, now) !== null
       ) {
         continue;

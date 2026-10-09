@@ -351,16 +351,19 @@ is refused, with an error that names the same DID and says to grant it WRITE:
 cf acl set <deployment did> WRITE --space <space>
 ```
 
-Mint a channel into the space, carrying the Gmail access token as proof of
-the mailbox; the mint binds the channel to it and gives it the `latest` sink.
-The command reads the token from `CF_GMAIL_ACCESS_TOKEN`:
+Mint a gmail channel into the space, naming the cell the notifications are
+written to and carrying the Gmail access token as proof of the mailbox; the
+mint binds the channel to it. `<target>` is a cell reference in `<space>`,
+such as `/of:fid1:…/inbox`; a document id that nothing else in the space
+uses is the caller's to choose. The command reads the token from
+`CF_GMAIL_ACCESS_TOKEN`:
 
 ```bash
-CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest mint --space <space> --install-id <install id> --cause-prefix gmail-push
+CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest mint --space <space> --install-id <install id> --target <target>
 ```
 
 It prints the mailbox it bound, which is the one Gmail reports for the
-token. A consent that returned a Google ID token can pass that instead, as
+token, and the target as a reference the command reads back. A consent that returned a Google ID token can pass that instead, as
 `CF_GMAIL_ID_TOKEN`, on a deployment whose `INGEST_GMAIL_OAUTH_CLIENT_IDS`
 names the consent's client.
 
@@ -432,8 +435,8 @@ curl -s -X POST -H "Authorization: Bearer <gcloud token>" -H "Content-Type: appl
 - Toolshed's response to a delivery is `{"delivered": 1}` for a bound mailbox
   with one live channel, and `{"delivered": 0}` for a mailbox nobody bound.
 - `cf ingest ls` shows the channel's LAST SEEN time moving with each delivery.
-- The notification lands in the cell `gmail-push` in `<space>`, where
-  `gmail-push` is the channel's cause prefix, replacing the one before it.
+- The notification lands in the cell `<target>` names in `<space>`,
+  replacing the one before it.
 - The history id in the cell is enough to fetch what changed. This lists what
   arrived in the inbox since an earlier id:
 

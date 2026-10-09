@@ -53,22 +53,40 @@ export interface ChannelConfig {
 }
 
 /**
- * What a channel's writes land in: a `journal` of records in per-day
- * partition cells, which a device POSTs to, or one `latest` cell holding the
- * newest record written to it, which is what a Gmail mailbox binds to.
+ * What kind of channel a registration is. A `device` channel is written by a
+ * device POSTing records with the channel's token, into journal cells under
+ * its cause prefix. A `gmail` channel is written by the server on each Gmail
+ * push notification for the mailbox bound to it, into the cell its target
+ * names. A mint decides it: a mailbox proof and a target make a gmail
+ * channel, and a mint without them makes a device channel.
  */
-export type IngestSink = "journal" | "latest";
+export type IngestChannelKind = "device" | "gmail";
 
-/** The sinks a channel can be minted with, as `--sink` accepts them. */
-export const INGEST_SINKS: readonly IngestSink[] = ["journal", "latest"];
+/**
+ * The cell a gmail channel writes, as the parts of a link: the space, the
+ * document id, and the path within it.
+ */
+export interface CellTarget {
+  space: string;
+  id: string;
+  path: string[];
+}
+
+/** A link to a cell, as a mint names the cell a gmail channel writes. */
+export type CellTargetLink = { "/": { "link@1": CellTarget } };
 
 export interface ChannelSummary {
   id: string;
   name: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a gmail channel. */
+  causePrefix?: string;
+
+  /** A gmail channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
-  sink: IngestSink;
+  kind: IngestChannelKind;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -84,16 +102,21 @@ export interface ChannelSummary {
 export interface MintedChannel {
   id: string;
 
-  /** Where a device POSTs; absent for a `latest` channel, as `token` is. */
+  /** Where a device POSTs; absent for a gmail channel, as `token` is. */
   url?: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a gmail channel. */
+  causePrefix?: string;
+
+  /** A gmail channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
   expiresAt?: string;
 
   /**
    * The device's bearer secret, shown ONCE; the server keeps only its hash.
-   * Absent for a `latest` channel, which no device POSTs to.
+   * Absent for a gmail channel, which no device POSTs to.
    */
   token?: string;
 
@@ -179,7 +202,9 @@ export function mintChannel(
     causePrefix?: string;
     name?: string;
     ttlDays?: number;
-    sink?: IngestSink;
+
+    /** With `gmail`, the cell the gmail channel writes. */
+    target?: CellTargetLink;
     gmail?: GmailProof;
     requestId: string;
   },

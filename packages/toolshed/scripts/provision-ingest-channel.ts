@@ -173,7 +173,7 @@ export async function provisionChannel(
       space,
       causePrefix,
       installId,
-      sink: "journal",
+      kind: "device",
       secretHash,
       // Re-provisioning an existing channel replaces its secret, so it IS a
       // rotation and must leave the re-pair signal behind. Without it a device

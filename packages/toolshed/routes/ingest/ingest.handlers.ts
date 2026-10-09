@@ -1,5 +1,5 @@
 /**
- * The `journal`-sink ingest handler — a thin transport wrapper. It pulls the
+ * The device-channel ingest handler — a thin transport wrapper. It pulls the
  * bearer token and JSON body off the request, then delegates to processIngest
  * (ingest.utils.ts), whose full auth + validation contract is unit-tested
  * against a real runtime. Auth mirrors the webhook ingest path.
@@ -48,7 +48,7 @@ const append = async (
 
   // Read the raw body but DON'T parse here — processIngest parses only after it
   // has verified the token, so a bad token can't be distinguished by body
-  // validity (uniform 401 for bad/unknown/disabled/wrong-sink).
+  // validity (uniform 401 for bad/unknown/disabled/wrong-kind).
   const rawBody = await request.text();
 
   return await processIngest(

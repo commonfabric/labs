@@ -51,13 +51,26 @@ const requestIdField = z.string().describe(
     "returns 409, and changes nothing and returns no secret.",
 );
 
+const cellTarget = z.object({
+  space: z.string(),
+  id: z.string(),
+  path: z.array(z.string()),
+}).describe("The parts of the link to the cell a gmail channel writes.");
+
 const channelSummary = z.object({
   id: z.string(),
   name: z.string(),
   space: z.string(),
-  causePrefix: z.string(),
+  causePrefix: z.string().optional().describe(
+    "A device channel's cause prefix.",
+  ),
+  target: cellTarget.optional(),
   installId: z.string(),
-  sink: z.enum(["journal", "latest"]),
+  kind: z.enum(["device", "gmail"]).describe(
+    "`device`: a device POSTs records with the token into journal cells " +
+      "under the cause prefix. `gmail`: toolshed writes each Gmail push " +
+      "notification for the bound mailbox into the target cell.",
+  ),
   createdAt: z.string(),
   enabled: z.boolean(),
   owner: z.string().optional(),
@@ -119,19 +132,22 @@ const commonResponses = {
 
 /**
  * The token is returned ONCE, here and on rotate, and never stored in clear.
- * A `latest` channel, which no device POSTs to, carries no URL and no token.
+ * A gmail channel, which no device POSTs to, carries no URL and no token.
  */
 const mintResult = z.object({
   id: z.string(),
   url: z.string().optional().describe(
-    "Where a device POSTs records. Absent for a `latest` channel.",
+    "Where a device POSTs records. Absent for a gmail channel.",
   ),
   space: z.string(),
-  causePrefix: z.string(),
+  causePrefix: z.string().optional().describe(
+    "A device channel's cause prefix.",
+  ),
+  target: cellTarget.optional(),
   installId: z.string(),
   expiresAt: z.string().optional(),
   token: z.string().optional().describe(
-    "Shown once. Hand it to the device. Absent for a `latest` channel.",
+    "Shown once. Hand it to the device. Absent for a gmail channel.",
   ),
   emailAddress: z.string().optional().describe(
     "The mailbox the channel is bound to, when the mint carried a proof.",
@@ -154,8 +170,8 @@ const gmailProof = z.union([
   }).strict(),
 ]).describe(
   "Binds the channel to the Gmail mailbox the proof is for, in this mint: " +
-    "one of the two tokens, never both. Only a `latest` channel binds, " +
-    "which is the sink when none is named.",
+    "one of the two tokens, never both. Comes with `target`, the cell the " +
+    "notifications are written to.",
 );
 
 export const mint = createRoute({
@@ -172,14 +188,25 @@ export const mint = createRoute({
               "Stable per-device id. Also the cross-repo join key and the " +
                 "provenance mark's audience.",
             ),
-            causePrefix: z.string().optional(),
+            causePrefix: z.string().optional().describe(
+              "A device channel's cell-cause prefix, `location` unless " +
+                "named. Not for a gmail channel, which names a `target`.",
+            ),
             name: z.string().optional(),
             ttlDays: z.number().int().positive().max(MAX_TTL_DAYS).optional(),
-            sink: z.enum(["journal", "latest"]).optional().describe(
-              "What the channel's writes land in: a `journal` of records in " +
-                "per-day partition cells, which devices POST to, or one " +
-                "`latest` cell holding the newest record written to it. A " +
-                "journal unless named, or `latest` with a `gmail` proof.",
+            target: z.object({
+              "/": z.object({
+                "link@1": z.object({
+                  id: z.string(),
+                  space: z.string(),
+                  path: z.array(z.string()).optional(),
+                }).passthrough(),
+              }),
+            }).optional().describe(
+              "The cell a gmail channel writes, as a link into the space the " +
+                "mint is addressed to. Comes with `gmail`; the two make the " +
+                "channel a gmail channel, and without them it is a device " +
+                "channel.",
             ),
             gmail: gmailProof.optional(),
             requestId: requestIdField,
@@ -199,16 +226,17 @@ export const mint = createRoute({
     [HttpStatusCodes.BAD_REQUEST]: {
       ...jsonError,
       description:
-        "Invalid input, a mailbox proof on a journal, a proof Google did " +
-        "not accept, or one this deployment does not accept",
+        "Invalid input, a mailbox proof without a target cell or on a " +
+        "device channel, a proof Google did not accept, or one this " +
+        "deployment does not accept",
     },
     [HttpStatusCodes.CONFLICT]: {
       ...jsonError,
       description:
         "Replayed requestId, a channel registered to another owner or " +
-        "with another cause prefix or sink, this deployment cannot write " +
-        "to the space, or the channel was minted but the mailbox is at " +
-        "its channel limit",
+        "writing another cause prefix or target cell, this deployment " +
+        "cannot write to the space, or the channel was minted but the " +
+        "mailbox is at its channel limit",
     },
     [HttpStatusCodes.BAD_GATEWAY]: {
       ...jsonError,

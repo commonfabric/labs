@@ -90,25 +90,26 @@ sequenceDiagram
     participant T as Toolshed
     participant G as Gmail API
 
-    S->>T: mint, with a mailbox proof (signed request)
+    S->>T: mint, naming the target cell, with a mailbox proof (signed request)
     alt the proof is an access token
         T->>G: users/me/profile with that token
         G-->>T: the mailbox's address
     else the proof is an ID token
         T->>T: verify it against Google's keys for an accepted client id
     end
-    T-->>S: channel id, cause prefix, and the bound address
+    T-->>S: channel id, target, and the bound address
     loop daily
         S->>G: users.watch, naming the Pub/Sub topic
     end
 ```
 
-The two sinks are written by different parties. A journal channel is
-written by a device presenting the channel's bearer token to
-`POST /api/spaces/:space/ingest/:id`, and that token is what mint returns
-for it. A `latest` channel has no device token and no device URL, since
-nothing POSTs to it: toolshed itself writes its cell on each Gmail delivery,
-and what authorizes that write is the push token and the binding.
+The two kinds of channel are written by different parties. A device
+channel is written by a device presenting the channel's bearer token to
+`POST /api/spaces/:space/ingest/:id`, into journal cells under its cause
+prefix, and that token is what mint returns for it. A gmail channel has no
+device token and no device URL, since nothing POSTs to it: toolshed itself
+writes the one cell its mint named on each Gmail delivery, and what
+authorizes that write is the push token and the binding.
 
 ## What each request is addressed to
 
@@ -188,17 +189,17 @@ sequenceDiagram
     B-->>L: access and refresh tokens
     L->>S: ensure space, grant WRITE to the toolshed's DID
     S->>T: create_space, acl set (signed as the user)
-    L->>S: mint, with the access token (or an ID token) as the mailbox proof
-    S->>T: POST /api/spaces/:space/ingest-channels/mint {gmail: {accessToken}}
+    L->>S: mint, naming the notification cell, with the access token (or an ID token) as the mailbox proof
+    S->>T: POST /api/spaces/:space/ingest-channels/mint {target, gmail: {accessToken}}
     T->>G: GET users/me/profile (one lookup, token not kept)
-    T-->>S: channel id, cause prefix, bound address (no device URL, no token)
-    S-->>T: subscribe to the channel's cell, named by its cause prefix (memory connection)
+    T-->>S: channel id, target, bound address (no device URL, no token)
+    S-->>T: subscribe to the target cell (memory connection)
     L->>G: users.watch naming the topic, renewed daily
 
     Note over G,T: Every time mail arrives
     G->>P: publish {emailAddress, historyId}
     P->>T: POST the push route under the registry's DID (OIDC token)
-    T->>T: verify the token, then find the mailbox's latest channels
+    T->>T: verify the token, then find the mailbox's gmail channels
     T->>T: replace the cell's record if the history id is newer
     T-->>P: 200 {delivered}
     T-->>S: the cell changed (memory connection)
@@ -271,4 +272,5 @@ Three facts decide the shape.
 - [`packages/toolshed/routes/ingest-channels/`](../../packages/toolshed/routes/ingest-channels/)
   holds the control plane, whose mint takes the mailbox proof.
 - [`packages/toolshed/routes/ingest/`](../../packages/toolshed/routes/ingest/)
-  holds the channel registry, and the vouched writes behind both sinks.
+  holds the channel registry, and the vouched writes behind both kinds of
+  channel.

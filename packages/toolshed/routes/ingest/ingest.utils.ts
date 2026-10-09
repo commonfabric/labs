@@ -5,7 +5,7 @@ import type {
   MemorySpace,
   Runtime,
 } from "@commonfabric/runner";
-import { isLink } from "@commonfabric/runner";
+import { isLink, type NormalizedLink, parseLink } from "@commonfabric/runner";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -15,15 +15,16 @@ import {
   type VouchedChannel,
 } from "@/lib/custody-ingest.ts";
 
-// The sinks of a vouched ingest channel, each a durable, ExternalIngest-marked
-// write into the channel's space. A `journal` is an append-only record log in
-// per-partition cells; location is one consumer of it (its beacon POSTs
+// The two kinds of vouched ingest channel, each a durable, ExternalIngest-
+// marked write into the channel's space. A `device` channel is an append-only
+// record journal in per-partition cells that a device POSTs to with the
+// channel's bearer token; location is one consumer of it (its beacon POSTs
 // `location.point` records; loom wraps them into `loom.source-record.v1`
-// envelopes on READ). A `latest` sink is one cell holding the newest record
-// written to it, for a signal whose history nobody reads, such as a Gmail
-// push notification. Nothing here knows about location, Gmail, or loom's
-// schema; records are stored verbatim and the read side is the single schema
-// authority.
+// envelopes on READ). A `gmail` channel is one cell, named by its owner,
+// holding the newest Gmail push notification for the mailbox bound to it,
+// which toolshed itself writes. Nothing here knows about location, loom's
+// schema, or what a reader does with a notification; records are stored
+// verbatim and the read side is the single schema authority.
 //
 // This module owns the DATA plane (ingest) and the shared registry helpers. The
 // CONTROL plane — self-serve mint/list/rotate/revoke — lives in
@@ -106,11 +107,54 @@ export const containsLink = (value: unknown): boolean => {
 export const isValidPartition = isValidSegment;
 
 /**
- * What a channel's writes land in. A `journal` is an append-only log in
- * per-partition cells, which the data plane appends to; a `latest` sink is one
- * cell holding only the newest record, which Gmail push writes to.
+ * What kind of channel a registration is, which decides who writes it and
+ * where. A `device` channel is written by a device POSTing records with the
+ * channel's bearer token, into journal partition cells under `causePrefix`. A
+ * `gmail` channel is written by toolshed on each Gmail push notification for
+ * the mailbox bound to it, into the one cell `target` names.
  */
-export type IngestSink = "journal" | "latest";
+export type IngestChannelKind = "device" | "gmail";
+
+/**
+ * The cell a `gmail` channel writes, as the parts of a link held as data: the
+ * space, the document id, and the path within it. The caller named it at mint
+ * and is the one keeping it from colliding with anything else in the space.
+ */
+export interface CellTarget {
+  space: string;
+  id: string;
+  path: string[];
+}
+
+/**
+ * Returns the parts of `link` as a `CellTarget`, or throws when the link is
+ * not complete: a target has to name its space and document outright.
+ */
+export function cellTargetOf(link: NormalizedLink): CellTarget {
+  if (link.id === undefined || link.space === undefined) {
+    throw new Error("a target cell link must carry a space and an id");
+  }
+  return {
+    space: link.space,
+    id: link.id,
+    path: link.path.map((segment) => String(segment)),
+  };
+}
+
+/** Returns the link a `CellTarget` holds the parts of. */
+export function linkOfCellTarget(target: CellTarget): NormalizedLink {
+  const link = parseLink({
+    "/": {
+      "link@1": { id: target.id, space: target.space, path: target.path },
+    },
+  });
+  if (link === undefined) {
+    throw new Error(
+      `cell target ${target.id} in ${target.space} is not a link`,
+    );
+  }
+  return link;
+}
 
 export interface IngestRegistration {
   id: string;
@@ -120,21 +164,29 @@ export interface IngestRegistration {
   space: string;
 
   /**
-   * Cell-cause prefix. A journal's partition cell has the cause
-   * `${causePrefix}/${partition}`; a `latest` channel's one cell has the cause
-   * `causePrefix` itself.
+   * Cell-cause prefix of a `device` channel: a partition cell has the cause
+   * `${causePrefix}/${partition}`. Absent on a `gmail` channel, whose cell is
+   * `target`.
    */
-  causePrefix: string;
+  causePrefix?: string;
+
+  /**
+   * The one cell of a `gmail` channel, which the caller named at mint. Absent
+   * on a `device` channel, whose cells are named by `causePrefix`.
+   */
+  target?: CellTarget;
 
   /** Stable source identifier: recorded on the mark + the cross-repo join key. */
   installId: string;
 
   /**
-   * The sink discriminator. Each write path checks it, so a channel of one
-   * kind can never be given the other's semantics: the data plane appends only
-   * to a `journal`, and Gmail push writes only to a `latest` cell.
+   * Which kind of channel this is, and so which of `causePrefix` and `target`
+   * it carries. Each write path checks it, so a channel of one kind can never
+   * be given the other's semantics: the data plane appends only to a `device`
+   * channel, and Gmail push writes only to a `gmail` channel. A registration
+   * stored before the field existed is a `device` channel, and reads as one.
    */
-  sink: IngestSink;
+  kind: IngestChannelKind;
 
   secretHash: string;
 
@@ -265,8 +317,17 @@ const RegistrationSchema = {
     name: { type: "string" },
     space: { type: "string" },
     causePrefix: { type: "string" },
+    target: {
+      type: "object",
+      properties: {
+        space: { type: "string" },
+        id: { type: "string" },
+        path: { type: "array", items: { type: "string" } },
+      },
+      required: ["space", "id", "path"],
+    },
     installId: { type: "string" },
-    sink: { type: "string" },
+    kind: { type: "string" },
     secretHash: { type: "string" },
     createdBy: { type: "string" },
     createdAt: { type: "string" },
@@ -293,9 +354,7 @@ const RegistrationSchema = {
     "id",
     "name",
     "space",
-    "causePrefix",
     "installId",
-    "sink",
     "secretHash",
     "createdBy",
     "createdAt",
@@ -726,7 +785,12 @@ export async function getRegistration(
   const cell = registrationCell(runtime, serviceSpace, id);
   await cell.sync();
   await runtime.storageManager.synced();
-  return (cell.get() as IngestRegistration | undefined) ?? null;
+  const stored = cell.get() as
+    | (Omit<IngestRegistration, "kind"> & { kind?: IngestChannelKind })
+    | undefined;
+  if (stored === undefined) return null;
+  // Every registration written before kinds existed is a device channel.
+  return { ...stored, kind: stored.kind ?? "device" };
 }
 
 /**
@@ -1065,6 +1129,22 @@ export async function getOwnerRegistrationIndex(
   return (cell.get() as string[] | undefined) ?? [];
 }
 
+/**
+ * Returns the cause prefix of a device channel, or throws for a channel of
+ * another kind, which has none.
+ */
+function causePrefixOf(registration: IngestRegistration): string {
+  if (
+    registration.kind !== "device" || registration.causePrefix === undefined
+  ) {
+    throw new Error(
+      `channel ${registration.id} is a ${registration.kind} channel, ` +
+        `not a device channel`,
+    );
+  }
+  return registration.causePrefix;
+}
+
 /** The partition cell for a channel — `${causePrefix}/${partition}` in the user's space. */
 export function journalCell(
   runtime: Runtime,
@@ -1073,7 +1153,7 @@ export function journalCell(
 ) {
   return runtime.getCell<Record<string, unknown>[]>(
     registration.space as MemorySpace,
-    `${registration.causePrefix}/${partition}`,
+    `${causePrefixOf(registration)}/${partition}`,
     JournalSchema,
   );
 }
@@ -1092,12 +1172,6 @@ export async function appendToJournal(
   partition: string,
   records: Record<string, unknown>[],
 ): Promise<number> {
-  if (registration.sink !== "journal") {
-    throw new Error(
-      `channel ${registration.id} is a ${registration.sink} channel, ` +
-        `not a journal`,
-    );
-  }
   const cell = journalCell(runtime, registration, partition);
   await cell.sync();
   await runtime.storageManager.synced();
@@ -1109,27 +1183,35 @@ export async function appendToJournal(
   return records.length;
 }
 
-// The one cell of a `latest` channel. The record it holds is opaque here, as
-// a journal's are.
+// The one cell of a `gmail` channel. The record it holds is opaque here, as a
+// journal's are.
 const LatestSchema = {
   type: "object",
   additionalProperties: true,
 } as const satisfies JSONSchema;
 
-/** The one cell of a `latest` channel — `causePrefix` in the user's space. */
+/**
+ * The one cell of a `gmail` channel: its `target`, resolved as a link. Throws
+ * for a channel of another kind, which has no target.
+ */
 export function latestCell(
   runtime: Runtime,
   registration: IngestRegistration,
 ) {
-  return runtime.getCell<Record<string, unknown>>(
-    registration.space as MemorySpace,
-    registration.causePrefix,
+  if (registration.kind !== "gmail" || registration.target === undefined) {
+    throw new Error(
+      `channel ${registration.id} is a ${registration.kind} channel, ` +
+        `not a gmail channel`,
+    );
+  }
+  return runtime.getCellFromLink<Record<string, unknown>>(
+    linkOfCellTarget(registration.target),
     LatestSchema,
   );
 }
 
 /**
- * Durably replaces the record in a `latest` channel's cell with `record`,
+ * Durably replaces the record in a `gmail` channel's cell with `record`,
  * minting one ExternalIngest mark bound to it, when the cell is empty or
  * `supersedes(current, record)` returns `true`, meaning `record` is newer
  * than the `current` record the cell holds. Otherwise the cell is left as it
@@ -1148,12 +1230,6 @@ export async function writeLatest(
     next: Record<string, unknown>,
   ) => boolean,
 ): Promise<boolean> {
-  if (registration.sink !== "latest") {
-    throw new Error(
-      `channel ${registration.id} is a ${registration.sink} channel, ` +
-        `not a latest channel`,
-    );
-  }
   const cell = latestCell(runtime, registration);
   await cell.sync();
   await runtime.storageManager.synced();
@@ -1232,7 +1308,7 @@ export type IngestResult =
  * equalized 401 for missing/disabled/wrong-token, 502-vs-401, hostile-partition
  * 400, batch cap) is unit-testable against a real runtime. `rawBody` is the raw
  * request body text; it is parsed only AFTER auth succeeds, so a bad/unknown/
- * disabled/wrong-sink token gets a uniform 401 regardless of body validity.
+ * disabled/wrong-kind token gets a uniform 401 regardless of body validity.
  *
  * `addressedSpace` is the space the request named in its path, for a request
  * that named one. A channel writing into any other space answers exactly like
@@ -1291,9 +1367,9 @@ export async function processIngest(
     }
     return { status: 401, body: { error: "Invalid request" } };
   }
-  // A wrong-sink channel stays opaque even to a valid token holder, so a
-  // channel of any other kind POSTed here can never acquire journal semantics.
-  if (registration.sink !== "journal") {
+  // A channel of another kind stays opaque even to a valid token holder, so a
+  // gmail channel's id POSTed here can never acquire journal semantics.
+  if (registration.kind !== "device") {
     return { status: 401, body: { error: "Invalid request" } };
   }
 

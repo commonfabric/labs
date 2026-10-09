@@ -126,7 +126,7 @@ function channel(overrides: Record<string, unknown>) {
     space: SPACE_DID,
     causePrefix: "ingest/phone-1",
     installId: "phone-1",
-    sink: "journal",
+    kind: "device",
     createdAt: "2026-08-01T00:00:00.000Z",
     enabled: true,
     lastSeenAt: null,
@@ -193,25 +193,6 @@ describe("cf ingest option validation", () => {
       'Missing required option: "--install-id".',
     );
   });
-
-  it("rejects mint with a sink it does not know", async () => {
-    await expectValidationError(
-      [
-        "mint",
-        "--identity",
-        keyPath,
-        "--api-url",
-        API_URL,
-        "--space",
-        SPACE_DID,
-        "--install-id",
-        "p",
-        "--sink",
-        "stream",
-      ],
-      'Unknown sink "stream"; expected one of journal, latest.',
-    );
-  });
 });
 
 describe("cf ingest mint", () => {
@@ -232,8 +213,6 @@ describe("cf ingest mint", () => {
       "Phone",
       "--ttl-days",
       "30",
-      "--sink",
-      "latest",
     ], {
       mint: { ...minted, expiresAt: "2026-09-03T00:00:00.000Z" },
     });
@@ -250,7 +229,8 @@ describe("cf ingest mint", () => {
     expect(calls[0].body.causePrefix).toBe("ingest/phone-1");
     expect(calls[0].body.name).toBe("Phone");
     expect(calls[0].body.ttlDays).toBe(30);
-    expect(calls[0].body.sink).toBe("latest");
+    expect(calls[0].body.target).toBeUndefined();
+    expect(calls[0].body.gmail).toBeUndefined();
     // A fresh idempotency key is minted per invocation, not left to the caller.
     expect(typeof calls[0].body.requestId).toBe("string");
     expect((calls[0].body.requestId as string).length).toBeGreaterThan(0);
@@ -286,8 +266,6 @@ describe("cf ingest mint", () => {
     // A did:key --space is forwarded verbatim — no derivation in the way.
     expect(calls[0].space).toBe(SPACE_DID);
     expect(calls[0].body.causePrefix).toBeUndefined();
-    // The sink is the server's default when none is named.
-    expect(calls[0].body.sink).toBeUndefined();
     expect(output).toContain("Ingest channel minted.");
     // The VALUE, not the label: the label prints unconditionally, so asserting
     // it alone would pass just as happily against a server that dropped the
@@ -295,8 +273,16 @@ describe("cf ingest mint", () => {
     expect(output).toContain("expires:     2026-11-02T00:00:00.000Z");
   });
 
-  it("prints the bind hint, and no URL or token, for a `latest` channel", async () => {
-    const { url: _url, token: _token, ...latest } = minted;
+  const TARGET_ID = "of:fid1:ZgAt8nM5zwgK9yvy9vmtO9vDgOP8XlXpncidUbNc2lg";
+  const gmailMinted = {
+    id: "chan-1",
+    space: SPACE_DID,
+    target: { space: SPACE_DID, id: TARGET_ID, path: ["inbox"] },
+    installId: "gmail-1",
+    expiresAt: "2026-11-02T00:00:00.000Z",
+  };
+
+  it("prints the target and a complete re-mint hint, and no URL or token, for an unbound gmail channel", async () => {
     const { output } = await run([
       "mint",
       "--identity",
@@ -306,24 +292,23 @@ describe("cf ingest mint", () => {
       "--space",
       SPACE_DID,
       "--install-id",
-      "loom-1",
-      "--sink",
-      "latest",
-    ], { mint: latest });
+      "gmail-1",
+    ], { mint: gmailMinted });
 
     expect(output).toContain("Ingest channel minted.");
+    expect(output).toContain(`target:      //${SPACE_DID}/${TARGET_ID}/inbox`);
     // The hint repeats what the server minted, not what the command line said.
     expect(output).toContain(
-      `ingest mint --space ${minted.space} --install-id ${minted.installId} ` +
-        `--cause-prefix ${minted.causePrefix}`,
+      `ingest mint --space ${SPACE_DID} --install-id gmail-1 --target ` +
+        `//${SPACE_DID}/${TARGET_ID}/inbox`,
     );
     expect(output).not.toContain("URL:");
+    expect(output).not.toContain("causePrefix:");
     expect(output).not.toContain("token (shown once");
     expect(output).not.toContain("tok-secret");
   });
 
-  it("sends the access token as the mailbox proof and prints the bound mailbox", async () => {
-    const { url: _url, token: _token, ...latest } = minted;
+  it("sends the target as a link and the access token as the mailbox proof, and prints the bound mailbox", async () => {
     const { output, calls } = await run([
       "mint",
       "--identity",
@@ -334,12 +319,16 @@ describe("cf ingest mint", () => {
       SPACE_DID,
       "--install-id",
       "gmail-1",
+      "--target",
+      `/${TARGET_ID}/inbox`,
       "--gmail-access-token",
       "ya29.token",
-    ], { mint: { ...latest, emailAddress: "alice@example.com" } });
+    ], { mint: { ...gmailMinted, emailAddress: "alice@example.com" } });
 
     expect(calls[0].body.gmail).toEqual({ accessToken: "ya29.token" });
-    expect(calls[0].body.sink).toBeUndefined();
+    expect(calls[0].body.target).toEqual({
+      "/": { "link@1": { id: TARGET_ID, space: SPACE_DID, path: ["inbox"] } },
+    });
     expect(output).toContain("mailbox:     alice@example.com");
     expect(output).toContain("users.watch");
     expect(output).not.toContain("token (shown once");
@@ -357,10 +346,55 @@ describe("cf ingest mint", () => {
         SPACE_DID,
         "--install-id",
         "gmail-1",
-      ], { mint: minted });
+        "--target",
+        `/${TARGET_ID}`,
+      ], { mint: gmailMinted });
 
       expect(calls[0].body.gmail).toEqual({ idToken: "eyJ.from-env" });
+      expect(calls[0].body.target).toEqual({
+        "/": { "link@1": { id: TARGET_ID, space: SPACE_DID, path: [] } },
+      });
     });
+  });
+
+  it("rejects a target in another space, and one carrying a member", async () => {
+    const other = "did:key:z6MkIngestCommandOtherSpaceAAAAAAAAAAAAAAAAAAAA";
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--target",
+        `//${other}/${TARGET_ID}`,
+        "--gmail-access-token",
+        "a",
+      ],
+      `--target is in ${other}, not in the channel's space ${SPACE_DID}.`,
+    );
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--target",
+        `/${TARGET_ID}#result`,
+        "--gmail-access-token",
+        "a",
+      ],
+      "--target names a cell by its document and path",
+    );
   });
 
   it("rejects both proofs at once", async () => {
