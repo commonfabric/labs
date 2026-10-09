@@ -1615,9 +1615,9 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
 `schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
-  `items: { type: "unknown", …element wrapper markers }` for property-only
-  access patterns (e.g. `.length`), preserving the outer wrapper without
-  materializing item schemas. Element capability is recovered from the element
+  `items: { type: "unknown", …element wrapper markers }`, preserving the outer
+  wrapper without materializing item schemas. The transformer records it on a
+  handler state property whose elements the body uses only for identity. Element capability is recovered from the element
   node or type; for expanded `Default<[]> | Item[]` unions it is recovered by
   descending the synthetic union **node** to the single real array member,
   since the resolved type cannot express it (CT-1639 Gap B)

@@ -101,6 +101,12 @@ interface MutableCapabilityState {
    * blanket-erasing every capture sharing this root state (#4714). */
   readonly wildcardPaths: Set<string>;
 
+  /** Paths whose whole value left the function — returned to a caller, put
+   * in a collection, handed to a callee with no summary — where whatever
+   * received it may read anything beneath. A `.get()` is not one: the body's
+   * own uses of what it returns are tracked where they occur. */
+  readonly escapedPaths: Set<string>;
+
   hasIdentityUse: boolean;
   hasNonIdentityUse: boolean;
   hasNonIdentityRootUse: boolean;
@@ -129,6 +135,7 @@ interface ObservedCapabilityUsage {
   readonly fullShapePaths: readonly (readonly string[])[];
   readonly writePaths: readonly (readonly string[])[];
   readonly opaquePaths: readonly (readonly string[])[];
+  readonly escapedPaths: readonly (readonly string[])[];
   readonly passthrough: boolean;
   readonly wildcard: boolean;
   readonly hasUnverifiedCellUse: boolean;
@@ -1690,6 +1697,7 @@ function normalizeObservedCapabilityUsage(
       )
     );
   const wildcardPrefixes = Array.from(state.wildcardPaths).map(decodePath);
+  const escapedPaths = Array.from(state.escapedPaths).map(decodePath);
   const identityPaths = Array.from(state.rawIdentityPaths)
     .map(decodePath)
     .filter((identityPath) => {
@@ -1711,6 +1719,15 @@ function normalizeObservedCapabilityUsage(
           : identityPath.every((segment, index) => wp[index] === segment)
       );
       if (overlapsWildcard) {
+        return false;
+      }
+      // A value that left whole may be read anywhere beneath where it left,
+      // so nothing at or below that path is used for identity alone.
+      const escapedAbove = escapedPaths.some((escaped) =>
+        escaped.length <= identityPath.length &&
+        escaped.every((segment, index) => identityPath[index] === segment)
+      );
+      if (escapedAbove) {
         return false;
       }
       if (identityPath.length === 0 && state.hasNonIdentityRootUse) {
@@ -1744,6 +1761,7 @@ function normalizeObservedCapabilityUsage(
     fullShapePaths,
     writePaths,
     opaquePaths,
+    escapedPaths,
     passthrough: state.passthrough,
     wildcard: state.wildcard,
     hasUnverifiedCellUse: state.hasUnverifiedCellUse,
@@ -1853,6 +1871,7 @@ export function analyzeFunctionCapabilities(
           passthrough: false,
           wildcard: false,
           wildcardPaths: new Set<string>(),
+          escapedPaths: new Set<string>(),
           hasIdentityUse: false,
           hasNonIdentityUse: false,
           hasNonIdentityRootUse: false,
@@ -1901,6 +1920,17 @@ export function analyzeFunctionCapabilities(
       const state = ensureState(name);
       state.fullShapeReads.add(encodePath(path));
       state.hasNonIdentityUse = true;
+    };
+
+    const recordEscape = (name: string, path: readonly string[]): void => {
+      if (isSelfReference(name, path)) return;
+      ensureState(name).escapedPaths.add(encodePath(path));
+    };
+
+    /** Charges the whole value at `path` as leaving the function. */
+    const trackEscape = (name: string, path: readonly string[]): void => {
+      trackFullShapeRead(name, path);
+      recordEscape(name, path);
     };
 
     const markWildcard = (
@@ -2692,6 +2722,14 @@ export function analyzeFunctionCapabilities(
       trackFullShapeRead(ref.root, ref.path);
     };
 
+    const trackEscapeRef = (ref: SourceRef): void => {
+      if (ref.dynamic) {
+        markWildcard(ref.root, ref.path);
+        return;
+      }
+      trackEscape(ref.root, ref.path);
+    };
+
     const assignBindingAlias = (
       name: ts.BindingName,
       source: AliasBinding | undefined,
@@ -3281,10 +3319,10 @@ export function analyzeFunctionCapabilities(
               const ref = materializeSourceRef(leaf);
               if (ref.path.length === 0 && !ref.dynamic) {
                 markPassthrough(ref.root);
-                if (helperReturnsToCaller) trackFullShapeRead(ref.root, []);
+                if (helperReturnsToCaller) trackEscape(ref.root, []);
               } else {
                 trackReadRef(ref);
-                trackFullShapeReadRef(ref);
+                trackEscapeRef(ref);
               }
             });
           }
@@ -3427,7 +3465,7 @@ export function analyzeFunctionCapabilities(
                       : undefined,
                   );
                   if (wholeValueEscape && !identityOnlyArgumentUse) {
-                    trackFullShapeRead(resolvedSource.root, []);
+                    trackEscape(resolvedSource.root, []);
                   }
                 } else if (
                   identityOnlyArgumentUse && !resolvedSource.dynamic
@@ -3449,7 +3487,7 @@ export function analyzeFunctionCapabilities(
                   // every consumer of `readPaths` see; the full-shape read is
                   // what keeps the value whole through shrinking.
                   trackReadRef(resolvedSource);
-                  trackFullShapeReadRef(resolvedSource);
+                  trackEscapeRef(resolvedSource);
                 } else {
                   trackReadRef(
                     resolvedSource,
@@ -3494,7 +3532,7 @@ export function analyzeFunctionCapabilities(
                 !ref.dynamic && !isPrimitiveLikeExpression(node) &&
                 escapesWhole(node)
               ) {
-                trackFullShapeReadRef(ref);
+                trackEscapeRef(ref);
               }
               // If this resolution went through a .get() call, record the
               // alias name so the identifier handler can skip redundant
@@ -3595,6 +3633,11 @@ export function analyzeFunctionCapabilities(
                 ...source.path,
                 ...fullShapePath,
               ]);
+            }
+            // And what the callee let leave may be read anywhere beneath,
+            // so the caller uses nothing there for identity alone either.
+            for (const escapedPath of paramSummary.escapedPaths ?? []) {
+              recordEscape(source.root, [...source.path, ...escapedPath]);
             }
             for (const writePath of paramSummary.writePaths) {
               trackWrite(source.root, [...source.path, ...writePath]);

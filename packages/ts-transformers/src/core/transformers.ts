@@ -58,6 +58,14 @@ export type CapabilityParamSummary = {
   readonly fullShapePaths?: readonly (readonly string[])[];
   readonly writePaths: readonly (readonly string[])[];
   readonly opaquePaths?: readonly (readonly string[])[];
+
+  /**
+   * Paths whose whole value left the function: returned to a caller, put in a
+   * collection, or handed to a callee with no summary. Whatever received it
+   * may read anything beneath, so no path at or below one is identity-only,
+   * here or in a caller that passed the value in.
+   */
+  readonly escapedPaths?: readonly (readonly string[])[];
   readonly passthrough: boolean;
   readonly wildcard: boolean;
 

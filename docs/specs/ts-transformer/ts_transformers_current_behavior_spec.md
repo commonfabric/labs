@@ -2266,12 +2266,31 @@ computation's input schema:
   synthetic root: blanket erasure degraded disjoint `equals()`-only captures
   into unsatisfiable full-value self-demands
   (`test/policy/capability-analysis.test.ts`).
+- A value whose whole leaves the function (returned to a caller, put in a
+  collection, or handed to a callee with no summary) records an escaped path as
+  well as a full-shape read, and normalization drops every identity path at or
+  below it, since whatever received the value may read anything beneath. A
+  summary carries its escaped paths (`escapedPaths`), and a caller replays them
+  at the path it passed the value from. A `.get()` is not an escape: the body's
+  uses of what it returns are tracked where they occur, so elements a body only
+  compares after a `.get()` stay identity-only
+  (`test/policy/capability-analysis-interprocedural.test.ts`; fixture
+  `handler-schema/identity-element-escaped-to-helper`).
 - Shrinking retains identity paths without materializing their value shape. A
   whole unwrapped identity-only input becomes `unknown`; a wrapped one becomes
   `OpaqueCell<unknown>`, or `ComparableCell<unknown>` for comparable use.
   Identity-only cell leaves receive the same opaque/comparable wrappers, while
   mixed summaries still retain and shrink their ordinary read/write paths
   (`transformers/type-shrinking.ts`; `test/type-shrinking.test.ts`).
+- In a handler's state, an identity path that ends at an element of a top-level
+  array property (`[name, <index>]`) also records an `items: false` schema hint
+  on that property, so the element's schema is its identity wrapper and nothing
+  more. A path that reaches inside the element (`[name, <index>, field, …]`)
+  records none: the element keeps the shape shrinking gave it, with the compared
+  field as its comparable cell (`transformers/schema-injection.ts`,
+  `applyIdentityArrayItemSchemaHints`; fixtures
+  `handler-schema/identity-only-handler-payload` and
+  `handler-schema/identity-element-field-handler`).
 - Scheduler completeness is separate from path retention: identity-only roots
   are passthrough, and `hasCompleteSchedulerScopeSummary` rejects passthrough or
   wildcard summaries. Thus identity/comparable tracking can preserve a
