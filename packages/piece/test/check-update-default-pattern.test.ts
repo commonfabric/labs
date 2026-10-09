@@ -3102,7 +3102,7 @@ describe("opening a space root", () => {
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("was refused");
-    expect(message).toContain("`default` export is not a pattern");
+    expect(message).toContain("the source's default export is not a pattern");
   });
 
   it("surfaces a clear error when the identity swap cannot commit", async () => {

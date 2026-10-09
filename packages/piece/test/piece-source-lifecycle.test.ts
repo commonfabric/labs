@@ -1603,7 +1603,7 @@ describe("piece source lifecycle", () => {
           kind: "follow",
           revisionId: revision.revisionId,
         }),
-      ).rejects.toThrow("`default` export is not a pattern");
+      ).rejects.toThrow("the source's default export is not a pattern");
     } finally {
       runtime.patternManager.getArtifactEntryRef = getEntryRef;
     }
