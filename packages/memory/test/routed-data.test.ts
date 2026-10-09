@@ -255,7 +255,11 @@ async function fixture(
     )).status,
     0,
   );
-  async function dataSocket() {
+  /**
+   * A data socket the toolshed has greeted, and the hello that redeems
+   * `redeem` on it for the fixture's context, not yet sent.
+   */
+  async function greetedSocket(redeem = ticket) {
     const socket = new FramedSocket();
     host.accept(
       socket as unknown as WebSocket,
@@ -272,21 +276,25 @@ async function fixture(
     const binding = await new RoutedWriter("mdb1").text(router.did()).text(
       "fixture",
     )
-      .text(toolshed.did()).fixed(epoch).fixed(context).fixed(ticket).fixed(
+      .text(toolshed.did()).fixed(epoch).fixed(context).fixed(redeem).fixed(
         nonce,
       )
       .time(issued).fixed(sha256(flags)).sign(router);
-    socket.receive(
-      `fvj1:${
-        JSON.stringify({
-          type: "hello",
-          protocol: "memory",
-          flags: flagObject,
-          routerTicket: routedHex(ticket),
-          routerBinding: routedBase64(binding),
-        })
-      }`,
-    );
+    const hello = `fvj1:${
+      JSON.stringify({
+        type: "hello",
+        protocol: "memory",
+        flags: flagObject,
+        routerTicket: routedHex(redeem),
+        routerBinding: routedBase64(binding),
+      })
+    }`;
+    return { socket, hello };
+  }
+  /** A data socket that has sent the hello redeeming `redeem`. */
+  async function dataSocket(redeem = ticket) {
+    const { socket, hello } = await greetedSocket(redeem);
+    socket.receive(hello);
     return socket;
   }
   const socket = await dataSocket();
@@ -340,6 +348,7 @@ async function fixture(
     proof,
     ticket,
     evidence,
+    greetedSocket,
     dataSocket,
     request,
     open,
@@ -1062,8 +1071,8 @@ Deno.test("a released principal leaves the history once its statement expires", 
 });
 
 Deno.test("a closed context's tickets leave with it", async () => {
-  // Two tickets in all: the fixture's own holds one, so each passing context
-  // gets the other only if the one before it gave it back.
+  // Two tickets in all, and the fixture's own was redeemed, so the third
+  // passing context gets one only if those before it gave theirs back.
   const f = await fixture("ticket-close", {
     limits: { contextsPerLink: 2, sockets: 3, tickets: 2 },
   });
@@ -1081,6 +1090,80 @@ Deno.test("a closed context's tickets leave with it", async () => {
       );
       assertEquals((await f.control(3, ctx)).status, 0);
     }
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a redeemed ticket leaves the toolshed's count, however often a context replaces its data socket", async () => {
+  // Two tickets in all. The fixture's context redeemed one for its first
+  // data socket, and redeems one more for each socket that replaces it.
+  const f = await fixture("ticket-redeem", {
+    limits: { contextsPerLink: 2, tickets: 2 },
+  });
+  try {
+    let socket = f.socket;
+    for (let i = 0; i < 5; i++) {
+      const issued = await f.control(
+        1,
+        new RoutedWriter("mat1").fixed(f.context).blob(f.flags)
+          .text(f.space.did()).time(1).bytes,
+      );
+      assertEquals(issued.status, 0, `ticket ${i}`);
+      const next = await f.dataSocket(issued.bytes);
+      assertEquals(
+        decodeRoutedFrame(await next.take(), true, FRAME_SLOTS).body.type,
+        "hello.ok",
+      );
+      // The new socket replaced the one before it.
+      await socket.closed.promise;
+      socket = next;
+    }
+    assertEquals(f.link.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("two sockets presenting one ticket at once redeem it once", async () => {
+  const f = await fixture("ticket-race");
+  try {
+    const issued = await f.control(
+      1,
+      new RoutedWriter("mat1").fixed(f.context).blob(f.flags)
+        .text(f.space.did()).time(1).bytes,
+    );
+    assertEquals(issued.status, 0);
+    const first = await f.greetedSocket(issued.bytes),
+      second = await f.greetedSocket(issued.bytes);
+    // Both hellos are checked before either binding's signature is
+    // verified, so both find the ticket live; only the first may consume it.
+    first.socket.receive(first.hello);
+    second.socket.receive(second.hello);
+    /** What a socket gets for its hello: a frame's type, or a close. */
+    const outcome = async (socket: FramedSocket) => {
+      try {
+        return decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body
+          .type;
+      } catch {
+        return "closed";
+      }
+    };
+    assertEquals(
+      await Promise.all([outcome(first.socket), outcome(second.socket)]),
+      ["hello.ok", "closed"],
+    );
+    assertEquals(first.socket.readyState, 1);
+    // Spent, the ticket admits no proof and no third socket.
+    assertEquals(
+      (await f.control(
+        2,
+        new RoutedWriter("map1").fixed(issued.bytes).blob(f.evidence).bytes,
+      )).status,
+      1,
+    );
+    assertEquals(await outcome(await f.dataSocket(issued.bytes)), "closed");
+    assertEquals(first.socket.readyState, 1);
   } finally {
     await f.close();
   }

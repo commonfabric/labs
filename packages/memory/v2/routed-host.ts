@@ -61,7 +61,7 @@ type Context = {
    * A released principal's are marked, and cannot admit it again.
    */
   accepted: Map<string, Accepted>;
-  /** IDs of the tickets issued for it. */
+  /** IDs of the tickets issued for it and not yet redeemed or expired. */
   tickets: Set<string>;
   backend?: Backend;
   socket?: WebSocket;
@@ -88,7 +88,11 @@ export interface RoutedHostLimits {
    * Private sockets from every router: links, data sockets and handshakes.
    */
   sockets: number;
-  /** Tickets issued and not yet expired, from every router. */
+  /**
+   * Tickets issued and neither redeemed nor expired, from every router. A
+   * ticket counts from its issue until a data socket redeems it, its
+   * context closes or 15 s pass.
+   */
   tickets: number;
   /** Principals authenticated in one context at once, as the router's own. */
   principalsPerContext: number;
@@ -301,7 +305,6 @@ type Ticket = {
   context: Context;
   link: Link;
   expires: number;
-  redeemed: boolean;
 };
 
 /** Private listener policy, independent of toolshed HTTP or service grants. */
@@ -326,9 +329,12 @@ export class RoutedMemoryHost {
   #options: RoutedHostOptions;
   #limits: RoutedHostLimits;
   #links = new Map<string, Link>();
+  /**
+   * Tickets issued and not yet redeemed, oldest first; each expires 15 s
+   * after issue. A ticket leaves when a data socket redeems it, when it
+   * expires, or with its context, so a ticket found here is unspent.
+   */
   #tickets = new Map<string, Ticket>();
-  /** Tickets not yet redeemed, oldest first; each expires 15 s after issue. */
-  #unredeemed = new Map<string, Ticket>();
   #sockets = new Set<WebSocket>();
 
   #closed = false;
@@ -454,14 +460,14 @@ export class RoutedMemoryHost {
   }
 
   /**
-   * Drops tickets that expired unredeemed. A closed context's tickets leave
-   * with it, and a closed link closes its contexts.
+   * Drops tickets that expired unredeemed. A redeemed ticket left when it
+   * was redeemed, a closed context's tickets leave with it, and a closed
+   * link closes its contexts.
    */
   #pruneTickets(): void {
     const now = this.#now();
-    for (const [id, ticket] of this.#unredeemed) {
+    for (const [id, ticket] of this.#tickets) {
       if (ticket.expires > now) break;
-      this.#unredeemed.delete(id);
       this.#tickets.delete(id);
       ticket.context.tickets.delete(id);
     }
@@ -479,10 +485,7 @@ export class RoutedMemoryHost {
     for (const key of context.accepted.keys()) link.claims.delete(key);
     context.accepted.clear();
     link.contexts.delete(context.idHex);
-    for (const id of context.tickets) {
-      this.#tickets.delete(id);
-      this.#unredeemed.delete(id);
-    }
+    for (const id of context.tickets) this.#tickets.delete(id);
     context.tickets.clear();
   }
 
@@ -677,15 +680,12 @@ export class RoutedMemoryHost {
       requireRouted(this.#tickets.size < this.#limits.tickets);
       const ticketBytes = crypto.getRandomValues(new Uint8Array(32));
       const ticketId = routedHex(ticketBytes);
-      const ticket = {
+      this.#tickets.set(ticketId, {
         id: ticketId,
         context,
         link,
         expires: this.#now() + 15,
-        redeemed: false,
-      };
-      this.#tickets.set(ticketId, ticket);
-      this.#unredeemed.set(ticketId, ticket);
+      });
       context.tickets.add(ticketId);
       return ticketBytes;
     }
@@ -733,10 +733,10 @@ export class RoutedMemoryHost {
       const ticket = this.#tickets.get(routedHex(r.fixed(32)));
       const proof = readRoutedProof(r.blob());
       r.end();
+      // A redeemed ticket is no longer in `#tickets`, so it admits no proof.
       requireRouted(
         ticket !== undefined && ticket.link === link &&
-          !ticket.context.closed &&
-          !ticket.redeemed && ticket.expires > this.#now(),
+          !ticket.context.closed && ticket.expires > this.#now(),
       );
       const context = ticket.context;
       await this.#admitProof(link, context, proof);
@@ -1138,7 +1138,7 @@ export class RoutedMemoryHost {
           // Check the live ticket before signature verification, then recheck
           // after its await and atomically consume it against this socket nonce.
           requireRouted(
-            selected !== undefined && !selected.redeemed &&
+            selected !== undefined &&
               selected.expires > this.#now() && !selected.link.closed &&
               !selected.context.closed && selected.link.peer === peer,
           );
@@ -1172,15 +1172,21 @@ export class RoutedMemoryHost {
           binding.end();
           // Signature verification yields. Recheck the exact live ticket and
           // atomically consume it only after binding it to this socket's nonce.
+          // Another socket may have redeemed it meanwhile, which removed it.
           requireRouted(
             !failed && socket.readyState === WebSocket.OPEN &&
-              !selected.redeemed && selected.expires > this.#now() &&
+              this.#tickets.get(selected.id) === selected &&
+              selected.expires > this.#now() &&
               this.#now() < issued + 15 && !selected.link.closed &&
               !selected.context.closed &&
               !this.#revoked.has(selected.link.router),
           );
-          selected.redeemed = true;
-          this.#unredeemed.delete(selected.id);
+          // Spent tickets are dropped here, not kept until their context
+          // closes: a context redeems one for every data socket it opens,
+          // and kept ones would fill `limits.tickets` and refuse every
+          // later ticket on the toolshed.
+          this.#tickets.delete(selected.id);
+          selected.context.tickets.delete(selected.id);
           ticket = selected;
           clearTimeout(deadline);
           const context = selected.context;
