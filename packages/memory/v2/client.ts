@@ -62,6 +62,7 @@ import {
 import type { AppliedCommit } from "./engine.ts";
 import { logIncomingFrame, logOutgoingFrame } from "./frame-log.ts";
 import { memoryMessageFrameBytes } from "./message-compression.ts";
+import { ROUTED_HOLDINGS_LIMIT } from "./routed-limits.ts";
 import {
   isPresenceRoom,
   PresenceError,
@@ -802,6 +803,27 @@ export class Client {
   }
 
   /**
+   * The holdings a request declares on this connection, given the ones its
+   * session holds. A router and a routed toolshed close the connection on
+   * a frame that names more than `ROUTED_HOLDINGS_LIMIT` holdings, and the
+   * reconnect would declare the same list again, so on a routed connection
+   * a longer list is cut to the limit. Declaring fewer is safe: the server
+   * delivers again every document the list does not name, so the documents
+   * cut are sent a second time and none is skipped. A direct server takes
+   * the whole list.
+   *
+   * @internal For `SpaceSession`.
+   */
+  declarableHoldings<Holdings extends SessionHolding[] | undefined>(
+    holdings: Holdings,
+  ): Holdings | SessionHolding[] {
+    return holdings !== undefined && holdings.length > ROUTED_HOLDINGS_LIMIT &&
+        this.#sessionOpenAuthContext?.deployment !== undefined
+      ? holdings.slice(0, ROUTED_HOLDINGS_LIMIT)
+      : holdings;
+  }
+
+  /**
    * Ends the authentication of the key `did` on the current connection.
    * Sessions mounted as it stay open, and a later mount as it authenticates
    * again, as does a mount as it that is still under way. Sends nothing for
@@ -906,7 +928,9 @@ export class Client {
               space,
               principal,
               session,
-              ...(holdings !== undefined ? { holdings } : {}),
+              ...(holdings !== undefined
+                ? { holdings: this.declarableHoldings(holdings) }
+                : {}),
             }, { whileConnected });
           }
         } catch (error) {
@@ -2448,7 +2472,9 @@ export class SpaceSession {
           sessionId: this.#sessionId,
           watches: requestedWatches,
           ...(views === undefined ? {} : { views }),
-          ...(holdings !== undefined ? { holdings } : {}),
+          ...(holdings !== undefined
+            ? { holdings: this.#client.declarableHoldings(holdings) }
+            : {}),
         });
       },
       (result) => {
@@ -2528,7 +2554,7 @@ export class SpaceSession {
     return await this.#runWatchMutation(
       () => {
         const holdings = this.#client.serverFlags?.sessionHoldings === true
-          ? this.#declaredHoldings()
+          ? this.#client.declarableHoldings(this.#declaredHoldings())
           : undefined;
         return this.#client.request<WatchSetResult>({
           type: "session.watch.set",

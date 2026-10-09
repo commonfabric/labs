@@ -9,7 +9,10 @@ import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
+import { ROUTED_HOLDINGS_LIMIT, ROUTED_WATCH_LIMIT } from "./routed-limits.ts";
 import { requireRouted } from "./routed-wire.ts";
+
+export { ROUTED_HOLDINGS_LIMIT, ROUTED_WATCH_LIMIT };
 
 /** Maximum raw public-stage frame bytes. */
 export const ROUTED_RAW_LIMIT = 8 * 1024 * 1024;
@@ -17,10 +20,6 @@ export const ROUTED_RAW_LIMIT = 8 * 1024 * 1024;
 export const ROUTED_EXPANDED_LIMIT = 16 * 1024 * 1024;
 /** Maximum queued bytes on one ticketed data socket. */
 export const ROUTED_QUEUE_LIMIT = 4 * 1024 * 1024;
-/** Most `watches` one frame may name; the router's `WATCH_LIMIT`. */
-export const ROUTED_WATCH_LIMIT = 1024;
-/** Most `holdings` one frame may name; the router's `HOLDINGS_LIMIT`. */
-export const ROUTED_HOLDINGS_LIMIT = 8192;
 /** Maximum JSON nesting in any routed input; the router's `DEPTH_LIMIT`. */
 export const ROUTED_DEPTH_LIMIT = 64;
 /**

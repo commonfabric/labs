@@ -10,6 +10,7 @@ import {
   type Transport,
   WatchView,
 } from "../v2/client.ts";
+import { ROUTED_HOLDINGS_LIMIT } from "../v2/routed-parser.ts";
 import {
   readRoutedHex,
   routedBase64,
@@ -1744,6 +1745,93 @@ Deno.test("a mount whose open is refused for good, or by a direct server, fails 
       } finally {
         await client.close();
         time.restore();
+      }
+    });
+  }
+});
+
+Deno.test("a routed connection is sent at most the holdings one frame may name", async (t) => {
+  setModernCellRepConfig(true);
+  const direct: SessionPrincipal = {
+    did: identity.did(),
+    authorizeSessionOpen: () => {
+      throw new Error("Direct session uses connection authority");
+    },
+    authorizeConnection: () =>
+      Promise.resolve({ statement: "direct" } as never),
+  };
+  const holdings = Array.from(
+    { length: ROUTED_HOLDINGS_LIMIT + 1 },
+    (_, i) => ({ id: `of:h${i}` as const, seq: 1 }),
+  );
+  for (
+    const [name, greeting, signer, sent] of [
+      ["a routed connection", frame(hello()), principal(), holdings.length - 1],
+      [
+        "a direct connection",
+        frame(hello({ audience: identity.did(), challenge: challenge() }, {
+          ...flags(),
+          routedAuthV1: false,
+        })),
+        direct,
+        holdings.length,
+      ],
+    ] as const
+  ) {
+    await t.step(name, async () => {
+      // What each request that declares holdings carried.
+      const declared: { type: unknown; holdings: unknown[] }[] = [];
+      const p = peer(greeting, (body, push) => {
+        if (Array.isArray(body.holdings)) {
+          declared.push({ type: body.type, holdings: body.holdings });
+        }
+        const ok = body.type === "connection.auth"
+          ? {
+            principal: identity.did(),
+            expiresAt: Math.floor(Date.now() / 1000) + 600,
+          }
+          : body.type === "session.open"
+          ? {
+            sessionId: "sdk-session",
+            sessionToken: "sdk-token",
+            serverSeq: 0,
+          }
+          : body.type === "session.watch.set"
+          ? {
+            serverSeq: 0,
+            sync: {
+              type: "sync",
+              fromSeq: 0,
+              toSeq: 0,
+              upserts: [],
+              removes: [],
+            },
+          }
+          : {};
+        push({ type: "response", requestId: body.requestId, ok });
+      });
+      const client = await connect({ transport: p.transport });
+      try {
+        // An open that declares holdings, as a reopen does.
+        await client.openSession(identity.did(), {}, signer, holdings);
+        const session = await client.mount(identity.did(), {}, signer);
+        // A watch set that declares them, and a view set, which declares
+        // what the session's consumer holds.
+        await session.watchSetSync([], holdings);
+        session.holdingsProvider = () => holdings;
+        await session.viewSetSync([]);
+        assertEquals(
+          declared.map((request) => [request.type, request.holdings.length]),
+          [
+            ["session.open", sent],
+            ["session.watch.set", sent],
+            ["session.watch.set", sent],
+          ],
+        );
+        // The holdings sent are the first of the list, unchanged.
+        assertEquals(declared[0].holdings, holdings.slice(0, sent));
+      } finally {
+        await client.close();
       }
     });
   }

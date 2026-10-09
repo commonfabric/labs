@@ -308,9 +308,13 @@ Each is logged in the toolshed's own journal, never the router's, as a
 `routed-memory-verdict` with verdict `request-refused` and reason
 `session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
 `principal-expired`, `session-not-held` or `principal-not-held`. A frame that
-itself names more than 1,024 watches or 8,192 holdings, and a request whose
-`holdings` or `views` is not a JSON list, are malformed and are not answered:
-each closes the socket, as the router closes the client's connection on one.
+itself names more than 1,024 watches or 8,192 holdings is malformed, and so is
+a request whose `watches`, `holdings` or `views` is not a JSON list. Such a
+request is not answered: it closes the socket, as the router closes the
+client's connection on one. The SDK therefore declares at most 8,192 holdings
+on a routed connection. A session that holds more declares the first 8,192,
+and the server delivers the documents left out a second time, since a document
+a session does not declare is one it is sent again.
 A proof is refused with verdict `proof-denied` and reason `proof-limit`,
 `principal-limit` or `principal-history-limit`, and the refusal closes its
 context, which ends the client's connection. The proofs live contexts hold are
