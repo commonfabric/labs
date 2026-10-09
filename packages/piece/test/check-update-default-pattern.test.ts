@@ -5,6 +5,7 @@ import {
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
+  getPieceReconciliation,
   getPieceSourceRevisions,
   inSpaceRootCause,
   parseLink,
@@ -1067,6 +1068,139 @@ describe("opening a space root", () => {
       await identityForSource(SOURCE_V2),
     );
     expect(getPatternIdentityRef(started)?.symbol).toBe("default");
+  });
+
+  // A client whose runtime differs from the host's can compile the host's
+  // official source to an identity the host does not advertise. The host's own
+  // clients follow the origin back to what it advertises, so a root rolled
+  // onto anything else would move every time a client of the other kind
+  // opened it.
+  const SOURCE_THE_HOST_COMPILES = patternSource("what-the-host-compiles");
+
+  it("keeps a root that follows the official source pinned when the client cannot reproduce the advertised identity", async () => {
+    await setup();
+    const root = (await controller.ensureDefaultPattern()).getCell();
+    const staleRef = {
+      identity: await identityForSource(
+        patternSource("unloadable-root-the-client-cannot-replace"),
+      ),
+      symbol: "default",
+    };
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        staleRef,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    stub.setSource(SOURCE_V2);
+    stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
+
+    let thrown: unknown;
+    try {
+      await controller.ensureDefaultPattern();
+    } catch (error) {
+      thrown = error;
+    }
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)).toEqual(staleRef);
+    expect(getPatternSource(after)).toBe(DEFAULT_APP_PATTERN_SOURCE);
+    expect(
+      (await readPieceSourceState(runtime, after)).displacedPattern,
+    ).toBeUndefined();
+    expect(getPieceReconciliation(after)).toMatchObject({
+      outcome: "refused",
+      reason: "identity-mismatch",
+      origin: DEFAULT_APP_PATTERN_SOURCE,
+      offered: {
+        identity: await identityForSource(SOURCE_THE_HOST_COMPILES),
+      },
+    });
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("default-root heal failed");
+    expect(message).toContain("its origin advertises");
+  });
+
+  it("keeps a root that follows nothing pinned when the client cannot reproduce the advertised identity", async () => {
+    await setup();
+    await controller.recreateDefaultPattern({
+      customProgram: {
+        main: "/custom-root.tsx",
+        files: [{ name: "/custom-root.tsx", contents: SOURCE_V1 }],
+      },
+    });
+    const root = (await controller.getDefaultPattern(false))!;
+    const staleRef = {
+      identity: await identityForSource(
+        patternSource("unloadable-sourceless-root-the-client-cannot-replace"),
+      ),
+      symbol: "default",
+    };
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        staleRef,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    stub.setSource(SOURCE_V2);
+    stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
+
+    let thrown: unknown;
+    try {
+      await controller.getDefaultPattern(true);
+    } catch (error) {
+      thrown = error;
+    }
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)).toEqual(staleRef);
+    expect(getPatternSource(after)).toBeUndefined();
+    expect(
+      (await readPieceSourceState(runtime, after)).displacedPattern,
+    ).toBeUndefined();
+    expect(thrown instanceof Error ? thrown.message : String(thrown))
+      .toContain("Could not load pattern");
+  });
+
+  it("keeps a root pinned when the host does not say which identity it offers", async () => {
+    await setup();
+    const root = (await controller.ensureDefaultPattern()).getCell();
+    const staleRef = {
+      identity: await identityForSource(
+        patternSource("unloadable-root-whose-host-says-nothing"),
+      ),
+      symbol: "default",
+    };
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        staleRef,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    stub.setSource(SOURCE_V2);
+    stub.setIdentityResponse("unavailable", 503);
+
+    let thrown: unknown;
+    try {
+      await controller.ensureDefaultPattern();
+    } catch (error) {
+      thrown = error;
+    }
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)).toEqual(staleRef);
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("default-root heal failed");
+    expect(message).toContain("the origin answered 503");
   });
 
   it("rethrows a start failure for a root that follows an origin", async () => {
@@ -2737,6 +2871,36 @@ describe("opening a space root", () => {
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("could not be compiled");
+  });
+
+  it("keeps an unrunnable root pinned when the client cannot reproduce the advertised identity", async () => {
+    // The official source compiles here, to an identity other than the one
+    // the host advertises for it.
+    const { oldRef } = await pinOldRequiredHome();
+    stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
+    const restore = patchRunSynced((opts) =>
+      opts?.expectedPatternIdentity?.identity === oldRef.identity
+        ? Promise.reject(new Error(MIGRATION_REJECTION))
+        : "real"
+    );
+    let thrown: unknown;
+    try {
+      await controller.ensureDefaultPattern();
+    } catch (error) {
+      thrown = error;
+    } finally {
+      restore();
+    }
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)).toEqual({
+      identity: oldRef.identity,
+      symbol: "default",
+    });
+    expect(getPatternSource(after)).toBeUndefined();
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("default-root heal failed");
+    expect(message).toContain("its origin advertises");
   });
 
   it("surfaces a clear error when the official pattern yields no entry identity", async () => {

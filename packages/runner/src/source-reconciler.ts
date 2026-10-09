@@ -451,6 +451,39 @@ export class SourceReconciler {
     }
   }
 
+  /**
+   * The identity the host serving `space` advertises for a `system:` origin,
+   * or why it did not say.
+   *
+   * Following an origin adopts only source that compiles to the identity the
+   * origin advertises, which keeps every runtime following it on the one
+   * identity the host serves. Source compiled for a piece by any other route
+   * is held to the same check against this: a runtime that compiles those
+   * bytes to another identity would otherwise move the piece somewhere the
+   * host's own runtimes move it back from.
+   *
+   * Throws for any origin but a `system:` ref, which is the one kind that
+   * advertises an identity this way.
+   */
+  async advertisedIdentity(
+    space: MemorySpace,
+    origin: string,
+  ): Promise<{ identity: string } | { detail: string }> {
+    const classified = classifyPieceOriginString(
+      origin,
+      this.#runtime.hostForSpace(space).href,
+    );
+    if (classified.kind !== "system") {
+      throw new Error(`\`${origin}\` is not a \`system:\` origin`);
+    }
+    const target = this.#systemSourceUrl(classified.route, space);
+    const answer = await this.#track((signal) =>
+      this.#advertisedIdentity(target, this.#revalidatingFetch(signal), signal)
+    );
+    return answer ??
+      { detail: "the runtime stopped before the origin answered" };
+  }
+
   /** Resolve when the passes currently in flight have settled. */
   async idle(): Promise<void> {
     await Promise.allSettled([

@@ -2825,6 +2825,24 @@ export class PiecesController<T = unknown> {
         { cause },
       );
 
+    // The host says which identity its official source compiles to, and a
+    // client whose runtime differs from the host's can compile the same bytes
+    // to another. The host's own clients follow the origin back to what it
+    // advertises, so a root rolled onto anything else would move again every
+    // time either kind of client opened it. The roll-forward takes the
+    // advertised identity or nothing, as following the origin does.
+    const advertised = await runtime.sourceReconciler.advertisedIdentity(
+      space,
+      officialUrlPath,
+    );
+    if ("detail" in advertised) {
+      throw clearError(
+        `could not learn which version its origin offers ` +
+          `(${advertised.detail})`,
+        migrationError,
+      );
+    }
+
     // Fetch + compile the official source.
     // Force ETag revalidation (`cache: "no-cache"`): the roll-forward exists to
     // ESCAPE a stale pinned pattern, so compiling a stale HTTP-cached source
@@ -2863,6 +2881,13 @@ export class PiecesController<T = unknown> {
     }
     if (officialRef === undefined) {
       throw clearError("did not yield an entry identity", migrationError);
+    }
+    if (officialRef.identity !== advertised.identity) {
+      throw clearError(
+        `compiled to ${officialRef.identity}, not the ` +
+          `${advertised.identity} its origin advertises`,
+        migrationError,
+      );
     }
     // Already current: the pinned pattern IS the official entry (same identity
     // AND symbol) but failed for some other reason. Re-materializing the exact
