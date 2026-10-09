@@ -385,8 +385,10 @@ and registers the room's space in their Home's shared-space catalog
 ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)). When
 that registers a new entry, the host then sends the room to the recipient's own
 manager's `accept`, with `keepArchived`, so the recipient's manager records the
-room as theirs, in `direct` under its creator for a direct room, and their later
-`openDirect` with the sender returns it rather than creating another. An entry
+room as theirs. A direct room goes in their `direct` under its creator, unless
+`direct` already holds a room with the sender, which stays, as under [crossing
+creations](#crossing-creations); either way their later `openDirect` with the
+sender returns the room `direct` holds rather than creating another. An entry
 already in the catalog, archived or not, gets no acceptance. A notice is
 produced for each other member offered nothing: one known only by their DID,
 who has no profile to reach an inbox through, or one whose profile points at no

@@ -487,9 +487,11 @@ host or kind is a `conflict`, which writes nothing.
 When Home's handler returns `registered`, a new entry, the intake then accepts
 the room on the owner's behalf: it sends the space's root, the one vetting read,
 to Home's `chatManager.accept`, when Home has that stream, with `keepArchived`
-set. The manager records the room as an acceptance from the room itself would,
-a direct room in its `direct` under the room's creator, so the owner's later
-start of a chat with that creator finds it, and adds the owner's profile to the
+set. The manager records the room as an acceptance from the room itself would.
+A direct room goes in its `direct` under the room's creator, unless `direct`
+already holds a room with that creator, which stays; either way, the owner's
+later start of a chat with that creator finds the room `direct` holds rather
+than creating another. The acceptance also adds the owner's profile to the
 room's participants. `keepArchived` leaves the entry archived if the owner has
 archived it since the registration, so an acceptance the owner didn't make never
 lists a room they forgot. An entry that was already there, archived or not, gets

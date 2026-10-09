@@ -40,9 +40,10 @@ a room to anyone its space doesn't admit.
   created the room, and what it is.
 - **An offer** of a room needs nothing from a client. The person's host vets
   it, registers the room in their Home's catalog, and accepts it on their
-  behalf, with `keepArchived`, so the room is in their `rooms`, a direct room is
-  in their `direct`, and their later `openDirect` with its creator finds it (see
-  [`ChatManagerOutput`](ChatManagerOutput.md#offers)).
+  behalf, with `keepArchived`, so the room is in their `rooms`, and a direct
+  room is in their `direct` unless that already holds a room with its creator.
+  Either way their later `openDirect` with the creator finds the room `direct`
+  holds (see [`ChatManagerOutput`](ChatManagerOutput.md#offers)).
 
 ## Showing a room
 

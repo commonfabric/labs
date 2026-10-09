@@ -127,8 +127,9 @@ the room's space in the recipient's Home catalog ([the share
 intake](../../features/private-inbox.md#the-share-intake)). Once the host has
 registered a new entry for the room, it sends the room to the recipient's own
 manager's `accept`, with `keepArchived`, so their manager records it as an
-acceptance from the room would, in `direct` for a direct room, and adds their
-profile to the room's participants, which already list them. A member the
+acceptance from the room would, in `direct` for a direct room unless `direct`
+already holds a room with its creator, and adds their profile to the room's
+participants, which already list them. A member the
 request names only by principal is offered nothing, since the manager has no
 profile to reach their inbox through. A space's access list can admit any
 writer, but that is the `"*"` grant a room has only when its creator makes a
