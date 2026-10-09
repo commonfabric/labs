@@ -3,6 +3,7 @@ import * as Path from "@std/path";
 import { z } from "zod";
 import {
   isLoopbackHostname,
+  readHttpOrigin,
   readMemoryUrl,
 } from "@commonfabric/runner/space-host";
 
@@ -42,6 +43,25 @@ function boolFlag() {
   return z.string().default("false").transform((v) =>
     v === "true" || v === "1"
   );
+}
+
+/**
+ * The origin `API_INTERNAL_URL=self` names: this process's own listener,
+ * `HOST` and `PORT` as a loopback or literal address. A wildcard or loopback
+ * bind is reached on the loopback literal of its family, since `localhost`
+ * may resolve to the other one; any other address is itself.
+ */
+function selfApiOrigin(host: string, port: number): string {
+  const bare = host.replace(/^\[|\]$/g, "");
+  const name = bare === "0.0.0.0" || bare === "localhost" ||
+      /^127(?:\.\d{1,3}){3}$/.test(bare)
+    ? "127.0.0.1"
+    : bare === "::" || bare === "::1"
+    ? "[::1]"
+    : bare.includes(":")
+    ? `[${bare}]`
+    : bare;
+  return `http://${name}:${port}`;
 }
 
 // NOTE: This is where we define the environment variable types and defaults.
@@ -246,8 +266,46 @@ export const EnvSchema = z.object({
   // Strict parse (see boolFlag); previously z.coerce.boolean() turned "false" into true.
   PLAID_SYNC_ALL_TRANSACTIONS: boolFlag(),
 
-  // URL of the toolshed API, for self-referring requests
+  // The toolshed's public origin: the one clients dial, the audience every
+  // signed invite and inbox request is checked against, the base of the
+  // webhook and ingest URLs it returns, sandbox CF_API_URL when
+  // SANDBOX_TOOLSHED_URL is unset, and what this process's runtimes record
+  // as a space's host and address their own pattern-source, compile and API
+  // requests to. API_INTERNAL_URL changes where those requests are sent, not
+  // what they are addressed to.
   API_URL: z.string().default("http://localhost:8000"),
+
+  // Where this process's own runtimes send the requests they address to
+  // API_URL: pattern-source loads, compiles and HTTP API calls from the
+  // serving runtimes and the webhook runtime. Unset, they go to API_URL,
+  // which on a deployment leaves through the public path (tailscale serve,
+  // nginx) and comes back in, once per fetch of a pattern load's many.
+  // `self` is this process's own listener, HOST and PORT (so each instance
+  // of a multi-instance host names itself from one shared .env); an HTTP or
+  // HTTPS origin is a specific listener of this same process, such as a
+  // private address it is bound to. It decides whose bytes this server
+  // compiles, so at startup the server sends a probe carrying a one-time
+  // token to the origin's /api/meta and refuses to run unless that request
+  // arrives at its own listener. Only the transport changes: API_URL stays
+  // what is recorded, compared and published (/api/meta, invite audiences,
+  // webhook and ingest URLs), and the LLM client keeps calling API_URL
+  // (docs/specs/server-side-execution/verification-coverage.md, OW55).
+  // Anything but `self`, an origin or unset refuses startup.
+  API_INTERNAL_URL: z.string().default("").transform((value, ctx) => {
+    const source = value.trim();
+    if (source === "") return undefined;
+    if (source === "self") return "self" as const;
+    const read = readHttpOrigin(source, "API_INTERNAL_URL");
+    if ("refused" in read) {
+      ctx.addIssue({
+        code: "custom",
+        message: `API_INTERNAL_URL must be "self" or an HTTP or HTTPS ` +
+          `origin: ${read.refused}`,
+      });
+      return z.NEVER;
+    }
+    return read.origin.origin;
+  }),
 
   // DEPRECATED: Identity signer passphrase for storage authentication
   IDENTITY_PASSPHRASE: z.string().default("implicit trust"),
@@ -375,7 +433,14 @@ export const EnvSchema = z.object({
   // URL that sandboxes should use to reach the toolshed API (injected as
   // CF_API_URL into every sandbox exec). Defaults to API_URL if not set.
   SANDBOX_TOOLSHED_URL: z.string().optional(),
-});
+}).transform((parsed) => ({
+  ...parsed,
+  // Resolved here, where HOST and PORT (the `--port=` override included) are
+  // known, so every reader sees a concrete origin or nothing.
+  API_INTERNAL_URL: parsed.API_INTERNAL_URL === "self"
+    ? selfApiOrigin(parsed.HOST, parsed.PORT)
+    : parsed.API_INTERNAL_URL,
+}));
 
 export type env = z.infer<typeof EnvSchema>;
 

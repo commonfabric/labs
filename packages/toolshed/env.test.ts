@@ -151,3 +151,85 @@ Deno.test("MEMORY_PUBLIC_URL warns about plain http off loopback", () => {
     console.warn = warn;
   }
 });
+
+Deno.test("API_INTERNAL_URL is `self`, an HTTP or HTTPS origin, or nothing, beside API_URL", () => {
+  const parse = (
+    value: string | undefined,
+    rest: Record<string, string> = {},
+  ) =>
+    EnvSchema.safeParse({
+      API_URL: "https://toolshed.example",
+      ...rest,
+      ...(value === undefined ? {} : { API_INTERNAL_URL: value }),
+    });
+
+  // Unset or empty: the runtimes' requests go to API_URL, as before.
+  assertEquals(parse(undefined).data?.API_INTERNAL_URL, undefined);
+  assertEquals(parse("  ").data?.API_INTERNAL_URL, undefined);
+  // An origin is kept as the bare origin, however it is spelled, and API_URL
+  // stays what it was: the public origin is not moved by naming an internal
+  // one.
+  const set = parse("HTTP://localhost:8080/").data;
+  assertEquals(set?.API_INTERNAL_URL, "http://localhost:8080");
+  assertEquals(set?.API_URL, "https://toolshed.example");
+  assertEquals(
+    parse("http://[::1]:8080").data?.API_INTERNAL_URL,
+    "http://[::1]:8080",
+  );
+  // `self` is this process's own listener, HOST and PORT, so one shared
+  // .env names each instance of a multi-instance host to itself. A wildcard
+  // or loopback bind is reached on its family's loopback literal, since
+  // `localhost` may resolve to the other family; a bound address is itself.
+  assertEquals(
+    parse("self", { PORT: "8007" }).data?.API_INTERNAL_URL,
+    "http://127.0.0.1:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "localhost" }).data?.API_INTERNAL_URL,
+    "http://127.0.0.1:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "::" }).data?.API_INTERNAL_URL,
+    "http://[::1]:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "10.0.0.5" }).data?.API_INTERNAL_URL,
+    "http://10.0.0.5:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "fd00::5" }).data?.API_INTERNAL_URL,
+    "http://[fd00::5]:8007",
+  );
+  // Anything else fails the parse, which refuses startup.
+  for (
+    const [value, reason] of [
+      ["not a url", "Invalid API_INTERNAL_URL"],
+      // Scheme-less, which URL parsing reads as the scheme `localhost:`.
+      ["localhost:8080", "Unsupported API_INTERNAL_URL protocol"],
+      ["ws://localhost:8080", "Unsupported API_INTERNAL_URL protocol"],
+      [
+        "http://localhost:8080/api",
+        "API_INTERNAL_URL must not include a path",
+      ],
+      [
+        "http://localhost:8080/?x=1",
+        "API_INTERNAL_URL must not include a query",
+      ],
+      [
+        "http://user@localhost:8080",
+        "API_INTERNAL_URL must not include credentials",
+      ],
+      ["Self", "Invalid API_INTERNAL_URL"],
+    ]
+  ) {
+    const result = parse(value);
+    assert(!result.success, value);
+    const issue = result.error.issues.find((issue) =>
+      issue.path[0] === "API_INTERNAL_URL"
+    );
+    assertEquals(
+      issue?.message,
+      `API_INTERNAL_URL must be "self" or an HTTP or HTTPS origin: ${reason}`,
+    );
+  }
+});

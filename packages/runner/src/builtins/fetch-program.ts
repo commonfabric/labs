@@ -592,8 +592,10 @@ async function startFetch(
   identity?: ScopeKeyIdentity,
 ) {
   try {
-    // Create HTTP program resolver
-    const resolver = new HttpProgramResolver(url);
+    // The runtime's fetch, as the other source loads use, so a host that
+    // redirects requests to its own origin (toolshed's API_INTERNAL_URL)
+    // covers this one too.
+    const resolver = new HttpProgramResolver(url, runtime.fetch);
 
     // Program resolution parses; load the deferred compiler stack first.
     const { resolveProgram, ts } = await ensureCompilerStack();

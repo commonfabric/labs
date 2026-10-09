@@ -1525,9 +1525,10 @@ whose reads of the docs it wrote saw the commit, as having observed them
 (§3d's conflict set exempts them for that contribution, and the sink
 holds the store to that exact head), so the swap's first derivation
 under the new pattern lands in the same cycle. Root creation and explicit wish-sidecar opens
-fetch system source through the serving runtime's API URL. Those fetches remain
-within verification-coverage.md OW55's source-trust obligation; root ensuring
-adds no source-following probe for an existing root.
+fetch system source through the serving runtime's API URL, the deployment's
+public origin, over the runtime's fetch, which a toolshed with
+`API_INTERNAL_URL` set points at its own listener (verification-coverage.md
+OW55); root ensuring adds no source-following probe for an existing root.
 
 ## 4. Effectful nodes: memoization contract
 

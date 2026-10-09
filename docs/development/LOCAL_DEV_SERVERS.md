@@ -277,7 +277,14 @@ as the other scripts.
 
 When `--port-offset` changes the toolshed port, `start-local-dev.sh` also sets
 toolshed's internal `API_URL` and `MEMORY_URL` to the offset toolshed URL unless
-those variables are already exported in the shell environment.
+those variables are already exported in the shell environment. A toolshed
+started by hand on another port needs the same: both default to
+`http://localhost:8000`, so with that port held by another toolshed, the new
+one fetches pattern sources from, and opens Memory on, the other process. A
+stale toolshed on the default port served pre-fix pattern sources to an
+investigation this way (verification-coverage.md OW48). The toolshed prints
+its configured first-party authority at startup, which names the port, but
+nothing says that port is another process.
 
 ### Common Issues
 

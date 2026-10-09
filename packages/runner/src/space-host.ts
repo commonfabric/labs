@@ -107,6 +107,43 @@ const MEMORY_URL_MESSAGES: OriginRuleMessages = {
   origin: "Memory URL must contain only an origin",
 };
 
+/**
+ * The refusals for an origin a configuration names, worded after `subject`
+ * (`"memory URL"` gives this module's own memory URL table).
+ */
+const originRuleMessages = (subject: string): OriginRuleMessages => {
+  const capitalized = subject.charAt(0).toUpperCase() + subject.slice(1);
+  return {
+    invalid: `Invalid ${subject}`,
+    protocol: `Unsupported ${subject} protocol`,
+    credentials: `${capitalized} must not include credentials`,
+    path: `${capitalized} must not include a path`,
+    query: `${capitalized} must not include a query`,
+    fragment: `${capitalized} must not include a fragment`,
+    origin: `${capitalized} must contain only an origin`,
+  };
+};
+
+/**
+ * Reads any other HTTP or HTTPS origin a configuration names, such as an
+ * environment variable, under the rule a space host and a memory URL are held
+ * to, with refusals worded after `subject`. A value that is not a string or
+ * not a bare origin is returned as the reason it was refused rather than
+ * thrown, for the caller to report its own way.
+ */
+export const readHttpOrigin = (
+  value: unknown,
+  subject: string,
+): { origin: URL } | { refused: string } => {
+  if (typeof value !== "string") return { refused: "expected a string" };
+  try {
+    return { origin: parseOrigin(value, originRuleMessages(subject)) };
+  } catch (error) {
+    if (!(error instanceof SpaceHostValidationError)) throw error;
+    return { refused: error.message };
+  }
+};
+
 /** Parses `host` as an HTTP or HTTPS origin, refusing with `messages`. */
 const parseOrigin = (
   host: string | URL,

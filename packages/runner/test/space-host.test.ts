@@ -5,6 +5,7 @@ import {
   namesApiOrigin,
   normalizeSpaceHost,
   parseMemoryUrl,
+  readHttpOrigin,
   readMemoryUrl,
   spaceHostFromFabricAuthority,
   SpaceHostValidationError,
@@ -263,6 +264,35 @@ describe("space-host", () => {
       expect(readMemoryUrl(null)).toEqual({ memoryUrl: undefined });
       expect(readMemoryUrl("https://router.example")).toEqual({
         memoryUrl: new URL("https://router.example/"),
+      });
+    });
+  });
+
+  describe("readHttpOrigin", () => {
+    it("reads a bare origin and refuses anything else, worded after the subject", () => {
+      expect(readHttpOrigin("http://127.0.0.1:8007/", "API_INTERNAL_URL"))
+        .toEqual({ origin: new URL("http://127.0.0.1:8007/") });
+      expect(readHttpOrigin(" HTTPS://Host.Example ", "API_INTERNAL_URL"))
+        .toEqual({ origin: new URL("https://host.example/") });
+      for (
+        const [value, refused] of [
+          ["nonsense", "Invalid API_INTERNAL_URL"],
+          ["ws://h", "Unsupported API_INTERNAL_URL protocol"],
+          ["http://u@h", "API_INTERNAL_URL must not include credentials"],
+          ["http://h/p", "API_INTERNAL_URL must not include a path"],
+          ["http://h/?q", "API_INTERNAL_URL must not include a query"],
+          ["http://h/#f", "API_INTERNAL_URL must not include a fragment"],
+          ["http://h/.", "API_INTERNAL_URL must contain only an origin"],
+        ]
+      ) {
+        expect(readHttpOrigin(value, "API_INTERNAL_URL")).toEqual({ refused });
+      }
+      expect(readHttpOrigin(42, "API_INTERNAL_URL")).toEqual({
+        refused: "expected a string",
+      });
+      // The memory URL table is the same rule under its own subject.
+      expect(readHttpOrigin("http://h/p", "memory URL")).toEqual({
+        refused: "Memory URL must not include a path",
       });
     });
   });

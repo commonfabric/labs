@@ -33,7 +33,11 @@ import {
   type RuntimeOptionKey,
   runtimePresets,
 } from "../src/runtime-presets.ts";
-import type { ExperimentalOptions, RuntimeOptions } from "../src/runtime.ts";
+import type {
+  ExperimentalOptions,
+  RuntimeFetch,
+  RuntimeOptions,
+} from "../src/runtime.ts";
 import type { IStorageManager } from "../src/storage/interface.ts";
 import { Runtime, signer, StorageManager } from "./engine-test-support.ts";
 
@@ -261,15 +265,18 @@ describe("runtimePresets conformance", () => {
 
     it("productionServer", () => {
       const patternApiUrl = new URL("https://public.example/api");
+      const fetch: RuntimeFetch = () => Promise.resolve(new Response());
       expect(runtimePresets.productionServer({
         ...minimalCore,
         patternApiUrl,
+        fetch,
         consoleHandler,
         errorHandlers,
         telemetry,
       })).toEqual({
         ...minimalOutputs.productionServer,
         patternEnvironment: { apiUrl: patternApiUrl },
+        fetch,
         consoleHandler,
         errorHandlers,
         telemetry,

@@ -525,6 +525,14 @@ export interface ProductionServerPresetParams extends CoreParams {
    */
   patternApiUrl?: URL;
 
+  /**
+   * The outbound `fetch` this runtime's network builtins and source loads
+   * use. Toolshed passes one that sends requests addressed to its public
+   * origin to its own listener instead (`API_INTERNAL_URL`); unset, the
+   * platform fetch.
+   */
+  fetch?: RuntimeFetch;
+
   consoleHandler?: ConsoleHandler;
   errorHandlers?: ErrorHandler[];
   telemetry?: RuntimeTelemetry;
@@ -704,6 +712,7 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.patternApiUrl ?? params.apiUrl },
+      ...(params.fetch !== undefined ? { fetch: params.fetch } : {}),
       ...(params.consoleHandler !== undefined
         ? { consoleHandler: params.consoleHandler }
         : {}),

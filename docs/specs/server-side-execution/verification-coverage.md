@@ -29,7 +29,7 @@ The status corrections in this register are bounded to the rows below:
 | OW30 | Stream sibling validation is fixed; the non-Stream counter/container observation remains unresolved. |
 | OW31 residual (vii) | Read-triggered remount is implemented; automatic replay of the entire watch set remains separate. |
 | OW41 | Partial: a demand pass over unchanged demand, with no warm key captured since the last pass, does no per-row work — the memory server keeps each session's share of the demand set and the SpaceServer reconciles only the keys whose rows changed and the newly captured warm keys (serving-loop.md §7, `demandKeysReconciled`). A session whose demand changes is still rebuilt and compared whole, so a pass after a change costs that session's closure; the first pass of a tenure and the pass after one whose reconcile threw partway reconcile every key. |
-| OW55 | Open: serving pattern-source trust, with root creation and wish sidecars among its consumers. |
+| OW55 | Closed: both runtimes' self-addressed requests are sent to `API_INTERNAL_URL` when set, else to `API_URL`, with every URL unchanged; a set origin must receive the server's own token-bearing probe before any runtime exists, or the server does not start. |
 | OW56 finding 2 | Closed: source following has one owner, the opener. ON upload and instantiate run on the serving runtime; source updates, other client creation paths, and compiled-byte trust remain separate OW56 work. |
 | OW58 | Closed: resolved-error notice commits release the drain guard. |
 | OW60 | Open: unresolved flag-ON client echoes are still skipped. |
@@ -9539,22 +9539,111 @@ supply; OW29/OW32/OW34 closed):
     OQ-19's foreign-derived
     freshness mechanism remains its separate currentness design and is
     not part of this closure.
-  - **OW55 — OPEN: the serving runtimes' pattern-fetch trust surface.**
-    `packages/toolshed/index.ts` passes `new URL(env.API_URL)` into
-    `startServerExecutionHost`, which supplies the serving runtime's API URL.
-    The default is `http://localhost:8000`. Wish sidecars and space-root
-    creation resolve system program sources through this URL. Existing wish
-    sidecars also reconcile their origins when `openSidecarSurface` explicitly
-    opens them on the serving runtime. Tenure activation does not follow the
-    root's source or run a general source updater. Owed: a deliberate posture
-    that pins the serving source to self
-    when co-hosted, or verifies its identity against the local patterns route,
-    plus a local-reproduction runbook note requiring explicit API_URL and
-    MEMORY_URL when the default port is occupied. Root creation is within
-    this obligation. A configured URL alone does not establish local source
-    identity. The coverage audit does not claim a new cross-origin experiment.
-    Trigger: the serving pattern-source trust pass; close when the chosen
-    posture and its regression coverage land.
+  - **OW55 — CLOSED 2026-10-08: the serving runtimes' pattern-fetch trust
+    surface.** `packages/toolshed/index.ts` passes `new URL(env.API_URL)`
+    into `startServerExecutionHost`, which supplies the serving runtimes'
+    API URL, and `runtime-options.ts` passes the same as the webhook
+    runtime's `patternApiUrl`. The default is `http://localhost:8000`. Wish
+    sidecars and space-root creation resolve system program sources through
+    this URL; existing wish sidecars also reconcile their origins when
+    `openSidecarSurface` explicitly opens them on the serving runtime, and
+    tenure activation does not follow the root's source or run a general
+    source updater. On a deployment the URL is the public origin, so every
+    self fetch left through the public path and came back in: on rapids on
+    2026-10-08, with `API_URL=https://rapids.saga-castor.ts.net`, the
+    operator timed one pattern module fetch at 18 ms through the public
+    origin against 1.4 ms through nginx on `http://localhost:8080` (curl;
+    no report file), and a pattern load makes many such fetches.
+
+    The posture: a URL that names this deployment is `API_URL` everywhere,
+    and only the transport of a request addressed to it changes. The
+    serving runtimes' `apiUrl` is also `hostForSpace()`'s default, which
+    `builtins/agent.ts` records as an agent run's host, `runner.ts`'s
+    `normalizePieceSourceOrigin` writes into a piece's source history, and
+    the source reconciler and `cell-from-url.ts` compare source origins
+    against, so it stays the public origin; so does the webhook runtime's
+    `patternEnvironment.apiUrl`. A new optional `API_INTERNAL_URL`
+    (`packages/toolshed/env.ts`: `self`, an HTTP or HTTPS origin read by the
+    runner's `readHttpOrigin`, or unset; anything else refuses startup)
+    names this process's own listener. `self` resolves to `HOST` and `PORT`
+    at parse time, `127.0.0.1` for a wildcard or loopback bind, so the one
+    `.env` the 21 instances of a rapids or estuary host share names each
+    instance to itself. Set, `selfDirectedFetch`
+    (`lib/internal-api-origin.ts`) builds a `RuntimeFetch` that sends a
+    request addressed to `API_URL` to the internal origin with its path,
+    query, method, headers and body unchanged and leaves every other
+    request alone; `toolshedRuntimeOptions` passes it to the webhook
+    runtime through the `productionServer` preset's new `fetch`, and
+    `startRuntimes` passes it to the serving runtimes through
+    `startServerExecutionHost` and `servingRuntimeFactory`'s new `fetch`.
+    Every source load and network builtin reads `runtime.fetch`: the source
+    reconciler's system-source and advertised-identity fetches,
+    `ensure-space-root`'s resolver, the `fetch` builtin and, with this
+    change, the `fetchProgram` builtin's `HttpProgramResolver`. The LLM
+    client reads `API_URL` once at module load and keeps calling the public
+    origin; its calls take seconds and are out of this closure.
+
+    A configured URL alone does not establish local source identity, and
+    neither does an answer: another toolshed, or anything bound to the
+    address, can answer `/api/meta` with this deployment's public DID. Set,
+    the listener binds first behind `startupGate`, which answers 503 to
+    every request but `GET /api/meta` carrying a one-time token and records
+    that request's arrival; the server then sends that probe to the
+    internal origin, without following redirects, and
+    `verifyInternalApiOrigin` refuses unless the answer is 2xx and the gate
+    saw the probe arrive, naming what happened otherwise (no answer, with
+    the connection failure's cause; an error status; an answer that did not
+    come through this process). `admitInternalApiOrigin` then constructs
+    the runtimes, admits the listener and writes the readiness marker, in
+    that order, exits 1 on a refusal or a runtime construction failure, and
+    ends without a verdict when a shutdown aborted the probe. The gate
+    covers the public listener only; the Mode A private listener starts at
+    module import and could open routed sessions before the host exists
+    before this change too. Residual: a proxy that forwards the probe and
+    alters later responses is not detected; `self` names a port this
+    process has bound, where none can sit, and an explicit origin is the
+    operator's statement that none does. The local-reproduction note is in
+    `docs/development/LOCAL_DEV_SERVERS.md`: a toolshed started on another
+    port needs explicit `API_URL` and `MEMORY_URL`, or it fetches pattern
+    sources from and opens Memory on whatever holds the default port, which
+    was OW48's contamination. Root creation and wish sidecars are within
+    the pin, since they fetch through the serving runtimes' fetch.
+
+    Coverage: `packages/toolshed/env.test.ts` (unset and blank give no
+    origin; an origin is kept bare with `API_URL` unchanged; `self` resolves
+    for wildcard, `localhost`, `::`, an IPv4 and an IPv6 bind; a non-URL,
+    another scheme, a path, a query, credentials and `Self` refuse the
+    parse), `runtime-options.test.ts` (set, the options carry a fetch that
+    sends an `API_URL` request to the internal origin and another request
+    where addressed, while the storage base stays `MEMORY_URL` and the
+    pattern base stays `API_URL`; unset, no fetch),
+    `lib/internal-api-origin.test.ts` (the rewrite for a string, a URL and
+    a Request with method, headers and body kept, loopback and third-party
+    requests untouched, late binding of the platform fetch; the probe's
+    URL, headers and no-redirect posture; acceptance on arrival; refusal on
+    an answer without arrival, a connection failure with its cause, an
+    error status and a timeout; `describeError`; the gate holding every
+    request, token-less `/api/meta` included, until admitted and recording
+    the probe; the startup sequence's order, its exit on refusal, on a
+    throwing probe and on a runtime failure, and its silence during
+    shutdown), `packages/runner/test/space-host.test.ts` (`readHttpOrigin`),
+    `runtime-presets.test.ts` (`productionServer` passes `fetch`) and
+    `executor/serving-runtime-fetch.test.ts` (the factory hands each
+    serving runtime the fetch and leaves `apiUrl` public). Mutation checks:
+    the rewrite never rewriting, the verification ignoring arrival, the
+    gate passing any `GET /api/meta`, admission before the runtimes, and
+    `self` resolving to `localhost` each fail their tests. Live
+    (2026-10-08, this change's worktree): a toolshed with
+    `API_INTERNAL_URL` on an unbound port exits 1 ("did not answer: fetch
+    failed: ... Connection refused"), on a second toolshed exits 1 ("the
+    request did not reach this process"), and with `self` starts with the
+    runtimes constructed after the check. No cross-origin experiment beyond
+    those is claimed. Infra follow-up (commonfabric/infra): add
+    `"API_INTERNAL_URL":"self"` to `toolshed_env_overrides` in
+    `ansible/rapids-inventory.ini` and `ansible/estuary-inventory.ini`, and
+    name the variable in `ansible/README.md` beside `API_URL`; the
+    post-apply probe there treats a 5xx as retryable, so the 503 window is
+    tolerated.
   - **OW56 — PARTIALLY CLOSED — server-owned program materialization
     and compilation.** Under ON, the upload and instantiate lifecycle
     verbs compile and materialize on the serving runtime. `cf piece new`

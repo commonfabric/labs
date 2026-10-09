@@ -13,6 +13,12 @@ import {
 import env from "@/env.ts";
 import { announceCloneIfServed } from "@/lib/clone-banner.ts";
 import { identity } from "@/lib/identity.ts";
+import {
+  admitInternalApiOrigin,
+  selfDirectedFetch,
+  startupGate,
+  verifyInternalApiOrigin,
+} from "@/lib/internal-api-origin.ts";
 import { createToolshedRuntime } from "@/runtime-options.ts";
 import { memory, memoryServer } from "@/routes/storage/memory.ts";
 import {
@@ -48,6 +54,27 @@ const initializeRuntime = () => {
 
 // Export runtime for use in other parts of the application
 export { runtime };
+
+/**
+ * This process's runtimes: the webhook runtime and, under the flag, the
+ * serving loop's host. Both address their own pattern-source, compile and
+ * API requests to API_URL; with API_INTERNAL_URL set, both send them there
+ * instead (lib/internal-api-origin.ts), so neither exists until that origin
+ * is known to be this server's own listener.
+ */
+function startRuntimes() {
+  initializeRuntime();
+  // Server-execution v2 (stage F): under EXPERIMENTAL_SERVER_EXECUTION
+  // this process hosts the serving loop; OFF (the default) this is a
+  // no-op and toolshed is byte-identical to today.
+  const fetch = selfDirectedFetch(env);
+  startServerExecutionHost({
+    server: memoryServer,
+    identity,
+    apiUrl: new URL(env.API_URL),
+    ...(fetch !== undefined ? { fetch } : {}),
+  });
+}
 
 export type AppType = typeof app;
 
@@ -117,15 +144,21 @@ function startServer(onListening?: () => void) {
     "Configured first-party authority:",
     normalizeInviteHost(env.API_URL),
   );
-  initializeRuntime();
-  // Server-execution v2 (stage F): under EXPERIMENTAL_SERVER_EXECUTION
-  // this process hosts the serving loop; OFF (the default) this is a
-  // no-op and toolshed is byte-identical to today.
-  startServerExecutionHost({
-    server: memoryServer,
-    identity,
-    apiUrl: new URL(env.API_URL),
-  });
+  // Where this process's own runtimes send their self-addressed requests.
+  // Unset, that is API_URL and the runtimes start before the listener, as
+  // they always have. Set, it must be this server's own listener, verified
+  // once the listener is up and before any runtime exists to fetch from it;
+  // the gate answers 503 to everything but the probe until then.
+  const internalApiOrigin = env.API_INTERNAL_URL;
+  const probeToken = crypto.randomUUID();
+  const gate = internalApiOrigin === undefined
+    ? undefined
+    : startupGate(app.fetch, probeToken);
+  if (gate === undefined) {
+    startRuntimes();
+  } else {
+    console.log("Configured internal API origin:", internalApiOrigin);
+  }
 
   const serverOptions = {
     hostname: env.HOST,
@@ -137,12 +170,36 @@ function startServer(onListening?: () => void) {
     },
     onListen: ({ port, hostname }: { port: number; hostname: string }) => {
       console.log(`Server running on http://${hostname}:${port}`);
-      onListening?.();
+      if (gate === undefined || internalApiOrigin === undefined) {
+        onListening?.();
+        return;
+      }
+      admitInternalApiOrigin({
+        origin: internalApiOrigin,
+        verify: () =>
+          verifyInternalApiOrigin({
+            origin: internalApiOrigin,
+            token: probeToken,
+            probeArrived: gate.probeArrived,
+          }),
+        startRuntimes,
+        admit: gate.admit,
+        onListening,
+        shuttingDown: () => isShuttingDown || ac.signal.aborted,
+        exit: Deno.exit,
+        log: console.log,
+        error: console.error,
+      }).catch((error) => {
+        // Nothing above is expected to throw; a throw here would otherwise
+        // leave the gate closed and a background launch's parent waiting.
+        console.error("Internal API origin check failed:", error);
+        Deno.exit(1);
+      });
     },
   };
 
   try {
-    Deno.serve(serverOptions, app.fetch);
+    Deno.serve(serverOptions, gate?.fetch ?? app.fetch);
   } catch (err) {
     if (err instanceof Deno.errors.AddrInUse) {
       console.error(`Port ${env.PORT} is already in use`);

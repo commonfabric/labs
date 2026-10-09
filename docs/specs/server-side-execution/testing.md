@@ -8,9 +8,11 @@ implemented as the gates below. Method inherited from the v1 learning run
 ## 1. Harness rules (non-negotiable)
 
 - Integration runs go through `deno task integration --port-offset=NNN`
-  — never a hand-rolled server (`MEMORY_URL` defaults to port 8000; a
-  hand-rolled harness on a shared box writes into someone else's
-  primary). The task wires both servers and storage correctly.
+  — never a hand-rolled server (`MEMORY_URL` and `API_URL` default to
+  port 8000; a hand-rolled harness on a shared box writes into someone
+  else's primary and compiles its pattern sources; see
+  [LOCAL_DEV_SERVERS.md](../../development/LOCAL_DEV_SERVERS.md)). The
+  task wires both servers and storage correctly.
 - **Workloads are uninstrumented and byte-identical across arms.** v1's
   own measurement probes warmed the measured path and understated its
   cost. Measurement reads counters and JUnit timings from outside.

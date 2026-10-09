@@ -7,7 +7,10 @@ import {
 } from "@commonfabric/runner";
 import { publishCfcPosture } from "@/lib/cfc-posture.ts";
 import { publishExperimentalPosture } from "@/lib/experimental-posture.ts";
+import { selfDirectedFetch } from "@/lib/internal-api-origin.ts";
 import type { env as ToolshedEnv } from "@/env.ts";
+
+type UrlEnv = Pick<ToolshedEnv, "MEMORY_URL" | "API_URL" | "API_INTERNAL_URL">;
 
 /**
  * Assemble this toolshed's `RuntimeOptions` (CT-1814), extracted pure from
@@ -15,17 +18,21 @@ import type { env as ToolshedEnv } from "@/env.ts";
  * `apiUrl` is the storage/memory base (MEMORY_URL), while patterns fetch
  * against the public API base (API_URL) — the builder/env.ts fallback is a
  * hardcoded `localhost:<ports.toolshed>`, wrong for any non-default port.
- * EXPERIMENTAL_* flags come from the injected env reader via the canonical
- * mapping.
+ * With API_INTERNAL_URL set, the runtime's fetch sends requests addressed to
+ * API_URL to that origin instead (`selfDirectedFetch`); the URLs themselves
+ * are unchanged. EXPERIMENTAL_* flags come from the injected env reader via
+ * the canonical mapping.
  */
 export function toolshedRuntimeOptions(
-  config: Pick<ToolshedEnv, "MEMORY_URL" | "API_URL">,
+  config: UrlEnv,
   storageManager: RuntimeOptions["storageManager"],
   envGet: EnvReader = Deno.env.get,
 ): RuntimeOptions {
+  const fetch = selfDirectedFetch(config);
   return runtimePresets.productionServer({
     apiUrl: new URL(config.MEMORY_URL),
     patternApiUrl: new URL(config.API_URL),
+    ...(fetch !== undefined ? { fetch } : {}),
     storageManager,
     experimental: experimentalOptionsFromEnv(envGet),
   });
@@ -46,7 +53,7 @@ type OtelEnv = Pick<ToolshedEnv, "OTEL_ENABLED" | "OTEL_SERVICE_NAME" | "ENV">;
  * are logged, never fatal.
  */
 export function createToolshedRuntime(
-  config: Pick<ToolshedEnv, "MEMORY_URL" | "API_URL"> & OtelEnv,
+  config: UrlEnv & OtelEnv,
   storageManager: RuntimeOptions["storageManager"],
   envGet: EnvReader = Deno.env.get,
 ): Runtime {
