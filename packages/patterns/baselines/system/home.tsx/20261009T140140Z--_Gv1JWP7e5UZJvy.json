@@ -1670,6 +1670,21 @@
         ],
         "type": "object"
       },
+      "SharedSpaceRemoval": {
+        "properties": {
+          "expectedRevision": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
       "SpaceEntry": {
         "properties": {
           "did": {
@@ -1988,6 +2003,12 @@
         },
         "type": "object"
       },
+      "removeSharedSpace": {
+        "$ref": "#/$defs/SharedSpaceRemoval",
+        "asCell": [
+          "stream"
+        ]
+      },
       "removeSpace": {
         "asCell": [
           "stream"
@@ -2053,6 +2074,7 @@
       "sharedSpaceCatalog",
       "registerSharedSpace",
       "changeSharedSpaceMembership",
+      "removeSharedSpace",
       "createProfile",
       "ensurePrivateInbox",
       "addFavorite",
