@@ -12,6 +12,7 @@ import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
 import { normalize } from "@std/path/posix";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { createSession, Identity } from "@commonfabric/identity";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
@@ -43,7 +44,6 @@ import {
   CfHarnessEngine,
   type CreateHarnessEngineOptions,
 } from "../src/engine.ts";
-import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import {
   HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
@@ -100,7 +100,7 @@ const DEFAULT_PATTERN_SOURCE = [
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };

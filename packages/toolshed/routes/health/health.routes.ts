@@ -14,6 +14,18 @@ const commitWindowCounts = z.object({
   operations: z.number().int().nonnegative(),
 });
 
+/** The fields every recorded session report carries, whatever its event
+ * (packages/memory/v2/session-reports.ts `RecordedSessionReport`). */
+const sessionReportBase = z.object({
+  kind: z.literal("echo-breaker"),
+  document: z.object({ id: z.string(), scopeKey: z.string() }),
+  action: z.string(),
+  at: z.number(),
+  space: z.string(),
+  session: z.string(),
+  principal: z.string().optional(),
+});
+
 export const index = createRoute({
   path: "/_health",
   method: "get",
@@ -86,6 +98,33 @@ export const stats = createRoute({
                 }),
               ),
             }),
+          ),
+        }).optional(),
+        // The diagnostics clients reported about their sessions
+        // (packages/memory/v2/session-reports.ts `SessionReportsReport`):
+        // the remote-echo breaker's trips and clears since the server
+        // started, and the most recent reports in full — present whenever a
+        // memory server is co-hosted in this process.
+        sessionReports: z.object({
+          echoBreaker: z.object({
+            trips: z.number().int().nonnegative(),
+            clears: z.object({
+              convergence: z.number().int().nonnegative(),
+              quiet: z.number().int().nonnegative(),
+              retired: z.number().int().nonnegative(),
+              evicted: z.number().int().nonnegative(),
+            }),
+          }),
+          recent: z.array(
+            z.discriminatedUnion("event", [
+              sessionReportBase.extend({ event: z.literal("trip") }),
+              sessionReportBase.extend({
+                event: z.literal("clear"),
+                reason: z.enum(["convergence", "quiet", "retired", "evicted"]),
+                renewals: z.number().int().nonnegative(),
+                trippedMs: z.number().int().nonnegative(),
+              }),
+            ]),
           ),
         }).optional(),
         // The serving loop's counters (server-execution v2,

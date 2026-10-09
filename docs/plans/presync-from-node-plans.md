@@ -327,8 +327,13 @@ in the pull request.
       root-only as well. `#collectResumeOwnedCells` still derives the
       instances and their derived internal cells; `#syncResumeListChildren`
       returns the instances it names so a list child's nodes join the
-      rounds. A pattern node's inputs are no longer synced under the child's
-      authored argument schema.
+      rounds. A nested instance whose result document holds no argument
+      link — the store never received its setup, so its parent's start sets
+      it up fresh, inline — is planned against the inputs its parent's node
+      binds it to, the stand-in a fresh start binds against, so that what
+      its nodes read is local before the parent's start commits. A pattern
+      node's inputs are no longer synced under the child's authored argument
+      schema.
 - [x] Give `runSynced` the plan walk against an immutable stand-in for the
       caller's argument. A plain `run()` still reaches setup and start with
       no pre-sync of its own, which stays owed: the pre-sync is asynchronous

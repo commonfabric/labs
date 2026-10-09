@@ -21,6 +21,7 @@ import { setLLMUrl } from "@commonfabric/llm";
 import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
+  attestedPrincipalsAt,
   type Cell,
   cellRuntime,
   Console as RuntimeConsole,
@@ -501,19 +502,52 @@ export class PiecesController<T = unknown> {
    * Refuses to replace an identity Home's root: a Home that already holds one
    * is changed only in place, as {@link #refuseHomeRoot} says. Linking the
    * first root of a Home that holds none is what first open does.
+   *
+   * With `options.replacing`, the link is made only while the space's root is
+   * still the one a caller inspected: the cell given, or none at all when it
+   * is `null`, compared by the link the space cell stores. With
+   * `options.stillReplaceable` as well, the root linked now must also pass
+   * that test, which reads it through the linking transaction. Both checks
+   * are read in that transaction, so a root another writer links or changes
+   * meanwhile fails the call rather than being replaced.
+   *
    * @param defaultPatternCell - The cell representing the default pattern
+   * @throws Error when `options.replacing` no longer names the space's root,
+   *   and when the root it names no longer passes `options.stillReplaceable`.
    */
   async linkDefaultPattern(
     defaultPatternCell: Cell<any>,
+    options: {
+      replacing?: Cell<unknown> | null;
+      stillReplaceable?: (root: Cell<unknown>) => boolean;
+    } = {},
   ): Promise<void> {
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
+      const slot = spaceCellWithTx.key("defaultPattern");
+      if (options.replacing !== undefined) {
+        const current = slot.get() as Cell<unknown> | undefined;
+        const unchanged = options.replacing === null
+          ? slot.getRaw() === undefined
+          : current !== undefined && current.equalLinks(options.replacing);
+        if (!unchanged) {
+          throw new Error("The space's root changed since it was inspected");
+        }
+        if (
+          current !== undefined &&
+          options.stillReplaceable?.(current.withTx(tx)) === false
+        ) {
+          throw new Error(
+            "The space's root is still the one inspected, but no longer passes the check it was inspected under",
+          );
+        }
+      }
       // Read in the transaction, as the stored pointer: a retry reruns this
       // against fresh state, and a target that cannot load is still a root.
-      if (spaceCellWithTx.key("defaultPattern").getRaw() !== undefined) {
+      if (slot.getRaw() !== undefined) {
         this.#refuseHomeRoot("replace");
       }
-      spaceCellWithTx.key("defaultPattern").set(defaultPatternCell.withTx(tx));
+      slot.set(defaultPatternCell.withTx(tx));
     });
     if (error) {
       throw new Error(
@@ -588,10 +622,12 @@ export class PiecesController<T = unknown> {
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
       // root HERE. Opening it already reconciled it against its origin, so a
       // start that still failed is not out of date; the one remaining rescue
-      // is for a root that records no origin at all, that no `inSpace()` call
-      // placed, and whose stored pattern this runtime cannot load. Roll that
-      // one forward to the space's official system root and retry the start
-      // ONCE. Every other failure rethrows untouched.
+      // is for a root that records no origin at all, that its creator's
+      // pattern did not place (no `inSpace()` call placed it, and its own
+      // label says it represents no principal), and whose stored pattern this
+      // runtime cannot load. Roll that one forward to the space's official
+      // system root and retry the start ONCE. Every other failure rethrows
+      // untouched.
       if (!start) throw error;
       let healed: Cell<NameSchema>;
       try {
@@ -647,8 +683,8 @@ export class PiecesController<T = unknown> {
    * runnable pattern, and rolling it forward changes no source. A root
    * following anything else has an owner's choice behind it, and replacing its
    * source with the system default would discard that choice rather than
-   * repair anything. So does a root an `inSpace()` call placed
-   * ({@link #isInSpaceRoot}), origin or none.
+   * repair anything. So does a root its creator's pattern placed
+   * ({@link #keepsCreatorsPattern}), origin or none.
    *
    * A by-identity load probe is the evidence this rests on, and with CFC
    * enforcement disabled that probe reports every artifact outside the
@@ -656,10 +692,33 @@ export class PiecesController<T = unknown> {
    */
   #rootNeedsRollForward(root: Cell<NameSchema>): boolean {
     if (this.runtime.cfcEnforcementMode === "disabled") return false;
-    if (this.#isInSpaceRoot(root)) return false;
+    if (this.#keepsCreatorsPattern(root)) return false;
     const origin = getPatternSource(root);
     return origin === undefined ||
       origin === deriveSystemPatternSource(this.#space, this.runtime);
+  }
+
+  /**
+   * Whether `root` was placed by its creator's pattern, which the space's
+   * system root is no replacement for: a root an `inSpace()` call placed
+   * ({@link #isInSpaceRoot}), and a root its own stored label says
+   * represents a principal, as a profile's does wherever the profile sits.
+   * The label read is of the root's own document, so a claim a link inside
+   * it carries in from another document does not count, and nothing is
+   * loaded or run to read it.
+   */
+  #keepsCreatorsPattern(root: Cell<NameSchema>): boolean {
+    if (this.#isInSpaceRoot(root)) return true;
+    const tx = this.runtime.edit();
+    try {
+      return (attestedPrincipalsAt(
+        tx,
+        root.getAsNormalizedFullLink(),
+        "represents-principal",
+      )?.length ?? 0) > 0;
+    } finally {
+      tx.abort();
+    }
   }
 
   /**
@@ -2551,7 +2610,8 @@ export class PiecesController<T = unknown> {
         // for its kind. One that follows an origin keeps what its owner chose:
         // opening it already tried that origin, and replacing its source with
         // the system default would discard the choice rather than repair it.
-        // One an `inSpace()` call placed keeps its creator's pattern the same
+        // One its creator's pattern placed, an `inSpace()` root or one whose
+        // label says it represents a principal, keeps that pattern the same
         // way, and fails closed.
         if (!this.#rootNeedsRollForward(rootToStart)) throw startError;
         return new PieceController<NameSchema>(
@@ -2639,14 +2699,14 @@ export class PiecesController<T = unknown> {
           );
           throw startError;
         }
-        if (this.#isInSpaceRoot(rootToStart)) {
-          // The system root is no replacement for a root an `inSpace()` call
+        if (this.#keepsCreatorsPattern(rootToStart)) {
+          // The system root is no replacement for a root its creator's pattern
           // placed, so this one fails closed like any other refused repair.
           pieceUpdateLogger.warn(
-            "cold-start-setup-repair-in-space-root",
+            "cold-start-setup-repair-creators-root",
             () => [
               "startEnsuredDefaultPattern: setup repair rejected for a root " +
-              "an `inSpace()` call placed; surfacing the original start error",
+              "its creator's pattern placed; surfacing the original start error",
               `${ref.identity}#${ref.symbol}`,
               repairError,
             ],

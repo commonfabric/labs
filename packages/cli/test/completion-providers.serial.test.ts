@@ -298,6 +298,7 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf space verify ", "dirs", undefined],
   ["cf space reset ", "dirs", undefined],
   ["cf inspect spaces --dir ", "dirs", undefined],
+  ["cf profile repair-root --from-snapshot ", "dirs", undefined],
   ["cf inspect html x --out ", "files", undefined],
   ["cf check --output ", "files", undefined],
   ["cf agent runner --loom-retrieval-config ", "files", "*.json"],

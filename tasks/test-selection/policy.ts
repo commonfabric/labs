@@ -122,6 +122,13 @@ export const BREADTH_SATURATION = 2;
  */
 export const ENVIRONMENTAL_MIN_SOURCES = 5;
 
+/**
+ * Identities one run must newly break, one source at one commit in one
+ * order, before its failures read as the run or the change as a whole
+ * rather than as any one test.
+ */
+export const MASS_FAILURE_MIN_IDENTITIES = 50;
+
 /** Days over which a day's failure count halves. */
 export const CHURN_HALF_LIFE_DAYS = 14;
 
@@ -267,6 +274,20 @@ export const FLAKE_ANCHOR_EXECUTIONS = 5;
 
 /** The most times one item is run inside a lane. */
 export const MAX_EXECUTIONS = 10;
+
+/**
+ * The most times a lane of the full run runs a unit again after its
+ * batches, where a test in the unit failed every time the batch ran it.
+ * The lane stops rerunning a unit once each such test has passed, since a
+ * pass beside a failure at one commit is what marks a test as flaky.
+ */
+export const RERUN_EXECUTIONS = 3;
+
+/**
+ * The seconds of reruns one lane of the full run may take on. A rerun
+ * starts only where what the lane is charged for it fits in what is left.
+ */
+export const RERUN_BUDGET_SECONDS = 300;
 
 /** Uncovered lines a change must add before the comment mentions it. */
 export const COVERAGE_COMMENT_LINES = 25;
@@ -679,6 +700,16 @@ export const DIALS: readonly Dial[] = [
       "broken runner's failures still count as catches.",
   },
   {
+    name: "MASS_FAILURE_MIN_IDENTITIES",
+    value: MASS_FAILURE_MIN_IDENTITIES,
+    unit: "identities",
+    setBy: "chosen",
+    why: "How many identities one run must newly break before none of " +
+      "those failures is a catch. Up when a breakage that reached many " +
+      "tests still escaped the pull requests that ran some of them; down " +
+      "when one broken run still credits a catch to a whole suite.",
+  },
+  {
     name: "CHURN_HALF_LIFE_DAYS",
     value: CHURN_HALF_LIFE_DAYS,
     unit: "days",
@@ -868,6 +899,25 @@ export const DIALS: readonly Dial[] = [
     why:
       "Where the line stops. Up when the flakiest items a change forces in " +
       "still are not proven by what runs; down when they crowd a lane.",
+  },
+  {
+    name: "RERUN_EXECUTIONS",
+    value: RERUN_EXECUTIONS,
+    unit: "runs of one unit",
+    setBy: "chosen",
+    why: "The most times the full run runs a unit again where a test in it " +
+      "failed every time. Up when flaky tests on `main` fail every rerun " +
+      "and go on being counted as catches; down when a real break's reruns " +
+      "take time that tells nobody anything.",
+  },
+  {
+    name: "RERUN_BUDGET_SECONDS",
+    value: RERUN_BUDGET_SECONDS,
+    unit: "seconds",
+    setBy: "chosen",
+    why: "What one lane of the full run may spend rerunning its failures. " +
+      "Up when failures go without reruns for want of it; down when a " +
+      "broken `main` holds every lane this much longer than it needs.",
   },
   {
     name: "COVERAGE_COMMENT_LINES",

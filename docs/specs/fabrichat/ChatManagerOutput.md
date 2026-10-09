@@ -96,10 +96,16 @@ it drives a room through the room's `room` group (see
 
 ## Scopes
 
-Everything a manager holds is `PerSpace` in the user's home space (see
+Everything a manager stores is `PerSpace` in the user's home space (see
 [scopes](../scoped-cell-instances.md#summary)). A home space admits only its
 user, so `PerSpace` there means one instance for that user, which is why nothing
-in it needs to be `PerUser` or `PerSession`.
+it stores needs to be `PerUser` or `PerSession`.
+
+`rooms` is derived per session all the same. Each room in it is read under the
+reader's own access, so a manager more than one principal reads, as one outside
+a home space can be, lists different rooms to a principal a room's space refuses
+than to its members. Stored once for every reader, a value readers derive
+differently is one their runtimes overwrite without end.
 
 ## Facts
 

@@ -5,7 +5,6 @@ import type {
   HarnessAcquiredSkill,
   HarnessSkillAcquisition,
 } from "../../src/contracts/skill.ts";
-import type { DockerRunscSandboxConfig } from "../../src/sandbox/types.ts";
 import { resolveRunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import {
   acquiredSkillForHandle,
@@ -34,24 +33,6 @@ const acquiredAt = (commitSha: string): HarnessAcquiredSkill => ({
   sandboxRoot: "/acquired-skill",
   scripts: [],
 });
-
-const parentSandbox: DockerRunscSandboxConfig = {
-  dockerBinary: "docker",
-  runtimeName: "runsc-cfc",
-  image: "cf-harness:test",
-  workspaceHostPath: "/tmp/workspace",
-  workspaceMountPath: "/workspace",
-  shellPath: "/bin/bash",
-  dockerNetworkMode: "none",
-  additionalMounts: [{
-    kind: "host-bind",
-    name: "docs",
-    hostPath: "/tmp/docs",
-    sandboxPath: "/docs",
-    readOnly: true,
-  }],
-  extraDockerArgs: [],
-};
 
 describe("the acquired-skill mount a delegation gives its child", () => {
   //
@@ -158,95 +139,14 @@ describe("the acquired-skill mount a delegation gives its child", () => {
       kind: "the parent's runtime",
     } as unknown as Parameters<typeof childSandboxOptions>[0]["sandbox"];
 
-    it("gives a child with an acquired skill a configuration and no runtime", () => {
-      // A mount is a property of the container, so a runtime already built
-      // against the parent's mounts would ignore anything handed beside it:
-      // the child has to build its own, which it can only do from a
-      // configuration.
-      const options = childSandboxOptions({
-        sandbox: fakeRuntime,
-        ownedSandboxConfig: parentSandbox,
-        configuredSandbox: parentSandbox,
-      }, acquiredAt(COMMIT_SHA));
-
-      expect(options.sandboxRuntime).toBeUndefined();
-      expect(options.sandbox?.additionalMounts).toEqual([
-        ...parentSandbox.additionalMounts,
-        {
-          kind: "host-bind",
-          name: "acquired-skill",
-          hostPath: acquiredAt(COMMIT_SHA).hostRoot,
-          sandboxPath: "/acquired-skill",
-          readOnly: true,
-        },
-      ]);
-    });
-
-    it("leaves every other mount of the parent's in place", () => {
-      const options = childSandboxOptions({
-        sandbox: fakeRuntime,
-        ownedSandboxConfig: parentSandbox,
-      }, acquiredAt(COMMIT_SHA));
-
-      expect(options.sandbox?.workspaceHostPath).toBe(
-        parentSandbox.workspaceHostPath,
-      );
-      expect(options.sandbox?.additionalMounts.length).toBe(
-        parentSandbox.additionalMounts.length + 1,
-      );
-    });
-
-    it("adds no second mount where the parent's configuration already backs the skill", () => {
-      // A configuration that already backs this skill would otherwise gain a
-      // duplicate under the same name at the same sandbox path. Asked through
-      // the predicate the backing decision uses, so "already mounted" means
-      // the same thing here as it does there.
-      const acquired = acquiredAt(COMMIT_SHA);
-      const alreadyMounted = {
-        ...parentSandbox,
-        additionalMounts: [
-          ...parentSandbox.additionalMounts,
-          {
-            kind: "host-bind" as const,
-            name: "acquired-skill",
-            hostPath: acquired.hostRoot,
-            sandboxPath: "/acquired-skill",
-            readOnly: true,
-          },
-        ],
-      };
-
-      const options = childSandboxOptions({
-        sandbox: fakeRuntime,
-        ownedSandboxConfig: alreadyMounted,
-      }, acquired);
-
-      expect(options.sandbox?.additionalMounts).toEqual(
-        alreadyMounted.additionalMounts,
-      );
-    });
-
-    it("shares the parent's runtime with a child given no acquired skill", () => {
-      const options = childSandboxOptions({
-        sandbox: fakeRuntime,
-        ownedSandboxConfig: parentSandbox,
-        configuredSandbox: parentSandbox,
-      }, undefined);
-
-      expect(options.sandboxRuntime).toBe(fakeRuntime);
-      expect(options.sandbox).toBe(parentSandbox);
-    });
-
     it("shares the parent's runtime when that runtime was handed in", () => {
-      // An injected runtime is the thing that executes; a configuration beside
-      // it describes something else, so there is nothing to extend.
+      // An injected runtime is the thing that executes, and the engine built
+      // no configuration beside it, so there is nothing to extend.
       const options = childSandboxOptions({
         sandbox: fakeRuntime,
-        configuredSandbox: parentSandbox,
       }, acquiredAt(COMMIT_SHA));
 
-      expect(options.sandboxRuntime).toBe(fakeRuntime);
-      expect(options.sandbox).toBe(parentSandbox);
+      expect(options).toEqual({ sandboxRuntime: fakeRuntime });
     });
   });
 });
@@ -282,7 +182,6 @@ describe("childSandboxOptions() on the runsc runtime", () => {
       acquiredAt(COMMIT_SHA),
     );
     expect(options.sandboxRuntime).toBeUndefined();
-    expect(options.sandbox).toBeUndefined();
     expect(options.sandboxRuntimeKind).toBe("runsc");
     expect(options.sandboxRootfs).toBe("/images/kitchensink");
     expect(options.sandboxCfcPolicy).toBe("/policy.json");
@@ -328,6 +227,67 @@ describe("childSandboxOptions() on the runsc runtime", () => {
       "/file-cabinet",
       "/acquired-skill",
     ]);
+  });
+
+  it("gives a child the parent's way of running runsc, rootless and inside its network helper, mount or no mount", () => {
+    const rootless = resolveRunscSandboxConfig({
+      workspaceHostPath: "/tmp/workspace",
+      rootfs: "/images/kitchensink",
+      runscBinary: "/opt/runsc",
+      scratchDir: "/tmp/scratch",
+      runId: "run-1",
+      platform: "linux",
+      rootless: true,
+      networkHelper: "/usr/bin/pasta",
+      setpriv: "/usr/bin/setpriv",
+    });
+
+    for (const acquired of [acquiredAt(COMMIT_SHA), undefined]) {
+      const options = childSandboxOptions(
+        { sandbox, ownedRunscSandboxConfig: rootless },
+        acquired,
+      );
+      expect([
+        options.sandboxRunscRootless,
+        options.sandboxRunscNetworkHelper,
+        options.sandboxRunscSetpriv,
+      ]).toEqual([true, rootless.networkHelper, rootless.setpriv]);
+    }
+    const asRoot = childSandboxOptions(
+      { sandbox, ownedRunscSandboxConfig: parentRunsc },
+      undefined,
+    );
+    expect(asRoot).not.toHaveProperty("sandboxRunscRootless");
+    expect(asRoot).not.toHaveProperty("sandboxRunscNetworkHelper");
+    expect(asRoot).not.toHaveProperty("sandboxRunscUnshare");
+    expect(asRoot).not.toHaveProperty("sandboxRunscSetpriv");
+  });
+
+  it("gives a child of root's run the `unshare` its network helper runs under, mount or no mount", () => {
+    const root = resolveRunscSandboxConfig({
+      workspaceHostPath: "/tmp/workspace",
+      rootfs: "/images/kitchensink",
+      runscBinary: "/opt/runsc",
+      scratchDir: "/tmp/scratch",
+      runId: "run-1",
+      platform: "linux",
+      networkHelper: "/usr/bin/pasta",
+      unshare: "/usr/bin/unshare",
+      setpriv: "/usr/bin/setpriv",
+    });
+
+    for (const acquired of [acquiredAt(COMMIT_SHA), undefined]) {
+      const options = childSandboxOptions(
+        { sandbox, ownedRunscSandboxConfig: root },
+        acquired,
+      );
+      expect([
+        options.sandboxRunscRootless,
+        options.sandboxRunscNetworkHelper,
+        options.sandboxRunscUnshare,
+        options.sandboxRunscSetpriv,
+      ]).toEqual([undefined, root.networkHelper, root.unshare, root.setpriv]);
+    }
   });
 
   it("gives every runsc child a runtime of its own, mount or no mount", () => {

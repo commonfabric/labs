@@ -682,6 +682,12 @@ ORDER BY seq DESC, op_index DESC
 LIMIT 1
 `;
 
+// The newest `set` or `delete` at or before a revision, searched no further
+// back than `:floor`, which is the newest snapshot's seq (see
+// {@link latestBaseAndSnapshot}). The index this walks does not cover `op`, so
+// every patch row in the range costs a table fetch; a document patched ten
+// thousand times since its last `set` has a snapshot within the last ten of
+// them, and the floor is what keeps the walk at that length.
 const SELECT_LATEST_BASE = `
 SELECT seq, op_index, op, data
 FROM revision
@@ -689,6 +695,7 @@ WHERE branch = :branch
   AND id = :id
   AND scope_key = :scope_key
   AND op IN ('set', 'delete')
+  AND seq >= :floor
   AND (
     seq < :seq OR
     (seq = :seq AND op_index <= :op_index)
@@ -3724,8 +3731,8 @@ const transformEffectsDocOperation = <
  * Helper for the commit entry points, which takes down what the observer
  * will be told about a commit at the moment it is applied, so a caller that
  * reuses or edits its options afterwards changes nothing already recorded.
- * A commit refused before validation may carry anything as its operations,
- * which counts as none.
+ * The operation count is the submitted array length, including for rejected
+ * commits; malformed non-array operations count as zero.
  */
 const decisionOf = (
   options: ApplyCommitOptions,
@@ -7545,6 +7552,43 @@ const validateStatefulEntityRevisions = (
   }
 };
 
+/**
+ * The two rows a reconstruction at `(seq, opIndex)` can start from: the
+ * newest snapshot at or before `seq`, and the newest `set` or `delete` at or
+ * before the revision but no older than that snapshot. A base older than the
+ * snapshot never wins the choice between them (the snapshot already holds its
+ * effect and every patch since), so the base lookup is bounded below by the
+ * snapshot's seq rather than walking the document's whole patch history to
+ * find a `set` it would then discard.
+ */
+const latestBaseAndSnapshot = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
+): { baseRow: ReadRow | undefined; snapshotRow: SnapshotRow | undefined } => {
+  const { branch, id, scopeKey, seq, opIndex } = options;
+  const snapshotRow = engine.statements.selectLatestSnapshot.get({
+    branch,
+    id,
+    scope_key: scopeKey,
+    seq,
+  }) as SnapshotRow | undefined;
+  const baseRow = engine.statements.selectLatestBase.get({
+    branch,
+    id,
+    scope_key: scopeKey,
+    seq,
+    op_index: opIndex,
+    floor: snapshotRow?.seq ?? 0,
+  }) as ReadRow | undefined;
+  return { baseRow, snapshotRow };
+};
+
 /** Substring probe over the serialized rows reconstruction would read — the
  *  latest set/snapshot base and the patch span — without decoding any of
  *  them. A negative answer proves the reconstructed pre-state cannot contain
@@ -7560,19 +7604,13 @@ const storedEntitySourcesMayContainRef = (
   },
 ): boolean => {
   const { id, scopeKey, branch, seq, opIndex } = options;
-  const baseRow = engine.statements.selectLatestBase.get({
+  const { baseRow, snapshotRow } = latestBaseAndSnapshot(engine, {
     branch,
     id,
-    scope_key: scopeKey,
+    scopeKey,
     seq,
-    op_index: opIndex,
-  }) as ReadRow | undefined;
-  const snapshotRow = engine.statements.selectLatestSnapshot.get({
-    branch,
-    id,
-    scope_key: scopeKey,
-    seq,
-  }) as SnapshotRow | undefined;
+    opIndex,
+  });
 
   let baseSeq = 0;
   let baseOpIndex = -1;
@@ -7668,19 +7706,13 @@ const latestMaterializationSeq = (
   scopeKey: string,
   seq: number,
 ): number => {
-  const baseRow = engine.statements.selectLatestBase.get({
+  const { baseRow, snapshotRow } = latestBaseAndSnapshot(engine, {
     branch,
     id,
-    scope_key: scopeKey,
+    scopeKey,
     seq,
-    op_index: Number.MAX_SAFE_INTEGER,
-  }) as ReadRow | undefined;
-  const snapshotRow = engine.statements.selectLatestSnapshot.get({
-    branch,
-    id,
-    scope_key: scopeKey,
-    seq,
-  }) as SnapshotRow | undefined;
+    opIndex: Number.MAX_SAFE_INTEGER,
+  });
   return Math.max(baseRow?.seq ?? 0, snapshotRow?.seq ?? 0);
 };
 
@@ -7695,19 +7727,13 @@ const reconstructPatchedDocument = (
   },
 ): { document: EntityDocument; encodedBytes: number } => {
   const { id, scopeKey, branch, seq, opIndex } = options;
-  const baseRow = engine.statements.selectLatestBase.get({
+  const { baseRow, snapshotRow } = latestBaseAndSnapshot(engine, {
     branch,
     id,
-    scope_key: scopeKey,
+    scopeKey,
     seq,
-    op_index: opIndex,
-  }) as ReadRow | undefined;
-  const snapshotRow = engine.statements.selectLatestSnapshot.get({
-    branch,
-    id,
-    scope_key: scopeKey,
-    seq,
-  }) as SnapshotRow | undefined;
+    opIndex,
+  });
 
   let baseSeq = 0;
   let baseOpIndex = -1;

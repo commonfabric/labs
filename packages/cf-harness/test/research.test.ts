@@ -1,6 +1,10 @@
 import { encodeHex } from "@std/encoding/hex";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type {
+  PatternIndexPattern,
+  PatternIndexSearchResponse,
+} from "@commonfabric/pattern-index/client";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { sha256 } from "@commonfabric/content-hash";
 import {
@@ -21,10 +25,6 @@ import type {
   HarnessModelTurnRequest,
   HarnessModelTurnResult,
 } from "../src/model/client.ts";
-import type {
-  PatternIndexPattern,
-  PatternIndexSearchResponse,
-} from "../src/pattern-index/client.ts";
 import {
   createResearchRunner,
   HarnessResearchError,

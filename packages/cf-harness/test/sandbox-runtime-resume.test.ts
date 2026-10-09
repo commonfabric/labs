@@ -1,12 +1,13 @@
 /**
  * Checks that a run, and an interactive session, goes on only on the sandbox
- * runtime it started on. The two runtimes need not keep the CFC labels of a
- * run's files where the other reads them, and on macOS they do not, so what
- * one labelled the other can read as unlabelled. A run records its runtime
- * as its engine is built and a session as it starts; a record written before
- * either did is read by what it does hold, and bound from its next use. Each
- * case builds its runs over a process runner that runs nothing, and a case
- * that needs a native store makes one.
+ * runtime it started on. There is one, `runsc`; a record of a run or a
+ * session that started on the Docker driver, which this cf-harness no longer
+ * has, or on a runtime it does not know, is refused, since another runtime
+ * need not read the CFC labels of its files where that one kept them. A run
+ * records its runtime as its engine is built and a session as it starts; a
+ * record written before either did is read by what it does hold, and bound
+ * from its next use. Each case builds its runs over a process runner that
+ * runs nothing, and a case that needs a native store makes one.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -34,7 +35,6 @@ import type {
   SandboxPlatform,
   SandboxRuntime,
   SandboxRuntimeDescription,
-  SandboxRuntimeKind,
 } from "../src/sandbox/types.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
 
@@ -61,16 +61,16 @@ const unknownRuntime = (recorded: string): string =>
   "it cannot tell whether this resume is on the same one. Resume it with " +
   "the cf-harness that wrote the record.";
 
-/** What a resume says of a run started on `recorded` and resumed on `selected`. */
-const mismatch = (
-  recorded: SandboxRuntimeKind,
-  selected: string,
-  naming: string,
-): string =>
-  `resume sandbox runtime mismatch: the run started on \`${recorded}\`, and ` +
-  `this resume selects ${selected}. The two need not keep the CFC labels of ` +
-  "a run's files where the other reads them, and on macOS they do not, so a " +
-  `run resumes only on the runtime it started on: name it with ${naming}.`;
+/**
+ * What a resume says of a record of a run started on the Docker driver, which
+ * records it as `recorded`: by its name, or by the kind of its description.
+ */
+const removed = (recorded: "docker" | "docker-runsc-cfc"): string =>
+  "resume sandbox runtime removed: the run records that it started on the " +
+  `Docker driver (\`${recorded}\`), which this cf-harness no longer has. A ` +
+  "run resumes only on the runtime it started on, since another need not " +
+  "read the CFC labels of the run's files where that one kept them. Start a " +
+  "new run.";
 
 describe("sandbox-runtime-resume", () => {
   /**
@@ -111,54 +111,31 @@ describe("sandbox-runtime-resume", () => {
     await Deno.remove(root, { recursive: true });
   });
 
-  /** The engine options that put a run on `runtime`, built by the engine. */
-  const on = (runtime: SandboxRuntimeKind) => ({
+  /** The engine options that put a run on `runsc`, built by the engine. */
+  const onRunsc = () => ({
     model: "gpt-5.4",
     workspaceHostPath: workspace,
     cfcEnforcementMode: "observe" as const,
     processRunner: inertRunner,
-    ...(runtime === "runsc"
-      ? {
-        sandboxRuntimeKind: "runsc" as const,
-        sandboxRunscBinary: join(store, "bin", "runsc"),
-        sandboxRootfs: join(store, "images", "kitchensink"),
-      }
-      : {}),
+    sandboxRuntimeKind: "runsc" as const,
+    sandboxRunscBinary: join(store, "bin", "runsc"),
+    sandboxRootfs: join(store, "images", "kitchensink"),
   });
 
-  /**
-   * The state of a run that started on `runtime` and described it. The Docker
-   * one is handed its runtime: a real one needs a Docker to probe.
-   */
-  const startedOn = async (
-    runtime: SandboxRuntimeKind,
-  ): Promise<HarnessRunState> => {
-    const engine = new CfHarnessEngine({
-      ...on(runtime),
-      ...(runtime === "docker"
-        ? { sandboxRuntime: handedIn("docker-runsc-cfc") }
-        : {}),
-      runId: "run-born",
-    });
+  /** The state of a run that started on `runsc` and described it. */
+  const startedOn = async (): Promise<HarnessRunState> => {
+    const engine = new CfHarnessEngine({ ...onRunsc(), runId: "run-born" });
     const state = await engine.ensureDiagnosticsInitialized();
-    expect(state.capabilitySnapshot?.cfc.sandbox.kind).toBe(
-      runtime === "runsc" ? "runsc-cfc" : "docker-runsc-cfc",
-    );
+    expect(state.capabilitySnapshot?.cfc.sandbox.kind).toBe("runsc-cfc");
     return state;
   };
 
   /**
-   * The state of a run built on `runtime` that never described it, as one
-   * whose first probe of its sandbox failed is left.
+   * The state of a run built on `runsc` that never described it, as one whose
+   * first probe of its sandbox failed is left.
    */
-  const neverDescribed = (runtime: SandboxRuntimeKind): HarnessRunState =>
-    new CfHarnessEngine({
-      ...on(runtime),
-      ...(runtime === "docker"
-        ? { sandboxRuntime: handedIn("docker-runsc-cfc") }
-        : {}),
-      runId: "run-born",
-    }).getRunState();
+  const neverDescribed = (): HarnessRunState =>
+    new CfHarnessEngine({ ...onRunsc(), runId: "run-born" }).getRunState();
 
   /** `state` as a harness that did not yet record a run's runtime wrote it. */
   const beforeRecording = (
@@ -178,6 +155,32 @@ describe("sandbox-runtime-resume", () => {
     return await readHarnessRunState(path);
   };
 
+  /**
+   * `state` as a cf-harness with a Docker driver wrote it for a run that
+   * started there: naming `docker` where it names a runtime, and describing
+   * the Docker driver's kind where it describes one.
+   */
+  const onDocker = (state: HarnessRunState): Promise<HarnessRunState> =>
+    asWritten(state, {
+      ...(state.sandboxRuntime !== undefined
+        ? { sandboxRuntime: "docker" }
+        : {}),
+      ...(state.capabilitySnapshot !== undefined
+        ? {
+          capabilitySnapshot: {
+            ...state.capabilitySnapshot,
+            cfc: {
+              ...state.capabilitySnapshot.cfc,
+              sandbox: {
+                ...state.capabilitySnapshot.cfc.sandbox,
+                kind: "docker-runsc-cfc",
+              },
+            },
+          },
+        }
+        : {}),
+    });
+
   /** What building `build` throws, or `undefined` where it builds. */
   const refusalOf = (build: () => unknown): unknown => {
     try {
@@ -189,13 +192,12 @@ describe("sandbox-runtime-resume", () => {
   };
 
   describe("sandboxRuntimeNamed()", () => {
-    it("returns each runtime for its own name, and nothing for any other", () => {
+    it("returns `runsc` for its own name, and nothing for any other, `docker` among them", () => {
       expect(
-        ["docker", "runsc", "Docker", "RUNSC", " docker", "", "podman"].map(
+        ["runsc", "docker", "RUNSC", " runsc", "", "podman"].map(
           sandboxRuntimeNamed,
         ),
       ).toEqual([
-        "docker",
         "runsc",
         undefined,
         undefined,
@@ -207,9 +209,9 @@ describe("sandbox-runtime-resume", () => {
   });
 
   describe("sandboxRuntimeOfKind()", () => {
-    it("returns the runtime an entrypoint names for each kind a runtime describes itself as", () => {
-      expect(sandboxRuntimeOfKind("docker-runsc-cfc")).toBe("docker");
+    it("returns the runtime an entrypoint names for the kind it describes itself as, and nothing for the Docker driver's", () => {
       expect(sandboxRuntimeOfKind("runsc-cfc")).toBe("runsc");
+      expect(sandboxRuntimeOfKind("docker-runsc-cfc")).toBeUndefined();
     });
 
     it("returns nothing for a kind it does not know, the runtimes' own names among them", () => {
@@ -224,10 +226,12 @@ describe("sandbox-runtime-resume", () => {
       expect(recordedSandboxRuntime({ sandboxRuntime: "runsc" })).toBe("runsc");
       expect(
         recordedSandboxRuntime({
-          sandboxRuntime: "docker",
-          capabilitySnapshot: { cfc: { sandbox: { kind: "runsc-cfc" } } },
+          sandboxRuntime: "runsc",
+          capabilitySnapshot: {
+            cfc: { sandbox: { kind: "docker-runsc-cfc" } },
+          },
         }),
-      ).toBe("docker");
+      ).toBe("runsc");
     });
 
     it("returns the runtime of the kind a record describes, where it names none", () => {
@@ -236,13 +240,6 @@ describe("sandbox-runtime-resume", () => {
           capabilitySnapshot: { cfc: { sandbox: { kind: "runsc-cfc" } } },
         }),
       ).toBe("runsc");
-      expect(
-        recordedSandboxRuntime({
-          capabilitySnapshot: {
-            cfc: { sandbox: { kind: "docker-runsc-cfc" } },
-          },
-        }),
-      ).toBe("docker");
     });
 
     it("returns nothing for a record that neither names a runtime nor describes one", () => {
@@ -252,6 +249,39 @@ describe("sandbox-runtime-resume", () => {
       expect(recordedSandboxRuntime({ capabilitySnapshot: { cfc: {} } }))
         .toBeUndefined();
     });
+
+    for (
+      const [what, record, recorded] of [
+        ["names it", { sandboxRuntime: "docker" }, "docker"],
+        [
+          "names it, whatever it describes",
+          {
+            sandboxRuntime: "docker",
+            capabilitySnapshot: { cfc: { sandbox: { kind: "runsc-cfc" } } },
+          },
+          "docker",
+        ],
+        [
+          "describes its kind",
+          {
+            capabilitySnapshot: {
+              cfc: { sandbox: { kind: "docker-runsc-cfc" } },
+            },
+          },
+          "docker-runsc-cfc",
+        ],
+      ] as const
+    ) {
+      it(`throws a resume refusal for a record of a run on the Docker driver that ${what}`, () => {
+        const refusal = refusalOf(() => recordedSandboxRuntime(record));
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(refusal).toMatchObject({
+          code: "provider-mismatch",
+          message: removed(recorded),
+        });
+      });
+    }
 
     for (
       const [what, record, named] of [
@@ -285,53 +315,53 @@ describe("sandbox-runtime-resume", () => {
   });
 
   describe("sandboxRuntimeOfOptions()", () => {
-    it("returns the runtime handed in over the one named, and Docker where neither is", () => {
-      expect(sandboxRuntimeOfOptions({})).toBe("docker");
-      expect(sandboxRuntimeOfOptions({ sandboxRuntimeKind: "runsc" })).toBe(
-        "runsc",
-      );
-      expect(
-        sandboxRuntimeOfOptions({
-          sandboxRuntimeKind: "runsc",
-          sandboxRuntime: handedIn("docker-runsc-cfc"),
-        }),
-      ).toBe("docker");
+    it("returns `runsc`, for a runtime handed in and for the one an engine builds", () => {
+      expect(sandboxRuntimeOfOptions({})).toBe("runsc");
       expect(
         sandboxRuntimeOfOptions({ sandboxRuntime: handedIn("runsc-cfc") }),
       ).toBe("runsc");
     });
 
-    it("throws for a runtime handed in that describes itself as a kind it does not know", () => {
-      expect(() =>
-        sandboxRuntimeOfOptions({
-          sandboxRuntimeKind: "runsc",
-          sandboxRuntime: { describe: () => ({ kind: "podman-cfc" }) },
-        })
-      ).toThrow(
-        new Error(
-          "the sandbox runtime handed in describes itself as `podman-cfc`, " +
-            "which is no kind of runtime this cf-harness knows",
-        ),
-      );
-    });
+    for (const kind of ["docker-runsc-cfc", "podman-cfc"]) {
+      it(`throws for a runtime handed in that describes itself as \`${kind}\`, a kind it does not run`, () => {
+        expect(() =>
+          sandboxRuntimeOfOptions({
+            sandboxRuntime: { describe: () => ({ kind }) },
+          })
+        ).toThrow(
+          new Error(
+            `the sandbox runtime handed in describes itself as \`${kind}\`, ` +
+              "which is no kind of runtime this cf-harness runs",
+          ),
+        );
+      });
+    }
   });
 
   describe("an engine as it is built", () => {
     it("records the runtime it runs on in its run state, before it has probed anything", () => {
-      expect(
-        (["docker", "runsc"] as const).map((runtime) =>
-          new CfHarnessEngine(on(runtime)).getRunState().sandboxRuntime
-        ),
-      ).toEqual(["docker", "runsc"]);
+      expect(new CfHarnessEngine(onRunsc()).getRunState().sandboxRuntime)
+        .toBe("runsc");
     });
 
-    it("records the runtime it was handed, rather than the one its options name", () => {
+    it("records the runtime it was handed", () => {
+      const { sandboxRuntimeKind: _, ...unnamed } = onRunsc();
+
       expect(
         new CfHarnessEngine({
-          ...on("docker"),
+          ...unnamed,
           sandboxRuntime: handedIn("runsc-cfc"),
         }).getRunState().sandboxRuntime,
       ).toBe("runsc");
+    });
+
+    it("refuses to be built on a runtime handed in that describes itself as the Docker driver's", () => {
+      expect(() =>
+        new CfHarnessEngine({
+          ...onRunsc(),
+          sandboxRuntime: handedIn("docker-runsc-cfc"),
+        })
+      ).toThrow("describes itself as `docker-runsc-cfc`");
     });
 
     it("keeps the record through a first probe of the sandbox that fails", async () => {
@@ -341,7 +371,7 @@ describe("sandbox-runtime-resume", () => {
         runShell: () => Promise.reject(new Error("the sandbox did not start")),
       };
       const engine = new CfHarnessEngine({
-        ...on("docker"),
+        ...onRunsc(),
         sandboxRuntime: failing,
       });
 
@@ -364,7 +394,7 @@ describe("sandbox-runtime-resume", () => {
         nativeStore: store,
       } as const;
       const engine = new CfHarnessEngine({
-        ...on("runsc"),
+        ...onRunsc(),
         cfcEnforcementMode: "enforce-strict",
         artifactRoot: join(root, "artifacts"),
         runId: "run-refused",
@@ -390,12 +420,12 @@ describe("sandbox-runtime-resume", () => {
 
     it("keeps how the runtime was chosen when the run started, through a resume that chose it another way", () => {
       const started = new CfHarnessEngine({
-        ...on("runsc"),
+        ...onRunsc(),
         sandboxRuntimeChoice: { runtime: "runsc", source: "environment" },
       }).getRunState();
 
       const resumed = new CfHarnessEngine({
-        ...on("runsc"),
+        ...onRunsc(),
         runState: started,
         sandboxRuntimeChoice: { runtime: "runsc", source: "flag" },
       }).getRunState();
@@ -408,20 +438,20 @@ describe("sandbox-runtime-resume", () => {
 
     it("records how a resume chose its runtime in a record that holds none", () => {
       const { sandboxRuntimeChoice: _, ...older } = new CfHarnessEngine(
-        on("docker"),
+        onRunsc(),
       ).getRunState();
 
       expect(
         new CfHarnessEngine({
-          ...on("docker"),
+          ...onRunsc(),
           runState: older,
-          sandboxRuntimeChoice: { runtime: "docker", source: "flag" },
+          sandboxRuntimeChoice: { runtime: "runsc", source: "flag" },
         }).getRunState().sandboxRuntimeChoice,
-      ).toEqual({ runtime: "docker", source: "flag" });
+      ).toEqual({ runtime: "runsc", source: "flag" });
     });
 
     it("records no choice for an engine its caller built with none", () => {
-      expect(new CfHarnessEngine(on("docker")).getRunState()).not
+      expect(new CfHarnessEngine(onRunsc()).getRunState()).not
         .toHaveProperty(
           "sandboxRuntimeChoice",
         );
@@ -429,62 +459,48 @@ describe("sandbox-runtime-resume", () => {
   });
 
   describe("an engine built to resume a run", () => {
-    for (
-      const [born, resumed] of [
-        ["docker", "runsc"],
-        ["runsc", "docker"],
-      ] as const
-    ) {
-      it(`throws for a run started on \`${born}\` and resumed on \`${resumed}\`, naming \`${born}\` and its variable`, async () => {
-        const runState = await startedOn(born);
+    it("returns an engine for a run started and resumed on `runsc`", async () => {
+      const runState = await startedOn();
 
-        let refusal: unknown;
-        try {
-          new CfHarnessEngine({ ...on(resumed), runState });
-        } catch (error) {
-          refusal = error;
-        }
+      const engine = new CfHarnessEngine({ ...onRunsc(), runState });
 
-        expect(refusal).toBeInstanceOf(HarnessControlError);
-        expect(refusal).toMatchObject({
-          code: "provider-mismatch",
-          message: mismatch(
-            born,
-            `\`${resumed}\``,
-            `\`CF_HARNESS_SANDBOX_RUNTIME=${born}\``,
-          ),
-        });
+      expect(sandboxRuntimeOfKind(engine.sandbox.describe().kind)).toBe(
+        "runsc",
+      );
+    });
+
+    it("throws for a run started on the Docker driver, naming the driver it no longer has", async () => {
+      const runState = await onDocker(await startedOn());
+
+      const refusal = refusalOf(() =>
+        new CfHarnessEngine({ ...onRunsc(), runState })
+      );
+
+      expect(refusal).toBeInstanceOf(HarnessControlError);
+      expect(refusal).toMatchObject({
+        code: "provider-mismatch",
+        message: removed("docker"),
       });
+    });
 
-      it(`throws for a run started on \`${born}\` and resumed on a \`${resumed}\` runtime handed in`, async () => {
-        const runState = await startedOn(born);
-
-        expect(() =>
-          new CfHarnessEngine({
-            ...on(born),
-            runState,
-            sandboxRuntime: handedIn(
-              resumed === "runsc" ? "runsc-cfc" : "docker-runsc-cfc",
-            ),
-          })
-        ).toThrow(`the run started on \`${born}\``);
-      });
-
-      it(`returns an engine for a run started and resumed on \`${born}\``, async () => {
-        const runState = await startedOn(born);
-
-        const engine = new CfHarnessEngine({ ...on(born), runState });
-
-        expect(sandboxRuntimeOfKind(engine.sandbox.describe().kind)).toBe(born);
-      });
-    }
-
-    it("says how the resume selected its runtime, where the engine was told", async () => {
-      const runState = await startedOn("docker");
+    it("throws for a run started on the Docker driver and resumed on a `runsc` runtime handed in", async () => {
+      const runState = await onDocker(await startedOn());
 
       expect(() =>
         new CfHarnessEngine({
-          ...on("runsc"),
+          ...onRunsc(),
+          runState,
+          sandboxRuntime: handedIn("runsc-cfc"),
+        })
+      ).toThrow(removed("docker"));
+    });
+
+    it("throws for a run started on the Docker driver whatever the resume selected, saying nothing of how it was selected", async () => {
+      const runState = await onDocker(await startedOn());
+
+      expect(() =>
+        new CfHarnessEngine({
+          ...onRunsc(),
           runState,
           sandboxRuntimeChoice: {
             runtime: "runsc",
@@ -493,121 +509,80 @@ describe("sandbox-runtime-resume", () => {
             nativeStore: store,
           },
         })
-      ).toThrow(
-        mismatch(
-          "docker",
-          `\`runsc\` (default on macOS: the native store at ${store})`,
-          "`CF_HARNESS_SANDBOX_RUNTIME=docker`",
-        ),
-      );
+      ).toThrow(removed("docker"));
     });
 
-    for (
-      const [born, resumed] of [
-        ["docker", "runsc"],
-        ["runsc", "docker"],
-      ] as const
-    ) {
-      it(`throws for a run built on \`${born}\` that never described it, resumed on \`${resumed}\``, () => {
-        const runState = neverDescribed(born);
-        expect(runState.capabilitySnapshot).toBeUndefined();
+    it("throws for a run built on the Docker driver that never described it", async () => {
+      const runState = await onDocker(neverDescribed());
+      expect(runState.capabilitySnapshot).toBeUndefined();
 
-        const refusal = refusalOf(() =>
-          new CfHarnessEngine({ ...on(resumed), runState })
-        );
+      const refusal = refusalOf(() =>
+        new CfHarnessEngine({ ...onRunsc(), runState })
+      );
 
-        expect(refusal).toBeInstanceOf(HarnessControlError);
-        expect(refusal).toMatchObject({
-          code: "provider-mismatch",
-          message: mismatch(
-            born,
-            `\`${resumed}\``,
-            `\`CF_HARNESS_SANDBOX_RUNTIME=${born}\``,
-          ),
-        });
+      expect(refusal).toBeInstanceOf(HarnessControlError);
+      expect(refusal).toMatchObject({
+        code: "provider-mismatch",
+        message: removed("docker"),
+      });
+    });
+
+    it("returns an engine for a run built on `runsc` that never described it, resumed on `runsc`", () => {
+      const engine = new CfHarnessEngine({
+        ...onRunsc(),
+        runState: neverDescribed(),
       });
 
-      it(`returns an engine for a run built on \`${born}\` that never described it, resumed on \`${born}\``, () => {
-        const engine = new CfHarnessEngine({
-          ...on(born),
-          runState: neverDescribed(born),
-        });
+      expect(engine.getRunState().sandboxRuntime).toBe("runsc");
+    });
 
-        expect(engine.getRunState().sandboxRuntime).toBe(born);
+    it("throws for a record written before runs recorded their runtime, by the Docker driver's kind it describes", async () => {
+      const runState = await onDocker(beforeRecording(await startedOn()));
+
+      const refusal = refusalOf(() =>
+        new CfHarnessEngine({ ...onRunsc(), runState })
+      );
+
+      expect(refusal).toMatchObject({
+        code: "provider-mismatch",
+        message: removed("docker-runsc-cfc"),
       });
+    });
 
-      it(`throws for a record written before runs recorded their runtime, by the \`${born}\` it describes, resumed on \`${resumed}\``, async () => {
-        const runState = beforeRecording(await startedOn(born));
+    it("writes `runsc` into a record written before runs recorded their runtime, as it resumes it there", async () => {
+      const runState = beforeRecording(await startedOn());
 
-        const refusal = refusalOf(() =>
-          new CfHarnessEngine({ ...on(resumed), runState })
-        );
+      const engine = new CfHarnessEngine({ ...onRunsc(), runState });
 
-        expect(refusal).toMatchObject({
-          code: "provider-mismatch",
-          message: mismatch(
-            born,
-            `\`${resumed}\``,
-            `\`CF_HARNESS_SANDBOX_RUNTIME=${born}\``,
-          ),
-        });
-      });
-
-      it(`writes \`${born}\` into a record written before runs recorded their runtime, as it resumes it there`, async () => {
-        const runState = beforeRecording(await startedOn(born));
-
-        const engine = new CfHarnessEngine({ ...on(born), runState });
-
-        expect(engine.getRunState().sandboxRuntime).toBe(born);
-      });
-    }
+      expect(engine.getRunState().sandboxRuntime).toBe("runsc");
+    });
 
     it("holds a resume to the runtime a record names, over the kind in its description", async () => {
-      const runState = {
-        ...await startedOn("docker"),
-        sandboxRuntime: "runsc" as const,
-      };
+      const described = await onDocker(beforeRecording(await startedOn()));
 
       expect(
-        new CfHarnessEngine({ ...on("runsc"), runState }).getRunState()
-          .sandboxRuntime,
+        new CfHarnessEngine({
+          ...onRunsc(),
+          runState: { ...described, sandboxRuntime: "runsc" },
+        }).getRunState().sandboxRuntime,
       ).toBe("runsc");
+      const named = { ...await startedOn(), sandboxRuntime: "docker" as const };
       expect(
-        refusalOf(() => new CfHarnessEngine({ ...on("docker"), runState })),
-      ).toMatchObject({
-        message: mismatch(
-          "runsc",
-          "`docker`",
-          "`CF_HARNESS_SANDBOX_RUNTIME=runsc`",
-        ),
-      });
+        refusalOf(() => new CfHarnessEngine({ ...onRunsc(), runState: named })),
+      ).toMatchObject({ message: removed("docker") });
     });
 
-    it("returns an engine on either runtime for a record that neither names a runtime nor describes one, and binds it to that runtime", async () => {
+    it("returns an engine for a record that neither names a runtime nor describes one, and binds it to `runsc`", async () => {
       const { capabilitySnapshot: _, capabilitiesPath: __, ...described } =
-        await startedOn("docker");
+        await startedOn();
       const runState = beforeRecording(described);
 
-      for (
-        const [runtime, other] of [["docker", "runsc"], [
-          "runsc",
-          "docker",
-        ]] as const
-      ) {
-        const engine = new CfHarnessEngine({ ...on(runtime), runState });
+      const engine = new CfHarnessEngine({ ...onRunsc(), runState });
 
-        expect(sandboxRuntimeOfKind(engine.sandbox.describe().kind)).toBe(
-          runtime,
-        );
-        // From here on the record names the runtime, and holds a resume to it.
-        const bound = engine.getRunState();
-        expect(bound.sandboxRuntime).toBe(runtime);
-        expect(
-          refusalOf(() =>
-            new CfHarnessEngine({ ...on(other), runState: bound })
-          ),
-        ).toBeInstanceOf(HarnessControlError);
-      }
+      expect(sandboxRuntimeOfKind(engine.sandbox.describe().kind)).toBe(
+        "runsc",
+      );
+      expect(engine.getRunState().sandboxRuntime).toBe("runsc");
     });
 
     for (
@@ -625,31 +600,29 @@ describe("sandbox-runtime-resume", () => {
         ],
       ] as const
     ) {
-      it(`throws for a record that ${what} it does not know, on either runtime`, async () => {
-        const runState = await asWritten(await startedOn("docker"), changes);
+      it(`throws for a record that ${what} it does not know`, async () => {
+        const runState = await asWritten(await startedOn(), changes);
 
-        for (const runtime of ["docker", "runsc"] as const) {
-          const refusal = refusalOf(() =>
-            new CfHarnessEngine({ ...on(runtime), runState })
-          );
+        const refusal = refusalOf(() =>
+          new CfHarnessEngine({ ...onRunsc(), runState })
+        );
 
-          expect(refusal).toBeInstanceOf(HarnessControlError);
-          expect(refusal).toMatchObject({
-            code: "provider-mismatch",
-            message: unknownRuntime(named),
-          });
-        }
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(refusal).toMatchObject({
+          code: "provider-mismatch",
+          message: unknownRuntime(named),
+        });
       });
     }
   });
 
   describe("the batch CLI resuming a run", () => {
     /**
-     * Resumes a run through the CLI, as `platform`: one started on `born`
-     * that described its runtime, or the one whose state is given.
+     * Resumes a run through the CLI, as `platform`: one started on `runsc`
+     * that described it, or the one whose state is given.
      */
     const resume = async (
-      born: SandboxRuntimeKind | HarnessRunState,
+      born: "runsc" | HarnessRunState,
       platform: SandboxPlatform,
       extra: {
         args?: readonly string[];
@@ -657,7 +630,7 @@ describe("sandbox-runtime-resume", () => {
         sandboxSelectionFlags?: boolean;
       } = {},
     ) => {
-      const runState = typeof born === "string" ? await startedOn(born) : born;
+      const runState = born === "runsc" ? await startedOn() : born;
       const stdout: string[] = [];
       const stderr: string[] = [];
       const io: CfHarnessCliIO = {
@@ -718,115 +691,91 @@ describe("sandbox-runtime-resume", () => {
     };
 
     it("refuses a run started on Docker where macOS defaults the resume to the native runtime", async () => {
-      const { exitCode, resumed, stderr } = await resume("docker", "darwin");
+      const { exitCode, resumed, stderr } = await resume(
+        await onDocker(await startedOn()),
+        "darwin",
+      );
 
       expect([exitCode, resumed]).toEqual([1, false]);
-      expect(stderr).toEqual([
-        `${
-          mismatch(
-            "docker",
-            `\`runsc\` (default on macOS: the native store at ${store})`,
-            "`--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`",
-          )
-        }\n`,
-      ]);
+      expect(stderr).toEqual([`${removed("docker")}\n`]);
     });
 
-    it("refuses a run started on `runsc` where the resume names Docker, naming `runsc`", async () => {
+    it("refuses a resume that names Docker, as it refuses any run that names it", async () => {
       const { exitCode, resumed, stderr } = await resume("runsc", "darwin", {
         args: ["--sandbox-runtime", "docker"],
       });
 
       expect([exitCode, resumed]).toEqual([1, false]);
-      expect(stderr).toEqual([
-        `${
-          mismatch(
-            "runsc",
-            "`docker` (named by --sandbox-runtime)",
-            "`--sandbox-runtime runsc` or `CF_HARNESS_SANDBOX_RUNTIME=runsc`",
-          )
-        }\n`,
-      ]);
+      expect(stderr.join("")).toContain(
+        "`--sandbox-runtime docker` names the Docker driver, which this " +
+          "cf-harness no longer has",
+      );
     });
 
     it("refuses a run started on Docker where Linux defaults the resume to the native runtime", async () => {
-      const { exitCode, resumed, stderr } = await resume("docker", "linux");
+      const { exitCode, resumed, stderr } = await resume(
+        await onDocker(await startedOn()),
+        "linux",
+      );
 
       expect([exitCode, resumed]).toEqual([1, false]);
-      expect(stderr).toEqual([
-        `${
-          mismatch(
-            "docker",
-            `\`runsc\` (default on Linux: the native store at ${linuxStore})`,
-            "`--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`",
-          )
-        }\n`,
-      ]);
+      expect(stderr).toEqual([`${removed("docker")}\n`]);
     });
 
-    it("refuses a run started on `runsc` where FreeBSD defaults the resume to Docker", async () => {
+    it("refuses a resume of a run started on `runsc` where FreeBSD has no default", async () => {
       const { exitCode, resumed, stderr } = await resume("runsc", "freebsd");
 
       expect([exitCode, resumed]).toEqual([1, false]);
       expect(stderr.join("")).toContain(
-        "this resume selects `docker` (default on freebsd: the native " +
-          "runtime is macOS and Linux only)",
+        "No sandbox runtime is named, and `freebsd` has no default",
       );
     });
 
-    it("refuses naming the variable alone for an embedder whose operator can pass no flag", async () => {
-      const { stderr } = await resume("docker", "darwin", {
+    it("refuses `docker` in the environment, naming the variable alone, for an embedder whose operator can pass no flag", async () => {
+      const { exitCode, resumed, stderr } = await resume("runsc", "darwin", {
+        env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         sandboxSelectionFlags: false,
       });
 
+      expect([exitCode, resumed]).toEqual([1, false]);
       expect(stderr.join("")).toContain(
-        "name it with `CF_HARNESS_SANDBOX_RUNTIME=docker`.",
+        "`CF_HARNESS_SANDBOX_RUNTIME=docker` names the Docker driver",
+      );
+      expect(stderr.join("")).toContain(
+        "name `runsc` with `CF_HARNESS_SANDBOX_RUNTIME=runsc`.",
       );
       expect(stderr.join("")).not.toContain("--sandbox-runtime");
     });
 
     it("refuses a run built on Docker that never described it, where macOS defaults the resume to the native runtime", async () => {
       const { exitCode, resumed, stderr } = await resume(
-        neverDescribed("docker"),
+        await onDocker(neverDescribed()),
         "darwin",
       );
 
       expect([exitCode, resumed]).toEqual([1, false]);
-      expect(stderr).toEqual([
-        `${
-          mismatch(
-            "docker",
-            `\`runsc\` (default on macOS: the native store at ${store})`,
-            "`--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`",
-          )
-        }\n`,
-      ]);
+      expect(stderr).toEqual([`${removed("docker")}\n`]);
     });
 
     it("refuses a record written before runs recorded their runtime, by the runtime it describes", async () => {
       const { exitCode, resumed, stderr } = await resume(
-        beforeRecording(await startedOn("runsc")),
-        "freebsd",
+        await onDocker(beforeRecording(await startedOn())),
+        "darwin",
       );
 
       expect([exitCode, resumed]).toEqual([1, false]);
-      expect(stderr.join("")).toContain("the run started on `runsc`");
+      expect(stderr).toEqual([`${removed("docker-runsc-cfc")}\n`]);
     });
 
     it("refuses a record that names a runtime it does not know, whatever the resume selects", async () => {
-      const runState = await asWritten(await startedOn("docker"), {
+      const runState = await asWritten(await startedOn(), {
         sandboxRuntime: "podman",
       });
 
-      for (
-        const args of [[], ["--sandbox-runtime", "docker"], [
-          "--sandbox-runtime",
-          "runsc",
-        ]]
-      ) {
+      for (const args of [[], ["--sandbox-runtime", "runsc"]]) {
         const { exitCode, resumed, stderr } = await resume(
           runState,
-          "freebsd",
+          "darwin",
           { args },
         );
 
@@ -835,18 +784,9 @@ describe("sandbox-runtime-resume", () => {
       }
     });
 
-    for (
-      const [born, platform, args] of [
-        ["docker", "darwin", ["--sandbox-runtime", "docker"]],
-        ["docker", "freebsd", []],
-        ["runsc", "darwin", []],
-        ["runsc", "linux", []],
-      ] as const
-    ) {
-      it(`resumes a run started on \`${born}\` on ${platform} with ${args.length > 0 ? "the runtime named" : "no runtime named"}`, async () => {
-        const { exitCode, resumed, stderr } = await resume(born, platform, {
-          args,
-        });
+    for (const platform of ["darwin", "linux"] as const) {
+      it(`resumes a run started on \`runsc\` on ${platform} with no runtime named`, async () => {
+        const { exitCode, resumed, stderr } = await resume("runsc", platform);
 
         expect([exitCode, resumed, stderr]).toEqual([0, true, []]);
       });
@@ -882,13 +822,13 @@ describe("sandbox-runtime-resume", () => {
     /** A service over the store at `url`, whose turns run on `runtime`. */
     const serviceOn = async (
       url: URL,
-      runtime: SandboxRuntimeKind | SandboxRuntime,
+      runtime: "runsc" | SandboxRuntime,
     ) => {
       const sessionStore = await openSqliteHarnessChatSessionStore({ url });
       const service = new HarnessInteractiveChatService({
         sessionStore,
-        basePromptLoopOptions: typeof runtime === "string"
-          ? (runtime === "runsc" ? { sandboxRuntimeKind: "runsc" } : {})
+        basePromptLoopOptions: runtime === "runsc"
+          ? { sandboxRuntimeKind: "runsc" }
           : { sandboxRuntime: runtime },
         createPromptLoop: answering,
       });
@@ -922,63 +862,6 @@ describe("sandbox-runtime-resume", () => {
       url = toFileUrl(join(root, "chat.sqlite"));
     });
 
-    for (
-      const [born, restarted] of [
-        ["docker", "runsc"],
-        ["runsc", "docker"],
-      ] as const
-    ) {
-      it(`records \`${born}\` as the runtime it started on, and refuses a turn once its host restarts on \`${restarted}\``, async () => {
-        const first = await serviceOn(url, born);
-        expect((await startSession(first.service)).sandboxRuntime).toBe(born);
-        first.sessionStore.close();
-
-        const second = await serviceOn(url, restarted);
-        const response = await startTurn(second.service);
-        second.sessionStore.close();
-
-        expect(response).toMatchObject({
-          ok: false,
-          error: {
-            code: "provider-mismatch",
-            message: `chat session \`chat\` started on the \`${born}\` ` +
-              `sandbox runtime, and this host runs \`${restarted}\`. The ` +
-              "two need not keep the CFC labels of a session's files where " +
-              "the other reads them, and on macOS they do not, so a session " +
-              "goes on only on the runtime it started on: restart the host " +
-              "with " +
-              `\`CF_HARNESS_SANDBOX_RUNTIME=${born}\`, or start a new ` +
-              "session.",
-          },
-        });
-      });
-
-      it(`starts a turn of a session started on \`${born}\` once its host restarts on \`${born}\``, async () => {
-        const first = await serviceOn(url, born);
-        await startSession(first.service);
-        first.sessionStore.close();
-
-        const second = await serviceOn(url, born);
-        const response = await startTurn(second.service);
-        await second.service.waitForIdle();
-        second.sessionStore.close();
-
-        expect(response.ok).toBe(true);
-      });
-    }
-
-    it("records the runtime a host was handed, rather than the one its options name", async () => {
-      const { service, sessionStore } = await serviceOn(
-        url,
-        handedIn("runsc-cfc"),
-      );
-
-      const status = await startSession(service);
-      sessionStore.close();
-
-      expect(status.sandboxRuntime).toBe("runsc");
-    });
-
     /**
      * Stores the session `chat` as a host that did not yet record a
      * session's runtime left it, with `changes` in its status.
@@ -986,7 +869,7 @@ describe("sandbox-runtime-resume", () => {
     const storedBeforeRecording = async (
       changes: Record<string, unknown> = {},
     ): Promise<void> => {
-      const first = await serviceOn(url, "docker");
+      const first = await serviceOn(url, "runsc");
       const { sandboxRuntime: _, ...unrecorded } = await startSession(
         first.service,
       );
@@ -998,41 +881,74 @@ describe("sandbox-runtime-resume", () => {
       first.sessionStore.close();
     };
 
-    for (
-      const [first, other] of [
-        ["docker", "runsc"],
-        ["runsc", "docker"],
-      ] as const
-    ) {
-      it(`binds a session stored before sessions recorded a runtime to \`${first}\`, where its next turn runs`, async () => {
-        await storedBeforeRecording();
+    it("records `runsc` as the runtime it started on", async () => {
+      const { service, sessionStore } = await serviceOn(url, "runsc");
 
-        const next = await serviceOn(url, first);
-        const turn = await startTurn(next.service);
-        await next.service.waitForIdle();
-        const stored = await next.sessionStore.getSession("chat");
-        next.sessionStore.close();
-        const later = await serviceOn(url, other);
-        const refused = await later.service.startTurn("turn-2", {
-          sessionId: "chat",
-          input: { text: "Continue." },
-        });
-        later.sessionStore.close();
+      const status = await startSession(service);
+      sessionStore.close();
 
-        expect(turn.ok).toBe(true);
-        expect(stored?.session.sandboxRuntime).toBe(first);
-        expect(refused).toMatchObject({
-          ok: false,
-          error: {
-            code: "provider-mismatch",
-            message: expect.stringContaining(
-              `chat session \`chat\` started on the \`${first}\` sandbox ` +
-                `runtime, and this host runs \`${other}\`.`,
-            ),
-          },
-        });
+      expect(status.sandboxRuntime).toBe("runsc");
+    });
+
+    it("starts a turn of a session started on `runsc` once its host restarts on `runsc`", async () => {
+      const first = await serviceOn(url, "runsc");
+      await startSession(first.service);
+      first.sessionStore.close();
+
+      const second = await serviceOn(url, "runsc");
+      const response = await startTurn(second.service);
+      await second.service.waitForIdle();
+      second.sessionStore.close();
+
+      expect(response.ok).toBe(true);
+    });
+
+    it("refuses a turn of a session that records it started on the Docker driver, which it no longer has, and leaves the record as it is", async () => {
+      await storedBeforeRecording({ sandboxRuntime: "docker" });
+
+      const host = await serviceOn(url, "runsc");
+      const response = await startTurn(host.service);
+      const stored = await host.sessionStore.getSession("chat");
+      host.sessionStore.close();
+
+      expect(response).toMatchObject({
+        ok: false,
+        error: {
+          code: "provider-mismatch",
+          message: "chat session `chat` started on the Docker driver " +
+            "(`docker`), which this cf-harness no longer has, and a session " +
+            "goes on only on the runtime it started on, since another need " +
+            "not read the CFC labels of its files where that one kept them. " +
+            "Start a new session.",
+        },
       });
-    }
+      expect(stored?.session.sandboxRuntime).toBe("docker");
+    });
+
+    it("records the runtime a host was handed", async () => {
+      const { service, sessionStore } = await serviceOn(
+        url,
+        handedIn("runsc-cfc"),
+      );
+
+      const status = await startSession(service);
+      sessionStore.close();
+
+      expect(status.sandboxRuntime).toBe("runsc");
+    });
+
+    it("binds a session stored before sessions recorded a runtime to `runsc`, where its next turn runs", async () => {
+      await storedBeforeRecording();
+
+      const next = await serviceOn(url, "runsc");
+      const turn = await startTurn(next.service);
+      await next.service.waitForIdle();
+      const stored = await next.sessionStore.getSession("chat");
+      next.sessionStore.close();
+
+      expect(turn.ok).toBe(true);
+      expect(stored?.session.sandboxRuntime).toBe("runsc");
+    });
 
     it("leaves a session unbound whose turn it refuses", async () => {
       await storedBeforeRecording();
@@ -1053,27 +969,25 @@ describe("sandbox-runtime-resume", () => {
       ]);
     });
 
-    it("refuses a turn of a session that records a runtime it does not know, on either runtime", async () => {
+    it("refuses a turn of a session that records a runtime it does not know", async () => {
       await storedBeforeRecording({ sandboxRuntime: "podman" });
 
-      for (const runtime of ["docker", "runsc"] as const) {
-        const host = await serviceOn(url, runtime);
-        const response = await startTurn(host.service);
-        host.sessionStore.close();
+      const host = await serviceOn(url, "runsc");
+      const response = await startTurn(host.service);
+      host.sessionStore.close();
 
-        expect(response).toMatchObject({
-          ok: false,
-          error: {
-            code: "provider-mismatch",
-            message:
-              "chat session `chat` records that it started on the sandbox " +
-              "runtime `podman`, which this cf-harness does not know, so it " +
-              "cannot tell whether this host runs the same one. Start a new " +
-              "session, or go on with this one on the cf-harness that " +
-              "started it.",
-          },
-        });
-      }
+      expect(response).toMatchObject({
+        ok: false,
+        error: {
+          code: "provider-mismatch",
+          message:
+            "chat session `chat` records that it started on the sandbox " +
+            "runtime `podman`, which this cf-harness does not know, so it " +
+            "cannot tell whether this host runs the same one. Start a new " +
+            "session, or go on with this one on the cf-harness that " +
+            "started it.",
+        },
+      });
     });
   });
 });

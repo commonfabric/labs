@@ -485,6 +485,33 @@ export type ChatRequestOutcome =
  */
 export type ChatRefusalCode = "space-own-chat";
 
+/** The outcome of an add to a room's space, by its `requestId`. */
+export type AddMemberOutcome =
+  | {
+    /** The person was admitted, or held the access already. */
+    status: "done";
+  }
+  | {
+    /** The add was refused, and nothing was granted. */
+    status: "refused";
+
+    /** Why, for a person to read. */
+    reason: string;
+
+    /**
+     * Which refusal it is, for a client to act on, where a client has one to
+     * take; absent for the others.
+     */
+    code?: AddMemberRefusalCode;
+  };
+
+/**
+ * A refusal of an add a client can act on, which stays the same whatever its
+ * `reason` says. `direct-room`: the room is a direct room, whose space keeps
+ * its two members.
+ */
+export type AddMemberRefusalCode = "direct-room";
+
 /**
  * The `kind` of a room's own space, as the space declares it, and as an offer
  * of the room to a member's share inbox and a user's shared-space catalog name

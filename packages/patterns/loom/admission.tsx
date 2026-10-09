@@ -102,8 +102,8 @@ function isAdderDid(value: string): boolean {
   return value.length <= 195 && DID_SYNTAX.test(value);
 }
 
-/** Validate a panel before admitting its occurrence to the shared composition. */
-function validatePanel(panel: Panel): void {
+/** Validate a panel before admitting its occurrence to the Loom. */
+export function validatePanel(panel: Panel): void {
   if (panel.kind === "url" && externalUrl(panel.url) === undefined) {
     throw new Error("A URL panel requires an HTTP(S) URL without credentials");
   }
@@ -123,23 +123,6 @@ function containsPiece(
     const value = panel.get();
     return value.kind === "piece" && value.piece.equalLinks(piece);
   });
-}
-
-/** `list` with `panel` inserted at `index`. */
-function withInserted(
-  list: readonly Writable<Panel>[],
-  index: number,
-  panel: Writable<Panel>,
-): Writable<Panel>[] {
-  return [...list.slice(0, index), panel, ...list.slice(index)];
-}
-
-/** Whether `panel` is one of the occurrences in `list`. */
-function containsOccurrence(
-  list: readonly Writable<Panel>[],
-  panel: Writable<Panel>,
-): boolean {
-  return list.some((existing) => existing.equals(panel));
 }
 
 /**
@@ -250,7 +233,7 @@ function admitCopy(
   validatePanel(copy);
   const occurrence = new Writable<Panel>();
   occurrence.set(copy);
-  panels.set(withInserted(list, index, occurrence));
+  panels.set(list.toSpliced(index, 0, occurrence));
 }
 
 /**
@@ -264,11 +247,6 @@ function admitCopy(
  * acted. An occurrence this handler creates without `as` records that
  * principal in `addedBy` instead, attested the same way. Nothing in the event
  * names the adder.
- *
- * The body touches the occurrences in `panels` only through helpers. Its
- * state schema is inferred from the uses the body shows, and an occurrence
- * compared with `equals` or moved with `splice` there would be narrowed to a
- * cell whose value the piece registration can no longer read.
  */
 export const admitPanel = handler<
   PanelAdmission,
@@ -292,7 +270,7 @@ export const admitPanel = handler<
     const index = insertionIndex(list, event.before);
     // A panel already present is not admitted again, so there is nothing to
     // validate or record.
-    if (containsOccurrence(list, panel)) return;
+    if (list.some((existing) => existing.equals(panel))) return;
     const value = panel.get();
     validatePanel(value);
     if (event.as !== undefined) {
@@ -323,10 +301,10 @@ export const admitPanel = handler<
         "A panel another principal added, or whose adder its label contests, cannot be linked; add a copy of it with `as` instead",
       );
     }
-    panels.set(withInserted(list, index, panel));
+    panels.set(list.toSpliced(index, 0, panel));
     return;
   }
-  if (!containsOccurrence(list, panel)) {
+  if (!list.some((existing) => existing.equals(panel))) {
     throw new Error("The panel is no longer in this Loom");
   }
   const index = insertionIndex(list, event.before);

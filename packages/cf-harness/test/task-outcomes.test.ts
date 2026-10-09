@@ -29,7 +29,7 @@ const contextPromptSlotBinding = {
 /** A host-only task uses this sandbox solely for its capability inventory. */
 const sandbox: SandboxRuntime = {
   describe: () => ({
-    kind: "docker-runsc-cfc",
+    kind: "runsc-cfc",
     defaultWorkingDirectory: "/workspace",
     cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
   }),

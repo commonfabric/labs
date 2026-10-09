@@ -61,6 +61,10 @@ Before AST transforms, `transformCfDirective()`:
    guard below parse with the script kind the file name implies, so a `.ts`
    module's angle-bracket assertions do not read as JSX. Either trailer is
    two lines. §16.5 depends on that split: exactly one line is prepended.
+   So does diagnostic reporting: a stage reports a line of the prepended
+   source, and the runtime engine names the authored line when it formats the
+   diagnostic, TypeScript's own included (the `authoredSource` compiler
+   option, `packages/js-compiler/typescript/diagnostics/errors.ts`).
 3. Rejects sources that contain identifier `__cfHelpers` (or the reserved
    fallback shim name `__cfHelpersShim`) anywhere in the AST.
 
@@ -1850,6 +1854,34 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
   which can differ from the arguments of its underlying reference type.
+- a printed commonfabric type is qualified through `__cfHelpers` whatever the
+  printer calls its module. The printer writes `import("commonfabric").X` only
+  while the program declares `"commonfabric"` as an ambient module, as the
+  `commonfabric/schema` types do. The js-compiler loads the commonfabric
+  declarations as a root file under `noResolve`, so for a program that does
+  not import `commonfabric/schema` the printer names the module by a path
+  relative to the file it prints for (`import("../commonfabric").X`), a
+  spelling a module of the program's own can share. Such an import type is
+  qualified when the type it is paired with is the commonfabric export it names
+  (`qualifyCommonFabricTypeRefs()`, `src/ast/type-building.ts`). A member of a
+  union or intersection is paired with a constituent only when the member's
+  provenance names it, since a module of the program's own can export a type
+  under a commonfabric export's name, declared under it or re-exported as it:
+  an import-type member with a constituent of its name declared in the one
+  file, among the constituents', that its specifier names by a path relative to
+  the file the type was printed for, without an extension, so a specifier
+  naming two files (`/commonfabric.ts` beside `commonfabric.d.ts`) pairs with
+  neither; and a bare member with the constituent its name stands for in that
+  file, or, for a name not in scope there, with the constituent declared under
+  it. It is
+  paired with none when two constituents qualify, and a member of the
+  program's own type is left as printed rather than qualified as the
+  commonfabric type. A cell type
+  left unqualified is not recognized as a cell, and a lift's input then keeps
+  the whole captured cell rather than the paths its body reads. The fixture
+  harness compiles under the same `noResolve`, loading the `commonfabric/schema`
+  types only for a fixture that imports them (`test/utils.ts`), so a golden
+  shows what the js-compiler emits.
 
 ### 10.2 `pattern(...)`
 
@@ -2043,20 +2075,61 @@ adjustments:
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
   than a blanket root read) and suppresses the redundant blanket `.get()` read.
-  An element access contributes a path segment when its key is a literal, an
-  expression of a single literal type (`offers[KEY]` with `const KEY = "k"`
-  records `["offers", "k"]`, as `offers.k` does), or a Common Fabric key such
-  as `NAME`. The key's literal type is trusted as its run-time value, so a key
-  whose type is wrong about it — an `as` cast, or a flow narrowing gone stale
-  after a closure reassigned the variable — narrows the schema to the key the
-  type names rather than the one read. A key that can name any member
-  (`offers[key.get()]`, a `string`-typed variable or a widened `let`, a
-  callback parameter, a union of literal types) leaves the chain unresolved.
+  An element access contributes a path segment when its key is a literal, a
+  Common Fabric key such as `NAME`, or an expression whose declared type is a
+  single literal (`offers[KEY]` with `const KEY = "k"` records
+  `["offers", "k"]`, as `offers.k` does; so do an enum member and a parameter
+  typed `"k"`). A reference is judged by the type it is declared with, not the
+  type flow narrowing gives it at the use, since a narrowing can go stale when
+  a call between the test and the use assigns the variable again. A declared
+  type counts only when every step from the key to it is a declaration: a
+  reference whose declaration writes its type (a parameter, a property
+  signature, an annotated variable) or takes it from an initializer that
+  itself counts (a `const` copied from another, a property of an object
+  initialized `as const`, a class field, a shorthand property, a name
+  destructured from such a property), and a call whose signature writes its
+  return type. A type assertion anywhere on the way is not taken for the key's
+  value, whether at the key (`offers[key as "k"]`), in the initializer of the
+  variable the key names, or further back (`const key = asserted`, or
+  `holder.key` with `holder = { key: raw as "k" }`); `as const` is. A property counts
+  only when its receiver does, so a property of a value cast to a type that
+  declares it does not. It is the property the receiver's declared type has,
+  not the one a narrowing of the receiver picks, so a property of a union,
+  which holds every member's literal, does not fix the path. And it counts
+  only when it holds the literal its declaration writes, so a generic property
+  declared `T` that a cast instantiates does not.
+  A key reached through anything else, such as an element access, an
+  operator, a getter, a parameter typed by its context, a generic call or a
+  property no declaration writes, does not fix the path. The same rule decides a `.key()` argument and a computed
+  property name (`policy/capability-analysis.ts`, `getStaticPathKey()`;
+  `test/policy/capability-analysis-static-keys.test.ts`). A key that can name
+  any member (`offers[key.get()]`, a `string`-typed variable or a widened
+  `let`, a callback parameter, a union of literal types, a key the rule above
+  does not fix) makes the access a read of the whole static prefix above the
+  key, `["offers"]` for `x.get().offers[key].space`, the same however the
+  access is spelled: through the `.get()` chain, an alias of a member above the
+  key, `.key("offers").get()`, a fallback's operand, an identity call, or a
+  `for..of` (an alias of the whole `.get()` result, `const c = x.get()`, still
+  reads the whole value, as it does before a static key). The prefix is read
+  in full and recorded where a wildcard's prefix
+  is, so the identity markings under it are erased as a wildcard's are, but it
+  is not a wildcard: the rest of the root still shrinks, and the
+  scheduler-scope marker is kept. A key that reads a capture
+  (`items[selected.get()]`) is a read of its own wherever the access sits, and
+  where the analysis resolves a fallback's operand or a `for..of` iterable to
+  a ref in place of walking it, it still visits what that operand evaluates:
+each operand of a fallback, wherever on the member spine it sits, a call on
+  the spine with its arguments and callbacks, and the keys on the spine. A
+  write through such a key (`counts.key(i).set(v)`) stays a wildcard and is
+  also recorded as a write of the prefix, so the prefix's capability says it
+  is written. A `.key()` call with such a key, an argument passed to a callee
+  whose signature or summary gives it a capability, and a destructuring by a
+  computed key (`const { [key]: value } = x`) stay wildcards.
   The suppression applies only to the calls of a chain that resolves in full,
-  including a chain nested in a fallback that resolves by its other operand
-  (`a.get().p ?? x.get().offers[key].space`), so an unresolved chain keeps the
-  blanket read: its `.get()` receiver is read in full
-  (`policy/capability-analysis.ts`; fixtures
+  judged for each operand of a fallback on its own, so a chain that does not
+  resolve keeps the blanket read: its `.get()` receiver is read in full
+  (`policy/capability-analysis.ts`;
+  `test/policy/capability-analysis-dynamic-keys.test.ts`; fixtures
   `closures/computed-element-access-*`,
   `handler-schema/handler-element-access-dynamic-key`,
   `schema-injection/lift-element-access-dynamic-key`)
@@ -2248,7 +2321,9 @@ computation's input schema:
   use. Bare helpers are accepted only when symbol resolution proves Common
   Fabric provenance; receiver methods require a cell-like receiver when a
   checker is available (`policy/capability-analysis.ts`,
-  `isKnownIdentityArgumentCall`).
+  `isKnownIdentityArgumentCall`). An argument is an identity use whether it is
+  a binding or a member access (`equals(state.selected, x)`), and is not
+  charged a read (fixture `handler-schema/identity-member-argument`).
 - A whole-root identity use records path `[]` and passthrough. `identityOnly` is
   true only when that root identity path survives normalization and the root has
   no non-identity use, ordinary reads/writes, or wildcard. Nested uses populate
@@ -2266,12 +2341,37 @@ computation's input schema:
   synthetic root: blanket erasure degraded disjoint `equals()`-only captures
   into unsatisfiable full-value self-demands
   (`test/policy/capability-analysis.test.ts`).
+- A value whose whole leaves the function (returned to a caller, put in a
+  collection, or handed to a callee with no summary, directly or as the operand
+  of a `??`/`||` fallback; a known identity call only compares what it is
+  handed, so a value handed to one does not leave) records an escaped path, and normalization drops
+  every identity path at or below it, since whatever received the value may
+  read anything beneath. It is charged a full-shape read as well, except a root
+  a builder's callback passes through, which keeps its passthrough accounting. A
+  summary carries its escaped paths (`escapedPaths`), and a caller replays them
+  at the path it passed the value from. A `.get()` is not an escape: the body's
+  uses of what it returns are tracked where they occur, so elements a body only
+  compares after a `.get()` stay identity-only
+  (`test/policy/capability-analysis-interprocedural.test.ts`; fixture
+  `handler-schema/identity-element-escaped-to-helper`).
 - Shrinking retains identity paths without materializing their value shape. A
   whole unwrapped identity-only input becomes `unknown`; a wrapped one becomes
   `OpaqueCell<unknown>`, or `ComparableCell<unknown>` for comparable use.
   Identity-only cell leaves receive the same opaque/comparable wrappers, while
-  mixed summaries still retain and shrink their ordinary read/write paths
-  (`transformers/type-shrinking.ts`; `test/type-shrinking.test.ts`).
+  mixed summaries still retain and shrink their ordinary read/write paths.
+  Identity paths are retained like any other path, so a summary holding only
+  identity paths prunes the members none of them reaches
+  (`transformers/type-shrinking.ts`; `test/type-shrinking.test.ts`; fixture
+  `handler-schema/identity-member-argument`).
+- In a handler's state, an identity path that ends at an element of a top-level
+  array property (`[name, <index>]`) also records an `items: false` schema hint
+  on that property, so the element's schema is its identity wrapper and nothing
+  more. A path that reaches inside the element (`[name, <index>, field, …]`)
+  records none: the element keeps the shape shrinking gave it, with the compared
+  field as its comparable cell (`transformers/schema-injection.ts`,
+  `applyIdentityArrayItemSchemaHints`; fixtures
+  `handler-schema/identity-only-handler-payload` and
+  `handler-schema/identity-element-field-handler`).
 - Scheduler completeness is separate from path retention: identity-only roots
   are passthrough, and `hasCompleteSchedulerScopeSummary` rejects passthrough or
   wildcard summaries. Thus identity/comparable tracking can preserve a

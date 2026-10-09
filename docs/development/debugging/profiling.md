@@ -627,6 +627,28 @@ process:
   cap. A count is exact to the second a commit landed in.
   [Alerting on a write storm](#alerting-on-a-write-storm) says what to do
   with it.
+- `sessionReports` — the diagnostics clients reported about their own
+  sessions over the memory protocol's `session.report`
+  ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), best-effort
+  and only from clients whose server advertises `sessionReportV1`, kept by
+  `SessionReportLog` in `packages/memory/v2/session-reports.ts`. The one
+  reporter is the scheduler's remote-echo breaker
+  ([plan](../../plans/scheduler-remote-echo-breaker.md)): `echoBreaker.trips`
+  counts the times a client began deferring an action that kept rewriting a
+  document another writer kept rewriting back, and `echoBreaker.clears` counts
+  how tripped actions ended — `convergence` when the action wrote the
+  document without changing it, `quiet` when it saw no echo for the
+  breaker's quiet reset, `retired` when the action was unregistered, `evicted`
+  when the breaker's bounded table dropped the pair. Both are lifetime counts.
+  `recent` lists the newest 64 reports in full, oldest first, each with the
+  `space`, the reporting `session`, its `principal` where the server knows
+  one, the `document` (`id`, and `scopeKey`, the scope instance the action
+  wrote — on a serving runtime a demanding session's rather than the
+  reporter's own), the `action`'s scheduler id, and for a clear
+  its `reason`, its `renewals` — echoes after the trip, each renewing the
+  backoff — and `trippedMs`. A trip with many renewals and a long
+  `trippedMs` is a loop the breaker held; a clear by `convergence` after a
+  renewal or two is a disagreement that settled.
 - `servingLoop` — the serving loop's counters
   ([`serving-loop.md` §7](../../specs/server-side-execution/serving-loop.md)),
   present only when this process serves. `settle.series` is a ready-made
@@ -634,7 +656,8 @@ process:
   wave and cycle counts behind each entry.
 
 Everything here but `commitRates`, which is a window rather than a lifetime,
-accumulates for the process's whole life, across every space it has served, so
+and `sessionReports.recent`, which keeps only the newest reports, accumulates
+for the process's whole life, across every space it has served, so
 a phase is a difference between two captures rather than any single one — and
 **only `count` and `totalTime` subtract**. `min`, `max`, `p50`,
 `p95` and the CDF describe the whole lifetime; differencing them yields a number
@@ -694,6 +717,20 @@ count where the loop writes one document per commit. Reading it again after a
 deploy is what verifies the fix: the space's `minute` falls to its steady rate
 while `tenMinutes` still carries the storm, and ten minutes later both do.
 
+`sessionReports` says whether the clients' remote-echo breakers caught the
+loop. A breaker that tripped on a storming space reports it on its own
+session, so the same server lists a `trip` naming the session `commitRates`
+blames and the document it kept rewriting, and that session's `minute` falls
+to about one commit per backoff while the breaker holds it, where the tripped
+action is most of what that session writes; its other actions' commits still
+count. A storm with no trip from its writers is a loop the breaker does not
+see, such as a client on a build without it or a loop between two documents
+rather than one, or a report that did not arrive, since reporting is
+best-effort. The
+reports also leave the process as the `ct.memory.echo_breaker` counter on the
+same `memory-server` meter, with `space.did`, the `event` (`trip` or `clear`),
+and for a clear its `reason`.
+
 The server judges a storm itself, so an alert needs no window arithmetic of
 its own: a space whose commits in the last sixty seconds have stayed at or
 over `CF_COMMIT_STORM_PER_MINUTE` for `CF_COMMIT_STORM_SUSTAINED_SECONDS`
@@ -739,8 +776,9 @@ The defaults are held to the Topics space's own history by
 `packages/memory/test/commit-rates-traces.test.ts`, which replays ten-minute
 stretches of the space's 2026-08-18 export through the tracker. The densest
 stretches of the July 2026 storms ran at four to seven hundred commits a
-minute and are reported within the sustained window. The busiest stretches of
-the three quiet weeks after them are cold board loads, which put up to 346
+minute and are reported within the sustained window plus the first minute
+needed to reach the threshold. The busiest stretches of the three quiet weeks
+after them are cold board loads, which put up to 346
 commits into one minute and nothing into the next, and in those weeks the
 space never stayed over the threshold for a second minute. One stretch of the
 July 22 storm ran at about a hundred commits a minute, touching the threshold

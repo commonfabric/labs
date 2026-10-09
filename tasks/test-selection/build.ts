@@ -21,6 +21,7 @@ import {
 } from "@commonfabric/test-support/records";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
+  CATCH_RULE,
   costSeconds,
   type DaySamples,
   daysBetween,
@@ -81,6 +82,12 @@ export interface AggregateState {
 
   /** The day the counters were last aged to. */
   day: string;
+
+  /**
+   * The set of rules its catches were credited under (see `CATCH_RULE`),
+   * absent for an aggregate written before the stamps began.
+   */
+  catchRule?: number;
 
   /**
    * The reports already folded in, by object name. Object names carry the
@@ -146,12 +153,28 @@ export function emptyAggregate(day: string): AggregateState {
   return {
     schema: MANIFEST_SCHEMA_VERSION,
     day,
+    catchRule: CATCH_RULE,
     folded: [],
     context: serializeContext(emptyContext()),
     compacted: [],
     states: {},
     files: {},
   };
+}
+
+/**
+ * The first day an aggregate's history holds, as "yyyy-mm-dd": the
+ * earliest day it folded an object or a rollup from. Absent for an
+ * aggregate that has folded nothing.
+ */
+export function firstDay(aggregate: AggregateState): string | undefined {
+  let first: string | undefined;
+  const consider = (day: string) => {
+    if (day.length > 0 && (first === undefined || day < first)) first = day;
+  };
+  for (const name of aggregate.folded) consider(partitionOf(name));
+  for (const pair of aggregate.compacted) consider(pair.split("\t")[1] ?? "");
+  return first?.replaceAll("/", "-");
 }
 
 /** The submission area an object was written into. */
@@ -276,6 +299,9 @@ export function parseAggregate(value: unknown): AggregateState | undefined {
   return {
     schema: MANIFEST_SCHEMA_VERSION,
     day: state.day,
+    ...(typeof state.catchRule === "number"
+      ? { catchRule: state.catchRule }
+      : {}),
     folded: state.folded as string[],
     context: serializeContext(parseContext(state.context)),
     compacted,
@@ -856,6 +882,7 @@ export class Fold {
   readonly #context: FoldContext;
   readonly #held: Contributions;
   readonly #compacted: string[];
+  readonly #catchRule: number | undefined;
 
   /**
    * The source-and-date pairs `folded` holds raw objects from, which is
@@ -901,6 +928,7 @@ export class Fold {
     for (const lane of aggregate.lanes ?? []) this.#held.lanes.push(lane);
     for (const name of aggregate.folded) this.#held.objects.add(name);
     this.#compacted = [...aggregate.compacted];
+    this.#catchRule = aggregate.catchRule;
     this.#rawPairs = new Set(
       aggregate.folded.map((name) =>
         sourceDateKey(sourceOf(name), partitionOf(name))
@@ -1110,6 +1138,9 @@ export class Fold {
       aggregate: {
         schema: MANIFEST_SCHEMA_VERSION,
         day: this.#today,
+        ...(this.#catchRule === undefined
+          ? {}
+          : { catchRule: this.#catchRule }),
         folded: [...this.#held.objects],
         context: serializeContext(this.#context),
         compacted: this.#compacted,

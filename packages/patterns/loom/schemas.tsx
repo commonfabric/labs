@@ -4,6 +4,7 @@ import type {
   NAME,
   PerSession,
   PerSpace,
+  PerUser,
   Stream,
   UI,
   VNode,
@@ -129,6 +130,8 @@ export interface LoomInput {
   >;
   participants?: PerSpace<ParticipantRosterCell>;
   chatRoom?: PerSpace<ChatRoomCell>;
+  hiddenPanels?: PerUser<Writable<Writable<Panel>[] | Default<[]>>>;
+  privatePanels?: PerUser<Writable<PrivatePanel[] | Default<[]>>>;
 }
 
 /** The room `setChatRoom` names as the Loom's chat. Omission clears it. */
@@ -136,8 +139,36 @@ export interface ChatRoomChoice {
   room?: Writable<LinkedChatRoom>;
 }
 
+/** A panel and the title it shows in place of its target's; `""` clears it. */
+export interface PanelTitle {
+  panel: Writable<Panel>;
+  titleOverride: string;
+}
+
+/** Where a URL or piece panel points: a URL, or a piece by its complete link. */
+export type PanelTarget =
+  | { kind: "url"; url: string }
+  | { kind: "piece"; piece: Writable<unknown> };
+
+/** A URL or piece panel, and the target `retargetPanel` points it at. */
+export interface PanelRetarget {
+  panel: Writable<Panel>;
+  target: PanelTarget;
+}
+
 /** An occurrence and its optional insertion anchor. Omission appends. */
 export interface PanelPosition {
+  panel: Writable<Panel>;
+  before?: Writable<Panel>;
+}
+
+/**
+ * One of a viewer's private panels: an occurrence in a space other than the
+ * Loom's, and the shared occurrence it shows just ahead of. Without `before`,
+ * or while `before` is not shown to the viewer, it shows after every shared
+ * one.
+ */
+export interface PrivatePanel {
   panel: Writable<Panel>;
   before?: Writable<Panel>;
 }
@@ -193,4 +224,15 @@ export interface LoomOutput {
   addParticipant: Stream<{ profile: ParticipantProfile }>;
   chatRoom?: Writable<LinkedChatRoom>;
   setChatRoom: Stream<ChatRoomChoice>;
+  retitleLoom: Stream<{ title: string }>;
+  retitlePanel: Stream<PanelTitle>;
+  retargetPanel: Stream<PanelRetarget>;
+  hiddenPanels: PerUser<Writable<Writable<Panel>[]>>;
+  privatePanels: PerUser<Writable<PrivatePanel[]>>;
+  viewerPanels: Writable<Panel>[];
+  hidePanel: Stream<{ panel: Writable<Panel> }>;
+  unhidePanel: Stream<{ panel: Writable<Panel> }>;
+  addPrivatePanel: Stream<PanelPosition>;
+  removePrivatePanel: Stream<{ panel: Writable<Panel> }>;
+  movePrivatePanel: Stream<PanelPosition>;
 }

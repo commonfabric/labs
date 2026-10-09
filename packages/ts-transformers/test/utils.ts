@@ -319,12 +319,15 @@ export async function transformFiles(
     return files;
   }, {} as Record<string, string>);
 
-  // JSX emit and module kind mirror the js-compiler's getCompilerOptions()
-  // (packages/js-compiler/typescript/options.ts) so the factory bindings match
-  // production; the target and strictness flags below are the harness's own.
+  // JSX emit, module kind and `noResolve` mirror the js-compiler's
+  // getCompilerOptions() (packages/js-compiler/typescript/options.ts) so the
+  // factory bindings and the program's files match production; the target and
+  // strictness flags below are the harness's own. `rootTypeFiles()` says why
+  // the program's files matter to what the pipeline emits.
   const compilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
     module: ts.ModuleKind.CommonJS,
+    noResolve: true,
     jsx: ts.JsxEmit.React,
     jsxFactory: "__cfHelpers.h",
     jsxFragmentFactory: "__cfHelpers.h.fragment",
@@ -497,12 +500,7 @@ export async function transformFiles(
       }),
   };
 
-  // Include type definition files in the program so their global declarations are loaded
-  // This is critical for JSX.IntrinsicElements and other global type augmentations
-  const typeDefFiles = Object.keys(allTypes).filter((name) =>
-    name.endsWith(".d.ts")
-  );
-  const rootFiles = [...Object.keys(files), ...typeDefFiles];
+  const rootFiles = [...Object.keys(files), ...rootTypeFiles(allTypes, files)];
 
   const program = ts.createProgram(rootFiles, compilerOptions, host);
 
@@ -661,12 +659,15 @@ export async function validateFiles(
     return files;
   }, {} as Record<string, string>);
 
-  // JSX emit and module kind mirror the js-compiler's getCompilerOptions()
-  // (packages/js-compiler/typescript/options.ts) so the factory bindings match
-  // production; the target and strictness flags below are the harness's own.
+  // JSX emit, module kind and `noResolve` mirror the js-compiler's
+  // getCompilerOptions() (packages/js-compiler/typescript/options.ts) so the
+  // factory bindings and the program's files match production; the target and
+  // strictness flags below are the harness's own. `rootTypeFiles()` says why
+  // the program's files matter to what the pipeline emits.
   const compilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
     module: ts.ModuleKind.CommonJS,
+    noResolve: true,
     jsx: ts.JsxEmit.React,
     jsxFactory: "__cfHelpers.h",
     jsxFragmentFactory: "__cfHelpers.h.fragment",
@@ -825,10 +826,7 @@ export async function validateFiles(
       }),
   };
 
-  const typeDefFiles = Object.keys(allTypes).filter((name) =>
-    name.endsWith(".d.ts")
-  );
-  const rootFiles = [...Object.keys(files), ...typeDefFiles];
+  const rootFiles = [...Object.keys(files), ...rootTypeFiles(allTypes, files)];
 
   const program = ts.createProgram(rootFiles, compilerOptions, host);
   const pipeline = new CommonFabricTransformerPipeline({
@@ -910,6 +908,37 @@ async function loadEnvironmentTypes(): Promise<Record<EnvTypeKey, string>> {
     ),
   );
   return Object.fromEntries(entries) as Record<EnvTypeKey, string>;
+}
+
+/**
+ * The type files a program over `files` is rooted in, as the engine loads
+ * them: `commonfabric-schema.d.ts` only when a file imports
+ * `commonfabric/schema`, and every other type file always. Under `noResolve`
+ * an import loads nothing, so a type file an import names (`./cfc.ts` from
+ * `commonfabric.d.ts`) has to be a root too, and the global declarations
+ * (`JSX.IntrinsicElements` and the rest) load only from roots.
+ *
+ * Which files load changes what the pipeline emits. `commonfabric-schema.d.ts`
+ * augments `"commonfabric"` as an ambient module, and while it is loaded the
+ * printer names a commonfabric type it cannot reach in scope
+ * `import("commonfabric").X`; without it the printer names the module by a
+ * path relative to the file it prints for, `import("./commonfabric").X`, which
+ * is what a pattern that does not import `commonfabric/schema` compiles with.
+ */
+function rootTypeFiles(
+  allTypes: Record<string, string>,
+  files: Record<string, string>,
+): string[] {
+  const imported = new Set(
+    Object.values(files).flatMap((source) =>
+      ts.preProcessFile(source, true, true).importedFiles.map((file) =>
+        file.fileName
+      )
+    ),
+  );
+  return Object.keys(allTypes).filter((name) =>
+    name !== "commonfabric-schema.d.ts" || imported.has("commonfabric/schema")
+  );
 }
 
 function baseNameFromPath(path: string): string | undefined {

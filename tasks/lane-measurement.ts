@@ -143,6 +143,15 @@ export function laneMeasurementName(kind: LaneMeasurementKind): string {
   return LANE_MEASUREMENT_NAMES[kind];
 }
 
+/**
+ * What a lane of the full run's measurement of its reruns is called: the
+ * seconds it spent running again the units holding a test that failed
+ * every time its batch ran it. The packer charges nothing for reruns, so
+ * what the lane records as its work leaves them out, and this records
+ * them apart.
+ */
+export const RERUN_MEASUREMENT_NAME = `${LANE_MEASUREMENT_PREFIX}reruns`;
+
 /** Which of the three a lane measurement is, from its name. */
 export function laneMeasurement(name: string): LaneMeasurementKind | undefined {
   for (const kind of ["spent", "projected", "bound"] as const) {
