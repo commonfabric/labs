@@ -159,9 +159,10 @@ space.
   the order of `participants`. A profile that attests none is left out, and so
   is one whose label can't be read where the list is derived, as when the
   profile's space refuses the reader, so two readers can read different lists.
-  Like `participants`, it is a claim, not proof of access. A client uses it to
-  tell which people are already in the room, as when it leaves them out of its
-  own add control.
+  It holds only the principals whose profiles can be read for the reader, so it
+  is a best-effort list of who is already in the room, not an access list, and
+  like `participants` it is a claim, not proof of access. A client uses it to
+  leave the people already in the room out of its own add control.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, and `latest`, the newest messages of
   the main conversation, which every member can read, a READ member included. It
