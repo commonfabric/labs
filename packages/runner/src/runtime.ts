@@ -4791,13 +4791,18 @@ export class Runtime {
    * - A hint naming `apiUrl`'s origin, or the memory URL's, names this
    *   deployment, whose Memory is the memory URL: the default route. It is
    *   accepted without being recorded, so neither spelling can move a space
-   *   off the memory URL or on to the API host. So is a hint naming another
-   *   deployment whose memory host turns out to be this runtime's memory URL
-   *   (the two share a router): that too is the default route.
-   * - A hint naming another deployment's origin is registered once the
-   *   runtime knows where that deployment serves Memory
-   *   ({@link resolveSpaceHost}): storage is offered that memory host, and
-   *   when it accepts, the space's HTTP work is routed to the hinted origin.
+   *   off the memory URL or on to the API host, and it retires no route the
+   *   space already has.
+   * - A hint naming any other origin, a foreign origin, is decided once the
+   *   runtime knows where that origin serves Memory
+   *   ({@link resolveSpaceHost}). An origin that publishes this runtime's
+   *   memory URL is a sibling toolshed of this deployment behind the same
+   *   router: the space's Memory takes the default route, and the hinted
+   *   origin is recorded as the space's compute host ({@link hostForSpace}).
+   *   Any other memory host is another deployment's: storage is offered it,
+   *   and when storage accepts, the space's HTTP work is routed to the
+   *   hinted origin. A route recorded either way is fixed: a later hint
+   *   naming another foreign origin is refused as `known-different-host`.
    *   A hint whose origin has not been resolved is refused as
    *   `foreign-host-unresolved`, one whose memory host could not be learned
    *   as `foreign-host-unread`, and one past the origins the runtime keeps
@@ -4877,13 +4882,34 @@ export class Runtime {
         return { accepted: false, reason: "foreign-host-unresolved" };
       case "unread":
         return { accepted: false, reason: "foreign-host-unread" };
-      case "resolved":
-        // Two deployments sharing one router: the space's Memory is where
-        // this runtime already opens Memory, so the hint names the default
-        // route and is not recorded, as a hint naming this deployment is not.
-        return entry.memoryHost.origin === this.memoryUrl.origin
-          ? { accepted: true }
-          : this.#registerWithStorage(space, route, entry.memoryHost, form);
+      case "resolved": {
+        // A route the runtime already recorded for the space is fixed, as a
+        // route storage accepted is: a hint naming the same origin confirms
+        // it and one naming another is refused. Checked here because the
+        // sibling case below never reaches storage, whose own rule
+        // (`known-different-host`) would otherwise decide only the hints
+        // it was told about.
+        const existing = this.#dynamicHosts.get(space);
+        if (existing !== undefined && existing !== route.toString()) {
+          return {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: existing,
+          };
+        }
+        // An origin whose Memory is this runtime's memory URL is a sibling
+        // toolshed of this deployment behind the same router. The space's
+        // Memory is where this runtime already opens Memory, so storage is
+        // not told and the space takes the default route there; the hinted
+        // origin is recorded as the space's compute host, so its LLM, blob
+        // and fetch work goes to the toolshed that serves the space, and
+        // `healthCheck` probes it, as for any other accepted hint.
+        if (entry.memoryHost.origin === this.memoryUrl.origin) {
+          this.#dynamicHosts.set(space, route.toString());
+          return { accepted: true };
+        }
+        return this.#registerWithStorage(space, route, entry.memoryHost, form);
+      }
     }
   }
 

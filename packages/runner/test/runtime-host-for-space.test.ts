@@ -398,10 +398,11 @@ describe("Runtime.registerSpaceHost", () => {
         }
       });
 
-      it("treats a foreign origin whose memory host is this runtime's memory URL as the default route", async () => {
-        // Two deployments sharing one router: Memory is already where it
-        // would open, and the space's HTTP work is not routed to host-b.
-        const { fetch } = metaFetch({
+      it("routes a sibling toolshed's space to it for compute while its Memory takes the default route", async () => {
+        // host-b publishes this runtime's own memory URL: a sibling toolshed
+        // behind the same router. Memory is already where it would open, so
+        // storage is told nothing; the space's HTTP work goes to host-b.
+        const { fetch, requests } = metaFetch({
           [foreign]: { memoryUrl: "http://router.test" },
         });
         const { runtime, seen } = routedRuntime({
@@ -411,12 +412,58 @@ describe("Runtime.registerSpaceHost", () => {
         try {
           expect(await runtime.resolveSpaceHost(spaceB, foreign))
             .toEqual({ accepted: true });
-          expect(runtime.registerSpaceHostDetailed(spaceC, foreign))
+          expect(runtime.registerSpaceHostDetailed(spaceC, `${foreign}/`))
             .toEqual({ accepted: true });
           expect(seen).toEqual([]);
-          expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
-          expect(runtime.mappedHostFor(spaceC)).toBeUndefined();
-          expect(runtime.hostForSpace(spaceB).href).toBe("http://host-a.test/");
+          expect(runtime.mappedHostFor(spaceB)).toBe("http://host-b.test/");
+          expect(runtime.mappedHostFor(spaceC)).toBe("http://host-b.test/");
+          expect(runtime.hostForSpace(spaceB).href).toBe("http://host-b.test/");
+          expect(requests.get(foreign)).toBe(1);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the first route a space was given, whichever kind came first", async () => {
+        // A sibling toolshed's route is recorded by the runtime alone, and a
+        // foreign deployment's by storage; either fixes the space's route, so
+        // the other kind of hint for the same space is refused as a different
+        // host, as storage refuses one it was told about, and a repeated hint
+        // confirms it.
+        const sibling = "http://host-b.test";
+        const other = "http://host-c.test";
+        const { fetch } = metaFetch({
+          [sibling]: { memoryUrl: "http://router.test" },
+          [other]: { memoryUrl: "http://router-c.test" },
+        });
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+        });
+        try {
+          // Sibling first: storage is never offered the other deployment.
+          expect(await runtime.resolveSpaceHost(spaceB, sibling))
+            .toEqual({ accepted: true });
+          expect(await runtime.resolveSpaceHost(spaceB, other)).toEqual({
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://host-b.test/",
+          });
+          expect(await runtime.resolveSpaceHost(spaceB, `${sibling}/`))
+            .toEqual({ accepted: true });
+          expect(seen).toEqual([]);
+          expect(runtime.hostForSpace(spaceB).href).toBe("http://host-b.test/");
+          // Other deployment first: the sibling cannot take over compute.
+          expect(await runtime.resolveSpaceHost(spaceC, other))
+            .toEqual({ accepted: true });
+          expect(seen).toEqual(["http://router-c.test/"]);
+          expect(runtime.registerSpaceHostDetailed(spaceC, sibling)).toEqual({
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://host-c.test/",
+          });
+          expect(runtime.registerSpaceHost(spaceC, sibling)).toBe(false);
+          expect(runtime.hostForSpace(spaceC).href).toBe("http://host-c.test/");
         } finally {
           await runtime.dispose();
         }

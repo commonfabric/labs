@@ -57,16 +57,19 @@ or from its API URL's `/api/meta` when the page states none or came from
 another origin, such as a CDN copy; `cf`, FUSE mounts and the connector hosts
 from `/api/meta`. Only Memory moves; the HTTP APIs stay on the API host, and a
 host hint naming the deployment's own API host or router is the default route
-and cannot move a space's Memory off the router. A host hint naming another
-deployment's origin, such as a site-table row for a space hosted elsewhere,
-opens that space's Memory where that deployment serves it: the client reads
+and cannot move a space's Memory off the router. A host hint naming any other
+origin, such as a site-table row for a space hosted elsewhere, opens that
+space's Memory where that origin's deployment serves it: the client reads
 `/api/meta` on the hinted origin, once per origin for the runtime's lifetime
 and for at most 64 origins, and opens Memory on the `memoryUrl` it publishes,
 or on the origin itself when it publishes none, while the space's HTTP work
-goes to the hinted origin. A hinted origin whose memory host cannot be learned
-leaves its spaces on no route, warned about once: the client's own router is
-not where another deployment keeps its spaces, so it is never the fallback. A
-deployment rolls the router out in this order:
+goes to the hinted origin. An origin that publishes this client's own memory
+URL is a sibling toolshed of this deployment behind the same router: the
+space's HTTP work goes to it and its Memory takes the default route. The first
+route a space is given is fixed for the runtime's lifetime. A hinted origin
+whose memory host cannot be learned leaves its spaces on no route, warned about
+once: the client's own router is not where another deployment keeps its spaces,
+so it is never the fallback. A deployment rolls the router out in this order:
 
 1. Install routed-capable clients and toolsheds with sharing off.
 2. Give the router its own hostname, set it as every toolshed's
