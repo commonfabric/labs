@@ -91,7 +91,18 @@ export interface MintedChannel {
    * Absent for a `latest` channel, which no device POSTs to.
    */
   token?: string;
+
+  /** The mailbox the channel was bound to, when the mint carried a proof. */
+  emailAddress?: string;
 }
+
+/**
+ * Proof of a Gmail mailbox, carried on a mint to bind the channel to it: a
+ * Google access token that reads the mailbox, used by the server for one
+ * profile lookup and kept nowhere, or a Google ID token naming it, which
+ * grants nothing. One of the two.
+ */
+export type GmailProof = { accessToken: string } | { idToken: string };
 
 /**
  * Accept either a space DID or a space NAME, mirroring `cf acl`. A name is
@@ -162,6 +173,7 @@ export function mintChannel(
     name?: string;
     ttlDays?: number;
     sink?: IngestSink;
+    gmail?: GmailProof;
     requestId: string;
   },
 ): Promise<MintedChannel> {
@@ -211,43 +223,6 @@ export function revokeChannel(
   return call<{ id: string; revokedAt: string; revision: number }>(
     config,
     "revoke",
-    payload,
-    space,
-  );
-}
-
-/**
- * Binds channel `input.id`, which writes into `input.space`, to the Gmail
- * mailbox `input.accessToken` reads, so that each Gmail push notification for
- * the mailbox replaces the record in the channel's one cell. The channel has
- * to be a `latest` channel. The server uses the token for one profile lookup
- * and does not keep it.
- */
-export function bindGmail(
-  config: ChannelConfig,
-  input: { space: string; id: string; accessToken: string; requestId: string },
-): Promise<{ id: string; emailAddress: string }> {
-  const { space, ...payload } = input;
-  return call<{ id: string; emailAddress: string }>(
-    config,
-    "gmail-bind",
-    payload,
-    space,
-  );
-}
-
-/**
- * Unbinds channel `input.id`, which writes into `input.space`, from its Gmail
- * mailbox, if it is bound to one.
- */
-export function unbindGmail(
-  config: ChannelConfig,
-  input: { space: string; id: string; requestId: string },
-): Promise<{ id: string; unbound: boolean }> {
-  const { space, ...payload } = input;
-  return call<{ id: string; unbound: boolean }>(
-    config,
-    "gmail-unbind",
     payload,
     space,
   );

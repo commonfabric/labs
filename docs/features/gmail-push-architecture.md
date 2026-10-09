@@ -36,8 +36,8 @@ flowchart TB
         syncer["Syncer"]
     end
 
-    syncer -. "a: mint, gmail-bind" .-> control
-    control -. "b: profile lookup at bind" .-> gmail
+    syncer -. "a: mint, with a proof of the mailbox" .-> control
+    control -. "b: profile lookup, for an access token" .-> gmail
     control -. "writes binding" .-> service
     syncer -. "c: users.watch, renewed daily" .-> gmail
 
@@ -90,12 +90,10 @@ sequenceDiagram
     participant T as Toolshed
     participant G as Gmail API
 
-    S->>T: mint a latest channel (signed request)
-    T-->>S: channel id and cause prefix
-    S->>T: gmail-bind with a Google access token (signed request)
-    T->>G: users/me/profile with that token
+    S->>T: mint, with a Google access token or ID token (signed request)
+    T->>G: users/me/profile with an access token
     G-->>T: the mailbox's address
-    T-->>S: bound
+    T-->>S: channel id, cause prefix, and the bound address
     loop daily
         S->>G: users.watch, naming the Pub/Sub topic
     end
@@ -114,11 +112,11 @@ holding that space.
 
 | Request | The space in its path |
 | --- | --- |
-| Mint, `gmail-bind`, `gmail-unbind` | The user's space, which the channel writes into. |
+| Mint, carrying the mailbox proof | The user's space, which the channel writes into. |
 | The push from Pub/Sub | The service space, which holds the bindings. Pub/Sub knows a mailbox and no user's space. |
 
 The push is the one request that cannot name the user's space, and a binding
-is written wherever its `gmail-bind` was handled. So the push subscription's
+is written wherever its mint was handled. So the push subscription's
 endpoint names the service space of the deployment that holds the user's
 space, and one topic serving several deployments has one subscription for
 each.
@@ -184,13 +182,10 @@ sequenceDiagram
     B-->>L: access and refresh tokens
     L->>S: ensure space, grant WRITE to the toolshed's DID
     S->>T: create_space, acl set (signed as the user)
-    L->>S: mint
-    S->>T: POST /api/spaces/:space/ingest-channels/mint {sink: "latest"}
-    T-->>S: channel id, cause prefix (no device URL, no token)
-    L->>S: gmail-bind with the access token
-    S->>T: POST /api/spaces/:space/ingest-channels/gmail-bind
+    L->>S: mint, with the access token (or an ID token) as the mailbox proof
+    S->>T: POST /api/spaces/:space/ingest-channels/mint {gmail: {accessToken}}
     T->>G: GET users/me/profile (one lookup, token not kept)
-    T-->>S: bound address
+    T-->>S: channel id, cause prefix, bound address (no device URL, no token)
     S-->>T: subscribe to the channel's cell, named by its cause prefix (memory connection)
     L->>G: users.watch naming the topic, renewed daily
 
@@ -207,15 +202,12 @@ sequenceDiagram
 
 Three facts decide the shape.
 
-- **Who signs what.** Mint, bind, and the space calls are signed with the
-  user's own identity key, which the share sidecar is launched with, and the
-  toolshed authorizes each against an OWNER grant read from a space's access
-  list at the time of the call. Which space differs: mint checks the space
-  the caller names, while bind and unbind look the channel up by id and
-  check the space its stored registration writes into, never one the caller
-  names. So they are the user's calls, made from the user's machine, and
-  need only the reach that machine already has to its toolshed: a private
-  network is fine.
+- **Who signs what.** Mint and the space calls are signed with the user's
+  own identity key, which the share sidecar is launched with, and the
+  toolshed authorizes each against an OWNER grant read from the named
+  space's access list at the time of the call. So they are the user's
+  calls, made from the user's machine, and need only the reach that machine
+  already has to its toolshed: a private network is fine.
   The push is Google's call, signed by a service account the toolshed was
   configured to accept, so where a deployment faces the internet at all, the
   push route is the one path that needs to. A deployment on a private
@@ -271,6 +263,6 @@ Three facts decide the shape.
 - [`packages/toolshed/routes/ingest-push/`](../../packages/toolshed/routes/ingest-push/)
   holds the push endpoint, token verification, and the binding store.
 - [`packages/toolshed/routes/ingest-channels/`](../../packages/toolshed/routes/ingest-channels/)
-  holds the control plane, with the binding verbs in `gmail-binding.utils.ts`.
+  holds the control plane, whose mint takes the mailbox proof.
 - [`packages/toolshed/routes/ingest/`](../../packages/toolshed/routes/ingest/)
   holds the channel registry, and the vouched writes behind both sinks.

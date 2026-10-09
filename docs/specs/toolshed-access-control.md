@@ -22,7 +22,7 @@ These routes require a first-party HTTP request proof:
 - `POST /api/agent-tools/web-search`
 - `POST /api/agent-tools/web-read`
 - `POST /api/sandbox/exec`
-- `POST /api/spaces/:space/ingest-channels/{mint,list,rotate,revoke,gmail-bind,gmail-unbind}`
+- `POST /api/spaces/:space/ingest-channels/{mint,list,rotate,revoke}`
 - `POST /api/ingest-channels/list`
 
 The first three were selected because first-party code calls them through the

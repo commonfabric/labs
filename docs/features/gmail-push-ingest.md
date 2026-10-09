@@ -22,22 +22,22 @@ space is a signal that something changed, never mail.
 
 ## The flow
 
-1. The syncer mints an ingest channel with the `latest` sink into a space it
-   owns, as [self-serve-ingest-channels.md](self-serve-ingest-channels.md)
-   describes. A `latest` channel has one cell, which holds only the newest
-   notification; a mailbox needs no history of them, and a cell that never
-   grows is one the syncer can watch for as long as it runs.
-2. It binds the channel to its mailbox with `gmail-bind`, handing toolshed a
-   Google access token that reads the mailbox. Only a `latest` channel binds.
-3. It calls Gmail's `users.watch` with that user's token, naming the Pub/Sub
+1. The syncer mints an ingest channel into a space it owns, as
+   [self-serve-ingest-channels.md](self-serve-ingest-channels.md) describes,
+   carrying a proof of the mailbox: a Google access token that reads it, or
+   a Google ID token naming it. The mint binds the channel to that mailbox.
+   A channel so minted has the `latest` sink: one cell, which holds only the
+   newest notification; a mailbox needs no history of them, and a cell that
+   never grows is one the syncer can watch for as long as it runs.
+2. It calls Gmail's `users.watch` with that user's token, naming the Pub/Sub
    topic, and repeats the call before the watch expires.
-4. When the mailbox changes, Gmail publishes to the topic, and the push
+3. When the mailbox changes, Gmail publishes to the topic, and the push
    subscription POSTs the message to
    `/api/spaces/:space/ingest-push/gmail`.
-5. Toolshed checks the push token, looks the mailbox up, and writes the
+4. Toolshed checks the push token, looks the mailbox up, and writes the
    notification into each live bound channel's cell, unless the cell already
    holds a newer history id.
-6. The syncer sees the cell change and runs an incremental sync.
+5. The syncer sees the cell change and runs an incremental sync.
 
 ## Routes
 
@@ -88,71 +88,62 @@ harmless: a channel already written carries the notification's history id,
 so the redelivery leaves its cell unchanged and wakes nothing, and only the
 channels the first attempt did not reach are written.
 
-### `POST /api/spaces/:space/ingest-channels/gmail-bind` and `gmail-unbind`
+### Binding a mailbox, on mint
 
-Two verbs on the ingest-channel control plane. They share its first-party
-request proof, its 16 KB body limit, and its gate on
-`INGEST_SELF_SERVE_ENABLED`, and are gated a second time on Gmail push being
-configured. Like the other verbs that take a channel id, they are addressed
-to the space the channel writes into, and a channel addressed through any
-other space answers as one the caller does not own.
+A mailbox is bound by the mint verb of the
+[ingest-channel control plane](self-serve-ingest-channels.md), which gains an
+optional `gmail` field and nothing else. Mint keeps its first-party request
+proof, its ownership check, its 16 KB body limit, its rate-limit bucket, and
+its gate on `INGEST_SELF_SERVE_ENABLED`. A mint carrying the field answers
+400 where Gmail push is not configured.
 
-`gmail-bind` takes `{ id, accessToken, requestId }` and returns
-`{ id, emailAddress }`.
-It binds channel `id` to the mailbox `accessToken` reads, moving the channel
-off any mailbox it was bound to before. Two proofs stand behind a binding:
+```json
+{ "installId": "gmail-1", "gmail": { "accessToken": "ya29…" }, "requestId": "…" }
+```
 
-- **The caller owns the channel's space.** The check is the one rotate and
-  revoke make, against the space in the stored registration, never a space
-  the caller names.
-- **The caller holds a token Gmail accepts for the mailbox.** Toolshed asks
-  Gmail's `users/me/profile` which mailbox the token reads, and binds that
-  mailbox. The token is used for that one lookup and is never stored or
-  logged. Without this proof, anyone could bind someone else's address to a
-  channel of their own and learn when that person's mail arrives.
+`gmail` holds exactly one of two proofs that the caller holds the mailbox:
 
-Ownership is checked first, so a caller who does not own the channel never
-causes a request to Gmail.
+- **`accessToken`**, a Google access token that reads the mailbox. Toolshed
+  asks Gmail's `users/me/profile` which mailbox the token reads, binds that
+  mailbox, and keeps the token nowhere; it is used for that one lookup and
+  never stored or logged.
+- **`idToken`**, a Google ID token naming the mailbox, which a consent that
+  requested the `openid` scope returns beside the access token. Toolshed
+  verifies it against Google's published keys for one of the OAuth client
+  ids in `INGEST_GMAIL_OAUTH_CLIENT_IDS` and binds the verified address. An
+  ID token grants no access to anything, so it is the proof to prefer; with
+  no client ids configured, it is refused with a 400 that says to use an
+  access token.
 
-`requestId` is a random id the caller generates for each request, as on mint,
-rotate and revoke. The proof on a request stays valid for several minutes, so
-without it a late duplicate of an earlier bind would move the channel back to
-the mailbox that bind named, and a late duplicate of an unbind would clear a
-binding made since. The id is recorded in the transaction that writes the
-binding, so a second request carrying it answers 409 and changes nothing, and
-a request that failed leaves its id free to retry with.
+Without either proof, anyone could bind someone else's address to a channel
+of their own and learn when that person's mail arrives. Ownership of the
+space is checked first, so a caller who does not own it never causes a
+request to Google, and a replayed `requestId` is refused before the proof is
+checked, so a replay costs no request either.
+
+A proof makes the channel a `latest` channel: that is the sink when the mint
+names none, and a proof on a journal answers 400. The response gains
+`emailAddress`, the mailbox bound, and carries no device URL or token.
+
+The binding is written after the registration. Minting the same channel
+again with a proof for another mailbox moves it; minting it again with no
+proof leaves the binding as it is. A mint whose registration landed but
+whose binding did not, because the mailbox is at its channel limit or the
+binding changed concurrently, answers 409 naming the channel as minted but
+not bound, and minting again with the same install id and proof binds it.
+Delivery to a channel stops when it is revoked; there is no unbind.
 
 | Status | When |
 | --- | --- |
-| 200 | Bound |
-| 400 | Gmail did not accept the access token, or `requestId` is malformed |
-| 401 | Missing or invalid first-party request proof |
-| 403 | Not an owner of the channel's space, no such channel, or the channel does not write into `:space` |
-| 409 | `requestId` was already used, the channel is revoked or expired, the mailbox is at its limit, the binding changed concurrently, or this deployment cannot write to the space |
-| 413 | Body over 16 KB, checked before the proof |
-| 422 | Body failed schema validation, checked after the proof |
-| 429 | Rate limited, or the caller has too many recent request ids on record |
-| 502 | Storage failed, or the Gmail lookup failed |
+| 200 | Minted and bound |
+| 400 | Gmail push is not configured here, a proof on a journal, two proofs or none in the field, a proof Google did not accept, or an ID token where none is accepted |
+| 403 | Not an owner of the space |
+| 409 | Replayed `requestId`, the channel is another owner's or has another cause prefix or sink, this deployment cannot write to the space, or the channel was minted but the mailbox is at its limit |
+| 502 | Storage failed, or Google could not be reached |
 
-`gmail-unbind` takes `{ id, requestId }` and returns `{ id, unbound }`, where
-`unbound` says whether the channel was bound to anything. It needs only
-ownership, and works on a revoked channel, so a retired channel can still be
-cleared. It answers with the same statuses as `gmail-bind`, except that its
-400 is only for a malformed `requestId`. A caller answered 429 for too many
-recent request ids can still stop delivery at once by revoking the channel,
-since a revoked channel is skipped.
-
-From the command line, `cf ingest gmail-bind <id>` binds a channel, reading
-the access token from `--gmail-access-token` or, better for a credential, from
-the `CF_GMAIL_ACCESS_TOKEN` environment variable. `cf ingest gmail-unbind <id>`
-removes the binding. Each sends a fresh `requestId` for you, and addresses the
-channel's space, which it looks up among the channels you minted unless
-`--space` names it.
-
-`gmail-bind` shares the mint and rotate rate-limit bucket, because each call
-costs a request to Gmail. `gmail-unbind` has a bucket of its own, so that it
-stays available when binding is throttled and never spends the budget that
-revoke relies on.
+From the command line, `cf ingest mint` takes `--gmail-access-token` or
+`--gmail-id-token`, or, better for a credential, reads `CF_GMAIL_ACCESS_TOKEN`
+or `CF_GMAIL_ID_TOKEN` from the environment, and prints the mailbox it bound.
 
 ## The cell
 
@@ -190,7 +181,7 @@ deployment reads. It is the space `INGEST_SERVICE_SPACE` names, or with that
 unset, the space named by the deployment's own identity.
 
 A push is delivered against the bindings of the deployment that receives it,
-and a binding is written by the deployment that handled the `gmail-bind`. So
+and a binding is written by the deployment that handled the mint. So
 where a space decides which deployment a request reaches, three things have to
 land together: the user's space, the registration of the channel that writes
 into it, and the service space the push is addressed to. A deployment in that
@@ -205,11 +196,12 @@ a log line.
 
 - A mailbox binds to at most eight channels at once, so several installs of
   one syncer can each have their own. Binding past that answers 409.
-- A channel binds to at most one mailbox. Binding it again moves it.
-- Only a `latest` channel binds; binding a journal answers 409.
+- A channel binds to at most one mailbox. Minting it again with a proof for
+  another mailbox moves it.
+- A proof mints a `latest` channel; a proof on a journal answers 400.
 - A bound channel that is revoked, expired, or gone is skipped on delivery,
-  and gives up its place in the mailbox's list at the next bind to that
-  mailbox.
+  and gives up its place in the mailbox's list at the next mint that binds
+  that mailbox. Revoking is how delivery to a channel is stopped.
 
 ## Setting up the Google side
 

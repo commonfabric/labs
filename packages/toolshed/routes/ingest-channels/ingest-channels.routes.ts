@@ -133,7 +133,25 @@ const mintResult = z.object({
   token: z.string().optional().describe(
     "Shown once. Hand it to the device. Absent for a `latest` channel.",
   ),
+  emailAddress: z.string().optional().describe(
+    "The mailbox the channel is bound to, when the mint carried a proof.",
+  ),
 });
+
+const gmailProof = z.object({
+  accessToken: z.string().min(1).max(4096).optional().describe(
+    "A Google access token that reads the mailbox. Used for one profile " +
+      "lookup and not stored.",
+  ),
+  idToken: z.string().min(1).max(4096).optional().describe(
+    "A Google ID token naming the mailbox, for one of the OAuth client ids " +
+      "this deployment accepts. Grants nothing, and is the proof to prefer.",
+  ),
+}).describe(
+  "Binds the channel to the Gmail mailbox the proof is for, in this mint. " +
+    "Exactly one of the two tokens. Only a `latest` channel binds, which is " +
+    "the sink when none is named.",
+);
 
 export const mint = createRoute({
   path: `${SPACE_BASE}/mint`,
@@ -156,8 +174,9 @@ export const mint = createRoute({
               "What the channel's writes land in: a `journal` of records in " +
                 "per-day partition cells, which devices POST to, or one " +
                 "`latest` cell holding the newest Gmail push notification. " +
-                "A journal unless named.",
+                "A journal unless named, or `latest` with a `gmail` proof.",
             ),
+            gmail: gmailProof.optional(),
             requestId: requestIdField,
           }),
         },
@@ -167,9 +186,29 @@ export const mint = createRoute({
   responses: {
     [HttpStatusCodes.OK]: {
       content: { "application/json": { schema: mintResult } },
-      description: "Channel minted (or its token rotated in place)",
+      description:
+        "Channel minted (or its token rotated in place), and bound to the " +
+        "mailbox when a proof was given",
     },
     ...commonResponses,
+    [HttpStatusCodes.BAD_REQUEST]: {
+      ...jsonError,
+      description:
+        "Invalid input, a mailbox proof on a journal, a proof Google did " +
+        "not accept, or one this deployment does not accept",
+    },
+    [HttpStatusCodes.CONFLICT]: {
+      ...jsonError,
+      description:
+        "Replayed requestId, a channel registered to another owner or " +
+        "with another cause prefix or sink, this deployment cannot write " +
+        "to the space, or the channel was minted but the mailbox is at " +
+        "its channel limit",
+    },
+    [HttpStatusCodes.BAD_GATEWAY]: {
+      ...jsonError,
+      description: "Storage failure, or Google could not be reached",
+    },
   },
 });
 
@@ -304,94 +343,8 @@ export const revoke = createRoute({
   },
 });
 
-export const gmailBind = createRoute({
-  path: `${SPACE_BASE}/gmail-bind`,
-  method: "post",
-  tags,
-  request: {
-    params: spaceParams,
-    body: {
-      content: {
-        "application/json": {
-          schema: z.object({
-            id: z.string(),
-            accessToken: z.string().min(1).max(4096).describe(
-              "A Google access token that can read the mailbox's Gmail " +
-                "profile. Used for one lookup and not stored.",
-            ),
-            requestId: requestIdField,
-          }),
-        },
-      },
-    },
-  },
-  responses: {
-    [HttpStatusCodes.OK]: {
-      content: {
-        "application/json": {
-          schema: z.object({ id: z.string(), emailAddress: z.string() }),
-        },
-      },
-      description:
-        "Gmail push notifications for this mailbox now reach the channel",
-    },
-    ...commonResponses,
-    [HttpStatusCodes.BAD_REQUEST]: {
-      ...jsonError,
-      description: "Invalid input, or Gmail did not accept the access token",
-    },
-    [HttpStatusCodes.CONFLICT]: {
-      ...jsonError,
-      description:
-        "Replayed requestId, the channel is revoked or expired, the mailbox " +
-        "is at its channel limit, the binding changed concurrently, or this " +
-        "deployment cannot write to the space",
-    },
-    [HttpStatusCodes.BAD_GATEWAY]: {
-      ...jsonError,
-      description: "Storage failure, or the Gmail profile lookup failed",
-    },
-  },
-});
-
-export const gmailUnbind = createRoute({
-  path: `${SPACE_BASE}/gmail-unbind`,
-  method: "post",
-  tags,
-  request: {
-    params: spaceParams,
-    body: {
-      content: {
-        "application/json": {
-          schema: z.object({ id: z.string(), requestId: requestIdField }),
-        },
-      },
-    },
-  },
-  responses: {
-    [HttpStatusCodes.OK]: {
-      content: {
-        "application/json": {
-          schema: z.object({ id: z.string(), unbound: z.boolean() }),
-        },
-      },
-      description:
-        "The channel is bound to no mailbox; `unbound` says whether it was",
-    },
-    ...commonResponses,
-    [HttpStatusCodes.CONFLICT]: {
-      ...jsonError,
-      description:
-        "Replayed requestId, the binding changed concurrently, or this " +
-        "deployment cannot write to the space",
-    },
-  },
-});
-
 export type MintRoute = typeof mint;
 export type ListRoute = typeof list;
 export type ListOwnRoute = typeof listOwn;
 export type RotateRoute = typeof rotate;
 export type RevokeRoute = typeof revoke;
-export type GmailBindRoute = typeof gmailBind;
-export type GmailUnbindRoute = typeof gmailUnbind;

@@ -168,8 +168,7 @@ Four forks were resolved explicitly rather than by default:
    routine, and a beacon offline across one otherwise cannot tell "re-pair me"
    from "the server is broken" — it drops its buffer or retries forever.
 2. **The deployment precondition below is documented, not enforced by a flag.**
-3. **`requestId` is required** on mint, rotate, AND revoke (see Hardening §1),
-   and on `gmail-bind` and `gmail-unbind`.
+3. **`requestId` is required** on mint, rotate, AND revoke (see Hardening §1).
 4. **The control plane's paths are NOT added to
    `PROTECTED_TOOLSHED_FIRST_PARTY_ROUTES`.** That list is the in-runtime
    signer's allowlist; adding these would let any pattern mint a channel with
@@ -257,8 +256,6 @@ caller, ever. POST-only keeps the door open for a shell/pattern client later.
 | `POST /api/ingest-channels/list` | the caller's own live channels, in whichever spaces; never returns `secretHash` |
 | `POST /api/spaces/:space/ingest-channels/rotate` | new token, same id and target |
 | `POST /api/spaces/:space/ingest-channels/revoke` | flips `enabled: false` |
-| `POST /api/spaces/:space/ingest-channels/gmail-bind` | binds a channel to a Gmail mailbox; see [gmail-push-ingest.md](gmail-push-ingest.md) |
-| `POST /api/spaces/:space/ingest-channels/gmail-unbind` | removes that binding |
 
 The caller's own list takes an empty body and refuses any other, so a request
 that names a space there, where it would be dropped, is told so with a 422
@@ -290,12 +287,13 @@ otherwise force arbitrary allocation with a garbage signature.
 
 ### Client
 
-`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`, and `cf ingest gmail-bind`
-and `cf ingest gmail-unbind` for [Gmail push](gmail-push-ingest.md). A channel
-is minted with a sink, which decides what its writes land in and cannot change
+`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. A channel is minted
+with a sink, which decides what its writes land in and cannot change
 afterwards: the default `journal`, records in per-day partition cells that a
 device POSTs to, or `latest`, one cell holding the newest record written to
-it. `gmail-bind` accepts only a `latest` channel. `cf ingest rotate <id>`
+it. A mint carrying a proof of a Gmail mailbox binds the channel to that
+mailbox and makes it `latest`, as [Gmail push](gmail-push-ingest.md)
+describes. `cf ingest rotate <id>`
 mints a new token for a channel the caller owns, leaving the channel and its
 grants in place — the spelling for a token that leaked or aged, where revoking
 would take the channel down with it. Rotate and revoke are addressed to the

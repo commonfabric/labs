@@ -7,7 +7,6 @@ import env from "@/env.ts";
 import { createRouter } from "@/lib/create-app.ts";
 import { requireFirstPartyHttpAuth } from "@/middlewares/first-party-http-auth.ts";
 import { createRateLimiter, rateLimit } from "@/middlewares/rate-limit.ts";
-import { gmailPushEnabled } from "@/routes/ingest-push/gmail-push.config.ts";
 
 const router = createRouter();
 
@@ -22,11 +21,6 @@ const everyVerb = [`${routes.SPACE_BASE}/*`, `${routes.CALLER_BASE}/list`];
 // authorized it.
 for (const path of everyVerb) {
   router.use(path, ingestGate(env.INGEST_SELF_SERVE_ENABLED));
-}
-// The Gmail binding verbs are gated a second time, on Gmail push being
-// configured: a binding nothing will ever deliver to is not worth making.
-for (const verb of ["gmail-bind", "gmail-unbind"]) {
-  router.use(`${routes.SPACE_BASE}/${verb}`, ingestGate(gmailPushEnabled));
 }
 
 // ORDER MATTERS: the body limit must run BEFORE the auth middleware.
@@ -62,16 +56,10 @@ const readLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 1 });
 // and rotating are safe to refuse, because nothing bad happens when they do not
 // run. Revoke is the verb where refusing IS the bad outcome.
 const revokeLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 0.5 });
-// Binding shares the mint bucket, because each bind costs an outbound call to
-// Gmail. Unbinding, like revoking, is the verb that must stay available, so it
-// stays out of that bucket; and it has one of its own rather than revoke's, so
-// that unbind traffic can never refuse a revoke.
-const unbindLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 0.5 });
-for (const verb of ["mint", "rotate", "gmail-bind"]) {
+for (const verb of ["mint", "rotate"]) {
   router.use(`${routes.SPACE_BASE}/${verb}`, rateLimit(mintLimiter));
 }
 router.use(`${routes.SPACE_BASE}/revoke`, rateLimit(revokeLimiter));
-router.use(`${routes.SPACE_BASE}/gmail-unbind`, rateLimit(unbindLimiter));
 for (const base of [routes.SPACE_BASE, routes.CALLER_BASE]) {
   router.use(`${base}/list`, rateLimit(readLimiter));
 }
@@ -92,6 +80,4 @@ export default router
   .openapi(routes.list, handlers.list)
   .openapi(routes.listOwn, handlers.listOwn)
   .openapi(routes.rotate, handlers.rotate)
-  .openapi(routes.revoke, handlers.revoke)
-  .openapi(routes.gmailBind, handlers.gmailBind)
-  .openapi(routes.gmailUnbind, handlers.gmailUnbind);
+  .openapi(routes.revoke, handlers.revoke);

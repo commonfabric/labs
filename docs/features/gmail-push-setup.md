@@ -223,11 +223,11 @@ deployment refuses it. A deployment Google cannot reach takes the pull
 variant above instead, with a relay of its own.
 
 Bindings do not cross deployments either. A binding lives in the registry of
-the deployment that handled the `gmail-bind`, and a push is delivered against
-the bindings of the deployment that received it. So the steps under
+the deployment that handled the mint, and a push is delivered against the
+bindings of the deployment that received it. So the steps under
 [Binding a mailbox](#binding-a-mailbox) run once per deployment, each against
 that deployment: a space the user owns there, the WRITE grant for that
-deployment's identity, a `latest` channel, and a bind. A syncer bound to one
+deployment's identity, and a mint carrying the mailbox proof. A syncer bound to one
 toolshed does only its own; two syncers on one machine, each pointed at a
 different toolshed, each bind the same mailbox on their own. A deployment
 holding no binding for a mailbox acknowledges its notifications with
@@ -348,17 +348,18 @@ is refused, with an error that names the same DID and says to grant it WRITE:
 cf acl set <deployment did> WRITE --space <space>
 ```
 
-Mint a channel with the `latest` sink into the space, then bind it to the
-mailbox. The bind command reads the Gmail access token from
-`CF_GMAIL_ACCESS_TOKEN`:
+Mint a channel into the space, carrying the Gmail access token as proof of
+the mailbox; the mint binds the channel to it and gives it the `latest` sink.
+The command reads the token from `CF_GMAIL_ACCESS_TOKEN`:
 
 ```bash
-cf ingest mint --space <space> --install-id <install id> --cause-prefix gmail-push --sink latest
-CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest gmail-bind <channel>
+CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest mint --space <space> --install-id <install id> --cause-prefix gmail-push
 ```
 
-`gmail-bind` prints the address it bound, which is the one Gmail reports for
-the token.
+It prints the mailbox it bound, which is the one Gmail reports for the
+token. A consent that returned a Google ID token can pass that instead, as
+`CF_GMAIL_ID_TOKEN`, on a deployment whose `INGEST_GMAIL_OAUTH_CLIENT_IDS`
+names the consent's client.
 
 ## Setting the watch
 

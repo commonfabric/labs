@@ -8,10 +8,10 @@
  * its latest history id and nothing more, so what reaches the user's space is
  * a wake-up signal: the reader resyncs the mailbox from its own cursor. A
  * mailbox reaches a space through a binding from its address to an ingest
- * channel, which the channel's owner makes on the control plane
- * (`routes/ingest-channels`), and each notification replaces the record in
- * the one cell of every live `latest` channel bound to its mailbox, unless
- * the cell already holds a newer history id. See
+ * channel, which the channel's owner makes by minting the channel with a
+ * proof of the mailbox (`routes/ingest-channels`), and each notification
+ * replaces the record in the one cell of every live `latest` channel bound
+ * to its mailbox, unless the cell already holds a newer history id. See
  * `docs/features/gmail-push-ingest.md`.
  */
 
@@ -23,14 +23,9 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
   channelRefusal,
-  type ClaimCheck,
-  type ClaimRequest,
-  ClaimStoreFullError,
   getRegistration,
   type IngestLogger,
   recordLastSeen,
-  RequestAlreadyClaimedError,
-  requestClaim,
   writeLatest,
 } from "@/routes/ingest/ingest.utils.ts";
 
@@ -81,7 +76,7 @@ export class MailboxBindingFullError extends Error {
   }
 }
 
-/** Thrown when a channel's binding moved while a bind or unbind was running. */
+/** Thrown when a channel's binding moved while a bind was running. */
 export class BindingConflictError extends Error {
   constructor() {
     super("channel binding changed concurrently");
@@ -89,12 +84,16 @@ export class BindingConflictError extends Error {
   }
 }
 
-/** The outcome of asking Gmail which mailbox an access token reads. */
+/** The outcome of proving which mailbox a Google token is for. */
 export type MailboxLookup =
-  /** The token reads this mailbox. */
+  /** The token is for this mailbox. */
   | { ok: true; emailAddress: string }
-  /** Gmail refused the token, or answered with something unusable. */
-  | { ok: false; reason: "rejected" | "unavailable" };
+  /**
+   * Google refused the token or answered with something unusable
+   * (`rejected`), could not be reached (`unavailable`), or the proof is of a
+   * kind this deployment does not accept (`unsupported`).
+   */
+  | { ok: false; reason: "rejected" | "unavailable" | "unsupported" };
 
 /** Everything the push handler needs besides the request itself. */
 export interface GmailPushDeps {
@@ -217,34 +216,22 @@ export async function getMailboxChannels(
  * gives up its place in the mailbox's list here, so that dead channels do not
  * hold the mailbox at its cap.
  *
- * With `claim`, the request id is recorded in the transaction that writes the
- * binding, so a second request carrying the same id binds nothing.
- *
  * @throws MailboxBindingFullError when the mailbox is already at
  *   `MAX_CHANNELS_PER_MAILBOX` live channels.
  * @throws BindingConflictError when the channel's binding changed while this
  *   ran; the caller may try again.
- * @throws RequestAlreadyClaimedError when `claim` names a request id already
- *   used.
- * @throws ClaimStoreFullError when the caller has too many recent claims for
- *   another to be recorded.
  */
 export async function bindMailbox(
   runtime: Runtime,
   serviceSpace: string,
   id: string,
   address: string,
-  claim?: ClaimRequest,
 ): Promise<void> {
   const key = mailboxKey(address);
   const target = mailboxChannelsCell(runtime, serviceSpace, key);
   const binding = channelBindingCell(runtime, serviceSpace, id);
-  const pendingClaim = claim === undefined
-    ? undefined
-    : requestClaim(runtime, serviceSpace, claim);
   await target.sync();
   await binding.sync();
-  await pendingClaim?.cell.sync();
   await runtime.storageManager.synced();
 
   const previousKey = (binding.get() as ChannelBinding | undefined)?.mailbox;
@@ -270,16 +257,12 @@ export async function bindMailbox(
 
   let full = false;
   let moved = false;
-  let claimed: ClaimCheck | undefined;
   const result = await runtime.editWithRetry((tx) => {
     full = false;
     moved = false;
 
     // Every check runs before any write, because `editWithRetry` commits
-    // whatever the closure wrote even when it returns early. That holds for
-    // the claim too: a request id is recorded only by a bind that lands.
-    claimed = pendingClaim?.check(tx);
-    if (claimed !== undefined && claimed.kind !== "fresh") return;
+    // whatever the closure wrote even when it returns early.
     const boundBinding = binding.withTx(tx);
     const currentKey = (boundBinding.get() as ChannelBinding | undefined)
       ?.mailbox;
@@ -298,7 +281,6 @@ export async function bindMailbox(
       ids.push(id);
     }
 
-    claimed?.record();
     if (previous !== undefined) {
       const boundPrevious = previous.withTx(tx);
       const previousIds = (boundPrevious.get() as string[] | undefined) ?? [];
@@ -310,87 +292,8 @@ export async function bindMailbox(
   if (result.error) {
     throw new Error(result.error.message, { cause: result.error });
   }
-  throwOnRefusedClaim(claimed);
   if (moved) throw new BindingConflictError();
   if (full) throw new MailboxBindingFullError();
-}
-
-/**
- * Unbinds channel `id` from whatever mailbox it is bound to, and returns
- * whether it was bound to one.
- *
- * With `claim`, the request id is recorded even when the channel was bound to
- * nothing, so that a second request carrying the same id cannot clear a
- * binding made in between.
- *
- * @throws BindingConflictError when the channel's binding changed while this
- *   ran; the caller may try again.
- * @throws RequestAlreadyClaimedError when `claim` names a request id already
- *   used.
- * @throws ClaimStoreFullError when the caller has too many recent claims for
- *   another to be recorded.
- */
-export async function unbindChannel(
-  runtime: Runtime,
-  serviceSpace: string,
-  id: string,
-  claim?: ClaimRequest,
-): Promise<boolean> {
-  const binding = channelBindingCell(runtime, serviceSpace, id);
-  const pendingClaim = claim === undefined
-    ? undefined
-    : requestClaim(runtime, serviceSpace, claim);
-  await binding.sync();
-  await pendingClaim?.cell.sync();
-  await runtime.storageManager.synced();
-  const key = (binding.get() as ChannelBinding | undefined)?.mailbox;
-  if (key === undefined && pendingClaim === undefined) return false;
-
-  const channels = key === undefined
-    ? undefined
-    : mailboxChannelsCell(runtime, serviceSpace, key);
-  if (channels !== undefined) {
-    await channels.sync();
-    await runtime.storageManager.synced();
-  }
-
-  let moved = false;
-  let claimed: ClaimCheck | undefined;
-  const result = await runtime.editWithRetry((tx) => {
-    moved = false;
-    claimed = pendingClaim?.check(tx);
-    if (claimed !== undefined && claimed.kind !== "fresh") return;
-    const boundBinding = binding.withTx(tx);
-    if ((boundBinding.get() as ChannelBinding | undefined)?.mailbox !== key) {
-      moved = true;
-      return;
-    }
-
-    claimed?.record();
-    if (channels !== undefined) {
-      const boundChannels = channels.withTx(tx);
-      const ids = (boundChannels.get() as string[] | undefined) ?? [];
-      boundChannels.set(ids.filter((other) => other !== id));
-      boundBinding.set({});
-    }
-  });
-  if (result.error) {
-    throw new Error(result.error.message, { cause: result.error });
-  }
-  throwOnRefusedClaim(claimed);
-  if (moved) throw new BindingConflictError();
-  return key !== undefined;
-}
-
-/**
- * Helper for `bindMailbox()` and `unbindChannel()`, which throws the error for
- * a claim check that found the request id used or the claim store full.
- */
-function throwOnRefusedClaim(claimed: ClaimCheck | undefined): void {
-  if (claimed?.kind === "used") {
-    throw new RequestAlreadyClaimedError(claimed.channel);
-  }
-  if (claimed?.kind === "full") throw new ClaimStoreFullError();
 }
 
 /**
@@ -427,6 +330,42 @@ export async function fetchGmailMailbox(
     return { ok: false, reason: "unavailable" };
   }
   return { ok: true, emailAddress };
+}
+
+/**
+ * Proves a mailbox with a Google ID token: one signed by Google for one of
+ * the `clientIds`, carrying a verified address. An ID token grants no access
+ * to anything, so it is the proof to prefer where a consent requested the
+ * `openid` scope. With no `clientIds` configured the proof is `unsupported`.
+ */
+export async function verifyGmailIdToken(
+  keys: JWTVerifyGetKey,
+  clientIds: readonly string[],
+  idToken: string,
+): Promise<MailboxLookup> {
+  if (clientIds.length === 0) return { ok: false, reason: "unsupported" };
+  let payload: Record<string, unknown>;
+  try {
+    ({ payload } = await jwtVerify(idToken, keys, {
+      issuer: GOOGLE_ISSUERS,
+      audience: [...clientIds],
+      algorithms: ["RS256"],
+    }));
+  } catch (error) {
+    if (isKeyFetchFailure(error)) return { ok: false, reason: "unavailable" };
+    if (error instanceof errors.JOSEError) {
+      return { ok: false, reason: "rejected" };
+    }
+    throw error;
+  }
+  const { email } = payload;
+  if (
+    payload.email_verified !== true || typeof email !== "string" ||
+    !isPlausibleAddress(email)
+  ) {
+    return { ok: false, reason: "rejected" };
+  }
+  return { ok: true, emailAddress: email };
 }
 
 /**

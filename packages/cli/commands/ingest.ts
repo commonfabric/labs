@@ -3,8 +3,8 @@ import { Table } from "@cliffy/table";
 import { cliText } from "../lib/cli-name.ts";
 import { render } from "../lib/render.ts";
 import {
-  bindGmail,
   type ChannelConfig,
+  type GmailProof,
   INGEST_SINKS,
   type IngestSink,
   listChannels,
@@ -14,7 +14,6 @@ import {
   resolveSpaceDid,
   revokeChannel,
   rotateChannel,
-  unbindGmail,
 } from "../lib/ingest-channels.ts";
 
 // `cf ingest` — self-serve ingest channels.
@@ -66,6 +65,22 @@ const requireSpace = (space: string | undefined): string => {
   return space;
 };
 
+// One proof or none; two is a mistake the server would also refuse.
+const gmailProof = (
+  accessToken: string | undefined,
+  idToken: string | undefined,
+): GmailProof | undefined => {
+  if (accessToken !== undefined && idToken !== undefined) {
+    throw new ValidationError(
+      "Give one of --gmail-access-token and --gmail-id-token, not both.",
+      { exitCode: 1 },
+    );
+  }
+  if (accessToken !== undefined) return { accessToken };
+  if (idToken !== undefined) return { idToken };
+  return undefined;
+};
+
 // `undefined` is left to the server, which mints a journal.
 const requireSink = (sink: string | undefined): IngestSink | undefined => {
   if (sink === undefined) return undefined;
@@ -115,15 +130,24 @@ const renderMinted = (minted: MintedChannel, verb: string): void => {
   render(`  installId:   ${minted.installId}`);
   if (minted.url !== undefined) render(`  URL:         ${minted.url}`);
   render(`  expires:     ${minted.expiresAt ?? "(none — unexpected)"}`);
+  if (minted.emailAddress !== undefined) {
+    render(`  mailbox:     ${minted.emailAddress}`);
+  }
   if (minted.token !== undefined) {
     render(
       `\n  token (shown once — hand it to the device, sent as ` +
         `'Authorization: Bearer <token>'):\n\n    ${minted.token}\n`,
     );
+  } else if (minted.emailAddress !== undefined) {
+    render(
+      `\n  Each Gmail push notification for that mailbox now replaces the ` +
+        `record in the channel's cell, once a \`users.watch\` on the ` +
+        `mailbox names this deployment's topic.\n`,
+    );
   } else {
     render(
-      `\n  A \`latest\` channel: no device URL and no token. Bind it to a ` +
-        `mailbox with \`cf ingest gmail-bind ${minted.id}\`.\n`,
+      `\n  A \`latest\` channel: no device URL and no token. Mint it again ` +
+        `with --gmail-access-token or --gmail-id-token to bind a mailbox.\n`,
     );
   }
 };
@@ -176,7 +200,30 @@ export const ingest = new Command()
     "--sink <kind:string>",
     "What the channel's writes land in: `journal`, records in per-day " +
       "partition cells that a device POSTs to (the default), or `latest`, one " +
-      "cell holding the newest Gmail push notification.",
+      "cell holding the newest Gmail push notification. A mailbox proof " +
+      "makes it `latest`.",
+  )
+  // The tokens are credentials, so the environment is the better carrier: an
+  // option value is visible in the process list and lands in shell history.
+  .env(
+    "CF_GMAIL_ACCESS_TOKEN=<token:string>",
+    "A Google access token that reads the mailbox to bind.",
+    { prefix: "CF_" },
+  )
+  .env(
+    "CF_GMAIL_ID_TOKEN=<token:string>",
+    "A Google ID token naming the mailbox to bind.",
+    { prefix: "CF_" },
+  )
+  .option(
+    "--gmail-access-token <token:string>",
+    "Binds the channel to the Gmail mailbox this access token reads. The " +
+      "server uses it for one profile lookup and does not keep it.",
+  )
+  .option(
+    "--gmail-id-token <token:string>",
+    "Binds the channel to the Gmail mailbox this Google ID token names. It " +
+      "grants nothing, so prefer it where a consent returned one.",
   )
   .example(
     cliText("cf ingest mint --space did:key:z6Mk... --install-id phone-1"),
@@ -184,9 +231,9 @@ export const ingest = new Command()
   )
   .example(
     cliText(
-      "cf ingest mint --space did:key:z6Mk... --install-id loom-1 --sink latest",
+      "CF_GMAIL_ACCESS_TOKEN=... cf ingest mint --space did:key:z6Mk... --install-id gmail-1",
     ),
-    "Mint a channel to bind a Gmail mailbox to",
+    "Mint a channel bound to the mailbox the token reads",
   )
   .action(async (options) => {
     const config = parseConfig(options);
@@ -206,6 +253,7 @@ export const ingest = new Command()
       name: options.name,
       ttlDays: options.ttlDays,
       sink: requireSink(options.sink),
+      gmail: gmailProof(options.gmailAccessToken, options.gmailIdToken),
       requestId: newRequestId(),
     });
     renderMinted(minted, "minted");
@@ -331,77 +379,6 @@ export const ingest = new Command()
     render(
       `Revoked ${id} at ${revokedAt}. Further POSTs are refused; the ` +
         `registration is retained as an audit record.`,
-    );
-  })
-  /* ingest gmail-bind */
-  .command(
-    "gmail-bind <id:string>",
-    "Bind a channel you own to a Gmail mailbox, so that Gmail push " +
-      "notifications for the mailbox reach the channel.",
-  )
-  .usage(`${commonUsage} --gmail-access-token <token> <id>`)
-  // The token is a credential, so the environment is the better carrier: an
-  // option value is visible in the process list and lands in shell history.
-  .env(
-    "CF_GMAIL_ACCESS_TOKEN=<token:string>",
-    "A Google access token that can read the mailbox.",
-    { prefix: "CF_" },
-  )
-  .option(
-    "--gmail-access-token <token:string>",
-    "A Google access token that can read the mailbox. The server uses it for " +
-      "one profile lookup, to learn which mailbox it is, and does not keep it.",
-  )
-  // No `-s` short form, for the reason `revoke --space` has none.
-  .option(
-    "--space <space:string>",
-    "The space the channel writes into. Without it the space is looked up " +
-      "among the channels you minted.",
-  )
-  .action(async (options, id: string) => {
-    const config = parseConfig(options);
-    if (!options.gmailAccessToken) {
-      throw new ValidationError(
-        `Missing required option: "--gmail-access-token", or ` +
-          `"CF_GMAIL_ACCESS_TOKEN".`,
-        { exitCode: 1 },
-      );
-    }
-    const { emailAddress } = await bindGmail(config, {
-      space: await channelSpace(config, id, options.space),
-      id,
-      accessToken: options.gmailAccessToken,
-      requestId: newRequestId(),
-    });
-    render(
-      `Bound ${id} to ${emailAddress}. Each Gmail push notification for that ` +
-        `mailbox now replaces the record in the channel's cell, once a ` +
-        `\`users.watch\` on the mailbox names this deployment's topic.`,
-    );
-  })
-  /* ingest gmail-unbind */
-  .command(
-    "gmail-unbind <id:string>",
-    "Stop Gmail push notifications reaching a channel you own.",
-  )
-  .usage(`${commonUsage} <id>`)
-  // No `-s` short form, for the reason `revoke --space` has none.
-  .option(
-    "--space <space:string>",
-    "The space the channel writes into. Without it the space is looked up " +
-      "among the channels you minted, which a revoked channel is not in.",
-  )
-  .action(async (options, id: string) => {
-    const config = parseConfig(options);
-    const { unbound } = await unbindGmail(config, {
-      space: await channelSpace(config, id, options.space),
-      id,
-      requestId: newRequestId(),
-    });
-    render(
-      unbound
-        ? `Unbound ${id} from its mailbox.`
-        : `${id} was not bound to a mailbox.`,
     );
   })
   // Returns the chain to the top-level `ingest` command. Without it the export

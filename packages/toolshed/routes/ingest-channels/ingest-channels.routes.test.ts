@@ -46,7 +46,7 @@ describe("Ingest channels route (transport + middleware)", () => {
   });
 
   it("returns 404 for a verb other than `list` at the prefix that names no space", async () => {
-    for (const verb of ["mint", "rotate", "revoke", "gmail-bind"]) {
+    for (const verb of ["mint", "rotate", "revoke"]) {
       const res = await post(`${CALLER_BASE}/${verb}`, {
         headers: {
           "Content-Type": "application/json",

@@ -128,6 +128,7 @@ On only when a service account is set; see
 |---|---|---|
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts a push token may be signed for. |
 | `INGEST_GMAIL_PUSH_AUDIENCE` | the ingest registry space's DID | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
+| `INGEST_GMAIL_OAUTH_CLIENT_IDS` | _(unset)_ | Comma-separated OAuth client ids whose Google ID tokens a mint accepts as proof of a mailbox. Unset, a mint proves a mailbox with an access token only. |
 
 ---
 

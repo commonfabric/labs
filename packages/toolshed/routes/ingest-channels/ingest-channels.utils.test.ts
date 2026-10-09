@@ -29,6 +29,11 @@ import {
   processIngest,
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
+import {
+  getMailboxChannels,
+  type MailboxLookup,
+  MAX_CHANNELS_PER_MAILBOX,
+} from "@/routes/ingest-push/gmail-push.utils.ts";
 
 // Shaped like a real derived channel id: ids are validated before they become
 // a cell cause in the operator's service space.
@@ -244,6 +249,231 @@ describe("ingest-channels control plane", () => {
       ["phone-1", "journal"],
       ["phone-2", "latest"],
     ]);
+  });
+
+  describe("minting with a mailbox proof", () => {
+    const MAILBOX = "alice@example.com";
+    let proofs: string[];
+    let lookup: MailboxLookup;
+
+    /** `deps` with Gmail push configured, answering every proof with `lookup`. */
+    const withGmail = (): ControlDeps => ({
+      ...deps,
+      gmail: {
+        fetchMailbox: (accessToken) => {
+          proofs.push(`access:${accessToken}`);
+          return Promise.resolve(lookup);
+        },
+        verifyIdToken: (idToken) => {
+          proofs.push(`id:${idToken}`);
+          return Promise.resolve(lookup);
+        },
+      },
+    });
+    const bound = (address = MAILBOX) =>
+      getMailboxChannels(runtime, operator.did(), address);
+
+    beforeEach(() => {
+      proofs = [];
+      lookup = { ok: true, emailAddress: MAILBOX };
+    });
+
+    it("binds the mailbox an access token reads, minting a `latest` channel", async () => {
+      const res = await processMint(withGmail(), alice.did(), {
+        space,
+        installId: "gmail-1",
+        gmail: { accessToken: "ya29.token" },
+        requestId: "req-1",
+      });
+
+      expect(ok(res).emailAddress).toBe(MAILBOX);
+      expect(ok(res).token).toBeUndefined();
+      expect(proofs).toEqual(["access:ya29.token"]);
+      expect(await bound()).toEqual([ok(res).id]);
+      const stored = await getRegistration(runtime, operator.did(), ok(res).id);
+      expect(stored?.sink).toBe("latest");
+    });
+
+    it("binds the mailbox an ID token names", async () => {
+      const res = await processMint(withGmail(), alice.did(), {
+        space,
+        installId: "gmail-1",
+        gmail: { idToken: "eyJ.id.token" },
+        requestId: "req-1",
+      });
+
+      expect(ok(res).emailAddress).toBe(MAILBOX);
+      expect(proofs).toEqual(["id:eyJ.id.token"]);
+      expect(await bound()).toEqual([ok(res).id]);
+    });
+
+    it("moves the channel when minted again with a proof for another mailbox", async () => {
+      const first = ok(
+        await processMint(withGmail(), alice.did(), {
+          space,
+          installId: "gmail-1",
+          gmail: { accessToken: "t1" },
+          requestId: "req-1",
+        }),
+      );
+      lookup = { ok: true, emailAddress: "bob@example.com" };
+
+      const again = await processMint(withGmail(), alice.did(), {
+        space,
+        installId: "gmail-1",
+        gmail: { accessToken: "t2" },
+        requestId: "req-2",
+      });
+
+      expect(ok(again).id).toBe(first.id);
+      expect(ok(again).emailAddress).toBe("bob@example.com");
+      expect(await bound()).toEqual([]);
+      expect(await bound("bob@example.com")).toEqual([first.id]);
+    });
+
+    it("keeps the binding when minted again without a proof", async () => {
+      const first = ok(
+        await processMint(withGmail(), alice.did(), {
+          space,
+          installId: "gmail-1",
+          gmail: { accessToken: "t1" },
+          requestId: "req-1",
+        }),
+      );
+
+      const again = await processMint(withGmail(), alice.did(), {
+        space,
+        installId: "gmail-1",
+        requestId: "req-2",
+      });
+
+      expect(ok(again).id).toBe(first.id);
+      expect(ok(again).emailAddress).toBeUndefined();
+      expect(await bound()).toEqual([first.id]);
+    });
+
+    it("returns 400 and mints nothing for a proof on a journal", async () => {
+      const res = await processMint(withGmail(), alice.did(), {
+        space,
+        installId: "gmail-1",
+        sink: "journal",
+        gmail: { accessToken: "t1" },
+        requestId: "req-1",
+      });
+
+      expect(res.status).toBe(400);
+      expect(err(res)).toContain("latest");
+      expect(proofs).toEqual([]);
+      expect(
+        await getOwnerRegistrationIndex(runtime, operator.did(), alice.did()),
+      ).toEqual([]);
+    });
+
+    it("returns 400 and mints nothing for two proofs, or none, in the field", async () => {
+      for (const gmail of [{}, { accessToken: "t", idToken: "i" }]) {
+        const res = await processMint(withGmail(), alice.did(), {
+          space,
+          installId: "gmail-1",
+          gmail,
+          requestId: "req-1",
+        });
+        expect(res.status).toBe(400);
+      }
+      expect(proofs).toEqual([]);
+      expect(
+        await getOwnerRegistrationIndex(runtime, operator.did(), alice.did()),
+      ).toEqual([]);
+    });
+
+    it("returns 400 and mints nothing where Gmail push is not configured", async () => {
+      const res = await processMint(deps, alice.did(), {
+        space,
+        installId: "gmail-1",
+        gmail: { accessToken: "t1" },
+        requestId: "req-1",
+      });
+
+      expect(res.status).toBe(400);
+      expect(err(res)).toContain("not configured");
+      expect(
+        await getOwnerRegistrationIndex(runtime, operator.did(), alice.did()),
+      ).toEqual([]);
+    });
+
+    it("returns 400 and mints nothing when Google rejects the proof", async () => {
+      lookup = { ok: false, reason: "rejected" };
+
+      const res = await processMint(withGmail(), alice.did(), {
+        space,
+        installId: "gmail-1",
+        gmail: { accessToken: "t1" },
+        requestId: "req-1",
+      });
+
+      expect(res.status).toBe(400);
+      expect(
+        await getOwnerRegistrationIndex(runtime, operator.did(), alice.did()),
+      ).toEqual([]);
+      expect(await bound()).toEqual([]);
+    });
+
+    it("returns 400 for an ID token where none is accepted, and 502 when Google cannot be reached", async () => {
+      lookup = { ok: false, reason: "unsupported" };
+      expect(
+        (await processMint(withGmail(), alice.did(), {
+          space,
+          installId: "gmail-1",
+          gmail: { idToken: "i" },
+          requestId: "req-1",
+        })).status,
+      ).toBe(400);
+
+      lookup = { ok: false, reason: "unavailable" };
+      expect(
+        (await processMint(withGmail(), alice.did(), {
+          space,
+          installId: "gmail-1",
+          gmail: { accessToken: "t" },
+          requestId: "req-2",
+        })).status,
+      ).toBe(502);
+    });
+
+    it("asks Google nothing for a caller who does not own the space", async () => {
+      const res = await processMint(withGmail(), mallory.did(), {
+        space,
+        installId: "gmail-1",
+        gmail: { accessToken: "t1" },
+        requestId: "req-1",
+      });
+
+      expect(res.status).toBe(403);
+      expect(proofs).toEqual([]);
+    });
+
+    it("returns 409 for a mailbox at its channel limit, leaving the channel minted", async () => {
+      for (let i = 0; i < MAX_CHANNELS_PER_MAILBOX; i++) {
+        ok(
+          await processMint(withGmail(), alice.did(), {
+            space,
+            installId: `gmail-${i}`,
+            gmail: { accessToken: "t" },
+            requestId: `req-${i}`,
+          }),
+        );
+      }
+
+      const res = await processMint(withGmail(), alice.did(), {
+        space,
+        installId: "gmail-extra",
+        gmail: { accessToken: "t" },
+        requestId: "req-extra",
+      });
+
+      expect(res.status).toBe(409);
+      expect(err(res)).toContain("minted but not bound");
+      expect((await bound()).length).toBe(MAX_CHANNELS_PER_MAILBOX);
+    });
   });
 
   it("refuses to re-mint under a different sink, and keeps the sink when none is named", async () => {

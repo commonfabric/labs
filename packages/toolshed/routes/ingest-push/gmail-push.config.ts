@@ -4,8 +4,11 @@
  * otherwise; with none, no push token could be accepted.
  */
 
+import { createRemoteJWKSet } from "@panva/jose";
+
 import env from "@/env.ts";
 import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
+import { GOOGLE_OIDC_JWKS_URL } from "./gmail-push.utils.ts";
 
 /** A deployment's resolved Gmail push settings. */
 export interface GmailPushSettings {
@@ -61,3 +64,20 @@ export const gmailPushAudience: string = settings.audience;
 
 /** Whether Gmail push ingest is configured on this deployment. */
 export const gmailPushEnabled: boolean = settings.enabled;
+
+/**
+ * The OAuth client ids whose ID tokens a mint accepts as proof of a mailbox.
+ * Empty, a mint proves a mailbox with an access token only.
+ */
+export const gmailOAuthClientIds: readonly string[] = env
+  .INGEST_GMAIL_OAUTH_CLIENT_IDS
+  .split(",")
+  .map((id) => id.trim())
+  .filter((id) => id.length > 0);
+
+// Google's signing keys, fetched on first use and cached; `jose` refetches
+// when a token names a key id the cache does not hold. One set serves the
+// push route and the mailbox proof.
+export const googleSigningKeys = createRemoteJWKSet(
+  new URL(GOOGLE_OIDC_JWKS_URL),
+);

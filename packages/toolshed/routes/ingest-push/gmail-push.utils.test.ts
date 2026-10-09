@@ -28,7 +28,7 @@ import {
   mailboxKey,
   MAX_CHANNELS_PER_MAILBOX,
   processGmailPush,
-  unbindChannel,
+  verifyGmailIdToken,
 } from "./gmail-push.utils.ts";
 import {
   channelId,
@@ -528,29 +528,49 @@ describe("gmail-push.utils", () => {
     });
   });
 
-  describe("unbindChannel()", () => {
-    it("returns `false` for a channel never bound", async () => {
-      const a = await channel("a");
-      expect(await unbindChannel(runtime, space, a.id)).toBe(false);
+  describe("verifyGmailIdToken()", () => {
+    const CLIENT_ID = "123.apps.googleusercontent.com";
+    const idToken = (
+      over: { claims?: Record<string, unknown>; audience?: string } = {},
+    ): Promise<string> =>
+      new SignJWT({ email: MAILBOX, email_verified: true, ...over.claims })
+        .setProtectedHeader({ alg: "RS256", kid: "google-1" })
+        .setIssuer("https://accounts.google.com")
+        .setAudience(over.audience ?? CLIENT_ID)
+        .setIssuedAt()
+        .setExpirationTime("1h")
+        .sign(signingKey);
+    const verify = (token: string, clientIds = [CLIENT_ID]) =>
+      verifyGmailIdToken(keys, clientIds, token);
+
+    it("returns the mailbox a token Google signed for an accepted client names", async () => {
+      expect(await verify(await idToken())).toEqual({
+        ok: true,
+        emailAddress: MAILBOX,
+      });
     });
 
-    it("returns `true` and removes the channel from its mailbox", async () => {
-      const a = await channel("a");
-      await bindMailbox(runtime, space, a.id, MAILBOX);
-
-      expect(await unbindChannel(runtime, space, a.id)).toBe(true);
-      expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([]);
-      expect(await unbindChannel(runtime, space, a.id)).toBe(false);
+    it("returns `rejected` for a token minted for another client", async () => {
+      expect(await verify(await idToken({ audience: "other-client" })))
+        .toEqual({ ok: false, reason: "rejected" });
     });
 
-    it("stops delivery to the channel", async () => {
-      const a = await channel("a");
-      await bindMailbox(runtime, space, a.id, MAILBOX);
-      await unbindChannel(runtime, space, a.id);
+    it("returns `rejected` for a token whose address is not verified", async () => {
+      expect(await verify(await idToken({ claims: { email_verified: false } })))
+        .toEqual({ ok: false, reason: "rejected" });
+    });
 
-      expect(await push(envelope(notification()))).toEqual({
-        status: 200,
-        body: { delivered: 0 },
+    it("returns `rejected` for a token that is not a token at all", async () => {
+      expect(await verify("not-a-jwt")).toEqual({
+        ok: false,
+        reason: "rejected",
+      });
+    });
+
+    it("returns `unsupported` when no client id is configured", async () => {
+      expect(await verify(await idToken(), [])).toEqual({
+        ok: false,
+        reason: "unsupported",
       });
     });
   });

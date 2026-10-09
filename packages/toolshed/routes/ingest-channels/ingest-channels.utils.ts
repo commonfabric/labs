@@ -47,6 +47,13 @@ import {
   saveRegistration,
   SpaceLifetimeChannelCapError,
 } from "@/routes/ingest/ingest.utils.ts";
+import {
+  BindingConflictError,
+  bindMailbox,
+  MailboxBindingFullError,
+  type MailboxLookup,
+  MAX_CHANNELS_PER_MAILBOX,
+} from "@/routes/ingest-push/gmail-push.utils.ts";
 
 const DEFAULT_CAUSE_PREFIX = "location";
 
@@ -119,11 +126,37 @@ export interface ControlDeps {
   maxLifetimeChannelsPerOwner?: number;
   maxLifetimeChannelsPerSpace?: number;
   apiUrl: string;
+
+  /**
+   * How a mint proves the mailbox it binds. Absent where Gmail push is not
+   * configured, and a mint carrying a proof is then refused.
+   */
+  gmail?: GmailProofDeps;
   logger?: {
     warn: (obj: unknown, msg: string) => void;
     info: (obj: unknown, msg: string) => void;
     error: (obj: unknown, msg: string) => void;
   };
+}
+
+/** What a mint asks of Google to learn which mailbox a token is for. */
+export interface GmailProofDeps {
+  /** Asks Gmail which mailbox an access token reads. */
+  fetchMailbox: (accessToken: string) => Promise<MailboxLookup>;
+
+  /** Verifies a Google ID token and reads the mailbox it names. */
+  verifyIdToken: (idToken: string) => Promise<MailboxLookup>;
+}
+
+/**
+ * Proof that the caller holds a Gmail mailbox, carried on a mint to bind the
+ * channel to that mailbox: a Google access token that reads it, used for one
+ * profile lookup and kept nowhere, or a Google ID token naming it, which
+ * grants nothing and is the proof to prefer. Exactly one of the two.
+ */
+export interface GmailProof {
+  accessToken?: string;
+  idToken?: string;
 }
 
 /** The one-time mint/rotate view. `token` is shown here and nowhere else. */
@@ -141,6 +174,9 @@ export interface MintedChannel {
   installId: string;
   expiresAt?: string;
   token?: string;
+
+  /** The mailbox the channel was bound to, when the mint carried a proof. */
+  emailAddress?: string;
 }
 
 export interface ChannelView {
@@ -453,8 +489,19 @@ export interface MintInput {
   name?: string;
   ttlDays?: number;
 
-  /** What the channel's writes land in; a journal unless named. */
+  /**
+   * What the channel's writes land in; a journal unless named, or `latest`
+   * when a mailbox proof is carried.
+   */
   sink?: IngestSink;
+
+  /**
+   * Binds the channel to the Gmail mailbox the proof is for, in the same
+   * mint. Only a `latest` channel binds. Minting again with a proof for
+   * another mailbox moves the channel; minting again without one leaves the
+   * binding as it is.
+   */
+  gmail?: GmailProof;
   requestId: string;
 }
 
@@ -464,6 +511,19 @@ export async function processMint(
   input: MintInput,
 ): Promise<ControlResult<MintedChannel>> {
   const causePrefix = input.causePrefix ?? DEFAULT_CAUSE_PREFIX;
+  // A mailbox binds to a `latest` channel, so a proof decides the sink where
+  // the caller named none.
+  const sink = input.sink ?? (input.gmail === undefined ? undefined : "latest");
+  if (input.gmail !== undefined) {
+    if (sink !== "latest") {
+      return bad("A mailbox binds to a `latest` channel, not a journal");
+    }
+    const proofs = [input.gmail.accessToken, input.gmail.idToken]
+      .filter((proof) => proof !== undefined);
+    if (proofs.length !== 1) {
+      return bad("A mailbox proof is one access token or one ID token");
+    }
+  }
 
   // A malformed space DID shares the ownership denial rather than getting its
   // own 400: a distinguishable shape error is a free probe.
@@ -534,11 +594,11 @@ export async function processMint(
     }
     // The sink is immutable for the same reason: it decides which cells the
     // reader watches. A re-mint that names none keeps the channel's own.
-    if (input.sink !== undefined && existing.sink !== input.sink) {
+    if (sink !== undefined && existing.sink !== sink) {
       return conflict(
         `Channel ${id} is registered with sink '${existing.sink}', and a ` +
           `channel's sink cannot change. Use a different --install-id to ` +
-          `get a channel with sink '${input.sink}'.`,
+          `get a channel with sink '${sink}'.`,
       );
     }
   }
@@ -555,14 +615,23 @@ export async function processMint(
   const replay = await peekReplay(deps, callerDid, input.requestId);
   if (replay) return replay;
 
-  return await persist(deps, {
+  // After the replay check, so that a replay costs no request to Google, and
+  // before the mint, so that a refused proof mints nothing.
+  let mailbox: string | undefined;
+  if (input.gmail !== undefined) {
+    const proven = await proveMailbox(deps, input.gmail);
+    if (!proven.ok) return proven.result;
+    mailbox = proven.emailAddress;
+  }
+
+  const minted = await persist(deps, {
     id,
     requestId: input.requestId,
     name: input.name ?? `ingest-${input.installId}`,
     space: input.space,
     causePrefix,
     installId: input.installId,
-    sink: input.sink ?? existing?.sink ?? "journal",
+    sink: sink ?? existing?.sink ?? "journal",
     existing,
     callerDid,
     ttlDays: input.ttlDays,
@@ -572,6 +641,76 @@ export async function processMint(
     // remove, on the single most likely path to reach it.
     ...(existing ? { rotatedFrom: existing.secretHash } : {}),
   });
+  if (minted.status !== 200 || mailbox === undefined) return minted;
+
+  // The binding is a second write, after the registration's. A binding that
+  // fails leaves a minted channel bound to nothing, and the caller mints
+  // again with the same install id and proof to bind it.
+  try {
+    await bindMailbox(deps.runtime, deps.serviceSpace, id, mailbox);
+  } catch (error) {
+    if (error instanceof MailboxBindingFullError) {
+      return conflict(
+        `Channel ${id} is minted but not bound: the mailbox already has ` +
+          `${MAX_CHANNELS_PER_MAILBOX} bound channels. Revoke one, then ` +
+          `mint again.`,
+      );
+    }
+    if (error instanceof BindingConflictError) {
+      return conflict(
+        `Channel ${id} is minted but not bound: its binding changed ` +
+          `concurrently. Mint again.`,
+      );
+    }
+    deps.logger?.error({ error, id }, "ingest-channels: bind failed");
+    return { status: 502, body: { error: "Storage failure" } };
+  }
+  deps.logger?.info({ id }, "ingest-channels: bound a mailbox");
+  return {
+    status: 200,
+    body: { ...minted.body, emailAddress: mailbox },
+  };
+}
+
+/**
+ * Helper for `processMint()`, which learns the mailbox a proof is for, or the
+ * refusal to answer with: 400 for a proof Google rejects or a kind this
+ * deployment does not accept, 502 for Google being unreachable.
+ */
+async function proveMailbox(
+  deps: ControlDeps,
+  proof: GmailProof,
+): Promise<
+  | { ok: true; emailAddress: string }
+  | { ok: false; result: ControlResult<never> }
+> {
+  if (deps.gmail === undefined) {
+    return {
+      ok: false,
+      result: bad("Gmail push is not configured on this deployment"),
+    };
+  }
+  const lookup = proof.idToken !== undefined
+    ? await deps.gmail.verifyIdToken(proof.idToken)
+    : await deps.gmail.fetchMailbox(proof.accessToken ?? "");
+  if (lookup.ok) return lookup;
+  switch (lookup.reason) {
+    case "rejected":
+      return { ok: false, result: bad("Google did not accept the token") };
+    case "unsupported":
+      return {
+        ok: false,
+        result: bad(
+          "This deployment accepts no ID tokens; prove the mailbox with an " +
+            "access token",
+        ),
+      };
+    case "unavailable":
+      return {
+        ok: false,
+        result: { status: 502, body: { error: "Google could not be reached" } },
+      };
+  }
 }
 
 /**
