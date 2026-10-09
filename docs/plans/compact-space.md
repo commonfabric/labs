@@ -569,8 +569,9 @@ and marks each hollowed commit explicitly: its envelope is replaced by the
 marker, which nothing a client writes can resemble, so a reader of the log
 can tell a hollowed commit from an elided write; what is lost is the
 contents, which are available only in the archive. A commit whose payload
-survives stays inspectable alongside its revisions, and needs no flag of its
-own. Robin's review asks for the space-level counterpart, the equivalent of
+survives stays inspectable in the commit log, whether or not its revision
+rows do — inside the retained window a payload outlives rows the cut
+deleted — and needs no flag of its own. Robin's review asks for the space-level counterpart, the equivalent of
 a browser's broken-key icon: something developers can wave past and a user
 of what looked like a safe space can see.
 
