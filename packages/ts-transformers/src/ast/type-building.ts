@@ -138,8 +138,8 @@ export function qualifyCommonFabricTypeRefs(
 
   // The module the specifier of `member`, an import type, names by a path
   // relative to the file the node was printed for, as a path from the root
-  // without an extension (`resolveModulePath()`), or `undefined` for any
-  // other specifier.
+  // without an extension or an `index` file's name, as `modulePathOf()`
+  // writes a declaring file's, or `undefined` for any other specifier.
   const importTypeModulePath = (
     member: ts.ImportTypeNode,
   ): string | undefined => {
@@ -147,7 +147,9 @@ export function qualifyCommonFabricTypeRefs(
     return ts.isLiteralTypeNode(argument) &&
         ts.isStringLiteral(argument.literal) &&
         /^\.\.?\//.test(argument.literal.text)
-      ? resolveModulePath(context.sourceFile.fileName, argument.literal.text)
+      ? modulePathOf(
+        resolveModulePath(context.sourceFile.fileName, argument.literal.text),
+      )
       : undefined;
   };
 

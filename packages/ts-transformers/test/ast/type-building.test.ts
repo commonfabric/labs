@@ -657,3 +657,44 @@ Deno.test('qualifyCommonFabricTypeRefs qualifies a union member an import type o
     "__cfHelpers.Cell<{ a: number; }> | undefined",
   );
 });
+
+Deno.test("qualifyCommonFabricTypeRefs qualifies a union member an import type names with the declarations' extension", () => {
+  const { type, node, checker, print, sourceFile } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? cell({ a: 1 }) : undefined;",
+    ].join("\n"),
+  );
+  assert(ts.isUnionTypeNode(node));
+  const [member, rest] = node.types;
+  assert(ts.isImportTypeNode(member));
+  const withExtension = ts.factory.createUnionTypeNode([
+    ts.factory.updateImportTypeNode(
+      member,
+      ts.factory.createLiteralTypeNode(
+        ts.factory.createStringLiteral("../../commonfabric.js"),
+      ),
+      member.attributes,
+      member.qualifier,
+      member.typeArguments,
+      member.isTypeOf,
+    ),
+    rest,
+  ]);
+  assertEquals(
+    print(withExtension),
+    'import("../../commonfabric.js").Cell<{ a: number; }> | undefined',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(withExtension, type, {
+    checker,
+    factory: ts.factory,
+    sourceFile,
+  });
+
+  assertEquals(
+    print(qualified),
+    "__cfHelpers.Cell<{ a: number; }> | undefined",
+  );
+});
