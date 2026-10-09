@@ -63,11 +63,24 @@ Two ensures create the roots reported as `junk-root`. A client's open of a
 profile space creates one only when its signing identity holds `OWNER` there;
 the `WRITE` every principal holds, which is all this command needs, creates
 none. With server execution on, the server creates one in a space that has no
-root and whose genesis reserved none as soon as any session opens it, and the
-inspection's own connection is such a session. In a served store, then, a
-profile reported as `unrooted` can hold a `junk-root` by the time it is applied:
-the apply reports it as `failed`, and a fresh inspection reports it as
-`junk-root`, which the apply after that replaces.
+root and whose genesis reserved none as soon as any session opens it.
+
+That second ensure is why the command refuses a server that runs server
+execution. The inspection's own connection is a session, so against such a
+server an inspection would write a junk root into each unrooted profile space it
+looked at, and would not leave the store as it found it. Before it opens any
+profile's space, the command reads the server's handshake for that space, which
+says whether server execution is on without opening a session, and exits with an
+error, having opened nothing, when the server reports it on or does not say. A
+server that predates the report does not say. Every run checks, the apply
+included.
+
+To repair a store, then, serve it with server execution off, with
+`EXPERIMENTAL_SERVER_EXECUTION=false` in the server's environment, and point
+`--api-url` at that server, for the rehearsal below and for the real store
+alike. The command's own check confirms the setting took: a server still running
+server execution is refused before anything is opened. Keep it off from the
+first inspection through the apply.
 
 Review the rows, then repeat the command with `--apply --expect <inspection>`.
 It inspects every profile again first. When that run's receipt is not the one
@@ -89,7 +102,8 @@ does, and repairs that profile alone against the clone's server, naming it with
 ```bash
 deno task cf space clone <profile-space> --from <snapshot>/<profile-space>.sqlite \
   --to ~/clones/profile-root
-# Serve the clone as the procedure says, then:
+# Serve the clone as the procedure says, with EXPERIMENTAL_SERVER_EXECUTION=false
+# in its environment, then:
 deno task cf profile repair-root --from-snapshot <snapshot> \
   --cell <listed-address> -i <admin.key> -a http://localhost:8010
 deno task cf profile repair-root --from-snapshot <snapshot> \

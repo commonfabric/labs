@@ -290,7 +290,9 @@ An operator's command. The profiles come from a snapshot of the store's space
 databases, read offline: each Home's profile list, with profiles no Home lists
 reported and skipped unless named with --cell. Each profile is inspected live,
 as your own identity, and the plan prints as JSON with an inspection receipt.
-Repeat with --apply --expect <inspection> to apply it. Always prints JSON.`,
+Repeat with --apply --expect <inspection> to apply it. Always prints JSON.
+It refuses a server that runs server execution, or does not say whether it
+does: serve the store with server execution off.`,
       ),
     )
       .option(
