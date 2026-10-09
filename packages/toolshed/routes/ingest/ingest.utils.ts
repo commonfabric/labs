@@ -15,12 +15,15 @@ import {
   type VouchedChannel,
 } from "@/lib/custody-ingest.ts";
 
-// The `journal` sink of a vouched ingest channel: a durable, append-only,
-// ExternalIngest-marked record log. This is the generic capability — location
-// is one consumer of it (its beacon POSTs `location.point` records; loom wraps
-// them into `loom.source-record.v1` envelopes on READ). Nothing here knows about
-// location or loom's schema; records are stored verbatim and the read side is
-// the single schema authority.
+// The sinks of a vouched ingest channel, each a durable, ExternalIngest-marked
+// write into the channel's space. A `journal` is an append-only record log in
+// per-partition cells; location is one consumer of it (its beacon POSTs
+// `location.point` records; loom wraps them into `loom.source-record.v1`
+// envelopes on READ). A `latest` sink is one cell holding the newest record
+// written to it, for a signal whose history nobody reads, such as a Gmail
+// push notification. Nothing here knows about location, Gmail, or loom's
+// schema; records are stored verbatim and the read side is the single schema
+// authority.
 //
 // This module owns the DATA plane (ingest) and the shared registry helpers. The
 // CONTROL plane — self-serve mint/list/rotate/revoke — lives in
@@ -102,26 +105,36 @@ export const containsLink = (value: unknown): boolean => {
 
 export const isValidPartition = isValidSegment;
 
+/**
+ * What a channel's writes land in. A `journal` is an append-only log in
+ * per-partition cells, which the data plane appends to; a `latest` sink is one
+ * cell holding only the newest record, which Gmail push writes to.
+ */
+export type IngestSink = "journal" | "latest";
+
 export interface IngestRegistration {
   id: string;
   name: string;
 
-  /** The space partition cells are written into (the end user's space). */
+  /** The space the channel's cells are written into (the end user's space). */
   space: string;
 
-  /** Cell-cause prefix; a partition cell's cause is `${causePrefix}/${partition}`. */
+  /**
+   * Cell-cause prefix. A journal's partition cell has the cause
+   * `${causePrefix}/${partition}`; a `latest` channel's one cell has the cause
+   * `causePrefix` itself.
+   */
   causePrefix: string;
 
   /** Stable source identifier: recorded on the mark + the cross-repo join key. */
   installId: string;
 
   /**
-   * The sink discriminator. Only `"journal"` (durable, append-only, marked)
-   * exists in iteration 1; `"stream"` (today's webhook dispatch) joins the union
-   * when webhooks are subsumed onto ingest channels. Required so a future
-   * stream-channel id can never silently be given journal semantics here.
+   * The sink discriminator. Each write path checks it, so a channel of one
+   * kind can never be given the other's semantics: the data plane appends only
+   * to a `journal`, and Gmail push writes only to a `latest` cell.
    */
-  sink: "journal";
+  sink: IngestSink;
 
   secretHash: string;
 
@@ -1090,6 +1103,61 @@ export async function appendToJournal(
   return records.length;
 }
 
+// The one cell of a `latest` channel. The record it holds is opaque here, as
+// a journal's are.
+const LatestSchema = {
+  type: "object",
+  additionalProperties: true,
+} as const satisfies JSONSchema;
+
+/** The one cell of a `latest` channel — `causePrefix` in the user's space. */
+export function latestCell(
+  runtime: Runtime,
+  registration: IngestRegistration,
+) {
+  return runtime.getCell<Record<string, unknown>>(
+    registration.space as MemorySpace,
+    registration.causePrefix,
+    LatestSchema,
+  );
+}
+
+/**
+ * Durably replaces the record in a `latest` channel's cell with `record`,
+ * minting one ExternalIngest mark bound to it, unless `supersedes` says the
+ * record already there is at least as new. The decision is made inside the
+ * retried transaction against the value it commits over, so two writes racing
+ * through different instances leave the newer record in place whichever
+ * lands last. Returns whether `record` was written.
+ */
+export async function writeLatest(
+  runtime: Runtime,
+  registration: IngestRegistration,
+  record: Record<string, unknown>,
+  supersedes: (
+    current: Record<string, unknown>,
+    next: Record<string, unknown>,
+  ) => boolean,
+): Promise<boolean> {
+  const cell = latestCell(runtime, registration);
+  await cell.sync();
+  await runtime.storageManager.synced();
+  const channel: VouchedChannel = {
+    channel: registration.space,
+    audience: registration.installId,
+  };
+  let written = false;
+  await custodyIngest.update(cell, (current) => {
+    if (current === undefined || supersedes(current, record)) {
+      written = true;
+      return record;
+    }
+    written = false;
+    return current;
+  }, channel);
+  return written;
+}
+
 /**
  * Why a stored channel may not take writes right now: `revoked` for one that
  * is disabled or revoked, `expired` for one past its `expiresAt`, or `null`
@@ -1213,7 +1281,7 @@ export async function processIngest(
     return { status: 401, body: { error: "Invalid request" } };
   }
   // A wrong-sink channel stays opaque even to a valid token holder, so a
-  // stream-channel id POSTed here can never acquire journal semantics.
+  // channel of any other kind POSTed here can never acquire journal semantics.
   if (registration.sink !== "journal") {
     return { status: 401, body: { error: "Invalid request" } };
   }

@@ -1,8 +1,10 @@
 /**
  * The control-plane verbs that bind an ingest channel to a Gmail mailbox, so
- * that Gmail push notifications for the mailbox reach the channel's journal,
- * and unbind it again. The binding store itself, and the data plane that
- * reads it, are in `routes/ingest-push/gmail-push.utils.ts`.
+ * that Gmail push notifications for the mailbox reach the channel's cell,
+ * and unbind it again. Only a `latest` channel binds: a push carries a
+ * cursor, not a record anyone keeps, so the cell holds the newest one. The
+ * binding store itself, and the data plane that reads it, are in
+ * `routes/ingest-push/gmail-push.utils.ts`.
  *
  * Two proofs stand behind a binding: the caller owns the space the channel
  * writes into, which `loadOwned()` checks against the stored registration,
@@ -60,10 +62,10 @@ const replayed = (channel: string): ControlResult<never> => ({
 /**
  * Binds channel `input.id` to the mailbox `input.accessToken` reads, moving it
  * off any mailbox it was bound to before. The caller must own the channel's
- * space, and the channel must be live. The access token is used for one
- * profile lookup and kept nowhere. `input.space`, when given, is the space the
- * request was addressed to, and a channel writing into any other is refused
- * as an unowned one is.
+ * space, and the channel must be live and a `latest` channel. The access
+ * token is used for one profile lookup and kept nowhere. `input.space`, when
+ * given, is the space the request was addressed to, and a channel writing
+ * into any other is refused as an unowned one is.
  *
  * `input.requestId` makes the bind at most once: the proof on a request stays
  * valid for minutes, and without the id a late duplicate of an earlier bind
@@ -81,6 +83,15 @@ export async function processGmailBind(
     return {
       status: 409,
       body: { error: "Channel is revoked or expired; it must be live to bind" },
+    };
+  }
+  if (owned.registration.sink !== "latest") {
+    return {
+      status: 409,
+      body: {
+        error: "Channel is a journal; Gmail push writes to a `latest` " +
+          'channel. Mint one with `sink: "latest"`',
+      },
     };
   }
 

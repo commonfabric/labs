@@ -30,7 +30,7 @@ flowchart TB
         control["Control plane<br/>/api/spaces/:space/ingest-channels"]
         push["Push endpoint<br/>/api/spaces/:space/ingest-push/gmail"]
         service[("Service space<br/>registrations and bindings")]
-        userspace[("User's space<br/>channel journal")]
+        userspace[("User's space<br/>the channel's cell")]
     end
     subgraph machine["User's machine, run by the user"]
         syncer["Syncer"]
@@ -46,8 +46,8 @@ flowchart TB
     subscription == "2: POST with OIDC token" ==> push
     push == "3: verify token" ==> keys
     push -- "looks up binding" --> service
-    push == "4: append record" ==> userspace
-    userspace == "5: read journal" ==> syncer
+    push == "4: write the newest notification" ==> userspace
+    userspace == "5: the cell changes" ==> syncer
     syncer == "6: history.list" ==> gmail
 ```
 
@@ -61,7 +61,7 @@ setup, or repeat on a schedule.
 | Google signing keys | Google | Google | Key rotation. Toolshed caches the keys and fetches them again for a key id it has not seen. |
 | Push endpoint and control plane | The toolshed deployment | The deployment's operator | Whether the feature is on, and which audience and service accounts are accepted. |
 | The service space | The toolshed deployment | The deployment's operator | Holds channel registrations and mailbox bindings for every user. |
-| The user's space | The toolshed deployment | The user, as OWNER in its ACL | Who may mint a channel into it. The journal lands here. |
+| The user's space | The toolshed deployment | The user, as OWNER in its ACL | Who may mint a channel into it. The channel's cell lives here. |
 | Syncer | The user's machine | The user | Calling and renewing `users.watch`, binding, and when to sync. |
 
 Two of these are one party's data on another party's server: the mailbox,
@@ -132,9 +132,9 @@ sequenceDiagram
     G->>P: 1. publish the address and history id
     P->>T: 2. POST the message with an OIDC token
     T->>T: 3. verify the token against Google's keys
-    T->>U: 4. append a gmail.push record to the journal
+    T->>U: 4. write the gmail.push notification to the channel's cell
     T-->>P: 200, which acknowledges the message
-    U-->>S: 5. the journal changes
+    U-->>S: 5. the cell changes
     S->>G: 6. history.list from the syncer's own cursor
 ```
 
@@ -142,9 +142,11 @@ Toolshed never sees a message, a sender, or a subject. Step 1 carries the
 address and a history id and nothing more, and the mail itself travels only in
 step 6, directly between Google and the user's machine.
 
-In step 5 the syncer reads the journal out of its own space, the way any
-client reads a cell. Toolshed opens no connection to the user's machine, and
-how the syncer watches for the change is the syncer's own business.
+In step 5 the syncer reads the cell out of its own space, the way any client
+reads a cell, and a subscription on it fires when toolshed's write lands.
+Toolshed opens no connection to the user's machine. The cell holds only the
+newest notification, so it never grows, and one subscription serves for as
+long as the syncer runs.
 
 ## What each crossing proves
 
@@ -158,9 +160,10 @@ how the syncer watches for the change is the syncer's own business.
   carries no mail and the syncer fetches changes from Gmail itself. It does
   expose one fact: the response counts the live channels the notification
   reached, so a holder of the account can learn whether an address is bound,
-  and to how many channels. And it costs availability: each post adds a
-  record to the journal of every channel bound to the mailbox and prompts a
-  sync, so a holder can grow those journals and keep syncers busy.
+  and to how many channels. And it costs availability: each post carrying a
+  newer history id changes the cell of every channel bound to the mailbox and
+  prompts a sync, so a holder can keep syncers busy. A post that carries no
+  newer id changes nothing.
 - **Syncer to control plane (a).** The signed request proves the caller's
   identity key, and the channel's space must list that identity as OWNER.
 - **Toolshed to Gmail (b).** The access token proves the caller can read the
@@ -174,10 +177,10 @@ how the syncer watches for the change is the syncer's own business.
 | --- | --- |
 | Gmail drops or delays a notification | The syncer's slower poll. |
 | Toolshed is down, or storage fails | Toolshed returns a non-2xx status or nothing, and Pub/Sub redelivers with backoff. |
-| Pub/Sub delivers a message twice | The journal gets two records. The syncer compares history ids and skips the one it already covered. |
+| Pub/Sub delivers a message twice | The second delivery carries no newer history id, so the cell does not change and the syncer is not woken. |
 | The watch expires | The syncer's daily renewal. A watch lasts seven days. |
 | The channel is revoked or expired | Delivery skips it. The syncer rotates the channel or mints a new one, then binds again. |
-| The syncer was offline | The journal keeps the records, and the syncer catches up from its cursor when it returns. |
+| The syncer was offline | The cell holds the newest history id, and the syncer catches up from its own cursor when it returns. |
 | The sync falls out of Gmail's history window | The syncer's own recovery, which is a bounded full sync. |
 
 ## Where the code is
@@ -187,4 +190,4 @@ how the syncer watches for the change is the syncer's own business.
 - [`packages/toolshed/routes/ingest-channels/`](../../packages/toolshed/routes/ingest-channels/)
   holds the control plane, with the binding verbs in `gmail-binding.utils.ts`.
 - [`packages/toolshed/routes/ingest/`](../../packages/toolshed/routes/ingest/)
-  holds the channel registry and the journal append both paths share.
+  holds the channel registry, and the vouched writes behind both sinks.

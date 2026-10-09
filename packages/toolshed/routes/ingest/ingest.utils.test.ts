@@ -14,11 +14,13 @@ import {
   type IngestRegistration,
   isValidPartition,
   journalCell,
+  latestCell,
   MAX_BATCH,
   peekMintRequest,
   processIngest,
   saveRegistration,
   verifyIngestSecret,
+  writeLatest,
 } from "./ingest.utils.ts";
 
 // Golden cell id for cause "location/2026-07-01" — pins the cross-repo cell
@@ -136,6 +138,40 @@ describe("ingest journal sink", () => {
     const cell = journalCell(runtime, reg(), "1999-01-01");
     await cell.sync();
     expect(cell.get()).toBeUndefined();
+  });
+
+  it("writeLatest: fills an empty cell, replaces a superseded record, and mints the mark", async () => {
+    const r = reg({ causePrefix: "gmail-push", sink: "latest" });
+    const newer = (
+      current: Record<string, unknown>,
+      next: Record<string, unknown>,
+    ) => (next.seq as number) > (current.seq as number);
+
+    expect(await writeLatest(runtime, r, { seq: 1 }, newer)).toBe(true);
+    expect(await writeLatest(runtime, r, { seq: 2 }, newer)).toBe(true);
+
+    const cell = latestCell(runtime, r);
+    await cell.sync();
+    expect(cell.get()).toEqual({ seq: 2 });
+    const marks = ingestMarks(space, cell.getAsNormalizedFullLink().id);
+    expect(marks.length).toBeGreaterThan(0);
+    expect(markType(marks[0])).toBe(CFC_ATOM_TYPE.ExternalIngest);
+    expect(marks[0]).toMatchObject({ channel: space, audience: "install-1" });
+  });
+
+  it("writeLatest: keeps the record already there when the new one does not supersede it", async () => {
+    const r = reg({ causePrefix: "gmail-push", sink: "latest" });
+    const newer = (
+      current: Record<string, unknown>,
+      next: Record<string, unknown>,
+    ) => (next.seq as number) > (current.seq as number);
+    await writeLatest(runtime, r, { seq: 2 }, newer);
+
+    expect(await writeLatest(runtime, r, { seq: 1 }, newer)).toBe(false);
+
+    const cell = latestCell(runtime, r);
+    await cell.sync();
+    expect(cell.get()).toEqual({ seq: 2 });
   });
 
   it("distinct partitions land in distinct cells", async () => {

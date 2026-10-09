@@ -34,6 +34,7 @@ import {
   getSpaceLifetimeChannelCount,
   getSpaceRegistrationIndex,
   type IngestRegistration,
+  type IngestSink,
   ingestUrl,
   isValidRequestId,
   isValidSegment,
@@ -142,7 +143,7 @@ export interface ChannelView {
   space: string;
   causePrefix: string;
   installId: string;
-  sink: "journal";
+  sink: IngestSink;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -241,7 +242,7 @@ export const channelSummary = (
   space: r.space,
   causePrefix: r.causePrefix,
   installId: r.installId,
-  sink: "journal" as const,
+  sink: r.sink,
   createdAt: r.createdAt,
   enabled: r.enabled,
   ...(r.owner !== undefined ? { owner: r.owner } : {}),
@@ -263,6 +264,7 @@ const persist = async (
     space: string;
     causePrefix: string;
     installId: string;
+    sink: IngestSink;
     existing: IngestRegistration | null;
     callerDid: string;
     ttlDays?: number;
@@ -321,7 +323,7 @@ const persist = async (
     space: params.space,
     causePrefix: params.causePrefix,
     installId: params.installId,
-    sink: "journal",
+    sink: params.sink,
     secretHash,
     createdBy: deps.operatorDid,
     createdAt: params.existing?.createdAt ?? now.toISOString(),
@@ -436,6 +438,9 @@ export interface MintInput {
   causePrefix?: string;
   name?: string;
   ttlDays?: number;
+
+  /** What the channel's writes land in; a journal unless named. */
+  sink?: IngestSink;
   requestId: string;
 }
 
@@ -513,6 +518,15 @@ export async function processMint(
           `--install-id to get a channel with cause-prefix '${causePrefix}'.`,
       );
     }
+    // The sink is immutable for the same reason: it decides which cells the
+    // reader watches. A re-mint that names none keeps the channel's own.
+    if (input.sink !== undefined && existing.sink !== input.sink) {
+      return conflict(
+        `Channel ${id} is registered with sink '${existing.sink}', and a ` +
+          `channel's sink cannot change. Use a different --install-id to ` +
+          `get a channel with sink '${input.sink}'.`,
+      );
+    }
   }
 
   // The live-channel and lifetime caps are NOT checked here. They are enforced
@@ -534,6 +548,7 @@ export async function processMint(
     space: input.space,
     causePrefix,
     installId: input.installId,
+    sink: input.sink ?? existing?.sink ?? "journal",
     existing,
     callerDid,
     ttlDays: input.ttlDays,
@@ -614,6 +629,7 @@ export async function processRotate(
     space: existing.registration.space,
     causePrefix: existing.registration.causePrefix,
     installId: existing.registration.installId,
+    sink: existing.registration.sink,
     existing: existing.registration,
     callerDid,
     ttlDays: input.ttlDays,

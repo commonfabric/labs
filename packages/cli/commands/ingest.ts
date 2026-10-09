@@ -5,6 +5,8 @@ import { render } from "../lib/render.ts";
 import {
   bindGmail,
   type ChannelConfig,
+  INGEST_SINKS,
+  type IngestSink,
   listChannels,
   mintChannel,
   newRequestId,
@@ -61,6 +63,19 @@ const requireSpace = (space: string | undefined): string => {
     });
   }
   return space;
+};
+
+// `undefined` is left to the server, which mints a journal.
+const requireSink = (sink: string | undefined): IngestSink | undefined => {
+  if (sink === undefined) return undefined;
+  const known = INGEST_SINKS.find((candidate) => candidate === sink);
+  if (known === undefined) {
+    throw new ValidationError(
+      `Unknown sink "${sink}"; expected one of ${INGEST_SINKS.join(", ")}.`,
+      { exitCode: 1 },
+    );
+  }
+  return known;
 };
 
 /**
@@ -155,9 +170,21 @@ export const ingest = new Command()
     "Days until the token expires (default 90). Every channel expires; this " +
       "only chooses when.",
   )
+  .option(
+    "--sink <kind:string>",
+    "What the channel's writes land in: `journal`, records in per-day " +
+      "partition cells that a device POSTs to (the default), or `latest`, one " +
+      "cell holding the newest Gmail push notification.",
+  )
   .example(
     cliText("cf ingest mint --space did:key:z6Mk... --install-id phone-1"),
     "Mint a channel for a space you own",
+  )
+  .example(
+    cliText(
+      "cf ingest mint --space did:key:z6Mk... --install-id loom-1 --sink latest",
+    ),
+    "Mint a channel to bind a Gmail mailbox to",
   )
   .action(async (options) => {
     const config = parseConfig(options);
@@ -176,6 +203,7 @@ export const ingest = new Command()
       causePrefix: options.causePrefix,
       name: options.name,
       ttlDays: options.ttlDays,
+      sink: requireSink(options.sink),
       requestId: newRequestId(),
     });
     renderMinted(minted, "minted");

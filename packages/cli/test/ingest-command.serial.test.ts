@@ -193,6 +193,25 @@ describe("cf ingest option validation", () => {
       'Missing required option: "--install-id".',
     );
   });
+
+  it("rejects mint with a sink it does not know", async () => {
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "p",
+        "--sink",
+        "stream",
+      ],
+      'Unknown sink "stream"; expected one of journal, latest.',
+    );
+  });
 });
 
 describe("cf ingest mint", () => {
@@ -213,6 +232,8 @@ describe("cf ingest mint", () => {
       "Phone",
       "--ttl-days",
       "30",
+      "--sink",
+      "latest",
     ], {
       mint: { ...minted, expiresAt: "2026-09-03T00:00:00.000Z" },
     });
@@ -229,6 +250,7 @@ describe("cf ingest mint", () => {
     expect(calls[0].body.causePrefix).toBe("ingest/phone-1");
     expect(calls[0].body.name).toBe("Phone");
     expect(calls[0].body.ttlDays).toBe(30);
+    expect(calls[0].body.sink).toBe("latest");
     // A fresh idempotency key is minted per invocation, not left to the caller.
     expect(typeof calls[0].body.requestId).toBe("string");
     expect((calls[0].body.requestId as string).length).toBeGreaterThan(0);
@@ -264,6 +286,8 @@ describe("cf ingest mint", () => {
     // A did:key --space is forwarded verbatim — no derivation in the way.
     expect(calls[0].space).toBe(SPACE_DID);
     expect(calls[0].body.causePrefix).toBeUndefined();
+    // The sink is the server's default when none is named.
+    expect(calls[0].body.sink).toBeUndefined();
     expect(output).toContain("Ingest channel minted.");
     // The VALUE, not the label: the label prints unconditionally, so asserting
     // it alone would pass just as happily against a server that dropped the

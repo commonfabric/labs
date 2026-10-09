@@ -7,10 +7,10 @@ as the backstop for a notification that never arrives.
 
 Gmail's `users.watch` publishes to a Cloud Pub/Sub topic when a watched
 mailbox changes. A Pub/Sub push subscription delivers each message to
-toolshed, and toolshed appends a record to the journal of every
+toolshed, and toolshed writes the notification into the cell of every
 [ingest channel](self-serve-ingest-channels.md) bound to that mailbox. The
-syncer reads its channel's journal and, on a new record, resyncs the mailbox
-from its own cursor.
+syncer watches that cell and, when it changes, resyncs the mailbox from its
+own cursor.
 
 [`gmail-push-architecture.md`](gmail-push-architecture.md) draws the whole
 path, across Google, toolshed, and the user's machine, and says who runs each
@@ -22,18 +22,22 @@ space is a signal that something changed, never mail.
 
 ## The flow
 
-1. The syncer mints an ingest channel for the space it reads from, as
-   [self-serve-ingest-channels.md](self-serve-ingest-channels.md) describes.
+1. The syncer mints an ingest channel with the `latest` sink into a space it
+   owns, as [self-serve-ingest-channels.md](self-serve-ingest-channels.md)
+   describes. A `latest` channel has one cell, which holds only the newest
+   notification; a mailbox needs no history of them, and a cell that never
+   grows is one the syncer can watch for as long as it runs.
 2. It binds the channel to its mailbox with `gmail-bind`, handing toolshed a
-   Google access token that reads the mailbox.
+   Google access token that reads the mailbox. Only a `latest` channel binds.
 3. It calls Gmail's `users.watch` with that user's token, naming the Pub/Sub
    topic, and repeats the call before the watch expires.
 4. When the mailbox changes, Gmail publishes to the topic, and the push
    subscription POSTs the message to
    `/api/spaces/:space/ingest-push/gmail`.
-5. Toolshed checks the push token, looks the mailbox up, and appends one
-   record to each live bound channel's journal.
-6. The syncer sees the new record and runs an incremental sync.
+5. Toolshed checks the push token, looks the mailbox up, and writes the
+   notification into each live bound channel's cell, unless the cell already
+   holds a newer history id.
+6. The syncer sees the cell change and runs an incremental sync.
 
 ## Routes
 
@@ -149,26 +153,32 @@ costs a request to Gmail. `gmail-unbind` has a bucket of its own, so that it
 stays available when binding is throttled and never spends the budget that
 revoke relies on.
 
-## The record
+## The cell
 
-Each delivery appends one record to the journal partition named for the UTC
-day the message was published, or for the current day when the publish time
-does not parse:
+A `latest` channel's one cell has the cause the channel's `causePrefix`
+names, in the channel's space. Each delivery replaces what the cell holds
+with the notification:
 
 ```json
 {
   "type": "gmail.push",
   "emailAddress": "alice@example.com",
   "historyId": "4242",
-  "messageId": "1234567890",
   "publishTime": "2026-09-30T12:34:56.789Z"
 }
 ```
 
 `historyId` is a decimal string, since a history id is an unsigned 64-bit
-integer and a JSON number that large loses precision. The record carries the
-ExternalIngest mark every journal append carries, and the delivery stamps the
+integer and a JSON number that large loses precision. The write carries the
+ExternalIngest mark every vouched write carries, and the delivery stamps the
 channel's last-seen time.
+
+The cell only ever moves forward. A notification whose history id is not
+newer than the one the cell holds leaves the cell as it is, so a redelivery,
+or two deliveries landing on different instances out of order, cannot set
+the cursor back. A reader that watches the cell is woken once per change,
+however many deliveries carried the same id, and reads the history id as the
+point to sync from.
 
 ## The service space
 
@@ -193,6 +203,7 @@ a log line.
 - A mailbox binds to at most eight channels at once, so several installs of
   one syncer can each have their own. Binding past that answers 409.
 - A channel binds to at most one mailbox. Binding it again moves it.
+- Only a `latest` channel binds; binding a journal answers 409.
 - A bound channel that is revoked, expired, or gone is skipped on delivery,
   and gives up its place in the mailbox's list at the next bind to that
   mailbox.

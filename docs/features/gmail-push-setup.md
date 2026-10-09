@@ -297,11 +297,12 @@ is refused, with an error that names the same DID and says to grant it WRITE:
 cf acl set <deployment did> WRITE --space <space>
 ```
 
-Mint a channel into the space, then bind it to the mailbox. The command reads
-the Gmail access token from `CF_GMAIL_ACCESS_TOKEN`:
+Mint a channel with the `latest` sink into the space, then bind it to the
+mailbox. The bind command reads the Gmail access token from
+`CF_GMAIL_ACCESS_TOKEN`:
 
 ```bash
-cf ingest mint --space <space> --install-id <install id> --cause-prefix gmail-push
+cf ingest mint --space <space> --install-id <install id> --cause-prefix gmail-push --sink latest
 CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest gmail-bind <channel>
 ```
 
@@ -376,9 +377,9 @@ curl -s -X POST -H "Authorization: Bearer <gcloud token>" -H "Content-Type: appl
 - Toolshed's response to a delivery is `{"delivered": 1}` for a bound mailbox
   with one live channel, and `{"delivered": 0}` for a mailbox nobody bound.
 - `cf ingest ls` shows the channel's LAST SEEN time moving with each delivery.
-- The record lands in the journal cell `gmail-push/<UTC day>` in `<space>`,
-  where `gmail-push` is the channel's cause prefix.
-- The history id in a record is enough to fetch what changed. This lists what
+- The notification lands in the cell `gmail-push` in `<space>`, where
+  `gmail-push` is the channel's cause prefix, replacing the one before it.
+- The history id in the cell is enough to fetch what changed. This lists what
   arrived in the inbox since an earlier id:
 
 ```bash

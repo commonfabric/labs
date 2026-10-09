@@ -34,7 +34,7 @@ import {
   channelId,
   getLastSeen,
   type IngestRegistration,
-  journalCell,
+  latestCell,
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
 
@@ -145,7 +145,7 @@ describe("gmail-push.utils", () => {
       space,
       causePrefix: `gmail-push-${installId}`,
       installId,
-      sink: "journal",
+      sink: "latest",
       secretHash: "unused",
       createdBy: space,
       createdAt: "2026-09-01T00:00:00.000Z",
@@ -156,11 +156,11 @@ describe("gmail-push.utils", () => {
     return registration;
   };
 
-  const journal = async (
+  /** What a channel's cell holds. */
+  const latest = async (
     registration: IngestRegistration,
-    partition: string,
   ): Promise<unknown> => {
-    const cell = journalCell(runtime, registration, partition);
+    const cell = latestCell(runtime, registration);
     await cell.sync();
     await runtime.storageManager.synced();
     return cell.get();
@@ -324,20 +324,19 @@ describe("gmail-push.utils", () => {
         });
       });
 
-      it("appends a record to the bound channel's journal for the day it was published", async () => {
+      it("writes the notification to the bound channel's cell", async () => {
         const a = await channel("a");
         await bindMailbox(runtime, space, a.id, MAILBOX);
 
         const result = await push(envelope(notification()));
 
         expect(result).toEqual({ status: 200, body: { delivered: 1 } });
-        expect(await journal(a, "2026-09-30")).toEqual([{
+        expect(await latest(a)).toEqual({
           type: "gmail.push",
           emailAddress: MAILBOX,
           historyId: "4242",
-          messageId: "m-1",
           publishTime: PUBLISH_TIME,
-        }]);
+        });
       });
 
       it("records a history id given as a decimal string unchanged", async () => {
@@ -347,10 +346,50 @@ describe("gmail-push.utils", () => {
 
         await push(envelope(notification({ historyId: big })));
 
-        const records = await journal(a, "2026-09-30") as {
-          historyId: string;
-        }[];
-        expect(records[0].historyId).toBe(big);
+        expect(await latest(a)).toMatchObject({ historyId: big });
+      });
+
+      it("replaces the record when a newer history id arrives", async () => {
+        const a = await channel("a");
+        await bindMailbox(runtime, space, a.id, MAILBOX);
+        await push(envelope(notification({ historyId: 4242 })));
+
+        await push(envelope(notification({ historyId: 5000 })));
+
+        expect(await latest(a)).toMatchObject({ historyId: "5000" });
+      });
+
+      it("keeps the record when an older history id arrives after it", async () => {
+        const a = await channel("a");
+        await bindMailbox(runtime, space, a.id, MAILBOX);
+        await push(envelope(notification({ historyId: 4242 })));
+
+        const result = await push(envelope(notification({ historyId: 4000 })));
+
+        expect(result).toEqual({ status: 200, body: { delivered: 1 } });
+        expect(await latest(a)).toMatchObject({ historyId: "4242" });
+      });
+
+      it("compares history ids as integers, not as strings", async () => {
+        const a = await channel("a");
+        await bindMailbox(runtime, space, a.id, MAILBOX);
+        await push(envelope(notification({ historyId: "900" })));
+
+        await push(envelope(notification({ historyId: "1000" })));
+
+        expect(await latest(a)).toMatchObject({ historyId: "1000" });
+      });
+
+      it("leaves the cell as it is when the same history id is delivered again", async () => {
+        const a = await channel("a");
+        await bindMailbox(runtime, space, a.id, MAILBOX);
+        await push(envelope(notification(), { publishTime: PUBLISH_TIME }));
+
+        await push(
+          envelope(notification(), { publishTime: "2026-09-30T12:35:00.000Z" }),
+        );
+
+        expect(await latest(a)).toMatchObject({ publishTime: PUBLISH_TIME });
       });
 
       it("matches the mailbox regardless of case", async () => {
@@ -362,15 +401,6 @@ describe("gmail-push.utils", () => {
         expect(result).toEqual({ status: 200, body: { delivered: 1 } });
       });
 
-      it("files a notification whose publish time does not parse under the current day", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
-
-        await push(envelope(notification(), { publishTime: "yesterday" }));
-
-        expect(await journal(a, "2026-10-01")).toHaveLength(1);
-      });
-
       it("delivers to every live channel bound to the mailbox", async () => {
         const a = await channel("a");
         const b = await channel("b");
@@ -380,8 +410,18 @@ describe("gmail-push.utils", () => {
         const result = await push(envelope(notification()));
 
         expect(result).toEqual({ status: 200, body: { delivered: 2 } });
-        expect(await journal(a, "2026-09-30")).toHaveLength(1);
-        expect(await journal(b, "2026-09-30")).toHaveLength(1);
+        expect(await latest(a)).toMatchObject({ historyId: "4242" });
+        expect(await latest(b)).toMatchObject({ historyId: "4242" });
+      });
+
+      it("skips a bound channel that is a journal", async () => {
+        const j = await channel("j", { sink: "journal" });
+        await bindMailbox(runtime, space, j.id, MAILBOX);
+
+        const result = await push(envelope(notification()));
+
+        expect(result).toEqual({ status: 200, body: { delivered: 0 } });
+        expect(await latest(j)).toBeUndefined();
       });
 
       it("skips a bound channel that has since been revoked", async () => {
@@ -396,7 +436,7 @@ describe("gmail-push.utils", () => {
         const result = await push(envelope(notification()));
 
         expect(result).toEqual({ status: 200, body: { delivered: 0 } });
-        expect(await journal(a, "2026-09-30")).toBeUndefined();
+        expect(await latest(a)).toBeUndefined();
       });
 
       it("skips a bound channel that has expired", async () => {

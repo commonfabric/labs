@@ -47,13 +47,23 @@ export interface ChannelConfig {
   identityPath: string;
 }
 
+/**
+ * What a channel's writes land in: a `journal` of records in per-day
+ * partition cells, which a device POSTs to, or one `latest` cell holding the
+ * newest Gmail push notification.
+ */
+export type IngestSink = "journal" | "latest";
+
+/** The sinks a channel can be minted with, as `--sink` accepts them. */
+export const INGEST_SINKS: readonly IngestSink[] = ["journal", "latest"];
+
 export interface ChannelSummary {
   id: string;
   name: string;
   space: string;
   causePrefix: string;
   installId: string;
-  sink: "journal";
+  sink: IngestSink;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -146,6 +156,7 @@ export function mintChannel(
     causePrefix?: string;
     name?: string;
     ttlDays?: number;
+    sink?: IngestSink;
     requestId: string;
   },
 ): Promise<MintedChannel> {

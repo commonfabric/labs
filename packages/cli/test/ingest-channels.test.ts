@@ -269,6 +269,7 @@ describe("ingest-channel verbs", () => {
           causePrefix: "ingest/phone-1",
           name: "Phone",
           ttlDays: 30,
+          sink: "latest",
           requestId: "req-1",
         });
         expect(calls.length).toBe(1);
@@ -279,6 +280,7 @@ describe("ingest-channel verbs", () => {
           causePrefix: "ingest/phone-1",
           name: "Phone",
           ttlDays: 30,
+          sink: "latest",
           requestId: "req-1",
         });
         return got;

@@ -95,12 +95,16 @@ describe("gmail-binding.utils", () => {
     await server.close();
   });
 
-  /** Mints a channel into alice's space, and returns its id. */
-  const mintChannel = async (installId = "loom-1"): Promise<string> =>
+  /** Mints a `latest` channel into alice's space, and returns its id. */
+  const mintChannel = async (
+    installId = "loom-1",
+    sink: "latest" | "journal" = "latest",
+  ): Promise<string> =>
     ok(
       await processMint(deps, alice.did(), {
         space,
         installId,
+        sink,
         requestId: `req-${installId}`,
       }),
     ).id;
@@ -236,6 +240,17 @@ describe("gmail-binding.utils", () => {
 
       expect(result.status).toBe(409);
       expect(lookups).toEqual([]);
+    });
+
+    it("returns 409 for a journal channel, without asking Gmail", async () => {
+      const id = await mintChannel("loom-j", "journal");
+
+      const result = await bind(id, "req-1");
+
+      expect(result.status).toBe(409);
+      expect(JSON.stringify(result.body)).toContain("latest");
+      expect(lookups).toEqual([]);
+      expect(await bound()).toEqual([]);
     });
 
     it("returns 400 for a request id that is not a single clean segment", async () => {
@@ -403,6 +418,7 @@ describe("gmail-binding.utils", () => {
         await processMint(elsewhere, alice.did(), {
           space,
           installId: "loom-registry",
+          sink: "latest",
           requestId: "req-mint",
         }),
       );

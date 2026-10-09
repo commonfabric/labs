@@ -9,9 +9,9 @@
  * a wake-up signal: the reader resyncs the mailbox from its own cursor. A
  * mailbox reaches a space through a binding from its address to an ingest
  * channel, which the channel's owner makes on the control plane
- * (`routes/ingest-channels`), and each notification appends one record to
- * the journal of every live channel bound to its mailbox. See
- * `docs/features/gmail-push-ingest.md`.
+ * (`routes/ingest-channels`), and each notification replaces the record in
+ * the one cell of every live channel bound to its mailbox, unless the cell
+ * already holds a newer history id. See `docs/features/gmail-push-ingest.md`.
  */
 
 import { errors, jwtVerify, type JWTVerifyGetKey } from "@panva/jose";
@@ -21,7 +21,6 @@ import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
-  appendToJournal,
   channelRefusal,
   type ClaimCheck,
   type ClaimRequest,
@@ -31,6 +30,7 @@ import {
   recordLastSeen,
   RequestAlreadyClaimedError,
   requestClaim,
+  writeLatest,
 } from "@/routes/ingest/ingest.utils.ts";
 
 /** How many channels one mailbox may be bound to at once. */
@@ -121,11 +121,11 @@ export interface GmailPushDeps {
  * failed on storage is not.
  */
 export type GmailPushResult =
-  /** Acknowledged, having appended to `delivered` channels. */
+  /** Acknowledged, having reached `delivered` live channels. */
   | { status: 200; body: { delivered: number } }
   /** No token, or one that is not a push token from an accepted account. */
   | { status: 401; body: { error: string } }
-  /** A lookup or an append failed; Pub/Sub redelivers the message. */
+  /** A lookup or a write failed; Pub/Sub redelivers the message. */
   | { status: 502; body: { error: string } };
 
 /** A Gmail notification, as decoded from a push envelope. */
@@ -502,27 +502,36 @@ function decodeNotification(rawBody: string): GmailNotification | null {
 }
 
 /**
- * Helper for `processGmailPush()`, which names the journal partition a
- * notification belongs in: the UTC day it was published, or today when its
- * publish time does not parse.
+ * Helper for `processGmailPush()`, which returns whether `next` carries a
+ * newer history id than `current`. A record with no readable history id is
+ * superseded by anything, so a cell holding one is not stuck.
  */
-function partitionFor(publishTime: string, now: number): string {
-  const published = Date.parse(publishTime);
-  const at = Number.isFinite(published) ? published : now;
-  return new Date(at).toISOString().slice(0, 10);
+function supersedes(
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): boolean {
+  const held = current.historyId;
+  const incoming = next.historyId;
+  if (typeof incoming !== "string" || !HISTORY_ID_RE.test(incoming)) {
+    return false;
+  }
+  if (typeof held !== "string" || !HISTORY_ID_RE.test(held)) return true;
+  return BigInt(incoming) > BigInt(held);
 }
 
 /**
  * The transport-independent core of the push handler. Verifies the push
- * token, then appends the notification to the journal of every live channel
- * bound to its mailbox.
+ * token, then writes the notification to the cell of every live `latest`
+ * channel bound to its mailbox, where it replaces whatever the cell held
+ * unless that carries a newer history id.
  *
  * A notification for a mailbox nobody has bound, and a body that is not a
  * Gmail notification at all, are both acknowledged: Pub/Sub would otherwise
- * redeliver them for as long as the subscription retains them. An append
- * that fails partway through is redelivered in full, so a channel may
- * receive the same notification more than once; a reader compares history
- * ids, which makes that harmless.
+ * redeliver them for as long as the subscription retains them. A write that
+ * fails partway through is redelivered in full, which is harmless: a
+ * redelivery carries the history id the cell already holds, and changes
+ * nothing. `delivered` counts the live channels the notification reached,
+ * whether or not it was newer than what each held.
  */
 export async function processGmailPush(
   deps: GmailPushDeps,
@@ -547,26 +556,22 @@ export async function processGmailPush(
   }
 
   // The address is left out of every log line, and so is its key, which
-  // would let anyone with the logs test a guess at it.
-  const { messageId } = notification;
-  const partition = partitionFor(notification.publishTime, now);
-  const record = { type: "gmail.push", ...notification };
+  // would let anyone with the logs test a guess at it. The record leaves out
+  // Pub/Sub's message id, which names the delivery rather than any mail.
+  const { messageId, emailAddress, historyId, publishTime } = notification;
+  const record = { type: "gmail.push", emailAddress, historyId, publishTime };
   let delivered = 0;
   try {
-    const ids = await getMailboxChannels(
-      runtime,
-      serviceSpace,
-      notification.emailAddress,
-    );
+    const ids = await getMailboxChannels(runtime, serviceSpace, emailAddress);
     for (const id of ids) {
       const registration = await getRegistration(runtime, serviceSpace, id);
       if (
-        registration === null || registration.sink !== "journal" ||
+        registration === null || registration.sink !== "latest" ||
         channelRefusal(registration, now) !== null
       ) {
         continue;
       }
-      await appendToJournal(runtime, registration, partition, [record]);
+      await writeLatest(runtime, registration, record, supersedes);
       await recordLastSeen(runtime, serviceSpace, id, logger);
       delivered++;
     }

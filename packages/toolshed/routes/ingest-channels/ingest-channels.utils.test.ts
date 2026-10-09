@@ -216,6 +216,34 @@ describe("ingest-channels control plane", () => {
     expect(err(res)).toContain("cause-prefix");
   });
 
+  it("stores the sink it was minted with, and a journal when none is named", async () => {
+    const journal = ok(await mint(alice, "req-a"));
+    const latest = ok(
+      await mint(alice, "req-b", { installId: "phone-2", sink: "latest" }),
+    );
+
+    const stored = (id: string) => getRegistration(runtime, operator.did(), id);
+    expect((await stored(journal.id))?.sink).toBe("journal");
+    expect((await stored(latest.id))?.sink).toBe("latest");
+    const listed = ok(await processList(deps, alice.did(), {})).channels;
+    expect(listed.map((c) => [c.installId, c.sink]).sort()).toEqual([
+      ["phone-1", "journal"],
+      ["phone-2", "latest"],
+    ]);
+  });
+
+  it("refuses to re-mint under a different sink, and keeps the sink when none is named", async () => {
+    const { id } = ok(await mint(alice, "req-a", { sink: "latest" }));
+
+    const changed = await mint(alice, "req-b", { sink: "journal" });
+    expect(changed.status).toBe(409);
+    expect(err(changed)).toContain("sink");
+
+    expect((await mint(alice, "req-c")).status).toBe(200);
+    const stored = await getRegistration(runtime, operator.did(), id);
+    expect(stored?.sink).toBe("latest");
+  });
+
   it("rejects an installId that could impersonate an integration audience", async () => {
     // `did:web:commonfabric.org#oauth2` and `#plaid` are the token-less
     // integration audiences; the segment charset is what keeps a minted

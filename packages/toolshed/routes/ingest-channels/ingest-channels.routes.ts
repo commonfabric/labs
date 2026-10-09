@@ -57,7 +57,7 @@ const channelSummary = z.object({
   space: z.string(),
   causePrefix: z.string(),
   installId: z.string(),
-  sink: z.literal("journal"),
+  sink: z.enum(["journal", "latest"]),
   createdAt: z.string(),
   enabled: z.boolean(),
   owner: z.string().optional(),
@@ -145,6 +145,12 @@ export const mint = createRoute({
             causePrefix: z.string().optional(),
             name: z.string().optional(),
             ttlDays: z.number().int().positive().max(MAX_TTL_DAYS).optional(),
+            sink: z.enum(["journal", "latest"]).optional().describe(
+              "What the channel's writes land in: a `journal` of records in " +
+                "per-day partition cells, which devices POST to, or one " +
+                "`latest` cell holding the newest Gmail push notification. " +
+                "A journal unless named.",
+            ),
             requestId: requestIdField,
           }),
         },
