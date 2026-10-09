@@ -74,6 +74,14 @@ const NAMED_WITH_SIBLING = parentProgram([
   "  return { views: [s, a], aCount: a.count, sCount: s.count };",
 ].join("\n"));
 
+// The same insertion with the sibling positional, which puts it at the
+// positional spot the deployed parent gave `a`.
+const POSITIONAL_SIBLING_OF_NAMED = parentProgram([
+  "  const [s] = [Other({ label: 's' })];",
+  "  const a = Counter({ label: 'a' });",
+  "  return { views: [s, a], aCount: a.count, sCount: s.count };",
+].join("\n"));
+
 // The same insertion with both children positional.
 const POSITIONAL_WITH_SIBLING = parentProgram([
   "  const [s, a] = [Other({ label: 's' }), Counter({ label: 'a' })];",
@@ -164,42 +172,77 @@ describe("instance-carry-over", () => {
     return cell.get() as Record<string, unknown>;
   };
 
-  it("keeps a deployed child's state when an unrelated sibling is inserted ahead of it", async () => {
-    const cell = await deployedParent("sibling-inserted");
+  describe("a named instance", () => {
+    it("keeps its deployed child's state when an unrelated sibling is inserted ahead of it, and the sibling starts fresh", async () => {
+      const cell = await deployedParent("sibling-inserted");
 
-    const result = await update(cell, NAMED_WITH_SIBLING);
+      const result = await update(cell, NAMED_WITH_SIBLING);
 
-    expect(result.aCount).toBe(7);
-    expect(result.sCount).toBe(0);
+      expect(result.aCount).toBe(7);
+      expect(result.sCount).toBe(0);
+    });
+
+    it("keeps its deployed child's state when the parent carries no setup marker", async () => {
+      const cell = await deployedParent("no-setup-marker", "absent");
+
+      const result = await update(cell, NAMED_WITH_SIBLING);
+
+      expect(result.aCount).toBe(7);
+      expect(result.sCount).toBe(0);
+    });
+
+    it("keeps the child it carried over across a further update", async () => {
+      const cell = await deployedParent("further-update");
+      await update(cell, NAMED_WITH_SIBLING);
+
+      const result = await update(cell, NAMED);
+
+      expect(result.aCount).toBe(7);
+    });
+
+    it("keeps its deployed child's state through a start under the same source and a live update after it", async () => {
+      // The start is a runtime first running a deployed parent whose source
+      // has not changed, and the update a pointer move the running parent's
+      // watcher follows.
+
+      const cell = await deployedParent("same-source-start");
+      expect(await rt.runner.start(cell)).toBe(true);
+      await rt.idle();
+      await cell.pull();
+      expect((cell.get() as Record<string, unknown>).aCount).toBe(7);
+
+      const withSibling = await compile(NAMED_WITH_SIBLING);
+      const ref = rt.patternManager.getArtifactEntryRef(withSibling)!;
+      const stamp = rt.edit();
+      cell.withTx(stamp).setMetaRaw("patternIdentity", {
+        identity: ref.identity,
+        symbol: ref.symbol,
+      }, rawMetaWriteAuthorization);
+      expect((await stamp.commit().settled).error).toBeUndefined();
+      await rt.idle();
+      await cell.pull();
+
+      const result = cell.get() as Record<string, unknown>;
+      expect(result.aCount).toBe(7);
+      expect(result.sCount).toBe(0);
+    });
   });
 
-  it("keeps a deployed child's state when the parent carries no setup marker", async () => {
-    const cell = await deployedParent("no-setup-marker", "absent");
+  describe("a positional child", () => {
+    it("refuses to set up over a child that has moved spots", async () => {
+      const cell = await deployedParent("positional-moved");
 
-    const result = await update(cell, NAMED_WITH_SIBLING);
+      await expect(update(cell, POSITIONAL_WITH_SIBLING)).rejects.toThrow(
+        /refusing to set up .*#Other over the child of .*#Counter/,
+      );
+    });
 
-    expect(result.aCount).toBe(7);
-    expect(result.sCount).toBe(0);
-  });
+    it("refuses to set up over the child a named instance carried over", async () => {
+      const cell = await deployedParent("positional-over-carried");
 
-  it("keeps the carried-over child across a further update", async () => {
-    const cell = await deployedParent("further-update");
-    await update(cell, NAMED_WITH_SIBLING);
-    const write = rt.edit();
-    cell.withTx(write).key("aCount").set(8);
-    expect((await write.commit().settled).error).toBeUndefined();
-    await rt.idle();
-
-    const result = await update(cell, NAMED);
-
-    expect(result.aCount).toBe(8);
-  });
-
-  it("refuses to set up a positional child over a child that has moved spots", async () => {
-    const cell = await deployedParent("positional-moved");
-
-    await expect(update(cell, POSITIONAL_WITH_SIBLING)).rejects.toThrow(
-      /refusing to set up .*#Other over the child of .*#Counter/,
-    );
+      await expect(update(cell, POSITIONAL_SIBLING_OF_NAMED)).rejects.toThrow(
+        /refusing to set up .*#Other over the child of .*#Counter that instance "a" carries/,
+      );
+    });
   });
 });
