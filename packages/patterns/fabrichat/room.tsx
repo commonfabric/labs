@@ -126,6 +126,43 @@ export const participantsOf = (
     [],
   );
 
+/** A participant, with the principal their profile attests. */
+export interface ParticipantEntry {
+  /** The participant's profile. */
+  profile: ProfileCell;
+
+  /**
+   * The principal the profile's `represents-principal` label attests; absent
+   * when it attests none, or when the label can't be read where the entry is
+   * derived.
+   */
+  principal?: string;
+}
+
+/**
+ * One entry for each of `participants`, in their order, each with the
+ * principal its profile attests where that can be read.
+ */
+export const participantEntriesOf = (
+  participants: readonly ProfileCell[],
+): ParticipantEntry[] =>
+  participants.map((profile) => {
+    const principal = principalOf(profile, "represents-principal");
+    return principal === undefined ? { profile } : { profile, principal };
+  });
+
+/** The principals `entries` attest, each once, in the order of `entries`. */
+export const principalsOf = (
+  entries: readonly ParticipantEntry[],
+): string[] =>
+  entries.reduce<string[]>(
+    (found, { principal }) =>
+      principal === undefined || found.includes(principal)
+        ? found
+        : [...found, principal],
+    [],
+  );
+
 /** What joining a room asks: the profile to add to its participants. */
 export interface JoinRoomEvent {
   /** The profile, as the live cell in its own space. */
@@ -547,11 +584,16 @@ export interface ChatRoomView {
   participants: ProfileCell[];
 
   /**
-   * The principal each of `participants` stands for, as its profile's
-   * `represents-principal` label attests it: each once, in the order of
-   * `participants`, leaving out a profile that attests none, or whose label
-   * can't be read where the list is derived. Like `participants`, it is not
-   * proof of access.
+   * One entry for each of `participants`, in their order: the profile, and the
+   * principal its `represents-principal` label attests, absent where it
+   * attests none or the label can't be read where the list is derived. Like
+   * `participants`, it is not proof of access.
+   */
+  participantEntries: ParticipantEntry[];
+
+  /**
+   * The principals `participantEntries` holds, each once, in the order of
+   * `participants`.
    */
   participantPrincipals: string[];
 
@@ -742,15 +784,14 @@ export const FabriChatRoomCore = pattern<
   );
   const participants = computed(() => participantsOf(listed, entries));
   // A profile lives in its owner's own space, and attests no one to a reader
-  // that space refuses, so the list is derived per session: one instance for
-  // every reader is one their runtimes hold differently.
+  // that space refuses, so the entries, and the principals taken from them,
+  // are derived per session: one instance for every reader is one their
+  // runtimes hold differently.
+  const pairedParticipants = computed((): PerSession<ParticipantEntry[]> =>
+    participantEntriesOf(participants)
+  );
   const participantPrincipals = computed((): PerSession<string[]> =>
-    participants.reduce<string[]>((found, participant) => {
-      const principal = principalOf(participant, "represents-principal");
-      return principal === undefined || found.includes(principal)
-        ? found
-        : [...found, principal];
-    }, [])
+    principalsOf(pairedParticipants)
   );
   const join = addParticipant({ roster });
   const canSend = computed(() => canActIn(messages, myProfile));
@@ -849,6 +890,7 @@ export const FabriChatRoomCore = pattern<
     recentActivity: activity,
     recentActivityExpiredThrough: expiredThrough,
     participants,
+    participantEntries: pairedParticipants,
     participantPrincipals,
     addParticipant: join,
     messages: messageList,
@@ -1097,6 +1139,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       recentActivity: room.recentActivity,
       recentActivityExpiredThrough: room.recentActivityExpiredThrough,
       participants: room.participants,
+      participantEntries: room.participantEntries,
       participantPrincipals: room.participantPrincipals,
       addParticipant: room.addParticipant,
       messages: room.messages,

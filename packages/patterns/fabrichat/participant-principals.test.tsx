@@ -1,8 +1,9 @@
 /**
  * The principals a FabriChat room's participants stand for, as a client that
- * draws natively reads them from the room's views: each participant's, as
- * their profile's label attests it, once, in the order of `participants`,
- * and none for a profile that attests no principal. Each person writes their
+ * draws natively reads them from the room's views: an entry for each
+ * participant, in the order of `participants`, pairing their profile with the
+ * principal its label attests, and with none for a profile that attests no
+ * principal; and each principal once, in that order. Each person writes their
  * own profile here, so its label names them, as a Fabric profile's does.
  * That a reader whom a profile's space refuses reads the list without a write
  * fight is something only spaces other than the test's own show, so
@@ -13,6 +14,7 @@ import {
   type AddIntegrity,
   assert,
   currentPrincipal,
+  equals,
   handler,
   multiUserTest,
   pattern,
@@ -228,6 +230,33 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           room.participantPrincipals.length === 2 &&
           room.participantPrincipals[0] === setup.aliceDid.get() &&
           room.participantPrincipals[1] === bobDid.get()
+        ),
+      },
+      // One entry for each participant, in order, each with its profile, and
+      // with the principal it attests, or none for the unclaimed profile.
+      {
+        assertion: assert(() => {
+          const entries = room[VIEWS].room.participantEntries;
+          const aliceDid = setup.aliceDid.get();
+          const expected = [aliceDid, undefined, aliceDid, bobDid.get()];
+          return aliceDid !== "" && bobDid.get() !== "" &&
+            entries.length === room.participants.length &&
+            entries.length === expected.length &&
+            entries.every((entry, index) =>
+              equals(entry.profile, room.participants[index]) &&
+              entry.principal === expected[index]
+            ) &&
+            !("principal" in entries[1]);
+        }),
+      },
+      // The reader's own entry, the one for the profile they read the room
+      // with, carries their principal, which is how a client tells which
+      // participant is them.
+      {
+        assertion: assert(() =>
+          room.participantEntries.find((entry) =>
+              equals(entry.profile, profile)
+            )?.principal === bobDid.get() && bobDid.get() !== ""
         ),
       },
     ],
