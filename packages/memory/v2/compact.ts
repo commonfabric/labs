@@ -134,6 +134,9 @@ const earlierBy = (createdAt: string, ms: number): string => {
   return new Date(at).toISOString().slice(0, 19).replace("T", " ");
 };
 
+// Byte totals are summed as REAL: the driver returns an INTEGER column as a
+// 32-bit value, and a store's payloads sum past that (13.58 GB on the
+// 2026-10-09 Topics snapshot came back negative before this cast).
 type RevisionRow = {
   id: string;
   scope_key: string;
@@ -196,7 +199,8 @@ export const planCompaction = (
   const snapshots = { rowsDeleted: 0, bytesDeleted: 0 };
   const largest: InstancePlan[] = [];
   const snapshotsBelow = db.prepare(
-    `SELECT count(*) AS n, COALESCE(sum(length(value)), 0) AS bytes FROM snapshot
+    `SELECT count(*) AS n, CAST(COALESCE(sum(length(value)), 0) AS REAL) AS bytes
+     FROM snapshot
      WHERE branch = '' AND id = ? AND scope_key = ? AND seq <= ?`,
   );
 
@@ -309,7 +313,7 @@ export const planCompaction = (
          ELSE 'headless'
        END AS kind,
        count(*) AS n,
-       COALESCE(sum(length(c.original)), 0) AS bytes
+       CAST(COALESCE(sum(length(c.original)), 0) AS REAL) AS bytes
      FROM "commit" c
      GROUP BY kind`,
   ).all<{ kind: string; n: number; bytes: number }>(cutoffAt);
