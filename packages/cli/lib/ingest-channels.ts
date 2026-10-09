@@ -78,7 +78,9 @@ export interface ChannelSummary {
 
 export interface MintedChannel {
   id: string;
-  url: string;
+
+  /** Where a device POSTs, and its bearer secret; absent for a `latest` channel. */
+  url?: string;
   space: string;
   causePrefix: string;
   installId: string;
@@ -213,9 +215,10 @@ export function revokeChannel(
 
 /**
  * Binds channel `input.id`, which writes into `input.space`, to the Gmail
- * mailbox `input.accessToken` reads, so that Gmail push notifications for the
- * mailbox are appended to the channel's journal. The server uses the token
- * for one profile lookup and does not keep it.
+ * mailbox `input.accessToken` reads, so that each Gmail push notification for
+ * the mailbox replaces the record in the channel's one cell. The channel has
+ * to be a `latest` channel. The server uses the token for one profile lookup
+ * and does not keep it.
  */
 export function bindGmail(
   config: ChannelConfig,

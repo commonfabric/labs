@@ -10,8 +10,9 @@
  * mailbox reaches a space through a binding from its address to an ingest
  * channel, which the channel's owner makes on the control plane
  * (`routes/ingest-channels`), and each notification replaces the record in
- * the one cell of every live channel bound to its mailbox, unless the cell
- * already holds a newer history id. See `docs/features/gmail-push-ingest.md`.
+ * the one cell of every live `latest` channel bound to its mailbox, unless
+ * the cell already holds a newer history id. See
+ * `docs/features/gmail-push-ingest.md`.
  */
 
 import { errors, jwtVerify, type JWTVerifyGetKey } from "@panva/jose";
@@ -503,8 +504,11 @@ function decodeNotification(rawBody: string): GmailNotification | null {
 
 /**
  * Helper for `processGmailPush()`, which returns whether `next` carries a
- * newer history id than `current`. A record with no readable history id is
- * superseded by anything, so a cell holding one is not stuck.
+ * newer history id than `current`. History ids order notifications of one
+ * mailbox only, so a record for another mailbox, which a channel's cell holds
+ * after the channel is rebound, is superseded whatever its id; so is a record
+ * with no readable history id or no readable address, so a cell holding one
+ * is not stuck.
  */
 function supersedes(
   current: Record<string, unknown>,
@@ -516,6 +520,14 @@ function supersedes(
     return false;
   }
   if (typeof held !== "string" || !HISTORY_ID_RE.test(held)) return true;
+  const heldAddress = current.emailAddress;
+  if (
+    typeof heldAddress !== "string" ||
+    typeof next.emailAddress !== "string" ||
+    mailboxKey(heldAddress) !== mailboxKey(next.emailAddress)
+  ) {
+    return true;
+  }
   return BigInt(incoming) > BigInt(held);
 }
 

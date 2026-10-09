@@ -294,8 +294,8 @@ otherwise force arbitrary allocation with a garbage signature.
 and `cf ingest gmail-unbind` for [Gmail push](gmail-push-ingest.md). A channel
 is minted with a sink, which decides what its writes land in and cannot change
 afterwards: the default `journal`, records in per-day partition cells that a
-device POSTs to, or `latest`, one cell holding the newest Gmail push
-notification, which is the only kind `gmail-bind` accepts. `cf ingest rotate <id>`
+device POSTs to, or `latest`, one cell holding the newest record written to
+it. `gmail-bind` accepts only a `latest` channel. `cf ingest rotate <id>`
 mints a new token for a channel the caller owns, leaving the channel and its
 grants in place — the spelling for a token that leaked or aged, where revoking
 would take the channel down with it. Rotate and revoke are addressed to the

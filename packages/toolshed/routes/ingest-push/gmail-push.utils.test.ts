@@ -380,6 +380,23 @@ describe("gmail-push.utils", () => {
         expect(await latest(a)).toMatchObject({ historyId: "1000" });
       });
 
+      it("takes the new mailbox's first notification after a rebind, whatever its history id", async () => {
+        const a = await channel("a");
+        await bindMailbox(runtime, space, a.id, MAILBOX);
+        await push(envelope(notification({ historyId: 9000 })));
+        await bindMailbox(runtime, space, a.id, "bob@example.com");
+
+        const result = await push(envelope(
+          notification({ emailAddress: "bob@example.com", historyId: 100 }),
+        ));
+
+        expect(result).toEqual({ status: 200, body: { delivered: 1 } });
+        expect(await latest(a)).toMatchObject({
+          emailAddress: "bob@example.com",
+          historyId: "100",
+        });
+      });
+
       it("leaves the cell as it is when the same history id is delivered again", async () => {
         const a = await channel("a");
         await bindMailbox(runtime, space, a.id, MAILBOX);

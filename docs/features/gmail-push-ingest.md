@@ -81,11 +81,12 @@ each status is chosen for what Pub/Sub does next:
 | 401 | No token, or one that fails any check above | Redelivers with backoff |
 | 404 | Gmail push is not configured, or `:space` is not this deployment's service space; checked before the token | Redelivers with backoff |
 | 413 | Body over 16 KB, checked before the token | Redelivers with backoff |
-| 502 | Google's keys could not be fetched, or a lookup or append failed | Redelivers with backoff |
+| 502 | Google's keys could not be fetched, or a lookup or a cell write failed | Redelivers with backoff |
 
-An append that fails partway through a delivery is redelivered in full, so a
-channel can receive one notification twice. Records carry the history id,
-which makes that harmless to a reader.
+A delivery that fails partway through is redelivered in full. That is
+harmless: a channel already written carries the notification's history id,
+so the redelivery leaves its cell unchanged and wakes nothing, and only the
+channels the first attempt did not reach are written.
 
 ### `POST /api/spaces/:space/ingest-channels/gmail-bind` and `gmail-unbind`
 
@@ -174,11 +175,13 @@ ExternalIngest mark every vouched write carries, and the delivery stamps the
 channel's last-seen time.
 
 The cell only ever moves forward. A notification whose history id is not
-newer than the one the cell holds leaves the cell as it is, so a redelivery,
-or two deliveries landing on different instances out of order, cannot set
-the cursor back. A reader that watches the cell is woken once per change,
-however many deliveries carried the same id, and reads the history id as the
-point to sync from.
+newer than the one the cell holds is not written: nothing changes in the
+cell, no provenance mark is minted, and nothing watching the cell is woken.
+So a redelivery, or two deliveries landing on different instances out of
+order, cannot set the cursor back, and a reader is woken once per change
+however many deliveries carried the same id. History ids order one mailbox's
+notifications only, so after a channel is rebound to another mailbox, that
+mailbox's first notification replaces the cell whatever its id.
 
 ## The service space
 

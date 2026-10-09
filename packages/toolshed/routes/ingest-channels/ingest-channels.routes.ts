@@ -117,15 +117,22 @@ const commonResponses = {
   },
 } as const;
 
-/** The token is returned ONCE, here and on rotate, and never stored in clear. */
+/**
+ * The token is returned ONCE, here and on rotate, and never stored in clear.
+ * A `latest` channel, which no device POSTs to, carries no URL and no token.
+ */
 const mintResult = z.object({
   id: z.string(),
-  url: z.string(),
+  url: z.string().optional().describe(
+    "Where a device POSTs records. Absent for a `latest` channel.",
+  ),
   space: z.string(),
   causePrefix: z.string(),
   installId: z.string(),
   expiresAt: z.string().optional(),
-  token: z.string().describe("Shown once. Hand it to the device."),
+  token: z.string().optional().describe(
+    "Shown once. Hand it to the device. Absent for a `latest` channel.",
+  ),
 });
 
 export const mint = createRoute({

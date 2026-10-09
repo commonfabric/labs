@@ -295,6 +295,29 @@ describe("cf ingest mint", () => {
     expect(output).toContain("expires:     2026-11-02T00:00:00.000Z");
   });
 
+  it("prints the bind hint, and no URL or token, for a `latest` channel", async () => {
+    const { url: _url, token: _token, ...latest } = minted;
+    const { output } = await run([
+      "mint",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--space",
+      SPACE_DID,
+      "--install-id",
+      "loom-1",
+      "--sink",
+      "latest",
+    ], { mint: latest });
+
+    expect(output).toContain("Ingest channel minted.");
+    expect(output).toContain("cf ingest gmail-bind chan-1");
+    expect(output).not.toContain("URL:");
+    expect(output).not.toContain("token (shown once");
+    expect(output).not.toContain("tok-secret");
+  });
+
   it("says so loudly when a mint response carries no expiry", async () => {
     // The server always sets an expiry, so a response without one means the two
     // sides disagree about the contract. Printing a bare blank there would hide

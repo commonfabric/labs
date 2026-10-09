@@ -1124,9 +1124,12 @@ export function latestCell(
 
 /**
  * Durably replaces the record in a `latest` channel's cell with `record`,
- * minting one ExternalIngest mark bound to it, unless `supersedes` says the
- * record already there is at least as new. The decision is made inside the
- * retried transaction against the value it commits over, so two writes racing
+ * minting one ExternalIngest mark bound to it, when the cell is empty or
+ * `supersedes(current, record)` returns `true`, meaning `record` is newer
+ * than the `current` record the cell holds. Otherwise the cell is left as it
+ * is: nothing is written and no mark is minted, so a stale arrival wakes
+ * nothing watching the cell. The decision is made inside the retried
+ * transaction against the value it commits over, so two writes racing
  * through different instances leave the newer record in place whichever
  * lands last. Returns whether `record` was written.
  */
@@ -1146,16 +1149,12 @@ export async function writeLatest(
     channel: registration.space,
     audience: registration.installId,
   };
-  let written = false;
-  await custodyIngest.update(cell, (current) => {
-    if (current === undefined || supersedes(current, record)) {
-      written = true;
-      return record;
-    }
-    written = false;
-    return current;
-  }, channel);
-  return written;
+  return await custodyIngest.replaceIfNewer(
+    cell,
+    record,
+    (current) => supersedes(current, record),
+    channel,
+  );
 }
 
 /**

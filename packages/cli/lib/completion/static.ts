@@ -10,6 +10,7 @@ import type { Option } from "@cliffy/command";
 
 import { AGENT_RUN_STATES } from "@commonfabric/runner/agent-run";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
+import { INGEST_SINKS } from "../ingest-channels.ts";
 import { languageNames } from "../view/languages/language.ts";
 import type { AnyCommand, CompletionLine, PreParseGlobal } from "./line.ts";
 import { longName, PRE_PARSE_GLOBALS } from "./line.ts";
@@ -45,7 +46,7 @@ const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
   // `cf piece map --format`.
   "format": ["ascii", "dot"],
   // `cf ingest mint --sink`.
-  "sink": ["journal", "latest"],
+  "sink": [...INGEST_SINKS],
   // `cf piece survey --side`: which document holds the collection.
   "side": ["input", "result"],
   // `cf inspect entities --kind`, the seven its help enumerates.

@@ -225,6 +225,12 @@ describe("ingest-channels control plane", () => {
     const stored = (id: string) => getRegistration(runtime, operator.did(), id);
     expect((await stored(journal.id))?.sink).toBe("journal");
     expect((await stored(latest.id))?.sink).toBe("latest");
+    // Nothing POSTs to a `latest` channel, so it is minted without the data
+    // plane's URL and bearer token; a journal has both.
+    expect(typeof journal.url).toBe("string");
+    expect(typeof journal.token).toBe("string");
+    expect(latest.url).toBeUndefined();
+    expect(latest.token).toBeUndefined();
     const listed = ok(await processList(deps, alice.did(), {})).channels;
     expect(listed.map((c) => [c.installId, c.sink]).sort()).toEqual([
       ["phone-1", "journal"],

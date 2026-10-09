@@ -129,12 +129,18 @@ export interface ControlDeps {
 /** The one-time mint/rotate view. `token` is shown here and nowhere else. */
 export interface MintedChannel {
   id: string;
-  url: string;
+
+  /**
+   * Where a device POSTs records, with `token` as its bearer secret. A
+   * `journal` channel has both; a `latest` channel, which nothing POSTs to,
+   * has neither.
+   */
+  url?: string;
   space: string;
   causePrefix: string;
   installId: string;
   expiresAt?: string;
-  token: string;
+  token?: string;
 }
 
 export interface ChannelView {
@@ -417,17 +423,25 @@ const persist = async (
     return { status: 502, body: { error: "Storage failure" } };
   }
 
+  // The data plane refuses a `latest` channel, so its URL and secret would
+  // only mislead whoever reads the response. The secret is still minted and
+  // its hash stored: a registration has one whatever its sink.
+  const devicePath = registration.sink === "journal"
+    ? {
+      url: ingestUrl(deps.apiUrl, registration.space, registration.id),
+      // Shown once, here only. Only the hash is ever stored.
+      token: secret,
+    }
+    : {};
   return {
     status: 200,
     body: {
       id: registration.id,
-      url: ingestUrl(deps.apiUrl, registration.space, registration.id),
       space: registration.space,
       causePrefix: registration.causePrefix,
       installId: registration.installId,
       ...(expiresAt !== undefined ? { expiresAt } : {}),
-      // Shown once, here only. Only the hash is ever stored.
-      token: secret,
+      ...devicePath,
     },
   };
 };

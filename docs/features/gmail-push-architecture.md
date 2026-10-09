@@ -152,6 +152,72 @@ Toolshed opens no connection to the user's machine. The cell holds only the
 newest notification, so it never grows, and one subscription serves for as
 long as the syncer runs.
 
+## How the pieces talk
+
+The whole conversation, from a weaver connecting a Gmail account to loom
+being woken by mail. Every arrow is one of three kinds: a signed control-plane
+call over the private network, a Google-authenticated push over the public
+internet, or a cell subscription over the memory connection the sidecar
+already holds. The diagram shows one deployment; a second one is the same
+picture again with its own subscription and its own bindings, as
+[Setting up](#setting-up) says.
+
+```mermaid
+sequenceDiagram
+    participant W as Weaver
+    participant L as local-loom.py
+    participant S as Share sidecar
+    participant B as Auth broker
+    participant T as Toolshed (private network)
+    participant G as Gmail API
+    participant P as Pub/Sub (push subscription)
+
+    Note over W,T: Connecting a mailbox, once per deployment
+    W->>L: connect Gmail
+    L->>B: consent
+    B-->>L: access and refresh tokens
+    L->>S: ensure space, grant WRITE to the toolshed's DID
+    S->>T: create_space, acl set (signed as the user)
+    L->>S: mint
+    S->>T: POST /api/spaces/:space/ingest-channels/mint {sink: "latest"}
+    T-->>S: channel id, cause prefix (no device URL, no token)
+    L->>S: gmail-bind with the access token
+    S->>T: POST /api/spaces/:space/ingest-channels/gmail-bind
+    T->>G: GET users/me/profile (one lookup, token not kept)
+    T-->>S: bound address
+    S->>T: sink the cell at <cause prefix> in the space
+    L->>G: users.watch naming the topic, renewed daily
+
+    Note over G,T: Every time mail arrives
+    G->>P: publish {emailAddress, historyId}
+    P->>T: POST /api/spaces/<registry DID>/ingest-push/gmail (OIDC token, over the internet)
+    T->>T: verify the token; find the mailbox's latest channels
+    T->>T: replace the cell's record if the history id is newer
+    T-->>P: 200 {delivered}
+    T-->>S: the cell changed (memory connection)
+    S-->>L: event
+    L->>G: history.list from loom's own cursor
+```
+
+Three facts decide the shape.
+
+- **Who signs what.** Mint, bind, and the space calls are signed with the
+  user's own identity key, which the share sidecar is launched with, and the
+  toolshed authorizes them against the OWNER grant on the user's space. So
+  they are the user's calls, made from the user's machine, and need only the
+  reach that machine already has to its toolshed: a private network is fine.
+  The push is Google's call, signed by a service account the toolshed was
+  configured to accept, so the push route alone has to face the internet.
+- **Where the binding lives.** It lives in the registry of the toolshed that
+  handled the bind, and a push is delivered against the bindings of the
+  toolshed that received it. A mailbox that should wake two deployments has a
+  channel bound on each, and each deployment has its own subscription on the
+  topic. Nothing forwards a push between deployments.
+- **What wakes loom.** The sidecar's subscription on the channel's cell, over
+  the memory connection it already holds. The cell holds only the newest
+  notification and only ever moves forward, so a redelivery changes nothing
+  and wakes nothing, and one subscription serves for the life of the binding.
+
 ## What each crossing proves
 
 - **Pub/Sub to toolshed (2, 3).** The OIDC token proves the request comes from

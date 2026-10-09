@@ -9,6 +9,7 @@ import {
   type IngestSink,
   listChannels,
   mintChannel,
+  type MintedChannel,
   newRequestId,
   resolveSpaceDid,
   revokeChannel,
@@ -101,30 +102,30 @@ async function channelSpace(
   return space;
 }
 
-/** The token is returned once and never again — say so where it is printed. */
-const renderMinted = (
-  minted: {
-    id: string;
-    url: string;
-    space: string;
-    causePrefix: string;
-    installId: string;
-    expiresAt?: string;
-    token: string;
-  },
-  verb: string,
-): void => {
+/**
+ * The token is returned once and never again — say so where it is printed. A
+ * `latest` channel comes with no URL and no token, since nothing POSTs to it;
+ * what it is for is binding.
+ */
+const renderMinted = (minted: MintedChannel, verb: string): void => {
   render(`\nIngest channel ${verb}.\n`);
   render(`  id:          ${minted.id}`);
   render(`  space:       ${minted.space}`);
   render(`  causePrefix: ${minted.causePrefix}`);
   render(`  installId:   ${minted.installId}`);
-  render(`  URL:         ${minted.url}`);
+  if (minted.url !== undefined) render(`  URL:         ${minted.url}`);
   render(`  expires:     ${minted.expiresAt ?? "(none — unexpected)"}`);
-  render(
-    `\n  token (shown once — hand it to the device, sent as ` +
-      `'Authorization: Bearer <token>'):\n\n    ${minted.token}\n`,
-  );
+  if (minted.token !== undefined) {
+    render(
+      `\n  token (shown once — hand it to the device, sent as ` +
+        `'Authorization: Bearer <token>'):\n\n    ${minted.token}\n`,
+    );
+  } else {
+    render(
+      `\n  A \`latest\` channel: no device URL and no token. Bind it to a ` +
+        `mailbox with \`cf ingest gmail-bind ${minted.id}\`.\n`,
+    );
+  }
 };
 
 export const ingest = new Command()
@@ -369,8 +370,8 @@ export const ingest = new Command()
       requestId: newRequestId(),
     });
     render(
-      `Bound ${id} to ${emailAddress}. Gmail push notifications for that ` +
-        `mailbox are now appended to the channel's journal, once a ` +
+      `Bound ${id} to ${emailAddress}. Each Gmail push notification for that ` +
+        `mailbox now replaces the record in the channel's cell, once a ` +
         `\`users.watch\` on the mailbox names this deployment's topic.`,
     );
   })

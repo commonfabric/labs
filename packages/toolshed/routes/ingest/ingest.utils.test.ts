@@ -166,12 +166,16 @@ describe("ingest journal sink", () => {
       next: Record<string, unknown>,
     ) => (next.seq as number) > (current.seq as number);
     await writeLatest(runtime, r, { seq: 2 }, newer);
+    const cell = latestCell(runtime, r);
+    const marksBefore = ingestMarks(space, cell.getAsNormalizedFullLink().id);
 
     expect(await writeLatest(runtime, r, { seq: 1 }, newer)).toBe(false);
 
-    const cell = latestCell(runtime, r);
     await cell.sync();
     expect(cell.get()).toEqual({ seq: 2 });
+    expect(ingestMarks(space, cell.getAsNormalizedFullLink().id)).toEqual(
+      marksBefore,
+    );
   });
 
   it("distinct partitions land in distinct cells", async () => {
