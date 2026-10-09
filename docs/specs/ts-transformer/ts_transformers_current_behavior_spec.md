@@ -2067,7 +2067,11 @@ adjustments:
   is, so the identity markings under it are erased as a wildcard's are, but it
   is not a wildcard: the rest of the root still shrinks, and the
   scheduler-scope marker is kept. A key that reads a capture
-  (`items[selected.get()]`) is a read of its own wherever the access sits. A
+  (`items[selected.get()]`) is a read of its own wherever the access sits, and
+  where the analysis resolves a fallback's operand or a `for..of` iterable to
+  a ref in place of walking it, it still visits what that operand evaluates:
+  each operand of a fallback, a call on the member spine with its arguments
+  and callbacks, and the keys on the spine. A
   write through such a key (`counts.key(i).set(v)`) stays a wildcard and is
   also recorded as a write of the prefix, so the prefix's capability says it
   is written. A `.key()` call with such a key, an argument passed to a callee

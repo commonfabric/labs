@@ -3323,6 +3323,37 @@ export function analyzeFunctionCapabilities(
       );
     };
 
+    // Visits what resolving `expression` to a ref, in place of visiting it,
+    // leaves unvisited though it is evaluated: each operand of a fallback, the
+    // keys of the element accesses on a member spine, and a call on that spine
+    // with its arguments and callbacks. An operand whose spine passes through
+    // a call is walked whole, `table.find((row) => equals(self, row.topic))`
+    // in `table.find(…)?.mentionedBy ?? []` among them; a read the walk
+    // repeats is a set entry, so recording it twice costs nothing.
+    const visitOperandsOfResolvedRef = (expression: ts.Expression): void => {
+      const current = unwrapExpression(expression);
+      if (
+        ts.isBinaryExpression(current) &&
+        FALLBACK_OPERATORS.has(current.operatorToken.kind)
+      ) {
+        for (const operand of [current.left, current.right]) {
+          if (resolveSourceRef(operand)) {
+            visitOperandsOfResolvedRef(operand);
+          } else {
+            visit(operand);
+          }
+        }
+        return;
+      }
+      if (memberSpineContainsCall(current)) {
+        visit(current);
+        return;
+      }
+      for (const key of memberSpineElementKeys(current)) {
+        visit(key);
+      }
+    };
+
     const visit = (node: ts.Node): void => {
       if (node !== fn && isCapabilityAnalyzableFunction(node)) {
         if (includeNestedCallbacks) {
@@ -3366,20 +3397,12 @@ export function analyzeFunctionCapabilities(
               }
             }
             // Resolving the ref stood in for walking the operand, so a call on
-            // its spine has gone unvisited and the reads inside that call's
-            // arguments are still unrecorded — the ref for
+            // its spine and the keys on it have gone unvisited and the reads
+            // inside them are still unrecorded — the ref for
             // `table.find((row) => equals(self, row.topic))?.mentionedBy ?? []`
-            // records `mentionedBy` and drops both `self` and each row's
-            // `topic`, shrinking them out of the schema. Walk it, as the for..of
-            // iterable below does for the same reason; the read tracked above is
-            // a set entry, so recording it twice costs nothing.
-            if (memberSpineContainsCall(node.left)) {
-              visit(node.left);
-            } else {
-              for (const key of memberSpineElementKeys(node.left)) {
-                visit(key);
-              }
-            }
+            // records `mentionedBy` and would drop both `self` and each row's
+            // `topic`, shrinking them out of the schema.
+            visitOperandsOfResolvedRef(node.left);
           } else {
             visit(node.left);
           }
@@ -4124,7 +4147,6 @@ export function analyzeFunctionCapabilities(
       }
 
       if (ts.isForOfStatement(node)) {
-        const iterableExpression = unwrapExpression(node.expression);
         const iterableBinding = resolveArrayElementBinding(node.expression);
         const iterableRef =
           iterableBinding && isSourceRefBinding(iterableBinding)
@@ -4139,13 +4161,10 @@ export function analyzeFunctionCapabilities(
             trackReadRef(iterableRef);
             recordMergeableReadSite(iterableRef, node.expression);
           }
-          if (ts.isCallExpression(iterableExpression)) {
-            visit(node.expression);
-          } else {
-            for (const key of memberSpineElementKeys(node.expression)) {
-              visit(key);
-            }
-          }
+          // The ref stood in for walking the iterable, which can be a
+          // fallback (`state.lists[state.selected.get()] ?? []`) or pass
+          // through a call (`table.filter((row) => row.topic === self)[0]`).
+          visitOperandsOfResolvedRef(node.expression);
         } else {
           visit(node.expression);
         }

@@ -33,6 +33,7 @@ type State = {
 };
 declare const anyKey: string;
 declare const otherKey: string;
+type Row = { topic: string; groups: Record<string, number[]> };
 `;
 
 /**
@@ -197,6 +198,33 @@ describe("capability-analysis-dynamic-keys", () => {
       expect(read.readPaths).toContain("state.lists");
     });
 
+    it("records the key's read in a for..of over a fallback", () => {
+      const read = usage(`const read = ({ state }: { state: State }) => {
+  let total = 0;
+  for (const value of state.lists[state.selected.get()] ?? []) total += value;
+  return total;
+};`);
+
+      expect(read.readPaths).toContain("state.selected");
+      expect(read.readPaths).toContain("state.lists");
+    });
+
+    it("records the reads inside a call on the spine of a for..of iterable", () => {
+      const read = usage(
+        `const read = ({ table, self, key }: { table: Row[]; self: string; key: string }) => {
+  let total = 0;
+  for (
+    const value of table.filter((row) => row.topic === self)[0]?.groups[key] ?? []
+  ) total += value;
+  return total;
+};`,
+      );
+
+      expect(read.readPaths).toContain("self");
+      expect(read.readPaths).toContain("table.0.topic");
+      expect(read.readPaths).toContain("key");
+    });
+
     it("records a captured key cell read inside a fallback", () => {
       const read = usage(
         `const read = ({ catalog, key }: { catalog: Cell<Catalog>; key: Cell<string> }) =>
@@ -205,6 +233,61 @@ describe("capability-analysis-dynamic-keys", () => {
 
       expect(read.readPaths).toContain("key");
       expect(read.readPaths).toContain("catalog.offers");
+    });
+  });
+
+  describe("a lift iterating through a key that can name any member", () => {
+    /** The input schema of the one lift `source` compiles to. */
+    async function liftInput(source: string): Promise<Record<string, unknown>> {
+      const output = await transformSource(source, {
+        types: COMMONFABRIC_TYPES,
+      });
+      const [input] = callSchemas(parseModule(output), "lift");
+      if (!input) throw new Error("Expected a lift with an input schema.");
+      return input;
+    }
+
+    it("keeps the key's cell in the input for a for..of over a fallback", async () => {
+      const input = await liftInput(
+        `import { computed, pattern, Writable } from "commonfabric";
+
+export default pattern<{ lists: number[][] }>(({ lists }) => {
+  const selected = new Writable(0);
+  const total = computed(() => {
+    let sum = 0;
+    for (const value of lists[selected.get()] ?? []) sum += value;
+    return sum;
+  });
+  return { total };
+});
+`,
+      );
+
+      expect(input.required).toEqual(["lists", "selected"]);
+    });
+
+    it("keeps a capture a callback on the iterable's spine reads in the input", async () => {
+      const input = await liftInput(
+        `import { computed, pattern } from "commonfabric";
+
+type Row = { topic: string; groups: Record<string, number[]> };
+
+export default pattern<{ table: Row[]; self: string; key: string }>(
+  ({ table, self, key }) => {
+    const total = computed(() => {
+      let sum = 0;
+      for (
+        const value of table.filter((row) => row.topic === self)[0]?.groups[key] ?? []
+      ) sum += value;
+      return sum;
+    });
+    return { total };
+  },
+);
+`,
+      );
+
+      expect(input.required).toEqual(["table", "self", "key"]);
     });
   });
 
