@@ -613,7 +613,16 @@ export class PiecesController<T = unknown> {
           error,
           "unloadable",
         );
-      } catch {
+      } catch (healError) {
+        // The start failure is what the caller sees; a roll-forward that
+        // refused says why only here.
+        if (healError !== error) {
+          pieceUpdateLogger.warn("default-root-heal-refused", () => [
+            "getDefaultPattern: start failed and the root was not rolled",
+            `forward (${this.#space})`,
+            healError,
+          ]);
+        }
         throw error;
       }
       pieceUpdateLogger.warn("default-root-healed-on-load-failure", () => [

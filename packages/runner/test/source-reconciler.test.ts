@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { defer, type Deferred } from "@commonfabric/utils/defer";
@@ -797,6 +797,33 @@ describe("piece source reconciliation", () => {
       );
       expect(outcome).toBe("incompatible");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+    });
+
+    it("records a compile that failed for a reason other than the source as unreachable", async () => {
+      // Only the compiler's verdict on the source itself is the same every
+      // time. A compile stack that would not load says nothing about the
+      // source, so the origin may yet be followed.
+      const v2Identity = await identityFor(source("v2"));
+      const piece = await preparePiece(
+        servingFetch(() => v2Identity, () => source("v2")),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+      const compile = stub(
+        runtime.patternManager,
+        "compilePattern",
+        () => Promise.reject(new Error("the compiler stack did not load")),
+      );
+      try {
+        expect(await reconcile(piece)).toBe("unavailable");
+      } finally {
+        compile.restore();
+      }
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+      });
+      expect(getPieceReconciliation(piece)?.reason).toBeUndefined();
     });
 
     it("records an origin whose source could not be downloaded as unreachable", async () => {

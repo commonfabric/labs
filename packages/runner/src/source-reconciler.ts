@@ -457,10 +457,11 @@ export class SourceReconciler {
    *
    * Following an origin adopts only source that compiles to the identity the
    * origin advertises, which keeps every runtime following it on the one
-   * identity the host serves. Source compiled for a piece by any other route
-   * is held to the same check against this: a runtime that compiles those
-   * bytes to another identity would otherwise move the piece somewhere the
-   * host's own runtimes move it back from.
+   * identity the host serves. The default-root roll-forward holds its own
+   * compile to the same check through this; a runtime that compiles those
+   * bytes to another identity would otherwise move the root somewhere the
+   * host's own runtimes move it back from. Other routes that compile a
+   * `system:` origin do not check it yet.
    *
    * Throws for any origin but a `system:` ref, which is the one kind that
    * advertises an identity this way.
@@ -477,9 +478,20 @@ export class SourceReconciler {
       throw new Error(`\`${origin}\` is not a \`system:\` origin`);
     }
     const target = this.#systemSourceUrl(classified.route, space);
-    const answer = await this.#track((signal) =>
-      this.#advertisedIdentity(target, this.#revalidatingFetch(signal), signal)
-    );
+    // A pass that throws reports why; only a runtime that stopped reports
+    // that it stopped.
+    const answer = await this.#track(async (signal) => {
+      try {
+        return await this.#advertisedIdentity(
+          target,
+          this.#revalidatingFetch(signal),
+          signal,
+        );
+      } catch (error) {
+        if (signal.aborted) throw error;
+        return { detail: reconciliationDetail(error) };
+      }
+    });
     return answer ??
       { detail: "the runtime stopped before the origin answered" };
   }
