@@ -1,8 +1,9 @@
 /**
  * The Loom creates its own chat room when it names none, keeps the room it
- * names, and adds no panel for it. That a reader the space's access list
- * refuses is refused, and that two sessions racing create one room, are
- * checked by `../integration/loom-chat-room-multi-runtime.test.ts`.
+ * names, creates a new one once that is cleared, and adds no panel for any.
+ * That a member who holds only READ is refused, and that two sessions racing
+ * create one room, are checked by
+ * `../integration/loom-chat-room-multi-runtime.test.ts`.
  */
 import {
   action,
@@ -38,6 +39,7 @@ export default pattern(() => {
   const hold = action(() => {
     if (loom.chatRoom !== undefined) held.set({ room: loom.chatRoom });
   });
+  const clear = action(() => loom.setChatRoom.send({}));
 
   // A Loom whose room `setChatRoom` named first.
   const named = Loom({});
@@ -82,6 +84,17 @@ export default pattern(() => {
           loom.panels.length === 0 && loom.pieceRegistry.length === 0
         ),
       },
+      // Once the room is cleared, it creates a new one.
+      { action: clear },
+      { assertion: assert(() => loom.chatRoom?.get() === undefined) },
+      { action: ensure },
+      {
+        assertion: assert(() =>
+          loom.chatRoom?.get()?.[NAME] === "Chat" &&
+          loom.chatRoom?.equals(held.key("room")) === false
+        ),
+      },
+      { assertion: assert(() => loom.panels.length === 0) },
 
       // A room `setChatRoom` named is kept.
       { action: name },
