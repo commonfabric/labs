@@ -10,7 +10,6 @@
 import { isDID } from "@commonfabric/identity/did";
 import {
   type Cell,
-  classifyPieceOriginString,
   fabricAuthorityMatchesSpaceHost,
   type FabricRef,
   formatFabricRef,
@@ -268,11 +267,11 @@ export async function resolvePieceOriginSource(
   historicalSymbol: string,
   options: { self?: { space: MemorySpace; pieceId: string } } = {},
 ): Promise<ResolvedPieceOriginSource> {
-  const origin = classifyOrigin(runtime, destinationSpace, recorded);
-  if (origin.kind === "system") {
+  const classified = classifyOriginSource(runtime, destinationSpace, recorded);
+  if ("system" in classified) {
     const candidate = await runtime.sourceReconciler.compileSystemSource(
       destinationSpace,
-      systemOriginOf(origin, runtime.hostForSpace(destinationSpace)),
+      classified.system,
       historicalSymbol,
     );
     if (candidate.outcome === "refused") {
@@ -284,13 +283,7 @@ export async function resolvePieceOriginSource(
     return { compiled: candidate.pattern, pattern: candidate.ref };
   }
 
-  const ref = parseFabricRef(origin.url);
-  if (ref === undefined) {
-    throw new Error(
-      `\`${origin.url}\` classifies as a \`${origin.kind}\` origin and ` +
-        `is not a fabric URL`,
-    );
-  }
+  const { origin, fabric: ref } = classified;
   if (ref.subpath !== undefined) {
     throw new PieceOriginError("piece source subpaths are not supported");
   }
@@ -373,29 +366,6 @@ export async function resolvePieceOriginSource(
 }
 
 /**
- * The `system:` origin a deployment-served `origin` names, as reconciliation
- * follows it. `origin.url` is the route on `host`, which reconciliation reads
- * as a legacy locator for that `system:` ref. Throws when it reads it as
- * anything else.
- */
-function systemOriginOf(
-  origin: PieceOrigin,
-  host: string | URL,
-): SystemPieceOrigin {
-  const locator = classifyPieceOriginString(origin.url, host);
-  const followed = locator.kind === "legacy-path" && locator.ref !== undefined
-    ? classifyPieceOriginString(locator.ref, host)
-    : locator;
-  if (followed.kind !== "system") {
-    throw new Error(
-      `\`${origin.url}\` classifies as a \`system\` origin, and ` +
-        `reconciliation follows it as \`${followed.kind}\``,
-    );
-  }
-  return followed;
-}
-
-/**
  * Whether a stable fabric reference names the entity `pieceId` addresses. The
  * id can arrive as a bare tagged hash or as its schemed URI, so both are
  * reduced to the kind and hash the reference carries.
@@ -432,6 +402,24 @@ export function classifyOrigin(
   space: MemorySpace,
   recorded: string,
 ): PieceOrigin {
+  return classifyOriginSource(runtime, space, recorded).origin;
+}
+
+/**
+ * An origin as {@link classifyOrigin} reports it, beside what resolving it
+ * starts from: the `system:` origin reconciliation follows, or the fabric
+ * reference the URL parsed to.
+ */
+type ClassifiedOrigin =
+  | { origin: PieceOrigin; system: SystemPieceOrigin }
+  | { origin: PieceOrigin; fabric: FabricRef };
+
+/** {@link classifyOrigin}, keeping what classifying `recorded` parsed. */
+function classifyOriginSource(
+  runtime: Runtime,
+  space: MemorySpace,
+  recorded: string,
+): ClassifiedOrigin {
   const source = recorded.trim();
   if (source.length === 0) {
     throw new PieceOriginError("origin is empty");
@@ -453,10 +441,13 @@ export function classifyOrigin(
   }
   if (ref !== undefined) {
     return {
-      url: source,
-      kind: pinnedPatternIdentity(ref) === undefined
-        ? "fabric-piece"
-        : "fabric-pattern",
+      origin: {
+        url: source,
+        kind: pinnedPatternIdentity(ref) === undefined
+          ? "fabric-piece"
+          : "fabric-pattern",
+      },
+      fabric: ref,
     };
   }
 
@@ -468,6 +459,7 @@ export function classifyOrigin(
     return systemOrigin(
       new URL(systemRoute, runtime.hostForSpace(space)),
       source,
+      { kind: "system", ref: source, route: systemRoute },
     );
   }
 
@@ -497,12 +489,18 @@ export function classifyOrigin(
     // site returns for it. `normalizePatternSource` yields the `system:` ref
     // when the path names such a file and the input unchanged when it does
     // not, which is the same test reconciliation applies before rewriting it.
-    if (normalizePatternSource(source, host) === source) {
+    const followed = normalizePatternSource(source, host);
+    const route = resolveSystemPatternSource(followed);
+    if (route === undefined) {
       throw new PieceOriginError(
         `${source} addresses nothing under the patterns route`,
       );
     }
-    return systemOrigin(resolved, source);
+    return systemOrigin(resolved, source, {
+      kind: "system",
+      ref: followed,
+      route,
+    });
   }
 
   // The reasons below match `classifyPieceOriginString` word for word. The two
@@ -523,8 +521,10 @@ export function classifyOrigin(
   // space is the same file a `system:` ref names, and reconciliation rewrites
   // it to that ref. It has to classify as followable here too, or the panel
   // would call an origin unusable that reconciliation goes on following.
-  if (normalizePatternSource(source, runtime.hostForSpace(space)) !== source) {
-    return systemOrigin(url, source);
+  const followed = normalizePatternSource(source, runtime.hostForSpace(space));
+  const route = resolveSystemPatternSource(followed);
+  if (route !== undefined) {
+    return systemOrigin(url, source, { kind: "system", ref: followed, route });
   }
 
   // Anything else absolute names an endpoint outside this deployment. A piece
@@ -540,13 +540,20 @@ export function classifyOrigin(
  * string whenever canonicalizing changed it — a `system:` ref, and the rooted
  * path that is the spelling those carried before the scheme existed. The panel
  * shows the recorded form beside the canonical one, so what a piece stores
- * stays visible.
+ * stays visible. `system` is that origin as reconciliation follows it.
  */
-function systemOrigin(url: URL, recorded: string): PieceOrigin {
+function systemOrigin(
+  url: URL,
+  recorded: string,
+  system: SystemPieceOrigin,
+): ClassifiedOrigin {
   return {
-    url: url.href,
-    kind: "system",
-    ...(url.href === recorded ? {} : { recorded }),
+    origin: {
+      url: url.href,
+      kind: "system",
+      ...(url.href === recorded ? {} : { recorded }),
+    },
+    system,
   };
 }
 
