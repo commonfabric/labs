@@ -2374,6 +2374,93 @@ finally:
     );
   }
   pass("a created space's genesis ACL then governs who opens it");
+  // A kinded genesis. The SDK creates a space whose signed open declares a
+  // kind and whose genesis commit carries the same kind, as
+  // StorageManager.createSpace does with `genesis.spaceKind`; the toolshed
+  // seals the kind with the ACL. A session opened before the space has
+  // history is told no kind; a member's later open is told the sealed one.
+  // A space kind is a genesis declaration, admitted only on a space-key ACL
+  // genesis, so a WRITE member's ordinary commit carrying one is refused.
+  {
+    const key = await Identity.generate();
+    const kinded = key.did() as MemorySpace;
+    const factory = new RemoteSessionFactory(
+      createStorageAddressResolver(new URL("https://localhost:8443")),
+      key,
+      (address) => socketFactory(address, "127.0.0.46"),
+    );
+    try {
+      const { client: connection, session } = await factory.create(
+        kinded,
+        key,
+        { sessionId: crypto.randomUUID(), spaceKind: "exercise-kind" },
+      );
+      try {
+        assertEquals(session.declaredSpaceKind, undefined);
+        await session.transact({
+          spaceKind: "exercise-kind",
+          localSeq: 1,
+          reads: {
+            confirmed: [{
+              id: aclDocId(kinded),
+              path: toDocumentPath([]),
+              seq: 0,
+            }],
+            pending: [],
+          },
+          operations: [{
+            op: "set",
+            id: aclDocId(kinded),
+            value: {
+              value: { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
+            },
+          }],
+        });
+      } finally {
+        await connection.close();
+      }
+    } finally {
+      await factory.close();
+    }
+    assert(stored(kinded));
+    const owner = await members.request({
+      type: "session.open",
+      space: kinded,
+      principal: alice.did(),
+      session: {},
+    });
+    assertEquals(
+      (owner.ok as { spaceKind?: string } | undefined)?.spaceKind,
+      "exercise-kind",
+      JSON.stringify(owner),
+    );
+    const writer = await members.request({
+      type: "session.open",
+      space: kinded,
+      principal: bob.did(),
+      session: {},
+    });
+    assert(writer.ok !== undefined, JSON.stringify(writer));
+    const refused = await members.request({
+      type: "transact",
+      space: kinded,
+      sessionId: (writer.ok as { sessionId: string }).sessionId,
+      commit: {
+        spaceKind: "exercise-kind",
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:kinded", value: { value: 1 } }],
+      },
+    });
+    assertEquals(
+      (refused.error as { message?: string } | undefined)?.message,
+      "A space kind requires space-key ACL genesis",
+      JSON.stringify(refused),
+    );
+  }
+  pass(
+    "a kinded genesis through the router seals the kind, which a later open reports and no member's commit may carry",
+  );
   const unclaimed = (await Identity.generate()).did();
   assert(
     (await members.request({
