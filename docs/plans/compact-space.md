@@ -875,7 +875,7 @@ store on the day it ships, and is the measurement the compaction decision
 should be made against; and the basis guard, because no store may be
 compacted until the engine can tell compacted history from absence.
 
-1. **The snapshot-bounded base search** — done (PR_PLACEHOLDER), measured on
+1. **The snapshot-bounded base search** — done ([labs#8628](https://github.com/commonfabric/labs/pull/8628)), measured on
    the August copy as the table above shows. What remains of this stage is
    the measurement on a clone of the current Topics file: cold board load and
    `transact` round trips before and after, on the uncompacted store. That is
