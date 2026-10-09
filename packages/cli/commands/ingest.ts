@@ -149,7 +149,8 @@ export const ingest = new Command()
   /* ingest mint */
   .command(
     "mint",
-    "Mint a channel for a space you own. Prints the token ONCE.",
+    "Mint a channel for a space you own. A journal's token is printed ONCE; " +
+      "a latest channel has none.",
   )
   .usage(`${commonUsage} --space <space> --install-id <id>`)
   .option(
@@ -266,11 +267,14 @@ export const ingest = new Command()
       ttlDays: options.ttlDays,
       requestId: newRequestId(),
     });
-    render(
-      "\nThe previous token stopped working. A device still holding it gets " +
-        "403 'Channel rotated — re-pair this device' rather than a blank 401, " +
-        "so it can tell this apart from an outage.",
-    );
+    // A `latest` channel has no device token, so there is no device to tell.
+    if (minted.token !== undefined) {
+      render(
+        "\nThe previous token stopped working. A device still holding it " +
+          "gets 403 'Channel rotated — re-pair this device' rather than a " +
+          "blank 401, so it can tell this apart from an outage.",
+      );
+    }
     renderMinted(minted, "rotated");
   })
   /* ingest revoke */

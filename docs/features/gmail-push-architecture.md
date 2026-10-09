@@ -90,8 +90,8 @@ sequenceDiagram
     participant T as Toolshed
     participant G as Gmail API
 
-    S->>T: mint an ingest channel (signed request)
-    T-->>S: channel id and token
+    S->>T: mint a latest channel (signed request)
+    T-->>S: channel id and cause prefix
     S->>T: gmail-bind with a Google access token (signed request)
     T->>G: users/me/profile with that token
     G-->>T: the mailbox's address
@@ -101,10 +101,10 @@ sequenceDiagram
     end
 ```
 
-The syncer never uses the channel's token. A channel is normally written by a
-device presenting that token to `POST /api/spaces/:space/ingest/:id`. Here
-toolshed is the writer, and what authorizes each write is the push token and
-the binding.
+A `latest` channel has no device token and no device URL. A journal channel
+is written by a device presenting its token to
+`POST /api/spaces/:space/ingest/:id`; here toolshed is the writer, and what
+authorizes each write is the push token and the binding.
 
 ## What each request is addressed to
 
@@ -155,11 +155,14 @@ long as the syncer runs.
 ## How the pieces talk
 
 The whole conversation, from a weaver connecting a Gmail account to loom
-being woken by mail. Every arrow is one of three kinds: a signed control-plane
-call over the private network, a Google-authenticated push over the public
-internet, or a cell subscription over the memory connection the sidecar
-already holds. The diagram shows one deployment; a second one is the same
-picture again with its own subscription and its own bindings, as
+being woken by mail. The calls that cross between the user's machine and
+toolshed are of two kinds, the signed control-plane calls over the private
+network and the cell subscription over the memory connection the sidecar
+already holds, and one call crosses from Google to toolshed over the public
+internet: the push. The rest are either local to the user's machine or
+ordinary calls to Google: the broker consent, the profile lookup, the watch,
+and the history fetch. The diagram shows one deployment; a second one is the
+same picture again with its own subscription and its own bindings, as
 [Setting up](#setting-up) says.
 
 ```mermaid
@@ -185,7 +188,7 @@ sequenceDiagram
     S->>T: POST /api/spaces/:space/ingest-channels/gmail-bind
     T->>G: GET users/me/profile (one lookup, token not kept)
     T-->>S: bound address
-    S->>T: sink the cell at <cause prefix> in the space
+    S-->>T: subscribe to the cell at <cause prefix> (memory connection)
     L->>G: users.watch naming the topic, renewed daily
 
     Note over G,T: Every time mail arrives

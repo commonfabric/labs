@@ -156,7 +156,9 @@ describe("custodyIngest", () => {
       await runtime.idle();
       const marksBefore = ingestMarks(id);
       let fired = 0;
-      const stop = cell.sink(() => fired++);
+      const stop = cell.sink(() => {
+        fired++;
+      });
       await runtime.idle();
       const firedOnSubscribe = fired;
 

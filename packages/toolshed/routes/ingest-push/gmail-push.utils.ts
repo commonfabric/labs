@@ -184,6 +184,18 @@ const channelBindingCell = (
     ChannelBindingSchema,
   );
 
+/** Returns the key of the mailbox channel `id` is bound to, or `undefined`. */
+export async function getChannelMailbox(
+  runtime: Runtime,
+  serviceSpace: string,
+  id: string,
+): Promise<string | undefined> {
+  const cell = channelBindingCell(runtime, serviceSpace, id);
+  await cell.sync();
+  await runtime.storageManager.synced();
+  return (cell.get() as ChannelBinding | undefined)?.mailbox;
+}
+
 /** Returns the ids of the channels bound to the mailbox at `address`. */
 export async function getMailboxChannels(
   runtime: Runtime,
@@ -574,6 +586,7 @@ export async function processGmailPush(
   const record = { type: "gmail.push", emailAddress, historyId, publishTime };
   let delivered = 0;
   try {
+    const key = mailboxKey(emailAddress);
     const ids = await getMailboxChannels(runtime, serviceSpace, emailAddress);
     for (const id of ids) {
       const registration = await getRegistration(runtime, serviceSpace, id);
@@ -583,6 +596,13 @@ export async function processGmailPush(
       ) {
         continue;
       }
+      // The list was read before this channel's write, and a rebind may have
+      // moved the channel to another mailbox in between. Re-reading the
+      // binding here narrows that window; it does not close it, since the
+      // binding lives in the service space and the cell in the user's, and a
+      // write of the old mailbox's record that slips through is replaced by
+      // the new mailbox's first notification, whatever its history id.
+      if (await getChannelMailbox(runtime, serviceSpace, id) !== key) continue;
       await writeLatest(runtime, registration, record, supersedes);
       await recordLastSeen(runtime, serviceSpace, id, logger);
       delivered++;
