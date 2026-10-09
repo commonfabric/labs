@@ -1496,9 +1496,17 @@ describe("piece source reconciliation", () => {
       });
     });
 
-    it("compiles an export rather than returning the pattern kept for another", async () => {
-      // Two exports that are different patterns, so which export a call
-      // selected shows in the pattern it returns.
+    /**
+     * Serves an entry whose two exports are different patterns, so which
+     * export a call selected shows in the pattern it returns, and returns the
+     * identity it advertises for it. `onIdentity` runs as each request for
+     * that identity arrives, and a download of the entry waits for
+     * `downloadable`.
+     */
+    async function serveTwoExports(
+      onIdentity: () => void = () => {},
+      downloadable: Promise<void> = Promise.resolve(),
+    ): Promise<string> {
       const entry = [
         "import { computed, pattern } from 'commonfabric';",
         `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "tracked") }));`,
@@ -1512,7 +1520,7 @@ describe("piece source reconciliation", () => {
             ? Promise.resolve(entry)
             : Promise.reject(new Error(`not found: ${name}`)),
       );
-      createRuntime((input) => {
+      createRuntime(async (input) => {
         const url = new URL(
           input instanceof Request
             ? input.url
@@ -1520,14 +1528,21 @@ describe("piece source reconciliation", () => {
             ? input.href
             : input,
         );
-        return Promise.resolve(
-          url.pathname !== PARENT_PATH
-            ? new Response("not found", { status: 404 })
-            : url.searchParams.has("identity")
-            ? new Response(advertised)
-            : new Response(entry),
-        );
+        if (url.pathname !== PARENT_PATH) {
+          return new Response("not found", { status: 404 });
+        }
+        if (url.searchParams.has("identity")) {
+          onIdentity();
+          return new Response(advertised);
+        }
+        await downloadable;
+        return new Response(entry);
       });
+      return advertised;
+    }
+
+    it("compiles an export rather than returning the pattern kept for another", async () => {
+      const advertised = await serveTwoExports();
 
       const tracked = await compile(SYMBOL);
       const other = await compile("default");
@@ -1540,6 +1555,33 @@ describe("piece source reconciliation", () => {
         outcome: "compiled",
         ref: { identity: advertised, symbol: "default" },
       });
+    });
+
+    it("compiles each export for concurrent calls that select different ones", async () => {
+      // Both calls are held at the source download until both have asked for
+      // the advertised identity, so they reach the compile together.
+      const bothIdentities = defer<void>();
+      let identities = 0;
+      const advertised = await serveTwoExports(() => {
+        if (++identities === 2) bothIdentities.resolve();
+      }, bothIdentities.promise);
+      try {
+        const [tracked, other] = await Promise.all([
+          compile(SYMBOL),
+          compile("default"),
+        ]);
+
+        expect(tracked).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: advertised, symbol: SYMBOL },
+        });
+        expect(other).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: advertised, symbol: "default" },
+        });
+      } finally {
+        bothIdentities.resolve();
+      }
     });
 
     describe("given a refusal it already holds", () => {
