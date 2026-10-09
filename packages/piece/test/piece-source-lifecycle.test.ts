@@ -626,6 +626,40 @@ describe("piece source lifecycle", () => {
     });
   });
 
+  it("records an update whose fabric origin's source cannot be had", async () => {
+    const source = await pieces.create(versionProgram("source-v1"), {
+      input: {},
+    });
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    const origin = `cf:/${pieces.getSpace()}/${source.id}`;
+    await stampOrigin(piece, origin);
+    // The source the origin names is gone; the piece's own is not.
+    const offered = getPatternIdentityRef(source.getCell())!.identity;
+    const getProgram = runtime.patternManager.getPatternSourceProgramByIdentity;
+    runtime.patternManager.getPatternSourceProgramByIdentity = (
+      identity,
+      ...rest
+    ) =>
+      identity === offered
+        ? Promise.resolve(undefined)
+        : getProgram.call(runtime.patternManager, identity, ...rest);
+
+    try {
+      await expect(piece.changeSource({ kind: "adopt" })).rejects.toThrow(
+        `source for ${offered} is not available`,
+      );
+    } finally {
+      runtime.patternManager.getPatternSourceProgramByIdentity = getProgram;
+    }
+
+    expect(await piece.result.get(["version"])).toBe("v1");
+    const recorded = getPieceReconciliation(piece.getCell());
+    expect(recorded).toMatchObject({ outcome: "unreachable", origin });
+    expect(recorded?.detail).toContain(
+      `source for ${offered} is not available`,
+    );
+  });
+
   it("records an update whose source does not compile to the identity its origin advertises", async () => {
     const origin = "system:mismatched.tsx";
     webSources["/api/patterns/mismatched.tsx"] = versionProgram("origin-v1");
@@ -1607,6 +1641,29 @@ describe("piece source lifecycle", () => {
     } finally {
       runtime.patternManager.getArtifactEntryRef = getEntryRef;
     }
+  });
+
+  it("rejects a fabric origin's compiled candidate without an entry identity", async () => {
+    const source = await pieces.create(versionProgram("source-v1"), {
+      input: {},
+    });
+    const target = await pieces.create(versionProgram("target-v1"), {
+      input: {},
+    });
+    const url = `cf:/${pieces.getSpace()}/${source.id}`;
+    const getEntryRef = runtime.patternManager.getArtifactEntryRef.bind(
+      runtime.patternManager,
+    );
+    runtime.patternManager.getArtifactEntryRef = () => undefined;
+
+    try {
+      await expect(target.changeSource({ kind: "repoint", url })).rejects
+        .toThrow("the candidate source has no pattern identity");
+    } finally {
+      runtime.patternManager.getArtifactEntryRef = getEntryRef;
+    }
+    expect(getPatternSource(target.getCell())).toBeUndefined();
+    expect(await target.result.get(["version"])).toBe("target-v1");
   });
 
   it("rejects a source that cannot use the retained argument", async () => {
