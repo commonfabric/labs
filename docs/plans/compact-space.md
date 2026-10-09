@@ -57,7 +57,7 @@ tool comes after it.
 | A space is one SQLite file. `commit` is the write log (`seq` primary key; `session_id` + `local_seq` unique; `original` holds the whole client commit, operations and reads; `resolution`; `class`). `revision` holds one row per operation on one document instance, keyed `(branch, id, scope_key, seq, op_index)`, with `op` in `set`, `patch`, `delete` and a foreign key to `commit`. `head` points at each instance's newest revision. `snapshot` holds a materialized document at a seq. `op_submission`, `op_integrated` and `op_checkpoint` hold collaborative operation fields with foreign keys to `commit`; `op_field_epoch` keeps a `commit_seq` column without one. `branch`, `execution_lease`, `scheduler_basis`, `execution_outbox`, `blob_store`, `invocation`, `authorization` complete the schema; patterns add their own tables through the SQLite builtin. | `packages/memory/v2/engine.ts`, the `INIT` statement |
 | A read resolves the head row by joining `head` to `revision`, so a head whose revision row is missing reads as absent. A `set` decodes directly; a `patch` reconstructs from the newer of the last `set`/`delete` and the newest snapshot, replaying the patches after it. | `readStateForScopeKey`, `reconstructPatchedDocument` |
 | The engine writes a snapshot when a document has accumulated `snapshotInterval` (10) patches since its base or newest snapshot, and keeps the newest `snapshotRetention` (2) per instance. So a replay chain is at most ten rows. | `maybeMaterializeSnapshot`, `DEFAULT_SNAPSHOT_INTERVAL` |
-| Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`. The index does not cover `op`, and the query is not bounded below by the newest snapshot, so the walk visits every patch row since the last `set`. Both reconstruction and the commit-time snapshot check run it. | `SELECT_LATEST_BASE`, `latestMaterializationSeq` |
+| Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`, no further back than the newest snapshot's seq. The index does not cover `op`, so each row the walk visits costs a table fetch; the bound keeps the walk within one snapshot interval of patches. Both reconstruction and the commit-time snapshot check run it through `latestBaseAndSnapshot`. | `SELECT_LATEST_BASE`, `latestBaseAndSnapshot` |
 | A confirmed read is validated by scanning for a `set`/`delete` after its basis seq, then for an overlapping patch. A pending read whose basis the engine cannot reconstruct keeps the staleness refusal it arrived with. A pending read names the own-session layers its view included, and the conflict scan excludes rows whose commit carries that session and one of those `local_seq`s. A resubmitted commit is recognized by `(session_id, local_seq)` alone, answered from its stored result when its bytes match the stored `original`, refused as a replay mismatch when they do not, and applied as a fresh commit when no row is found. An `origin-committed` precondition looks up the origin commit by the same key. A revision's `commit_seq` is joined to `commit.seq` everywhere it is used; nothing requires it to equal the revision's own `seq`. | `findConflictSeq`, the pending-read `basisOf`, `selectExistingCommit`, `selectPendingResolution` |
 | A resumed session's catch-up is a full watch evaluation diffed against the holdings the client sent, not a replay of commits since a seq. The serving loop's commit feed reads from the seq its index scan ran against, in-process. | `packages/memory/v2/server.ts` (`forceFullResync`), `selectCommitsSince` |
 | The decoded-document cache keys an entry by the revision's address plus its `op` and data length, on the premise that the engine only appends revisions. The per-space bound is 128 MB and 65,536 entries; the Server bounds the total. | `documentCacheKey`, `DEFAULT_DOCUMENT_CACHE_*` |
@@ -120,9 +120,9 @@ instances of the content redirect, and nothing sweeps a session's instances
 when it ends. Compaction treats each instance alike; collecting dead
 sessions' instances is [left open](#what-is-deliberately-left-open).
 
-**What a long tail costs a reader.** On the August copy, against its
-longest-tailed document (head at seq 233251, a snapshot at the head seq, so
-zero patches to replay):
+**What a long tail cost a reader before stage 1.** On the August copy,
+against its longest-tailed document (head at seq 233251, a snapshot at the
+head seq, so zero patches to replay), with the base search still unbounded:
 
 | Query, as the engine issues it | Shell-timed, cold file |
 | --- | ---: |
@@ -134,19 +134,31 @@ zero patches to replay):
 | the same from a recent basis | 60 ms |
 
 Laptop numbers over a 3.5 GB file, noisy and not the server's cache state; the
-finding they support is structural rather than numeric. Every cold read of a
-patch-headed document, and every commit that touches it, walks that document's
-whole patch history to find a `set` the snapshot has already made irrelevant,
-and the walk fetches a table row per index entry because `op` is not in the
-index. A document rewritten ten thousand times costs ten thousand row fetches
-per read until something writes a `set` to it. Compaction writes that `set`;
-[§5](#5-what-the-server-should-do-afterward) stops the walk at the snapshot
-so the next storm never reaches this state.
+finding they supported was structural rather than numeric. Every cold read of
+a patch-headed document, and every commit that touched it, walked that
+document's whole patch history to find a `set` the snapshot had already made
+irrelevant, fetching a table row per index entry because `op` is not in the
+index. Stage 1 bounded the walk by the snapshot. Measured through the engine
+on the same copy, a cold read of each of the twelve longest-tailed documents
+(10,042 to 48,751 rows each), after the first run had paid migrations and
+warmed the file:
 
-The storm investigation's 180 ms per `transact` with no lock wait is
+| Engine | Twelve cold reads | The 48,751-row document |
+| --- | ---: | ---: |
+| before stage 1 | 107.6 ms | 21.3 ms |
+| after stage 1 | 10.2 ms | 1.6 ms |
+
+The same twelve reads replayed 32 patch rows on both sides, which is the
+reconstruction doing identical work past the lookup. Compaction still writes
+the `set` that makes the history itself small; what stage 1 removed is the
+reason a long history degraded every read and every commit of the document
+that carried it.
+
+The storm investigation's 180 ms per `transact` with no lock wait was
 consistent with this walk running at commit time for each of the four or five
 confirmed reads, on top of the conflict scans from old bases. The rehearsal in
-[stage 1](#stages) measures it on the real file rather than inferring it.
+[stage 6](#stages) measures the remainder on the real file rather than
+inferring it.
 
 ## 1. What compaction means
 
@@ -753,19 +765,17 @@ live snapshot standing in for the post-stop one.
 
 ## 5. What the server should do afterward
 
-**Bound the base search by the newest snapshot (recommended, code only).**
-`reconstructPatchedDocument` and `latestMaterializationSeq` each query the
-newest snapshot and the latest base independently and take the newer. Query
-the snapshot first and pass its seq as a lower bound to `selectLatestBase`
-(`AND seq >= :floor`), and the walk stops at the snapshot instead of at the
-last `set`. The patch count check already runs from that newer seq. This is
-the change that makes a future storm cost the engine ten rows per read
-instead of its whole history, and it is independent of compaction: it helps
-the uncompacted Topics file on the day it ships. A partial index on
-`revision (branch, id, scope_key, seq) WHERE op IN ('set', 'delete')` would
-do the same at the index level and needs a migration; the query bound needs
-none, so it goes first, and the index is the follow-up if measurement on the
-clone says the bound is not enough.
+**Bound the base search by the newest snapshot (stage 1, done).**
+`latestBaseAndSnapshot` queries the snapshot first and passes its seq as the
+lower bound of `selectLatestBase` (`AND seq >= :floor`), so the walk stops at
+the snapshot instead of at the last `set`; reconstruction, the commit-time
+snapshot check and the schema-reference probe all go through it. This is what
+makes a future storm cost the engine ten rows per read instead of its whole
+history, and it is independent of compaction: it helps the uncompacted Topics
+file from the deploy that carries it. A partial index on `revision (branch,
+id, scope_key, seq) WHERE op IN ('set', 'delete')` would do the same at the
+index level and needs a migration; the query bound needed none, and the index
+is the follow-up only if the rehearsal says the bound is not enough.
 
 **Answer a hollowed commit's resubmission faithfully (stage 8).** After
 compaction a resubmitted commit whose payload was hollowed is refused as a
@@ -865,11 +875,13 @@ store on the day it ships, and is the measurement the compaction decision
 should be made against; and the basis guard, because no store may be
 compacted until the engine can tell compacted history from absence.
 
-1. **The snapshot-bounded base search**, measured on a clone of the current
-   Topics file: cold board load and `transact` round trips before and after,
-   on the uncompacted store. This is where the 180 ms claim is tested rather
-   than inferred, and where the question "is compaction still needed for
-   latency, or only for disk?" gets its answer.
+1. **The snapshot-bounded base search** — done (PR_PLACEHOLDER), measured on
+   the August copy as the table above shows. What remains of this stage is
+   the measurement on a clone of the current Topics file: cold board load and
+   `transact` round trips before and after, on the uncompacted store. That is
+   where the 180 ms claim is tested rather than inferred, and where the
+   question "is compaction still needed for latency, or only for disk?" gets
+   its answer; it needs a fresh snapshot from the host.
 2. **The basis guard (I9).** `known: false` for a confirmed or pending read
    whose basis predates an instance's oldest surviving row when that row
    points at a compaction commit. Tests: the last two protocol cases of §3
