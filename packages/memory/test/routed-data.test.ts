@@ -816,6 +816,77 @@ Deno.test("watch IDs added past a session's bound are refused, and the socket st
   }
 });
 
+Deno.test("holdings and views named on a watch add leave a session's counted usage as it was", async () => {
+  setServerExecutionConfig(true);
+  // Two views and four holdings are all the context may hold of each.
+  const f = await fixture("add-names-watches", {
+    limits: { watchesPerContext: 2, holdingsPerContext: 4 },
+  });
+  const view = (i: number) => ({
+    id: `v${i}`,
+    revision: 0,
+    query: {
+      roots: [{ id: "of:visible", selector: { path: [], schema: false } }],
+    },
+    mode: "speculate",
+    componentContractVersion: "1",
+  });
+  const holdings = (length: number) =>
+    Array.from({ length }, (_, i) => ({ id: `of:h${i}`, seq: 0 }));
+  try {
+    const space = f.space.did();
+    const first = await f.open(), second = await f.open();
+    const filled = await f.request({
+      type: "session.watch.set",
+      space,
+      sessionId: first.sessionId,
+      watches: [],
+      views: [view(0), view(1)],
+      holdings: holdings(4),
+    });
+    assert(filled.ok !== undefined, JSON.stringify(filled));
+    // The Memory server reads only `watches` from an add, so this one
+    // changes nothing the first session holds.
+    const added = await f.request({
+      type: "session.watch.add",
+      space,
+      sessionId: first.sessionId,
+      watches: [],
+      views: [],
+      holdings: [],
+    });
+    assert(added.ok !== undefined, JSON.stringify(added));
+    assertEquals(f.server.viewInterestsForSpace(space).length, 2);
+    // The context is still full: the second session is refused one watch
+    // and one holding.
+    const reasons = await refusalReasons(async () => {
+      for (
+        const fields of [
+          { watches: [{ id: "w", kind: "graph", query: { roots: [] } }] },
+          { watches: [], holdings: holdings(1) },
+        ]
+      ) {
+        const refused = await f.request({
+          type: "session.watch.set",
+          space,
+          sessionId: second.sessionId,
+          ...fields,
+        });
+        assertEquals(
+          (refused.error as { retriable?: boolean } | undefined)?.retriable,
+          true,
+          JSON.stringify(refused),
+        );
+      }
+    });
+    assertEquals(reasons, ["watch-limit", "holdings-limit"]);
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+    resetServerExecutionConfig();
+  }
+});
+
 Deno.test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {
   const holding = (i: number) => ({ id: `of:h${i}`, seq: 0 });
   const holdings = (length: number) =>

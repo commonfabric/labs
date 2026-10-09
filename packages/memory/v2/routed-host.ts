@@ -1342,12 +1342,19 @@ export class RoutedMemoryHost {
               watches.add(id);
             }
             const key = `${parsed.space} ${body.sessionId}`;
-            const holdings = body.holdings === undefined
-              ? session.holdings
-              : routedListLength(body.holdings);
-            const views = body.views === undefined
-              ? session.views
-              : routedListLength(body.views);
+            // Only a `session.watch.set` replaces a session's holdings and
+            // views. The Memory server reads `watches` alone from an add,
+            // so holdings or views named on one change nothing the session
+            // holds, and counting them would put the session's usage below
+            // what the server keeps for it. On either request they must
+            // still be lists.
+            const named = (field: unknown, held: number): number => {
+              if (field === undefined) return held;
+              const length = routedListLength(field);
+              return body.type === "session.watch.set" ? length : held;
+            };
+            const holdings = named(body.holdings, session.holdings);
+            const views = named(body.views, session.views);
             // Fixed bounds on what one session holds, refused for good. The
             // request is well formed, and for a `session.watch.add` whether
             // it fits depends on the IDs the session already holds, so it
