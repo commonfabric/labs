@@ -209,7 +209,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   every selected head under one `system` compaction commit, keep every head's
   address but the ACL document's, which records the compaction, drop the
   rows behind it, hollow every commit payload outside a retained window
-  except the genesis receipt's while keeping every commit's identity,
+  except the genesis receipt's and those an `op_*` row references, while
+  keeping every commit's identity,
   and write the result out with `VACUUM INTO`. Options for what compaction
   means and what each breaks, the flags, the safety and rollback recipe for
   Estuary, and the server change that goes first because it keeps a future

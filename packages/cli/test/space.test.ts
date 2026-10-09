@@ -11,6 +11,8 @@ import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { clonePaths } from "@commonfabric/state-inspector";
 import { cf, stripAnsi } from "./utils.ts";
+import { toFileUrl } from "@std/path";
+import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
 
 /**
  * `CliResult` streams are line arrays; join before substring assertions.
@@ -121,6 +123,68 @@ async function withFixture(
     await Deno.remove(root, { recursive: true });
   }
 }
+
+describe("cf space compact", () => {
+  /** A store the engine wrote: one computed instance with a set and twelve
+   * patches, one authored document, both on the default branch. */
+  async function engineStore(path: string): Promise<void> {
+    const engine = await open({ url: toFileUrl(path), snapshotInterval: 10 });
+    let local = 1;
+    const apply = (operations: unknown[]) =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: {
+          localSeq: local++,
+          reads: { confirmed: [], pending: [] },
+          operations,
+        },
+      } as never);
+    apply([{ op: "set", id: "computed:x", value: { value: { n: 0 } } }]);
+    for (let index = 1; index <= 12; index++) {
+      apply([{
+        op: "patch",
+        id: "computed:x",
+        patches: [{ op: "replace", path: "/value/n", value: index }],
+      }]);
+    }
+    apply([{ op: "set", id: "of:y", value: { value: { title: "kept" } } }]);
+    close(engine);
+  }
+
+  it("plans a compaction without writing, and refuses to run without --dry-run", async () => {
+    const root = await Deno.makeTempDir({ prefix: "cf-space-compact-" });
+    try {
+      const store = `${root}/space.sqlite`;
+      await engineStore(store);
+      const before = (await Deno.stat(store)).mtime?.getTime();
+
+      const planned = await cf(
+        `space compact ${store} --documents computed: --dry-run --json`,
+      );
+      expect(planned.code).toBe(0);
+      const report = JSON.parse(planned.stdout.join("\n"));
+      expect(report.instances).toEqual({
+        matched: 1,
+        truncated: 1,
+        materialized: 1,
+        headOpChanges: 1,
+      });
+      expect(report.revisions.rowsDeleted).toBe(12);
+      expect(report.largest[0].id).toBe("computed:x");
+      expect((await Deno.stat(store)).mtime?.getTime()).toBe(before);
+
+      const refused = await cf(`space compact ${store} --documents computed:`);
+      expect(refused.code).not.toBe(0);
+      expect(text(refused.stderr)).toContain("--dry-run");
+
+      const nothing = await cf(`space compact ${store} --dry-run`);
+      expect(nothing.code).not.toBe(0);
+      expect(text(nothing.stderr)).toContain("--documents");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
 
 describe("cf space", () => {
   it("runs the rehearsal loop: clone, attempt, verify, reset", async () => {

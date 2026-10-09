@@ -951,8 +951,8 @@ operator took.
 
 ## Stages
 
-Each stage is a pull request. Stages 1 and 2 have landed; stage 3 onward is
-open. Two engine changes come
+Each stage is a pull request. Stages 1 and 2 have landed, stage 3 is in
+review, and stage 4 onward is open. Two engine changes come
 first, and both have landed: the base search, because it preserves history,
 helps the uncompacted store from the deploy that carries it, and is the
 measurement the compaction decision was made against; and the basis guard,
@@ -976,14 +976,17 @@ history from absence.
    the tool will transform them, red on the engine before and green after;
    an uncompacted instance's genuine absence still proves identity as
    today, and so does a basis at the boundary itself.
-3. **Dry run and report.** `packages/memory/v2/compact.ts` with the
-   selection, the cut, and the report, read-only; `cf space compact --dry-run`
-   over it. Exercised against the September Topics copy, whose numbers replace
-   the estimates above. Tests: a store built with the engine, patched past the
-   snapshot interval, reports the rows and bytes a hand count gives. Also
-   the engine export the write path needs: reconstruction at an exact
-   `(seq, op_index)` that ignores snapshots at that seq, tested on a
-   multi-operation commit with and without such a snapshot.
+3. **Dry run and report** — PR_PLACEHOLDER. `packages/memory/v2/compact.ts`
+   with the selection, the cut, and the report, read-only; `cf space compact
+   --dry-run` over it, which refuses to run without the flag until stage 4.
+   Tests: a store built with the engine, patched past the snapshot interval,
+   reports the rows and bytes a hand count gives, under the default cut,
+   `--keep-last`, `--before-seq`, and the payload window. Also the engine
+   export the write path needs, `readRevision`: reconstruction at an exact
+   `(seq, op_index)` that considers only snapshots below that seq, tested on
+   a multi-operation commit with and without a snapshot at it. The dry run's
+   numbers on the 2026-10-09 snapshot replace the estimates above once it has
+   been run there.
 4. **The write path.** The compaction commit with its per-run identity and
    its ACL-document marker, materialize, truncate, hollow (commit 1 exempt),
    `VACUUM INTO`, `--verify --against`. Tests: every head reads back identical

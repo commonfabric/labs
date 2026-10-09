@@ -715,6 +715,31 @@ ORDER BY seq DESC
 LIMIT 1
 `;
 
+// The newest snapshot strictly before a seq. A snapshot at a seq holds the
+// state after every operation of that commit, so a reconstruction at an
+// exact (seq, op_index) that is not the commit's last operation on the
+// document must start below it — see {@link readRevision}.
+const SELECT_LATEST_SNAPSHOT_BELOW = `
+SELECT seq, value
+FROM snapshot
+WHERE branch = :branch
+  AND id = :id
+  AND scope_key = :scope_key
+  AND seq < :seq
+ORDER BY seq DESC
+LIMIT 1
+`;
+
+const SELECT_REVISION_ROW = `
+SELECT seq, op_index, op, data
+FROM revision
+WHERE branch = :branch
+  AND id = :id
+  AND scope_key = :scope_key
+  AND seq = :seq
+  AND op_index = :op_index
+`;
+
 const SELECT_PATCHES = `
 SELECT seq, op_index, data
 FROM revision
@@ -948,6 +973,8 @@ interface PreparedStatements {
   selectHead: PreparedStatement;
   selectLatestBase: PreparedStatement;
   selectLatestSnapshot: PreparedStatement;
+  selectLatestSnapshotBelow: PreparedStatement;
+  selectRevisionRow: PreparedStatement;
   selectLiveExecutionLease: PreparedStatement;
   selectNextSeq: PreparedStatement;
   selectPatchConflicts: PreparedStatement;
@@ -1726,6 +1753,8 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   selectHead: database.prepare(SELECT_HEAD),
   selectLatestBase: database.prepare(SELECT_LATEST_BASE),
   selectLatestSnapshot: database.prepare(SELECT_LATEST_SNAPSHOT),
+  selectLatestSnapshotBelow: database.prepare(SELECT_LATEST_SNAPSHOT_BELOW),
+  selectRevisionRow: database.prepare(SELECT_REVISION_ROW),
   selectLiveExecutionLease: database.prepare(SELECT_LIVE_EXECUTION_LEASE),
   selectNextSeq: database.prepare(SELECT_NEXT_SEQ),
   selectPatchConflicts: database.prepare(SELECT_PATCH_CONFLICTS),
@@ -7652,10 +7681,16 @@ const latestBaseAndSnapshot = (
     scopeKey: string;
     seq: number;
     opIndex: number;
+    /** Consider only snapshots strictly before `seq`: the reconstruction is
+     * at an exact row rather than at the end of its commit. */
+    snapshotBelow?: boolean;
   },
 ): { baseRow: ReadRow | undefined; snapshotRow: SnapshotRow | undefined } => {
   const { branch, id, scopeKey, seq, opIndex } = options;
-  const snapshotRow = engine.statements.selectLatestSnapshot.get({
+  const snapshotStatement = options.snapshotBelow
+    ? engine.statements.selectLatestSnapshotBelow
+    : engine.statements.selectLatestSnapshot;
+  const snapshotRow = snapshotStatement.get({
     branch,
     id,
     scope_key: scopeKey,
@@ -7799,6 +7834,65 @@ const latestMaterializationSeq = (
   return Math.max(baseRow?.seq ?? 0, snapshotRow?.seq ?? 0);
 };
 
+/**
+ * The document a stored revision row produces: the state after exactly that
+ * row, and before any later operation the same commit applied to the
+ * document.
+ *
+ * {@link read} at a seq returns the state after the whole commit, which is
+ * what every reader wants: a commit's operations on one document land
+ * together. One caller wants the row instead — the compaction tool
+ * (docs/plans/compact-space.md, §1 option (a)), when a bounded cut falls
+ * between two operations of one commit on one document and the boundary it
+ * materializes must hold the state the kept operations then replay over. A
+ * snapshot at the row's own seq holds the state after the commit's last
+ * operation, so the reconstruction starts from a snapshot strictly below the
+ * seq, or from the newest `set` or `delete` before the row, and replays the
+ * patches up to and including the row. Throws when no such row exists.
+ */
+export const readRevision = (
+  engine: Engine,
+  options: {
+    branch?: BranchName;
+    id: EntityId;
+    scopeKey?: string;
+    seq: number;
+    opIndex: number;
+  },
+): EntityDocument | null => {
+  const branch = options.branch ?? DEFAULT_BRANCH;
+  const scopeKey = options.scopeKey ?? DEFAULT_SCOPE_KEY;
+  const row = engine.statements.selectRevisionRow.get({
+    branch,
+    id: options.id,
+    scope_key: scopeKey,
+    seq: options.seq,
+    op_index: options.opIndex,
+  }) as ReadRow | undefined;
+  if (row === undefined) {
+    throw new Error(
+      `no revision of ${options.id} at seq ${options.seq} op_index ${options.opIndex}`,
+    );
+  }
+  switch (row.op) {
+    case "set":
+      return decodeStoredDocument(row.data);
+    case "delete":
+      return null;
+    case "patch":
+      return reconstructPatchedDocument(engine, {
+        id: options.id,
+        scopeKey,
+        branch,
+        seq: row.seq,
+        opIndex: row.op_index,
+        exact: true,
+      }).document;
+    default:
+      throw new Error(`unexpected stored revision op: ${row.op}`);
+  }
+};
+
 const reconstructPatchedDocument = (
   engine: Engine,
   options: {
@@ -7807,6 +7901,10 @@ const reconstructPatchedDocument = (
     branch: BranchName;
     seq: number;
     opIndex: number;
+    /** Reconstruct the state after exactly this row; see
+     * {@link readRevision} for why a snapshot at the row's own seq is then
+     * not a base. */
+    exact?: boolean;
   },
 ): { document: EntityDocument; encodedBytes: number } => {
   const { id, scopeKey, branch, seq, opIndex } = options;
@@ -7816,6 +7914,7 @@ const reconstructPatchedDocument = (
     scopeKey,
     seq,
     opIndex,
+    snapshotBelow: options.exact === true,
   });
 
   let baseSeq = 0;
