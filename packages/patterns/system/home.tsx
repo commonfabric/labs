@@ -391,10 +391,13 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
-    // Its panel renders after every other panel. A panel inserted ahead of an
-    // existing one changes the arguments a deployed Home's existing children
-    // are offered when they update: the profile picker's update over Home's
-    // vintages is refused for want of `profiles` (`deno task pattern-vintage`).
+    // Its panel renders after every other panel. Home's children are named
+    // instances, so a Home set up under instance names keeps each child
+    // wherever its panel sits. A Home whose stored state carries no setup
+    // marker, and whose children's sources have changed since it was set up,
+    // finds its children by position instead, so a panel inserted ahead of an
+    // existing one moves them: `deno task pattern-vintage` refuses the profile
+    // picker's update over such a vintage for want of `profiles`.
     const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
