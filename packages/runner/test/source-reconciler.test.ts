@@ -30,6 +30,7 @@ import {
 } from "../src/index.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
 
 const signer = await Identity.fromPassphrase("piece source reconciliation");
 const PARENT_PATH = "/api/patterns/system/reconcile-parent.tsx";
@@ -127,18 +128,25 @@ describe("piece source reconciliation", () => {
     await runtime?.dispose();
   });
 
-  function createRuntime(fetch: RuntimeFetch): Runtime {
+  function createRuntime(
+    fetch: RuntimeFetch,
+    options: { patternCoverage?: PatternCoverageCollector } = {},
+  ): Runtime {
     runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
       fetch,
+      ...options,
     });
     return runtime;
   }
 
   /** A piece running v1 of the tracked pattern, with no origin yet. */
-  async function preparePiece(fetch: RuntimeFetch) {
-    createRuntime(fetch);
+  async function preparePiece(
+    fetch: RuntimeFetch,
+    options: { patternCoverage?: PatternCoverageCollector } = {},
+  ) {
+    createRuntime(fetch, options);
     const space = signer.did();
     const initialIdentity = await identityFor(source("v1"));
     const initial = await runtime.patternManager.compilePattern(
@@ -856,6 +864,31 @@ describe("piece source reconciliation", () => {
       expect(getPieceReconciliation(piece)?.detail).toContain(
         `No "${SYMBOL}" export`,
       );
+    });
+
+    it("records a compile that runs a coverage collector and fails as unreachable", async () => {
+      // A collector the runtime supplies runs inside the compile, and what it
+      // throws there reads as the compile's own failure, so a failure says
+      // nothing certain about the source.
+      const uncompilable = [
+        "import { pattern } from 'commonfabric';",
+        `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: notDeclaredAnywhere }));`,
+        "",
+      ].join("\n");
+      const advertised = await identityFor(uncompilable);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => uncompilable),
+        { patternCoverage: new PatternCoverageCollector() },
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("unavailable");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+      });
+      expect(getPieceReconciliation(piece)?.reason).toBeUndefined();
     });
 
     it("records a compile that failed for a reason other than the source as unreachable", async () => {

@@ -1329,7 +1329,8 @@ export class SourceReconciler {
    * Refuses a candidate that does not compile to `advertised`, whose compile
    * fails in a way that recurs for the same source
    * ({@link isDeterministicCompileFailure}), or whose selected export is not a
-   * pattern. Any other compile failure throws.
+   * pattern. Any other compile failure throws, and so does every compile
+   * failure in a runtime with a pattern-coverage collector.
    */
   async #compileCandidate(
     program: RuntimeProgram,
@@ -1341,7 +1342,12 @@ export class SourceReconciler {
     try {
       pattern = await manager.compilePattern(program, { space });
     } catch (error) {
-      if (!isDeterministicCompileFailure(error)) throw error;
+      // A coverage collector the runtime supplies runs inside the marked
+      // steps, so under one the mark is no verdict on the source.
+      if (
+        this.#runtime.patternCoverage !== undefined ||
+        !isDeterministicCompileFailure(error)
+      ) throw error;
       logger.warn("candidate-did-not-compile", () => [
         "the origin's current source did not compile",
         space,
