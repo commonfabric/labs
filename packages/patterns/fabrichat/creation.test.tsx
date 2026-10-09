@@ -189,11 +189,23 @@ export default pattern(() => {
       revision: direct.rooms[0]?.revision,
     })
   );
-  const action_forget_direct = action(() =>
+  // The revision the forget below names, which another client's request made
+  // from the same list names too.
+  const forgottenRevision = Writable.of<string>("");
+  const action_forget_direct = action(() => {
+    const revision = direct.rooms[0]?.revision ?? "";
+    forgottenRevision.set(revision);
     direct.forget.send({
       requestId: "f-1",
       room: directHeld.key("room").resolveAsCell(),
-      revision: direct.rooms[0]?.revision,
+      revision,
+    });
+  });
+  const action_forget_direct_from_older_list = action(() =>
+    direct.forget.send({
+      requestId: "f-older-list",
+      room: directHeld.key("room").resolveAsCell(),
+      revision: forgottenRevision.get(),
     })
   );
 
@@ -369,6 +381,17 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           direct.rooms.length === 0 &&
+          entriesOf(directCatalog)[0]?.state === "archived"
+        ),
+      },
+      // A forget made from the same list, once the entry is archived, names a
+      // revision the entry has moved on from.
+      { action: action_forget_direct_from_older_list },
+      {
+        assertion: assert(() =>
+          forgottenRevision.get() !== "" &&
+          reasonOf(directRequests, "f-older-list") ===
+            "The room's entry changed since it was listed." &&
           entriesOf(directCatalog)[0]?.state === "archived"
         ),
       },

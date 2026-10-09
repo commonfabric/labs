@@ -753,27 +753,27 @@ const performManagerAct = (
       });
       return;
     }
+    // An entry no longer saved, archived or removed by another client since
+    // the list was read, has moved on from any revision a list showed.
     const space = spaceOf(room);
     const entry = isWellFormedDID(space)
       ? readSharedSpaceCatalog(catalog).entries[space]
       : undefined;
-    if (
-      isWellFormedDID(space) && entry?.kind === CHAT_ROOM_OFFER_KIND &&
-      entry.state === "saved"
-    ) {
-      const changed = changeSharedSpaceMembershipIn(catalog, {
+    const changed = isWellFormedDID(space) &&
+        entry?.kind === CHAT_ROOM_OFFER_KIND && entry.state === "saved"
+      ? changeSharedSpaceMembershipIn(catalog, {
         space,
         id: eventKey(),
         expectedRevision: revision,
         state: "archived",
+      })
+      : undefined;
+    if (changed === undefined || changed.status === "conflict") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The room's entry changed since it was listed.",
       });
-      if (changed.status === "conflict") {
-        recordOutcome(state, requestId, {
-          status: "refused",
-          reason: "The room's entry changed since it was listed.",
-        });
-        return;
-      }
+      return;
     }
     recordOutcome(state, requestId, { status: "done" });
     return;
