@@ -597,7 +597,7 @@ describe("local-jobs/lane", () => {
       });
     });
 
-    it("shows the active child, coalesces repeated browser actions, and restores the parent on return", async () => {
+    it("shows the active child, coalesces a repeated browser call, and restores the parent on return", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
       lane.start();
       const id = enqueue("browse");
@@ -620,9 +620,69 @@ describe("local-jobs/lane", () => {
       expect(store.get(id)!.seq).toBe(click.seq);
       await run.options.onEvent?.(events[5]);
       await run.options.onEvent?.(events[6]);
-      expect(store.get(id)!.step).toEqual({ tool: "delegate_task", turn: 1 });
+      expect(store.get(id)!.step).toEqual({
+        tool: "delegate_task",
+        turn: 1,
+        returned: true,
+      });
       await run.options.onEvent?.(events[7]);
       expect(store.get(id)!.step).toEqual({ tool: "submit_result", turn: 2 });
+      run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
+      await reached(store, id, "failed");
+    });
+
+    it("marks a loop's step returned once every call of its turn has returned, so a repeated action reports again", async () => {
+      const { store, lane, nextRun, enqueue } = laneWith();
+      lane.start();
+      const id = enqueue("returns");
+      const run = await nextRun(0);
+      const events = delegatedBrowse();
+      for (const event of events) await run.options.onEvent?.(event);
+      const steps = store.events(id).filter((event) => event.kind === "step")
+        .map(({ body }) => [body.tool, body.action, body.returned ?? false]);
+      expect(steps).toEqual([
+        ["delegate_task", undefined, false],
+        ["browser", "open", false],
+        ["browser", "open", true],
+        ["browser", "snapshot", false],
+        ["browser", "snapshot", true],
+        ["browser", "click", false],
+        ["browser", "click", true],
+        ["browser", "click", false],
+        ["browser", "click", true],
+        ["submit_result", undefined, false],
+        ["submit_result", undefined, true],
+        ["delegate_task", undefined, true],
+        ["submit_result", undefined, false],
+      ]);
+      run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
+      await reached(store, id, "failed");
+    });
+
+    it("reports a child's return as its latest activity when a sibling acted after its call", async () => {
+      const { store, lane, nextRun, enqueue } = laneWith();
+      lane.start();
+      const id = enqueue("sibling returns");
+      const run = await nextRun(0);
+      const events = delegatedBrowse();
+      const sibling = {
+        ...browserChild,
+        parentToolCallId: "delegate-2",
+        childRunId: "job-browse.subagent.2",
+      };
+      await run.options.onEvent?.(events[0]);
+      await run.options.onEvent?.({ ...events[1], subagent: sibling });
+      await run.options.onEvent?.(events[1]);
+      expect(store.get(id)!.step).toMatchObject({
+        child: { childRunId: browserChild.childRunId },
+      });
+      await run.options.onEvent?.({ ...events[2], subagent: sibling });
+      expect(store.get(id)!.step).toMatchObject({
+        tool: "browser",
+        action: "open",
+        returned: true,
+        child: { childRunId: sibling.childRunId },
+      });
       run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
       await reached(store, id, "failed");
     });
@@ -662,7 +722,11 @@ describe("local-jobs/lane", () => {
         ...returned,
         message: { ...returned.message, toolCallId: "delegate-2" },
       });
-      expect(store.get(id)!.step).toEqual({ turn: 1, tool: "delegate_task" });
+      expect(store.get(id)!.step).toEqual({
+        turn: 1,
+        tool: "delegate_task",
+        returned: true,
+      });
       run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
       await reached(store, id, "failed");
     });
@@ -723,7 +787,8 @@ describe("local-jobs/lane", () => {
       });
       const before = store.get(id)!.seq;
       await run.options.onEvent?.(receipt);
-      expect(store.get(id)!.seq).toBe(before + 1);
+      // The command, and the call's return after it.
+      expect(store.get(id)!.seq).toBe(before + 2);
       expect(store.get(id)!.commands).toHaveLength(2);
       expect(store.get(id)!.commands[1]).toMatchObject({
         command: "page.write",
@@ -753,7 +818,11 @@ describe("local-jobs/lane", () => {
           });
         }
       }
-      expect(store.get(id)!.step).toEqual({ turn: 1, tool: "delegate_task" });
+      expect(store.get(id)!.step).toEqual({
+        turn: 1,
+        tool: "delegate_task",
+        returned: true,
+      });
       run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
       await reached(store, id, "failed");
     });
@@ -799,8 +868,14 @@ describe("local-jobs/lane", () => {
         command: "loom.compose",
         child: { profile: "default", depth: 1 },
       });
+      expect(store.get(id)!.step).toMatchObject({
+        tool: "run_command",
+        returned: true,
+      });
       await run.options.onEvent?.(step);
-      expect(store.get(id)!.seq).toBe(before + 3);
+      expect(store.get(id)!.step).not.toHaveProperty("returned");
+      // Each answer's command and the call's return, and the call made again.
+      expect(store.get(id)!.seq).toBe(before + 5);
       run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
       await reached(store, id, "failed");
     });

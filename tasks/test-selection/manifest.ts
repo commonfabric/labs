@@ -33,7 +33,6 @@ export type {
   Manifest,
   ManifestEntry,
   PreviousSuiteHealth,
-  ProcessFit,
   ScoreInputs,
   SuiteFit,
   SuiteHealth,

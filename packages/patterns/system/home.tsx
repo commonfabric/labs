@@ -391,6 +391,10 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
+    // Its panel renders after every other panel. A panel inserted ahead of an
+    // existing one changes the arguments a deployed Home's existing children
+    // are offered when they update: the profile picker's update over Home's
+    // vintages is refused for want of `profiles` (`deno task pattern-vintage`).
     const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
@@ -423,6 +427,7 @@ const Home = pattern(
               <cf-tab value="profile">Profile</cf-tab>
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
+              <cf-tab value="chats">Chats</cf-tab>
             </cf-tab-list>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
@@ -521,6 +526,9 @@ const Home = pattern(
                   </span>
                 </cf-vstack>
               </cf-vstack>
+            </cf-tab-panel>
+            <cf-tab-panel value="chats" id="home-chats">
+              {chatManager}
             </cf-tab-panel>
           </cf-tabs>
         </cf-screen>

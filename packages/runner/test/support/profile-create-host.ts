@@ -1,0 +1,229 @@
+/**
+ * Creates profiles the way Home does, through the real `profile-create.tsx`,
+ * for tests that need a profile in a space of its own, on a memory server that
+ * enforces access-control lists. A test can instead create a profile of a
+ * shape it names, its space's root or not, without depending on what the
+ * create pattern currently does about roots.
+ */
+
+import { fromFileUrl } from "@std/path";
+import type { Signer } from "@commonfabric/memory/interface";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+
+import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
+import type { RuntimeProgram } from "../../src/harness/types.ts";
+import type { NormalizedFullLink } from "../../src/link-types.ts";
+import type { Runtime } from "../../src/runtime.ts";
+import type { MemorySpace } from "../../src/storage/interface.ts";
+import type { SessionFactory } from "../../src/storage/v2.ts";
+
+/** Opens each session as the principal its signer is, over one server. */
+export class PrincipalSessionFactory implements SessionFactory {
+  /** Always `true`: the loopback server takes a genesis access list. */
+  readonly supportsAclBootstrap = true;
+
+  readonly #server: MemoryV2Server.Server;
+
+  /** Constructs an instance which opens its sessions on `server`. */
+  constructor(server: MemoryV2Server.Server) {
+    this.#server = server;
+  }
+
+  /** @inheritDoc */
+  async create(
+    space: MemorySpace,
+    signer?: Signer,
+    requested: MemoryV2Client.MountOptions = {},
+  ) {
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(this.#server),
+    });
+    try {
+      const session = await client.mount(
+        space,
+        requested,
+        (_space, _session, context) => ({
+          invocation: {
+            aud: context.audience,
+            challenge: context.challenge.value,
+          },
+          authorization: { principal: signer?.did() },
+        }),
+      );
+      return { client, session };
+    } catch (error) {
+      await client.close();
+      throw error;
+    }
+  }
+}
+
+const sysDir = fromFileUrl(
+  new URL("../../../patterns/system/", import.meta.url),
+);
+const read = (name: string) => Deno.readTextFileSync(sysDir + name);
+
+/**
+ * A host that owns a Home-like `profiles` list and embeds the real create
+ * pattern.
+ */
+const CREATE_HOST = [
+  "import ProfileCreate from './profile-create.tsx';",
+  "import { pattern, Writable } from 'commonfabric';",
+  "import type { ProfileHomeOutput } from './profile-home.tsx';",
+  "",
+  "export default pattern(() => {",
+  "  const profiles = new Writable<ProfileHomeOutput[]>([]).for('profiles');",
+  "  const created = ProfileCreate({ profiles });",
+  "  return { profiles, createProfile: created.createProfile };",
+  "});",
+].join("\n");
+
+/**
+ * A host with the same list and stream that creates each profile with an
+ * anonymous `inSpace()` granting every principal `WRITE`, passing `ROOT_OPTION`
+ * in its place: nothing, for a profile that is not its space's root, or
+ * `root: true` for one that is.
+ */
+const SHAPED_HOST = [
+  "import { handler, pattern, Writable } from 'commonfabric';",
+  "import ProfileHome, { type ProfileHomeOutput } from './profile-home.tsx';",
+  "",
+  "const create = handler<",
+  "  { name: string },",
+  "  { profiles: Writable<ProfileHomeOutput[]> }",
+  ">((event, { profiles }) => {",
+  "  profiles.push(",
+  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WRITE' }ROOT_OPTION })({",
+  "      initialName: event.name,",
+  "    }) as ProfileHomeOutput,",
+  "  );",
+  "});",
+  "",
+  "export default pattern(() => {",
+  "  const profiles = new Writable<ProfileHomeOutput[]>([]).for('profiles');",
+  "  return { profiles, createProfile: create({ profiles }) };",
+  "});",
+].join("\n");
+
+/** How a profile is created: by the real create pattern, or in a shape named. */
+export type ProfileShape = "create" | "root" | "not-root";
+
+/** The host program that creates a profile of `shape`. */
+function hostProgram(shape: ProfileShape): RuntimeProgram {
+  const main = shape === "create" ? CREATE_HOST : SHAPED_HOST.replace(
+    "ROOT_OPTION",
+    shape === "root" ? ", root: true" : "",
+  );
+  return {
+    main: "/main.tsx",
+    files: [
+      { name: "/main.tsx", contents: main },
+      { name: "/profile-create.tsx", contents: read("profile-create.tsx") },
+      { name: "/profile-home.tsx", contents: read("profile-home.tsx") },
+    ],
+  };
+}
+
+const profileLinkListSchema = {
+  type: "array",
+  items: { type: "unknown", asCell: ["cell"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
+
+/** The create event as the create surface's submit click sends it. */
+function createEvent(name: string): { name: string } {
+  const event = {
+    name,
+    provenance: {
+      origin: "dom",
+      trusted: true,
+      ui: {
+        pattern: "ProfileCreateSurface",
+        eventIntegrity: ["ProfileCreateSurface"],
+        uiContractDataset: { uiAction: "CreateProfile" },
+      },
+    },
+  };
+  markRendererTrustedEvent(event);
+  return event;
+}
+
+/**
+ * Creates a profile named `name` through the create pattern, run by `runtime`
+ * in its user's home space, and returns the link the host's list holds, which
+ * names the slot that links on to the profile. `shape` says how: `create`,
+ * the default, through the real create pattern; `root`, as its space's root,
+ * reserved in the space's genesis; `not-root`, in a space whose genesis
+ * reserves no root.
+ * The host's root lives at `hostCause` in the home space, and with
+ * `hostIsRoot` the home space cell links it as the space's root, as a real
+ * Home is.
+ *
+ * @throws Error when a commit fails or the list does not end up holding
+ *   exactly one profile in a space other than the home space.
+ */
+export async function createProfileThroughHome(
+  runtime: Runtime,
+  name: string,
+  options: {
+    shape?: ProfileShape;
+    hostCause?: string;
+    hostIsRoot?: boolean;
+  } = {},
+): Promise<NormalizedFullLink> {
+  const space = runtime.userIdentityDID as MemorySpace;
+  const setupTx = runtime.edit();
+  const host = await runtime.patternManager.compilePattern(
+    hostProgram(options.shape ?? "create"),
+    { space, tx: setupTx },
+  );
+  const result = runtime.run(
+    setupTx,
+    // deno-lint-ignore no-explicit-any
+    host as any,
+    {},
+    runtime.getCell<Record<string, unknown>>(
+      space,
+      options.hostCause ?? "profile space access host",
+      undefined,
+      setupTx,
+    ),
+  );
+  if (options.hostIsRoot) {
+    runtime.getSpaceCell(space).withTx(setupTx).key("defaultPattern").set(
+      result,
+    );
+  }
+  runtime.prepareTxForCommit(setupTx);
+  const setup = await setupTx.commit().settled;
+  if (setup.error) throw new Error(setup.error.message);
+  await result.pull();
+
+  const createTx = runtime.edit();
+  result.withTx(createTx).key("createProfile").send(createEvent(name));
+  runtime.prepareTxForCommit(createTx);
+  const created = await createTx.commit().settled;
+  if (created.error) throw new Error(created.error.message);
+  await result.pull();
+  await runtime.idle();
+  await result.pull();
+
+  const links = result.key("profiles").asSchema(profileLinkListSchema)
+    // deno-lint-ignore no-explicit-any
+    .get() as any[];
+  if (links.length !== 1) {
+    throw new Error(`The host lists ${links.length} profiles, not one`);
+  }
+  const profileLink = links[0].getAsNormalizedFullLink() as NormalizedFullLink;
+  if (profileLink.space === space) {
+    throw new Error("The profile was created in the home space");
+  }
+
+  await runtime.patternManager.flushCompileCacheWrites();
+  await runtime.storageManager.synced();
+  await runtime.idle();
+  await runtime.storageManager.synced();
+  return profileLink;
+}

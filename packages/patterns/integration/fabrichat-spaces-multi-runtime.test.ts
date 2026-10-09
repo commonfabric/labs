@@ -90,7 +90,14 @@ describe("fabrichat spaces across runtimes", () => {
       "room",
     ]);
     // The room starts with no participants, and holds no messages whose
-    // authors it would add, so the one it lists is the starter's join.
+    // authors it would add, so the one it lists is the starter's join. Under
+    // server execution the join is an event the served start emits, which
+    // commits in a later wave than the start's own, and `settle()` waits only
+    // for the start's; so the wait is for the room to list anyone, and the
+    // assertions then say who.
+    await harness.settleUntil(async () =>
+      (await starter.read(["participants", "length"], { piece: room })) !== 0
+    );
     expect(await starter.read(["participants", "length"], { piece: room }))
       .toBe(1);
     expect(await starter.read(["participants", 0, "name"], { piece: room }))
@@ -178,11 +185,62 @@ describe("fabrichat spaces across runtimes", () => {
       .toThrow(`lacks READ on space ${room.space}`);
 
     // A member admitted at creation holds OWNER, so their own add, from the
-    // room's control, admits the stranger.
-    await member.send("addMember", adding, ADD_MEMBER_ACTION, { piece: room });
+    // room's control, admits the stranger, and the room records it as done
+    // where the member's own views read it.
+    await member.send(
+      "addMember",
+      { ...adding, requestId: "add-stranger" },
+      ADD_MEMBER_ACTION,
+      { piece: room },
+    );
     await harness.settle();
     expect(await stranger.read(["about", "title"], { piece: room }))
       .toBe("Growing team");
+    expect(
+      await member.read(["$VIEWS", "room", "addRequests", "add-stranger"], {
+        piece: room,
+      }),
+    ).toEqual({ status: "done" });
+  });
+
+  it("refuses an add to a direct room, even from its counterpart's own control", async () => {
+    const room = await start("openDirect", {
+      requestId: "d-add",
+      counterpart: member.identity.did(),
+    });
+    const participants = await member.read(["participants", "length"], {
+      piece: room,
+    });
+
+    // The counterpart holds OWNER, as a member admitted at creation does, and
+    // sends from the room's control, yet a direct room keeps its two members.
+    // Its views say they can't add, and the refusal carries its code.
+    expect(
+      await member.read(["$VIEWS", "room", "canAdd"], { piece: room }),
+    ).toBe(false);
+    await member.send(
+      "addMember",
+      {
+        requestId: "add-to-direct",
+        target: { value: stranger.identity.did() },
+      },
+      ADD_MEMBER_ACTION,
+      { piece: room },
+    );
+    await harness.settle();
+    expect(
+      await member.read(["$VIEWS", "room", "addRequests", "add-to-direct"], {
+        piece: room,
+      }),
+    ).toEqual({
+      status: "refused",
+      reason: "A direct chat keeps its two members.",
+      code: "direct-room",
+    });
+    await expect(stranger.read(["about", "kind"], { piece: room })).rejects
+      .toThrow(`lacks READ on space ${room.space}`);
+    expect(await member.read(["participants", "length"], { piece: room }))
+      .toBe(participants);
   });
 
   it("lets a direct room's counterpart read it, and refuses a stranger", async () => {

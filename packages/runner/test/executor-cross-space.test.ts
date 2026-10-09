@@ -68,6 +68,11 @@ import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
 } from "./memory-v2-test-utils.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 // The route the toolshed serves the profile-create surface from, which is what
 // the surface's `system:` origin resolves against.
@@ -89,6 +94,8 @@ const homeSigner = await Identity.fromPassphrase("cross-space home");
 const homeSpace = homeSigner.did() as MemorySpace;
 const foreignSigner = await Identity.fromPassphrase("cross-space foreign");
 const foreignSpace = foreignSigner.did() as MemorySpace;
+const roomSigner = await Identity.fromPassphrase("cross-space room");
+const roomSpace = roomSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("cross-space service");
 const aliceSigner = await Identity.fromPassphrase("cross-space alice");
 const bobSigner = await Identity.fromPassphrase("cross-space bob");
@@ -2409,6 +2416,188 @@ export default pattern<
       },
     });
     expect(stored()?.counts).toEqual([]);
+  });
+
+  /**
+   * A pattern whose `name` handler records the principal the label on its
+   * event's `target.name` attests, read in a helper the handler hands its
+   * event to. The read is of the cell's label and never its value, and the
+   * capability analysis does not follow it into the helper, so the event
+   * schema declares the position opaque and nothing reads the cell's document
+   * ahead of the run.
+   */
+  const PRINCIPAL_EVENT_PATTERN = `
+import { handler, pattern, principalOf, type Writable, type Stream } from "commonfabric";
+type Profile = { name?: string };
+type NameEvent = { target?: { name?: Writable<Profile> } };
+const ownerOf = (event: NameEvent | undefined): string =>
+  principalOf(event?.target?.name, "represents-principal") ?? "none";
+const name = handler<NameEvent, { owners: Writable<string[]> }>(
+  (event, { owners }) => {
+    owners.push(ownerOf(event));
+  },
+);
+export default pattern<
+  { owners: Writable<string[]> },
+  { name: Stream<NameEvent> }
+>(({ owners }) => ({ name: name({ owners }) }));`;
+
+  /**
+   * Writes, as Alice, a document named `name` in the foreign space whose
+   * label says it represents Bob, as a profile's does, and a document in the
+   * room space that links to it, and returns the room document's link field:
+   * a two-hop chain whose second document the serving runtime has not read.
+   */
+  const labeledChain = async (client: Runtime, name: string) => {
+    const profile = client.getCell(foreignSpace, name);
+    const seed = client.edit();
+    writeSeedEnvelopeDoc(seed, foreignSpace);
+    seedStoredEnvelope(
+      seed,
+      {
+        space: foreignSpace,
+        scope: "space",
+        id: profile.getAsNormalizedFullLink().id,
+        path: [],
+      },
+      {
+        value: { name: "Bob" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: bobSigner.did(),
+                }],
+              },
+              origin: "declared",
+            }],
+          },
+        },
+      } as never,
+    );
+    expect((await seed.commit().settled).error).toBeUndefined();
+    const holder = client.getCell<{ name: unknown }>(
+      roomSpace,
+      `${name}-holder`,
+    );
+    const tx = client.edit();
+    holder.withTx(tx).set({ name: profile });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await client.storageManager.synced();
+    return holder.key("name");
+  };
+
+  it("records the principal a served handler reads off a foreign document's label through a link chain in its event", async () => {
+    let name: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "principal-chain",
+      PRINCIPAL_EVENT_PATTERN,
+      async (client) => {
+        name = await labeledChain(client, "principal-chain-profile");
+        return { owners: [] };
+      },
+    );
+
+    result.key("name").send({ target: { name } });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    expect(stored()?.owners).toEqual([bobSigner.did()]);
+  });
+
+  it("records no principal for a served handler whose event links through a chain to a foreign document that does not exist, and completes", async () => {
+    let name: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "principal-chain-missing",
+      PRINCIPAL_EVENT_PATTERN,
+      async (client) => {
+        const missing = client.getCell(
+          foreignSpace,
+          "principal-chain-missing-profile",
+        );
+        const holder = client.getCell<{ name: unknown }>(
+          roomSpace,
+          "principal-chain-missing-holder",
+        );
+        const tx = client.edit();
+        holder.withTx(tx).set({ name: missing });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await client.storageManager.synced();
+        name = holder.key("name");
+        return { owners: [] };
+      },
+    );
+
+    result.key("name").send({ target: { name } });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    expect(stored()?.owners).toEqual(["none"]);
+  });
+
+  /**
+   * A pattern whose `point` handler keeps the cell its holder's `piece`
+   * resolves to, as a profile's inbox pointer is set from an inbox holder.
+   * The holder names the piece by a stored link, so the handle the handler
+   * reads is minted at that link's target and resolving it walks on from
+   * there.
+   */
+  const RESOLVING_HANDLER_PATTERN = `
+import { type Cell, handler, pattern, type Writable, type Stream } from "commonfabric";
+type Piece = { name?: string };
+type Holder = { piece?: Cell<Piece> };
+const point = handler<void, { holder: Holder; kept: Writable<Holder> }>(
+  (_event, { holder, kept }) => {
+    kept.set({ piece: holder.piece?.resolveAsCell() });
+  },
+);
+export default pattern<
+  { holder: Holder; kept: Writable<Holder> },
+  { point: Stream<void> }
+>(({ holder, kept }) => ({ point: point({ holder, kept }) }));`;
+
+  it("keeps the document a served handler resolves a foreign cell to, through a document the serving runtime has not loaded", async () => {
+    let piece: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "resolve-unloaded-hop",
+      RESOLVING_HANDLER_PATTERN,
+      async (client) => {
+        piece = await foreignDocument(
+          client,
+          "resolve-unloaded-hop-piece",
+          "space",
+          { name: "inbox" },
+        );
+        // A document whose whole value is a link to the piece, which is what
+        // the holder names.
+        const alias = await foreignDocument(
+          client,
+          "resolve-unloaded-hop-alias",
+          "space",
+          piece,
+        );
+        return { holder: { piece: alias }, kept: {} };
+      },
+    );
+
+    result.key("point").send(undefined);
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    const kept = stored()?.kept as { piece?: unknown } | undefined;
+    expect(parseLink(kept?.piece)).toMatchObject({
+      space: foreignSpace,
+      id: piece!.getAsNormalizedFullLink().id,
+    });
   });
 
   it("runs a served event whose declared value is a foreign space-scope document", async () => {

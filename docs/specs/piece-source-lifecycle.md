@@ -298,10 +298,12 @@ identity. Resolved source may be shared within a reconciler for the same
 destination space, full source URL, and advertised identity. Retention is bounded
 by entry count and source string size. An open that finds no verified pattern
 for that source compiles it and verifies that identity in its destination space,
-including source-closure persistence on a compiler cache hit. The pattern that
-open verified is retained with the source and answers later opens for the same
-destination, URL, and identity without compiling again, because that destination
-already holds its closure. It answers only within the schema registry epoch that
+including source-closure persistence on a compiler cache hit. Opens for the same
+destination, URL, and identity that arrive while that compile runs share it
+rather than compiling the same source again. The pattern that open verified is
+retained with the source and answers later opens for the same destination, URL,
+and identity without compiling again, because that destination already holds
+its closure. It answers only within the schema registry epoch that
 compiled it: its serialized graph carries `cid:` schema references that a
 registry clear retires, so an open after a clear compiles again. Compilation or
 identity failure retires the source used by that attempt, with any pattern kept
@@ -648,9 +650,11 @@ source compiles to the identity its `system:` origin advertises through the
 `?identity` route. The root is left as it is when the route does not answer,
 when the source compiles to any other identity, or when the source does not
 compile. A root moved to an identity the host does not advertise would be moved
-back the next time a client whose runtime agrees with the host's opened it. A
-root at the address the space's genesis commit reserves for the root an
-`inSpace(..., { root: true })` call places is the exception: its creator's
+back the next time a client whose runtime agrees with the host's opened it. Two
+kinds of root are the exception: one at the address the space's genesis commit
+reserves for the root an `inSpace(..., { root: true })` call places, and one
+whose own stored label carries a `represents-principal` claim, as a profile's
+does wherever it sits, a claim a link carries in not counting. Its creator's
 pattern placed it, the system source is no replacement for it, and a start that
 fails leaves it as it is, whether its pattern cannot load or CFC migration
 rejects its setup repair.

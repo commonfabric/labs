@@ -26,6 +26,7 @@ import {
   FULL_RUN_LABEL,
   LANE_BOUND_SECONDS,
   LANES,
+  RERUN_BUDGET_SECONDS,
 } from "./test-selection/policy.ts";
 
 function jobBlock(workflow: string, jobId: string): string {
@@ -327,15 +328,20 @@ Deno.test("a lane's step is bounded above what a lane is packed to finish inside
   // A lane packs its work against a budget derived from the bound of the
   // run it is part of, and the bound on the step that runs it only stops a
   // lane that hangs. At or below either run's bound, it would stop a lane
-  // that was running to plan, with its later batches unrun.
+  // that was running to plan, with its later batches unrun. A lane of the
+  // full run may also rerun its failures after its batches, for as long
+  // as its rerun budget allows.
   const job = (await parsedWorkflow("deno.yml")).jobs.tests;
   const minutes = namedStep(job, "🧪 Run the lane")["timeout-minutes"];
   assert(typeof minutes === "number", "the lane step has no timeout-minutes");
-  const packed = Math.max(LANE_BOUND_SECONDS, FULL_LANE_BOUND_SECONDS);
+  const packed = Math.max(
+    LANE_BOUND_SECONDS,
+    FULL_LANE_BOUND_SECONDS + RERUN_BUDGET_SECONDS,
+  );
   assert(
     minutes * 60 > packed,
     `the lane step is bounded at ${minutes} minutes, and a lane is packed ` +
-      `to finish inside ${packed} seconds`,
+      `to finish inside ${packed} seconds, reruns included`,
   );
 });
 

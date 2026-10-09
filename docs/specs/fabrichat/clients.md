@@ -108,13 +108,15 @@ gesture on the reviewed surface its policy names:
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
-| add a member | room's rendering | `addMember` | `ChatAddMemberSurface` |
+| add a member | room | `addMember` | `ChatAddMemberSurface` |
 
 A client that draws natively sends `addMember` through
 [the sanctioned issuing path](#the-sanctioned-issuing-path) on
-`ChatAddMemberSurface`, as it sends the acts above. It finds the stream on the
-room's output rather than in `[VIEWS]` (see
-[`ChatRoomOutput`](ChatRoomOutput.md#addmembertarget--value-string-)).
+`ChatAddMemberSurface`, as it sends the acts above. It finds the stream in
+`[VIEWS]`, beside `canAdd`, which says whether the reader may add anyone, false
+in a direct room, and `addRequests`, where each add's outcome is recorded under
+its `requestId` (see
+[`ChatRoomOutput`](ChatRoomOutput.md#addmemberrequestid-string-target--value-string-)).
 
 A client sends to the room's own streams, never through a placement or an
 adapter.

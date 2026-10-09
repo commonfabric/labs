@@ -4,9 +4,6 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   cfcResultFromRunscSidecar,
   deniedCfcResult,
-  DIRECT_RUNSC_CFC_RESULT_READER,
-  DOCKER_RUNSC_CFC_RESULT_READER,
-  type RunscCfcResultReader,
 } from "../src/sandbox/runsc-cfc-result.ts";
 
 const command = { stdout: "out\n", stderr: "err\n", exitCode: 0 };
@@ -126,13 +123,9 @@ Deno.test("cfcResultFromRunscSidecar denies a malformed taint rather than readin
 });
 
 // ---------------------------------------------------------------------------
-// The verdict table.
-//
-// Every row names the verdict for the direct runsc driver and for the Docker
-// driver. They differ in exactly one respect (see `RunscCfcResultReader`):
-// beside an `xattrJSON` object the Docker driver accepts any non-blank
-// `string`, as main did, where the direct driver requires runsc's own
-// spelling of the empty label.
+// The verdict table: every row names the verdict for the direct runsc driver.
+// Beside an `xattrJSON` object the driver requires runsc's own spelling of
+// the empty label in `string`.
 // ---------------------------------------------------------------------------
 
 type Verdict = "observed" | "opaque" | "denied";
@@ -145,14 +138,13 @@ interface VerdictRow {
   name: string;
   cfcTaint: unknown;
   direct: Verdict;
-  docker: Verdict;
 }
 
 const same = (
   name: string,
   cfcTaint: unknown,
   verdict: Verdict,
-): VerdictRow => ({ name, cfcTaint, direct: verdict, docker: verdict });
+): VerdictRow => ({ name, cfcTaint, direct: verdict });
 
 const VERDICT_TABLE: VerdictRow[] = [
   // What runsc writes.
@@ -202,24 +194,21 @@ const VERDICT_TABLE: VerdictRow[] = [
     "opaque",
   ),
 
-  // Both forms present and they disagree. The one place the drivers differ.
+  // Both forms present and they disagree: withheld.
   {
     name: "a tainted string beside an empty xattr",
     cfcTaint: { string: ALICE, xattrJSON: {} },
     direct: "opaque",
-    docker: "observed",
   },
   {
     name: "an unfamiliar spelling beside an empty xattr",
     cfcTaint: { string: "{conf: public, integ: empty}", xattrJSON: {} },
     direct: "opaque",
-    docker: "observed",
   },
   {
     name: "the empty spelling, padded, beside an empty xattr",
     cfcTaint: { string: ` ${EMPTY}\n`, xattrJSON: {} },
     direct: "opaque",
-    docker: "observed",
   },
   same("the empty spelling beside a tainted xattr", {
     string: EMPTY,
@@ -279,15 +268,11 @@ const VERDICT_TABLE: VerdictRow[] = [
   }, "opaque"),
 ];
 
-const verdictOf = (
-  cfcTaint: unknown,
-  reader?: RunscCfcResultReader,
-): Verdict => {
+const verdictOf = (cfcTaint: unknown): Verdict => {
   const r = cfcResultFromRunscSidecar(
     { version: 1, containerId: "c1", cfcTaint },
     "c1",
     command,
-    ...(reader !== undefined ? [reader] as const : []),
   );
   // The three channels always carry one verdict between them.
   assertEquals(r.stderr.policy, r.stdout.policy);
@@ -298,29 +283,15 @@ const verdictOf = (
 Deno.test("cfcResultFromRunscSidecar verdict table, direct runsc driver", () => {
   for (const row of VERDICT_TABLE) {
     assertEquals(
-      verdictOf(row.cfcTaint, DIRECT_RUNSC_CFC_RESULT_READER),
+      verdictOf(row.cfcTaint),
       row.direct,
       `${row.name}: ${JSON.stringify(row.cfcTaint)}`,
     );
-    // The direct driver calls the parser with no reader; that is the same
-    // reading, not a third one.
-    assertEquals(verdictOf(row.cfcTaint), row.direct, row.name);
   }
 });
 
-Deno.test("cfcResultFromRunscSidecar verdict table, Docker driver", () => {
-  for (const row of VERDICT_TABLE) {
-    assertEquals(
-      verdictOf(row.cfcTaint, DOCKER_RUNSC_CFC_RESULT_READER),
-      row.docker,
-      `${row.name}: ${JSON.stringify(row.cfcTaint)}`,
-    );
-  }
-});
-
-// main's predicate, copied verbatim from `docker-runsc.ts` as it stood before
-// the parser moved (blob d972ceeff on origin/main). It is the oracle for "never more
-// permissive than main", so it must stay main's code and not track the
+// The oracle for "never more permissive" than the reading cf-harness once
+// took of a result (blob d972ceeff), kept as that code and not tracking the
 // parser's.
 const mainHasNonEmptyXattrValue = (value: unknown): boolean => {
   if (Array.isArray(value)) {
@@ -343,7 +314,7 @@ const mainIsPublicRunscTaint = (
   return stringValue.length === 0 || stringValue === "{}";
 };
 
-Deno.test("cfcResultFromRunscSidecar observes nothing main withheld, on either driver", () => {
+Deno.test("cfcResultFromRunscSidecar observes nothing main withheld", () => {
   let observedRows = 0;
   let mainPublicRows = 0;
   for (const row of VERDICT_TABLE) {
@@ -351,20 +322,13 @@ Deno.test("cfcResultFromRunscSidecar observes nothing main withheld, on either d
       row.cfcTaint as { string?: unknown; xattrJSON?: unknown },
     );
     if (mainPublic) mainPublicRows++;
-    for (
-      const reader of [
-        DIRECT_RUNSC_CFC_RESULT_READER,
-        DOCKER_RUNSC_CFC_RESULT_READER,
-      ]
-    ) {
-      if (verdictOf(row.cfcTaint, reader) === "observed") {
-        observedRows++;
-        assertEquals(
-          mainPublic,
-          true,
-          `${row.name}: observed where main withheld`,
-        );
-      }
+    if (verdictOf(row.cfcTaint) === "observed") {
+      observedRows++;
+      assertEquals(
+        mainPublic,
+        true,
+        `${row.name}: observed where main withheld`,
+      );
     }
   }
   // The property is only worth something if the table holds both kinds of
@@ -376,25 +340,13 @@ Deno.test("cfcResultFromRunscSidecar observes nothing main withheld, on either d
   assertEquals(mainIsPublicRunscTaint({ string: EMPTY }), false);
 });
 
-Deno.test("cfcResultFromRunscSidecar names the container id the way the driver does", () => {
-  const mismatch = (reader?: RunscCfcResultReader) =>
+Deno.test("cfcResultFromRunscSidecar names the container id in a mismatch", () => {
+  assertEquals(
     cfcResultFromRunscSidecar(
       { version: 1, containerId: "other", cfcTaint: {} },
       "c1",
       command,
-      ...(reader !== undefined ? [reader] as const : []),
-    ).diagnostics?.[0]?.message;
-  // main's wording, which the Docker driver keeps.
-  assertEquals(
-    mismatch(DOCKER_RUNSC_CFC_RESULT_READER),
-    "runsc CFC result sidecar did not match the Docker container ID",
-  );
-  assertEquals(
-    mismatch(DIRECT_RUNSC_CFC_RESULT_READER),
-    "runsc CFC result sidecar did not match the container ID",
-  );
-  assertEquals(
-    mismatch(),
+    ).diagnostics?.[0]?.message,
     "runsc CFC result sidecar did not match the container ID",
   );
 });

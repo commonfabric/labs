@@ -130,6 +130,18 @@ a line for each new document to the index below.
   mints an ingest channel for their own space without an operator: the space-ACL
   authorization model, why the two obvious designs are unsound, and the
   procedure for retiring channels when the trust conditions change
+- [`gmail-push-architecture.md`](gmail-push-architecture.md) — the end-to-end
+  path of a Gmail push notification, in diagrams: the servers and clients
+  involved, who runs each one, what each hop between them proves, and what
+  absorbs each failure
+- [`gmail-push-setup.md`](gmail-push-setup.md) — the Google Cloud resources,
+  permissions, and deployment settings Gmail push needs outside this
+  repository, as commands, for a deployment Google can reach and for one on a
+  private network
+- [`gmail-push-ingest.md`](gmail-push-ingest.md) — how a Gmail `users.watch`
+  notification, pushed by Cloud Pub/Sub, reaches the ingest channels bound to
+  its mailbox, what proves a caller may bind a mailbox, and what the syncer
+  still owns
 - [`gateway-request-provenance.md`](gateway-request-provenance.md) — how a
   request to the LLM gateway says which workload produced it, what a value is
   allowed to contain given that it reaches the provider, and why the machine

@@ -455,6 +455,17 @@ export class SourceReconciler {
     weigh: suppliedSourceWeight,
   });
   readonly #suppliedSourceFlights = new Map<string, Promise<SuppliedSource>>();
+
+  /**
+   * The compiles of supplied source in flight, by the key their source is
+   * retained under and the export they select, each with the schema registry
+   * epoch it started in. Kept apart from retention, so a call still finds a
+   * compile whose source has since been retired.
+   */
+  readonly #suppliedCompileFlights = new Map<
+    string,
+    { promise: Promise<CompiledCandidate | SourceRefusal>; epoch: number }
+  >();
   #disposed = false;
 
   constructor(runtime: Runtime) {
@@ -596,13 +607,16 @@ export class SourceReconciler {
    * space, origin, and advertised identity share the downloaded source, which
    * keeps one verified pattern beside it: that of the export last compiled
    * from it into the space, with the source-closure persistence of a compiler
-   * cache hit done. A later call for that export in the same schema registry
-   * epoch returns that pattern, whose closure the space already holds. A call
-   * for another export compiles it, and its pattern is kept in place of the
-   * other. A refusal, or a failure once the source is downloaded, drops the
-   * shared source and the pattern kept with it, whichever export it was for,
-   * so the next call downloads the source again and compiles even an export
-   * verified before, such as the `default` export {@link open} compiles.
+   * cache hit done. Calls for the same export that arrive while it compiles
+   * share that compile, and its refusal or failure, rather than compiling the
+   * same source again. A later call for that export in the same schema
+   * registry epoch returns the kept pattern, whose closure the space already
+   * holds. A call for another export compiles it, and its pattern is kept in
+   * place of the other. A refusal, or a failure once the source is
+   * downloaded, drops the shared source and the pattern kept with it,
+   * whichever export it was for, so the next call downloads the source again
+   * and compiles even an export verified before, such as the `default` export
+   * {@link open} compiles.
    *
    * `refused` is a refusal the caller already holds for this origin's source,
    * such as the one following the origin has just returned. While the host
@@ -639,6 +653,7 @@ export class SourceReconciler {
     this.#disposed = true;
     this.#suppliedSources.clear();
     this.#suppliedSourceFlights.clear();
+    this.#suppliedCompileFlights.clear();
     for (const { abort } of this.#pending.values()) abort.abort();
     for (const { abort } of this.#passes) abort.abort();
     for (const { cancel } of this.#fabricFollowers.values()) cancel();
@@ -1034,6 +1049,69 @@ export class SourceReconciler {
       if (kept?.epoch === epoch && kept.symbol === symbol) {
         return { outcome: "compiled", pattern: kept.pattern, ref: kept.ref };
       }
+      const compileKey = stringTupleKey([key, symbol]);
+      let flight = this.#suppliedCompileFlights.get(compileKey);
+      if (flight?.epoch !== epoch) {
+        const started = {
+          promise: this.#compileSupplied(
+            key,
+            resolved,
+            space,
+            symbol,
+            answer.identity,
+            signal,
+            epoch,
+          ),
+          epoch,
+        };
+        flight = started;
+        this.#suppliedCompileFlights.set(compileKey, started);
+        void started.promise.catch(() => {}).finally(() => {
+          if (this.#suppliedCompileFlights.get(compileKey) === started) {
+            this.#suppliedCompileFlights.delete(compileKey);
+          }
+        });
+      }
+      const candidate = await flight.promise;
+      // The compile answers for the pass that started it, and this pass may
+      // have been stopped since.
+      signal.throwIfAborted();
+      return candidate;
+    } catch (error) {
+      if (held !== undefined) {
+        this.#forgetSuppliedSource(held.key, held.resolved);
+      }
+      signal.throwIfAborted();
+      logger.warn("system-source-failed", () => [
+        "the source a system origin names could not be had",
+        space,
+        origin.ref,
+        error,
+      ]);
+      return {
+        outcome: "unreachable",
+        detail: reconciliationDetail(error),
+        ...(offered === undefined ? {} : { offered }),
+      };
+    }
+  }
+
+  /**
+   * Helper for `#compileSystemSource()`, which compiles the `symbol` export of
+   * `resolved` into `space`, holds it to `advertised`, the identity its origin
+   * names, and keeps the pattern when the schema registry is still in the
+   * `epoch` it started in. A refusal or a failure retires `resolved`.
+   */
+  async #compileSupplied(
+    key: string,
+    resolved: SuppliedSource,
+    space: MemorySpace,
+    symbol: string,
+    advertised: string,
+    signal: AbortSignal,
+    epoch: number,
+  ): Promise<CompiledCandidate | SourceRefusal> {
+    try {
       // The destination must hold the closure behind its creation revision.
       // A compiler hit still performs the destination's persistence work.
       await prepareSourceClosureVerification();
@@ -1042,7 +1120,7 @@ export class SourceReconciler {
       const candidate = await this.#compileCandidate(
         { ...copySourceProgram(resolved.program), mainExport: symbol },
         space,
-        answer.identity,
+        advertised,
       );
       signal.throwIfAborted();
       if (candidate.outcome === "refused") {
@@ -1061,21 +1139,8 @@ export class SourceReconciler {
       }
       return candidate;
     } catch (error) {
-      if (held !== undefined) {
-        this.#forgetSuppliedSource(held.key, held.resolved);
-      }
-      signal.throwIfAborted();
-      logger.warn("system-source-failed", () => [
-        "the source a system origin names could not be had",
-        space,
-        origin.ref,
-        error,
-      ]);
-      return {
-        outcome: "unreachable",
-        detail: reconciliationDetail(error),
-        ...(offered === undefined ? {} : { offered }),
-      };
+      this.#forgetSuppliedSource(key, resolved);
+      throw error;
     }
   }
 

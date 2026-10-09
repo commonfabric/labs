@@ -113,17 +113,37 @@ profile's data fields, and its view state is per session; nothing else in the
 space is protected from a visitor (a *named* `inSpace(name)` would put every
 profile created under one name in one space) —
 running `/api/patterns/system/profile-home.tsx`; the link
-is appended to `profiles`.
+is appended to `profiles`. The home Profile tab renders the **profile picker**
+(`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
+the default, and stamp MRU. There is no `profileName` mirror field anymore.
 
 The create passes `root: true`, so the profile is its space's root: the space's
 genesis commit reserves the root's address, the space cell's `defaultPattern`
 links the profile there, and a host holding only the profile space's DID
-reaches the profile as it reaches any space's root. A profile space whose
-genesis reserved no root, which is every profile space created before the
-create passed `root: true`, has no profile as its root, and its profile is
-reached only through a link to it, such as the one in `profiles`. The home Profile tab renders the **profile picker**
-(`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
-the default, and stamp MRU. There is no `profileName` mirror field anymore.
+reaches the profile as it reaches any space's root.
+
+A profile space whose genesis reserved no root, which is every profile space
+created before the create passed `root: true`, can get its profile as its root
+from `cf profile repair-root`, run by an operator across a store or by the
+person over their own Home's profiles (the
+[CLI README](../../../packages/cli/README.md) describes running it). The repair
+links the existing profile as the space cell's `defaultPattern` where the space
+has no root, and where its root is one a space-root ensure created and nothing
+was added to: a client's open of the space by its owner creates one, and so,
+with server execution on, does the server when any session opens the space.
+Any other root it leaves alone, and that space's profile stays a profile its
+space does not have as its root. A repaired profile is not at the reserved
+address, since a genesis commit cannot gain a reservation afterward, and it is
+a root like any other in a space that grants every principal `WRITE`: anyone
+can link something else there. `getSpaceRootPattern()` returns whatever root
+the space cell links, or `undefined` when it links none, and throws the server's
+refusal when the server refuses the reader the space; it does not ask whether
+the root is a profile or whom it represents. So a host that finds a person's
+profile from the space's DID makes those checks itself: it takes the root as the person's profile only when the
+root is a piece in that space, rather than a path into one, and its label says
+it represents the person the host expects. Until the repair reaches it, a
+profile in such a space is reached only through a link to it, such as the one
+in `profiles`.
 
 `profiles`/`defaultProfile`/`mru` are CFC-protected profile-link data, created
 through the trusted profile-create / picker surfaces. Untrusted writes are
@@ -233,7 +253,7 @@ The piece holds two things:
   before the request is staged.
 
 Home's **Agent runs** tab renders this queue beside Spaces, Favorites, Profile,
-and Self. Each row shows its task, state, age, and available token usage.
+Self, and Chats. Each row shows its task, state, age, and available token usage.
 Reported cost and estimated cost have separate labels; an unavailable estimate
 shows the harness's withheld reason when supplied. Missing counters and costs
 remain unavailable rather than displaying zero. Relative ages share a one-minute
@@ -269,10 +289,9 @@ requests produced for a client to deliver. It creates each room as the root
 of a space of its own. Everything it holds is private to the user, as the home
 space is.
 
-Home holds it but renders it nowhere of its own: a page shows it at its path
-in home's result, `chatManager`, with the user's rooms, each a link that opens
-the room as a page of its own, and the controls that start a direct or a group
-chat.
+Home's **Chats** tab renders it: the user's rooms, each a link that opens the
+room as a page of its own, and the controls that start a direct or a group
+chat. A page can also show it at its path in home's result, `chatManager`.
 
 A home space whose system home pattern was set up before it held a chat manager
 holds none until the home space is next opened, since nothing updates a piece
@@ -284,7 +303,9 @@ remedies, rather than resolving to nothing.
 Home hands the manager its shared-space catalog ([Shared-space
 catalog](../../features/shared-space-catalog.md)), and the manager registers
 there each room it creates, and each room a manager created that it accepts, as
-a `fabrichat-room` entry.
+a `fabrichat-room` entry. Its `rooms` is a view over the catalog: the saved
+`fabrichat-room` entries, a room offered to the user and registered by the share
+intake among them, and forgetting a room archives its entry.
 
 ## Custom Home Pattern
 

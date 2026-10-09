@@ -60,7 +60,7 @@ import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
 import type {
-  DockerRunscAdditionalMountConfig,
+  SandboxAdditionalMountConfig,
   SandboxRuntimeChoice,
   SandboxRuntimeKind,
 } from "./sandbox/types.ts";
@@ -88,27 +88,27 @@ export interface HarnessSessionConfig {
   /** The harness's own enforcement dial, over tool policy and the sandbox. */
   cfcEnforcementModeOverride?: CfcEnforcementMode;
 
-  /** The sandbox's two CFC sidecar transports. */
-  cfcResultDir?: string;
-  cfcInvocationContextDir?: string;
-
-  sandboxImage?: string;
-  sandboxDockerRuntime?: string;
-
   /**
-   * The sandbox runtime the run's engine builds: `runsc` is the direct
-   * driver, with no Docker and sessions honoured, and `docker` is the Docker
-   * driver. Absent, the engine builds the Docker driver on every platform;
-   * no platform default is applied here. An entrypoint applies its
+   * The sandbox runtime the run's engine builds: `runsc`, the direct driver,
+   * the one there is, with sessions honoured except under pasta's network.
+   * No platform default is applied here: an entrypoint applies its
    * platform's default when it derives the selection, before it builds this
-   * configuration, and sets `runsc` for the native runtime macOS defaults
-   * to; `sandboxRuntimeChoice` records how the runtime was selected.
+   * configuration, and sets `runsc` for the native runtime macOS and Linux
+   * default to; `sandboxRuntimeChoice` records how the runtime was selected.
    */
   sandboxRuntimeKind?: SandboxRuntimeKind;
   sandboxRootfs?: string;
   sandboxCfcPolicy?: string;
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+  /** Whether the direct driver's runsc runs with `--rootless`. */
+  sandboxRunscRootless?: boolean;
+  /** The `pasta` that gives the direct driver's `sandbox` network on Linux. */
+  sandboxRunscNetworkHelper?: string;
+  /** The `unshare` root's pasta runs under. */
+  sandboxRunscUnshare?: string;
+  /** The `setpriv` that ties what pasta runs to pasta. */
+  sandboxRunscSetpriv?: string;
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -271,7 +271,7 @@ const sessionParentToolIds = (
 /** The sandbox bind mounts this session provisions, in one list. */
 export const harnessSessionAdditionalMounts = (
   config: HarnessSessionConfig,
-): readonly DockerRunscAdditionalMountConfig[] => [
+): readonly SandboxAdditionalMountConfig[] => [
   ...(config.fabricMount !== undefined
     ? [{ kind: "fabric-fuse" as const, hostPath: config.fabricMount }]
     : []),
@@ -300,12 +300,6 @@ export const harnessSessionEngineOptions = (
     allowedSubagentProfiles: config.allowedSubagentProfiles,
     ...(config.model !== undefined ? { model: config.model } : {}),
     ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
-    ...(config.sandboxImage !== undefined
-      ? { sandboxImage: config.sandboxImage }
-      : {}),
-    ...(config.sandboxDockerRuntime !== undefined
-      ? { sandboxDockerRuntime: config.sandboxDockerRuntime }
-      : {}),
     ...(config.sandboxRuntimeKind !== undefined
       ? { sandboxRuntimeKind: config.sandboxRuntimeKind }
       : {}),
@@ -321,14 +315,20 @@ export const harnessSessionEngineOptions = (
     ...(config.sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
       : {}),
+    ...(config.sandboxRunscRootless === true
+      ? { sandboxRunscRootless: true }
+      : {}),
+    ...(config.sandboxRunscNetworkHelper !== undefined
+      ? { sandboxRunscNetworkHelper: config.sandboxRunscNetworkHelper }
+      : {}),
+    ...(config.sandboxRunscUnshare !== undefined
+      ? { sandboxRunscUnshare: config.sandboxRunscUnshare }
+      : {}),
+    ...(config.sandboxRunscSetpriv !== undefined
+      ? { sandboxRunscSetpriv: config.sandboxRunscSetpriv }
+      : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }
-      : {}),
-    ...(config.cfcResultDir !== undefined
-      ? { cfcResultDir: config.cfcResultDir }
-      : {}),
-    ...(config.cfcInvocationContextDir !== undefined
-      ? { cfcInvocationContextDir: config.cfcInvocationContextDir }
       : {}),
     ...(config.cfcEnforcementModeOverride !== undefined
       ? { cfcEnforcementModeOverride: config.cfcEnforcementModeOverride }

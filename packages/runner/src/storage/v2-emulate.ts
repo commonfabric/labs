@@ -1,4 +1,5 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import type { MemoryProtocolFlags } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
@@ -70,6 +71,18 @@ class EmulatedSessionFactory implements SessionFactory {
       }),
     );
     return { client, session };
+  }
+
+  /** @inheritDoc */
+  async serverFlags(): Promise<MemoryProtocolFlags | null> {
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(this.#getServer()),
+    });
+    try {
+      return client.serverFlags;
+    } finally {
+      await client.close();
+    }
   }
 }
 

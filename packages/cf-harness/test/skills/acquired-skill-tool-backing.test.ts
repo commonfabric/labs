@@ -16,7 +16,7 @@ import {
   withheldToolIds,
 } from "../../src/contracts/tool-descriptor.ts";
 import type { HarnessAcquiredSkill } from "../../src/contracts/skill.ts";
-import type { DockerRunscSandboxConfig } from "../../src/sandbox/types.ts";
+import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import { acquiredSkillScriptBacking } from "../../src/skills/acquired-skill-mount.ts";
 
 const backing = (
@@ -41,18 +41,8 @@ const acquired: HarnessAcquiredSkill = {
 };
 
 const sandboxWith = (
-  additionalMounts: DockerRunscSandboxConfig["additionalMounts"],
-): DockerRunscSandboxConfig => ({
-  dockerBinary: "docker",
-  runtimeName: "runsc-cfc",
-  image: "cf-harness:test",
-  workspaceHostPath: "/tmp/workspace",
-  workspaceMountPath: "/workspace",
-  shellPath: "/bin/bash",
-  dockerNetworkMode: "none",
-  additionalMounts,
-  extraDockerArgs: [],
-});
+  additionalMounts: RunscSandboxConfig["additionalMounts"],
+): Pick<RunscSandboxConfig, "additionalMounts"> => ({ additionalMounts });
 
 const acquiredMount = {
   kind: "host-bind" as const,

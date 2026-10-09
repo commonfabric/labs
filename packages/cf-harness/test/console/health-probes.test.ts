@@ -9,7 +9,6 @@ import {
   consolePatternIndexHealthProbes,
   type ConsolePolicyReading,
   consoleRunscHealthProbe,
-  consoleSandboxHealthProbe,
   consoleVmHealthProbe,
   type ConsoleVmImage,
   consoleVmStore,
@@ -130,55 +129,6 @@ const readLine = async (
 };
 
 describe("health-probes", () => {
-  describe("consoleSandboxHealthProbe()", () => {
-    for (const registered of [true, false]) {
-      it(`reports Docker responding with runsc-cfc ${registered ? "registered" : "missing"}`, async () => {
-        const probe = consoleSandboxHealthProbe(() =>
-          Promise.resolve({
-            runtimes: registered ? { "runsc-cfc": {} } : { runc: {} },
-          })
-        );
-        const rows = await probe.read();
-        expect(rows.map(({ id, state, value }) => ({ id, state, value })))
-          .toEqual([
-            { id: "sandbox.docker", state: "ok", value: "responding" },
-            {
-              id: "sandbox.runtime",
-              state: registered ? "ok" : "failed",
-              value: registered
-                ? "runsc-cfc registered"
-                : "runsc-cfc not registered",
-            },
-          ]);
-        expect(rows.every((row) => Number.isFinite(Date.parse(row.checkedAt!))))
-          .toBe(true);
-        expect(rows[1]).toMatchObject({
-          label: "Sandbox Runtime",
-          source: "docker info",
-          detail: "docker info --format '{{json .Runtimes}}'",
-        });
-        expect(rows[1].remedy).toBe(
-          registered
-            ? undefined
-            : "Install the runsc-cfc runtime and reload Docker's runtime registration.",
-        );
-      });
-    }
-
-    for (const runtimes of [undefined, null, [], "invalid"]) {
-      it(`leaves availability unknown for ${JSON.stringify(runtimes)} runtime metadata`, async () => {
-        const probe = consoleSandboxHealthProbe(() =>
-          Promise.resolve({ runtimes, unreadable: "daemon unavailable" })
-        );
-        const rows = await probe.read();
-        expect(rows.map((row) => [row.state, row.reason])).toEqual([
-          ["unknown", "daemon unavailable"],
-          ["unknown", "daemon unavailable"],
-        ]);
-      });
-    }
-  });
-
   describe("consoleRunscHealthProbe()", () => {
     /** The parts of a resolved configuration the probe reads. */
     const config = (policy?: string) =>

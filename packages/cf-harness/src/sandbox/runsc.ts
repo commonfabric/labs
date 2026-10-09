@@ -32,9 +32,10 @@ import {
   type RunscCfcResultSidecar,
 } from "./runsc-cfc-result.ts";
 import {
-  type DockerRunscAdditionalMount,
-  type DockerRunscAdditionalMountConfig,
+  type RunscNetworkMode,
   SANDBOX_SESSION_NAME_PATTERN,
+  type SandboxAdditionalMount,
+  type SandboxAdditionalMountConfig,
   type SandboxCommandRequest,
   type SandboxCommandResult,
   type SandboxPlatform,
@@ -67,6 +68,11 @@ import {
  *   gets a container id minted here, fixed in width, so no id is a prefix
  *   of another (runsc resolves abbreviated ids).
  *
+ * No session is offered under pasta's network (see {@link PASTA_ARGS}):
+ * pasta starts what it runs in a PID namespace of its own, so a session's
+ * container started under it records pids that `exec` and the control
+ * commands, run outside pasta, cannot find.
+ *
  * Sessions and CFC. A session call carries its own invocation context in on
  * fd 3 and gets a result out on fd 4, but that result is NOT a sound basis
  * for enforcement, and sessions are refused in enforcing modes:
@@ -88,11 +94,12 @@ export const DEFAULT_RUNSC_BINARY = "runsc";
 export const DEFAULT_RUNSC_WORKSPACE_MOUNT_PATH = "/workspace";
 export const DEFAULT_RUNSC_SHELL = "/bin/sh";
 /**
- * The docker runtime defaults to `--network bridge`; this is the runsc
- * spelling of the same posture (runsc's own netstack, which the darwin runsc
- * runs as the VM's network), so a run that names no network mode has the
- * same reach on either runtime. A lane that wants isolation says so, as the
- * docker lanes do, through `CF_HARNESS_DOCKER_NETWORK_MODE=none`.
+ * The network a run that names no network mode has. On macOS it is runsc's
+ * own netstack, which the darwin runsc runs as the VM's network. On Linux it
+ * is `pasta`'s network (egress, and the host at `host.docker.internal`) where
+ * the configuration names a `networkHelper`, as the Linux default does;
+ * without one, runsc's own netstack gives a container loopback alone. A lane
+ * that wants isolation says so through `CF_HARNESS_DOCKER_NETWORK_MODE=none`.
  */
 export const DEFAULT_RUNSC_NETWORK_MODE: RunscNetworkMode = "sandbox";
 export const DEFAULT_RUNSC_FABRIC_MOUNT_PATH = "/fabric";
@@ -143,7 +150,100 @@ export const darwinCfcVmRootfs = (
   imageKey = DARWIN_CFC_VM_IMAGE_KEY,
 ): string => joinHostPath(store, "images", imageKey);
 
-export type RunscNetworkMode = "none" | "sandbox" | "host";
+/**
+ * The store gVisor's Linux installer writes under `home`: the `runsc` binary
+ * in `bin/`, the CFC policy as `cfc-policy.json`, and each image unpacked to
+ * a rootfs directory in `images/`.
+ */
+export const linuxRunscStore = (home: string): string =>
+  joinHostPath(home, ".local", "share", "runsc-cfc");
+
+/** The image a Linux runsc store unpacks when it is installed, by its key. */
+export const LINUX_RUNSC_IMAGE_KEY = "kitchensink";
+
+/** Where the Linux runsc `store` keeps the rootfs directory of `imageKey`. */
+export const linuxRunscRootfs = (
+  store: string,
+  imageKey = LINUX_RUNSC_IMAGE_KEY,
+): string => joinHostPath(store, "images", imageKey);
+
+export type { RunscNetworkMode };
+
+/**
+ * How `pasta` (from passt) gives a container on Linux the `sandbox` network:
+ * a network namespace of its own, whose one interface pasta translates to
+ * the host's sockets, so the container has egress and reaches the host at
+ * the gateway address, and sees none of the host's interfaces. The
+ * addresses are fixed, slirp's, IPv4 alone, so the hosts file the container
+ * gets can name the host by a constant. No port of the container's is
+ * forwarded to the host, and none of the host's into the container: the host
+ * is reached at the gateway alone. Pasta's own messages go to a log file the
+ * runtime names, not into a call's output, but for two warnings about user
+ * mappings that root's pasta writes to its stderr, which the call shares,
+ * whatever its flags say.
+ */
+export const PASTA_ARGS: readonly string[] = [
+  "--config-net",
+  "--quiet",
+  "-4",
+  "-a",
+  "10.0.2.15",
+  "-n",
+  "24",
+  "-g",
+  "10.0.2.2",
+  "-t",
+  "none",
+  "-u",
+  "none",
+  "-T",
+  "none",
+  "-U",
+  "none",
+];
+
+/**
+ * What pasta is given beside {@link PASTA_ARGS} for root: no user namespace
+ * of its own, and root kept rather than dropped to `nobody`, since runsc then
+ * runs as root inside it. Without a user namespace pasta mounts its own
+ * `/proc` in the mount namespace it runs in, which would hide every process
+ * of the host's from the host, so for root it runs in a mount namespace of
+ * its own, which {@link UNSHARE_ARGS} makes. A process that is not root has
+ * pasta make a user namespace, in which runsc's `--rootless` makes its own.
+ */
+export const PASTA_ROOT_ARGS: readonly string[] = [
+  "--netns-only",
+  "--runas",
+  "0",
+];
+
+/** How `unshare` (util-linux) gives root's pasta a mount namespace of its own. */
+export const UNSHARE_ARGS: readonly string[] = [
+  "--mount",
+  "--propagation",
+  "private",
+];
+
+/**
+ * How `setpriv` (util-linux) ties what pasta runs to pasta: SIGKILL when pasta
+ * goes. Pasta starts its command as the first process of a PID namespace of
+ * its own, and clears the parent-death signal it gave it before the command
+ * starts, so a `runsc run` whose pasta is stopped (a timeout, a close) would
+ * otherwise keep its container running. A SIGKILL to that first process ends
+ * every process of the namespace, the container's included.
+ */
+export const SETPRIV_ARGS: readonly string[] = ["--pdeathsig", "KILL"];
+
+/** The address a container under pasta reaches the host at. */
+export const PASTA_HOST_ADDRESS = "10.0.2.2";
+
+/** Where a container under pasta gets {@link PASTA_HOSTS_FILE}. */
+export const PASTA_HOSTS_PATH = "/etc/hosts";
+
+/** The hosts file a container under pasta gets, naming the host. */
+export const PASTA_HOSTS_FILE = "127.0.0.1\tlocalhost\n" +
+  "::1\tlocalhost ip6-localhost ip6-loopback\n" +
+  `${PASTA_HOST_ADDRESS}\thost.docker.internal\n`;
 
 export interface RunscSandboxConfig {
   /**
@@ -163,9 +263,35 @@ export interface RunscSandboxConfig {
   workspaceMountPath: string;
   shellPath: string;
   networkMode: RunscNetworkMode;
-  additionalMounts: readonly DockerRunscAdditionalMount[];
+  additionalMounts: readonly SandboxAdditionalMount[];
   /** Global runsc flags placed before the subcommand, verbatim. */
   extraRunscArgs: readonly string[];
+  /**
+   * Whether every runsc command runs with `--rootless`: in a user namespace
+   * of its own, mapping this process's user to root there. Linux's runsc
+   * needs it where this process is not root.
+   */
+  rootless: boolean;
+  /**
+   * The `pasta` binary that gives a container the `sandbox` network on
+   * Linux, as {@link PASTA_ARGS} describes; absent where runsc's own
+   * `sandbox` network is used as it is (the macOS `runsc` gives it the VM's
+   * network), and read only under that network mode.
+   */
+  networkHelper?: string;
+  /**
+   * The `unshare` that gives pasta a mount namespace of its own where this
+   * process is root, and that this process is root: given, pasta runs as
+   * {@link PASTA_ROOT_ARGS} says, in that namespace; absent, pasta makes a
+   * user namespace of its own. Read only where `networkHelper` is.
+   */
+  unshare?: string;
+  /**
+   * The `setpriv` that ties what pasta runs to pasta, as
+   * {@link SETPRIV_ARGS} says; read only where `networkHelper` is, and
+   * required there.
+   */
+  setpriv?: string;
   /**
    * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
    * when this is set.
@@ -199,8 +325,16 @@ export interface ResolveRunscSandboxConfigOptions {
   workspaceMountPath?: string;
   shellPath?: string;
   networkMode?: RunscNetworkMode;
-  additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
+  additionalMounts?: readonly SandboxAdditionalMountConfig[];
   extraRunscArgs?: readonly string[];
+  /** Whether runsc runs with `--rootless`; see {@link RunscSandboxConfig}. */
+  rootless?: boolean;
+  /** The `pasta` binary; see {@link RunscSandboxConfig}. */
+  networkHelper?: string;
+  /** The `unshare` binary; see {@link RunscSandboxConfig}. */
+  unshare?: string;
+  /** The `setpriv` binary; see {@link RunscSandboxConfig}. */
+  setpriv?: string;
   cfcPolicyPath?: string;
   scratchDir?: string;
   runId?: string;
@@ -210,7 +344,9 @@ export interface ResolveRunscSandboxConfigOptions {
    * The home, and the value of `CFC_VM_HOME`, that the macOS `runsc` this
    * runs finds its store by. On macOS an unnamed rootfs is the kitchen-sink
    * image of that store, as `darwinCfcVmStore()` names it from these two, so
-   * that it is in the store the shim runs from.
+   * that it is in the store the shim runs from. On Linux an unnamed rootfs is
+   * the kitchen-sink rootfs of the store under the home, as
+   * `linuxRunscStore()` names it.
    */
   homeDir?: string;
   cfcVmHome?: string;
@@ -261,8 +397,8 @@ const requireAbsoluteSandboxPath = (label: string, path: string): string => {
 };
 
 const resolveAdditionalMounts = (
-  configs: readonly DockerRunscAdditionalMountConfig[],
-): DockerRunscAdditionalMount[] =>
+  configs: readonly SandboxAdditionalMountConfig[],
+): SandboxAdditionalMount[] =>
   configs.map((mount) => {
     if (mount.kind === "fabric-fuse") {
       return {
@@ -275,8 +411,6 @@ const resolveAdditionalMounts = (
           "fabric mount sandbox path",
           mount.sandboxPath ?? DEFAULT_RUNSC_FABRIC_MOUNT_PATH,
         ),
-        // The docker runtime's default, so `/fabric` is writable or not on
-        // both runtimes alike.
         readOnly: mount.readOnly ?? false,
       };
     }
@@ -469,6 +603,19 @@ const findOnSearchPath = (
 };
 
 /**
+ * Returns the canonical path of the executable file a bare `name` leads to
+ * on `searchPath`, this process's `PATH` by default, or `undefined` where no
+ * entry holds one.
+ */
+export const executableOnPath = (
+  name: string,
+  searchPath: string | undefined = Deno.env.get("PATH"),
+): string | undefined =>
+  searchPath === undefined
+    ? undefined
+    : findOnSearchPath(name, searchPath, () => Deno.cwd());
+
+/**
  * Returns the canonical path of the runsc binary `given` names, resolved the
  * way running it would resolve it: a bare name through `PATH`, a relative
  * path against the working directory of this process.
@@ -531,9 +678,11 @@ const resolveRunscBinary = (given: string): string => {
  *
  * @throws When a setting is malformed (on macOS, a store that is not an
  * absolute path), when two sandbox roots overlap, when the scratch directory
- * lies inside a mount, when the binary, the policy, the rootfs or, on macOS,
- * the cfc-vm store lies inside a writable mount, when on macOS a writable
- * mount lies inside the store, and when {@link canonicalHostPath} cannot tell
+ * lies inside a mount, when the binary, the policy, the rootfs or the native
+ * store (on macOS the cfc-vm store, on Linux given a home the runsc-cfc store
+ * under it) lies inside a writable mount, when a writable mount lies inside
+ * that store, when a writable mount lies inside the rootfs,
+ * and when {@link canonicalHostPath} cannot tell
  * where one of those paths, or a mount, leads.
  */
 export const resolveRunscSandboxConfig = (
@@ -550,11 +699,19 @@ export const resolveRunscSandboxConfig = (
       `runsc sandbox needs the cfc-vm store by its absolute path: \`${store}\` is not an absolute path (set CFC_VM_HOME to the store's absolute path)`,
     );
   }
+  const linuxHome = platform === "linux" && options.homeDir !== undefined &&
+      options.homeDir !== ""
+    ? options.homeDir
+    : undefined;
   const rootfs = options.rootfs ??
-    (store !== undefined ? darwinCfcVmRootfs(store) : undefined);
+    (store !== undefined
+      ? darwinCfcVmRootfs(store)
+      : linuxHome !== undefined
+      ? linuxRunscRootfs(linuxRunscStore(linuxHome))
+      : undefined);
   if (rootfs === undefined) {
     throw new Error(
-      `runsc sandbox needs a rootfs: pass --sandbox-rootfs or set ${RUNSC_ROOTFS_ENV} (on macOS the default is the cfc-vm kitchensink image)`,
+      `runsc sandbox needs a rootfs: pass --sandbox-rootfs or set ${RUNSC_ROOTFS_ENV} (the default is the kitchensink image of the store under the home: the cfc-vm store on macOS, ~/.local/share/runsc-cfc on Linux)`,
     );
   }
   const workspaceMountPath = requireAbsoluteSandboxPath(
@@ -564,9 +721,14 @@ export const resolveRunscSandboxConfig = (
   const additionalMounts = resolveAdditionalMounts(
     options.additionalMounts ?? [],
   );
+  // Under pasta's network the hosts file is bound in as well, and no mount
+  // may cover it or sit in it.
+  const underPasta = options.networkHelper !== undefined &&
+    (options.networkMode ?? DEFAULT_RUNSC_NETWORK_MODE) === "sandbox";
   const roots = [
     workspaceMountPath,
     ...additionalMounts.map((m) => m.sandboxPath),
+    ...(underPasta ? [PASTA_HOSTS_PATH] : []),
   ];
   // By index, so two mounts at the very same path are an overlap too: the
   // later bind would shadow the earlier one while the description still
@@ -576,7 +738,14 @@ export const resolveRunscSandboxConfig = (
       const a = roots[i]!;
       const b = roots[j]!;
       if (isWithinRoot(a, b) || isWithinRoot(b, a)) {
-        throw new Error(`sandbox roots overlap: ${a} and ${b}`);
+        throw new Error(
+          `sandbox roots overlap: ${a} and ${b}${
+            underPasta && j === roots.length - 1
+              ? ", where pasta's network binds the hosts file naming " +
+                "`host.docker.internal`"
+              : ""
+          }`,
+        );
       }
     }
   }
@@ -711,6 +880,19 @@ export const resolveRunscSandboxConfig = (
     rootfs,
     canonicalHostPath("sandbox rootfs", rootfs),
   );
+  // The other way round as well: a writable mount inside the rootfs lets a
+  // sandbox rewrite the image every later container starts from. On Linux
+  // the rootfs is that image's own directory tree.
+  for (const mount of hostMounts) {
+    if (
+      !mount.readOnly &&
+      mount.canonical.some((root) => inside(root, [canonicalRootfs]))
+    ) {
+      throw new Error(
+        `the writable mount ${mount.hostPath} lies inside the sandbox rootfs ${rootfs}: the sandbox could rewrite the image later containers start from${unnamed}`,
+      );
+    }
+  }
   const cfcPolicyPath = options.cfcPolicyPath === undefined
     ? undefined
     : trusted(
@@ -719,14 +901,25 @@ export const resolveRunscSandboxConfig = (
       canonicalHostPath("CFC policy", options.cfcPolicyPath),
     );
   // The macOS `runsc` runs from its store whatever binary, rootfs and policy
-  // are named: the VM's config, image and daemon socket are there. So the
-  // store is kept out of reach both ways: not inside a writable mount, and
-  // no writable mount inside it.
-  if (store !== undefined) {
+  // are named: the VM's config, image and daemon socket are there. Linux's
+  // store under the home holds the `runsc`, the images and the policy its
+  // default runs from, an image this run does not use included, which a
+  // later run can. So the store is kept out of reach both ways: not inside a
+  // writable mount, and no writable mount inside it.
+  const nativeStore = store !== undefined
+    ? { path: store, label: "cfc-vm store", runs: "the macOS runsc" }
+    : linuxHome !== undefined
+    ? {
+      path: linuxRunscStore(linuxHome),
+      label: "runsc-cfc store",
+      runs: "Linux's runsc default",
+    }
+    : undefined;
+  if (nativeStore !== undefined) {
     const canonicalStore = trusted(
-      "cfc-vm store",
-      store,
-      canonicalHostPath("cfc-vm store", store),
+      nativeStore.label,
+      nativeStore.path,
+      canonicalHostPath(nativeStore.label, nativeStore.path),
     );
     for (const mount of hostMounts) {
       if (
@@ -734,7 +927,7 @@ export const resolveRunscSandboxConfig = (
         mount.canonical.some((root) => inside(root, [canonicalStore]))
       ) {
         throw new Error(
-          `the writable mount ${mount.hostPath} lies inside the cfc-vm store ${store}: the sandbox could rewrite what the macOS runsc runs from${unnamed}`,
+          `the writable mount ${mount.hostPath} lies inside the ${nativeStore.label} ${nativeStore.path}: the sandbox could rewrite what ${nativeStore.runs} runs from${unnamed}`,
         );
       }
     }
@@ -753,6 +946,34 @@ export const resolveRunscSandboxConfig = (
       additionalMounts.map((mount) => Object.freeze(mount)),
     ),
     extraRunscArgs: Object.freeze([...(options.extraRunscArgs ?? [])]),
+    rootless: options.rootless ?? false,
+    ...(options.networkHelper !== undefined
+      ? {
+        networkHelper: trusted(
+          "pasta binary",
+          options.networkHelper,
+          canonicalHostPath("pasta binary", options.networkHelper),
+        ),
+      }
+      : {}),
+    ...(options.unshare !== undefined
+      ? {
+        unshare: trusted(
+          "unshare binary",
+          options.unshare,
+          canonicalHostPath("unshare binary", options.unshare),
+        ),
+      }
+      : {}),
+    ...(options.setpriv !== undefined
+      ? {
+        setpriv: trusted(
+          "setpriv binary",
+          options.setpriv,
+          canonicalHostPath("setpriv binary", options.setpriv),
+        ),
+      }
+      : {}),
     ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
     scratchDir,
     ...(options.scratchDir === undefined
@@ -767,8 +988,7 @@ export const resolveRunscSandboxConfig = (
 };
 
 /**
- * The enforcing floor for this runtime, the counterpart of the docker
- * runtime's sidecar-transport check: without a policy runsc runs with no
+ * The enforcing floor for this runtime: without a policy runsc runs with no
  * `--cfc` at all, so every result would arrive unmediated and an enforcing
  * mode would deny each one after the command had already run. Refuse the
  * run before anything executes instead.
@@ -914,6 +1134,16 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   readonly #lostSessions = new Map<string, string>();
   /** Fresh-call containers in flight, so `close()` can take them down. */
   readonly #liveCalls = new Set<string>();
+  /**
+   * Every fresh call from the moment it is set up until it has ended, its
+   * bundle and state gone: what stops it under pasta, what tells that it has
+   * ended, and whether it has started. `close()` waits for a call under pasta,
+   * which it stops, and for one not yet started, which then refuses to.
+   */
+  readonly #calls = new Map<
+    string,
+    { stop: AbortController; ended: Promise<void>; started: boolean }
+  >();
   #sessionsStarted = 0;
   #scratchVerified: Promise<void> | undefined;
   /**
@@ -937,7 +1167,10 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     return {
       kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
-      sessions: true,
+      // Pasta starts what it runs in a PID namespace of its own, so a
+      // session's container started under it records pids that `exec` and
+      // the control commands, run outside it, cannot find.
+      sessions: this.#pasta() === undefined,
       cfc: {
         runtimeRequested: this.config.cfcPolicyPath !== undefined,
         image: this.config.rootfs,
@@ -1016,13 +1249,23 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }));
   }
 
-  /** Global runsc flags: what every subcommand of this runtime is run with. */
-  #globalArgs(): string[] {
+  /**
+   * The global flags of every runsc command of this runtime: its state root,
+   * `--rootless` where it runs rootless, and the network, which under pasta
+   * is `host`, pasta's namespace. `callId` names the call a container is
+   * started for under pasta, which keeps its state in a root of its own,
+   * {@link RunscSandboxRuntime.#stateRoot}.
+   */
+  #globalArgs(callId?: string): string[] {
     return [
       "--root",
-      joinHostPath(this.config.scratchDir, "state"),
+      this.#stateRoot(callId),
       "--ignore-cgroups",
-      `--network=${this.config.networkMode}`,
+      ...(this.config.rootless ? ["--rootless"] : []),
+      // Under pasta runsc takes pasta's namespace as the host's network.
+      `--network=${
+        this.#pasta() !== undefined ? "host" : this.config.networkMode
+      }`,
       "--overlay2=root:memory",
       ...(this.config.cfcPolicyPath !== undefined
         ? ["--cfc", "--cfc-policy", this.config.cfcPolicyPath]
@@ -1031,7 +1274,19 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     ];
   }
 
-  /** A call's working directory: inside the mounts, as the docker runtime requires. */
+  /**
+   * Where runsc keeps container state: the run's `state` directory, and for
+   * the call `callId` names a directory of its own inside it. A container
+   * under pasta that is stopped dies with pasta's namespace, before runsc can
+   * take its state down, and a root of the call's own is one that can be
+   * taken down after it whole, touching no other call's.
+   */
+  #stateRoot(callId?: string): string {
+    const state = joinHostPath(this.config.scratchDir, "state");
+    return callId === undefined ? state : joinHostPath(state, callId);
+  }
+
+  /** A call's working directory: inside the mounts. */
   #cwd(cwd: string | undefined): string {
     return cwd === undefined
       ? this.defaultWorkingDirectory()
@@ -1039,9 +1294,8 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   }
 
   /**
-   * The docker runtime refuses, per call, an enforcing invocation context it
-   * has no transport for. The counterpart here: without a policy runsc runs
-   * with no `--cfc`, the context would be dropped and no result produced.
+   * An enforcing invocation context with no policy: runsc runs with no
+   * `--cfc`, so the context would be dropped and no result produced.
    * The engine refuses such a run at its start, but a runtime constructed
    * or injected directly has no engine in front of it.
    */
@@ -1112,6 +1366,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         source: m.hostPath,
         options: ["rbind", m.readOnly ? "ro" : "rw"],
       })),
+      ...(this.#pasta() !== undefined
+        ? [{
+          destination: PASTA_HOSTS_PATH,
+          type: "bind",
+          source: this.#hostsFile(),
+          options: ["rbind", "ro"],
+        }]
+        : []),
     ];
     const env = {
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -1136,9 +1398,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       hostname: "cf-harness",
       mounts,
       linux: {
+        // With the host's network, the container has no network namespace
+        // of its own: runsc would otherwise make an empty one and leave the
+        // container its loopback alone.
         namespaces: [
           { type: "pid" },
-          { type: "network" },
+          ...(this.config.networkMode === "host" || this.#pasta() !== undefined
+            ? []
+            : [{ type: "network" }]),
           { type: "ipc" },
           { type: "uts" },
           { type: "mount" },
@@ -1194,7 +1461,64 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     const dir = joinHostPath(this.config.scratchDir, "bundles", id);
     await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
     await Deno.writeTextFile(joinHostPath(dir, "config.json"), specText);
+    if (this.#pasta() !== undefined) {
+      // Written aside and renamed into place, so a container that binds the
+      // file as it is rewritten never finds it empty.
+      const aside = `${this.#hostsFile()}.${crypto.randomUUID()}`;
+      await Deno.writeTextFile(aside, PASTA_HOSTS_FILE, { mode: 0o644 });
+      await Deno.rename(aside, this.#hostsFile());
+    }
     return dir;
+  }
+
+  /** The `pasta` a container runs under: under the `sandbox` network alone. */
+  #pasta(): string | undefined {
+    return this.config.networkMode === "sandbox"
+      ? this.config.networkHelper
+      : undefined;
+  }
+
+  /** The hosts file a container under pasta gets, in the scratch directory. */
+  #hostsFile(): string {
+    return joinHostPath(this.config.scratchDir, "hosts");
+  }
+
+  /**
+   * The command that starts a container: `command` with `args`, under pasta
+   * where the container gets pasta's network. A command that only reaches a
+   * running container (`exec`, and the control commands) runs as it is.
+   */
+  #starting(
+    command: string,
+    args: readonly string[],
+  ): { command: string; args: string[] } {
+    const pasta = this.#pasta();
+    if (pasta === undefined) return { command, args: [...args] };
+    if (this.config.setpriv === undefined) {
+      throw new Error(
+        "a container under pasta would outlive a pasta that is stopped, " +
+          "since no `setpriv` was given to tie it to pasta",
+      );
+    }
+    const underPasta = [
+      ...PASTA_ARGS,
+      ...(this.config.unshare !== undefined ? PASTA_ROOT_ARGS : []),
+      "--log-file",
+      joinHostPath(this.config.scratchDir, "pasta.log"),
+      "--",
+      this.config.setpriv,
+      ...SETPRIV_ARGS,
+      "--",
+      command,
+      ...args,
+    ];
+    if (this.config.unshare === undefined) {
+      return { command: pasta, args: underPasta };
+    }
+    return {
+      command: this.config.unshare,
+      args: [...UNSHARE_ARGS, "--", pasta, ...underPasta],
+    };
   }
 
   /**
@@ -1210,6 +1534,31 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     const callId = `c-${this.#runTag}-${crypto.randomUUID().slice(0, 8)}`;
     // Validated before anything is written or registered.
     const specText = this.#spec(request);
+    // Registered before anything is awaited, so a close() that begins while
+    // the call is set up finds it.
+    let ended!: () => void;
+    const call = {
+      stop: new AbortController(),
+      ended: new Promise<void>((resolve) => (ended = resolve)),
+      started: false,
+    };
+    this.#calls.set(callId, call);
+    try {
+      return await this.#setUpAndRun(request, callId, specText, call);
+    } finally {
+      this.#calls.delete(callId);
+      ended();
+    }
+  }
+
+  /** {@link RunscSandboxRuntime.#runOnce}, once the call is registered. */
+  async #setUpAndRun(
+    request: SandboxCommandRequest,
+    callId: string,
+    specText: string,
+    call: { stop: AbortController; started: boolean },
+  ): Promise<SandboxCommandResult> {
+    const underPasta = this.#pasta() !== undefined;
     this.#liveCalls.add(callId);
     const bundleDir = await this.#writeBundle(callId, specText).catch(
       (error) => {
@@ -1231,7 +1580,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
     const withResult = this.config.cfcPolicyPath !== undefined;
     const runscArgs = [
-      ...this.#globalArgs(),
+      ...this.#globalArgs(underPasta ? callId : undefined),
       "run",
       ...(withContext ? ["--cfc-invocation-context-fd", "3"] : []),
       ...(withResult ? ["--cfc-result-fd", "4"] : []),
@@ -1258,16 +1607,36 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     try {
       let result: ProcessRunResult;
       try {
+        // A close() that began while the bundle was written found nothing of
+        // this call to stop yet; nothing awaits between here and the start,
+        // so one that begins after this finds it registered.
+        if (this.#closed) {
+          throw new Error("sandbox runtime closed before the call started");
+        }
+        call.started = true;
         result = await this.#runner.run({
-          command: "/bin/sh",
-          args: shellArgs,
+          ...this.#starting("/bin/sh", shellArgs),
           stdinText: request.stdinText,
           timeoutMs: request.timeoutMs,
+          ...(underPasta ? { signal: call.stop.signal } : {}),
         });
       } finally {
         // A timed-out or killed run leaves the container registered; make
         // sure the sandbox is gone before the bundle it was started from.
-        await this.#destroyContainer(callId);
+        // Not under pasta: the state of a container started there records
+        // pids of pasta's PID namespace, and a control command run out here
+        // would signal whatever process of this one has that pid. There the
+        // run ends only once pasta has, and every process of its namespace
+        // with it (see SETPRIV_ARGS), so all that is left is the state of a
+        // container whose `runsc run` died before it could remove it.
+        if (underPasta) {
+          await Deno.remove(this.#stateRoot(callId), { recursive: true })
+            .catch((error) => {
+              if (!(error instanceof Deno.errors.NotFound)) throw error;
+            });
+        } else {
+          await this.#destroyContainer(callId);
+        }
         this.#liveCalls.delete(callId);
       }
       const commandResult: SandboxCommandResult = {
@@ -1400,14 +1769,13 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         );
       }
       const handle = spawn.call(this.#runner, {
-        command: this.config.runscBinary,
-        args: [
+        ...this.#starting(this.config.runscBinary, [
           ...this.#globalArgs(),
           "run",
           "--bundle",
           state.bundleDir,
           state.containerId,
-        ],
+        ]),
         stdin: "held",
       });
       state.handle = handle;
@@ -1607,6 +1975,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     const refusal = this.#refusedForEnforcement(request);
     if (refusal !== undefined) return refusal;
     if (request.session !== undefined) {
+      if (this.#pasta() !== undefined) {
+        throw new SandboxSessionUnavailableError(
+          "sandbox sessions are not offered under pasta's network: pasta " +
+            "starts a session's container in a PID namespace of its own, " +
+            "which the session's later calls cannot reach",
+          "start-failed",
+        );
+      }
       return await this.#runInSession(request, request.session);
     }
     return await this.#runOnce(request);
@@ -1649,15 +2025,38 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       await state.ready.catch(() => undefined);
       await this.#dropSession(state);
     }
+    // A call under pasta is stopped through pasta, and its container ends
+    // with it; one not yet started refuses to start. Both are waited for,
+    // their bundles and state gone, before anything here is taken down. A
+    // started call off pasta has its container destroyed below.
+    const waited: Promise<void>[] = [];
+    for (const call of this.#calls.values()) {
+      if (this.#pasta() !== undefined) {
+        call.stop.abort(
+          new Error("the sandbox runtime closed while the call was running"),
+        );
+      }
+      if (this.#pasta() !== undefined || !call.started) {
+        waited.push(call.ended);
+      }
+    }
+    await Promise.all(waited);
     for (const callId of [...this.#liveCalls]) {
-      await this.#destroyContainer(callId);
+      // Not under pasta, for the reason `#runOnce` gives.
+      if (this.#pasta() === undefined) await this.#destroyContainer(callId);
       await Deno.remove(
         joinHostPath(this.config.scratchDir, "bundles", callId),
         { recursive: true },
       ).catch(() => undefined);
     }
     // The scratch tree is this run's; take it down when nothing is left in
-    // it (non-recursive on purpose: anything still there is evidence).
+    // it (non-recursive on purpose: anything still there is evidence). The
+    // hosts file and pasta's log are the runtime's own, not evidence.
+    for (const file of ["hosts", "pasta.log"]) {
+      await Deno.remove(joinHostPath(this.config.scratchDir, file)).catch(() =>
+        undefined
+      );
+    }
     for (const sub of ["calls", "bundles", "state"]) {
       await Deno.remove(joinHostPath(this.config.scratchDir, sub)).catch(() =>
         undefined

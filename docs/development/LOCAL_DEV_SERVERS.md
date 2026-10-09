@@ -24,9 +24,8 @@
 `--cf-harness` starts a cf-harness console against the fabric these scripts are
 starting, on the port Weaver pairs with, and stops it with the pair.
 `restart-local-dev.sh` forwards the flag. The console resolves the rest from
-that fabric — the toolshed URL and store from this script's own values, and,
-where its sandbox is Docker, the sandbox's sidecar directories from Docker's
-runtime registration — and prints every value beside the record that decided
+that fabric — the toolshed URL and store from this script's own values — and
+prints every value beside the record that decided
 it, so a wrong one names where to fix it. Two values it cannot derive: set
 `CF_IDENTITY` to an identity keyfile and `CF_SPACE` to a space name, or the
 console's own `CF_HARNESS_FABRIC_IDENTITY` and `CF_HARNESS_FABRIC_SPACE`, which
@@ -58,10 +57,22 @@ sandbox runtime and a connected model provider, and when it cannot start —
 either of those missing, its port taken, a value underivable — it says so in
 the script's output and in `packages/cf-harness/local-dev-console.log`, and the
 shell and toolshed keep running. The sandbox runtime is the one
-`CF_HARNESS_SANDBOX_RUNTIME` names, `docker` or `runsc`. With none named, a Mac
-serves on its native runtime, the cfc-vm store gVisor's macOS installer writes,
-and does not start where that store is not set up; every other platform serves
-on Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
+`CF_HARNESS_SANDBOX_RUNTIME` names, `runsc`. With none named (unset, or white
+space alone), a Mac
+with Apple silicon serves on its native runtime, the cfc-vm store gVisor's macOS
+installer writes, and does not start where that store is not set up, and any
+other Mac does not start at all; Linux serves on its native runtime too, the
+store gVisor's Linux installer writes under `~/.local/share/runsc-cfc`, and does
+not start where that store is not set up, where its default network finds no
+`pasta` (passt) or `setpriv` on `PATH` or, for a root console, no `unshare`
+(`CF_HARNESS_DOCKER_NETWORK_MODE=none` or `host` needs none of the three), or
+where the console is not root and the host gives it no unprivileged user
+namespace (`user.max_user_namespaces` 0, `kernel.unprivileged_userns_clone` 0
+or `kernel.apparmor_restrict_unprivileged_userns` 1), which the store's
+rootless `runsc` needs whatever the network and pasta needs even with a `runsc`
+named by `CF_HARNESS_RUNSC_BINARY`; that refusal names the `sudo sysctl -w`
+that allows them. Every other platform does not start unless the runtime is
+named. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
 is set the console is launched for that loom instance, and with no runtime named
 it does not start on any platform, saying that Loom must name one. `packages/cf-harness/console/README.md` covers the console itself,
 and [`../../packages/cf-harness/docs/WEAVER.md`](../../packages/cf-harness/docs/WEAVER.md)
@@ -386,14 +397,16 @@ tools. A run's workspace and artifacts go under `--work-root`, which defaults to
 `$CF_HARNESS_HOME/agent-runs`.
 
 A run's sandbox is the one the harness selects.
-`CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`; with none named, a
-Mac runs each run on its native runtime, from the cfc-vm store, while every
-other platform runs Docker. The runner derives that selection as it starts, and
-where the harness would refuse its runs, a Mac whose store is not set up among
-them, it exits with the harness's refusal before either of its lanes, the
-Fabric lane or local jobs, serves anything. On Docker, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
-`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` name the two sidecar directories
-Docker's `runsc-cfc` runtime is registered with. A run's task is bound to the
+`CF_HARNESS_SANDBOX_RUNTIME` names it, `runsc`; with none named, a
+Mac with Apple silicon runs each run on its native runtime, from the cfc-vm
+store, Linux on its own, from the store under `~/.local/share/runsc-cfc`, the
+store's `runsc` rootless for a runner that is not root (a `runsc` named with
+`CF_HARNESS_RUNSC_BINARY` runs as it is) and `pasta` for its default network,
+with `setpriv`, and `unshare` for a root runner, and
+every other platform names it. The runner derives that selection as it
+starts, and where the harness would refuse its runs, any other Mac, and a Mac
+or a Linux host whose store is not set up, among them, it exits with the harness's refusal before either of its lanes, the
+Fabric lane or local jobs, serves anything. A run's task is bound to the
 prompt-slot role `context`, and the run returns its structured result through
 the harness's `submit_result` tool, which the harness's default
 `enforce-strict` mode admits under that role. Under that mode and role every

@@ -169,6 +169,58 @@ describe("PiecesController.ensureDefaultPattern", () => {
     });
   });
 
+  describe("linkDefaultPattern() with the root it replaces", () => {
+    const rootName = () =>
+      runtime.getCell(controller.getSpace(), controller.getSpace()).key(
+        "defaultPattern",
+      ).asSchema<{ name?: string }>().key("name").get();
+
+    it("links while the space still has no root, given `null`", async () => {
+      const piece = runtime.getImmutableCell(controller.getSpace(), {
+        name: "First",
+      });
+      await controller.linkDefaultPattern(piece, { replacing: null });
+      expect(rootName()).toBe("First");
+    });
+
+    it("throws given `null` once the space has a root, and keeps that root", async () => {
+      const space = controller.getSpace();
+      await controller.linkDefaultPattern(
+        runtime.getImmutableCell(space, { name: "Linked meanwhile" }),
+      );
+      await expect(
+        controller.linkDefaultPattern(
+          runtime.getImmutableCell(space, { name: "Late" }),
+          { replacing: null },
+        ),
+      ).rejects.toThrow("changed since it was inspected");
+      expect(rootName()).toBe("Linked meanwhile");
+    });
+
+    it("replaces the root it is given, and throws given any other", async () => {
+      const space = controller.getSpace();
+      const inspected = runtime.getImmutableCell(space, { name: "Inspected" });
+      await controller.linkDefaultPattern(inspected);
+      await expect(
+        controller.linkDefaultPattern(
+          runtime.getImmutableCell(space, { name: "Late" }),
+          {
+            replacing: runtime.getImmutableCell(space, { name: "Elsewhere" }),
+          },
+        ),
+      ).rejects.toThrow("changed since it was inspected");
+      expect(rootName()).toBe("Inspected");
+
+      const stored = runtime.getCell(space, space).key("defaultPattern")
+        .get() as Parameters<typeof controller.linkDefaultPattern>[0];
+      await controller.linkDefaultPattern(
+        runtime.getImmutableCell(space, { name: "Replacement" }),
+        { replacing: stored },
+      );
+      expect(rootName()).toBe("Replacement");
+    });
+  });
+
   describe("linkDefaultPattern idempotence", () => {
     it("should succeed when linking the same pattern twice", async () => {
       // Create a mock piece cell

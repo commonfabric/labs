@@ -320,6 +320,7 @@ export class SchedulerGates {
       node.gate.debounceReadyAt ?? 0,
       node.gate.throttleReadyAt ?? 0,
       node.gate.backoffUntil ?? 0,
+      node.gate.echoBackoffUntil ?? 0,
     );
   }
 
@@ -406,10 +407,11 @@ export class SchedulerGates {
    * Release the freshness gates on `action` for a retry the scheduler owes
    * (`MarkInvalidOptions.retry`): an armed debounce readiness and throttle
    * readiness are cleared and the wake recomputed, so the retry is eligible
-   * in the pass queued for it. The convergence backoff (§7.7) stays — it
-   * bounds a non-settling graph, and a retry inside one waits its turn like
-   * every other run. Further invalidations preserve this release until the
-   * owed run starts. The policies apply again to invalidations after that.
+   * in the pass queued for it. The convergence backoff (§7.7) and the
+   * remote-echo backoff stay — each bounds a loop, and a retry inside one
+   * waits its turn like every other run. Further invalidations preserve this
+   * release until the owed run starts. The policies apply again to
+   * invalidations after that.
    */
   releaseForRetry(action: Action): void {
     const gate = this.#gate(action);
@@ -431,6 +433,34 @@ export class SchedulerGates {
     node.gate.backoffStreak = 0;
     node.gate.convergenceHoldPasses = 0;
     return clearedDeadline;
+  }
+
+  /**
+   * Defer `action`'s re-runs until `until` for the remote-echo breaker
+   * (docs/plans/scheduler-remote-echo-breaker.md §2). Folded into `eligibleAt`
+   * like the other gates and armed through the single wake timer, so a
+   * tripped action is skipped as a settle seed until the deadline and then
+   * runs once. Raises an existing deadline rather than lowering it, so a
+   * fresh trip cannot shorten a longer backoff already in place, and arms the
+   * wake for the deadline that stands.
+   */
+  setEchoBackoff(action: Action, until: number): void {
+    const gate = this.#mutableGate(action);
+    const deadline = Math.max(gate.echoBackoffUntil ?? 0, until);
+    gate.echoBackoffUntil = deadline;
+    this.scheduleWake(deadline);
+  }
+
+  /**
+   * Lift the echo-breaker backoff on `action` — on a convergence that ended
+   * the loop — and recompute the shared wake, since the cleared node may have
+   * been the one it was armed for.
+   */
+  clearEchoBackoff(action: Action): void {
+    const gate = this.#gate(action);
+    if (gate?.echoBackoffUntil === undefined) return;
+    delete gate.echoBackoffUntil;
+    this.recomputeWakeAfterClear();
   }
 
   #armComputationDebounce(
