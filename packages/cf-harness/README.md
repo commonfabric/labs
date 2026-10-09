@@ -1872,6 +1872,15 @@ somewhere, attached metadata accompanies it, and trusted-side code resolves it.
 They deliberately remain separate until experience supplies a concrete reason to
 unify them.
 
+### Pattern-index client
+
+The shared signed client, successor resolution, search-body composition, and
+feedback vocabulary live in
+[`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
+configuration and identity loading live in `src/pattern-index/factory.ts`;
+composition, publication gates, the session ledger, probes, retrieval scoring,
+and tools remain in this package.
+
 ### Seeding the pattern index
 
 The corpus has two kinds of entry, with different purposes and evidence:

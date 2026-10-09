@@ -1,6 +1,7 @@
 import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join, resolve, toFileUrl } from "@std/path";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { Identity } from "@commonfabric/identity";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
@@ -42,7 +43,6 @@ import {
 } from "../../src/sandbox/runsc.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
-import { PatternIndexClient } from "../../src/pattern-index/client.ts";
 import {
   createHarnessHandleTable,
   mintReferentHandle,
@@ -178,7 +178,7 @@ const config = () =>
       "--session-db",
       "none",
     ],
-    {},
+    { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
     "/console",
   );
 
@@ -194,7 +194,7 @@ const configWithBrowserHost = () =>
       "none",
       "--allow-browser-host",
     ],
-    {},
+    { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
     "/console",
   );
 
@@ -211,7 +211,7 @@ const configWithIndex = () =>
       "--pattern-index-url",
       "https://index.test/api",
     ],
-    {},
+    { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
     "/console",
   );
 
@@ -414,7 +414,7 @@ describe("console/server", () => {
           "--artifact-root",
           artifactRoot,
         ],
-        {},
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         "/console",
       );
       const resultServer = new ConsoleServer(
@@ -458,7 +458,7 @@ describe("console/server", () => {
           "--skills-registry-url",
           "https://registry.example",
         ],
-        {},
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         "/console",
       );
       const serviceOptions = createConsoleInteractiveServiceOptions(
@@ -498,7 +498,7 @@ describe("console/server", () => {
           "none",
           "--allow-skill-scripts",
         ],
-        {},
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         "/console",
       );
       expect(named.allowSkillScripts).toBe(true);
@@ -512,7 +512,10 @@ describe("console/server", () => {
           "--session-db",
           "none",
         ],
-        { CF_HARNESS_ALLOW_SKILL_SCRIPTS: "1" },
+        {
+          CF_HARNESS_SANDBOX_RUNTIME: "docker",
+          CF_HARNESS_ALLOW_SKILL_SCRIPTS: "1",
+        },
         "/console",
       );
       expect(inherited.allowSkillScripts).toBe(true);
@@ -539,7 +542,7 @@ describe("console/server", () => {
           "/workspace/skills",
           "--allow-skill-scripts",
         ],
-        {},
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         "/console",
       );
       const withNeither = await resolveConsoleConfig(
@@ -553,7 +556,7 @@ describe("console/server", () => {
           "--skills-root",
           "/workspace/skills",
         ],
-        {},
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         "/console",
       );
 
@@ -602,7 +605,7 @@ describe("console/server", () => {
             "--skills-registry-url",
             "not a url",
           ],
-          {},
+          { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
           "/console",
         ),
       ).rejects.toThrow("--skills-registry-url must be a valid URL");
@@ -629,7 +632,7 @@ describe("console/server", () => {
             "system.txt",
             "--no-child-composition-guidance",
           ],
-          {},
+          { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
           directory,
         );
 
@@ -694,7 +697,7 @@ describe("console/server", () => {
               "--system-prompt-file",
               promptPath,
             ],
-            {},
+            { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
             directory,
           ),
         ).rejects.toThrow(`--system-prompt-file is empty: ${promptPath}`);

@@ -10,17 +10,17 @@
  * know what a pattern is for and what it takes, and never what it says.
  */
 
+import type {
+  PatternIndexClient,
+  PatternIndexPatternKind,
+  PatternIndexQuality,
+} from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import { TRUSTED_PATTERN_PROPERTIES } from "../contracts/trusted-pattern-schema.ts";
 import { schemaToTypeString } from "@commonfabric/runner";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { TrustedPatternRecord } from "../contracts/trusted-pattern.ts";
-import type {
-  PatternIndexClient,
-  PatternIndexPatternKind,
-  PatternIndexQuality,
-} from "../pattern-index/client.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
 export interface SearchPatternsToolInput {
