@@ -354,6 +354,15 @@ interface SchemaRoot {
       .toThrow("A scope wrapper around a cell cannot hold anything beside");
   });
 
+  /**
+   * `Handle`, a labelled cell, which an alias hoists into a definition of its
+   * own.
+   */
+  const LABELLED_HANDLE =
+    `type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+type Handle = Confidential<Writable<string>, ["owner"]>;`;
+
   for (
     const [form, declarations] of [
       ["`null`", "type Maybe = Writable<string> | null;"],
@@ -362,11 +371,24 @@ interface SchemaRoot {
         "`null` through a chain of aliases",
         "type Inner = Writable<string> | null; type Maybe = Inner;",
       ],
+      [
+        "`null`, the cell an alias of a labelled cell",
+        `${LABELLED_HANDLE} type Maybe = Handle | null;`,
+      ],
+      [
+        "`undefined` in a union nested in an alias",
+        `${LABELLED_HANDLE} type Inner = Handle | null; type Maybe = Inner | undefined;`,
+      ],
+      [
+        "`null` in a recursive definition",
+        `${LABELLED_HANDLE} type Maybe = Handle | { next: Maybe } | null;`,
+      ],
     ] as const
   ) {
     it(`throws for a scope wrapper around an alias of a cell beside ${form}`, async () => {
       // The alias's union is hoisted into a definition, which the wrapper's
-      // payload only references.
+      // payload only references, as the union's branch may reference the
+      // cell's.
       const { type, checker, typeNode } = await getTypeFromCode(
         `${declarations} interface SchemaRoot { handle: PerSpace<Maybe>; }`,
         "SchemaRoot",

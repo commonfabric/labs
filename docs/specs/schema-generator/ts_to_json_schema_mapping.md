@@ -1049,7 +1049,8 @@ string entry into the object form (`applyScopeToAsCellEntry`) —
 `{ type: "string", scope: "user" }`. A wrapper around a cell **throws** beside
 anything, `null` and `undefined` included, written outside it or inside, or in
 an alias the payload names, whose union is hoisted into a definition the
-payload references (`PerUser<Maybe>` with `type Maybe = Writable<T> | null`)
+payload references (`PerUser<Maybe>` with `type Maybe = Writable<T> | null`),
+the cell in it hoisted too where its own alias is, as a labelled cell's is
 (`A scope wrapper around a cell cannot hold anything beside the cell`). Beside
 `null`, `undefined` or a value, the cell would be an `anyOf` branch, where the
 cap on following its handle sits apart from the slot's scope, which the write

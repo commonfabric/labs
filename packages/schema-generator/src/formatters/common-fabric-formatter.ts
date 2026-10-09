@@ -342,6 +342,31 @@ export const scopeOfWrittenScopedUnion = (
   return scope;
 };
 
+/**
+ * The branches of the union `schema` is, through its chain of local
+ * references in `definitions` (`referenceChain()`), each as the chain of the
+ * schemas it reaches, and a branch that is itself a union read for its own
+ * branches in turn. A definition met again on the way, as a recursive one
+ * is, adds nothing. `undefined` where `schema` reaches no `anyOf`.
+ */
+const unionBranches = (
+  schema: MutableJSONSchemaObj,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+  reached = new Set<MutableJSONSchemaObj>(),
+): MutableJSONSchemaObj[][] | undefined => {
+  const chain = referenceChain(schema, definitions);
+  const union = chain.find((link) => Array.isArray(link.anyOf));
+  if (!union) return undefined;
+  if (reached.has(union)) return [];
+  reached.add(union);
+  return (union.anyOf as MutableJSONSchema[]).flatMap((branch) =>
+    isObjectNotArray(branch)
+      ? unionBranches(branch, definitions, reached) ??
+        [referenceChain(branch, definitions)]
+      : []
+  );
+};
+
 /** The error for a scope wrapper nested in another with no cell between. */
 const nestedScopeError = (): Error =>
   new Error("Nested scope wrappers require a cell boundary between scopes.");
@@ -2180,11 +2205,12 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     // A cell beside anything, `null` and `undefined` included, is an `anyOf`
     // branch, where the cap on following its handle would sit apart from the
-    // slot's scope (`scopeAroundCellUnionError()`). The union may be the
-    // definition the payload references, as an alias of it is hoisted.
+    // slot's scope (`scopeAroundCellUnionError()`). The union, and the cell in
+    // it, may each be a definition a reference names, as an alias of either is
+    // hoisted.
     if (
-      referenceChain(schema, context.definitions).some((link) =>
-        Array.isArray(link.anyOf) && link.anyOf.some(isHandleSchema)
+      unionBranches(schema, context.definitions)?.some((branch) =>
+        branch.some(isHandleSchema)
       )
     ) {
       throw scopeAroundCellUnionError(scope);
