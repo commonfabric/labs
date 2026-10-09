@@ -1,0 +1,12 @@
+#!/bin/bash
+#
+# The `cf` CLI under Node: `nodejs/bin/cf [cf args...]`, the analog of
+# `deno task cf`. The Deno launcher (`packages/cli/launcher.ts`) re-execs
+# `deno run <permissions> packages/cli/mod.ts` in the caller's directory with
+# `CF_CLI_NAME=cf`; Node has no permissions to grant, so this execs the entry
+# point directly through `cfnode`, in the directory it was run from.
+
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+CF_CLI_NAME="${CF_CLI_NAME:-cf}" exec "${dir}/nodejs/bin/cfnode" \
+  "${dir}/packages/cli/mod.ts" "$@"
