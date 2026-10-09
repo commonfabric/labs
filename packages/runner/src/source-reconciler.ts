@@ -389,9 +389,20 @@ type SuppliedSource = {
    * minted from the registry.
    */
   compiled?: {
+    /** The pattern the export compiled to. */
     pattern: Pattern;
+
+    /** The pattern's entry ref, under the identity it compiled to. */
     ref: PatternRef;
+
+    /**
+     * The export the pattern was compiled for. `ref.symbol` need not be it:
+     * a pattern exported under two names carries the one it was first
+     * indexed under.
+     */
     symbol: string;
+
+    /** The schema registry epoch the pattern was compiled in. */
     epoch: number;
   };
 };
@@ -580,11 +591,16 @@ export class SourceReconciler {
    * neither this time. Never throws.
    *
    * Every call asks the host which identity it advertises. Calls for the same
-   * space, origin, and advertised identity share the downloaded source, and the
-   * first to compile an export into that space verifies it, including the
-   * source-closure persistence of a compiler cache hit. Later calls for that
-   * export in the same schema registry epoch return the verified pattern,
-   * whose closure the space already holds.
+   * space, origin, and advertised identity share the downloaded source, which
+   * keeps one verified pattern beside it: that of the export last compiled
+   * from it into the space, with the source-closure persistence of a compiler
+   * cache hit done. A later call for that export in the same schema registry
+   * epoch returns that pattern, whose closure the space already holds. A call
+   * for another export compiles it, and its pattern is kept in place of the
+   * other. A refusal, or a failure once the source is downloaded, drops the
+   * shared source and the pattern kept with it, whichever export it was for,
+   * so the next call downloads the source again and compiles even an export
+   * verified before, such as the `default` export {@link open} compiles.
    *
    * `refused` is a refusal the caller already holds for this origin's source,
    * such as the one following the origin has just returned. While the host

@@ -1493,6 +1493,52 @@ describe("piece source reconciliation", () => {
       });
     });
 
+    it("compiles an export rather than returning the pattern kept for another", async () => {
+      // Two exports that are different patterns, so which export a call
+      // selected shows in the pattern it returns.
+      const entry = [
+        "import { computed, pattern } from 'commonfabric';",
+        `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "tracked") }));`,
+        `export default pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "default") }));`,
+        "",
+      ].join("\n");
+      const advertised = await resolveEntryIdentity(
+        PARENT_PATH,
+        (name) =>
+          name === PARENT_PATH
+            ? Promise.resolve(entry)
+            : Promise.reject(new Error(`not found: ${name}`)),
+      );
+      createRuntime((input) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        return Promise.resolve(
+          url.pathname !== PARENT_PATH
+            ? new Response("not found", { status: 404 })
+            : url.searchParams.has("identity")
+            ? new Response(advertised)
+            : new Response(entry),
+        );
+      });
+
+      const tracked = await compile(SYMBOL);
+      const other = await compile("default");
+
+      expect(tracked).toMatchObject({
+        outcome: "compiled",
+        ref: { identity: advertised, symbol: SYMBOL },
+      });
+      expect(other).toMatchObject({
+        outcome: "compiled",
+        ref: { identity: advertised, symbol: "default" },
+      });
+    });
+
     describe("given a refusal it already holds", () => {
       // What following the origin has just returned, in the same lookup.
 
