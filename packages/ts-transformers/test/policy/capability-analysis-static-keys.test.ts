@@ -3,11 +3,15 @@
  * an expression the code fixes is a static path segment: the capability
  * analysis records the read at the member the key names, and a builder's
  * input schema shrinks to it. A key is fixed by a literal, a Common Fabric
- * key, or a declared type that is a single literal. It is not fixed by a type
- * assertion, at the key or in the initializer of the variable it names, nor by
- * a narrowing at the use, which a call between the test and the use can make
- * stale. Such a key reads as one that can name any member, so the read keeps
- * every member it could reach.
+ * key, or a declared type that is a single literal, when every step from the
+ * key to that type is a declaration that writes it or takes it from an
+ * initializer that counts the same way. It is not fixed by a type assertion
+ * anywhere on the way, at the key, in the initializer of the variable it names
+ * or further back, nor by a step that is not a declaration, such as an element
+ * access, an operator or a parameter typed by its context, nor by a narrowing
+ * at the use, which a call between the test and the use can make stale. Such
+ * a key reads as one that can name any member, so the read keeps every member
+ * it could reach.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -167,6 +171,67 @@ const read = (catalog: Cell<{ slots: [Entry, Entry] }>) =>
       expect(usage.readPaths).not.toContain("slots");
     });
 
+    it("reads the member a `const` copied from a `const` initialized with a literal names", () => {
+      const usage = catalogUsage(`const KEY = "a";
+const key = KEY;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
+    it("reads the member a property of an object initialized `as const` names", () => {
+      const usage = catalogUsage(`const KEYS = { first: "a" } as const;
+const key = KEYS.first;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
+    it("reads the member a property signature's written type names", () => {
+      const usage = catalogUsage(`interface Choice { key: "a" }
+declare const choice: Choice;
+const key = choice.key;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
+    it("reads the member a class field initialized `as const` names", () => {
+      const usage = catalogUsage(`class Choice { readonly key = "a" as const; }
+const key = new Choice().key;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
+    it("reads the member a shorthand property names", () => {
+      const usage = catalogUsage(`const k = "a";
+const holder = { k } as const;
+const key = holder.k;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
+    it("reads the member a name destructured from a parameter's written type names", () => {
+      const usage = catalogUsage(
+        `const read = (catalog: Cell<Catalog>, { key }: { key: "a" }) =>
+  catalog.get().offers[key].space;`,
+      );
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
+    it("reads the member a call names whose signature writes its return type", () => {
+      const usage = catalogUsage(`function pick(): "a" {
+  return "a";
+}
+const key = pick();
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
     it("reads the member a `.key()` argument's declared type names", () => {
       const usage = catalogUsage(`const KEY = "a";
 const read = (catalog: Cell<Catalog>) =>
@@ -200,6 +265,138 @@ const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
 
     it("reads past a key whose `const` was initialized by a cast under a non-null assertion", () => {
       const usage = catalogUsage(`const key = (anyKey as "a" | undefined)!;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key copied from a `const` initialized by a cast", () => {
+      const usage = catalogUsage(`const asserted = anyKey as "a";
+const key = asserted;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key read from an object property initialized by a cast", () => {
+      const usage = catalogUsage(`const holder = { key: anyKey as "a" };
+const key = holder.key;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key read from a shorthand property of a `const` initialized by a cast", () => {
+      const usage = catalogUsage(`const k = anyKey as "a";
+const holder = { k };
+const key = holder.k;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key destructured from an object property initialized by a cast", () => {
+      const usage = catalogUsage(`const { key } = { key: anyKey as "a" };
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key a conditional with a cast in one branch initializes", () => {
+      const usage = catalogUsage(`declare const flag: boolean;
+const key = flag ? (anyKey as "a") : "a";
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key a call returns whose signature writes no return type", () => {
+      const usage = catalogUsage(`function pick() {
+  return anyKey as "a";
+}
+const key = pick();
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key a generic call instantiates from a cast", () => {
+      const usage = catalogUsage(`function id<T>(value: T): T {
+  return value;
+}
+const key = id(anyKey as "a");
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a parameter typed by its context", () => {
+      const usage = catalogUsage(
+        `const read: (catalog: Cell<Catalog>, key: "a") => string = (
+  catalog,
+  key,
+) => catalog.get().offers[key].space;`,
+      );
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key read from a property no declaration writes", () => {
+      const usage = catalogUsage(
+        `type Table<K extends string, V> = { [P in K]: V };
+declare const choice: Table<"k", "a">;
+const key = choice.k;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`,
+      );
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key read from a getter", () => {
+      const usage = catalogUsage(`const holder = {
+  get key(): "a" {
+    return "a";
+  },
+};
+const key = holder.key;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key destructured from an array", () => {
+      const usage = catalogUsage(`const [key] = ["a"] as const;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key destructured by a computed name", () => {
+      const usage = catalogUsage(`const { ["k"]: key } = { k: "a" } as const;
 const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
 
       expect(usage.readPaths.some((path) => path.startsWith("offers.a")))

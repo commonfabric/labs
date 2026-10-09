@@ -2049,10 +2049,20 @@ adjustments:
   `["offers", "k"]`, as `offers.k` does; so do an enum member and a parameter
   typed `"k"`). A reference is judged by the type it is declared with, not the
   type flow narrowing gives it at the use, since a narrowing can go stale when
-  a call between the test and the use assigns the variable again. A type
-  assertion is not taken for the key's value, whether at the key
-  (`offers[key as "k"]`) or in the initializer of the variable the key names;
-  `as const` is. The same rule decides a `.key()` argument and a computed
+  a call between the test and the use assigns the variable again. A declared
+  type counts only when every step from the key to it is a declaration: a
+  reference whose declaration writes its type (a parameter, a property
+  signature, an annotated variable) or takes it from an initializer that
+  itself counts (a `const` copied from another, a property of an object
+  initialized `as const`, a class field, a shorthand property, a name
+  destructured from such a property), and a call whose signature writes its
+  return type. A type assertion anywhere on the way is not taken for the key's
+  value, whether at the key (`offers[key as "k"]`), in the initializer of the
+  variable the key names, or further back (`const key = asserted`, or
+  `holder.key` with `holder = { key: raw as "k" }`); `as const` is. A key
+  reached through anything else, such as an element access, an operator, a
+  getter, a parameter typed by its context, a generic call or a property no
+  declaration writes, does not fix the path. The same rule decides a `.key()` argument and a computed
   property name (`policy/capability-analysis.ts`, `getStaticPathKey()`;
   `test/policy/capability-analysis-static-keys.test.ts`). A key that can name
   any member (`offers[key.get()]`, a `string`-typed variable or a widened
