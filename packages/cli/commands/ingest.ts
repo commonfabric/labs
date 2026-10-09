@@ -3,13 +3,18 @@ import { Table } from "@cliffy/table";
 import { cliText } from "../lib/cli-name.ts";
 import { render } from "../lib/render.ts";
 import {
+  bindGmail,
   type ChannelConfig,
+  INGEST_SINKS,
+  type IngestSink,
   listChannels,
   mintChannel,
+  type MintedChannel,
   newRequestId,
   resolveSpaceDid,
   revokeChannel,
   rotateChannel,
+  unbindGmail,
 } from "../lib/ingest-channels.ts";
 
 // `cf ingest` — self-serve ingest channels.
@@ -61,30 +66,66 @@ const requireSpace = (space: string | undefined): string => {
   return space;
 };
 
-/** The token is returned once and never again — say so where it is printed. */
-const renderMinted = (
-  minted: {
-    id: string;
-    url: string;
-    space: string;
-    causePrefix: string;
-    installId: string;
-    expiresAt?: string;
-    token: string;
-  },
-  verb: string,
-): void => {
+// `undefined` is left to the server, which mints a journal.
+const requireSink = (sink: string | undefined): IngestSink | undefined => {
+  if (sink === undefined) return undefined;
+  const known = INGEST_SINKS.find((candidate) => candidate === sink);
+  if (known === undefined) {
+    throw new ValidationError(
+      `Unknown sink "${sink}"; expected one of ${INGEST_SINKS.join(", ")}.`,
+      { exitCode: 1 },
+    );
+  }
+  return known;
+};
+
+/**
+ * Helper for the verbs that act on one channel, which returns the space
+ * channel `id` writes into: `named` when the caller passed `--space`, and
+ * otherwise the space of that channel in the caller's own list. A request is
+ * addressed to the channel's space, so it has to be known before it is sent.
+ */
+async function channelSpace(
+  config: ChannelConfig,
+  id: string,
+  named: string | undefined,
+): Promise<string> {
+  const space = named
+    ? await resolveSpaceDid(config.identityPath, named)
+    : (await listChannels(config)).find((c) => c.id === id)?.space;
+  if (space === undefined) {
+    throw new Error(
+      `No ingest channel ${id} among the ones you minted. Pass --space to ` +
+        `name the space it writes into.`,
+    );
+  }
+  return space;
+}
+
+/**
+ * The token is returned once and never again — say so where it is printed. A
+ * `latest` channel comes with no URL and no token, since nothing POSTs to it;
+ * what it is for is binding.
+ */
+const renderMinted = (minted: MintedChannel, verb: string): void => {
   render(`\nIngest channel ${verb}.\n`);
   render(`  id:          ${minted.id}`);
   render(`  space:       ${minted.space}`);
   render(`  causePrefix: ${minted.causePrefix}`);
   render(`  installId:   ${minted.installId}`);
-  render(`  URL:         ${minted.url}`);
+  if (minted.url !== undefined) render(`  URL:         ${minted.url}`);
   render(`  expires:     ${minted.expiresAt ?? "(none — unexpected)"}`);
-  render(
-    `\n  token (shown once — hand it to the device, sent as ` +
-      `'Authorization: Bearer <token>'):\n\n    ${minted.token}\n`,
-  );
+  if (minted.token !== undefined) {
+    render(
+      `\n  token (shown once — hand it to the device, sent as ` +
+        `'Authorization: Bearer <token>'):\n\n    ${minted.token}\n`,
+    );
+  } else {
+    render(
+      `\n  A \`latest\` channel: no device URL and no token. Bind it to a ` +
+        `mailbox with \`cf ingest gmail-bind ${minted.id}\`.\n`,
+    );
+  }
 };
 
 export const ingest = new Command()
@@ -108,7 +149,8 @@ export const ingest = new Command()
   /* ingest mint */
   .command(
     "mint",
-    "Mint a channel for a space you own. Prints the token ONCE.",
+    "Mint a channel for a space you own. A journal's token is printed ONCE; " +
+      "a latest channel has none.",
   )
   .usage(`${commonUsage} --space <space> --install-id <id>`)
   .option(
@@ -130,9 +172,21 @@ export const ingest = new Command()
     "Days until the token expires (default 90). Every channel expires; this " +
       "only chooses when.",
   )
+  .option(
+    "--sink <kind:string>",
+    "What the channel's writes land in: `journal`, records in per-day " +
+      "partition cells that a device POSTs to (the default), or `latest`, one " +
+      "cell holding the newest Gmail push notification.",
+  )
   .example(
     cliText("cf ingest mint --space did:key:z6Mk... --install-id phone-1"),
     "Mint a channel for a space you own",
+  )
+  .example(
+    cliText(
+      "cf ingest mint --space did:key:z6Mk... --install-id loom-1 --sink latest",
+    ),
+    "Mint a channel to bind a Gmail mailbox to",
   )
   .action(async (options) => {
     const config = parseConfig(options);
@@ -151,6 +205,7 @@ export const ingest = new Command()
       causePrefix: options.causePrefix,
       name: options.name,
       ttlDays: options.ttlDays,
+      sink: requireSink(options.sink),
       requestId: newRequestId(),
     });
     renderMinted(minted, "minted");
@@ -197,18 +252,29 @@ export const ingest = new Command()
     "--ttl-days <days:number>",
     "Days until the new token expires. Omit to keep the current window.",
   )
+  // No `-s` short form, for the reason `revoke --space` has none.
+  .option(
+    "--space <space:string>",
+    "The space the channel writes into. Without it the space is looked up " +
+      "among the channels you minted.",
+  )
   .action(async (options, id: string) => {
     const config = parseConfig(options);
+    const space = await channelSpace(config, id, options.space);
     const minted = await rotateChannel(config, {
+      space,
       id,
       ttlDays: options.ttlDays,
       requestId: newRequestId(),
     });
-    render(
-      "\nThe previous token stopped working. A device still holding it gets " +
-        "403 'Channel rotated — re-pair this device' rather than a blank 401, " +
-        "so it can tell this apart from an outage.",
-    );
+    // A `latest` channel has no device token, so there is no device to tell.
+    if (minted.token !== undefined) {
+      render(
+        "\nThe previous token stopped working. A device still holding it " +
+          "gets 403 'Channel rotated — re-pair this device' rather than a " +
+          "blank 401, so it can tell this apart from an outage.",
+      );
+    }
     renderMinted(minted, "rotated");
   })
   /* ingest revoke */
@@ -255,6 +321,7 @@ export const ingest = new Command()
       );
     }
     const { revokedAt } = await revokeChannel(config, {
+      space: found.space,
       id,
       requestId: newRequestId(),
       expectedRevision: found.revision,
@@ -264,6 +331,77 @@ export const ingest = new Command()
     render(
       `Revoked ${id} at ${revokedAt}. Further POSTs are refused; the ` +
         `registration is retained as an audit record.`,
+    );
+  })
+  /* ingest gmail-bind */
+  .command(
+    "gmail-bind <id:string>",
+    "Bind a channel you own to a Gmail mailbox, so that Gmail push " +
+      "notifications for the mailbox reach the channel.",
+  )
+  .usage(`${commonUsage} --gmail-access-token <token> <id>`)
+  // The token is a credential, so the environment is the better carrier: an
+  // option value is visible in the process list and lands in shell history.
+  .env(
+    "CF_GMAIL_ACCESS_TOKEN=<token:string>",
+    "A Google access token that can read the mailbox.",
+    { prefix: "CF_" },
+  )
+  .option(
+    "--gmail-access-token <token:string>",
+    "A Google access token that can read the mailbox. The server uses it for " +
+      "one profile lookup, to learn which mailbox it is, and does not keep it.",
+  )
+  // No `-s` short form, for the reason `revoke --space` has none.
+  .option(
+    "--space <space:string>",
+    "The space the channel writes into. Without it the space is looked up " +
+      "among the channels you minted.",
+  )
+  .action(async (options, id: string) => {
+    const config = parseConfig(options);
+    if (!options.gmailAccessToken) {
+      throw new ValidationError(
+        `Missing required option: "--gmail-access-token", or ` +
+          `"CF_GMAIL_ACCESS_TOKEN".`,
+        { exitCode: 1 },
+      );
+    }
+    const { emailAddress } = await bindGmail(config, {
+      space: await channelSpace(config, id, options.space),
+      id,
+      accessToken: options.gmailAccessToken,
+      requestId: newRequestId(),
+    });
+    render(
+      `Bound ${id} to ${emailAddress}. Each Gmail push notification for that ` +
+        `mailbox now replaces the record in the channel's cell, once a ` +
+        `\`users.watch\` on the mailbox names this deployment's topic.`,
+    );
+  })
+  /* ingest gmail-unbind */
+  .command(
+    "gmail-unbind <id:string>",
+    "Stop Gmail push notifications reaching a channel you own.",
+  )
+  .usage(`${commonUsage} <id>`)
+  // No `-s` short form, for the reason `revoke --space` has none.
+  .option(
+    "--space <space:string>",
+    "The space the channel writes into. Without it the space is looked up " +
+      "among the channels you minted, which a revoked channel is not in.",
+  )
+  .action(async (options, id: string) => {
+    const config = parseConfig(options);
+    const { unbound } = await unbindGmail(config, {
+      space: await channelSpace(config, id, options.space),
+      id,
+      requestId: newRequestId(),
+    });
+    render(
+      unbound
+        ? `Unbound ${id} from its mailbox.`
+        : `${id} was not bound to a mailbox.`,
     );
   })
   // Returns the chain to the top-level `ingest` command. Without it the export

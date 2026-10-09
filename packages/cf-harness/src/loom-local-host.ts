@@ -359,7 +359,7 @@ export const createLoomLocalCfHarnessHost = async (
   const identity = await homeIdentity(harnessHome);
   const processEnv = { ...(options.env ?? Deno.env.toObject()) };
   // HOME is cleared from what this host hands on (below), but the runsc
-  // runtime's default CFC policy and the default macOS runsc store are
+  // runtime's default CFC policy and the default runsc stores are
   // machine-level installs under the real one. Kept aside so both lanes find
   // them, as the stdio and batch entrypoints do from their own environment.
   const hostHome = nonEmpty(processEnv.HOME);

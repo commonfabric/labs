@@ -47,11 +47,7 @@ import {
   lanePlan,
   resolveManifest,
 } from "./ci-lane.ts";
-import {
-  capabilitiesBySuite,
-  loadTopology,
-  unitProcesses,
-} from "./test-topology.ts";
+import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
 import {
   measuredCostLines,
@@ -748,7 +744,6 @@ export async function dispatch(
           manifest,
           previous: before.manifest,
           capabilities: capabilitiesBySuite(topology),
-          processes: unitProcesses(topology),
           observations: { charges: [], lanes: [] },
         });
       }

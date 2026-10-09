@@ -507,8 +507,8 @@ one identity's runs go in one lane and one observation beats none. Down
 to once and never to nothing.
 
 A plan says what a suite costs it, as well as what a test does. A lane pays
-a suite's overhead, what one of its units costs to open, its process setup,
-and its capabilities' setup before it runs anything of that suite, and that
+a suite's overhead, what one of its units costs to open, and its
+capabilities' setup before it runs anything of that suite, and that
 charge is the same for every identity the suite has. A lane that runs a
 suite with coverage on pays what that suite's batches have cost with
 coverage on, where such a fit exists, and otherwise its fit without
@@ -603,9 +603,6 @@ suite it holds:
   invocation of the suite's command over the units still asking for runs,
   so a batch whose identities run three times takes three passes;
 - the suite's `unitOverhead` for each time a pass opens a unit;
-- the suite's process `setup` for each time a process starts, where the
-  suite's fit carries a process fit and the topology names the process
-  each unit runs in;
 - what its tests take, which is the larger of two figures. One is the
   suite's `correction` times the tests' own costs, each counted once for
   each time its unit runs. The other is what the longest unit of each pass
@@ -613,46 +610,34 @@ suite it holds:
   unit does. The second is the one that binds for a suite whose runner
   runs its units side by side.
 
-Where the process fit applies, the suite's `overhead`, `correction` and
-`unitOverhead` are that fit's too, fitted to what its batches spent once
-their processes' setup is taken out. Otherwise they are the fit of each
-batch as a whole, which spreads that setup through the three. A suite
-with no fit is charged no overhead, no setup, nothing per unit, and a
+A suite with no fit is charged no overhead, nothing per unit, and a
 correction of one. A runner that runs units side by side starts the
 costliest first, by the cost the lane hands it with each unit, since the
 second figure assumes nothing long starts last.
 
-The figures are fitted to what the lanes' own batches spent. The fixed
-charges are read high, since a lane charged too little runs past its
-bound. The correction and the per-unit charge are read from the middle of
-what the batches did.
+A capability's setup is charged at the ninetieth percentile of its
+openings over the cost window. A suite's three figures are fitted to what
+the lanes' own batches of it spent, by least squares with none of them
+below zero: what each batch spent against `overhead` times its passes,
+`unitOverhead` times the units it opened, and `correction` times what the
+tests of its units took. The fit takes no account of the longest-unit
+figure. So a batch is charged what a batch of its shape spends on
+average, and the safety margin `LANE_SAFETY_SECONDS` absorbs a lane that
+spends more than its batches' average.
 
-- `correction` is the least-squares slope of what a batch spent against
-  what its tests took. It is believed only over at least
-  `MIN_CORRECTION_SAMPLES` batches whose tests' times span at least
-  `MIN_CORRECTION_SPAN_SECONDS`, and only where it is above zero and the
-  fixed cost it implies is not below zero. A batch whose longest units
-  outlasted what the slope makes of it measured those units rather than
-  the slope, so the slope is fitted again without such batches, and the
-  second slope is taken where it is believed. Where the first is not
-  believed, the second is fitted over the batches whose longest units
-  took under half of what they spent. Where neither is believed the
-  correction is one, which is the reading that needs no evidence.
-- `unitOverhead` is the middle of the rates the batches read on their own:
-  what each spent beyond what its tests are charged, over the units it
-  opened, read as zero where a batch spent less than its tests are
-  charged. Where the count is even it is the higher of the two middle
-  readings.
-- `overhead` is the ninetieth percentile, across the batches, of what is
-  left over per pass, and never below zero. A batch that does not say how
-  many passes it made is read as one.
-- A process fit's `setup` is the ninetieth percentile of what each batch
-  that measured its processes' setup spent on it per process.
-
-A batch carries only the figures its lane wrote. The fit narrows by one
-figure at a time: wherever at least `MIN_CORRECTION_SAMPLES` of the
-batches still being read carry the figure, the rest are left out. The
-correction is taken from the narrowest of those sets that fits one.
+- What a batch's tests took counts only the records its suite places in
+  a unit. A record placed in no unit, such as one a wrapper writes for a
+  whole invocation, is part of what the batch spent beyond its tests.
+- The correction is fitted only over at least `MIN_CORRECTION_SAMPLES`
+  batches whose tests' times span at least `MIN_CORRECTION_SPAN_SECONDS`,
+  and only where it comes out above zero. Otherwise the correction is
+  one, which is the reading that needs no evidence, and `overhead` and
+  `unitOverhead` are fitted to what the batches spent beyond their tests.
+- Where the batches cannot tell a charge per pass from a charge per unit,
+  as when every batch opens one unit in one pass, `unitOverhead` carries
+  it.
+- A batch that does not say how many passes it made, or whether coverage
+  was on for it, is not read.
 
 ### How lanes are filled
 

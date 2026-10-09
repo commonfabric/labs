@@ -6,6 +6,13 @@ export interface ProcessRunRequest {
   clearEnv?: boolean;
   stdinText?: string;
   timeoutMs?: number;
+  /**
+   * Stops the process with SIGTERM when it aborts, as a timeout does; the
+   * run then throws the signal's reason once the process has ended, and not
+   * a timeout, whatever status the process ends with. A run whose signal has
+   * already aborted throws its reason, starting nothing.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ProcessRunResult {
@@ -104,6 +111,9 @@ export class DenoProcessRunner implements ProcessRunner {
   }
 
   async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+    // Deno starts a process whose signal has already aborted, and runs it to
+    // its end, so a run that is stopped before it starts starts nothing.
+    request.signal?.throwIfAborted();
     const controller = new AbortController();
     let timeoutTriggered = false;
     const timeoutId = request.timeoutMs !== undefined
@@ -112,6 +122,15 @@ export class DenoProcessRunner implements ProcessRunner {
         controller.abort();
       }, request.timeoutMs)
       : undefined;
+    // Whichever stops the process first is why it stopped: a signal that
+    // aborts disarms the timeout, so one that comes due while the process
+    // ends does not take its place.
+    const stop = () => {
+      if (timeoutTriggered) return;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+    request.signal?.addEventListener("abort", stop, { once: true });
     try {
       const child = new Deno.Command(request.command, {
         args: request.args,
@@ -136,19 +155,30 @@ export class DenoProcessRunner implements ProcessRunner {
         }
       };
 
+      // A write the process stopped short of failing is told only once the
+      // process has ended, and only where nothing stopped it: a stopped
+      // process closes its stdin under a write in flight.
+      let inputFailure: { error: unknown } | undefined;
       const [status, stdout, stderr] = await Promise.all([
         child.status,
         readStreamText(child.stdout),
         readStreamText(child.stderr),
-        writeInput(),
+        writeInput().catch((error: unknown) => {
+          inputFailure = { error };
+        }),
       ]);
 
-      if (timeoutTriggered && status.code !== 0) {
+      // Whatever status the process ends with: one that answers SIGTERM by
+      // exiting 0 (pasta does, once the kernel has killed what it ran) was
+      // still stopped.
+      if (timeoutTriggered) {
         throw new ProcessTimeoutError(
           [request.command, ...request.args].join(" "),
           request.timeoutMs ?? 0,
         );
       }
+      request.signal?.throwIfAborted();
+      if (inputFailure !== undefined) throw inputFailure.error;
 
       return {
         stdout,
@@ -156,7 +186,10 @@ export class DenoProcessRunner implements ProcessRunner {
         exitCode: status.code,
       };
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (
+        timeoutTriggered && error instanceof DOMException &&
+        error.name === "AbortError"
+      ) {
         throw new ProcessTimeoutError(
           [request.command, ...request.args].join(" "),
           request.timeoutMs ?? 0,
@@ -164,6 +197,7 @@ export class DenoProcessRunner implements ProcessRunner {
       }
       throw error;
     } finally {
+      request.signal?.removeEventListener("abort", stop);
       if (timeoutId !== undefined) {
         clearTimeout(timeoutId);
       }

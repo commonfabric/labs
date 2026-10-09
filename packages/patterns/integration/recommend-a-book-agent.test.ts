@@ -111,8 +111,8 @@ describe("recommend-a-book visitor agent", () => {
         CF_HARNESS_GATEWAY_AUTH_MODE: "none",
         CF_HARNESS_CFC_ENFORCEMENT_MODE: "enforce-strict",
         // The two sidecar directories this run takes from its environment are
-        // the Docker driver's, and macOS runs another driver where none is
-        // named. An operator who names one keeps it.
+        // the Docker driver's, and macOS and Linux run another driver where
+        // none is named. An operator who names one keeps it.
         CF_HARNESS_SANDBOX_RUNTIME:
           Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME")?.trim() || "docker",
       };

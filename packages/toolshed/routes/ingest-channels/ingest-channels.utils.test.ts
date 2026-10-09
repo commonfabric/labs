@@ -13,6 +13,7 @@ import {
 import {
   type ControlDeps,
   type ControlResult,
+  type MintedChannel,
   processList,
   processMint,
   processRevoke,
@@ -40,6 +41,13 @@ const ok = <T>(result: ControlResult<T>): T => {
     `expected 200, got ${result.status}: ${JSON.stringify(result.body)}`,
   );
   return result.body;
+};
+
+/** The one-time token a mint or rotate of a journal channel returns. */
+const tokenOf = (result: ControlResult<MintedChannel>): string => {
+  const { token } = ok(result);
+  assert(token !== undefined, "a journal channel's mint returns a token");
+  return token;
 };
 
 /** Narrow a ControlResult to its error message. */
@@ -143,8 +151,8 @@ describe("ingest-channels control plane", () => {
   it("mints for a space the caller owns, and returns the token exactly once", async () => {
     const res = await mint(alice, "req-1");
     expect(res.status).toBe(200);
-    expect(typeof ok(res).token).toBe("string");
-    expect(ok(res).token.startsWith("ingsec_")).toBe(true);
+    expect(typeof tokenOf(res)).toBe("string");
+    expect(tokenOf(res).startsWith("ingsec_")).toBe(true);
     expect(ok(res).space).toBe(space);
 
     // Only the hash is ever stored, and the hash never leaves the server.
@@ -154,7 +162,7 @@ describe("ingest-channels control plane", () => {
       ok(res).id,
     );
     expect(stored?.secretHash).toBeDefined();
-    expect(stored?.secretHash).not.toBe(ok(res).token);
+    expect(stored?.secretHash).not.toBe(tokenOf(res));
     expect(stored?.owner).toBe(alice.did());
     expect(JSON.stringify(res.body)).not.toContain(stored!.secretHash);
   });
@@ -202,7 +210,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       ok(first).id,
-      ok(first).token,
+      tokenOf(first),
       JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
     );
     expect(ingest.status).toBe(200);
@@ -214,6 +222,40 @@ describe("ingest-channels control plane", () => {
     const res = await mint(alice, "req-b", { causePrefix: "elsewhere" });
     expect(res.status).toBe(409);
     expect(err(res)).toContain("cause-prefix");
+  });
+
+  it("stores the sink it was minted with, and a journal when none is named", async () => {
+    const journal = ok(await mint(alice, "req-a"));
+    const latest = ok(
+      await mint(alice, "req-b", { installId: "phone-2", sink: "latest" }),
+    );
+
+    const stored = (id: string) => getRegistration(runtime, operator.did(), id);
+    expect((await stored(journal.id))?.sink).toBe("journal");
+    expect((await stored(latest.id))?.sink).toBe("latest");
+    // Nothing POSTs to a `latest` channel, so it is minted without the data
+    // plane's URL and bearer token; a journal has both.
+    expect(typeof journal.url).toBe("string");
+    expect(typeof journal.token).toBe("string");
+    expect(latest.url).toBeUndefined();
+    expect(latest.token).toBeUndefined();
+    const listed = ok(await processList(deps, alice.did(), {})).channels;
+    expect(listed.map((c) => [c.installId, c.sink]).sort()).toEqual([
+      ["phone-1", "journal"],
+      ["phone-2", "latest"],
+    ]);
+  });
+
+  it("refuses to re-mint under a different sink, and keeps the sink when none is named", async () => {
+    const { id } = ok(await mint(alice, "req-a", { sink: "latest" }));
+
+    const changed = await mint(alice, "req-b", { sink: "journal" });
+    expect(changed.status).toBe(409);
+    expect(err(changed)).toContain("sink");
+
+    expect((await mint(alice, "req-c")).status).toBe(200);
+    const stored = await getRegistration(runtime, operator.did(), id);
+    expect(stored?.sink).toBe("latest");
   });
 
   it("rejects an installId that could impersonate an integration audience", async () => {
@@ -237,7 +279,7 @@ describe("ingest-channels control plane", () => {
     });
     expect(rotated.status).toBe(200);
     expect(ok(rotated).id).toBe(id);
-    expect(ok(rotated).token).not.toBe(ok(first).token);
+    expect(tokenOf(rotated)).not.toBe(tokenOf(first));
 
     const body = JSON.stringify({
       partition: "2026-08-04",
@@ -247,7 +289,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(rotated).token,
+      tokenOf(rotated),
       body,
     );
     expect(withNew.status).toBe(200);
@@ -259,7 +301,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(first).token,
+      tokenOf(first),
       body,
     );
     expect(withOld.status).toBe(403);
@@ -291,10 +333,63 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(first).token,
+      tokenOf(first),
       JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
     );
     expect(still.status).toBe(200);
+  });
+
+  it("returns the unowned denial for a rotate and a revoke addressed to a space the channel does not write into", async () => {
+    // The owner asks, so only the space the request was addressed to stands
+    // between the request and the channel.
+
+    const first = await mint(alice, "req-as1");
+    const id = ok(first).id;
+
+    const rot = await processRotate(deps, alice.did(), {
+      id,
+      requestId: "req-as2",
+      space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+    });
+    expect(rot.status).toBe(403);
+    expect("token" in rot.body).toBe(false);
+
+    const rev = await processRevoke(deps, alice.did(), {
+      id,
+      requestId: "rv-as1",
+      expectedRevision: await revOf(id),
+      space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+    });
+    expect(rev.status).toBe(403);
+
+    const still = await processIngest(
+      runtime,
+      operator.did(),
+      id,
+      tokenOf(first),
+      JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
+    );
+    expect(still.status).toBe(200);
+  });
+
+  it("rotates a channel addressed through the space it writes into", async () => {
+    const first = await mint(alice, "req-as3");
+
+    const rotated = await processRotate(deps, alice.did(), {
+      id: ok(first).id,
+      requestId: "req-as4",
+      space,
+    });
+
+    expect(rotated.status).toBe(200);
+  });
+
+  it("returns a URL that names the channel's space ahead of its id", async () => {
+    const minted = ok(await mint(alice, "req-url"));
+
+    expect(minted.url).toBe(
+      `${deps.apiUrl}/api/spaces/${space}/ingest/${minted.id}`,
+    );
   });
 
   it("answers identically for an unknown channel id and an unowned one", async () => {
@@ -328,7 +423,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(first).token,
+      tokenOf(first),
       JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
     );
     // A correct token on a revoked channel gets the re-pair signal, not a 401.
@@ -415,7 +510,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(reminted).token,
+      tokenOf(reminted),
       JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
     );
     expect(post.status).toBe(200);
@@ -445,7 +540,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(first).token,
+      tokenOf(first),
       body,
     );
     expect(stale.status).toBe(403);
@@ -493,7 +588,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       ok(first).id,
-      ok(first).token,
+      tokenOf(first),
       JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
     );
     expect(post.status).toBe(200);
@@ -543,7 +638,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(taken).token,
+      tokenOf(taken),
       JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
     );
     expect(post.status).toBe(200);
@@ -625,7 +720,7 @@ describe("ingest-channels control plane", () => {
         runtime,
         operator.did(),
         id,
-        ok(second).token,
+        tokenOf(second),
         JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
       )).status,
     ).toBe(200);
@@ -667,7 +762,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(first).token,
+      tokenOf(first),
       body,
     );
     expect(stale.status).toBe(403);
@@ -679,7 +774,7 @@ describe("ingest-channels control plane", () => {
         runtime,
         operator.did(),
         id,
-        ok(reminted).token,
+        tokenOf(reminted),
         body,
       )).status,
     ).toBe(200);
@@ -946,7 +1041,7 @@ describe("ingest-channels control plane", () => {
         runtime,
         operator.did(),
         id,
-        ok(second).token,
+        tokenOf(second),
         JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
       )).status,
     ).toBe(200);
@@ -1487,7 +1582,7 @@ describe("ingest-channels control plane", () => {
         runtime,
         operator.did(),
         id,
-        ok(minted).token,
+        tokenOf(minted),
         JSON.stringify({ partition: "2026-08-05", records: [{ x: 1 }] }),
       );
       expect(after.status).toBe(403);
@@ -1524,7 +1619,7 @@ describe("ingest-channels control plane", () => {
       runtime,
       operator.did(),
       id,
-      ok(first).token,
+      tokenOf(first),
       JSON.stringify({ partition: "2026-08-05", records: [{ x: 1 }] }),
     );
     expect(post.status).toBe(200);

@@ -281,6 +281,13 @@ Detection is provenance-first:
 3. synthetic helper support for `__cfHelpers.*` nodes introduced by earlier
    passes
 
+A callee that is itself a call has a call kind only as a builder's factory:
+`lift(cb)` and `handler(cb)`, written in place or bound to a `const`, are
+factories, and calling one applies the builder. A call of what an application
+returned has no call kind (`lift(cb)(x)(y)`, or a call through a `const` bound
+to `lift(cb)(x)`), and neither does a call of what any other call returned,
+such as `ifElse(...)()` (`test/ast/call-kind.test.ts`).
+
 Remaining fallback behavior is intentionally narrow:
 
 - unresolved bare builder identifiers can still match builders
@@ -2309,7 +2316,11 @@ time.
 - **Applied builders** (`lift`, `handler`): the site is `builder(...)(captures)`
   — the callee is itself the inner `builder(...)` call. Hoist the inner call,
   leave `__cfLift_N(captures)` / `__cfHandler_N(captures)` at the site (any
-  trailing `.for(...)` member chain stays anchored on the outer call):
+  trailing `.for(...)` member chain stays anchored on the outer call). Only a
+  single application is one of these sites: in an over-applied
+  `lift(cb)(x)(y)` the outer call is a call of what the application returned,
+  so `lift(cb)` is hoisted and `__cfLift_N(x)(y)` stays at the site
+  (`test/transformers/builder-call-hoisting.test.ts`):
 
   ```ts
   // Shown inside a pattern body.

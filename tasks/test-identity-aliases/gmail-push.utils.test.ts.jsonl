@@ -1,0 +1,1 @@
+{"date":"2026-10-08","from":{"k":"unit","s":"toolshed","n":"gmail-push.utils > processGmailPush() > delivery > appends a record to the bound channel's journal for the day it was published"},"to":{"k":"unit","s":"toolshed","n":"gmail-push.utils > processGmailPush() > delivery > writes the notification to the bound channel's cell"}}
