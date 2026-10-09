@@ -28,7 +28,7 @@ import {
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
-/** An empty shared-space catalog, as a manager registers its rooms in. */
+/** An empty shared-space catalog, as a manager lists its rooms from. */
 const emptyCatalog = () =>
   Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 
@@ -51,12 +51,10 @@ const statusOf = (
 ): string => requests.get()?.[id]?.status ?? "none";
 
 export default pattern(() => {
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const notices = Writable.of<ChatManagerNotice[]>([]);
   const manager = FabriChatManagerCore({
     myProfile: Writable.of<TestProfile>({ name: "Tester" }),
-    rooms,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -82,7 +80,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          rooms.get().length === 0 && notices.get().length === 0 &&
+          manager.rooms.length === 0 && notices.get().length === 0 &&
           statusOf(requests, "d-1") === "none" &&
           statusOf(requests, "g-1") === "none" &&
           statusOf(requests, "g-2") === "none"
@@ -101,7 +99,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          rooms.get().length === 2 && notices.get().length === 2 &&
+          manager.rooms.length === 2 && notices.get().length === 2 &&
           statusOf(requests, "d-2") === "done" &&
           statusOf(requests, "g-3") === "done"
         ),

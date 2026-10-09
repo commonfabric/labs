@@ -440,8 +440,15 @@ export interface ChatIndexEntry {
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When this user created or accepted it. */
+  /** When this user's catalog admitted it. */
   since: FabricEpochNsec;
+
+  /**
+   * The revision of the room's entry in the user's catalog, as listed, which a
+   * request to forget the room names; absent where the entry is not one the
+   * catalog keeps revisions of.
+   */
+  revision?: string;
 }
 
 /** The outcome of a manager request. */
@@ -461,9 +468,22 @@ export type ChatRequestOutcome =
     /** The request was refused. */
     status: "refused";
 
-    /** Why. */
+    /** Why, for a person to read. */
     reason: string;
+
+    /**
+     * Which refusal it is, for a client to act on, where a client has one to
+     * take; absent for the others.
+     */
+    code?: ChatRefusalCode;
   };
+
+/**
+ * A refusal a client can act on, which stays the same whatever its `reason`
+ * says. `space-own-chat`: `accept` named a social space's own chat, which a
+ * user's chats don't list, since the catalog lists rooms by their own spaces.
+ */
+export type ChatRefusalCode = "space-own-chat";
 
 /**
  * The `kind` of a room's own space, as the space declares it, and as an offer

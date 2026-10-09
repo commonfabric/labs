@@ -53,7 +53,7 @@ import {
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
-/** An empty shared-space catalog, as a manager registers its rooms in. */
+/** An empty shared-space catalog, as a manager lists its rooms from. */
 const emptyCatalog = () =>
   Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 type ChipArg = Parameters<typeof ParticipantChip>[0];
@@ -211,14 +211,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<OwnProfile>();
   const unclaimed = Writable.of<UnclaimedProfile>({ name: "Nobody" });
   const writeProfile = writeOwnProfile({ profile, name: "Bob" });
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
   const bobDid = Writable.of<string>("");
   const action_note_principal = action(() =>
     bobDid.set(currentPrincipal() ?? "")
   );
   const manager = FabriChatManagerCore({
     myProfile: profile,
-    rooms,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
@@ -289,8 +287,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       {
         assertion: assert(() =>
-          rooms.get().length === 1 && rooms.get()[0]?.kind === "direct" &&
-          rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
+          manager.rooms.length === 1 && manager.rooms[0]?.kind === "direct" &&
+          manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           setup.aliceDid.get() !== ""
         ),
       },

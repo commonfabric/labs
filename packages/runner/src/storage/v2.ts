@@ -47,6 +47,7 @@ import {
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
   isScopeKey,
+  type MemoryProtocolFlags,
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
@@ -1838,6 +1839,13 @@ export class StorageManager implements IStorageManager {
     // space this manager has not opened holds nothing to refresh.
     return this.#providers.get(space)?.replica.integrateStoreWrites(writes) ??
       0;
+  }
+
+  /** @inheritDoc */
+  async serverFlags(
+    space: MemorySpace,
+  ): Promise<MemoryProtocolFlags | null | undefined> {
+    return await this.#sessionFactory.serverFlags?.(space);
   }
 
   /** @inheritDoc */

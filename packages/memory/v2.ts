@@ -1150,6 +1150,17 @@ export type MemoryProtocolFlags = {
    */
   spaceKind?: boolean;
 
+  /**
+   * Whether the server runs patterns itself (server execution): a session
+   * opening a space can then lead the server to write to it, the space's root
+   * ensure among the writes. A server advertises it in every `hello.ok`, true
+   * or false, so a client can learn it before it opens a session anywhere.
+   * Absent from a server that predates the flag, and from a client's own
+   * `hello`, where it means nothing; a client that needs the answer treats
+   * absence as not knowing.
+   */
+  serverExecution?: boolean;
+
   modernCellRep: boolean;
 
   /**
@@ -1305,6 +1316,7 @@ export type MemoryProtocolFlags = {
 export type WireMemoryProtocolFlags = {
   genesisRoot?: boolean;
   spaceKind?: boolean;
+  serverExecution?: boolean;
   modernCellRep?: boolean;
 
   /** Expression result identity contract required for session admission. */
@@ -2484,6 +2496,10 @@ export const parseMemoryProtocolFlags = (
   if (spaceKind !== undefined && typeof spaceKind !== "boolean") {
     return null;
   }
+  const serverExecution = value.serverExecution;
+  if (serverExecution !== undefined && typeof serverExecution !== "boolean") {
+    return null;
+  }
   const stableExpressionResultIds = value.stableExpressionResultIds;
   if (
     stableExpressionResultIds !== undefined &&
@@ -2643,6 +2659,7 @@ export const parseMemoryProtocolFlags = (
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
     spaceKind: spaceKind === true,
+    ...(serverExecution === undefined ? {} : { serverExecution }),
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
     applyOp: applyOp === true,
@@ -2697,6 +2714,9 @@ export const wireMemoryProtocolFlags = (
 ): WireMemoryProtocolFlags => ({
   genesisRoot: flags.genesisRoot,
   spaceKind: flags.spaceKind,
+  ...(flags.serverExecution === undefined
+    ? {}
+    : { serverExecution: flags.serverExecution }),
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,

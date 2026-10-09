@@ -4,6 +4,12 @@
  * the user's home space, where `#chatManager` finds it, so everything it holds
  * is private to its user.
  *
+ * The rooms it lists are the ones the user's shared-space catalog, Home's,
+ * keeps as saved: each room is its space's root, and the catalog lists the
+ * space. The manager registers there each room it creates, and each room a
+ * manager created that it accepts, and the host that vets an offer of a room
+ * registers that room there. Forgetting a room archives its entry.
+ *
  * It creates each room with `inSpace()` as the root of a space of its own,
  * which declares itself a `fabrichat-room`. The space grants the room's
  * creator and each other member named at creation OWNER, and no one else,
@@ -26,7 +32,6 @@ import {
   debugStr,
   type Default,
   type DID,
-  equals,
   eventKey,
   getPatternEnvironment,
   handler,
@@ -52,9 +57,11 @@ import {
 import type { ShareInboxPiece } from "../system/profile-home.tsx";
 import {
   changeSharedSpaceMembershipIn,
+  isSharedSpaceCatalog,
   readSharedSpaceCatalog,
   registerSharedSpaceIn,
   type SharedSpaceCatalogStorage,
+  type SharedSpaceEntry,
 } from "../system/shared-space-catalog.ts";
 import FabriChatRoom from "./room.tsx";
 import {
@@ -75,9 +82,6 @@ import {
   type ManagerProfileCell,
   nsecOf,
 } from "./schemas.tsx";
-
-/** The manager's rooms, in the order it recorded them. */
-export type RoomsCell = Writable<ChatIndexEntry[] | Default<[]>>;
 
 /**
  * A user's shared-space catalog, which lists the rooms they belong to among
@@ -163,6 +167,12 @@ export interface ManagerStreamEvent {
   /** The id of a notice delivered. */
   id?: string;
 
+  /**
+   * The revision of a room's entry, as the list the request was made from
+   * showed it, for a room to forget.
+   */
+  revision?: string;
+
   /** A rendered control's text, or the principal it starts a direct room with. */
   readonly target?: {
     readonly value?: string;
@@ -196,9 +206,6 @@ export interface ManagerActState {
 
   /** The user's profile, which holds no value until it resolves. */
   myProfile: ManagerProfileCell | undefined;
-
-  /** The rooms this user belongs to. */
-  rooms: RoomsCell;
 
   /** The user's shared-space catalog, where each room listed is registered. */
   catalog: CatalogCell;
@@ -235,6 +242,9 @@ export interface ManagerActState {
 
   /** A rendered control's notice id. */
   id?: string;
+
+  /** A rendered control's room's revision, as its row shows it. */
+  revision?: string;
 }
 
 /** The DIDs in `text`, separated by spaces, commas, or lines. */
@@ -273,12 +283,6 @@ const recordOutcome = (
     );
   }
 };
-
-/** Whether `rooms` already lists `room`. */
-const lists = (rooms: RoomsCell, room: Cell<ChatRoomLink>): boolean =>
-  ((rooms.get() ?? []) as ChatIndexEntry[]).some((entry) =>
-    equals(entry.room, room)
-  );
 
 /** The origin of the host serving this pattern, and so the rooms it creates. */
 const hostOrigin = (): string => new URL(getPatternEnvironment().apiUrl).origin;
@@ -539,14 +543,12 @@ const createRoom = (
       });
     }
   }
-  const entry: ChatIndexEntry = {
+  return {
     room,
     kind,
     ...(counterpart === undefined ? {} : { counterpart }),
     since: createdAt,
   };
-  state.rooms.push(entry);
-  return entry;
 };
 
 /**
@@ -561,7 +563,7 @@ const performManagerAct = (
   event: ManagerStreamEvent | undefined,
   state: ManagerActState,
 ): void => {
-  const { act, rooms, direct, requests, outgoingNotices } = state;
+  const { act, catalog, direct, requests, outgoingNotices } = state;
   const requestId = event?.requestId ?? eventKey();
   const earlier = requests.key(requestId).get();
   if (earlier !== undefined && earlier.status !== "pending") return;
@@ -660,13 +662,10 @@ const performManagerAct = (
     }
     const known = direct.key(counterpart).get();
     if (known !== undefined) {
-      if (!lists(rooms, known.room)) {
-        rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), known]);
-      }
       // Restores an archived entry at the revision just read, as `listRoom`
       // says: starting the chat is the choice to have it listed.
       const knownSpace = spaceOf(known.room);
-      if (isWellFormedDID(knownSpace)) listRoom(state.catalog, knownSpace);
+      if (isWellFormedDID(knownSpace)) listRoom(catalog, knownSpace);
       recordOutcome(state, requestId, { status: "done", entry: known });
       return;
     }
@@ -732,11 +731,50 @@ const performManagerAct = (
   }
 
   if (act === "forget") {
-    rooms.set(
-      ((rooms.get() ?? []) as ChatIndexEntry[]).filter((entry) =>
-        !equals(entry.room, room)
-      ),
-    );
+    // Forgetting archives the room's entry, at the revision the list the
+    // request came from showed, so a choice made since is not overridden.
+    const revision = event?.revision ?? state.revision;
+    if (typeof revision !== "string") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The request names no revision of the room's entry.",
+      });
+      return;
+    }
+    // The catalog names a room by its space, which holds at most one room,
+    // its root; a link to anything else in that space, such as one of the
+    // room's messages, names no room to forget.
+    const kind = aboutRecordOf(room).key("kind").get() ??
+      room.key("about").get()?.kind;
+    if (kind !== "direct" && kind !== "group") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The request names no room.",
+      });
+      return;
+    }
+    // An entry no longer saved, archived or removed by another client since
+    // the list was read, has moved on from any revision a list showed.
+    const space = spaceOf(room);
+    const entry = isWellFormedDID(space)
+      ? readSharedSpaceCatalog(catalog).entries[space]
+      : undefined;
+    const changed = isWellFormedDID(space) &&
+        entry?.kind === CHAT_ROOM_OFFER_KIND && entry.state === "saved"
+      ? changeSharedSpaceMembershipIn(catalog, {
+        space,
+        id: eventKey(),
+        expectedRevision: revision,
+        state: "archived",
+      })
+      : undefined;
+    if (changed === undefined || changed.status === "conflict") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The room's entry changed since it was listed.",
+      });
+      return;
+    }
     recordOutcome(state, requestId, { status: "done" });
     return;
   }
@@ -754,6 +792,20 @@ const performManagerAct = (
     recordOutcome(state, requestId, {
       status: "refused",
       reason: "The room can't be read by this user.",
+    });
+    return;
+  }
+  // The catalog lists a room by its space, so only a room that is its space's
+  // root can be listed, and only a room a manager created is one, which its
+  // record says: such a room is its space's root, in a space that declares
+  // itself a `fabrichat-room`. A space's own chat has no record, and its space
+  // is the social space it belongs to.
+  if (record.key("kind").get() === undefined) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason:
+        "The room is a social space's own chat, which isn't listed among chats.",
+      code: "space-own-chat",
     });
     return;
   }
@@ -786,20 +838,12 @@ const performManagerAct = (
     ...(kind === "direct" ? { counterpart } : {}),
     since: epochNsecFromMsec(Date.now()),
   };
-  if (!lists(rooms, room)) {
-    rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), entry]);
-  }
   // Registers the room, or restores an archived entry at the revision just
   // read, as `listRoom` says: accepting the room is the choice to have it
-  // listed. Only a room a manager created is registered, which its record
-  // says: such a room is its space's root, in a space that declares itself a
-  // `fabrichat-room`, while a space's own chat has no record, and its space is
-  // the social space it belongs to.
-  if (record.key("kind").get() !== undefined) {
-    listRoom(state.catalog, space, {
-      title: kind === "group" ? room.key("about").get()?.title : undefined,
-    });
-  }
+  // listed.
+  listRoom(catalog, space, {
+    title: kind === "group" ? room.key("about").get()?.title : undefined,
+  });
   if (state.myProfile !== undefined) {
     state.joinRooms.send({ room, profile: state.myProfile });
   }
@@ -834,17 +878,16 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
 
 /** What a manager stores. Every field has a default. */
 export interface FabriChatManagerInput {
-  /** The rooms this user belongs to. */
-  rooms?: RoomsCell;
-
   /**
-   * The user's shared-space catalog, where each room this manager creates or
-   * accepts is registered: in a user's home space, Home's. A manager given
-   * none keeps one of its own.
+   * The user's shared-space catalog, which lists the rooms they belong to: in
+   * a user's home space, Home's. A manager given none keeps one of its own.
    */
   sharedSpaceCatalog?: CatalogCell;
 
-  /** The direct room shared with each counterpart. */
+  /**
+   * The direct room shared with each counterpart, for the rooms this manager
+   * created or accepted.
+   */
   direct?: DirectCell;
 
   /** Each request's outcome. */
@@ -864,6 +907,13 @@ export interface FabriChatManagerOutput {
 
   /** Every room this user belongs to and hasn't forgotten, newest first. */
   rooms: ChatIndexEntry[];
+
+  /**
+   * The user's shared-space catalog, as stored, from which `rooms` is drawn. A
+   * reader in another piece finds a room's entry here by its space without
+   * this manager's view having been computed.
+   */
+  sharedSpaceCatalog: SharedSpaceCatalogStorage;
 
   /** The direct room this user shares with each counterpart, by principal. */
   direct: Record<string, ChatIndexEntry>;
@@ -904,9 +954,53 @@ interface ShownEntry {
   /** The room. */
   room: Cell<ChatRoomLink>;
 
+  /** The revision of the room's entry, which forgetting it names. */
+  revision?: string;
+
   /** How the entry is labeled. */
   label: string;
 }
+
+/** What finding a catalog entry's room needs. */
+interface FoundRoomInput {
+  /** The DID of the room's space, as the catalog entry names it. */
+  space: string;
+}
+
+/** A catalog entry's room, once found. */
+interface FoundRoomOutput {
+  /** The room; absent until it resolves. */
+  room?: Cell<ChatRoomLink>;
+}
+
+/** The room in `space`, found as the space's root. */
+const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(({ space }) => {
+  const root = wish<Cell<ChatRoomLink>>({
+    query: "#default",
+    scope: computed(() => isWellFormedDID(space) ? [space] : []),
+  });
+  return { room: root.result };
+});
+
+/**
+ * The other member of the direct room in `space`: the counterpart `direct`
+ * holds the room under, for a room this manager created or accepted, or else
+ * the room's creator, as its `about.record` is labeled, unless that is `self`.
+ * Absent when neither names one, as when the label can't be read.
+ */
+const counterpartOf = (
+  direct: Record<string, ChatIndexEntry>,
+  space: string,
+  room: Cell<ChatRoomLink>,
+  self: string | undefined,
+): string | undefined => {
+  const stored = Object.entries(direct).find(([, known]) =>
+    spaceOf(known.room) === space
+  )?.[0];
+  if (stored !== undefined) return stored;
+  const creator = principalOf(aboutRecordOf(room), "authored-by");
+  return creator === self ? undefined : creator;
+};
 
 /** What a manager's core needs: what it stores, and whose it is. */
 export interface FabriChatManagerCoreInput
@@ -923,14 +1017,52 @@ export const FabriChatManagerCore = pattern<
   FabriChatManagerCoreInput,
   FabriChatManagerOutput
 >(
-  (
-    { myProfile, rooms, sharedSpaceCatalog, direct, requests, outgoingNotices },
-  ) => {
+  ({ myProfile, sharedSpaceCatalog, direct, requests, outgoingNotices }) => {
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const startRefusal = new Writable.perSession<string>("");
+    // The rooms the catalog keeps as saved; a catalog that doesn't read as one
+    // lists none.
+    const savedRooms = computed((): SharedSpaceEntry[] => {
+      const catalog = sharedSpaceCatalog.get();
+      return isSharedSpaceCatalog(catalog)
+        ? Object.values(catalog.entries).filter((entry) =>
+          entry.kind === CHAT_ROOM_OFFER_KIND && entry.state === "saved"
+        )
+        : [];
+    });
+    const found = savedRooms.map((entry) => FoundRoom({ space: entry.space }));
+    // Each saved room once it resolves and reads as a room, newest first. The
+    // room's own records are read here, beside the entry they belong to, so
+    // they are read in the run that lists them.
+    const newestFirst = computed((): ChatIndexEntry[] => {
+      const self = principalOf(myProfile, "represents-principal");
+      const stored = direct.get() ?? {};
+      return savedRooms.flatMap((entry, index): ChatIndexEntry[] => {
+        const room = found[index]?.room;
+        if (room === undefined) return [];
+        const kind = aboutRecordOf(room).key("kind").get() ??
+          room.key("about").get()?.kind;
+        if (kind !== "direct" && kind !== "group") return [];
+        const counterpart = kind === "direct"
+          ? counterpartOf(stored, entry.space, room, self)
+          : undefined;
+        return [{
+          room,
+          kind,
+          ...(counterpart === undefined ? {} : { counterpart }),
+          since: epochNsecFromMsec(entry.since ?? 0),
+          revision: entry.revision,
+        }];
+      }).sort((a, b) =>
+        nsecOf(b.since) < nsecOf(a.since)
+          ? -1
+          : nsecOf(b.since) > nsecOf(a.since)
+          ? 1
+          : 0
+      );
+    });
     const records = {
       myProfile,
-      rooms,
       catalog: sharedSpaceCatalog,
       direct,
       requests,
@@ -940,18 +1072,10 @@ export const FabriChatManagerCore = pattern<
       draft,
       startRefusal,
     };
-    const newestFirst = computed(() =>
-      [...((rooms.get() ?? []) as ChatIndexEntry[])].sort((a, b) =>
-        nsecOf(b.since) < nsecOf(a.since)
-          ? -1
-          : nsecOf(b.since) > nsecOf(a.since)
-          ? 1
-          : 0
-      )
-    );
     const shown = computed((): ShownEntry[] =>
       newestFirst.map((entry) => ({
         room: entry.room,
+        ...(entry.revision === undefined ? {} : { revision: entry.revision }),
         label: entry.kind === "direct"
           ? `With ${entry.counterpart ?? "someone"}`
           : entry.room.key("about").get()?.title ?? "Group chat",
@@ -986,6 +1110,7 @@ export const FabriChatManagerCore = pattern<
     };
     const view = {
       rooms: newestFirst,
+      sharedSpaceCatalog,
       direct,
       requests,
       outgoingNotices: noticeList,
@@ -1008,6 +1133,7 @@ export const FabriChatManagerCore = pattern<
                     act: "forget",
                     ...records,
                     room: entry.room,
+                    revision: entry.revision,
                   })}
                 >
                   Forget
@@ -1113,7 +1239,6 @@ const FabriChatManager = pattern<
   const core = FabriChatManagerCore(
     {
       myProfile: profileWish.result,
-      rooms: input.rooms,
       sharedSpaceCatalog: input.sharedSpaceCatalog,
       direct: input.direct,
       requests: input.requests,
@@ -1125,6 +1250,7 @@ const FabriChatManager = pattern<
     [UI]: core[UI],
     [VIEWS]: core[VIEWS],
     rooms: core.rooms,
+    sharedSpaceCatalog: core.sharedSpaceCatalog,
     direct: core.direct,
     requests: core.requests,
     outgoingNotices: core.outgoingNotices,
