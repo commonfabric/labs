@@ -140,12 +140,13 @@ other 9.46 GB of payload sits in the 377,607 commits that still own a head,
 revisions. Two different mechanisms reclaim two different pools: truncation
 removes the 1.22 GB of revision rows behind heads, and hollowing frees only
 eligible payloads, so the 4.12 GB on commits that own no head is an upper
-bound on what hollowing reaches, less whatever the retained window and the
-`op_*` references keep. Of the 13.58 GB of payload overall, 7.27 GB is read
-sets and 6.16 GB is operations; the head-owning commits carry 4.21 GB of
-reads and 5.23 GB of operations, the headless ones 3.06 GB and 0.92 GB.
-Whether the out-of-window payloads of head-owning commits can be hollowed
-as well is a question for the next revision of this plan.
+bound on what hollowing of those commits reaches, less whatever the retained
+window and the `op_*` references keep. Of the 13.58 GB of payload overall,
+7.27 GB is read sets and 6.16 GB is operations; the head-owning commits
+carry 4.21 GB of reads and 5.23 GB of operations, the headless ones 3.06 GB
+and 0.92 GB. That split is why I6 hollows head-owning commits' payloads
+outside the window as well: nothing reads them, and they are the larger
+pool.
 
 **Most heads are session instances.** Of the 672,073 head rows in
 September, 451,721 are `session:` scope keys and 17,813 are `user:`; the
@@ -295,10 +296,13 @@ Each is something a reader relies on today, with the code that relies on it.
   of a later one — Astra's review reproduced the second with a week-old row
   swept by an age window). No age window makes this safe, so no commit row is
   deleted. Outside the retained window the row's `original` is replaced by a
-  marker carrying a hash of what it held; a resubmission then mismatches the
-  stored bytes and is refused as a replay mismatch, which the client surfaces
-  as a terminal error for a write that in fact landed, and never mutates
-  state. `origin-committed` preconditions, `commitClassOfSeq` and the commit
+  marker carrying a hash of what it held, whether or not a surviving row
+  still points at the commit: nothing reads a payload beyond replay
+  detection and the pending-read layer replay, which the window serves, and
+  the genesis receipt, which is exempt below. A resubmission then mismatches
+  the stored bytes and is refused as a replay mismatch, which the client
+  surfaces as a terminal error for a write that in fact landed, and never
+  mutates state. `origin-committed` preconditions, `commitClassOfSeq` and the commit
   feed read the columns that stay. [§5](#5-what-the-server-should-do-afterward)
   turns the refusal into a faithful `replayed` answer.
 
@@ -309,9 +313,13 @@ Each is something a reader relies on today, with the code that relies on it.
   foreign key naming it; session opening and root initialization depend on
   both (Astra's review reproduced `Invalid genesis receipt` after hollowing
   it). Commit 1 is therefore never hollowed. The eligibility rule is a list,
-  not a predicate: a payload is hollowed only when no surviving `revision` or
-  `op_*` row references the commit, its seq is not 1, and it is outside the
-  retained window. The audit behind the list is every `FROM "commit"` outside
+  not a predicate: a payload is hollowed when the commit is outside the
+  retained window, its seq is not 1, and no `op_*` row references it (those
+  tables read `original` through their own paths). A surviving revision
+  pointing at the commit is not a reason to keep its payload: the revision
+  carries the document, and the payload would only duplicate it. On the
+  2026-10-09 production file that is the difference between 4.1 GB and most
+  of 13.6 GB (see [what the history costs](#what-the-history-costs-today-measured-on-copies)). The audit behind the list is every `FROM "commit"` outside
   the engine: `genesis-root.ts` is the one live reader of `original`; the
   state inspector's readers (`conflicts.ts`, `timetravel.ts`, `churn.ts`,
   `scopes.ts`, `grouping.ts`, `queries.ts`, `clone.ts`, `discover.ts`) are
@@ -479,8 +487,9 @@ The dry-run report, printed before any write and by `--dry-run` alone:
   boundaries are heads (the head's op changes);
 - rows to delete from `revision` and `snapshot`, and their byte totals as
   stored (`length(data)`, `length(value)`);
-- commit rows that become unreferenced, how many fall inside the retained
-  window and keep their payload, and the bytes of `original` the rest give up;
+- commit rows outside the retained window, how many of them an `op_*` row
+  or the genesis exemption keeps, and the bytes of `original` the rest give
+  up, split into commits that still own a head and commits that do not;
 - invocation and authorization rows that become unreferenced (empty in the
   Topics store, where every commit's refs are null);
 - the ten instances contributing the most rows, with their head seq and op;
@@ -860,14 +869,14 @@ the tool inserts is the compaction log, with the run's report as its
 was compacted on <date>; the archive is <file>" rather than showing a
 document that appears from nowhere.
 
-**Distinguish a compacted basis from absence (stage 2, prerequisite).** I9
-is the engine change that has to exist before any store is compacted: a
-confirmed or pending read whose basis is older than an instance's oldest
-surviving row, when that row points at a compaction commit, is `known:
-false` to the identity proof. It is small — one lookup of the oldest row's
-commit class, consulted only on the path that already found a conflict — and
-it is the difference between a compacted store that refuses a stale write
-and one that accepts it with every operation elided.
+**Distinguish a compacted basis from absence (stage 2, done).** I9 is the
+engine change that has to exist before any store is compacted, and it does:
+`historyCompactedBelow` reads an instance's oldest surviving row with the
+commit it points at, and a confirmed or pending read whose basis is older
+than that row is `known: false` to the identity proof when the commit is
+`system`-class under `COMPACTION_SESSION_PREFIX`. One indexed lookup,
+consulted only on the path that already found a conflict; the prefix is the
+engine's export, and the tool stamps its commit with it.
 
 **Refuse a historical read below the cut explicitly (stage 8).** A
 `read({seq})` below the cut returns absent today; it should name the
@@ -939,12 +948,13 @@ operator took.
 
 ## Stages
 
-Each stage is a pull request. Stage 1's change has landed; its measurement
-on the current file and every later stage are open. Two engine changes come
-first: the base search, because it preserves history, helps the uncompacted
-store from the deploy that carries it, and is the measurement the compaction
-decision should be made against; and the basis guard, because no store may
-be compacted until the engine can tell compacted history from absence.
+Each stage is a pull request. Stages 1 and 2 have landed; stage 3 onward is
+open. Two engine changes come
+first, and both have landed: the base search, because it preserves history,
+helps the uncompacted store from the deploy that carries it, and is the
+measurement the compaction decision was made against; and the basis guard,
+because no store may be compacted until the engine can tell compacted
+history from absence.
 
 1. **The snapshot-bounded base search** — done ([labs#8628](https://github.com/commonfabric/labs/pull/8628)), measured on
    the August copy, on the 2026-10-09 production snapshot, and through a
@@ -955,13 +965,14 @@ be compacted until the engine can tell compacted history from absence.
    where the 180 ms claim is tested rather than inferred, and where the
    question "is compaction still needed for latency, or only for disk?" gets
    its answer; it needs a fresh snapshot from the host.
-2. **The basis guard (I9).** `known: false` for a confirmed or pending read
-   whose basis predates an instance's oldest surviving row when that row
-   points at a compaction commit. Tests: the last two protocol cases of §3
-   in all three variants — patch-headed, `set`-headed, bounded cut — against
-   stores transformed by hand the way the tool will transform them, red
-   before and green after; an uncompacted instance's genuine absence still
-   proves identity as today.
+2. **The basis guard (I9)** — done (PR_PLACEHOLDER). `known: false` for a
+   confirmed or pending read whose basis predates an instance's oldest
+   surviving row when that row points at a compaction commit. Tests: the
+   last two protocol cases of §3 in all three variants — patch-headed,
+   `set`-headed, bounded cut — against stores transformed by hand the way
+   the tool will transform them, red on the engine before and green after;
+   an uncompacted instance's genuine absence still proves identity as
+   today, and so does a basis at the boundary itself.
 3. **Dry run and report.** `packages/memory/v2/compact.ts` with the
    selection, the cut, and the report, read-only; `cf space compact --dry-run`
    over it. Exercised against the September Topics copy, whose numbers replace
@@ -998,7 +1009,7 @@ be compacted until the engine can tell compacted history from absence.
    timings as stage 1 taken after compaction.
 7. **The production run**, by the operator, from the rehearsed flag set, with
    the owner's agreement. Stage 1's measurement left disk as the reason:
-   22.7 GB, of which 13.6 GB is commit payloads, 4.1 GB of it in commits
-   that own no head.
+   22.7 GB, of which 13.6 GB is commit payloads that I6 reaches outside the
+   window, and 1.2 GB revision rows that truncation removes.
 8. **Faithful replay of hollowed commits and explicit refusal of reads
    below the cut**, the two engine changes of §5.

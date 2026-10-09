@@ -761,6 +761,22 @@ WHERE session_id = :session_id
   AND local_seq = :local_seq
 `;
 
+// The oldest row an instance still has, with the commit it is attributed to.
+// Compaction (docs/plans/compact-space.md, I4) attributes the boundary row of
+// every instance it truncates to a commit stamped with
+// {@link COMPACTION_SESSION_PREFIX}, so this row says whether history below
+// it was deleted or never existed — see {@link historyCompactedBelow}.
+const SELECT_OLDEST_REVISION_ATTRIBUTION = `
+SELECT r.seq AS seq, c.class AS class, c.session_id AS session_id
+FROM revision r
+JOIN "commit" c ON c.seq = r.commit_seq
+WHERE r.branch = :branch
+  AND r.id = :id
+  AND r.scope_key = :scope_key
+ORDER BY r.seq ASC, r.op_index ASC
+LIMIT 1
+`;
+
 // The derived-class admission read (serving-loop.md §2): the space's LIVE
 // lease row, liveness judged by the memory server's own clock (the :now the
 // admission path passes is always this process's Date.now()). An expired row
@@ -928,6 +944,7 @@ interface PreparedStatements {
   selectCurrentEntityIdPage: PreparedStatement;
   selectCurrentEntityIdPageAfter: PreparedStatement;
   selectExistingCommit: PreparedStatement;
+  selectOldestRevisionAttribution: PreparedStatement;
   selectHead: PreparedStatement;
   selectLatestBase: PreparedStatement;
   selectLatestSnapshot: PreparedStatement;
@@ -947,6 +964,51 @@ interface PreparedStatements {
   deleteBranch: PreparedStatement;
   deleteOldSnapshots: PreparedStatement;
 }
+
+/**
+ * The session id prefix of a compaction commit: the `system`-class commit
+ * `cf space compact` inserts, which every row it rewrites or re-attributes
+ * points at (docs/plans/compact-space.md, I4). No client session carries it;
+ * the engine reads it as the mark that history below a row was deleted.
+ */
+export const COMPACTION_SESSION_PREFIX = "compaction:";
+
+/**
+ * Whether the instance's history below `basisSeq` was compacted away, as
+ * opposed to never having existed.
+ *
+ * Reconstructing a basis reads the newest row at or before it, and a basis
+ * older than the instance's oldest row reads as absent either way. The two
+ * must not be confused: the identity exemption replays a commit's operations
+ * on the reader's basis, and a patch applied to nothing can equal the stored
+ * document while the same patch applied to the view the reader actually
+ * held would not. Compaction marks the distinction in the store itself — the
+ * oldest surviving row of every instance it truncated points at a commit
+ * whose session id carries {@link COMPACTION_SESSION_PREFIX} — and this reads
+ * that mark and nothing else about the row: a boundary that was a `set`
+ * before compaction and one that became a `set` are the same case. An
+ * instance whose oldest row points at an ordinary commit lost nothing, and a
+ * basis older than it is a genuine absence.
+ */
+const historyCompactedBelow = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    basisSeq: number;
+  },
+): boolean => {
+  const oldest = engine.statements.selectOldestRevisionAttribution.get({
+    branch: options.branch,
+    id: options.id,
+    scope_key: options.scopeKey,
+  }) as { seq: number; class: string; session_id: string } | undefined;
+  return oldest !== undefined &&
+    options.basisSeq < oldest.seq &&
+    oldest.class === "system" &&
+    oldest.session_id.startsWith(COMPACTION_SESSION_PREFIX);
+};
 
 /** A decoded revision the engine keeps, with the encoded size it stands in
  * for in the cache's byte budget. */
@@ -1658,6 +1720,9 @@ const prepareStatements = (database: Database): PreparedStatements => ({
     SELECT_CURRENT_ENTITY_ID_PAGE_AFTER,
   ),
   selectExistingCommit: database.prepare(SELECT_EXISTING_COMMIT),
+  selectOldestRevisionAttribution: database.prepare(
+    SELECT_OLDEST_REVISION_ATTRIBUTION,
+  ),
   selectHead: database.prepare(SELECT_HEAD),
   selectLatestBase: database.prepare(SELECT_LATEST_BASE),
   selectLatestSnapshot: database.prepare(SELECT_LATEST_SNAPSHOT),
@@ -5990,7 +6055,10 @@ const applyCommitTransaction = (
   // that names another branch says nothing about this one and is passed
   // over. A basis below the branch's creation seq is not a state of this
   // branch (06-branching.md §6.10.1), so such a read leaves the view
-  // unreconstructable as well. With no read of the document at all the
+  // unreconstructable as well, and so does a basis below the point to which
+  // compaction truncated the instance's history: what the reader saw there
+  // is gone, and an absent document would stand in for it (see
+  // historyCompactedBelow). With no read of the document at all the
   // sequence is an identity only where it is idempotent, so the stored
   // document is the basis.
   type Basis =
@@ -6004,7 +6072,15 @@ const applyCommitTransaction = (
     first: DocumentOps[number],
     stored: EntityDocument,
     at: (seq: number) => EntityDocument | null,
+    scopeKey: string,
   ): Basis => {
+    const compactedBelow = (basisSeq: number): boolean =>
+      historyCompactedBelow(engine, {
+        branch,
+        id: first.id,
+        scopeKey,
+        basisSeq,
+      });
     const sameDocument = (candidate: { id: string; scope?: unknown }) =>
       candidate.id === first.id &&
       normalizeScope(
@@ -6020,6 +6096,7 @@ const applyCommitTransaction = (
       ) {
         return { known: false };
       }
+      if (compactedBelow(pending.basisSeq)) return { known: false };
       let document = documentAt(pending.basisSeq);
       const layers = [...pendingReadLayers(pending)].sort((a, b) => a - b);
       for (const localSeq of layers) {
@@ -6047,6 +6124,7 @@ const applyCommitTransaction = (
     );
     if (confirmed === undefined) return { known: true, document: stored };
     if (confirmed.seq < branchCreatedSeq) return { known: false };
+    if (compactedBelow(confirmed.seq)) return { known: false };
     return { known: true, document: documentAt(confirmed.seq) };
   };
   // Proving the identity reads the stored document and, for a patch, the
@@ -6082,6 +6160,11 @@ const applyCommitTransaction = (
     }
     for (const { opIndex, operations } of byDocument.values()) {
       const first = operations[0];
+      const scopeKey = scopeKeyByOpIndex.get(opIndex) ??
+        resolveScopeKey(first.scope, {
+          principal: scanPrincipal,
+          sessionId: scanSession,
+        });
       const at = (seq?: number) =>
         read(engine, {
           id: first.id,
@@ -6090,7 +6173,7 @@ const applyCommitTransaction = (
           scope: first.scope,
           principal: scanPrincipal,
           sessionId: scanSession,
-          scopeKey: scopeKeyByOpIndex.get(opIndex),
+          scopeKey,
         });
       const stored = at();
       if (stored === null) return false;
@@ -6099,7 +6182,7 @@ const applyCommitTransaction = (
       // staleness refusal the commit arrived with stands; the ordinary
       // apply path reports a patch's own failure on the retry.
       try {
-        const basis = basisOf(first, stored, at);
+        const basis = basisOf(first, stored, at, scopeKey);
         if (!basis.known) return false;
         const fromBasis = replay(basis.document, operations);
         const onStored = replay(stored, operations);
