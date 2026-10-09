@@ -6,7 +6,6 @@ import {
   decodeRoutedFrame,
   encodeRoutedFrame,
   parseRoutedJson,
-  routedCollectionSize,
   routedFlags,
 } from "../v2/routed-parser.ts";
 import { DEFAULT_ROUTED_HOST_LIMITS } from "../v2/routed-host.ts";
@@ -157,38 +156,6 @@ describe("routed untrusted parsers", () => {
     expect(() => decodeRoutedFrame(encoded, true, target - 1)).toThrow();
     // The fixed cap this replaced would have refused it.
     expect(() => decodeRoutedFrame(encoded, true, 100_000)).toThrow();
-  });
-  it("sizes a list or a record by its entries, and bounds a frame's holdings and watches by that size", () => {
-    expect(routedCollectionSize([])).toBe(0);
-    expect(routedCollectionSize([1, 2, 3])).toBe(3);
-    expect(routedCollectionSize({ a: 1, b: 2 })).toBe(2);
-    // A record's `length` member is an entry, not its count.
-    expect(routedCollectionSize({ length: -5 })).toBe(1);
-    for (const value of [undefined, null, 3, "abc", true]) {
-      expect(() => routedCollectionSize(value)).toThrow();
-    }
-    const cap = DEFAULT_ROUTED_HOST_LIMITS.frameSlots;
-    const keyed = (length: number) =>
-      Object.fromEntries(Array.from({ length }, (_, i) => [`k${i}`, 0]));
-    const frame = (fields: Record<string, unknown>) =>
-      `fvj1:${JSON.stringify({ type: "session.watch.set", ...fields })}`;
-    for (
-      const [field, limit] of [["watches", 1024], ["holdings", 8192]] as const
-    ) {
-      for (const collection of [Array(limit).fill(0), keyed(limit)]) {
-        expect(
-          decodeRoutedFrame(frame({ [field]: collection }), false, cap).body
-            .type,
-        ).toBe("session.watch.set");
-      }
-      for (
-        const collection of [Array(limit + 1).fill(0), keyed(limit + 1), 3]
-      ) {
-        expect(() =>
-          decodeRoutedFrame(frame({ [field]: collection }), false, cap)
-        ).toThrow();
-      }
-    }
   });
   it("checks DIDs rather than accepting a did:key prefix", () => {
     expect(isCanonicalEd25519DID(space)).toBe(true);

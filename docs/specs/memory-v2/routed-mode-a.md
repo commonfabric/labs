@@ -294,12 +294,15 @@ A request over a session, watch (views included) or holdings limit, or one
 whose principal's grant expired after the router forwarded it, is denied
 marked `retriable`, so the client holds the session and tries again; a request
 for a session the toolshed revoked, or a principal it released, after the
-router forwarded it is denied for good, as is one that would take a session
-past a fixed bound on what it holds (more than 1,024 watch IDs or 64 views:
-`frame-limit`). Each is logged in the toolshed's own journal, never the
-router's, as a `routed-memory-verdict` with verdict `request-refused` and
-reason `session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
-`principal-expired`, `session-not-held` or `principal-not-held`.
+router forwarded it is denied for good, as is a watch mutation that would
+leave a session with more than 1,024 watch IDs or 64 views (`frame-limit`).
+Each is logged in the toolshed's own journal, never the router's, as a
+`routed-memory-verdict` with verdict `request-refused` and reason
+`session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
+`principal-expired`, `session-not-held` or `principal-not-held`. A frame that
+itself names more than 1,024 watches or 8,192 holdings, and a request whose
+`holdings` or `views` is not a JSON list, are malformed and are not answered:
+each closes the socket, as the router closes the client's connection on one.
 A proof is refused with verdict `proof-denied` and reason `proof-limit`,
 `principal-limit` or `principal-history-limit`, and the refusal closes its
 context, which ends the client's connection. The proofs live contexts hold are

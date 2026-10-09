@@ -17,6 +17,10 @@ export const ROUTED_RAW_LIMIT = 8 * 1024 * 1024;
 export const ROUTED_EXPANDED_LIMIT = 16 * 1024 * 1024;
 /** Maximum queued bytes on one ticketed data socket. */
 export const ROUTED_QUEUE_LIMIT = 4 * 1024 * 1024;
+/** Most `watches` one frame may name; the router's `WATCH_LIMIT`. */
+export const ROUTED_WATCH_LIMIT = 1024;
+/** Most `holdings` one frame may name; the router's `HOLDINGS_LIMIT`. */
+export const ROUTED_HOLDINGS_LIMIT = 8192;
 /** Maximum JSON nesting in any routed input; the router's `DEPTH_LIMIT`. */
 export const ROUTED_DEPTH_LIMIT = 64;
 /**
@@ -142,17 +146,6 @@ export function routedObject(value: unknown): Record<string, unknown> {
   return value;
 }
 
-/**
- * The number of entries in a wire collection that may be a list or a record,
- * as a frame's `watches` and `holdings` may. Anything else is refused. A
- * record's `length` member is one entry, never its count, so the parser's
- * bound and the toolshed's quota read every collection the same way.
- */
-export function routedCollectionSize(collection: unknown): number {
-  requireRouted(Array.isArray(collection) || isPlainObject(collection));
-  return Object.keys(collection).length;
-}
-
 /** Validates a bounded routing/session/request identifier. */
 export function routedIdentifier(value: unknown): asserts value is string {
   requireRouted(
@@ -255,10 +248,17 @@ export function parseRoutedText(
     if (session.sessionId !== undefined) routedIdentifier(session.sessionId);
   }
   for (
-    const [field, limit] of [["watches", 1024], ["holdings", 8192]] as const
+    const [field, limit] of [
+      ["watches", ROUTED_WATCH_LIMIT],
+      ["holdings", ROUTED_HOLDINGS_LIMIT],
+    ] as const
   ) {
     if (body[field] !== undefined) {
-      requireRouted(routedCollectionSize(body[field]) <= limit);
+      const collection = body[field];
+      requireRouted(
+        (Array.isArray(collection) || isPlainObject(collection)) &&
+          Object.keys(collection).length <= limit,
+      );
     }
   }
   return {

@@ -255,11 +255,21 @@ async function fixture(
     )).status,
     0,
   );
+  /** Asks for another ticket for the fixture's context and space. */
+  async function issueTicket() {
+    const issued = await control(
+      1,
+      new RoutedWriter("mat1").fixed(context).blob(flags)
+        .text(space.did()).time(1).bytes,
+    );
+    assertEquals(issued.status, 0);
+    return issued.bytes;
+  }
   /**
-   * A data socket the toolshed has greeted, and the hello that redeems
-   * `redeem` on it for the fixture's context, not yet sent.
+   * A data socket that has the toolshed's greeting, and the hello that
+   * presents `presented` on it for the fixture's context, not yet sent.
    */
-  async function greetedSocket(redeem = ticket) {
+  async function socketBeforeHello(presented = ticket) {
     const socket = new FramedSocket();
     host.accept(
       socket as unknown as WebSocket,
@@ -276,7 +286,7 @@ async function fixture(
     const binding = await new RoutedWriter("mdb1").text(router.did()).text(
       "fixture",
     )
-      .text(toolshed.did()).fixed(epoch).fixed(context).fixed(redeem).fixed(
+      .text(toolshed.did()).fixed(epoch).fixed(context).fixed(presented).fixed(
         nonce,
       )
       .time(issued).fixed(sha256(flags)).sign(router);
@@ -285,15 +295,15 @@ async function fixture(
         type: "hello",
         protocol: "memory",
         flags: flagObject,
-        routerTicket: routedHex(redeem),
+        routerTicket: routedHex(presented),
         routerBinding: routedBase64(binding),
       })
     }`;
     return { socket, hello };
   }
-  /** A data socket that has sent the hello redeeming `redeem`. */
-  async function dataSocket(redeem = ticket) {
-    const { socket, hello } = await greetedSocket(redeem);
+  /** A data socket that has sent the hello presenting `presented`. */
+  async function dataSocket(presented = ticket) {
+    const { socket, hello } = await socketBeforeHello(presented);
     socket.receive(hello);
     return socket;
   }
@@ -348,7 +358,8 @@ async function fixture(
     proof,
     ticket,
     evidence,
-    greetedSocket,
+    issueTicket,
+    socketBeforeHello,
     dataSocket,
     request,
     open,
@@ -385,6 +396,19 @@ async function refusalReasons(run: () => Promise<void>): Promise<string[]> {
   });
   await run();
   return reasons;
+}
+
+/**
+ * What the toolshed does to `socket` next: the type of the frame it sends,
+ * or "closed" once it has closed the socket.
+ */
+async function frameOrClose(socket: FramedSocket): Promise<unknown> {
+  try {
+    return decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body.type;
+  } catch (error) {
+    if (socket.readyState === 3) return "closed";
+    throw error;
+  }
 }
 
 Deno.test("redeemed Mode A tickets are single use; control renews and releases authority independently", async () => {
@@ -729,7 +753,8 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
       watches: [],
       views: Array.from({ length: 65 }, (_, i) => view(i)),
     });
-    // A fixed bound on one request: refused for good, the socket open.
+    // A fixed bound on what a session holds: refused for good, the socket
+    // open.
     assertEquals((set.error as { retriable?: boolean }).retriable, undefined);
     assertEquals(f.socket.readyState, 1);
     assert(
@@ -747,7 +772,7 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
   }
 });
 
-Deno.test("watch IDs added past a session's bound are refused, and the socket goes on", async () => {
+Deno.test("watch IDs added past a session's bound are refused, and the socket stays open", async () => {
   const f = await fixture("watch-add-bound");
   const watches = (prefix: string, length: number) =>
     Array.from(
@@ -763,17 +788,17 @@ Deno.test("watch IDs added past a session's bound are refused, and the socket go
         sessionId: session.sessionId,
         watches: list,
       });
-    // One request carries at most 1,024 watch IDs, which the session holds.
+    // One request names at most 1,024 watch IDs, and the session holds them.
     assert((await mutate("session.watch.set", watches("a", 1024))).ok);
-    // One more, added by a later request, is within that request's bound
-    // and takes the session past its own.
+    // One more ID, added by a later request, is within that request's bound
+    // and would leave the session with more than its own.
     const reasons = await refusalReasons(async () => {
       const added = await mutate("session.watch.add", watches("b", 1));
       assertEquals(
         (added.error as { message?: string }).message,
         "Routed memory request denied",
       );
-      // A fixed bound: refused for good, the socket open.
+      // A fixed bound: refused for good.
       assertEquals(
         (added.error as { retriable?: boolean }).retriable,
         undefined,
@@ -791,107 +816,105 @@ Deno.test("watch IDs added past a session's bound are refused, and the socket go
   }
 });
 
-Deno.test("holdings and views sent as plain objects are counted by their keys", async () => {
-  const f = await fixture("keyed-collections", {
-    limits: { holdingsPerContext: 4 },
-  });
+Deno.test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {
   const holding = (i: number) => ({ id: `of:h${i}`, seq: 0 });
-  /** `length` entries as a plain object, the other shape the parser admits. */
-  const keyed = (length: number) =>
-    Object.fromEntries(
-      Array.from({ length }, (_, i) => [`k${i}`, holding(i)]),
-    );
-  /** Sends `body` and returns the next response, whichever request it names. */
-  const answer = async (body: Record<string, unknown>) => {
-    f.socket.receive(
-      encodeRoutedFrame(`fvj1:${JSON.stringify(body)}`, FRAME_SLOTS),
-    );
-    while (true) {
-      const message =
-        decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS).body;
-      if (message.type === "response") return message;
-    }
-  };
-  const open = (requestId: string, holdings: unknown) =>
-    answer({
-      type: "session.open",
-      requestId,
-      space: f.space.did(),
-      principal: f.principal.did(),
-      session: {},
-      holdings,
-    });
-  type Refusal = { name?: string; message?: string; retriable?: boolean };
-  try {
-    // Five keys are five holdings, one over the context's four.
-    let reasons = await refusalReasons(async () => {
-      const refused = await open("keyed-over", keyed(5));
-      assertEquals(refused.requestId, "keyed-over");
-      assertEquals((refused.error as Refusal).retriable, true);
-    });
-    assertEquals(reasons, ["holdings-limit"]);
-    // Four keys fit, so the toolshed's own limits pass the open on. The
-    // Memory server reads holdings as a list only and cannot parse this
-    // one, which it says under its own request ID.
-    reasons = await refusalReasons(async () => {
-      const passed = await open("keyed-fits", keyed(4));
-      assertEquals((passed.error as Refusal).name, "InvalidMessageError");
-    });
-    assertEquals(reasons, []);
-    // The totals are still numbers: a list over the limit is refused too.
-    reasons = await refusalReasons(async () => {
-      const refused = await open("listed-over", [0, 1, 2, 3, 4].map(holding));
-      assertEquals(refused.requestId, "listed-over");
-      assertEquals((refused.error as Refusal).retriable, true);
-    });
-    assertEquals(reasons, ["holdings-limit"]);
-    // A watch mutation counts its holdings and views the same way.
-    const session = await f.open();
-    const watchSet = (requestId: string, fields: Record<string, unknown>) =>
-      answer({
-        type: "session.watch.set",
-        requestId,
-        space: f.space.did(),
-        sessionId: session.sessionId,
-        watches: [],
-        ...fields,
+  const holdings = (length: number) =>
+    Array.from({ length }, (_, i) => holding(i));
+  const view = (i: number) => ({
+    id: `v${i}`,
+    revision: 0,
+    query: {
+      roots: [{ id: "of:visible", selector: { path: [], schema: false } }],
+    },
+    mode: "speculate",
+    componentContractVersion: "1",
+  });
+  const limits = { holdingsPerContext: 4 };
+  await t.step("a list over the context's holdings is refused", async () => {
+    const f = await fixture("listed-holdings", { limits });
+    try {
+      const open = (list: unknown[]) =>
+        f.request({
+          type: "session.open",
+          space: f.space.did(),
+          principal: f.principal.did(),
+          session: {},
+          holdings: list,
+        });
+      const reasons = await refusalReasons(async () => {
+        const refused = await open(holdings(5));
+        assertEquals(
+          (refused.error as { retriable?: boolean }).retriable,
+          true,
+        );
+        const session = await f.open();
+        const set = await f.request({
+          type: "session.watch.set",
+          space: f.space.did(),
+          sessionId: session.sessionId,
+          watches: [],
+          holdings: holdings(5),
+        });
+        assertEquals((set.error as { retriable?: boolean }).retriable, true);
       });
-    reasons = await refusalReasons(async () => {
-      const refused = await watchSet("watch-holdings", { holdings: keyed(5) });
-      assertEquals(refused.requestId, "watch-holdings");
-      assertEquals((refused.error as Refusal).retriable, true);
-      // Sixty-five keys are sixty-five views, one over a session's bound.
-      const views = await watchSet("watch-views", { views: keyed(65) });
-      assertEquals(views.requestId, "watch-views");
-      assertEquals((views.error as Refusal).retriable, undefined);
+      assertEquals(reasons, ["holdings-limit", "holdings-limit"]);
+      // The refusals reserved nothing: four holdings still fit.
+      assert((await open(holdings(4))).ok !== undefined);
+      assertEquals(f.socket.readyState, 1);
+    } finally {
+      await f.close();
+    }
+  });
+  // The frame parser admits a record under `holdings` and does not look at
+  // `views`. The Memory server decodes a record tagged `/quote` into the
+  // list it wraps, so a record's members are not what the server would
+  // count; a record has no `length`, and one read as a list made the
+  // toolshed's totals NaN, which no limit compares against.
+  for (
+    const [name, type, fields] of [
+      ["a record of holdings on an open", "session.open", {
+        holdings: { a: holding(0), b: holding(1) },
+      }],
+      ["a quoted list of holdings on a watch set", "session.watch.set", {
+        holdings: { "/quote": holdings(5) },
+      }],
+      ["a record with a length on a watch set", "session.watch.set", {
+        holdings: { length: -5 },
+      }],
+      ["a quoted list of views on a watch set", "session.watch.set", {
+        views: { "/quote": Array.from({ length: 65 }, (_, i) => view(i)) },
+      }],
+      ["a number for views on a watch add", "session.watch.add", {
+        views: 3,
+      }],
+    ] as const
+  ) {
+    await t.step(`${name} closes the socket`, async () => {
+      const f = await fixture("unlisted", { limits });
+      try {
+        const session = await f.open();
+        f.socket.receive(
+          encodeRoutedFrame(
+            `fvj1:${
+              JSON.stringify({
+                type,
+                requestId: "not-a-list",
+                space: f.space.did(),
+                ...(type === "session.open"
+                  ? { principal: f.principal.did(), session: {} }
+                  : { sessionId: session.sessionId, watches: [] }),
+                ...fields,
+              })
+            }`,
+            FRAME_SLOTS,
+          ),
+        );
+        assertEquals(await frameOrClose(f.socket), "closed");
+        assertEquals(f.link.readyState, 1);
+      } finally {
+        await f.close();
+      }
     });
-    assertEquals(reasons, ["holdings-limit", "frame-limit"]);
-    assertEquals(f.socket.readyState, 1);
-    // Neither a list nor a record has no count, so it is malformed and
-    // closes the socket, as any malformed frame does.
-    f.socket.receive(
-      encodeRoutedFrame(
-        `fvj1:${
-          JSON.stringify({
-            type: "session.watch.set",
-            requestId: "watch-scalar",
-            space: f.space.did(),
-            sessionId: session.sessionId,
-            watches: [],
-            views: 3,
-          })
-        }`,
-        FRAME_SLOTS,
-      ),
-    );
-    await Promise.race([
-      f.socket.closed.promise,
-      f.socket.take().then(() => {}, () => {}),
-    ]);
-    assertEquals(f.socket.readyState, 3);
-    assertEquals(f.link.readyState, 1);
-  } finally {
-    await f.close();
   }
 });
 
@@ -1116,7 +1139,8 @@ Deno.test("a released principal leaves the history once its statement expires", 
 
 Deno.test("a closed context's tickets leave with it", async () => {
   // Two tickets in all, and the fixture's own was redeemed, so the third
-  // passing context gets one only if those before it gave theirs back.
+  // passing context is issued one only if the toolshed removed the tickets
+  // of the two before it.
   const f = await fixture("ticket-close", {
     limits: { contextsPerLink: 2, sockets: 3, tickets: 2 },
   });
@@ -1139,7 +1163,7 @@ Deno.test("a closed context's tickets leave with it", async () => {
   }
 });
 
-Deno.test("a redeemed ticket leaves the toolshed's count, however often a context replaces its data socket", async () => {
+Deno.test("a redeemed ticket no longer counts against the ticket limit, however many data sockets a context opens", async () => {
   // Two tickets in all. The fixture's context redeemed one for its first
   // data socket, and redeems one more for each socket that replaces it.
   const f = await fixture("ticket-redeem", {
@@ -1148,17 +1172,8 @@ Deno.test("a redeemed ticket leaves the toolshed's count, however often a contex
   try {
     let socket = f.socket;
     for (let i = 0; i < 5; i++) {
-      const issued = await f.control(
-        1,
-        new RoutedWriter("mat1").fixed(f.context).blob(f.flags)
-          .text(f.space.did()).time(1).bytes,
-      );
-      assertEquals(issued.status, 0, `ticket ${i}`);
-      const next = await f.dataSocket(issued.bytes);
-      assertEquals(
-        decodeRoutedFrame(await next.take(), true, FRAME_SLOTS).body.type,
-        "hello.ok",
-      );
+      const next = await f.dataSocket(await f.issueTicket());
+      assertEquals(await frameOrClose(next), "hello.ok");
       // The new socket replaced the one before it.
       await socket.closed.promise;
       socket = next;
@@ -1172,42 +1187,30 @@ Deno.test("a redeemed ticket leaves the toolshed's count, however often a contex
 Deno.test("two sockets presenting one ticket at once redeem it once", async () => {
   const f = await fixture("ticket-race");
   try {
-    const issued = await f.control(
-      1,
-      new RoutedWriter("mat1").fixed(f.context).blob(f.flags)
-        .text(f.space.did()).time(1).bytes,
-    );
-    assertEquals(issued.status, 0);
-    const first = await f.greetedSocket(issued.bytes),
-      second = await f.greetedSocket(issued.bytes);
+    const ticket = await f.issueTicket();
+    const first = await f.socketBeforeHello(ticket),
+      second = await f.socketBeforeHello(ticket);
     // Both hellos are checked before either binding's signature is
-    // verified, so both find the ticket live; only the first may consume it.
+    // verified, so both find the ticket live; only one may consume it.
     first.socket.receive(first.hello);
     second.socket.receive(second.hello);
-    /** What a socket gets for its hello: a frame's type, or a close. */
-    const outcome = async (socket: FramedSocket) => {
-      try {
-        return decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body
-          .type;
-      } catch {
-        return "closed";
-      }
-    };
-    assertEquals(
-      await Promise.all([outcome(first.socket), outcome(second.socket)]),
-      ["hello.ok", "closed"],
-    );
-    assertEquals(first.socket.readyState, 1);
-    // Spent, the ticket admits no proof and no third socket.
+    const outcomes = await Promise.all([
+      frameOrClose(first.socket),
+      frameOrClose(second.socket),
+    ]);
+    assertEquals(outcomes.toSorted(), ["closed", "hello.ok"]);
+    const winner = outcomes[0] === "hello.ok" ? first.socket : second.socket;
+    assertEquals(winner.readyState, 1);
+    // Redeemed, the ticket admits no proof and no third socket.
     assertEquals(
       (await f.control(
         2,
-        new RoutedWriter("map1").fixed(issued.bytes).blob(f.evidence).bytes,
+        new RoutedWriter("map1").fixed(ticket).blob(f.evidence).bytes,
       )).status,
       1,
     );
-    assertEquals(await outcome(await f.dataSocket(issued.bytes)), "closed");
-    assertEquals(first.socket.readyState, 1);
+    assertEquals(await frameOrClose(await f.dataSocket(ticket)), "closed");
+    assertEquals(winner.readyState, 1);
   } finally {
     await f.close();
   }

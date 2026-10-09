@@ -16,7 +16,7 @@ import {
   parseRoutedJson,
   ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_QUEUE_LIMIT,
-  routedCollectionSize,
+  ROUTED_WATCH_LIMIT,
   routedFlags,
   routedIdentifier,
   routedObject,
@@ -61,7 +61,7 @@ type Context = {
    * A released principal's are marked, and cannot admit it again.
    */
   accepted: Map<string, Accepted>;
-  /** IDs of the tickets issued for it and not yet redeemed or expired. */
+  /** IDs of the unredeemed tickets issued for it. */
   tickets: Set<string>;
   backend?: Backend;
   socket?: WebSocket;
@@ -88,11 +88,7 @@ export interface RoutedHostLimits {
    * Private sockets from every router: links, data sockets and handshakes.
    */
   sockets: number;
-  /**
-   * Tickets issued and neither redeemed nor expired, from every router. A
-   * ticket counts from its issue until a data socket redeems it, its
-   * context closes or 15 s pass.
-   */
+  /** Tickets issued and neither redeemed nor expired, from every router. */
   tickets: number;
   /** Principals authenticated in one context at once, as the router's own. */
   principalsPerContext: number;
@@ -168,12 +164,12 @@ export const DEFAULT_ROUTED_HOST_LIMITS: Readonly<RoutedHostLimits> = {
 };
 
 /**
- * Watch IDs one session may hold. The parser admits at most this many in one
- * request, and a client sends a session's whole set in one
- * `session.watch.set` when it restores the session, so a session may not
- * hold more than one request can carry; it stays fixed.
+ * Watch IDs one session may hold: as many as one frame may name. A client
+ * sends a session's whole set in one `session.watch.set` when it restores
+ * the session, so a session may not hold more than a frame can carry, and
+ * the bound stays fixed.
  */
-const WATCHES_PER_SESSION = 1024;
+const WATCHES_PER_SESSION = ROUTED_WATCH_LIMIT;
 /** Views one session may hold; bounds one frame, so it stays fixed. */
 const VIEWS_PER_SESSION = 64;
 
@@ -336,8 +332,9 @@ export class RoutedMemoryHost {
   #links = new Map<string, Link>();
   /**
    * Tickets issued and not yet redeemed, oldest first; each expires 15 s
-   * after issue. A ticket leaves when a data socket redeems it, when it
-   * expires, or with its context, so a ticket found here is unspent.
+   * after issue. A ticket is removed when a data socket redeems it, when
+   * its context closes, and by `#pruneTickets` once it has expired, so a
+   * lookup still checks `expires`.
    */
   #tickets = new Map<string, Ticket>();
   #sockets = new Set<WebSocket>();
@@ -465,9 +462,8 @@ export class RoutedMemoryHost {
   }
 
   /**
-   * Drops tickets that expired unredeemed. A redeemed ticket left when it
-   * was redeemed, a closed context's tickets leave with it, and a closed
-   * link closes its contexts.
+   * Drops tickets that expired unredeemed. A closed context's tickets leave
+   * with it, and a closed link closes its contexts.
    */
   #pruneTickets(): void {
     const now = this.#now();
@@ -1180,18 +1176,17 @@ export class RoutedMemoryHost {
           // Another socket may have redeemed it meanwhile, which removed it.
           requireRouted(
             !failed && socket.readyState === WebSocket.OPEN &&
-              this.#tickets.get(selected.id) === selected &&
+              this.#tickets.get(id) === selected &&
               selected.expires > this.#now() &&
               this.#now() < issued + 15 && !selected.link.closed &&
               !selected.context.closed &&
               !this.#revoked.has(selected.link.router),
           );
-          // Spent tickets are dropped here, not kept until their context
-          // closes: a context redeems one for every data socket it opens,
-          // and kept ones would fill `limits.tickets` and refuse every
-          // later ticket on the toolshed.
-          this.#tickets.delete(selected.id);
-          selected.context.tickets.delete(selected.id);
+          // A redeemed ticket is dropped here: a context redeems one for
+          // every data socket it opens, so tickets kept longer would count
+          // against `limits.tickets`.
+          this.#tickets.delete(id);
+          selected.context.tickets.delete(id);
           ticket = selected;
           clearTimeout(deadline);
           const context = selected.context;
@@ -1296,11 +1291,9 @@ export class RoutedMemoryHost {
           requireRouted(
             prior === undefined || prior.principal === body.principal,
           );
-          // The parser admits a list or a record of holdings, and this
-          // counts either; the Memory server then reads a list only.
           const holdings = body.holdings === undefined
             ? prior?.holdings ?? 0
-            : routedCollectionSize(body.holdings);
+            : routedListLength(body.holdings);
           const reservation = prior === undefined
             ? `pending ${body.requestId}`
             : priorKey!;
@@ -1351,19 +1344,15 @@ export class RoutedMemoryHost {
             const key = `${parsed.space} ${body.sessionId}`;
             const holdings = body.holdings === undefined
               ? session.holdings
-              : routedCollectionSize(body.holdings);
-            // The parser does not look at `views`, so this is where one
-            // that is neither a list nor a record is refused as malformed.
+              : routedListLength(body.holdings);
             const views = body.views === undefined
               ? session.views
-              : routedCollectionSize(body.views);
-            // Fixed bounds on what one session holds, refused for good and
-            // answered. The parser bounds the watch IDs of one request, so
-            // only a `session.watch.add` can exceed the session's bound, by
-            // adding to the IDs it already holds; that breaks no rule of
-            // the protocol, so it does not close the socket. The router
-            // refuses either before forwarding and counts views as watches,
-            // as this does.
+              : routedListLength(body.views);
+            // Fixed bounds on what one session holds, refused for good. The
+            // request is well formed, and for a `session.watch.add` whether
+            // it fits depends on the IDs the session already holds, so it
+            // is answered and the socket stays open, as the router answers
+            // it; the router counts views as watches, as this does.
             if (
               watches.size > WATCHES_PER_SESSION || views > VIEWS_PER_SESSION
             ) {
@@ -1433,6 +1422,18 @@ export class RoutedMemoryHost {
       });
     });
   }
+}
+
+/**
+ * The number of entries in a request's `holdings` or `views`, which must be
+ * a JSON list, as the SDK sends and the router requires; anything else is
+ * malformed. A record cannot be counted by its members instead: the frame
+ * parser admits one under `holdings`, and the Memory server decodes a
+ * record tagged `/quote` into the list it wraps, of any length.
+ */
+function routedListLength(list: unknown): number {
+  requireRouted(Array.isArray(list));
+  return list.length;
 }
 
 function safeClose(socket: WebSocket): void {
