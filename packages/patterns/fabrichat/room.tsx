@@ -547,6 +547,14 @@ export interface ChatRoomView {
   participants: ProfileCell[];
 
   /**
+   * The principal each of `participants` stands for, as its profile's
+   * `represents-principal` label attests it: each once, in the order of
+   * `participants`, leaving out a profile that attests none, or whose label
+   * this reader can't read. Like `participants`, it is not proof of access.
+   */
+  participantPrincipals: string[];
+
+  /**
    * Adds a profile to those who joined the room, once. Any participant may add
    * any profile, so an entry is a claim: it does not say that the profile's
    * principal holds access to the room's space.
@@ -732,6 +740,18 @@ export const FabriChatRoomCore = pattern<
     ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
   );
   const participants = computed(() => participantsOf(listed, entries));
+  // A profile lives in its owner's own space, and attests no one to a reader
+  // that space refuses, so each participant's principal is read per session:
+  // stored once for every reader, a value readers derive differently is one
+  // their runtimes overwrite without end.
+  const participantPrincipals = computed((): PerSession<string[]> =>
+    participants.reduce<string[]>((found, participant) => {
+      const principal = principalOf(participant, "represents-principal");
+      return principal === undefined || found.includes(principal)
+        ? found
+        : [...found, principal];
+    }, [])
+  );
   const join = addParticipant({ roster });
   const canSend = computed(() => canActIn(messages, myProfile));
   const addMember = AddMember({
@@ -829,6 +849,7 @@ export const FabriChatRoomCore = pattern<
     recentActivity: activity,
     recentActivityExpiredThrough: expiredThrough,
     participants,
+    participantPrincipals,
     addParticipant: join,
     messages: messageList,
     canSend,
@@ -1076,6 +1097,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       recentActivity: room.recentActivity,
       recentActivityExpiredThrough: room.recentActivityExpiredThrough,
       participants: room.participants,
+      participantPrincipals: room.participantPrincipals,
       addParticipant: room.addParticipant,
       messages: room.messages,
       canSend: room.canSend,

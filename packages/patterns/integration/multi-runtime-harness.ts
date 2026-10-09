@@ -561,6 +561,18 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * Mint a profile of this session's own, holding `name`, in a space created
+   * for it that admits this session's identity alone, and answer with the
+   * link that reaches it. Its label attests this session's identity with
+   * `represents-principal`, as a Fabric profile's does, so a session the
+   * space refuses can't read whom it attests. The link can be passed back in
+   * a `send` event, as {@link createCell}'s can.
+   */
+  async createOwnProfile(name: string): Promise<FabricValue> {
+    return await this.#client.call("createOwnProfile", { name });
+  }
+
+  /**
    * Inspect the normalized link (id, space, scope) at `path` in the result,
    * or in another piece's result when `piece` is given, as for {@link read}.
    * The link at a path holding a piece is that piece's {@link PieceAddress}.
