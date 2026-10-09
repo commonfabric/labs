@@ -1013,7 +1013,19 @@ of `A | null` written in `PerUser<A | null>` are. So what only the syntax says,
 the binding `PolicyOf<typeof rules>` names in
 `type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null`,
 is kept, for a holder's values read by type too, and the two spellings read
-alike. The node-based analyzer hands such a union to the same reading. The
+alike. Each member is read through parentheses, aliases without type
+parameters, and a union written in it, so `PerUser<A> | Nil` with
+`type Nil = null`, and `(PerUser<A> | null) | undefined`, read as written out.
+A union written for a scope wrapper whose members do not read so, as
+`Maybe<PerUser<A>>` with `type Maybe<T> = T | null` writes one, where the member
+is a parameter bound apart from the union, **throws** (``A scope wrapper
+beside `null` or `undefined` is read from the union written around it``): its
+type alone would lose what only the syntax names. A member's `?` takes the
+`undefined` written beside a wrapper out of the type the member is read at, as
+in `handle?: Box<A>` with `type Box<T> = PerUser<T> | undefined`; the wrapper
+alone is then read at the member written for it, under the bindings it is
+written with, and a cell there throws as a cell beside `undefined` does. The
+node-based analyzer hands such a union to the same reading. The
 payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
@@ -1730,8 +1742,9 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   (`applyNodeSchemaHints` in `schema-generator.ts`, `withIfcLabels` and
   `declaredIfcLabels` in `ifc-labels.ts`). The value is formatted apart from
   the position, in definitions of its own, with nothing reported, and only for
-  its labels: a type no CFC wrapper holds, other than a union or an
-  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A cell has
+  its labels: a type no CFC wrapper holds, other than a union, an
+  intersection, `null` or `undefined`, reads as `{}`
+  (`GenerationContext.labelsOnly`). A cell has
   the labels of its value, read at the value's own node where its wrapper is
   written out. A value that may be `undefined` or `null` has the labels of its
   one other member, and where the node's schema is such a union whose value
@@ -1820,6 +1833,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
+| Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

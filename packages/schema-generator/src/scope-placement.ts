@@ -100,6 +100,25 @@ export const scopeAroundCellUnionError = (scope: string): Error =>
       `one cell (\`PerUser<Cell<T | U>>\`).`,
   );
 
+/**
+ * The error raised for a union of one scope's wrappers beside `null` or
+ * `undefined` whose members are not written where they can be read: one is a
+ * type parameter or a generic alias, as `T` is in `type Maybe<T> = T | null`.
+ * Read from its type alone, the payload would lose what only its syntax
+ * names, such as the binding a `PolicyOf<typeof rules>` names.
+ */
+export const scopeUnionUnreadError = (scope: string): Error =>
+  new Error(
+    `A scope wrapper beside \`null\` or \`undefined\` is read from the ` +
+      `union written around it, each member of which names the wrapper or ` +
+      `is \`null\` or \`undefined\`, directly or through aliases without ` +
+      `type parameters (\`scope: "${scope}"\`). A member written as a type ` +
+      `parameter or a generic alias cannot be read there, as in ` +
+      `\`Maybe<PerUser<T>>\` with \`type Maybe<T> = T | null\`. Write the ` +
+      `union out (\`PerUser<T> | null\`), or put \`null\` inside the ` +
+      `wrapper (\`PerUser<T | null>\`).`,
+  );
+
 const walkSlot = (schema: MutableJSONSchema): void => {
   if (!isObjectOrArray(schema)) return;
 

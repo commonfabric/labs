@@ -233,8 +233,10 @@ export interface GenerationContext {
 
   /**
    * Reads only the CFC labels a type attaches at its top: a type that no CFC
-   * wrapper holds, other than a union or an intersection, whose members can
-   * carry labels to it, is read as accepting anything, and not formatted.
+   * wrapper holds is read as accepting anything, and not formatted, except a
+   * union or an intersection, whose members can carry labels to it, and
+   * `null` and `undefined`, which tell a value that may be missing apart from
+   * its value member.
    */
   labelsOnly?: boolean;
 

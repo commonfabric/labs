@@ -277,6 +277,11 @@ ${main}`,
           `type Inner<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | null;
 type Box<T> = Inner<T>;`,
         ],
+        [
+          "through an alias of `null`",
+          `type Nil = null;
+type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | Nil;`,
+        ],
       ] as const
     ) {
       it(`keeps the policy a scoped alias's declaration spells beside \`null\` written outside the wrapper ${form}, where a holder's values are read by type`, async () => {
@@ -301,6 +306,56 @@ export default pattern<{ a: Outer<Secret> }>(({ a }) => ({
           );
         }
         expect(outside).toEqual(await valuesFor(INSIDE_BOX));
+      });
+    }
+
+    it("refuses a scoped alias's wrapper beside `null` written through a generic alias", async () => {
+      // `Maybe`'s union writes its member as a parameter, bound apart from the
+      // union, so the policy only the declaration spells could not be read.
+      await expect(withRules(`type Maybe<T> = T | null;
+type Box<T> = Maybe<PerUser<Confidential<T, [PolicyOf<typeof rules>]>>>;
+interface Dict<U> { [key: string]: U }
+type Outer<T> = { inner: Dict<Box<T>> };
+export default pattern<{ a: Outer<Secret> }>(({ a }) => ({
+  out: computed(() => a.inner),
+}));`)).rejects.toThrow(
+        "A scope wrapper beside `null` or `undefined` is read from the union written around it",
+      );
+    });
+
+    for (
+      const [form, box] of [
+        [
+          "written out",
+          "type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | undefined;",
+        ],
+        [
+          "through an alias of `undefined`",
+          `type Undef = undefined;
+type Box<T> = PerUser<Confidential<T, [PolicyOf<typeof rules>]>> | Undef;`,
+        ],
+      ] as const
+    ) {
+      it(`keeps the policy a scoped alias's declaration spells beside \`undefined\` ${form} outside the wrapper in the capture of the whole value`, async () => {
+        // The capture's member is optional, and its `?` takes the
+        // `undefined` out of the type it is read at, while the input's
+        // annotation, which the capture is read as, still writes it.
+        const module = await withRules(`${box}
+export default pattern<{ a: Box<Secret> }>(({ a }) => ({
+  out: computed(() => a),
+}));`);
+
+        // deno-lint-ignore no-explicit-any
+        expect((callSchemas(module, "lift")[0]! as any).properties.a)
+          .toMatchObject({
+            ifc: {
+              confidentiality: [{
+                policyRefKind: "module",
+                __ctPolicyIdentityOf: { file: "/rules.ts", path: ["rules"] },
+              }],
+            },
+            scope: "user",
+          });
       });
     }
 

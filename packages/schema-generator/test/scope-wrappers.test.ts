@@ -354,6 +354,18 @@ interface SchemaRoot {
       .toThrow("A scope wrapper around a cell cannot hold anything beside");
   });
 
+  it("throws for a scoped cell a generic alias writes beside `undefined` where its type does not hold it", async () => {
+    // The member's node names the alias, whose body writes the union.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `type CellBox<T> = PerSpace<Cell<T>> | undefined;
+type SchemaRoot = Required<{ handle?: CellBox<string> }>;`,
+      "SchemaRoot",
+    );
+
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("A scope wrapper around a cell cannot hold anything beside");
+  });
+
   it("caps the handle of a scoped cell whose value may be `null`", async () => {
     const { type, checker, typeNode } = await getTypeFromCode(
       `interface SchemaRoot { handle: PerSpace<Writable<string | null>>; }`,
@@ -529,6 +541,102 @@ interface SchemaRoot {
         '"__ctPolicyIdentityOf":{"file":"/entry.ts","path":["rules"]}',
       );
     });
+
+    /** A payload holding a policy only the syntax `typeof rules` names. */
+    const LABELED = "Confidential<T, readonly [PolicyOf<typeof rules>]>";
+
+    /**
+     * The properties of `SchemaRoot`, declared in `declarations` beside a
+     * `Confidential` alias and the `rules` a policy names.
+     */
+    const policySchema = async (declarations: string) => {
+      const { type, checker } = await getTypeFromFiles(
+        {
+          "/cfc-types.ts":
+            `export type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };`,
+          "/entry.ts": `
+            import type { PolicyOf } from "./cfc-types.ts";
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+            type Confidential<T, X extends readonly unknown[]> =
+              Cfc<T, { confidentiality: X }>;
+            declare const rules: unknown;
+            ${declarations}
+          `,
+        },
+        "/entry.ts",
+        "SchemaRoot",
+      );
+      return asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+        .properties;
+    };
+
+    for (
+      const [form, aliased, written] of [
+        [
+          "an alias of `null`",
+          `type Nil = null; type Aliased<T> = PerUser<${LABELED}> | Nil;`,
+          `type Written<T> = PerUser<${LABELED}> | null;`,
+        ],
+        [
+          "an alias of `undefined`",
+          `type Undef = undefined; type Aliased<T> = PerUser<${LABELED}> | Undef;`,
+          `type Written<T> = PerUser<${LABELED}> | undefined;`,
+        ],
+        [
+          "a union nested in the union",
+          `type Aliased<T> = (PerUser<${LABELED}> | null) | undefined;`,
+          `type Written<T> = PerUser<${LABELED}> | null | undefined;`,
+        ],
+      ] as const
+    ) {
+      it(`keeps a policy only the payload's syntax names, with the wrapper written beside ${form}`, async () => {
+        const properties = await policySchema(`${aliased} ${written}
+          interface SchemaRoot { aliased: Aliased<string>; written: Written<string> }`);
+
+        expect(properties?.aliased).toEqual(properties?.written);
+        expect(JSON.stringify(properties?.aliased)).toContain(
+          '"__ctPolicyIdentityOf":{"file":"/entry.ts","path":["rules"]}',
+        );
+      });
+    }
+
+    it("keeps a policy only the payload's syntax names, read where a member's `?` takes the `undefined` written beside the wrapper out of its type", async () => {
+      // `Required` leaves the member's node, `Box<string>`, whose alias writes
+      // the wrapper beside `undefined`, as the type it is read at does not.
+      const properties = await policySchema(`
+        type Box<T> = PerUser<${LABELED}> | undefined;
+        type SchemaRoot = Required<{ box?: Box<string> }> & {
+          bare: PerUser<Confidential<string, readonly [PolicyOf<typeof rules>]>>;
+        };`);
+
+      expect(properties?.box).toEqual(properties?.bare);
+      expect(JSON.stringify(properties?.box)).toContain(
+        '"__ctPolicyIdentityOf":{"file":"/entry.ts","path":["rules"]}',
+      );
+    });
+
+    for (
+      const [form, box] of [
+        [
+          "a generic alias writing the union",
+          `type Maybe<T> = T | null; type Box<T> = Maybe<PerUser<${LABELED}>>;`,
+        ],
+        [
+          "a generic alias of the wrapper",
+          `type Scoped<T> = PerUser<${LABELED}>; type Box<T> = Scoped<T> | null;`,
+        ],
+      ] as const
+    ) {
+      it(`throws for a scope wrapper beside \`null\` written through ${form}`, async () => {
+        // The union's members are written apart from the bindings they are
+        // read under, so its type alone would be read, which loses the policy.
+        await expect(
+          policySchema(`${box} interface SchemaRoot { box: Box<string> }`),
+        ).rejects.toThrow(
+          "A scope wrapper beside `null` or `undefined` is read from the union written around it",
+        );
+      });
+    }
 
     it("throws for a handle's cap in a branch that is not the slot's scope", async () => {
       // `PerUser<Cell<string>> | PerSession<Cell<string>>` puts two caps in

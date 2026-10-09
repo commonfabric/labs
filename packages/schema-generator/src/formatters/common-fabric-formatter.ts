@@ -77,6 +77,7 @@ import { dedupeByValueEqual } from "../value-equality.ts";
 import {
   scopeAroundCellUnionError,
   scopeInsideUnionError,
+  scopeUnionUnreadError,
 } from "../scope-placement.ts";
 import { withIfcLabels } from "../ifc-labels.ts";
 import {
@@ -287,44 +288,46 @@ const isNullishTypeNode = (node: ts.TypeNode): boolean => {
 };
 
 /**
- * The scope of the wrappers `node`, a union, writes beside `null` or
- * `undefined`, as `PerUser<A> | null` does, which is the scope wrapper around
- * the union of their payloads, `PerUser<A | null>`: each member is `null`,
- * `undefined`, or a wrapper of that one scope naming its payload, and at
- * least one is a wrapper. `undefined` for any other union.
+ * What `member`, a member written in a union, reads as through parentheses
+ * and aliases without type parameters (`readAuthoredTypeNode()`): `"nullish"`
+ * for `null` or `undefined`, the scope wrapper it names, or `undefined` for
+ * anything else.
  */
-export const scopeOfWrittenScopedUnion = (
-  node: ts.UnionTypeNode,
-): SchemaScope | undefined => {
-  let scope: SchemaScope | undefined;
-  for (const member of node.types) {
-    if (isNullishTypeNode(member)) continue;
-    const wrapper = resolveScopeWrapperNode(member);
-    if (
-      !wrapper?.node.typeArguments?.length ||
-      (scope !== undefined && wrapper.scope !== scope)
-    ) {
-      return undefined;
-    }
-    scope = wrapper.scope;
-  }
-  return scope;
+const readScopedUnionMember = (
+  member: ts.TypeNode,
+  checker: ts.TypeChecker,
+): "nullish" | ResolvedScopeWrapper | undefined => {
+  const written = readAuthoredTypeNode(member, checker);
+  return isNullishTypeNode(written)
+    ? "nullish"
+    : resolveScopeWrapperNode(written);
 };
 
 /**
- * Whether `node`, read through parentheses and aliases, writes `null` or
- * `undefined` beside a scope wrapper, as `PerUser<Writable<T>> | null` does.
+ * The scope of the wrappers `node`, a union, writes beside `null` or
+ * `undefined`, as `PerUser<A> | null` does, which is the scope wrapper around
+ * the union of their payloads, `PerUser<A | null>`: each member it writes
+ * (`readUnionMemberNodes()`), read as `readScopedUnionMember()` reads it, is
+ * `null`, `undefined`, or a wrapper of that one scope naming its payload, and
+ * at least one is a wrapper. `undefined` for any other union.
  */
-const writesNullishBesideScopeWrapper = (
-  node: ts.TypeNode,
+export const scopeOfWrittenScopedUnion = (
+  node: ts.UnionTypeNode,
   checker: ts.TypeChecker,
-): boolean => {
-  const members = readUnionMemberNodes(node, checker);
-  return members.some(isNullishTypeNode) &&
-    members.some((member) =>
-      resolveScopeWrapperNode(readAuthoredTypeNode(member, checker)) !==
-        undefined
-    );
+): SchemaScope | undefined => {
+  let scope: SchemaScope | undefined;
+  for (const member of readUnionMemberNodes(node, checker)) {
+    const read = readScopedUnionMember(member, checker);
+    if (read === "nullish") continue;
+    if (
+      !read?.node.typeArguments?.length ||
+      (scope !== undefined && read.scope !== scope)
+    ) {
+      return undefined;
+    }
+    scope = read.scope;
+  }
+  return scope;
 };
 
 /** The error for a scope wrapper nested in another with no cell between. */
@@ -1346,6 +1349,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       );
     }
 
+    const besideUndefined = this.#formatBesideTakenUndefined(type, context);
+    if (besideUndefined) return besideUndefined;
+
     const aliasType = type as TypeWithInternals;
     const aliasScope = scopeForWrapperName(aliasType.aliasSymbol?.name);
     if (aliasScope !== undefined) {
@@ -1888,6 +1894,45 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
+   * The schema of `type`, one scope's wrapper holding no `undefined`, where
+   * the node at this position writes the wrapper beside `undefined`, as a
+   * member's node does once its `?` takes that `undefined` out of the type it
+   * is read at (`handle?: Box<A>` with `type Box<T> = PerUser<T> | undefined`).
+   * The union is the one `#writtenUnion()` finds there, and the wrapper is
+   * read at the member written for it, under the bindings it is written
+   * with, so that what only its syntax names is kept. A cell there is
+   * refused, as a cell beside `undefined` is anywhere, and so is a union
+   * whose other members do not read as one wrapper of that scope
+   * (`readScopedUnionMember()`). `undefined` where the node writes no such
+   * union.
+   */
+  #formatBesideTakenUndefined(
+    type: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    if (type.isUnion() || !context.typeNode) return undefined;
+    const brand = this.#scopeBrand(type, context);
+    const written = brand && this.#writtenUnion(type as ts.UnionType, context);
+    if (!written) return undefined;
+    const checker = context.typeChecker;
+    const members = readUnionMemberNodes(written.node, checker).map((member) =>
+      readScopedUnionMember(member, checker)
+    );
+    const values = members.filter((member) => member !== "nullish");
+    if (values.length === members.length) return undefined;
+    const [wrapper, ...rest] = values;
+    if (!wrapper || rest.length > 0 || wrapper.scope !== brand.scope) {
+      throw scopeUnionUnreadError(brand.scope);
+    }
+    const schema = this.formatType(type, {
+      ...written.context,
+      typeNode: wrapper.node,
+    });
+    if (isHandleSchema(schema)) throw scopeAroundCellUnionError(brand.scope);
+    return schema;
+  }
+
+  /**
    * The schema of the payload the scope wrapper `type` holds, with its `brand`
    * taken off. A payload the checker cannot intersect again without the brand,
    * as `A & B` in `PerUser<A & B>`, is `type` itself, whose own `#formatType()`
@@ -1944,17 +1989,27 @@ export class CommonFabricFormatter implements TypeFormatter {
     const written = type.isUnion()
       ? this.#writtenUnion(type, context)
       : undefined;
-    if (!written || scopeOfWrittenScopedUnion(written.node) !== brand.scope) {
-      return undefined;
+    if (!written) return undefined;
+    // Every member of a branded union is one of the brand's wrappers or
+    // `null` or `undefined`, so a union written for it that does not read so
+    // hides its members, and its type alone would lose what only the syntax
+    // names.
+    if (scopeOfWrittenScopedUnion(written.node, checker) !== brand.scope) {
+      throw scopeUnionUnreadError(brand.scope);
     }
     // Each wrapper stands for the payload written in it, and a union written
     // there has its members written beside the `null` or `undefined` outside.
-    const nodes = written.node.types.flatMap((member) => {
-      const payload = resolveScopeWrapperNode(member)?.node.typeArguments?.[0];
-      if (!payload) return [member];
-      const unwrapped = unwrapTypeParentheses(payload);
-      return ts.isUnionTypeNode(unwrapped) ? unwrapped.types : [payload];
-    });
+    const nodes = readUnionMemberNodes(written.node, checker).flatMap(
+      (member) => {
+        const read = readScopedUnionMember(member, checker);
+        const payload = read === "nullish"
+          ? undefined
+          : read?.node.typeArguments?.[0];
+        if (!payload) return [member];
+        const unwrapped = unwrapTypeParentheses(payload);
+        return ts.isUnionTypeNode(unwrapped) ? unwrapped.types : [payload];
+      },
+    );
     // Read under bindings, the union is the declaration's own type, whose
     // brand gives the payload as the declaration writes it.
     const writtenBrand = written.type === type
@@ -2104,15 +2159,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (Array.isArray(schema.asCell) && schema.asCell.length > 0) {
-      // A cell written beside `null` or `undefined` is refused as written,
-      // though the type it is read at may hold the cell alone: a member's `?`,
-      // or `Required`, takes that `undefined` out of the type.
-      if (
-        context.typeNode &&
-        writesNullishBesideScopeWrapper(context.typeNode, context.typeChecker)
-      ) {
-        throw scopeAroundCellUnionError(scope);
-      }
       const [first, ...rest] = schema.asCell;
       return {
         ...schema,

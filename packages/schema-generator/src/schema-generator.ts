@@ -1533,9 +1533,12 @@ export class SchemaGenerator {
     // Read for its labels alone, a type no CFC wrapper holds is a payload, and
     // is not formatted. A union or an intersection is formatted from its
     // members, which can attach their labels to it: an expanded `Default`
-    // holds its value as a member.
+    // holds its value as a member. `null` and `undefined` are formatted, as
+    // what tells a value that may be missing apart from its value member
+    // (`labeledValueMember()`).
     if (
       context.labelsOnly && !readType.isUnionOrIntersection() &&
+      (readType.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) === 0 &&
       !this.#commonFabricFormatter.supportsType(readType, childContext)
     ) {
       return {};
@@ -3433,7 +3436,7 @@ export class SchemaGenerator {
       // are the wrapper around their payloads, `PerUser<A | null>`, which the
       // scope wrapper formatter reads from the union's type, at the payloads
       // written in it.
-      const scoped = scopeOfWrittenScopedUnion(typeNode) !== undefined
+      const scoped = scopeOfWrittenScopedUnion(typeNode, checker) !== undefined
         ? typeRegistry?.get(typeNode) ?? checker.getTypeFromTypeNode(typeNode)
         : undefined;
       const scopedContext = { ...context, typeNode };
