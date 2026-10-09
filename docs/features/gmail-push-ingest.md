@@ -128,10 +128,14 @@ exists, since it is what the syncer watches.
 - **`idToken`**, a Google ID token naming the mailbox, which a consent that
   requested the `openid` scope returns beside the access token. Toolshed
   verifies it against Google's published keys for one of the OAuth client
-  ids in `INGEST_GMAIL_OAUTH_CLIENT_IDS` and binds the verified address. An
-  ID token grants no access to anything, so it is the proof to prefer; with
-  no client ids configured, it is refused with a 400 that says to use an
-  access token.
+  ids in `INGEST_GMAIL_OAUTH_CLIENT_IDS` and binds the verified address. The
+  address has to be one Google is the authority on: a `gmail.com` address,
+  or a Workspace address whose domain the token's `hd` claim names. A Google
+  account can carry an address at any other domain, and the token's
+  `email_verified` says only that Google checked it once, so such an address
+  is refused with a 400 that says to use an access token. An ID token grants
+  no access to anything, so it is the proof to prefer; with no client ids
+  configured, it is refused the same way.
 
 Without either proof, anyone could bind someone else's address to a channel
 of their own and learn when that person's mail arrives. Ownership of the

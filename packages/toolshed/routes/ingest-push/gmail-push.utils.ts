@@ -412,7 +412,7 @@ function isGoogleHostedAddress(
   hostedDomain: unknown,
 ): boolean {
   const domain = email.slice(email.indexOf("@") + 1).toLowerCase();
-  if (domain === "gmail.com" || domain === "googlemail.com") return true;
+  if (domain === "gmail.com") return true;
   return typeof hostedDomain === "string" &&
     hostedDomain.toLowerCase() === domain;
 }
