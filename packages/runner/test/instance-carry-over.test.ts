@@ -6,6 +6,8 @@ import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { Cell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import { instancePartialCause } from "../src/builder/instance-name.ts";
+import { getDerivedInternalCellLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
 
@@ -341,6 +343,42 @@ describe("instance-carry-over", () => {
     });
   });
 
+  describe("a named instance's child", () => {
+    it("refuses to set up for one instance over the child another instance set up", async () => {
+      // A parent's `instanceChildren` pointing instance `a` at `b`'s child is
+      // what a wrong carry-over would leave.
+
+      const named = await compile(NAMED_TWO);
+      const tx = rt.edit();
+      const cell = rt.getCell<Record<string, unknown>>(
+        space,
+        "stamped-children",
+        undefined,
+        tx,
+      );
+      const running = rt.run(tx, named, {}, cell);
+      await tx.commit().settled;
+      await running.pull();
+      await rt.idle();
+      rt.runner.stop(cell);
+      const spot = getDerivedInternalCellLink(cell, {
+        partialCause: instancePartialCause("b"),
+      });
+      const bChild = rt.getCell(space, {
+        resultFor: { space: spot.space, id: spot.id, path: [] },
+      }).getAsNormalizedFullLink();
+      const wrong = rt.edit();
+      cell.withTx(wrong).setMetaRaw("instanceChildren", {
+        a: { space: bChild.space, id: bChild.id, scope: bChild.scope },
+      }, rawMetaWriteAuthorization);
+      expect((await wrong.commit().settled).error).toBeUndefined();
+
+      await expect(update(cell, NAMED_TWO)).rejects.toThrow(
+        /refusing to set up .*#Counter for instance "a" over the child of .*#Counter that instance "b" set up/,
+      );
+    });
+  });
+
   describe("a positional child", () => {
     it("refuses to set up over a child that has moved spots", async () => {
       const cell = await deployedParent("positional-moved");
@@ -354,7 +392,7 @@ describe("instance-carry-over", () => {
       const cell = await deployedParent("positional-over-carried");
 
       await expect(update(cell, POSITIONAL_SIBLING_OF_NAMED)).rejects.toThrow(
-        /refusing to set up .*#Other over the child of .*#Counter that instance "a" carries/,
+        /refusing to set up .*#Other for a positional spot over the child of .*#Counter that instance "a" carries/,
       );
     });
   });

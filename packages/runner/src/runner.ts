@@ -987,6 +987,14 @@ type UncarriedInstance = {
   leftBehind?: string;
 };
 
+/** The instance name stamped on the child `child`, if any. */
+function getInstanceNameStamp(child: Cell<any>): string | undefined {
+  const raw = child.getMetaRaw("instanceName", {
+    meta: ignoreReadForScheduling,
+  });
+  return typeof raw === "string" ? raw : undefined;
+}
+
 /** What `instanceChildren` records for the child at `link`. */
 function instanceChildRecord(
   link: NormalizedFullLink,
@@ -13327,26 +13335,32 @@ export class Runner {
     const incoming = this.#runtime.patternManager.getArtifactEntryRef(
       childPattern,
     );
-    if (
-      stored === undefined || incoming === undefined ||
-      samePatternRef(stored, incoming)
-    ) {
-      return;
+    if (stored === undefined || incoming === undefined) return;
+    const describe = (ref: { identity: string; symbol: string }) =>
+      `${ref.identity}#${ref.symbol}`;
+    const holder = instanceName === undefined
+      ? "a positional spot"
+      : `instance "${instanceName}"`;
+    const stamped = getInstanceNameStamp(committedChild);
+    if (stamped !== undefined && stamped !== instanceName) {
+      throw new Error(
+        `refusing to set up ${describe(incoming)} for ${holder} ` +
+          `over the child of ${describe(stored)} that instance ` +
+          `"${stamped}" set up`,
+      );
     }
     const storedLink = storedChild.getAsNormalizedFullLink();
     const parent = resultCell.withTx(tx);
-    const describe = (ref: { identity: string; symbol: string }) =>
-      `${ref.identity}#${ref.symbol}`;
     for (
       const [name, link] of Object.entries(readInstanceChildren(parent))
     ) {
       if (name === instanceName || link.id !== storedLink.id) continue;
       throw new Error(
-        `refusing to set up ${describe(incoming)} over the child of ` +
-          `${describe(stored)} that instance "${name}" carries`,
+        `refusing to set up ${describe(incoming)} for ${holder} over ` +
+          `the child of ${describe(stored)} that instance "${name}" carries`,
       );
     }
-    if (instanceName !== undefined) return;
+    if (instanceName !== undefined || samePatternRef(stored, incoming)) return;
     for (const { module, partialCause } of subPatternNodes(pattern)) {
       if (!isPositionalPartialCause(partialCause)) continue;
       const other = this.#childAtPartialCause(
@@ -13460,6 +13474,16 @@ export class Runner {
           storedChild,
           plan.instanceName,
         );
+        if (
+          plan.instanceName !== undefined &&
+          getInstanceNameStamp(storedChild) !== plan.instanceName
+        ) {
+          storedChild.setMetaRaw(
+            "instanceName",
+            plan.instanceName,
+            rawMetaWriteAuthorization,
+          );
+        }
       }
       const sourceOrigin = crossSpace && !resumeExisting
         ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
