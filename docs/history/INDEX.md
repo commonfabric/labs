@@ -291,6 +291,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Investigations, journals, and working notes
 
+- [The Topics export's loops and quiet weeks, replayed through the echo breaker](development/performance/2026-10-08-topics-export-traces-vs-echo-breaker.md) — 2026-10-08; the July 2026 write storms and the quiet weeks after them in the 2026-08-18 export of the Topics social space, replayed through the remote-echo breaker's detector: per session the loops ran between three and sixty echoes per ten seconds, two of the five storm documents never reach twelve in ten, the quiet weeks never put more than five changed rewrites of one reactive document in a minute, and forty seconds is the shortest window that catches every July loop at the cadence it sustained.
 - [Staged-reference derivation cache](development/performance/2026-09-25-staged-reference-cache/README.md) — Alternating main/cache measurements, warmed chain controls, exact metadata equivalence, and the remaining flat-map growth; probe and raw records accompany the report (2026-09-25).
 
 - [Scoped conflict recovery review](packages/runner/scoped-conflict-recovery-review-2026-09-16.md) — 2026-09-16: review of merged scoped conflict pulls, the reactive scheduler integration gap, and the regression and lifetime requirements retained from the inactive transaction-owned repair proposal.

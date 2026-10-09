@@ -194,6 +194,7 @@ Every environment variable has a flag, and the flag wins:
 | `--research-reasoning-effort` | `CF_HARNESS_RESEARCH_REASONING_EFFORT` | the provider's default                |
 | `--workspace`                 | `CF_HARNESS_CONSOLE_WORKSPACE`         | `.cf-harness-console/workspace`       |
 | `--artifact-root`             | `CF_HARNESS_ARTIFACT_ROOT`             | `.cf-harness-console/runs`            |
+| `--agent-runs-root`           | `CF_HARNESS_CONSOLE_AGENT_RUNS_ROOT`   | `$CF_HARNESS_HOME/agent-runs`; `none` |
 | `--session-db`                | `CF_HARNESS_CONSOLE_SESSION_DB`        | `.cf-harness-console/sessions.sqlite` |
 | `--space-db`                  | `CF_HARNESS_SPACE_DB`                  | the space's own database, discovered  |
 | `--max-model-turns`           | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS`   | the prompt loop's default             |
@@ -1276,6 +1277,21 @@ run and its map. The step the scrubber sits on survives the re-read.
 The left column lists every run the server has made, each named by the task it
 was given, with a `delegate_task` child nested under the run that delegated to
 it.
+
+Beside them it lists the runs the agent runner made on this machine, read from
+its work root (`--agent-runs-root`, `$CF_HARNESS_HOME/agent-runs` by default):
+an `/ask` job's runs, under `local/<job-id>/artifacts/`, are labelled `/ask`,
+and the runs of an `agent()` built-in, under `<run-key>/artifacts/`, are
+labelled `agent()`. They open, map and graph like the console's own, but no
+session holds them, so they appear here and nowhere else. A run id two roots
+both hold is read from the console's own root first, then from `/ask` jobs, then
+from `agent()` runs. Only checkpoints with the required run-state fields and an
+ID matching their directory are listed or take precedence; malformed and
+incomplete checkpoints are skipped individually. If no valid checkpoint holds an
+ID, a real run directory still permits artifact and tool-output reads. Lane,
+job, `artifacts` and run directories must be real directories: symlinked
+descendants are skipped by both listing and resolution. A work root that does
+not exist lists nothing.
 
 ### The map
 

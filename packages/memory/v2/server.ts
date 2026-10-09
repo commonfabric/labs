@@ -116,6 +116,11 @@ import {
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
 import { AdmissionWaiters } from "./admission-waiters.ts";
+import {
+  type CommitRatesReport,
+  CommitRateTracker,
+  commitStormThresholds,
+} from "./commit-rates.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
 import * as Engine from "./engine.ts";
 import {
@@ -254,6 +259,14 @@ const operationActiveWatchCount = operationMeter.createHistogram(
   "ct.memory.operation.active_watches",
   { description: "Active operation watches observed during sync assembly." },
 );
+const commitCount = operationMeter.createCounter(
+  "ct.memory.commits",
+  {
+    description:
+      "Commits decided on every path, by space, by outcome, and by whether " +
+      "the space was in a write storm at the time.",
+  },
+);
 
 /**
  * Timing-only logger. It never logs — the statistics behind `time()` are
@@ -303,6 +316,12 @@ const QUERY_EVALUATION_CACHE_MAX_SPACES = 8;
 // state's parsed documents, which scale with the entities delivered.
 const QUERY_EVALUATION_CACHE_BUDGET = 32_768;
 const SLOW_QUERY_BUFFER_SIZE = 100;
+// The write-storm thresholds the commit-rate tracker judges a space by,
+// `CF_COMMIT_STORM_PER_MINUTE` and `CF_COMMIT_STORM_SUSTAINED_SECONDS`, read
+// the way the slow-query threshold is.
+const COMMIT_STORM_THRESHOLDS = commitStormThresholds((name) =>
+  Deno.env.get(name)
+);
 const DEFAULT_SESSION_OPEN_CHALLENGE_TTL_SECONDS = 300;
 
 /**
@@ -562,6 +581,16 @@ export const getDocumentCachesDiagnostics = ():
   | DocumentCachesDiagnostics
   | undefined => documentCachesDiagnosticsProviders.at(-1)?.();
 
+/** Live servers' commit-rate providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported. */
+const commitRatesProviders: (() => CommitRatesReport)[] = [];
+
+/** The co-hosted memory server's commit rates for the health route — the
+ * most recently constructed server still open; undefined when none is. */
+export const getCommitRates = (): CommitRatesReport | undefined =>
+  commitRatesProviders.at(-1)?.();
+
 const randomHex = (bytes: number): string => {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return [...data].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -734,6 +763,10 @@ type PublishTransactVerdict = (
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
   postCommit?: () => Promise<void>;
+
+  /** Whether the engine decided the commit, and so reported it to the
+   * server's commit observer; false for one refused before reaching it. */
+  engineDecided: boolean;
 };
 
 type SessionOpenAuthContext = {
@@ -2257,6 +2290,7 @@ export class Server {
   /** Holds `documentCacheTotalBudgetBytes` across this server's engines and
    * keeps their recency; every engine this server opens reports to it. */
   #documentCacheCoordinator: Engine.DocumentCacheCoordinator;
+  #commitRates = new CommitRateTracker({ storm: COMMIT_STORM_THRESHOLDS });
 
   /**
    * Synthesized session id for direct out-of-band document writes, such as
@@ -2534,12 +2568,13 @@ export class Server {
         DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
     );
     // Module-level providers for the health route (push-priority counters,
-    // Phase 6; document caches): the newest live server is reported, and
-    // close() withdraws exactly this server's.
+    // Phase 6; document caches; commit rates): the newest live server is
+    // reported, and close() withdraws exactly this server's.
     pushPriorityStatsProviders.push(this.#pushPriorityStatsProvider);
     documentCachesDiagnosticsProviders.push(
       this.#documentCachesDiagnosticsProvider,
     );
+    commitRatesProviders.push(this.#commitRatesProvider);
   }
 
   /**
@@ -2587,6 +2622,7 @@ export class Server {
    * exactly them and no other server's. */
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
+  #commitRatesProvider = () => this.commitRates();
 
   /** Every open engine's document-cache counters, keyed by space. A peek:
    * nothing is opened by asking. */
@@ -2602,6 +2638,36 @@ export class Server {
       totalBudgetEvictions: coordinator.evictions,
       spaces,
     };
+  }
+
+  /** Every space with a commit in the last ten minutes, ranked, with the
+   * sessions behind those commits and whether the space is in a write
+   * storm. A read, which also lets go of the spaces and writers that have
+   * gone quiet. */
+  commitRates(): CommitRatesReport {
+    return this.#commitRates.report();
+  }
+
+  /** Helper for the engines' commit observer and for `transact()`'s own
+   * refusals, which counts one decided commit toward its space's rate and
+   * the `ct.memory.commits` counter, under the session and, where known,
+   * the principal it came from (an anonymous session carries none). */
+  #observeCommit(decision: Engine.CommitDecision & { space: string }): void {
+    const principal = decision.principal;
+    const { storm } = this.#commitRates.record({
+      space: decision.space,
+      session: decision.sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      accepted: decision.accepted,
+      operations: decision.operations,
+    });
+    commitCount.add(1, {
+      "space.did": decision.space,
+      outcome: decision.accepted ? "ok" : "rejected",
+      storm,
+    });
   }
 
   memoryProtocolFlags(): MemoryProtocolFlags {
@@ -3424,6 +3490,7 @@ export class Server {
       documentCachesDiagnosticsProviders,
       this.#documentCachesDiagnosticsProvider,
     );
+    withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
     this.#cancelScheduledRefresh();
     for (const connection of [...this.#connections.values()]) {
       connection.close();
@@ -4887,8 +4954,10 @@ export class Server {
     return await this.#withSpacePublicationLock(message.space, async () => {
       const lockWaitMs = performance.now() - requestedAt;
       let outcome = "threw";
+      let engineDecided = false;
       try {
         const decision = await this.#decideTransaction(message, originating);
+        engineDecided = decision.engineDecided;
         outcome = decision.response.error?.name ?? "ok";
         let verdictError: { value: unknown } | undefined;
         try {
@@ -4922,13 +4991,30 @@ export class Server {
         const commit = message.commit as Partial<ClientCommit>;
         const count = (value: unknown): number | undefined =>
           Array.isArray(value) ? value.length : undefined;
+        const operations = count(commit.operations);
         recordSlowQueryDuration("transact", message.space, requestedAt, {
           lockWaitMs: Math.round(lockWaitMs),
-          operations: count(commit.operations),
+          operations,
           readsConfirmed: count(commit.reads?.confirmed),
           readsPending: count(commit.reads?.pending),
           outcome,
         });
+        // The engine reports every commit it decides to this server's
+        // commit observer, whichever path brought it. A commit refused
+        // before reaching the engine (an unknown session, a denied
+        // capability, a decision that threw) is counted here instead, so
+        // every decision counts exactly once, slow or not.
+        if (!engineDecided) {
+          this.#observeCommit({
+            space: message.space,
+            sessionId: message.sessionId,
+            ...(originating?.principal === undefined
+              ? {}
+              : { principal: originating.principal }),
+            accepted: outcome === "ok",
+            operations: operations ?? 0,
+          });
+        }
       }
     });
   }
@@ -5248,6 +5334,7 @@ export class Server {
     originating: SessionState | null,
   ): Promise<TransactDecision> {
     let postCommit: (() => Promise<void>) | undefined;
+    let engineDecided = false;
     const response = await tracer.startActiveSpan(
       "memory.transact",
       async (span): Promise<ResponseMessage<Engine.AppliedCommit>> => {
@@ -5381,6 +5468,7 @@ export class Server {
               "memory.commit.persist",
               (persistSpan) => {
                 try {
+                  engineDecided = true;
                   return Engine.applyCommit(engine, {
                     sessionId: message.sessionId,
                     space: message.space,
@@ -5613,7 +5701,7 @@ export class Server {
         }
       },
     );
-    return { response, postCommit };
+    return { response, postCommit, engineDecided };
   }
 
   async graphQuery(
@@ -9345,6 +9433,11 @@ export class Server {
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
         documentCacheCoordinator: this.#documentCacheCoordinator,
+        // Every commit this engine decides, on whichever path, counts
+        // toward the space's commit rate; the engine is this space's, so
+        // the space is known here whatever the committing caller named.
+        commitObserver: (decision) =>
+          this.#observeCommit({ ...decision, space }),
       });
     })();
     // The SYNC engine view (server-execution v2 Phase 5): the read-row

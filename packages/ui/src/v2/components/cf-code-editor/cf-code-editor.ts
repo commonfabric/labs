@@ -2104,7 +2104,6 @@ export class CFCodeEditor extends BaseElement {
         await previous.stop();
       } catch (cause) {
         if (generation !== this._collaborationGeneration) return;
-        previous.dispose();
         if (this._collaboration === previous) {
           this._collaboration = undefined;
         }
@@ -2188,13 +2187,13 @@ export class CFCodeEditor extends BaseElement {
 
     try {
       await controller.start();
+      // A superseded controller belongs to whatever superseded this setup: a
+      // later setup or the element's cleanup stops it, which confirms any
+      // edit it accepted once its first snapshot was installed.
       if (
         generation !== this._collaborationGeneration ||
         this._collaboration !== controller
-      ) {
-        controller.dispose();
-        return;
-      }
+      ) return;
       this._observeCollaboration(controller);
       view.dispatch({
         effects: this._readonly.reconfigure(
