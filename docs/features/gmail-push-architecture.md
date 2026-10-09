@@ -265,7 +265,7 @@ Three facts decide the shape.
 | Toolshed is down, or storage fails | Toolshed returns a non-2xx status or nothing, and Pub/Sub redelivers with backoff. |
 | Pub/Sub delivers a message twice | The second delivery carries no newer history id, so the cell does not change and the syncer is not woken. |
 | The watch expires | The syncer's daily renewal. A watch lasts seven days. |
-| The channel is revoked or expired | Delivery skips it. The syncer mints the channel again with the mailbox proof, which re-enables it and keeps or restores the binding. Rotate alone keeps an existing binding but cannot make one. |
+| The channel is revoked or expired | Delivery skips it. The syncer mints the channel again, with or without the mailbox proof, which re-enables it and keeps its binding. Rotate is refused for a gmail channel. |
 | The syncer was offline | The cell holds the newest history id, and the syncer catches up from its own cursor when it returns. |
 | The sync falls out of Gmail's history window | The syncer's own recovery, which is a bounded full sync. |
 

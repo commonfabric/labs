@@ -32,8 +32,6 @@ import {
 } from "@/routes/ingest/ingest.utils.ts";
 import { linkRefPayloadToString } from "@commonfabric/runner/shared";
 import {
-  BindingConflictError,
-  bindMailbox,
   getMailboxChannels,
   type MailboxLookup,
   MAX_CHANNELS_PER_MAILBOX,
@@ -365,7 +363,7 @@ describe("ingest-channels control plane", () => {
       expect(stored?.target).toEqual(first.target);
     });
 
-    it("puts a pruned channel back in its mailbox's list when minted again without a proof", async () => {
+    it("takes a revoked channel out of its mailbox's list, and puts it back when minted again without a proof", async () => {
       const first = ok(await gmailMint("req-1"));
       const registration = await getRegistration(
         runtime,
@@ -379,19 +377,43 @@ describe("ingest-channels control plane", () => {
           expectedRevision: registration?.revision ?? 0,
         }),
       );
-      // Another channel binding the mailbox prunes the revoked one.
-      ok(
-        await gmailMint("req-2", {
-          installId: "gmail-2",
-          target: targetLink("gmail-2"),
-        }),
-      );
-      expect(await bound()).not.toContain(first.id);
+      expect(await bound()).toEqual([]);
 
-      const again = ok(await mint(alice, "req-3", { installId: "gmail-1" }));
+      const again = ok(await mint(alice, "req-2", { installId: "gmail-1" }));
 
       expect(again.id).toBe(first.id);
-      expect(await bound()).toContain(first.id);
+      expect(await bound()).toEqual([first.id]);
+    });
+
+    it("returns 400 and mints nothing for a proof-less re-mint of a gmail channel bound to no mailbox", async () => {
+      // A gmail channel's registration written before the mailbox key was
+      // stored with it names no mailbox, and a push reaches no such channel.
+      const id = channelId(space, "gmail-1");
+      await saveRegistration(runtime, operator.did(), {
+        id,
+        name: "gmail-1",
+        space,
+        target: targetParts("gmail-1"),
+        installId: "gmail-1",
+        kind: "gmail",
+        secretHash: "unused",
+        createdBy: operator.did(),
+        createdAt: "2026-09-01T00:00:00.000Z",
+        enabled: true,
+        owner: alice.did(),
+        revision: 1,
+      });
+
+      const res = await mint(alice, "req-1", { installId: "gmail-1" });
+
+      expect(res.status).toBe(400);
+      expect(err(res)).toContain("bound to no mailbox");
+      expect((await getRegistration(runtime, operator.did(), id))?.revision)
+        .toBe(1);
+
+      const rebound = ok(await gmailMint("req-2"));
+      expect(rebound.id).toBe(id);
+      expect(await bound()).toEqual([id]);
     });
 
     it("returns 400 for a target that is not space-scoped, not a document, or not a wire link", async () => {
@@ -411,22 +433,6 @@ describe("ingest-channels control plane", () => {
         .toBe(400);
 
       expect(proofs).toEqual([]);
-    });
-
-    it("leaves a newer mint's binding in place when an earlier mint's binding arrives late", async () => {
-      // Alice's first mint has written its registration, at revision 1, and
-      // not yet its binding; before it does, the channel is minted again for
-      // Bob's mailbox, at revision 2. The late binding, held to revision 1,
-      // is refused, and Bob's binding stands.
-      const first = ok(await gmailMint("req-1"));
-      lookup = { ok: true, emailAddress: "bob@example.com" };
-      ok(await gmailMint("req-2"));
-
-      await expect(bindMailbox(runtime, operator.did(), first.id, MAILBOX, 1))
-        .rejects.toBeInstanceOf(BindingConflictError);
-
-      expect(await bound()).toEqual([]);
-      expect(await bound("bob@example.com")).toEqual([first.id]);
     });
 
     it("refuses to rotate a gmail channel, and says to mint instead", async () => {
@@ -531,7 +537,7 @@ describe("ingest-channels control plane", () => {
       expect(proofs).toEqual([]);
     });
 
-    it("returns 409 for a mailbox at its channel limit, leaving the channel minted", async () => {
+    it("returns 409 and mints nothing for a mailbox at its channel limit", async () => {
       for (let i = 0; i < MAX_CHANNELS_PER_MAILBOX; i++) {
         ok(
           await gmailMint(`req-${i}`, {
@@ -547,8 +553,15 @@ describe("ingest-channels control plane", () => {
       });
 
       expect(res.status).toBe(409);
-      expect(err(res)).toContain("minted but not bound");
+      expect(err(res)).toContain("was not minted");
       expect((await bound()).length).toBe(MAX_CHANNELS_PER_MAILBOX);
+      expect(
+        await getRegistration(
+          runtime,
+          operator.did(),
+          channelId(space, "gmail-extra"),
+        ),
+      ).toBeNull();
     });
   });
 

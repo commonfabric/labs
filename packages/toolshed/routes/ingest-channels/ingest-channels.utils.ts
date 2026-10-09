@@ -51,12 +51,11 @@ import {
   SpaceLifetimeChannelCapError,
 } from "@/routes/ingest/ingest.utils.ts";
 import {
-  BindingConflictError,
-  bindMailbox,
   MailboxBindingFullError,
+  mailboxKey,
+  mailboxListUpdate,
   type MailboxLookup,
   MAX_CHANNELS_PER_MAILBOX,
-  restoreBinding,
 } from "@/routes/ingest-push/gmail-push.utils.ts";
 
 const DEFAULT_CAUSE_PREFIX = "location";
@@ -322,6 +321,14 @@ const persist = async (
       kind: "gmail";
       target: CellTarget;
     };
+
+    /**
+     * The key of the mailbox a gmail channel is bound to by this write: the
+     * one its proof named, or the one it was bound to already. The channel's
+     * place in that mailbox's list is written in the same transaction as the
+     * registration, and a mailbox at its cap refuses the whole mint.
+     */
+    mailboxKey?: string;
     existing: IngestRegistration | null;
     callerDid: string;
     ttlDays?: number;
@@ -381,6 +388,9 @@ const persist = async (
     ...(params.writes.kind === "device"
       ? { causePrefix: params.writes.causePrefix }
       : { target: params.writes.target }),
+    ...(params.mailboxKey !== undefined
+      ? { mailboxKey: params.mailboxKey }
+      : {}),
     installId: params.installId,
     kind: params.writes.kind,
     secretHash,
@@ -423,12 +433,26 @@ const persist = async (
         spaceLifetime: deps.maxLifetimeChannelsPerSpace ??
           MAX_LIFETIME_CHANNELS_PER_SPACE,
       },
+      params.mailboxKey === undefined ? undefined : mailboxListUpdate(
+        deps.runtime,
+        deps.serviceSpace,
+        params.id,
+        { next: params.mailboxKey, previous: params.existing?.mailboxKey },
+        now.getTime(),
+      ),
     );
   } catch (error) {
     if (error instanceof RequestAlreadyClaimedError) {
       return conflict(
         `requestId already used for channel ${error.channel}. A replay never ` +
           `returns a token; retry with a fresh requestId.`,
+      );
+    }
+    if (error instanceof MailboxBindingFullError) {
+      return conflict(
+        `The mailbox already has ${MAX_CHANNELS_PER_MAILBOX} bound ` +
+          `channels, so channel ${params.id} was not minted. Revoke one, ` +
+          `then mint again.`,
       );
     }
     if (error instanceof LiveChannelCapError) {
@@ -701,6 +725,20 @@ export async function processMint(
     mailbox = proven.emailAddress;
   }
 
+  // A gmail channel is bound to the mailbox its proof names, or stays bound
+  // to the one it has. One bound to none, which a registration written before
+  // the key was stored with it may be, has nothing to deliver to, so minting
+  // it again without a proof would re-enable a channel no push reaches.
+  const boundKey = mailbox !== undefined
+    ? mailboxKey(mailbox)
+    : existing?.mailboxKey;
+  if (existing?.kind === "gmail" && boundKey === undefined) {
+    return bad(
+      `Channel ${id} is a gmail channel bound to no mailbox. Mint it with a ` +
+        `mailbox proof to bind one.`,
+    );
+  }
+
   const minted = await persist(deps, {
     id,
     requestId: input.requestId,
@@ -708,6 +746,7 @@ export async function processMint(
     space: input.space,
     installId: input.installId,
     writes: writesOf({ causePrefix, target }, existing),
+    ...(boundKey !== undefined ? { mailboxKey: boundKey } : {}),
     existing,
     callerDid,
     ttlDays: input.ttlDays,
@@ -717,42 +756,7 @@ export async function processMint(
     // remove, on the single most likely path to reach it.
     ...(existing ? { rotatedFrom: existing.secretHash } : {}),
   });
-  if (minted.status !== 200) return minted;
-
-  // The binding is a second write, after the registration's, and it is held
-  // to the revision this mint wrote: a mint of the same channel that landed
-  // in between owns the registration, and its binding stands. A binding that
-  // fails leaves a minted channel bound to nothing, and the caller mints
-  // again with the same install id and proof to bind it. A re-mint of a gmail
-  // channel with no proof keeps the mailbox it has, and puts the channel
-  // back in that mailbox's list where a retirement had pruned it.
-  const revision = (existing?.revision ?? 0) + 1;
-  try {
-    if (mailbox !== undefined) {
-      await bindMailbox(deps.runtime, deps.serviceSpace, id, mailbox, revision);
-    } else if (existing?.kind === "gmail") {
-      await restoreBinding(deps.runtime, deps.serviceSpace, id, revision);
-      return minted;
-    } else {
-      return minted;
-    }
-  } catch (error) {
-    if (error instanceof MailboxBindingFullError) {
-      return conflict(
-        `Channel ${id} is minted but not bound: the mailbox already has ` +
-          `${MAX_CHANNELS_PER_MAILBOX} bound channels. Revoke one, then ` +
-          `mint again.`,
-      );
-    }
-    if (error instanceof BindingConflictError) {
-      return conflict(
-        `Channel ${id} is minted but not bound: its binding or its ` +
-          `registration changed concurrently. Mint again.`,
-      );
-    }
-    deps.logger?.error({ error, id }, "ingest-channels: bind failed");
-    return { status: 502, body: { error: "Storage failure" } };
-  }
+  if (minted.status !== 200 || mailbox === undefined) return minted;
   deps.logger?.info({ id }, "ingest-channels: bound a mailbox");
   return {
     status: 200,
@@ -1020,6 +1024,15 @@ const writeRevocation = async (
       input.expectedRevision,
       opts.claim
         ? { owner: callerDid, requestId: input.requestId, channel: input.id }
+        : undefined,
+      undefined,
+      // A revoked gmail channel leaves its mailbox's list in the same write,
+      // so that it holds no place at the mailbox's cap; minting it again
+      // puts it back.
+      registration.kind === "gmail" && registration.mailboxKey !== undefined
+        ? mailboxListUpdate(deps.runtime, deps.serviceSpace, input.id, {
+          previous: registration.mailboxKey,
+        })
         : undefined,
     );
   } catch (error) {

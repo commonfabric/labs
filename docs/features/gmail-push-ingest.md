@@ -150,22 +150,26 @@ other answers 400, as does a cause prefix beside them, or a proof on a
 channel minted as a device channel. The response gains `emailAddress`, the
 mailbox bound, and `target`, and carries no device URL or token.
 
-The binding is written after the registration. Minting the same channel
-again with a proof for another mailbox moves it; minting it again with no
-proof leaves the binding as it is. A mint whose registration landed but
-whose binding did not, because the mailbox is at its channel limit or the
-binding changed concurrently, answers 409 naming the channel as minted but
-not bound, and minting again with the same install id and proof binds it.
-Delivery to a channel stops when it is revoked; there is no unbind. Rotate
-answers 400 for a gmail channel, which has no token to rotate: minting it
-again is what re-enables or extends it.
+The binding is part of the registration: the registration carries the key
+of the mailbox it is bound to, and the mailbox's list of channel ids, which
+a push is delivered through, is written in the same transaction, so the two
+cannot disagree. A mailbox at its channel limit refuses the whole mint with
+a 409, and nothing is written. Minting the same channel again with a proof
+for another mailbox moves it; minting it again with no proof leaves the
+binding as it is. Revoking a gmail channel takes it out of its mailbox's
+list in the revoking write, so it holds no place at the limit, and minting
+it again puts it back; there is no unbind. A gmail channel bound to no
+mailbox, which a registration written before the key was stored with it may
+be, is minted again with a proof, and a proof-less re-mint of one answers
+400. Rotate answers 400 for a gmail channel, which has no token to rotate:
+minting it again is what re-enables or extends it.
 
 | Status | When |
 | --- | --- |
 | 200 | Minted and bound |
-| 400 | Gmail push is not configured here, a proof without a target or a target without a proof, a cause prefix beside them, a proof on a device channel, a target in another space, not space-scoped, or not a complete link to a document, a proof Google did not accept, or an ID token where none is accepted |
+| 400 | Gmail push is not configured here, a proof without a target or a target without a proof, a cause prefix beside them, a proof on a device channel, a proof-less re-mint of a gmail channel bound to no mailbox, a target in another space, not space-scoped, or not a complete link to a document, a proof Google did not accept, or an ID token where none is accepted |
 | 403 | Not an owner of the space |
-| 409 | Replayed `requestId`, the channel is another owner's or writes another cause prefix or target cell, this deployment cannot write to the space, or the channel was minted but the mailbox is at its limit |
+| 409 | Replayed `requestId`, the channel is another owner's or writes another cause prefix or target cell, this deployment cannot write to the space, or the mailbox is at its channel limit, in which case nothing is minted |
 | 422 | The body failed schema validation: two proofs or none in `gmail`, or a malformed `target` |
 | 502 | Storage failed, or Google could not be reached |
 
@@ -219,7 +223,12 @@ mailbox's first notification replaces the cell whatever its id.
 
 Channel registrations and mailbox bindings live in one space, which only this
 deployment reads. It is the space `INGEST_SERVICE_SPACE` names, or with that
-unset, the space named by the deployment's own identity.
+unset, the space named by the deployment's own identity. A gmail channel's
+registration carries the key of its mailbox, a hash of the address, and one
+cell per mailbox key lists the channel ids bound to it. The list is the index
+a push is delivered through, and the registration is what each listed channel
+is checked against: its kind, its liveness, and that its key is still the
+mailbox's.
 
 A push is delivered against the bindings of the deployment that receives it,
 and a binding is written by the deployment that handled the mint. So

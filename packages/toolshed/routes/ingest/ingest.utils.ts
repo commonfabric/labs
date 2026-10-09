@@ -218,6 +218,16 @@ export interface IngestRegistration {
    */
   target?: CellTarget;
 
+  /**
+   * The key of the mailbox a `gmail` channel is bound to, as the push
+   * module's `mailboxKey()` derives it from the address. The mailbox's own
+   * list of channel ids is the index a push is delivered through, and the two
+   * are written in one transaction, so a live gmail channel carrying a key is
+   * in that mailbox's list. Absent on a `device` channel, and on a gmail
+   * channel bound to no mailbox, which a mint with a proof binds.
+   */
+  mailboxKey?: string;
+
   /** Stable source identifier: recorded on the mark + the cross-repo join key. */
   installId: string;
 
@@ -368,6 +378,7 @@ const RegistrationSchema = {
       },
       required: ["space", "id", "path"],
     },
+    mailboxKey: { type: "string" },
     installId: { type: "string" },
     kind: { type: "string" },
     // What a registration carried before `kind`; read only to classify one.
@@ -930,6 +941,19 @@ export async function getLastSeen(
   return (cell.get() as string | undefined) ?? null;
 }
 
+/**
+ * A write that joins a registration's transaction. `prepare()` runs before
+ * the transaction opens and syncs whatever `apply()` reads; `apply()` runs
+ * inside it, after every check on the registration has passed and before
+ * anything is written, reads through `tx` so that what it read joins the read
+ * set, and either writes and returns `undefined` or returns the error the
+ * whole write is then refused with, nothing committed.
+ */
+export interface RegistrationCompanion {
+  prepare(): Promise<void>;
+  apply(tx: IExtendedStorageTransaction): Error | undefined;
+}
+
 export async function saveRegistration(
   runtime: Runtime,
   serviceSpace: string,
@@ -958,6 +982,12 @@ export async function saveRegistration(
    * bounded.
    */
   limits?: { live?: number; lifetime?: number; spaceLifetime?: number },
+  /**
+   * A write that lands with the registration or not at all: a gmail
+   * channel's place in its mailbox's list, which has to agree with the
+   * `mailboxKey` the registration carries.
+   */
+  companion?: RegistrationCompanion,
 ): Promise<void> {
   // Every index is written with the registration, and none of them is
   // best-effort.
@@ -1017,6 +1047,7 @@ export async function saveRegistration(
   ) {
     await c.sync();
   }
+  await companion?.prepare();
   await runtime.storageManager.synced();
 
   let conflicted = false;
@@ -1025,6 +1056,7 @@ export async function saveRegistration(
   let overLive: number | undefined;
   let overLifetime: number | undefined;
   let overSpaceLifetime: number | undefined;
+  let refusedBy: Error | undefined;
   const result = await runtime.editWithRetry((tx) => {
     conflicted = false;
     claimedBy = undefined;
@@ -1032,6 +1064,7 @@ export async function saveRegistration(
     overLive = undefined;
     overLifetime = undefined;
     overSpaceLifetime = undefined;
+    refusedBy = undefined;
 
     // EVERY check runs before ANY write. `editWithRetry` commits whatever the
     // closure did to the transaction, so a write followed by an early return
@@ -1117,6 +1150,13 @@ export async function saveRegistration(
       }
     }
 
+    // Last of the checks, and the first write: the companion writes only
+    // when it does not refuse.
+    if (companion !== undefined) {
+      refusedBy = companion.apply(tx);
+      if (refusedBy !== undefined) return;
+    }
+
     recordClaim?.();
 
     if (acquiring && lifetimeCell !== undefined) {
@@ -1181,6 +1221,7 @@ export async function saveRegistration(
   if (overSpaceLifetime !== undefined) {
     throw new SpaceLifetimeChannelCapError(overSpaceLifetime);
   }
+  if (refusedBy !== undefined) throw refusedBy;
   if (conflicted) throw new RegistrationConflictError();
 }
 
