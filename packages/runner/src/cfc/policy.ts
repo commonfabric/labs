@@ -645,16 +645,44 @@ const boundMembersListVariable = (pattern: unknown): string | undefined => {
 };
 
 /**
+ * Whether `pattern` names a `TransformedBy` whose input witness is written
+ * out: a literal, with no variable in it. The release then rests on evidence
+ * about the transformation's input, not on its code identity alone, so a
+ * value laundered or nudged through any other computation releases nothing.
+ */
+const isWitnessedTransformation = (pattern: AtomPattern): boolean => {
+  if (
+    !isPlainRecord(pattern) || pattern.type !== CFC_ATOM_TYPE.TransformedBy ||
+    pattern.inputWitness === undefined
+  ) {
+    return false;
+  }
+  const variables = new Set<string>();
+  collectPatternVariables([pattern.inputWitness as AtomPattern], variables);
+  return variables.size === 0;
+};
+
+/**
  * Refuses a postcondition that adds a `Members` alternative in any shape but
  * {@link boundMembersListVariable}'s, with its list variable bound by a
- * precondition pattern of the same shape. A template therefore cannot name a
- * list literal, nor rebind a list authored for another subject.
+ * precondition pattern of the same shape, and a rule that adds one without a
+ * witnessed `TransformedBy` among its integrity patterns. A template therefore
+ * cannot name a list literal, nor rebind a list authored for another subject,
+ * nor release to a list on code identity or a grant alone. A postcondition
+ * that is a bare variable would add whatever whole atom it bound, a list
+ * included, so it is refused in every rule.
  */
 const validateTemplateMembersRelease = (
   preConfidentiality: readonly AtomPattern[],
+  preIntegrity: readonly AtomPattern[],
   postConfidentiality: readonly AtomPattern[],
   where: string,
 ): void => {
+  if (postConfidentiality.some((pattern) => isAtomVarPlaceholder(pattern))) {
+    throw new Error(
+      `cfcPolicyManifest: ${where} may not add a whole bound atom as an alternative`,
+    );
+  }
   const releasable = new Set(
     preConfidentiality.slice(1).flatMap((pattern) => {
       const variable = boundMembersListVariable(pattern);
@@ -669,6 +697,11 @@ const validateTemplateMembersRelease = (
     if (variable === undefined || !releasable.has(variable)) {
       throw new Error(
         `cfcPolicyManifest: ${where} may add Members only from a precondition Members pattern on THIS_POLICY.subject`,
+      );
+    }
+    if (!preIntegrity.some(isWitnessedTransformation)) {
+      throw new Error(
+        `cfcPolicyManifest: ${where} may add Members only under a TransformedBy with a literal input witness`,
       );
     }
   }
@@ -757,7 +790,12 @@ const validatePolicyTemplateRule = (
       `${where} postCondition.confidentiality[${index}]`,
     )
   );
-  validateTemplateMembersRelease(confidentiality, postConfidentiality, where);
+  validateTemplateMembersRelease(
+    confidentiality,
+    integrity,
+    postConfidentiality,
+    where,
+  );
 
   let policyState: readonly AtomPattern[] = [];
   if (input.guard !== undefined) {

@@ -143,6 +143,7 @@ import { externalIngestStamp } from "./external-ingest.ts";
 import {
   authorsMembersAtom,
   membersCaptureClause,
+  sealAuthoredMembersClause,
   type MembersCaptureReads,
 } from "./members-capture.ts";
 import {
@@ -5353,7 +5354,9 @@ const membersCaptureReadsFor = (
     runOf: ({ space, id }) =>
       attempt(() => {
         const own = patternModuleOf(space, id);
-        if (own !== undefined) return { resultId: id, moduleIdentity: own };
+        if (own !== undefined) {
+          return { resultSpace: space, resultId: id, moduleIdentity: own };
+        }
         const result = meta(space, id, "result");
         const target = isPrimitiveCellLink(result)
           ? parseLink(result, {
@@ -5364,10 +5367,11 @@ const membersCaptureReadsFor = (
           })
           : undefined;
         if (target?.id === undefined) return undefined;
-        const module = patternModuleOf(target.space ?? space, target.id);
+        const resultSpace = target.space ?? space;
+        const module = patternModuleOf(resultSpace, target.id);
         return module === undefined
           ? undefined
-          : { resultId: target.id, moduleIdentity: module };
+          : { resultSpace, resultId: target.id, moduleIdentity: module };
       }),
     position: ({ space, id, path }) =>
       attempt(() => {
@@ -7409,7 +7413,9 @@ const derivePersistedLabel = (
         tx,
         schemaLabel.confidentiality,
         owningSpace,
-      ) as readonly CfcConfClause[] | undefined)?.map(normalizeClause),
+      ) as readonly CfcConfClause[] | undefined)?.map((clause) =>
+        normalizeClause(sealAuthoredMembersClause(clause))
+      ),
       (copiedInputLabel?.confidentiality as
         | readonly CfcConfClause[]
         | undefined)
@@ -11157,7 +11163,7 @@ export function* prepareBoundaryCommitSteps(
             const captured = membersCaptureClause({
               actingPrincipal: tx.getCfcState().trustSnapshot?.actingPrincipal,
               members: ifc.members,
-              target: { space, id },
+              target: { space, id, scope },
               flowConfidentiality,
             }, membersCaptureReadsFor(tx, scope));
             if ("refusal" in captured) {

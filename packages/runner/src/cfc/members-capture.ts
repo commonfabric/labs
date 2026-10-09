@@ -33,6 +33,7 @@ import { isExactModulePolicyRef } from "./policy.ts";
 
 /** A run of a pattern: its result document and the module it runs. */
 export type PatternRun = {
+  readonly resultSpace: string;
   readonly resultId: string;
   readonly moduleIdentity: string;
 };
@@ -74,8 +75,12 @@ export type MembersCaptureInput = {
   /** The output's `ifc.members` value: a pointer into its run's result. */
   readonly members: unknown;
 
-  /** The document the output is written to. */
-  readonly target: { readonly space: string; readonly id: string };
+  /** The document the output is written to, and its scope. */
+  readonly target: {
+    readonly space: string;
+    readonly id: string;
+    readonly scope?: string;
+  };
 
   /** The confidentiality the write carries in from its inputs. */
   readonly flowConfidentiality: readonly CfcConfClause[];
@@ -165,6 +170,11 @@ export const membersCaptureClause = (
   if (path === undefined) {
     return { refusal: "members must be a pointer into the run's result" };
   }
+  // A list position names a space-scoped document; a list in another scope
+  // would be a different document at the same id when it is read.
+  if (input.target.scope !== undefined && input.target.scope !== "space") {
+    return { refusal: "members requires a space-scoped output" };
+  }
   const owned = modulePolicyRefs(input.flowConfidentiality).filter((ref) =>
     solelyOwns(reads, ref.subject, actor)
   );
@@ -176,7 +186,10 @@ export const membersCaptureClause = (
   }
   const [policy] = owned;
   const run = reads.runOf(input.target);
-  if (run === undefined || run.moduleIdentity !== policy.moduleIdentity) {
+  if (
+    run === undefined || run.moduleIdentity !== policy.moduleIdentity ||
+    run.resultSpace !== input.target.space
+  ) {
     return {
       refusal:
         "members requires the output to belong to a run of the module the policy names",
@@ -223,3 +236,13 @@ export const authorsMembersAtom = (
       alternative.type === CFC_ATOM_TYPE.Members
     )
   );
+
+/**
+ * A schema-authored clause, sealed if it names a list: a clause with a
+ * `Members` alternative becomes the unsatisfiable `{ anyOf: [] }`, so a label
+ * a schema authors on any path can never release to a list, nor tell whose
+ * runtime renders it. The one admitted route is {@link membersCaptureClause}.
+ */
+export const sealAuthoredMembersClause = (
+  clause: CfcConfClause,
+): CfcConfClause => authorsMembersAtom([clause]) ? { anyOf: [] } : clause;

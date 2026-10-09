@@ -8,6 +8,7 @@ import {
   membersCaptureClause,
   type MembersCaptureInput,
   type MembersCaptureReads,
+  sealAuthoredMembersClause,
 } from "../src/cfc/members-capture.ts";
 
 const ALICE = "did:key:alice";
@@ -33,7 +34,10 @@ const owners: Record<string, readonly string[]> = {
 };
 
 type World = {
-  runs: Record<string, { resultId: string; moduleIdentity: string }>;
+  runs: Record<
+    string,
+    { resultSpace: string; resultId: string; moduleIdentity: string }
+  >;
   positions: Array<
     [CfcListPosition, { owners: readonly string[]; declaresWriter: boolean }]
   >;
@@ -42,7 +46,7 @@ type World = {
 
 const world = (overrides: Partial<World> = {}): World => ({
   runs: overrides.runs ??
-    { [OUTPUT]: { resultId: RESULT, moduleIdentity: MODULE } },
+    { [OUTPUT]: { resultSpace: SHARE, resultId: RESULT, moduleIdentity: MODULE } },
   positions: overrides.positions ??
     [[LIST, { owners: [ALICE], declaresWriter: true }]],
   links: overrides.links ?? [],
@@ -126,11 +130,37 @@ describe("membersCaptureClause (spec §8.7.5)", () => {
     // Another of Alice's patterns reuses the transformation: its run is of
     // a different module.
     const reused = world({
-      runs: { [OUTPUT]: { resultId: RESULT, moduleIdentity: OTHER_MODULE } },
+      runs: {
+        [OUTPUT]: {
+          resultSpace: SHARE,
+          resultId: RESULT,
+          moduleIdentity: OTHER_MODULE,
+        },
+      },
     });
     expect(refusal({}, reused)).toMatch(/run of the module/);
     expect(refusal({}, world({ runs: {} })))
       .toMatch(/run of the module/);
+  });
+
+  it("refuses an output whose run's result is in another space", () => {
+    const elsewhere = world({
+      runs: {
+        [OUTPUT]: {
+          resultSpace: "did:key:elsewhere",
+          resultId: RESULT,
+          moduleIdentity: MODULE,
+        },
+      },
+    });
+    expect(refusal({}, elsewhere)).toMatch(/run of the module/);
+  });
+
+  it("refuses an output outside the space scope", () => {
+    expect(refusal({ target: { space: SHARE, id: OUTPUT, scope: "user" } }))
+      .toMatch(/space-scoped/);
+    expect(refusal({ target: { space: SHARE, id: OUTPUT, scope: "space" } }))
+      .toBeUndefined();
   });
 
   it("refuses a list position someone else owns", () => {
@@ -164,6 +194,20 @@ describe("membersCaptureClause (spec §8.7.5)", () => {
       links: [[LIST, FAMILY]],
     });
     expect(refusal({}, linkedToEve)).toMatch(/links to/);
+  });
+});
+
+describe("sealAuthoredMembersClause", () => {
+  it("seals a schema-authored clause that names a list", () => {
+    const authored = { anyOf: [cfcAtom.user(EVE), cfcAtom.members(LIST, ALICE)] };
+    expect(sealAuthoredMembersClause(authored)).toEqual({ anyOf: [] });
+    expect(sealAuthoredMembersClause(cfcAtom.members(LIST, ALICE)))
+      .toEqual({ anyOf: [] });
+  });
+
+  it("leaves a clause without a list as it is", () => {
+    expect(sealAuthoredMembersClause(cfcAtom.user(EVE)))
+      .toEqual(cfcAtom.user(EVE));
   });
 });
 

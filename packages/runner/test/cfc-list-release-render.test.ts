@@ -53,10 +53,14 @@ const listsProvider = (
 
 // The owner's module policy: one rule that releases the policy clause to the
 // list an authored `Members` atom names for the same subject, once the value
-// carries the transformation's witness (a stand-in atom here).
+// carries the transformation's witness.
 const MODULE = "sha256:location-module";
 const SYMBOL = "locationRules";
-const WITNESS = { type: "CoarsenedFrom", source: "ingest" };
+const WITNESS = {
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: { kind: "verified", moduleIdentity: "sha256:location-module" },
+  inputWitness: { type: "GPSMeasurement" },
+};
 const manifest = buildCfcPolicyArtifactManifest({
   formatVersion: 1,
   moduleIdentity: MODULE,

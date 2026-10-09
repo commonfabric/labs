@@ -56,6 +56,24 @@ const membersPattern = (variable: string) => ({
   subject: { thisPolicyField: "subject" },
 });
 
+/** A transformation guard naming its input witness, written out. */
+const witnessed = (inputWitness: unknown) => ({
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: { kind: "verified", moduleIdentity: "sha256:module" },
+  inputWitness,
+});
+
+/** A rule releasing to the authored list under `integrity`. */
+const membersRelease = (integrity: unknown[]) => ({
+  name: "releaseToList",
+  preCondition: {
+    confidentiality: [{ thisPolicy: true }, membersPattern("$l")],
+    integrity,
+  },
+  preConfScope: "anywhere",
+  postCondition: { confidentiality: [membersPattern("$l")], integrity: [] },
+});
+
 describe("CFC module policy templates", () => {
   it("computes the normative manifest digest and deep-freezes the artifact", () => {
     const body = manifestBody();
@@ -167,16 +185,45 @@ describe("CFC module policy templates", () => {
 
   it("admits a Members release bound to THIS_POLICY.subject (spec §8.7.5)", () => {
     const body = manifestBody();
+    body.template.exchangeRules[0] = membersRelease([
+      witnessed({ type: "GPSMeasurement" }),
+    ]) as never;
+    expect(() => buildCfcPolicyArtifactManifest(body)).not.toThrow();
+  });
+
+  it("rejects a Members release without a written-out input witness", () => {
+    for (
+      const integrity of [
+        [{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: { kind: "verified", moduleIdentity: "sha256:module" },
+        }],
+        [witnessed({ var: "$anyWitness" })],
+        [{ type: CFC_ATOM_TYPE.HasRole, role: "reader" }],
+      ]
+    ) {
+      const body = manifestBody();
+      body.template.exchangeRules[0] = membersRelease(integrity) as never;
+      expect(() => buildCfcPolicyArtifactManifest(body)).toThrow(
+        /literal input witness/,
+      );
+    }
+  });
+
+  it("rejects a postcondition that adds a whole bound atom", () => {
+    const body = manifestBody();
     body.template.exchangeRules[0] = {
       ...body.template.exchangeRules[0],
       preCondition: {
         ...body.template.exchangeRules[0].preCondition,
-        confidentiality: [{ thisPolicy: true }, membersPattern("$l")],
+        confidentiality: [{ thisPolicy: true }, { var: "$m" }],
       },
       preConfScope: "anywhere",
-      postCondition: { confidentiality: [membersPattern("$l")], integrity: [] },
+      postCondition: { confidentiality: [{ var: "$m" }], integrity: [] },
     } as never;
-    expect(() => buildCfcPolicyArtifactManifest(body)).not.toThrow();
+    expect(() => buildCfcPolicyArtifactManifest(body)).toThrow(
+      /whole bound atom/,
+    );
   });
 
   it("rejects a Members postcondition naming a list literal", () => {
