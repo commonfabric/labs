@@ -178,8 +178,10 @@ describe("instance-carry-over", () => {
 
       const result = await update(cell, NAMED_WITH_SIBLING);
 
-      expect(result.aCount).toBe(7);
-      expect(result.sCount).toBe(0);
+      expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
+        aCount: 7,
+        sCount: 0,
+      });
     });
 
     it("keeps its deployed child's state when the parent carries no setup marker", async () => {
@@ -187,8 +189,10 @@ describe("instance-carry-over", () => {
 
       const result = await update(cell, NAMED_WITH_SIBLING);
 
-      expect(result.aCount).toBe(7);
-      expect(result.sCount).toBe(0);
+      expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
+        aCount: 7,
+        sCount: 0,
+      });
     });
 
     it("keeps the child it carried over across a further update", async () => {
@@ -223,8 +227,10 @@ describe("instance-carry-over", () => {
       await cell.pull();
 
       const result = cell.get() as Record<string, unknown>;
-      expect(result.aCount).toBe(7);
-      expect(result.sCount).toBe(0);
+      expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
+        aCount: 7,
+        sCount: 0,
+      });
     });
   });
 
