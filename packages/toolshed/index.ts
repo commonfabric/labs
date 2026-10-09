@@ -169,9 +169,12 @@ function startServer(onListening?: () => void) {
       return new Response("Internal Server Error", { status: 500 });
     },
     onListen: ({ port, hostname }: { port: number; hostname: string }) => {
-      console.log(`Server running on http://${hostname}:${port}`);
-      if (gate === undefined || internalApiOrigin === undefined) {
+      const ready = () => {
+        console.log(`Server running on http://${hostname}:${port}`);
         onListening?.();
+      };
+      if (gate === undefined || internalApiOrigin === undefined) {
+        ready();
         return;
       }
       admitInternalApiOrigin({
@@ -184,7 +187,7 @@ function startServer(onListening?: () => void) {
           }),
         startRuntimes,
         admit: gate.admit,
-        onListening,
+        onListening: ready,
         shuttingDown: () => isShuttingDown || ac.signal.aborted,
         exit: Deno.exit,
         log: console.log,
