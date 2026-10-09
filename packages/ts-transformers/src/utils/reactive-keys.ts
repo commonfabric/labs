@@ -74,15 +74,6 @@ export function isCommonFabricKeyExpression(
   return getCommonFabricKeyName(expr, context.checker) === targetName;
 }
 
-export function getKnownComputedKeyPathSegment(
-  expr: ts.Expression,
-  checker?: ts.TypeChecker,
-): string | undefined {
-  return getComputedPropertyKeyInfo(expr, checker, {
-    commonFabricHelperIdentifier: CF_HELPERS_IDENTIFIER,
-  })?.text;
-}
-
 export function getKnownComputedKeyExpression(
   expr: ts.Expression,
   context: TransformationContext,

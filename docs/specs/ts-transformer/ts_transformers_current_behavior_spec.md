@@ -2075,20 +2075,61 @@ adjustments:
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
   than a blanket root read) and suppresses the redundant blanket `.get()` read.
-  An element access contributes a path segment when its key is a literal, an
-  expression of a single literal type (`offers[KEY]` with `const KEY = "k"`
-  records `["offers", "k"]`, as `offers.k` does), or a Common Fabric key such
-  as `NAME`. The key's literal type is trusted as its run-time value, so a key
-  whose type is wrong about it — an `as` cast, or a flow narrowing gone stale
-  after a closure reassigned the variable — narrows the schema to the key the
-  type names rather than the one read. A key that can name any member
-  (`offers[key.get()]`, a `string`-typed variable or a widened `let`, a
-  callback parameter, a union of literal types) leaves the chain unresolved.
+  An element access contributes a path segment when its key is a literal, a
+  Common Fabric key such as `NAME`, or an expression whose declared type is a
+  single literal (`offers[KEY]` with `const KEY = "k"` records
+  `["offers", "k"]`, as `offers.k` does; so do an enum member and a parameter
+  typed `"k"`). A reference is judged by the type it is declared with, not the
+  type flow narrowing gives it at the use, since a narrowing can go stale when
+  a call between the test and the use assigns the variable again. A declared
+  type counts only when every step from the key to it is a declaration: a
+  reference whose declaration writes its type (a parameter, a property
+  signature, an annotated variable) or takes it from an initializer that
+  itself counts (a `const` copied from another, a property of an object
+  initialized `as const`, a class field, a shorthand property, a name
+  destructured from such a property), and a call whose signature writes its
+  return type. A type assertion anywhere on the way is not taken for the key's
+  value, whether at the key (`offers[key as "k"]`), in the initializer of the
+  variable the key names, or further back (`const key = asserted`, or
+  `holder.key` with `holder = { key: raw as "k" }`); `as const` is. A property counts
+  only when its receiver does, so a property of a value cast to a type that
+  declares it does not. It is the property the receiver's declared type has,
+  not the one a narrowing of the receiver picks, so a property of a union,
+  which holds every member's literal, does not fix the path. And it counts
+  only when it holds the literal its declaration writes, so a generic property
+  declared `T` that a cast instantiates does not.
+  A key reached through anything else, such as an element access, an
+  operator, a getter, a parameter typed by its context, a generic call or a
+  property no declaration writes, does not fix the path. The same rule decides a `.key()` argument and a computed
+  property name (`policy/capability-analysis.ts`, `getStaticPathKey()`;
+  `test/policy/capability-analysis-static-keys.test.ts`). A key that can name
+  any member (`offers[key.get()]`, a `string`-typed variable or a widened
+  `let`, a callback parameter, a union of literal types, a key the rule above
+  does not fix) makes the access a read of the whole static prefix above the
+  key, `["offers"]` for `x.get().offers[key].space`, the same however the
+  access is spelled: through the `.get()` chain, an alias of a member above the
+  key, `.key("offers").get()`, a fallback's operand, an identity call, or a
+  `for..of` (an alias of the whole `.get()` result, `const c = x.get()`, still
+  reads the whole value, as it does before a static key). The prefix is read
+  in full and recorded where a wildcard's prefix
+  is, so the identity markings under it are erased as a wildcard's are, but it
+  is not a wildcard: the rest of the root still shrinks, and the
+  scheduler-scope marker is kept. A key that reads a capture
+  (`items[selected.get()]`) is a read of its own wherever the access sits, and
+  where the analysis resolves a fallback's operand or a `for..of` iterable to
+  a ref in place of walking it, it still visits what that operand evaluates:
+each operand of a fallback, wherever on the member spine it sits, a call on
+  the spine with its arguments and callbacks, and the keys on the spine. A
+  write through such a key (`counts.key(i).set(v)`) stays a wildcard and is
+  also recorded as a write of the prefix, so the prefix's capability says it
+  is written. A `.key()` call with such a key, an argument passed to a callee
+  whose signature or summary gives it a capability, and a destructuring by a
+  computed key (`const { [key]: value } = x`) stay wildcards.
   The suppression applies only to the calls of a chain that resolves in full,
-  including a chain nested in a fallback that resolves by its other operand
-  (`a.get().p ?? x.get().offers[key].space`), so an unresolved chain keeps the
-  blanket read: its `.get()` receiver is read in full
-  (`policy/capability-analysis.ts`; fixtures
+  judged for each operand of a fallback on its own, so a chain that does not
+  resolve keeps the blanket read: its `.get()` receiver is read in full
+  (`policy/capability-analysis.ts`;
+  `test/policy/capability-analysis-dynamic-keys.test.ts`; fixtures
   `closures/computed-element-access-*`,
   `handler-schema/handler-element-access-dynamic-key`,
   `schema-injection/lift-element-access-dynamic-key`)

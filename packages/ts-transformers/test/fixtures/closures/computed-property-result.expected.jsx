@@ -41,7 +41,7 @@ const __cfLift_1 = __cfHelpers.lift<{
     required: ["value", "config", "key"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
-} as const satisfies __cfHelpers.JSONSchema);
+} as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-property-result
 // Verifies: computed property access with a dynamic key captures both the object and the key
 //   computed(() => expr) → lift(schema, schema)({ value, config, key })
