@@ -21,7 +21,10 @@ export type MetaLinkField = typeof META_LINK_FIELDS[number];
  * result cell to its argument cell. `internal` holds a manifest of links to
  * derived internal cells. `schema` stores the schema for a result cell.
  * `patternSetupIdentity` records the pattern identity whose complete setup
- * state was installed on a result cell. `result` lets a result cell link to
+ * state was installed on a result cell. `instanceChildren` records, by
+ * instance name, a child a named sub-pattern instance carried over from where
+ * a version of the pattern without instance names set it up. `result` lets a
+ * result cell link to
  * its parent result cell, and lets the argument and derived internal cells
  * link back to the result cell.
  *
@@ -54,6 +57,7 @@ export const META_FIELDS = Object.freeze(
     // reference recorded when system-pattern auto-update replaces an unloadable
     // sourceless root — the recovery pointer for a displaced custom program
     "internal",
+    "instanceChildren", // {[instanceName]: {space, id, scope}} carried over
     "schema",
     "slug",
   ] as const,

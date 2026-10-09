@@ -118,6 +118,12 @@ function createReactiveVariableForVisitor(
           declaration.name.text,
           context,
         );
+      } else if (isNameableInstance(initializer, context)) {
+        initializer = createNameInstanceCall(
+          initializer,
+          declaration.name.text,
+          context,
+        );
       }
 
       if (initializer === declaration.initializer) {
@@ -582,6 +588,40 @@ function visitObjectPropertyInitializerWithCausePath(
       shouldRetargetReactiveReference(visited, context)
     ? createForCall(visited, causePath, context)
     : visited;
+}
+
+/**
+ * Reports whether `initializer` is a sub-pattern instance to give an instance
+ * name: a call to a pattern factory, with no authored `.for()` in its chain.
+ * An instance takes no cause of its own, since a cause would outrank the name
+ * the pattern builder takes from a result key or a node input; the instance
+ * name ranks below both.
+ */
+function isNameableInstance(
+  initializer: ts.Expression,
+  context: TransformationContext,
+): boolean {
+  if (chainContainsForCall(initializer)) return false;
+  const expression = unwrapExpression(initializer);
+  return ts.isCallExpression(expression) &&
+    isPatternFactoryCalleeExpression(expression.expression, context.checker);
+}
+
+/**
+ * Wraps the sub-pattern instance `initializer` in
+ * `__cfHelpers.nameInstance(initializer, name)`.
+ */
+function createNameInstanceCall(
+  initializer: ts.Expression,
+  name: string,
+  context: TransformationContext,
+): ts.Expression {
+  return context.cfHelpers.createHelperCall(
+    "nameInstance",
+    initializer,
+    undefined,
+    [initializer, context.factory.createStringLiteral(name)],
+  );
 }
 
 function shouldAddVariableFor(

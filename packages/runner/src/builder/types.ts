@@ -281,6 +281,14 @@ export type DerivedInternalCellDescriptor = {
    * `docs/specs/computed-cell-identity.md`.
    */
   kind?: EntityKind;
+
+  /**
+   * For a named sub-pattern instance, the positional `{ $generated: N }` cause
+   * its root takes where instance names are not given. A child a parent set
+   * up under that cause is found again under the instance's own cause. See
+   * `docs/specs/computed-cell-identity.md`.
+   */
+  legacyPartialCause?: JSONValue;
 };
 
 declare module "@commonfabric/api" {
@@ -574,11 +582,13 @@ export interface BuilderFunctionsAndConstants extends
 
   // The rest of this interface is what the sandbox binds beyond what
   // `@commonfabric/api` declares. Pattern source cannot name any of it: the
-  // assert-diagnostics transformer reaches the two operand recorders through
-  // the injected `__cfHelpers` object, JSX lowering emits calls to `h`, and the
-  // two schemas are read by the runner rather than by pattern code.
+  // assert-diagnostics transformer reaches the two operand recorders, and the
+  // reactive-variable stage reaches `nameInstance`, through the injected
+  // `__cfHelpers` object, JSX lowering emits calls to `h`, and the two schemas
+  // are read by the runner rather than by pattern code.
   assertCapture: AssertCaptureFunction;
   assertRenderParts: AssertRenderPartsFunction;
+  nameInstance: <T>(value: T, name: string) => T;
   h: HFunction;
   AuthSchema: typeof AuthSchema;
   WebhookConfigSchema: typeof WebhookConfigSchema;
