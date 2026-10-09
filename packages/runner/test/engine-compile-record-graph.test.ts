@@ -251,6 +251,43 @@ describe("Engine.compileToRecordGraph()", () => {
     await expect(engine.compileToRecordGraph(program)).rejects.toThrow();
   });
 
+  describe("a compile error's location", () => {
+    // The engine adds a helper import ahead of each authored file before
+    // compiling it, so the compiler sees every authored line one line lower.
+
+    /** The message `compileToRecordGraph()` rejects with for `body`. */
+    async function compileErrorMessage(body: string): Promise<string> {
+      const program: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: body }],
+      };
+      try {
+        await engine.compileToRecordGraph(program);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error("Expected the compile to fail");
+    }
+
+    it("names the authored line of a type error and quotes it", async () => {
+      const message = await compileErrorMessage(
+        "export default 1;\nconst wrong: number = 'text';\n",
+      );
+
+      expect(message).toContain("2 | const wrong: number = 'text';");
+      expect(message).not.toContain("3 | const wrong");
+    });
+
+    it("names the authored line of a transformer error and quotes it", async () => {
+      const message = await compileErrorMessage(
+        "export default 1;\nlet counter = 0;\n",
+      );
+
+      expect(message).toContain("/main.tsx:2:1 - error:");
+      expect(message).toContain("2 | let counter = 0;");
+    });
+  });
+
   it("emits __cf_data for CTS top-level data and evaluates it at runtime", async () => {
     const program: RuntimeProgram = {
       main: "/main.tsx",

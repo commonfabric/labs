@@ -61,6 +61,10 @@ Before AST transforms, `transformCfDirective()`:
    guard below parse with the script kind the file name implies, so a `.ts`
    module's angle-bracket assertions do not read as JSX. Either trailer is
    two lines. §16.5 depends on that split: exactly one line is prepended.
+   So does diagnostic reporting: a stage reports a line of the prepended
+   source, and the runtime engine names the authored line when it formats the
+   diagnostic, TypeScript's own included (the `authoredSource` compiler
+   option, `packages/js-compiler/typescript/diagnostics/errors.ts`).
 3. Rejects sources that contain identifier `__cfHelpers` (or the reserved
    fallback shim name `__cfHelpersShim`) anywhere in the AST.
 
