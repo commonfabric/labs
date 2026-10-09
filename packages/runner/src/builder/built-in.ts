@@ -19,6 +19,7 @@ import type {
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
+  PolicySecretHashesFunction,
   PolicySecretHashFunction,
   SqliteDatabaseFunction,
   SqliteQueryFunction,
@@ -197,6 +198,13 @@ export const policySecretHash = createNodeFactory({
   implementation: "policySecretHash",
   resultSchema: { type: "string" },
 }) as PolicySecretHashFunction;
+
+// The same builtin over a list: one hash per input string, in order.
+export const policySecretHashes = createNodeFactory({
+  type: "ref",
+  implementation: "policySecretHash",
+  resultSchema: { type: "array", items: { type: "string" } },
+}) as PolicySecretHashesFunction;
 
 export const fetchJsonUnchecked = createNodeFactory({
   type: "ref",

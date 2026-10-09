@@ -3024,6 +3024,23 @@ export type PolicySecretHashFunction = <T extends string>(
 ) => Reactive<T | undefined>;
 
 /**
+ * Like {@link PolicySecretHashFunction}, except that `input` is a list of
+ * strings and the result is the list of their keyed hashes, one per input in
+ * the same order. The builtin writes the whole list itself, so an exchange
+ * rule can require it as the input witness of a function that decides over
+ * the list. `T` names the type of each hash, as it does for
+ * `policySecretHash`. The result is `undefined` until the key is available,
+ * and while the input is unset.
+ */
+export type PolicySecretHashesFunction = <T extends string>(
+  params: FactoryInput<{
+    input: string[];
+    schema?: JSONSchema;
+    result?: T[];
+  }>,
+) => Reactive<T[] | undefined>;
+
+/**
  * The cell a URL names, if it names one.
  *
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
@@ -3971,6 +3988,7 @@ export declare const cfSqlite: CfSqliteHelpers;
 export declare const navigateTo: NavigateToFunction;
 export declare const inspectConfLabel: InspectConfLabelFunction;
 export declare const policySecretHash: PolicySecretHashFunction;
+export declare const policySecretHashes: PolicySecretHashesFunction;
 export declare const wish: WishFunction;
 
 /**

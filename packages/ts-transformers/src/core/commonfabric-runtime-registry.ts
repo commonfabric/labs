@@ -281,12 +281,18 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
-  // `policySecretHash` gets type-argument schema injection in
-  // schema-injection.ts, like `fetchJson`: the injected `schema` names the
-  // module policy its result belongs to, and the call is a compile error
-  // without a type argument.
+  // `policySecretHash` and its list form `policySecretHashes` get
+  // type-argument schema injection in schema-injection.ts, like `fetchJson`:
+  // the injected `schema` names the module policy the result belongs to, and
+  // the call is a compile error without a type argument.
   {
     exportName: "policySecretHash",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "policySecretHashes",
     category: "call",
     callKind: "runtime-call",
     reactiveOrigin: true,

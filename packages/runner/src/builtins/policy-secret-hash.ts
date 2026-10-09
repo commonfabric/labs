@@ -47,7 +47,9 @@ export const POLICY_SECRET_HASH_WRITER = "policySecretHash";
 const INPUT_SCHEMA = {
   type: "object",
   properties: {
-    input: { type: "string" },
+    input: {
+      anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+    },
     schema: { type: "object", additionalProperties: true },
   },
 } as const satisfies JSONSchema;
@@ -168,6 +170,32 @@ const reportUnobtainableKey = (
   );
 };
 
+/** Returns the hash of `input` under `key`, or of each string in it. */
+const hashesOf = (key: string, input: string | string[]): string | string[] =>
+  typeof input === "string"
+    ? policySecretHashOf(key, input)
+    : input.map((item) => policySecretHashOf(key, item));
+
+/**
+ * Returns the input of a `policySecretHash` or `policySecretHashes` call as
+ * plain data: a string, a list of strings, or `undefined` while it is unset.
+ *
+ * @throws Error when the input is anything else.
+ */
+const inputOf = (input: unknown): string | string[] | undefined => {
+  if (input === undefined || typeof input === "string") return input;
+  const items = Array.isArray(input) ? snapshotQueryResult(input) : undefined;
+  if (
+    Array.isArray(items) && items.every((item) => typeof item === "string")
+  ) {
+    return items;
+  }
+  throw new Error(
+    "policySecretHash: `input` must be a string, or for `policySecretHashes` " +
+      "a list of strings",
+  );
+};
+
 /**
  * `policySecretHash<T>({ input })`: the keyed hash of the string `input` under
  * the key of the module policy `T` names, so that only the policy's exchange
@@ -181,9 +209,13 @@ const reportUnobtainableKey = (
  * `TransformedBy{builtin policySecretHash}`. The result is unset until the key
  * is available and while the input is, and the builtin writes nothing unless
  * the runtime enforces CFC and persists flow labels.
+ *
+ * `policySecretHashes<T>({ input })` is the same builtin over a list of
+ * strings: its result is the list of their hashes, in order, written whole
+ * by the builtin under the same identity.
  */
 export function policySecretHash(
-  inputsCell: Cell<{ input?: string; schema?: unknown }>,
+  inputsCell: Cell<{ input?: string | string[]; schema?: unknown }>,
   sendResult: (tx: IExtendedStorageTransaction, result: unknown) => void,
   addCancel: (cancel: () => void) => void,
   _cause: unknown,
@@ -218,10 +250,7 @@ export function policySecretHash(
     const space = parentCell.space;
     const secret = modulePolicySecret(marker);
 
-    const input = inputs.key("input").get();
-    if (input !== undefined && typeof input !== "string") {
-      throw new Error("policySecretHash: `input` must be a string");
-    }
+    const input = inputOf(inputs.key("input").get());
 
     let key: string | undefined;
     if (mintsInFlight.get(runtime)?.has(`${space}\n${secret.name}`)) {
@@ -259,7 +288,7 @@ export function policySecretHash(
         tx,
         key === undefined || input === undefined
           ? undefined
-          : policySecretHashOf(key, input),
+          : hashesOf(key, input),
       );
     } finally {
       setCfcImplementationIdentity(tx, prior);

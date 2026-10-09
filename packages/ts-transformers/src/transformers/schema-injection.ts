@@ -104,6 +104,12 @@ const TYPED_SCHEMA_CALLS: ReadonlyMap<
       "its module policy, e.g. policySecretHash<Confidential<string, " +
       "readonly [PolicyOf<typeof rules>]>>({ input }).",
   }],
+  ["policySecretHashes", {
+    diagnostic: "policy-secret-hash:missing-type-argument",
+    message: "policySecretHashes requires an explicit type argument naming " +
+      "its module policy, e.g. policySecretHashes<Confidential<string, " +
+      "readonly [PolicyOf<typeof rules>]>>({ input }).",
+  }],
 ]);
 
 /**
@@ -4541,13 +4547,14 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         }
       }
 
-      // fetchJson<T>({ url, ... }) and policySecretHash<T>({ input }) lower
-      // the T type argument to an injected `schema` property (mirrors
-      // generate-object's `schema` and sqliteQuery's `rowSchema`). The
-      // fetchJson builtin verifies the fetched JSON against it at fetch time;
-      // the policySecretHash builtin reads the module policy its result
-      // belongs to off it. A type argument is required for both;
-      // fetchJsonUnchecked is fetchJson's untyped escape hatch.
+      // fetchJson<T>({ url, ... }), policySecretHash<T>({ input }) and its
+      // list form policySecretHashes<T>({ input }) lower the T type argument
+      // to an injected `schema` property (mirrors generate-object's `schema`
+      // and sqliteQuery's `rowSchema`). The fetchJson builtin verifies the
+      // fetched JSON against it at fetch time; the policySecretHash builtin
+      // reads the module policy its result belongs to off it. A type
+      // argument is required for each; fetchJsonUnchecked is fetchJson's
+      // untyped escape hatch.
       const typedSchemaCall = callKind?.kind === "runtime-call"
         ? TYPED_SCHEMA_CALLS.get(callKind.exportName)
         : undefined;

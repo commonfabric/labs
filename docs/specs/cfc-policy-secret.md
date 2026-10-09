@@ -188,6 +188,12 @@ export default pattern(() => ({
 }));
 ```
 
+`policySecretHashes<T>({ input })` is the same builtin over a list of strings.
+`T` is still the type of one hash, and the result is the list of the inputs'
+hashes in their order, which the builtin writes whole, so a decision over any
+number of candidates reads one list:
+`drawWinner({ candidates, hashes: policySecretHashes<DrawHash>({ input: candidates }) })`.
+
 The transformer lowers the type argument to the schema it injects into the
 call, as it does for `fetchJson<T>()`, and refuses the call without one.
 `PolicyOf<typeof drawRules>` lowers to the compiled marker that names the rule
@@ -196,7 +202,7 @@ unset, unless:
 
 - the schema describes a string whose confidentiality is exactly one clause
   holding exactly one compiled module-policy marker;
-- the input is a string;
+- the input is a string, or for `policySecretHashes` a list of strings;
 - the runtime enforces CFC (`enforce-explicit` or `enforce-strict`) and
   persists flow labels. Below either, nothing would refuse a hash written
   where its label does not fit, or the hash would be written without the
@@ -213,12 +219,13 @@ consume it stay deterministic. Until the
 key is available, and while the input is unset, the result is `undefined`, and
 code consuming it has to decide nothing then.
 
-The builtin writes the hash as its result, under its own builtin identity, in a
-transaction that read the key with `readRuntimeSecretIntoFlow()` and the input
-with an ordinary read. The result therefore carries what that transaction's flow
-carries: the policy's clause, every label the input carried, and
-`TransformedBy{builtin policySecretHash}`. A hash of an input another policy
-governs carries both clauses, and each policy's rules can drop only their own.
+The builtin writes the hash, or the list of hashes, as its result, under its own
+builtin identity, in a transaction that read the key with
+`readRuntimeSecretIntoFlow()` and the input with an ordinary read. The result
+therefore carries what that transaction's flow carries: the policy's clause,
+every label the input carried, and `TransformedBy{builtin policySecretHash}`. A
+hash of an input another policy governs carries both clauses, and each policy's
+rules can drop only their own.
 
 When no trusted key is readable, the builtin obtains one before it computes:
 
@@ -234,11 +241,11 @@ When no trusted key is readable, the builtin obtains one before it computes:
 ## How a policy uses it
 
 The policy's endorsed function, `drawWinner` above, reads hashes like any other
-input and computes its decision. It reads each hash as an input of its own: a
-list `.map()` builds carries no witness (see below). The rule releases the
-decision because the endorsed function computed it, and requires, through its
-input witness, that every confidential input the function read was a hash the
-builtin wrote.
+input and computes its decision. It reads each hash as an input of its own, or
+reads the list `policySecretHashes` writes; a list `.map()` builds carries no
+witness (see below). The rule releases the decision because the endorsed
+function computed it, and requires, through its input witness, that every
+confidential input the function read was a hash the builtin wrote.
 
 The witness is what refuses a stand-in. Code can derive from a hash a value that
 selects one of two outcomes by one bit of the hash, and feed it to the endorsed
@@ -278,9 +285,8 @@ policy's clause is, and no better.
   unattributed, so a rule requiring the builtin's witness refuses whatever the
   endorsed function computes over the list
   ([input witnesses](cfc-transformed-by-input-witnesses.md), "An unattributed
-  input"). A decision over hashes is witness-guarded only when the endorsed
-  function takes each hash as an input of its own, so a fixed set of
-  candidates rather than a list.
+  input"). A decision over a list of hashes is witness-guarded when the
+  endorsed function reads the list `policySecretHashes` writes instead.
 - **Chosen inputs.** The builtin hashes any input any code passes it, so any
   code holds the hash of any input it can name, under the policy's clause. An
   endorsed function that compares a hash against a caller-chosen number is an

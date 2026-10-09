@@ -167,6 +167,7 @@ import {
   type MaxConfidentiality,
   pattern,
   policySecretHash,
+  policySecretHashes,
   Writable,
 } from "commonfabric";
 import { collectHashes, type DrawHash, drawWinner } from "./policy.tsx";
@@ -198,6 +199,7 @@ interface Rooms {
   name: Writable<Default<string, "carol">>;
   items: Writable<Default<string[], ["alice", "bob"]>>;
   roomMapped: Writable<Default<RoomText, "">>;
+  roomListed: Writable<Default<RoomText, "">>;
   roomCollected: Writable<Default<RoomText, "">>;
   roomCollectedStandIn: Writable<Default<RoomText, "">>;
   roomWinner: Writable<Default<RoomText, "">>;
@@ -211,6 +213,7 @@ export default pattern<Rooms>((
     name,
     items,
     roomMapped,
+    roomListed,
     roomCollected,
     roomCollectedStandIn,
     roomWinner,
@@ -234,6 +237,8 @@ export default pattern<Rooms>((
     candidates: items,
     hashes: items.map((item) => policySecretHash<DrawHash>({ input: item })),
   });
+  const listedHashes = policySecretHashes<DrawHash>({ input: items });
+  const listedWinner = drawWinner({ candidates: items, hashes: listedHashes });
   const collectedWinner = drawWinner({
     candidates: ["alice", "bob"],
     hashes: collectHashes({ hashes: [alice, bob] }),
@@ -265,12 +270,16 @@ export default pattern<Rooms>((
     roomRelabel,
     roomStandIn,
     roomMapped,
+    listedHashes,
+    listedWinner,
+    roomListed,
     publishWinner: publish({ from: winner, to: roomWinner }),
     publishEcho: publish({ from: echo(alice), to: roomEcho }),
     publishRelabel: publish({ from: relabel(alice), to: roomRelabel }),
     publishStandIn: publish({ from: steered, to: roomStandIn }),
     rename: rename({ name }),
     publishMapped: publish({ from: mappedWinner, to: roomMapped }),
+    publishListed: publish({ from: listedWinner, to: roomListed }),
     publishCollected: publish({ from: collectedWinner, to: roomCollected }),
     publishCollectedStandIn: publish({
       from: collectedSteered,
@@ -298,10 +307,13 @@ type Draw = {
   nameHash?: string;
   winner?: string;
   mappedWinner?: string;
+  listedHashes?: string[];
+  listedWinner?: string;
   collectedWinner?: string;
   collectedSteered?: string;
   steered?: string;
   roomMapped: string;
+  roomListed: string;
   roomCollected: string;
   roomCollectedStandIn: string;
   roomWinner: string;
@@ -555,6 +567,42 @@ describe("policySecretHash()", () => {
 
         await send("publishMapped");
         expect((await read()).roomMapped).toBe("");
+      });
+    });
+  });
+
+  it("hands out the hash of each input in a list, in order", async () => {
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(runtime, "draw-listed-hashes", async ({ result, read }) => {
+        const listed = await waitForCellValue<string[] | undefined>(
+          runtime,
+          result.key("listedHashes"),
+          (value) => value?.length === 2,
+          { stuckLabel: "the listed hashes" },
+        );
+        const { alice, bob } = await read();
+        expect(listed).toEqual([alice, bob]);
+      });
+    });
+  });
+
+  it("releases what the endorsed function computes over the list of hashes the builtin wrote", async () => {
+    // The list form writes the whole list in the transaction that read the
+    // key, so every location of it carries the builtin's witness, and the
+    // rule requiring that witness of the decision releases it.
+
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(runtime, "draw-listed", async ({ result, send, read }) => {
+        const { winner } = await read();
+        await waitForCellValue<string>(
+          runtime,
+          result.key("listedWinner"),
+          (value) => value === winner,
+          { stuckLabel: "the listed draw" },
+        );
+
+        await send("publishListed");
+        expect((await read()).roomListed).toBe(winner);
       });
     });
   });
