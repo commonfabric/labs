@@ -31,6 +31,8 @@ const NODEJS_PKG_URL = pathToFileURL(path.join(NODEJS_DIR, "package.json"))
 const REPLACEMENTS = {
   "jsr:@db/sqlite": pathToFileURL(path.join(NODEJS_DIR, "lib/sqlite.mjs"))
     .href,
+  "jsr:@denosaurs/plug": pathToFileURL(path.join(NODEJS_DIR, "lib/plug.mjs"))
+    .href,
 };
 
 const workspace = loadWorkspace();
