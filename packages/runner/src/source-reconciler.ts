@@ -32,10 +32,6 @@
  */
 
 import { isDID } from "@commonfabric/identity/did";
-import {
-  CompilerError,
-  TransformerError,
-} from "@commonfabric/js-compiler/errors";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { LRUCache } from "@commonfabric/utils/cache";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
@@ -46,6 +42,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { Pattern } from "./builder/types.ts";
 import type { Cell } from "./cell.ts";
 import { prepareSourceClosureVerification } from "./compilation-cache/cell-cache.ts";
+import { isDeterministicCompileFailure } from "./harness/compile-failure.ts";
 import type { RuntimeProgram } from "./harness/types.ts";
 import type { PreparedSourceUpdate } from "./pattern-manager.ts";
 import {
@@ -182,16 +179,6 @@ function reconciliationFor(
     ...offered,
     ...(state.detail === undefined ? {} : { detail: state.detail }),
   };
-}
-
-/**
- * Whether `error` is the compiler's verdict on the source it was given, which
- * is the same every time that source is compiled. Anything else that stops a
- * compile, such as storage failing or a compiler that would not load, may not
- * be.
- */
-function isSourceRejection(error: unknown): boolean {
-  return error instanceof CompilerError || error instanceof TransformerError;
 }
 
 async function abortable<T>(
@@ -1165,9 +1152,10 @@ export class SourceReconciler {
    *
    * `advertisedIdentity`, where the origin supplied one, must equal what the
    * candidate compiles to. A source that does not produce the identity its own
-   * origin advertises is not the source that origin names. That, and source
-   * the compiler rejects, are refused: a runtime that compiles the same bytes
-   * differently from the host serving them gets the same answer every time.
+   * origin advertises is not the source that origin names, and is refused.
+   * So is a candidate whose compile fails in a way that recurs for the same
+   * source ({@link isDeterministicCompileFailure}), or whose selected export is
+   * not a pattern; any other compile failure throws.
    *
    * The transition records the origin the piece already follows, as an
    * update to it. A `claim` records a different one instead: the origin a
@@ -1177,7 +1165,7 @@ export class SourceReconciler {
   async #adopt(
     resultCell: Cell<unknown>,
     state: PieceState,
-    program: Parameters<Runtime["patternManager"]["compilePattern"]>[0],
+    program: RuntimeProgram,
     origin: PieceOriginKind,
     signal: AbortSignal,
     advertisedIdentity?: string,
@@ -1191,7 +1179,7 @@ export class SourceReconciler {
         space: state.space,
       });
     } catch (error) {
-      if (!isSourceRejection(error)) throw error;
+      if (!isDeterministicCompileFailure(error)) throw error;
       logger.warn("candidate-did-not-compile", () => [
         "the origin's current source did not compile",
         state.space,
@@ -1211,7 +1199,13 @@ export class SourceReconciler {
         state.space,
         state.storedSource,
       ]);
-      return "unavailable";
+      return {
+        outcome: "refused",
+        reason: "source-invalid",
+        detail: `its \`${
+          program.mainExport ?? "default"
+        }\` export is not a pattern`,
+      };
     }
     if (
       advertisedIdentity !== undefined &&

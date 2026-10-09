@@ -3319,7 +3319,11 @@ export class PatternManager {
     );
   }
 
-  /** Resolves a `Pattern` from an evaluate result. */
+  /**
+   * Resolves a `Pattern` from an evaluate result. A program with no exports,
+   * or without the export it selects, fails the same way every time it is
+   * compiled, and the failure is marked as such.
+   */
   #patternFromEvaluation(
     result: EvaluateResult,
     program: RuntimeProgram,
@@ -3328,11 +3332,13 @@ export class PatternManager {
     this.registerEvaluatedModules(result);
     const { main } = result;
     if (!main) {
-      throw new Error("Pattern compilation produced no exports.");
+      throw deterministicCompileError(
+        "Pattern compilation produced no exports.",
+      );
     }
     const exportName = program.mainExport ?? "default";
     if (!(exportName in main)) {
-      throw new Error(
+      throw deterministicCompileError(
         `No "${exportName}" export found in compiled pattern.`,
       );
     }

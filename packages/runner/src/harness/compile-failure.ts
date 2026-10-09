@@ -1,12 +1,16 @@
 /**
- * Marker for deterministic compile failures on the by-identity cold-load
- * path.
+ * Marker for compile failures that recur whenever the same source is compiled
+ * in this runtime, which a reader may take as a verdict on the source rather
+ * than retry.
  *
- * The negative memo must never turn a transient storage or resolver failure
- * into a session-long outage. The engine therefore marks only failures that
- * are pure functions of an already verified, content-addressed source
- * closure. Unmarked failures remain retryable, and marking refuses allocation
- * failures outright — heap pressure is not a function of the source.
+ * Such a verdict must never be made of a transient storage or resolver
+ * failure, so only the steps that are pure functions of the source they are
+ * given mark what they throw. Resolution, evaluation, and storage failures stay
+ * unmarked and retryable, and marking refuses allocation failures outright —
+ * heap pressure is not a function of the source. A failure that a hook the
+ * caller supplied raises inside a marked step, such as a pattern-coverage
+ * collector's, is marked along with it, so a reader whose compile ran such a
+ * hook does not rely on the mark.
  *
  * Boot-safe: no TypeScript or compiler-stack imports.
  */

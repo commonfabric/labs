@@ -472,25 +472,26 @@ describe("piece source reconciliation", () => {
     });
 
     it("keeps the running source when the candidate compiles to no identity", async () => {
-      // Nothing can point a piece at source that has no identity to point at,
-      // so a candidate the compiler produces without one is refused rather
-      // than adopted under whatever the piece already records.
-      const v2Identity = await identityFor(source("v2"));
+      // Nothing can point a piece at source that has no identity to point at.
+      // An export that is not a pattern the runtime built has none, and it is
+      // the same export every time this source is offered.
+      const notAPattern = `export const ${SYMBOL} = { marker: "v2" };\n`;
+      const advertised = await identityFor(notAPattern);
       const piece = await preparePiece(
-        servingFetch(() => v2Identity, () => source("v2")),
+        servingFetch(() => advertised, () => notAPattern),
       );
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      const manager = runtime.patternManager;
-      const entryRef = manager.getArtifactEntryRef.bind(manager);
-      manager.getArtifactEntryRef = () => undefined;
-      try {
-        expect(await reconcile(piece)).toBe("unavailable");
-      } finally {
-        manager.getArtifactEntryRef = entryRef;
-      }
+      expect(await reconcile(piece)).toBe("refused");
+
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.detail).toContain(SYMBOL);
     });
 
     it("records the pattern it displaced when its source is gone", async () => {
@@ -769,8 +770,8 @@ describe("piece source reconciliation", () => {
     });
 
     it("records source that does not compile as refused", async () => {
-      // The same holds for source this runtime cannot compile at all, which is
-      // how a host running a newer runtime than this one usually shows.
+      // Source this runtime cannot compile gets the same answer every time it
+      // is offered, so it must not read as an origin that may yet come back.
       const uncompilable = [
         "import { pattern } from 'commonfabric';",
         `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: notDeclaredAnywhere }));`,
@@ -791,12 +792,76 @@ describe("piece source reconciliation", () => {
         origin: PARENT_SOURCE,
         offered: { identity: advertised, symbol: SYMBOL },
       });
-      // What the compiler said is the reason, on a line of its own.
+      // What the compiler said is the detail the record keeps.
       expect(getPieceReconciliation(piece)?.detail).toContain(
         "notDeclaredAnywhere",
       );
       expect(outcome).toBe("refused");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+    });
+
+    it("records source that uses a name the compiler reserves as refused", async () => {
+      // Rejected before the compiler proper runs, and as surely every time.
+      const reserved = `const __cfHelpers = "taken";\n${source("v2")}`;
+      const advertised = await identityFor(reserved);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => reserved),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("refused");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.detail).toContain("__cfHelpers");
+    });
+
+    it("records source that lacks the export the piece runs as refused", async () => {
+      // The parent compiles, and exports the pattern only as its default.
+      const parentWithoutSymbol = [
+        `import { ${SYMBOL} } from "./reconcile-target.tsx";`,
+        `export default ${SYMBOL};`,
+        "",
+      ].join("\n");
+      const files = new Map([
+        [PARENT_PATH, parentWithoutSymbol],
+        [SOURCE_PATH, source("v2")],
+      ]);
+      const read = (name: string) =>
+        files.has(name)
+          ? Promise.resolve(files.get(name)!)
+          : Promise.reject(new Error(`not found: ${name}`));
+      const advertised = await resolveEntryIdentity(PARENT_PATH, read);
+      const piece = await preparePiece((input) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        const body = url.searchParams.has("identity")
+          ? advertised
+          : files.get(url.pathname);
+        return Promise.resolve(
+          new Response(body ?? "not found", { status: body ? 200 : 404 }),
+        );
+      });
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("refused");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.detail).toContain(
+        `No "${SYMBOL}" export`,
+      );
     });
 
     it("records a compile that failed for a reason other than the source as unreachable", async () => {

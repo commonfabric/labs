@@ -480,8 +480,10 @@ export class Engine extends EventTarget {
       // are awaited — load the deferred compiler stack up front.
       await ensureCompilerStack();
       const id = options.identifier ?? computeId(program);
-      assertNoReservedFabricPaths(program.files);
-      const mappedProgram = pretransformProgramForModules(program, id);
+      const mappedProgram = deterministicCompileStep(() => {
+        assertNoReservedFabricPaths(program.files);
+        return pretransformProgramForModules(program, id);
+      });
       const sourceRoots = canonicalSourceRoots(
         mappedProgram.main,
         mappedProgram.sourceRoots,
@@ -520,7 +522,9 @@ export class Engine extends EventTarget {
       // modules are already injected by `pretransformProgramForModules`.
       const resolvedForCompile = {
         ...resolvedProgram,
-        files: injectMountSources(resolvedFiles),
+        files: deterministicCompileStep(() =>
+          injectMountSources(resolvedFiles)
+        ),
       };
 
       // Authored (non-.d.ts) sources are the modules that must have a body.
@@ -689,18 +693,25 @@ export class Engine extends EventTarget {
             };
           },
         };
+        // Each step the interleaved driver takes runs from the event loop,
+        // with no caller stack beneath it, so its failures classify as the
+        // synchronous driver's do.
         const modules = COMPILE_INTERLEAVES_EVENT_LOOP
           ? await compiler.compileToModulesInterleaved(
             resolvedForCompile,
             compileOptions,
-          )
-          : compiler.compileToModules(resolvedForCompile, compileOptions);
+          ).catch((error) => {
+            throw markDeterministicCompileFailure(error);
+          })
+          : deterministicCompileStep(() =>
+            compiler.compileToModules(resolvedForCompile, compileOptions)
+          );
 
         // Every authored source must have an emitted body; a missing one would
         // otherwise be silently dropped and only fail later at import.
         for (const file of moduleFiles) {
           if (!modules.has(file.name)) {
-            throw new Error(
+            throw deterministicCompileError(
               `ESM compile produced no module body for '${file.name}'`,
             );
           }
