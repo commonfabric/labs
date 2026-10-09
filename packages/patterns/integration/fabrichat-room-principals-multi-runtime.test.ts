@@ -5,9 +5,9 @@
  * so two members of a room derive the list differently. Two sessions share the
  * harness's space, where the manager lives: the starter, who creates a group
  * room, and a member, named in it, who joins it under a profile in a space
- * that admits the member alone. Once every runtime has caught up, none of them
- * commits anything more: stored once for every reader, a value readers derive
- * differently is one their runtimes overwrite without end.
+ * that admits the member alone. Each session reads the list from an instance
+ * of its own, and once every runtime has caught up, none of them commits
+ * anything more.
  *
  * Kept apart from `fabrichat-spaces-multi-runtime.test.ts`, whose test
  * selection record names that file's whole `describe()`, so that a lane
@@ -32,6 +32,9 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
+
+// Where a client that draws natively reads the participants' principals.
+const PRINCIPALS = ["$VIEWS", "room", "participantPrincipals"];
 
 /** Whether this run's harness serves handlers from a serving loop. */
 const SERVER_EXECUTION = resolveServerExecution();
@@ -63,7 +66,7 @@ describe("fabrichat room principals across runtimes", () => {
     await harness?.dispose();
   });
 
-  it("commits nothing more once every runtime has caught up with a participant whose profile one of them can't read", async () => {
+  it("gives each session the principals it can read, and commits nothing more once every runtime has caught up", async () => {
     await starter.send("createGroup", {
       requestId: "g-principals",
       title: "Team",
@@ -97,16 +100,15 @@ describe("fabrichat room principals across runtimes", () => {
     await harness.settle();
     expect(await member.read(["participants", "length"], { piece: room }))
       .toBe(2);
-    expect(
-      await member.read(["$VIEWS", "room", "participantPrincipals"], {
-        piece: room,
-      }),
-    ).toEqual([member.identity.did()]);
-    expect(
-      await starter.read(["$VIEWS", "room", "participantPrincipals"], {
-        piece: room,
-      }),
-    ).toEqual(SERVER_EXECUTION ? [member.identity.did()] : []);
+    expect(await member.read(PRINCIPALS, { piece: room }))
+      .toEqual([member.identity.did()]);
+    expect(await starter.read(PRINCIPALS, { piece: room }))
+      .toEqual(SERVER_EXECUTION ? [member.identity.did()] : []);
+
+    // Each session reads an instance of its own: one instance for every
+    // reader is a document the readers' runtimes hold differently.
+    expect(await starter.link(PRINCIPALS, { piece: room }))
+      .toMatchObject({ scope: "session" });
 
     // A whole settle of every runtime and the server, with nothing left to
     // happen, admits no commit. Each document written is named with the
