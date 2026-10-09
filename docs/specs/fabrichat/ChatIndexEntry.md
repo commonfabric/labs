@@ -14,10 +14,10 @@ interface ChatIndexEntry {
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When this user's index admitted it. */
+  /** When this user's catalog admitted it. */
   since: FabricEpochNsec;
 
-  /** The revision of the room's entry in this user's index, if it has one. */
+  /** The revision of the room's entry in this user's catalog. */
   revision?: string;
 }
 ```
@@ -43,13 +43,12 @@ interface ChatIndexEntry {
   member, which is the key `direct` is indexed by. It is a principal and not a
   profile, because a person can have several profiles, and one conversation with
   a person must not split along them.
-- **`since`** is when the room entered this user's index: when they created or
+- **`since`** is when the room entered this user's catalog: when they created or
   accepted it, or when the room offered to them was admitted. It comes from the
   clock of the handler that admitted it, at whatever resolution the system
   provides (see the [timing side-channel
   mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)).
-
-- **`revision`** is the revision of the room's entry in the index the manager
+- **`revision`** is the revision of the room's entry in the catalog the manager
   lists it from, which a request to [`forget`](ChatManagerOutput.md) the room
   names, so that a choice made since by another client is not overridden.
 

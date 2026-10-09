@@ -109,8 +109,8 @@
     "dashboard": "deno run --allow-net --allow-run=deno --allow-read --allow-write --allow-env packages/dashboard/server.ts",
     "profile": "./scripts/restart-local-dev.sh --inspect-brk",
     "cf-profile": "ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && deno run -A \"$ROOT/packages/cli/support/profiling/cf-profile.ts\"",
-    "cf-inspect-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && CF_CLI_NAME=cf deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces \"$ROOT/packages/cli/mod.ts\" \"$@\"' --",
-    "cf-profile-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && CF_CLI_NAME=cf deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces \"$ROOT/packages/cli/mod.ts\" \"$@\"' --"
+    "cf-inspect-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && CF_CLI_NAME=cf deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces,uid \"$ROOT/packages/cli/mod.ts\" \"$@\"' --",
+    "cf-profile-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && CF_CLI_NAME=cf deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces,uid \"$ROOT/packages/cli/mod.ts\" \"$@\"' --"
   },
   "compilerOptions": {
     "jsx": "react-jsx",

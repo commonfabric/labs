@@ -40,6 +40,7 @@ import type {
   SharedSpaceCatalog,
   SharedSpaceMembershipChange,
   SharedSpaceRegistration,
+  SharedSpaceRemoval,
 } from "../system/shared-space-catalog.ts";
 
 const owner = await Identity.fromPassphrase("Home catalog owner");
@@ -56,6 +57,7 @@ interface HomeSurface {
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: SharedSpaceRegistration;
   changeSharedSpaceMembership: SharedSpaceMembershipChange;
+  removeSharedSpace: SharedSpaceRemoval;
   addSpace: { did: string; name: string };
   spaces: { did: string; name: string }[];
 }
@@ -1382,6 +1384,80 @@ describe("Home shared-space catalog", () => {
             "stale-archive",
           ),
         ).toEqual({ status: "conflict", reason: "revision" });
+        await runtime.idle();
+      });
+    });
+
+    it(`removes only an entry no receipt names, at its observed revision, with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, _peer, server) => {
+        const imported: SharedSpaceRegistration = {
+          space: "did:key:catalog-import",
+          host: "https://room.example",
+          kind: "loom",
+          title: "Imported loom",
+        };
+        const remove = home.key("removeSharedSpace");
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          registration,
+          "register",
+        );
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          imported,
+          "import",
+        );
+        const catalog = home.key("sharedSpaceCatalog");
+        const observed = await catalog.pull();
+        expect(
+          await invoke(runtime, remove, {
+            space: imported.space,
+            expectedRevision: "1:not-the-observed-revision",
+          }, "stale"),
+        ).toEqual({ status: "conflict", reason: "revision" });
+        expect(
+          await invoke(runtime, remove, {
+            space: registration.space,
+            expectedRevision: observed.entries[registration.space].revision,
+          }, "receipted"),
+        ).toEqual({ status: "conflict", reason: "offer" });
+        const take: SharedSpaceRemoval = {
+          space: imported.space,
+          expectedRevision: observed.entries[imported.space].revision,
+        };
+        expect(await invoke(runtime, remove, take, "take")).toEqual({
+          status: "removed",
+          space: imported.space,
+        });
+        expect(await invoke(runtime, remove, take, "take")).toEqual({
+          status: "removed",
+          space: imported.space,
+        });
+        expect(await invoke(runtime, remove, take, "take-again")).toEqual({
+          status: "conflict",
+          reason: "missing",
+        });
+        const stored = await backingCatalog(runtime, home);
+        expect(Object.keys(stored.getRaw().entries)).toEqual([
+          registration.space,
+        ]);
+        expect(await catalog.pull()).toEqual({
+          entries: {
+            [registration.space]: observed.entries[registration.space],
+          },
+          offers: observed.offers,
+        });
+        for (
+          const input of [
+            { space: imported.space },
+            { space: "not-a-did", expectedRevision: take.expectedRevision },
+            { space: imported.space, expectedRevision: "" },
+          ]
+        ) {
+          await rejectInvocation(runtime, remove, input, server, serving);
+        }
         await runtime.idle();
       });
     });

@@ -6,7 +6,7 @@
  * records are its own inputs, defaulted, as the real manager's are.
  */
 
-import { pattern, Writable } from "commonfabric";
+import { type AddIntegrity, pattern, Writable } from "commonfabric";
 import {
   FabriChatManagerCore,
   type FabriChatManagerInput,
@@ -14,9 +14,18 @@ import {
 } from "../../../fabrichat/manager.tsx";
 import { type ChatProfile } from "../../../fabrichat/schemas.tsx";
 
+/**
+ * The stand-in profile, labeled, as a Fabric profile is, because a room's
+ * participants link only a document that carries a label.
+ */
+type StandInProfile = AddIntegrity<
+  ChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
+
 export default pattern<FabriChatManagerInput, FabriChatManagerOutput>(
   ({ sharedSpaceCatalog, direct, requests, outgoingNotices }) => {
-    const profile = Writable.of<ChatProfile>({ name: "Starter" });
+    const profile = Writable.of<StandInProfile>({ name: "Starter" });
     return FabriChatManagerCore({
       myProfile: profile,
       sharedSpaceCatalog,

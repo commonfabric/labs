@@ -24,7 +24,7 @@ interface ChatManagerOutput {
     string,
     | { status: "pending" }
     | { status: "done"; entry?: ChatIndexEntry }
-    | { status: "refused"; reason: string }
+    | { status: "refused"; reason: string; code?: "space-own-chat" }
   >;
 
   /** Notices this user's requests have produced that no one has delivered. */
@@ -34,11 +34,7 @@ interface ChatManagerOutput {
     recipient: string;
   }[];
 
-  openDirect: Stream<{
-    requestId: string;
-    counterpart: string;
-    profile?: Cell<ChatProfile>;
-  }>;
+  openDirect: Stream<{ requestId: string; counterpart: string }>;
   createGroup: Stream<{
     requestId: string;
     members: string[];
@@ -113,8 +109,10 @@ in it needs to be `PerUser` or `PerSession`.
   room, under the reader's own access. Through the link a reader finds the
   room's `about`, and where its conversation stands, `messages.count` and
   `messages.newestAt`; [`ChatIndexEntry`](ChatIndexEntry.md) says why the link
-  declares those and no more.
-- **`sharedSpaceCatalog`** is the user's shared-space catalog, Home's
+  declares those and no more. `rooms` is drawn from the user's shared-space
+  catalog, Home's: each entry the catalog keeps as a saved `fabrichat-room`,
+  whose space's root is a room.
+- **`sharedSpaceCatalog`** is that catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), as
   stored. A room reads it to tell whether the viewer's chats list it, without
   this manager's own facts having been computed.
@@ -124,11 +122,12 @@ in it needs to be `PerUser` or `PerSession`.
   conversation with that person is always the same room.
 - **`requests`** records each request's outcome under the `requestId` its caller
   chose: `pending`, then `done` or `refused`. `done` carries the entry, except
-  for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason.
-  An implementation MAY discard a `done` or `refused` outcome after a retention
-  period it documents. A request sent again after that starts afresh: an
-  `openDirect` still finds the existing room, but a `createGroup` creates
-  another.
+  for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason,
+  prose for a person, and a refusal a client can act on carries a `code` as
+  well, which stays the same whatever the reason says. An implementation MAY
+  discard a `done` or `refused` outcome after a retention period it documents. A
+  request sent again after that starts afresh: an `openDirect` still finds the
+  existing room, but a `createGroup` creates another.
 - **`outgoingNotices`** holds each notice this user's requests have produced,
   until a client reports it delivered.
 
@@ -157,6 +156,8 @@ These rules hold for every stream:
 - Every stream changes only this user's own manager, except `openDirect` and
   `createGroup`, which also create a room and grant other people access to it,
   and `openDirect`, which can also offer the room to the other person.
+  `openDirect`, `createGroup` and `accept` also add this user to the room's
+  participants, which anyone the room's space admits may do.
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
@@ -183,15 +184,16 @@ outward act when it creates a room.
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
 - **Effect:** if `direct` has an entry for `counterpart`, that entry is the
   outcome, and it is put back in `rooms` if it was forgotten, whatever its
-  archive state: starting the chat is the person's choice to have it listed,
-  so this restore wins over a concurrent archive, from another device, say.
-  Otherwise, if a
+  catalog entry's revision: starting the chat is the person's choice to have it
+  listed, so this restore wins over a concurrent forget, from another device,
+  say. Otherwise, if a
   creation for the same `counterpart` is still pending under another
   `requestId`, the manager MUST resume that creation rather than start another,
   and records its outcome under both ids. Otherwise, creates a direct room whose
   members are this user and `counterpart`, grants `counterpart` access, produces
   a notice for them, offers the room through `profile`'s inbox when there is
-  one, and records the new entry in `rooms` and `direct`.
+  one, and records the new entry in `rooms` and `direct`; adding this user to
+  the new room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `counterpart` is this
   user, or `profile`'s label doesn't name `counterpart`.
 
@@ -219,9 +221,10 @@ conversation from splitting.
 Creates a group room. This is an outward act: it grants other people access.
 
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
-- **Effect:** always creates a new space, with a new room as its chat, even when
-  another group room has the same members. Grants each member access, produces a
-  notice for each, and records the entry in `rooms`.
+- **Effect:** always creates a new space, with a new room as its root, even
+  when another group room has the same members. Grants each member access,
+  produces a notice for each, and records the entry in `rooms`; adding this
+  user to the new room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
   `members` is absent, or a member is not a principal's DID.
 
@@ -242,26 +245,31 @@ Creates a group room. This is an outward act: it grants other people access.
 Records a room this user has been admitted to.
 
 - **Admitted:** without a reviewed gesture, since it changes only this user's
-  own index. Whether to add a room to their index is the user's decision (see
+  own index, beside adding them to the room's participants, which needs none.
+  Whether to add a room to their index is the user's decision (see
   [`clients.md`](clients.md#finding-conversations)).
 - **Effect:** records an entry in `rooms`, putting a forgotten room back
-  whatever its archive state: accepting the room is the person's choice to
-  have it listed, so this restore wins over a concurrent archive, from another
-  device, say. For a direct room, the counterpart it
+  whatever its catalog entry's revision: accepting the room is the person's
+  choice to have it listed, so this restore wins over a concurrent forget. For
+  a direct room, the counterpart it
   records is the creator `about.record`'s label names, which it reads itself;
   once the room's space has a member set, it also checks that the counterpart is
   a member. For a direct room, it also records the entry in `direct`, unless
   `direct` already has an entry for `counterpart`, in which case that entry
-  stays, as under [crossing creations](#crossing-creations).
+  stays, as under [crossing creations](#crossing-creations). Adding this
+  user's profile to the room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if this user has no
   profile to join the room's participants as, or the request names no room, or
-  this user can't read the room, or if the room is direct and its
-  label names no creator, names this user, or names someone other than a
-  `counterpart` sent, or, once there are member sets, the counterpart isn't a
-  member.
+  this user can't read the room, or the room is a social space's own chat, or
+  if the room is direct and its label names
+  no creator, names this user, or names someone other than a `counterpart`
+  sent, or, once there are member sets, the counterpart isn't a member.
 
-A client also sends `accept` when the user first opens the chat of an existing
-social space, which is created with its space and not by a manager.
+A social space's own chat is created with its space and not by a manager, so
+it has no `about.record`, and the catalog lists rooms by their own spaces, so
+`accept` refuses one, with the code `space-own-chat`: its space is the social
+space it belongs to. Listing a space's own chat among a user's chats is a
+possible later direction, which this contract doesn't promise.
 
 ### `forget(requestId: string, room: Cell<ChatRoomOutput>, revision: string)`
 
@@ -276,11 +284,12 @@ social space, which is created with its space and not by a manager.
 Removes a room from this user's list.
 
 - **Admitted:** without a reviewed gesture.
-- **Effect:** removes the entry from `rooms`. A direct room's entry stays in
-  `direct`, so a later `openDirect` with the same person returns the same room.
-  The room, and this user's access to it, are untouched.
-- **Outcome:** `done`, with no entry, or `refused` if the request names no
-  room or no revision, or the room's entry has moved on from `revision`.
+- **Effect:** archives the room's catalog entry, which removes it from `rooms`.
+  A direct room's entry stays in `direct`, so a later `openDirect` with the same
+  person returns the same room. The room, and this user's access to it, are
+  untouched.
+- **Outcome:** `done`, with no entry, or `refused` if the request names no room
+  or no revision, or the room's entry has moved on from `revision`.
 
 ### `delivered(requestId: string, id: string)`
 
@@ -353,11 +362,10 @@ envelope a share inbox takes:
 
 The recipient's host reads each offer in the inboxes their Home holds, vets it,
 and registers the room's space in their Home's shared-space catalog
-([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
-where their manager lists it. Nothing tells the sender that an offer arrived,
-and a member known only by their DID has no profile to reach an inbox through,
-so a notice is produced for every other member whether or not an offer was
-sent.
+([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)).
+Nothing tells the sender that an offer arrived, and a member known only by
+their DID has no profile to reach an inbox through, so a notice is produced for
+every other member whether or not an offer was sent.
 
 ## Crossing creations
 

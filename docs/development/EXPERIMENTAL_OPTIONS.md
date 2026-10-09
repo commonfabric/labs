@@ -329,7 +329,12 @@ server](#clients-that-are-not-built-alongside-their-server).
   feature, but the per-class commit admission rows are enforced by the memory
   server under the flag, so the value lives beside the memory protocol flags.
   It is not a handshake capability — admission enforcement is server-local and
-  nothing about it is negotiated per connection.
+  nothing about it is negotiated per connection. A memory server does report,
+  in every `hello.ok`, whether server execution is attached to it
+  (`serverExecution`), as a fact a client reads before opening any session
+  rather than a capability the two agree on. A server that predates the flag
+  sends no `serverExecution` at all, and a client receiving none does not know
+  whether server execution is on.
 - **Added by.** Bernhard Seefeld, in server-execution v2 Phase 1 stage A
   (#5339;
   [`docs/plans/server-execution-v2.md`](../plans/server-execution-v2.md);
@@ -1582,13 +1587,16 @@ the per-epic implementation notes).
   ([`packages/toolshed/env.ts`](../../packages/toolshed/env.ts)). Not a
   `RuntimeOptions` flag: it gates an HTTP router, not runtime behavior.
 - **Added by.** Alex Komoroske, in the self-serve ingest channels change.
-- **Purpose.** Gates the `/api/ingest-channels` control plane, through which a
+- **Purpose.** Gates the ingest-channel control plane
+  (`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
+  through which a
   user holding their own identity key mints, lists, rotates, and revokes ingest
   channels for spaces they own — without an operator. When off, the router
   [404s every verb](../../packages/toolshed/routes/ingest-channels/gate.ts)
   before the body limit, the rate limiter, or signature verification runs, so a
   deployment that has not opted in does not advertise the endpoint. The data
-  plane (`/api/ingest/:id`) and the operator provisioning scripts are
+  plane (`/api/spaces/:space/ingest/:id` and `/api/ingest/:id`) and the
+  operator provisioning scripts are
   unaffected by the flag.
 - **Current default and planned end state.** Off by default. The gate exists
   because minting issues a durable bearer capability that outlives the trust

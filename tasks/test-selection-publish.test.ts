@@ -484,6 +484,7 @@ function laneObject(
           batchMeasurementName("workspace-unit", measured, "units"),
           units,
         ),
+        figure(batchMeasurementName("workspace-unit", measured, "passes"), 1),
       ]
       : []),
     ...(projected === undefined ? [] : [
@@ -750,7 +751,7 @@ describe("publish()", () => {
       publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
     );
     expect(said).toContain("no suite has a measured cost in the last 7 day(s)");
-    expect(said).toContain("4 lane measurement(s) this run read");
+    expect(said).toContain("5 lane measurement(s) this run read");
     expect(said).toContain("the fold could not place");
   });
 

@@ -4,14 +4,13 @@
  * handlers that write it, are in `room-records.tsx`; one message's rendering
  * is in `message-row.tsx`.
  *
- * Who may read and write is the business of the room's space: its access
- * list decides. A room a manager creates is its space's root, and keeps the
- * space's participants itself: the profiles of those who joined, each added
- * through `addParticipant`, the roster's one writer
- * (`../loom/participants.tsx`). A room in some other social space, which isn't its space's root,
- * lists that space's participants as the root lists them
- * (`wish("#default")`), and those who joined the room itself. The room shows
- * every author alongside them.
+ * Who may read and write is the business of the room's space: its access list
+ * decides. A room a manager creates is its space's root, and keeps the space's
+ * participants itself: the profiles of those who joined, each added through
+ * `addParticipant`, the roster's one writer (`../loom/participants.tsx`). A
+ * room in some other social space, which isn't its space's root, lists that
+ * space's participants as the root lists them (`wish("#default")`), then those
+ * who joined the room itself. The room shows every author alongside them.
  *
  * `FabriChatRoomCore` takes the viewer's profile as an input, so a test can
  * supply a stand-in. The default export, `FabriChatRoom`, resolves the real

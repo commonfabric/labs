@@ -90,14 +90,15 @@ async function fetchRuns(
 
 /**
  * Builds the context, reading each repository's green branch through
- * `green`, which defaults to the branches `GREEN_BRANCHES` names.
+ * `green`, which defaults to the branches `GREEN_BRANCHES` names, and the
+ * runs of every source through `lists`.
  */
 export function makeCtx(
   green: (repo: string) => GreenBranch | undefined = greenBranchOf,
+  lists: RunLists = new RunLists(),
 ): Ctx {
   // One memoized fetcher per source, created on first use and shared for ~20s
   // across every tile that reads it.
-  const lists = new RunLists();
   const fetchers = new Map<string, () => Promise<Run[]>>();
   const runsFor = (source: RunSource): Promise<Run[]> => {
     const key = runSourceKey(source);
@@ -111,6 +112,7 @@ export function makeCtx(
   return {
     runs: () => runsFor(runSource(REPO, CI_WORKFLOW, "main")),
     runsFor,
+    runLists: lists,
     env: (k) => Deno.env.get(k),
   };
 }

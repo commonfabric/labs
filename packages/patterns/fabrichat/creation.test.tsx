@@ -10,6 +10,7 @@ import {
   action,
   type AddIntegrity,
   assert,
+  type Cell,
   currentPrincipal,
   equals,
   pattern,
@@ -17,7 +18,11 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
+import {
+  readSharedSpaceCatalog,
+  type SharedSpaceCatalogStorage,
+  type SharedSpaceEntry,
+} from "../system/shared-space-catalog.ts";
 import {
   countElements,
   findNode,
@@ -30,7 +35,9 @@ import {
   textContent,
 } from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
+import FabriChatRoom from "./room.tsx";
 import {
+  CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
@@ -104,6 +111,15 @@ const reasonOf = (
     : outcome?.status ?? "none";
 };
 
+/** The code of the refusal recorded under `id`, or `none` for any other. */
+const codeOf = (
+  requests: Writable<Record<string, ChatRequestOutcome>>,
+  id: string,
+): string => {
+  const outcome = requests.get()?.[id];
+  return outcome?.status === "refused" ? outcome.code ?? "none" : "none";
+};
+
 /** What a room says of its messages through the link a manager lists. */
 const linkedCount = (room: ChatIndexEntry["room"] | undefined): string => {
   const messages = room?.get()?.messages;
@@ -114,6 +130,17 @@ const linkedCount = (room: ChatIndexEntry["room"] | undefined): string => {
 /** An empty shared-space catalog, as a manager lists its rooms from. */
 const emptyCatalog = () =>
   Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
+
+/** The entries `catalog` holds, as Home's reader validates them. */
+const entriesOf = (
+  catalog: Writable<SharedSpaceCatalogStorage>,
+): SharedSpaceEntry[] => Object.values(readSharedSpaceCatalog(catalog).entries);
+
+/** A room's result, as the link an `accept` names it by. */
+function roomLinkOf(room: unknown): Cell<ChatRoomLink>;
+function roomLinkOf(room: unknown): unknown {
+  return room;
+}
 
 /** The room a request's outcome names, as a cell. */
 const roomOf = (
@@ -130,9 +157,10 @@ export default pattern(() => {
   // A direct room: one per counterpart, found again after it is forgotten.
   const directNotices = Writable.of<ChatManagerNotice[]>([]);
   const directRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const directCatalog = emptyCatalog();
   const direct = FabriChatManagerCore({
     myProfile: profile,
-    sharedSpaceCatalog: emptyCatalog(),
+    sharedSpaceCatalog: directCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: directRequests,
     outgoingNotices: directNotices,
@@ -161,11 +189,23 @@ export default pattern(() => {
       revision: direct.rooms[0]?.revision,
     })
   );
-  const action_forget_direct = action(() =>
+  // The revision the forget below names, which another client's request made
+  // from the same list names too.
+  const forgottenRevision = Writable.of<string>("");
+  const action_forget_direct = action(() => {
+    const revision = direct.rooms[0]?.revision ?? "";
+    forgottenRevision.set(revision);
     direct.forget.send({
       requestId: "f-1",
       room: directHeld.key("room").resolveAsCell(),
-      revision: direct.rooms[0]?.revision,
+      revision,
+    });
+  });
+  const action_forget_direct_from_older_list = action(() =>
+    direct.forget.send({
+      requestId: "f-older-list",
+      room: directHeld.key("room").resolveAsCell(),
+      revision: forgottenRevision.get(),
     })
   );
 
@@ -173,9 +213,10 @@ export default pattern(() => {
   // other members.
   const groupNotices = Writable.of<ChatManagerNotice[]>([]);
   const groupRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const groupCatalog = emptyCatalog();
   const group = FabriChatManagerCore({
     myProfile: profile,
-    sharedSpaceCatalog: emptyCatalog(),
+    sharedSpaceCatalog: groupCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: groupRequests,
     outgoingNotices: groupNotices,
@@ -201,9 +242,10 @@ export default pattern(() => {
 
   // Accepting a group room, and a direct room only with its counterpart.
   const acceptRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const acceptCatalog = emptyCatalog();
   const accepting = FabriChatManagerCore({
     myProfile: profile,
-    sharedSpaceCatalog: emptyCatalog(),
+    sharedSpaceCatalog: acceptCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: acceptRequests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -234,6 +276,14 @@ export default pattern(() => {
       requestId: "f-3",
       room: acceptHeld.key("room").resolveAsCell(),
       revision: accepting.rooms[0]?.revision,
+    })
+  );
+  // A space's own chat, which no manager created, so it has no record.
+  const ownChat = FabriChatRoom({});
+  const action_accept_own_chat = action(() =>
+    accepting.accept.send({
+      requestId: "a-own",
+      room: roomLinkOf(ownChat),
     })
   );
   const action_accept_group = action(() =>
@@ -293,6 +343,17 @@ export default pattern(() => {
           recipientsOf(directNotices) === BOB
         ),
       },
+      // Creating it registers its space in the user's catalog, as a saved
+      // FabriChat room, from which the manager lists it.
+      {
+        assertion: assert(() => {
+          const entries = entriesOf(directCatalog);
+          return entries.length === 1 &&
+            entries[0]?.kind === CHAT_ROOM_OFFER_KIND &&
+            entries[0]?.state === "saved" &&
+            entries[0]?.revision === direct.rooms[0]?.revision;
+        }),
+      },
       // The notice offers the room's link, for its creator to send on, and
       // the room's entry in the list is a link to it, labeled with whom it is
       // with, which opens it as a page of its own: the manager renders no
@@ -314,9 +375,26 @@ export default pattern(() => {
         trustedUi: startGesture,
       },
       { assertion: assert(() => direct.rooms.length === 1) },
-      // Forgetting it keeps it in `direct`; finding it again puts it back.
+      // Forgetting it archives its catalog entry and keeps it in `direct`;
+      // finding it again restores the entry, which puts it back.
       { action: action_forget_direct },
-      { assertion: assert(() => direct.rooms.length === 0) },
+      {
+        assertion: assert(() =>
+          direct.rooms.length === 0 &&
+          entriesOf(directCatalog)[0]?.state === "archived"
+        ),
+      },
+      // A forget made from the same list, once the entry is archived, names a
+      // revision the entry has moved on from.
+      { action: action_forget_direct_from_older_list },
+      {
+        assertion: assert(() =>
+          forgottenRevision.get() !== "" &&
+          reasonOf(directRequests, "f-older-list") ===
+            "The room's entry changed since it was listed." &&
+          entriesOf(directCatalog)[0]?.state === "archived"
+        ),
+      },
       {
         action: direct.openDirect,
         event: { requestId: "d-3", counterpart: BOB },
@@ -366,6 +444,13 @@ export default pattern(() => {
           group.rooms[0]?.room.key("about").get()?.kind === "group" &&
           group.rooms[0]?.room.key("about").get()?.title === "Team" &&
           !equals(group.rooms[0]?.room, directHeld.key("room"))
+        ),
+      },
+      // A group room is registered with its title.
+      {
+        assertion: assert(() =>
+          entriesOf(groupCatalog).length === 1 &&
+          entriesOf(groupCatalog)[0]?.title === "Team"
         ),
       },
       // The link carries where the conversation stands, which a new room has
@@ -543,6 +628,18 @@ export default pattern(() => {
           reasonOf(acceptRequests, "a-3") ===
             "The room was created by this user." &&
           accepting.rooms.length === 0
+        ),
+      },
+      // A space's own chat is refused: its space is the social space it
+      // belongs to, which the catalog doesn't list as a room.
+      { assertion: assert(() => entriesOf(acceptCatalog).length === 2) },
+      { action: action_accept_own_chat },
+      {
+        assertion: assert(() =>
+          reasonOf(acceptRequests, "a-own") ===
+            "The room is a social space's own chat, which isn't listed among chats." &&
+          codeOf(acceptRequests, "a-own") === "space-own-chat" &&
+          entriesOf(acceptCatalog).length === 2
         ),
       },
 

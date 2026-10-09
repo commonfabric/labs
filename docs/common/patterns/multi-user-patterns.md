@@ -417,7 +417,8 @@ const inviteBaker = handler<
   form only the runtime writes. A pattern cannot write that form for anyone but
   the user it runs for, so a DID it returns is one that user's runtime put
   there. `undefined` means no verified single principal: refuse whatever needs
-  one. A label that cannot be read throws rather than returning `undefined`.
+  one. A label the caller cannot observe, such as one in a space it cannot
+  read, also returns `undefined`, as a missing one does.
 - It reads the label, and no contents of the value beyond the link pointers
   needed to reach it. Call it in a handler, including on a cell the event
   names, or in a `computed()` or `lift()`, where it updates when the label
@@ -430,6 +431,13 @@ const inviteBaker = handler<
 - `principalsOf(target, kind)` returns every principal the label attests: `[]`
   for none, several for a contested one. Read it where a value nobody attests
   is fine but one someone else attests is not.
+- A field that links a document has its own label, separate from the linked
+  document's. `principalOf(field, kind, { label: "written" })` reads the
+  field's claim of `kind`, such as who wrote the link, while the default reads
+  the linked document's claim of `kind`.
+- `spaceAccessOf(target, principal)` returns another principal's level, so a
+  handler can tell whether the principal a label names is still a member.
+  It narrows no computation to per-user scope, as `spaceAccess(target)` does.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 

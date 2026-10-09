@@ -6,6 +6,7 @@ import type {
   LinkScope,
   SchemaScope,
 } from "./builder/types.ts";
+import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 
 export const DEFAULT_CELL_SCOPE: CellScope = "space";
 
@@ -135,6 +136,27 @@ export function narrowestScope(
     }
   }
   return narrowest;
+}
+
+/**
+ * Narrows `tx`'s read scope to `declared`, the scope the position a link is
+ * followed from is declared at, when that is narrower than `linkScope`, the
+ * scope of the address the follow lands on. An instance at a declared scope
+ * exists only for a reader that has written one; every other reader lands on
+ * the broad address and sees whatever it holds, the declaration's default
+ * included. The declaration is what every reader shares, so it is what
+ * decides that the read was of narrow-scoped data, and so where a
+ * computation over it places its output.
+ */
+export function noteDeclaredReadScope(
+  tx: Pick<IExtendedStorageTransaction, "noteReadScope">,
+  declared: SchemaScope | undefined,
+  linkScope: CellScope | undefined,
+): void {
+  if (!isCellScope(declared)) return;
+  if (scopeRank(declared) > scopeRank(normalizeCellScope(linkScope))) {
+    tx.noteReadScope(declared);
+  }
 }
 
 /**

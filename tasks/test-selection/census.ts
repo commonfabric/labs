@@ -12,7 +12,6 @@
 
 import { testIdentityKey } from "@commonfabric/test-support/records";
 import type { TestIdentity } from "@commonfabric/test-support/records";
-import { unitProcesses } from "../test-topology.ts";
 import {
   type Suite,
   unavailableUnits,
@@ -30,7 +29,7 @@ import {
   type Manifest,
   type ManifestEntry,
 } from "./manifest.ts";
-import { calibrationFor, type SelectionReason } from "./plan.ts";
+import type { SelectionReason } from "./plan.ts";
 import { UNMEASURED_COST_SECONDS, VALUE_FLOOR } from "./policy.ts";
 import { percentile90 } from "./score.ts";
 
@@ -242,10 +241,10 @@ export function census(
   let unmeasured = 0;
   for (const suite of suites) {
     const unavailable = unavailableUnits(suite);
-    // A unit that is a path is made mandatory by the diff naming it. A
-    // unit that is not — a type-check group, a repository gate, a
-    // binary — is one the suite has to map the diff onto itself,
-    // because only it knows what its unit covers.
+    // A suite that maps the diff onto its units itself — the type-check
+    // groups and the repository gates do, because only they know what
+    // each unit covers — says which it touched. Every other suite's unit
+    // is made mandatory by the diff naming it.
     const touched = new Set<string>(
       suite.unitsForChange !== undefined
         ? suite.unitsForChange(changed)
@@ -353,8 +352,7 @@ export interface PricedCensus extends Census {
  * census — packing the lanes, ordering their batches, counting the full
  * run's lanes, and a report saying what a run would have chosen — prices
  * one suite alike. `pricedCalibration()` says what a suite no lane has
- * run that way is charged, and `calibrationFor()` which suites are
- * charged their process fit.
+ * run that way is charged.
  */
 export function pricedForRun(
   seen: Census,
@@ -373,7 +371,7 @@ export function pricedForRun(
     ...seen,
     manifest: {
       ...seen.manifest,
-      calibration: calibrationFor(priced.calibration, unitProcesses(suites)),
+      calibration: priced.calibration,
       fitted: priced.fitted,
     },
   };

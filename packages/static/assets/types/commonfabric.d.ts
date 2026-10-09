@@ -4257,7 +4257,9 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * none, more than one, or a claim in some other form. It also means that
  * `target` is `undefined`, which is what a value that cannot be read yet reads
  * as. It is never a guess, and a caller refuses whatever needs a principal. A
- * label that cannot be read throws instead.
+ * label the caller cannot observe, a refused read among them, returns
+ * `undefined` as well, as missing metadata does; a label stored in a form the
+ * runtime cannot interpret throws.
  *
  * It reads the label, and no contents of the value beyond the link pointers
  * needed to reach it. In a reactive computation
@@ -4271,10 +4273,15 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * subject is refused, like any other literal DID a pattern writes there,
  * unless the schema declares it as the `ownerPrincipal` and it is the
  * principal the write acts for.
+ *
+ * `options` is a {@link PrincipalReadOptions}: with `label` of `"written"`,
+ * the label read is the one on the field `target` addresses, not the one on
+ * the document a link stored there leads to.
  */
 export declare function principalOf(
   target: AnyCell<unknown> | undefined,
   kind: PrincipalClaimKind,
+  options?: PrincipalReadOptions,
 ): DID | undefined;
 
 /**
@@ -4283,16 +4290,33 @@ export declare function principalOf(
  * caller can tell a label that attests no principal from one that attests
  * several, and refuse the second while admitting the first.
  *
- * `[]` means the label attests none. A non-empty array lists the DIDs it
- * attests, in the order they first appear. `undefined` means a claim there is
+ * `[]` means the label attests none, or that the caller cannot observe it, a
+ * refused read among them, as with missing metadata. A non-empty array lists
+ * the DIDs it attests, in the order they first appear. `undefined` means a claim there is
  * in some other form, from which no principal can be read, or that `target` is
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,
- * it can be called where `principalOf()` can, and it throws where that does.
+ * `options.label` included; it can be called where `principalOf()` can,
+ * and it throws where that does.
  */
 export declare function principalsOf(
   target: AnyCell<unknown> | undefined,
   kind: PrincipalClaimKind,
+  options?: PrincipalReadOptions,
 ): DID[] | undefined;
+
+/** Which label `principalOf()` and `principalsOf()` read. */
+export type PrincipalReadOptions = {
+  /**
+   * `"resolved"`, the default, is the label on the document `target`'s value
+   * resolves to, following a link stored there: for a field linking a
+   * profile, whom the profile represents. `"written"` is the label where a
+   * write to `target` lands, the field's own, which a link stored there does
+   * not change: what the runtime stamped there, such as who wrote the link.
+   * Links on the way to `target` are followed either way, and so is a
+   * redirect stored there.
+   */
+  readonly label?: "written" | "resolved";
+};
 
 /**
  * Returns the event key of the event the running handler handles: a string
@@ -4853,13 +4877,35 @@ export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
  * body builds one graph for every viewer: wrap it in `computed()` instead.
  *
  * It names no principal, and tells a member only what a member can already
- * read, since any member can read the whole access list.
+ * read, since any member can read the whole access list. `spaceAccessOf()`
+ * returns another principal's level.
  */
 export type SpaceAccessFunction = (
   target: AnyCell<unknown> | undefined,
 ) => SpaceAccessLevel | undefined;
 
 export declare const spaceAccess: SpaceAccessFunction;
+
+/**
+ * Returns `principal`'s access to the space `target`'s value lives in, where
+ * `spaceAccess()` returns the current principal's own: that principal's
+ * entry in the space's access list, else the list's `"*"` entry, so a handler
+ * can tell whether the principal a label names still belongs to the space.
+ *
+ * The answer is the list's alone, and does not depend on who is asking, so a
+ * computation calling it keeps its read scope, and the memory server's
+ * refusal of the caller's own session does not enter into it. `undefined`
+ * means the list has not arrived, the space has no list, or `target` is
+ * `undefined`. It can be called where `spaceAccess()` can, and throws where
+ * that does; a `principal` that is not a well-formed DID throws too, and `*`
+ * is not a principal.
+ */
+export type SpaceAccessOfFunction = (
+  target: AnyCell<unknown> | undefined,
+  principal: DID,
+) => SpaceAccessLevel | undefined;
+
+export declare const spaceAccessOf: SpaceAccessOfFunction;
 
 /**
  * Returns the DID of the space `target`'s value lives in, after following any

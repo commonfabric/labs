@@ -19,10 +19,7 @@ const KINDS = [
   "spent",
   "ran",
   "units",
-  "longest",
   "passes",
-  "start",
-  "processes",
   "projected",
 ] as const;
 
@@ -66,14 +63,6 @@ describe("lane-measurement", () => {
       });
     });
 
-    it("returns the suite a longest-unit measurement names", () => {
-      expect(batchMeasurement("ci-lane longest batch pattern-unit")).toEqual({
-        suite: "pattern-unit",
-        measured: false,
-        kind: "longest",
-      });
-    });
-
     it("returns the suite a pass-count measurement names", () => {
       expect(batchMeasurement("ci-lane passes batch pattern-unit")).toEqual({
         suite: "pattern-unit",
@@ -82,14 +71,11 @@ describe("lane-measurement", () => {
       });
     });
 
-    it("returns the suite a process setup measurement names, and one a process count names", () => {
-      expect(batchMeasurement("ci-lane start batch pattern-unit")).toEqual({
-        suite: "pattern-unit",
-        measured: false,
-        kind: "start",
-      });
-      expect(batchMeasurement("ci-lane processes batch pattern-unit"))
-        .toEqual({ suite: "pattern-unit", measured: false, kind: "processes" });
+    it("returns `undefined` for a figure no lane writes", () => {
+      for (const word of ["longest", "start", "processes"]) {
+        expect(batchMeasurement(`ci-lane ${word} batch pattern-unit`))
+          .toBeUndefined();
+      }
     });
 
     it("returns every name `batchMeasurementName()` composes", () => {

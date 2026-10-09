@@ -28,7 +28,6 @@ import {
 
 const NO_CAPABILITIES = new Map<string, readonly string[]>();
 const NO_WHOLE_UNITS: ReadonlySet<string> = new Set();
-const NO_PROCESSES: ReadonlyMap<string, string> = new Map();
 
 /** `count` identities of one suite, each in its own invocation unit. */
 function entries(
@@ -54,7 +53,6 @@ function run(
     mandatory: new Map(),
     capabilities: NO_CAPABILITIES,
     wholeUnits: NO_WHOLE_UNITS,
-    processes: NO_PROCESSES,
     ...overrides,
   });
 }
@@ -636,55 +634,6 @@ describe("plan", () => {
         test(`sibling ${i}`, "open.test.ts")
       );
       const chosen = reasons(packed([...strangers, ...siblings]));
-      for (const sibling of siblings) {
-        expect(chosen.get(sibling.test.n)).toBe("density");
-      }
-      expect(
-        strangers.filter((s) => chosen.get(s.test.n) === "density").length,
-      ).toBe(1);
-    });
-
-    it("takes the files of a process a lane has started ahead of files in processes it has not", () => {
-      // The same shape again, with the ten seconds charged for starting
-      // the process a file runs in rather than for opening the file. The
-      // siblings are each a file of their own, run in the process the
-      // mandatory test started, so each costs the lane one. Each stranger
-      // runs in a process of its own, and costs eleven.
-      const perProcess: Calibration = {
-        setupCost: {},
-        suites: {
-          "workspace-unit": {
-            overhead: 0,
-            correction: 1,
-            unitOverhead: 0,
-            process: { setup: 10, overhead: 0, correction: 1, unitOverhead: 0 },
-          },
-        },
-        prologue: 0,
-      };
-      const strangers = [1, 2, 3, 4].map((i) =>
-        test(`stranger ${i}`, `stranger-${i}.test.ts`)
-      );
-      const siblings = [2, 3, 4, 5].map((i) =>
-        test(`sibling ${i}`, `sibling-${i}.test.ts`)
-      );
-      const proven = test("proven", "proven.test.ts", {
-        cost: 49.5,
-        score: 0.9,
-      });
-      const processes = new Map([
-        ["workspace-unit\topen.test.ts", "near"],
-        ["workspace-unit\tproven.test.ts", "proven"],
-        ...siblings.map(({ unit }) => [`workspace-unit\t${unit}`, "near"]),
-        ...strangers.map(({ unit }) => [`workspace-unit\t${unit}`, unit]),
-      ] as [string, string][]);
-      const chosen = reasons(run(
-        sampleManifest({
-          entries: [opener, proven, ...strangers, ...siblings],
-          calibration: perProcess,
-        }),
-        { lanes: 1, budgetSeconds: 111, mandatory: opened, processes },
-      ));
       for (const sibling of siblings) {
         expect(chosen.get(sibling.test.n)).toBe("density");
       }
@@ -1295,12 +1244,6 @@ describe("plan", () => {
               overhead: 9,
               correction: 0.8,
               unitOverhead: 2,
-              process: {
-                setup: 5,
-                overhead: 1,
-                correction: 0.7,
-                unitOverhead: 1,
-              },
             },
             "runner-unit": { overhead: 4, correction: 0.4, unitOverhead: 1 },
             "cli-core": { overhead: 21, correction: 1.2, unitOverhead: 0 },
@@ -1312,14 +1255,7 @@ describe("plan", () => {
         ["workspace-unit", ["fuse"]],
         ["runner-unit", ["fuse", "toolshed"]],
       ]);
-      // Three files of the workspace suite to a process.
-      const processes = new Map(
-        Array.from({ length: 9 }, (_, i) => [
-          `workspace-unit\tpackages/workspace-unit/${i}.test.ts`,
-          `process ${Math.floor(i / 3)}`,
-        ]),
-      );
-      const result = run(manifest, { capabilities, processes });
+      const result = run(manifest, { capabilities });
       for (const lane of result.lanes) {
         const bySuite = Map.groupBy(
           lane.selections,
@@ -1331,8 +1267,7 @@ describe("plan", () => {
           0,
         );
         const charges = [...bySuite].reduce(
-          (total, [suite, held]) =>
-            total + suiteCharge({ manifest, processes }, suite, held),
+          (total, [suite, held]) => total + suiteCharge(manifest, suite, held),
           0,
         );
         expect(charges + setup).toBeCloseTo(lane.projectedSeconds, 6);
@@ -1343,11 +1278,7 @@ describe("plan", () => {
 
     it("charges nothing for a suite a lane holds nothing of", () => {
       expect(
-        suiteCharge(
-          { manifest: sampleManifest(), processes: NO_PROCESSES },
-          "workspace-unit",
-          [],
-        ),
+        suiteCharge(sampleManifest(), "workspace-unit", []),
       ).toBe(0);
     });
 
@@ -1370,159 +1301,11 @@ describe("plan", () => {
         },
       });
       const capabilities = new Map([["workspace-unit", ["fuse"]]]);
-      expect(fixedCharges({ manifest, capabilities, processes: NO_PROCESSES }))
+      expect(fixedCharges({ manifest, capabilities }))
         .toEqual({ "workspace-unit": 25, "cli-core": 400 });
       // The same figure the crowding report compares against the budget.
       expect(run(manifest, { capabilities }).crowding.map((c) => c.fixed))
         .toEqual([400]);
-    });
-
-    describe("a suite whose processes each pay a setup", () => {
-      const perProcess: Calibration = {
-        setupCost: {},
-        suites: {
-          "workspace-unit": {
-            overhead: 0,
-            correction: 1,
-            unitOverhead: 0,
-            process: { setup: 20, overhead: 0, correction: 1, unitOverhead: 0 },
-          },
-        },
-        prologue: 0,
-      };
-
-      /** Four one-second tests, each a file of its own. */
-      const four = () =>
-        entries(4, (i) => ({
-          cost: 1,
-          unit: `packages/memory/test/${i}.test.ts`,
-        }));
-
-      /** The processes that put the files of `four()` two to a process. */
-      const pairs = new Map(
-        [0, 1, 2, 3].map((i) => [
-          `workspace-unit\tpackages/memory/test/${i}.test.ts`,
-          i < 2 ? "first" : "second",
-        ]),
-      );
-
-      it("charges the setup once for each process a lane starts", () => {
-        const result = run(
-          sampleManifest({ entries: four(), calibration: perProcess }),
-          { lanes: 1, processes: pairs },
-        );
-        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(44, 6);
-      });
-
-      it("charges the setup again each time a process starts again to repeat a test", () => {
-        // A unit's runner starts its process again for each run.
-        const result = run(
-          sampleManifest({
-            entries: four().slice(0, 1).map((entry) => ({
-              ...entry,
-              repeats: 2,
-            })),
-            calibration: perProcess,
-          }),
-          { lanes: 1, processes: pairs },
-        );
-        expect(result.lanes[0]!.selections[0]!.repeats).toBe(2);
-        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(42, 6);
-      });
-
-      it("charges a suite's process fit in place of the figures beside it", () => {
-        // Those are for a packer that charges no process setup. The process
-        // fit's own intercept, correction and per-unit charge are what this
-        // one charges: 5 for the lane, twice 4 for the tests, 1 for each
-        // file, and 20 for each process.
-        const result = run(
-          sampleManifest({
-            entries: four(),
-            calibration: {
-              ...perProcess,
-              suites: {
-                "workspace-unit": {
-                  overhead: 100,
-                  correction: 3,
-                  unitOverhead: 50,
-                  process: {
-                    setup: 20,
-                    overhead: 5,
-                    correction: 2,
-                    unitOverhead: 1,
-                  },
-                },
-              },
-            },
-          }),
-          { lanes: 1, processes: pairs },
-        );
-        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(57, 6);
-      });
-
-      it("charges the figures beside a process fit where the topology names no process for the suite", () => {
-        // The process fit leaves its setup out of everything but the
-        // charge per process, so a suite no lane starts a process for
-        // would be charged that setup nowhere.
-        const result = run(
-          sampleManifest({
-            entries: four(),
-            calibration: {
-              ...perProcess,
-              suites: {
-                "workspace-unit": {
-                  overhead: 30,
-                  correction: 1,
-                  unitOverhead: 2,
-                  process: {
-                    setup: 20,
-                    overhead: 0,
-                    correction: 1,
-                    unitOverhead: 0,
-                  },
-                },
-              },
-            },
-          }),
-          { lanes: 1 },
-        );
-        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(42, 6);
-      });
-
-      it("charges no setup for a unit its suite puts in no process", () => {
-        const result = run(
-          sampleManifest({ entries: four(), calibration: perProcess }),
-          { lanes: 1 },
-        );
-        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(4, 6);
-      });
-
-      it("counts a process's setup in what a suite costs before any test", () => {
-        const result = run(
-          sampleManifest({
-            entries: four().map((entry) => ({ ...entry, cost: 0 })),
-            calibration: {
-              ...perProcess,
-              suites: {
-                "workspace-unit": {
-                  overhead: 0,
-                  correction: 1,
-                  unitOverhead: 0,
-                  process: {
-                    setup: 250,
-                    overhead: 0,
-                    correction: 1,
-                    unitOverhead: 0,
-                  },
-                },
-              },
-            },
-          }),
-          { lanes: 1, processes: pairs },
-        );
-        expect(result.crowding.map(({ suite, fixed }) => ({ suite, fixed })))
-          .toEqual([{ suite: "workspace-unit", fixed: 250 }]);
-      });
     });
 
     it("charges a suite's per-unit overhead once for a shared unit", () => {
@@ -2297,7 +2080,6 @@ describe("how many lanes the full run needs", () => {
       manifest,
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
-      processes: NO_PROCESSES,
       ...overrides,
     });
   }
@@ -2320,7 +2102,6 @@ describe("how many lanes the full run needs", () => {
       mandatory: new Map(),
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
-      processes: NO_PROCESSES,
       policy: "everything",
       lanes,
     });
@@ -2369,7 +2150,6 @@ describe("how many lanes the full run needs", () => {
         mandatory: new Map(),
         capabilities,
         wholeUnits: NO_WHOLE_UNITS,
-        processes: NO_PROCESSES,
         policy: "everything",
         budgetSeconds: 100,
         lanes: count,
@@ -2407,7 +2187,6 @@ describe("how many lanes the full run needs", () => {
       mandatory: new Map(),
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
-      processes: NO_PROCESSES,
       policy: "everything",
       lanes,
     });
@@ -2438,7 +2217,6 @@ describe("how many lanes the full run needs", () => {
         mandatory: new Map(),
         capabilities,
         wholeUnits: NO_WHOLE_UNITS,
-        processes: NO_PROCESSES,
         policy: "everything",
         lanes: n,
       });
@@ -2477,7 +2255,6 @@ describe("how many lanes the full run needs", () => {
       mandatory: new Map(),
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
-      processes: NO_PROCESSES,
       policy: "everything",
       lanes,
     });

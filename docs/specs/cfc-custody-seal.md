@@ -3,7 +3,7 @@
 A person can release something derived from their own data without releasing
 the data itself, if they trust the code that does the deriving. The custody seal
 is the host operation that makes that concrete. The actor reviews a value that
-is entirely their own, and the host copies it into the custody of a policy
+is their own, and the host copies it into the custody of a policy
 module `P` that the actor's trust configuration names as a trusted declassifier.
 After the seal, the only way anything derived from the value leaves is through
 `P`'s own release rules. Those rules can require, through the input witness on
@@ -51,30 +51,61 @@ established the checks are compared against the committing transaction: the
 transaction that writes the entry reads each of them again and refuses the seal
 if any holds something else, so the value checked is the value committed.
 
-- **Every clause of the draft's label is the actor's own.** Each alternative of
-  each clause must be one of six shapes: a bare DID equal to the actor;
-  `User{subject}`; `Context{name, subject}`; `Resource{class, subject}`;
-  `Space{id}`; or `PersonalSpace{owner}`. The subject, `id`, or `owner` must
-  equal the acting principal exactly, and each shape is matched on its exact
-  key set. The two space shapes admit only the actor's home space, the space
-  whose DID is the actor's own, which is where a draft written at home is
-  labeled; a `Space` naming any other DID is refused, whether it is the room
-  or another member's home. A `Context` that carries a `hash` is a named policy
-  reference, and an atom with any other extra field (a `scope`, a `role`) also
-  belongs to someone else's policy, so neither counts as the actor's. The seal
-  refuses:
-  - a clause holding any other alternative;
+- **The draft is the actor's own.** Every clause of its label must admit the
+  actor through an alternative of the actor's own, one of six shapes: a bare
+  DID equal to the actor; `User{subject}`; `Context{name, subject}`;
+  `Resource{class, subject}`; `Space{id}`; or `PersonalSpace{owner}`. The
+  subject, `id`, or `owner` must equal the acting principal exactly, and each
+  shape is matched on its exact key set. The two space shapes admit only the
+  actor's home space, the space whose DID is the actor's own, which is where a
+  draft written at home is labeled; a `Space` naming any other DID is not the
+  actor's, whether it is the room or another member's home. A `Context` that
+  carries a `hash` is a named policy reference, and an atom with any other
+  extra field (a `scope`, a `role`) also belongs to someone else's policy, so
+  neither counts as the actor's.
+- **A clause shared with other people is absorbed.** A value made the actor's
+  own from data shared with others carries a clause naming them beside the
+  actor, as a message row labeled for its participants and the store's owner
+  does (§13.12). The seal accepts such a clause only when another clause, all
+  of whose alternatives are the actor's own, holds only alternatives the shared
+  clause holds. That clause then absorbs it (§3.1.8(5), `03-core-concepts.md`),
+  the label admits whom the actor's own clause admits (§3.1.4), and the shared
+  clause adds no reader. The actor's `User` and bare DID count as one
+  principal here, since a store names its owner by bare DID and a value private
+  to its reader by `User`. A draft private to the actor, joined with a message
+  row, is sealed; the row alone, or the row beside the actor's home space or a
+  source, is not, since those do not hold only alternatives the row holds.
+- **Beside the actor, a shared clause names only people:** `User{subject}` or
+  a well-formed bare DID, so that the dialog can name each one. A policy, a
+  source or a space is refused there; this is the seal's own rule, not the
+  specification's, which admits those as alternatives (§3.1.8(2)).
+- **The seal refuses:**
+  - a clause with no alternative that is the actor's own;
+  - a shared clause no clause of the actor's own absorbs, since its other
+    people could read the value too;
   - an empty clause, which no one can read and which sealing would open;
   - a clause carrying a `Caveat`. The caveat has to be discharged before the
-    seal, for example by instruction-inert structured generation.
+    seal, for example by instruction-inert structured generation. A caveat
+    named by its short form is not a person, so it is refused beside the
+    actor as well.
+
+  The preview names the people a value was drawn from data shared with
+  (`heldWith`): one sorted group per distinct set of people a shared clause
+  names, so conversations with different people stay apart. Two conversations
+  with the same people carry identical clauses, which a label holds once. The dialog lists them; the actor-private receipt records them;
+  the box entry does not.
 
   When an owner-shaped alternative names another DID, the refusal names both
   DIDs. That makes a stance labeled under a rotated key diagnosable: the seal
   never accepts an alternate or mapped DID.
 - **The sources are allowed.** The host must supply `allowedSources`, and every
-  `Context` and `Resource` the draft draws on must be among them. An empty list
-  admits only a value labeled for the actor alone, as a value the actor typed
-  in is. The preview lists these sources. A host passes the actor's private
+  `Context` and `Resource` the draft draws on must be among them: those are the
+  actor's own `Context` and `Resource` alternatives. An empty list admits only a
+  value that names none of them: one the actor typed in, or one made the
+  actor's own from data shared with other people, whom the preview names. The
+  list governs the actor's own sources; data shared with people is not a source
+  of the actor's, and what admits it is the actor's confirmation, which names
+  them. The preview lists these sources. A host passes the actor's private
   settings cell rather than a list it read itself; the seal reads it as
   `readCustodySourcePolicy(settings)` does: a list of the actor's own `Context`
   and `Resource` atoms in a document in the actor's home space, and nowhere
@@ -191,7 +222,8 @@ creates it, so a seal that cannot establish one has written nothing durable.
 Then:
 
 1. **A receipt in the actor's home space.** It is labeled `User(actor)` and
-   records the event, `P`, `D`, the entry key, the sources, and the stance's
+   records the event, `P`, `D`, the entry key, the sources, the people the
+   value was drawn from data shared with (`heldWith`), and the stance's
    digest. The receipt is written first, so every entry has one. A receipt
    whose entry is absent records a seal that did not commit, or an entry lost
    afterwards, as when the box is replaced (see below). A seal whose commit

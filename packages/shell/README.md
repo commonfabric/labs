@@ -13,7 +13,11 @@
 
 The shell currently supports these browser URL forms:
 
-- `/<space-name-or-did>`: opens the space root pattern.
+- `/<space-name-or-did>`: opens the space root pattern. A space with no root
+  gets one when its owner opens it; anyone else the space admits is told that
+  nothing is in the space yet, and anyone it refuses sees the refusal as an
+  error loading the space. A name or DID no space answers to is reported as
+  such, with an offer to create a new space, which gets its own DID.
 - `/<space-name-or-did>/<piece-id-or-slug>`: opens a specific piece. Where the
   slug names a collection rather than a piece, this opens the piece that holds
   the collection.

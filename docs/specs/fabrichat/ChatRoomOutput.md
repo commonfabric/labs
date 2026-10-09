@@ -68,11 +68,14 @@ most one. A conversation the user starts, direct or group, gets a space of its
 own, which the user's chat manager ([`ChatManagerOutput`](ChatManagerOutput.md))
 creates with the room as its root, and never a placement, an adapter, or a
 container. Such a room is a social space in its own right: opening its space
-shows the room, and the room lists the space's participants itself. An existing
-social space's chat is created in it by whatever sets the space up, and that
-space's root stays its own. Either way, a room can also be shown in any other
-social space, through a placement and an adapter, and there the other space's
-root stays the root.
+shows the room, and the room lists the space's participants itself. The room
+is at the address the space's genesis reserves for a root, and the space
+declares itself a `fabrichat-room`
+([space kinds](../../features/space-kinds.md)), which is how a host vetting an
+offer of the room tells what the space is. An existing social space's chat is
+created in it by whatever sets the space up, and that space's root stays its
+own. Either way, a room can also be shown in any other social space, through a
+placement and an adapter, and there the other space's root stays the root.
 
 When the manager creates a space for a conversation, the creator and each
 other member hold OWNER. Its access list MUST NOT contain the `"*"`
@@ -134,7 +137,7 @@ space.
   profiles ([`ChatProfile`](ChatProfile.md)) and copy nothing from them.
 - **`participants`** are links to profiles, compared with `equals()`: the
   profiles its space's root lists, as [membership](#membership) says, plus any
-  author none of them is. They are not proof of access.
+  author none of them is, each once. They are not proof of access.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, and `latest`, the newest messages of
   the main conversation, which every member can read, a READ member included. It
@@ -515,16 +518,17 @@ output but not in `[VIEWS]`.
 - `profile: Cell<ChatProfile>` — A person's profile, as the live cell in its
   own space.
 
-Adds a profile to those who joined the room, the participants a room in a
-space of its own keeps for its space. Like `addMember`, and unlike the streams
-in the table, it takes no `requestId`: a profile already listed is not added
-again, so a repeat changes nothing. Any participant may add any profile, so an
-entry is a claim. A member's chat manager adds its user when it creates or
-accepts the room.
+Adds a profile to those who joined the room: for a room in a space of its own,
+the participants it keeps for its space. Unlike the streams in the table, it
+takes no `requestId`: a profile already listed is not added again, so a repeat
+changes nothing. Like them, and unlike `addMember`, it is in `[VIEWS]`. Any
+participant may add any profile, so an entry is a claim. A member's chat
+manager adds its user when it creates or accepts the room.
 
 - **Admitted:** without a reviewed gesture.
 - **Effect:** adds the profile to the room's participants, unless it is listed
-  already. The profile's document must carry a label, as a profile does.
+  already. The profile's document must carry a label, as a profile does; one
+  that carries none is refused.
 
 ## Renderings
 

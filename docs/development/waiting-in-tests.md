@@ -1007,7 +1007,7 @@ that: the wait returns, the assertions run, and the case is green.
 Test selection is what makes this more than a redundant line. A case running
 after a sibling inherits the sibling's effect, so an early-satisfiable wait
 costs it nothing; the same case selected alone
-([the selection plan](../plans/pull-request-test-selection.md)) has only its
+([test selection](../specs/test-selection.md)) has only its
 hooks behind it, and the wait is then the whole of what stands between the
 case and a state nothing produced. So the shape is most dangerous exactly
 where an independence check would have to catch it, and that check cannot:

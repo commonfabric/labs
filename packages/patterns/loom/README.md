@@ -95,16 +95,17 @@ is longer than 195 characters, the bound every `addedBy` is held to, is refused.
 The actor is read from the panel document's stored label map as for
 `addedByProfile`: the `authored-by` atom of the entry whose path is exactly
 `["addedBy"]` and whose `origin` is not `"link"`. Patterns read the adder with
-`principalOf(panel.key("addedBy"), "authored-by")`, and every principal the
-field attests with `principalsOf`, which tells a contested field from an
-unattested one; authorship on another field, such as the panel's title, does not
-name the adder. `addPanel` without `as` links an occurrence a caller made as it
-is, and an `addedBy` it already holds is its writer's claim, which `addPanel`
-refuses unless it is a DID in W3C DID Core syntax of at most 195 characters. The
-label entry there, when the run that wrote the value minted one, names that
-writer rather than whomever the value names. So a reader takes the adder from
-the label, and from the value alone only where no entry exists. A panel with
-neither field names no adder.
+`principalOf(panel.key("addedBy"), "authored-by", { label: "written" })`, which
+reads the stamp on the field itself rather than the label of a document a link
+stored there leads to, and every principal the field attests with
+`principalsOf`, which tells a contested field from an unattested one; authorship
+on another field, such as the panel's title, does not name the adder. `addPanel`
+without `as` links an occurrence a caller made as it is, and an `addedBy` it
+already holds is its writer's claim, which `addPanel` refuses unless it is a DID
+in W3C DID Core syntax of at most 195 characters. The label entry there, when
+the run that wrote the value minted one, names that writer rather than whomever
+the value names. So a reader takes the adder from the label, and from the value
+alone only where no entry exists. A panel with neither field names no adder.
 
 The root's own Duplicate button acts under the session's `actingProfile` in
 `viewerState` when it holds one, and otherwise under the viewer's `#profile`;
@@ -124,6 +125,36 @@ runtime invocation identifies the new occurrence, including when that delivery
 is retried. `removePanel` removes only one occurrence and its presentation
 references. `removePiece` unregisters every occurrence of the specified complete
 piece link. Neither operation deletes the target.
+
+Only the principal who added an occurrence removes it, unless they have left.
+`removePanel` reads the adder from the runtime's stamps on the occurrence's own
+fields, with `principalsOf` and `label: "written"`: `authored-by` at `addedBy`,
+whatever the field holds, and `represents-principal` at `addedByProfile`, which
+names whoever acted under the profile rather than the profile's owner. It
+removes an occurrence those stamps attest to the principal the event acts for
+alone. It removes one they attest to nobody whose contribution the rule could
+keep: an occurrence with no adder, one that holds its adder only as its writer's
+claim in `addedBy`, and one whose stamps name more than one principal. A field
+whose claims hold one in a form no runtime mints names nobody either: a label a
+runtime did not mint is trusted in neither direction, and the rule falls open
+there because the alternative is a panel nobody can remove; the other field's
+stamp, when well formed, still names the adder. It refuses one attested to
+another principal, with one exception: an OWNER of the Loom's space, by
+`spaceAccess(panels)`, removes an occurrence whose attested adder the Loom's
+access list grants nothing, by `spaceAccessOf(panels, adder)`, so that what a
+participant who has left added can be cleared up. Both reads are anchored in the
+Loom's list, never in the occurrence, which `addPanel` may have linked from
+another space whose list says nothing about the Loom. A list the replica has not
+read admits no such removal, and a list granting `*` a level says nobody has
+left. The field read stops at a value link but follows a redirect, as a write
+would, so a redirect stored in `addedBy` would stand the target document's stamp
+in for the field's; the typed pattern API authors no redirect, so no pattern can
+place one there. An occurrence that is not in the Loom is left alone without a
+check. `removePiece` applies the same check to every occurrence of the piece and
+removes all of them or none, so a piece that another principal also registered
+is unregistered one occurrence at a time, with `removePanel`. The root's Remove
+button sends `removePanel`, so it is refused on an occurrence someone else,
+still in the Loom, added.
 
 `setPresentation({stagedPanels, focusedPanel?})` replaces staging and focus in
 one transaction. Staged occurrences must belong to the current collection and be

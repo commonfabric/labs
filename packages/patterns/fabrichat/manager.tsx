@@ -6,16 +6,19 @@
  *
  * The rooms it lists are the ones the user's shared-space catalog, Home's,
  * keeps as saved: each room is its space's root, and the catalog lists the
- * space. The manager registers each room it creates or accepts there, and a
- * room offered to the user is registered there by the host that vets the
- * offer. Forgetting a room archives its entry.
+ * space. The manager registers there each room it creates, and each room a
+ * manager created that it accepts, and the host that vets an offer of a room
+ * registers that room there. Forgetting a room archives its entry.
  *
- * It creates each room with `inSpace()`, as the root of a space of its own
- * declaring the kind `fabrichat-room`. The space grants its creator and each
- * other member named at creation OWNER, and no one else, except that a group
- * made joinable by its link grants everyone WRITE as well. After that, who is
- * in the space is the space's business: any OWNER may add someone from the
- * room's own rendering, and the manager never changes it.
+ * It creates each room with `inSpace()` as the root of a space of its own,
+ * which declares itself a `fabrichat-room`. The space grants the room's
+ * creator and each other member named at creation OWNER, and no one else,
+ * except that a group made joinable by its link grants everyone WRITE as well.
+ * After that, who is in the space is the space's business: any OWNER may add
+ * someone from the room's own rendering, and the manager never changes it.
+ *
+ * The room keeps its space's participants itself, and the manager adds its
+ * user to them when it creates or accepts a room.
  *
  * A new room is offered to each other member whose profile the request names,
  * through the share inbox the profile points at, in the envelope a share inbox
@@ -70,6 +73,7 @@ import {
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatManagerProfile,
+  type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
@@ -206,7 +210,7 @@ export interface ManagerActState {
   /** The user's shared-space catalog, where each room listed is registered. */
   catalog: CatalogCell;
 
-  /** The direct room shared with each counterpart, as the manager stores it. */
+  /** The direct room shared with each counterpart. */
   direct: DirectCell;
 
   /** Each request's outcome. */
@@ -284,10 +288,10 @@ const recordOutcome = (
 const hostOrigin = (): string => new URL(getPatternEnvironment().apiUrl).origin;
 
 /**
- * Lists the room in `space` among this user's chats: registers the space in
- * the catalog, or restores its entry when the room was forgotten. An entry in
- * any other state stays as it is. A group room's title, cut to the length an
- * offer's may run to, is registered with it.
+ * Lists the room in `space` in the user's catalog: registers the space, or
+ * restores its entry when the entry is archived. An entry in any other state
+ * stays as it is. A group room's title, cut to the length an offer's may run
+ * to, is registered with it.
  */
 const listRoom = (
   catalog: CatalogCell,
@@ -296,11 +300,12 @@ const listRoom = (
 ): void => {
   const entry = readSharedSpaceCatalog(catalog).entries[space];
   if (entry === undefined) {
-    // The host is this pattern's own. A runtime reads every space from the
-    // one memory host its `apiUrl` names, and a link carries no host, so a
-    // room this manager creates or accepts is one this runtime has read, and
-    // so one this host serves; the share intake refuses an offer of a room
-    // on any other host.
+    // The host registered is this pattern's own, which serves each room this
+    // manager creates. A room it accepts is registered under it as well,
+    // since a pattern can't read which host serves a space, and a room
+    // another host serves is then registered under the wrong one.
+    // TODO(danfuzz): Register an accepted room under the host that serves
+    // its space, once a pattern can read it.
     registerSharedSpaceIn(catalog, {
       space,
       host: hostOrigin(),
@@ -398,18 +403,19 @@ const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
 /** What joining a room asks: the room, and the profile to join it as. */
 export interface JoinRoomsEvent {
   /** The room to join. */
-  // `Cell<…>` is written out rather than reached through an alias, as in
-  // `OfferRoomEvent`.
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
   room: Cell<ChatRoomLink>;
 
   /** This user's profile. */
-  profile: Cell<ChatManagerProfile>;
+  profile: Cell<ChatProfile>;
 }
 
 /** The room's stream that adds a profile to its participants. */
 function joinStreamOf(
   room: Cell<ChatRoomLink>,
-): Cell<{ addParticipant: Stream<{ profile: Cell<ChatManagerProfile> }> }>;
+): Cell<{ addParticipant: Stream<{ profile: Cell<ChatProfile> }> }>;
 function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
   return room;
 }
@@ -417,18 +423,18 @@ function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
 /**
  * Adds the event's profile to the room's participants, through the room's own
  * `addParticipant`, the one writer its roster admits, so that whoever creates
- * or accepts a room is listed in it without a step of their own. Like
- * `offerRooms`, it runs as an event of its own, queued by the one that creates
- * or accepts the room, so that the room's streams exist when it sends. A
- * profile that hasn't resolved is added to nothing.
+ * or accepts a room is listed in it without a step of their own. It runs as an
+ * event of its own, queued by the one that creates or accepts the room, so
+ * that the room's streams exist when it sends. A profile that hasn't resolved
+ * is added to nothing.
  */
 const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   (event) => {
-    // TODO(danfuzz): A stop-gap. A member whose catalog lists a room only
-    // because the share intake registered an offer of it is never sent here,
-    // so isn't on the room's roster, and is shown among its participants only
-    // as an author, once they write. Add them when their catalog admits the
-    // room, once something running for them sees that happen.
+    // TODO(danfuzz): A stop-gap. A member whose manager neither created nor
+    // accepted the room is never sent here, so isn't on the room's roster,
+    // and is shown among its participants only as an author, once they write.
+    // Add each member once their manager lists the room without a step of
+    // their own.
     const profile = event?.profile?.resolveAsCell();
     if (profile === undefined || profile.get() === undefined) return;
     joinStreamOf(event.room).key("addParticipant").send({ profile });
@@ -474,11 +480,12 @@ interface RoomOptions {
 
 /**
  * Creates a room in a space of its own, as the space's root, and its notices,
- * and registers its space in the catalog, all in one transaction: the space's
- * grants are part of creating it, so nothing has to commit apart. A notice for
- * each other member is queued for a client to deliver, and adding this user
- * to the room's participants, and offering the room to each profile in
- * `offerTo`, are queued to follow.
+ * records its entry, and registers its space in the user's catalog, all in one
+ * transaction: the space's grants and its declared kind are part of creating
+ * it, so nothing has to commit apart. A notice for each other member is
+ * queued for a client to deliver, and adding this user to the room's
+ * participants, and offering the room to each profile in `offerTo`, are queued
+ * to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
  * runs again with the name resolved. Nothing is registered or sent until the
@@ -655,10 +662,10 @@ const performManagerAct = (
     }
     const known = direct.key(counterpart).get();
     if (known !== undefined) {
-      const space = spaceOf(known.room);
-      // Restores a forgotten entry at the revision just read, as `listRoom`
+      // Restores an archived entry at the revision just read, as `listRoom`
       // says: starting the chat is the choice to have it listed.
-      if (isWellFormedDID(space)) listRoom(catalog, space);
+      const knownSpace = spaceOf(known.room);
+      if (isWellFormedDID(knownSpace)) listRoom(catalog, knownSpace);
       recordOutcome(state, requestId, { status: "done", entry: known });
       return;
     }
@@ -746,27 +753,27 @@ const performManagerAct = (
       });
       return;
     }
+    // An entry no longer saved, archived or removed by another client since
+    // the list was read, has moved on from any revision a list showed.
     const space = spaceOf(room);
     const entry = isWellFormedDID(space)
       ? readSharedSpaceCatalog(catalog).entries[space]
       : undefined;
-    if (
-      isWellFormedDID(space) && entry?.kind === CHAT_ROOM_OFFER_KIND &&
-      entry.state === "saved"
-    ) {
-      const changed = changeSharedSpaceMembershipIn(catalog, {
+    const changed = isWellFormedDID(space) &&
+        entry?.kind === CHAT_ROOM_OFFER_KIND && entry.state === "saved"
+      ? changeSharedSpaceMembershipIn(catalog, {
         space,
         id: eventKey(),
         expectedRevision: revision,
         state: "archived",
+      })
+      : undefined;
+    if (changed === undefined || changed.status === "conflict") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The room's entry changed since it was listed.",
       });
-      if (changed.status === "conflict") {
-        recordOutcome(state, requestId, {
-          status: "refused",
-          reason: "The room's entry changed since it was listed.",
-        });
-        return;
-      }
+      return;
     }
     recordOutcome(state, requestId, { status: "done" });
     return;
@@ -785,6 +792,20 @@ const performManagerAct = (
     recordOutcome(state, requestId, {
       status: "refused",
       reason: "The room can't be read by this user.",
+    });
+    return;
+  }
+  // The catalog lists a room by its space, so only a room that is its space's
+  // root can be listed, and only a room a manager created is one, which its
+  // record says: such a room is its space's root, in a space that declares
+  // itself a `fabrichat-room`. A space's own chat has no record, and its space
+  // is the social space it belongs to.
+  if (record.key("kind").get() === undefined) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason:
+        "The room is a social space's own chat, which isn't listed among chats.",
+      code: "space-own-chat",
     });
     return;
   }
@@ -848,7 +869,8 @@ export const commitStart = handler<ManagerStreamEvent, ManagerActState>(
 /**
  * Performs one of the manager's other acts: accepting a room, forgetting one,
  * or reporting a notice delivered. None of them needs a gesture, since each
- * changes only this user's own manager.
+ * changes only this user's own manager, except that accepting a room also
+ * adds this user to its participants, which anyone in its space may do.
  */
 export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
   (event, state) => performManagerAct(event, state),

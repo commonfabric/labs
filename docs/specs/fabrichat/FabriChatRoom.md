@@ -57,8 +57,8 @@ Every write goes through one handler per stream:
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
 
 Those who joined the room are the exception. The room's `addParticipant`
-stream is bound to the roster's one writer, also named `addParticipant`,
-which adds a profile with no gesture and no `requestId`: it is a set-add, so a
+stream is bound to the roster's one writer, also named `addParticipant`, which
+adds a profile with no gesture and no `requestId`: it is a set-add, so a
 profile already listed is not added again. The roster's write contract admits
 no other writer.
 
@@ -70,12 +70,11 @@ from the text the person submitted, which its handler reads as `target.value`,
 and the composer event's time as the proposed `sentAt`.
 
 Every handler in the table first checks its event's sender and `requestId`
-against a keyed
-collection of the requests the room has acted on, and does nothing for one it
-finds. It records the request there in the same transaction as its effect, and
-the collection drops a request once it was recorded longer ago than the greater
-of `proposedTimeMaxAgeNsec` plus `proposedTimeMaxLeadNsec`, and
-`recentActivityWindowNsec`. The collection keeps a request even after its
+against a keyed collection of the requests the room has acted on, and does
+nothing for one it finds. It records the request there in the same transaction
+as its effect, and the collection drops a request once it was recorded longer
+ago than the greater of `proposedTimeMaxAgeNsec` plus `proposedTimeMaxLeadNsec`,
+and `recentActivityWindowNsec`. The collection keeps a request even after its
 message is obliterated: it says only that the sender made a request, not what,
 and without it a late redelivery of the original send would send the message
 again. The two bounds of its window for proposed times are constants of the
@@ -162,7 +161,10 @@ the room is created from the same settings the handlers read.
 - **A private space, created from a pattern.** The manager's
   `FabriChatRoom.inSpace()` creates a space with a random DID whose genesis
   document names its creator an OWNER, plus the grants it names
-  ([random space identities](../random-space-identities.md)).
+  ([random space identities](../random-space-identities.md)), reserves the
+  room as the space's root
+  ([custom space roots](../../features/custom-space-roots.md)), and declares
+  the space's kind ([space kinds](../../features/space-kinds.md)).
 - **Per-session state written by a handler.** `windows` is a `PerSession` cell
   linked from the room's `PerSpace` message list, a nesting the scoped-cell
   design provides across a `Cell` boundary (see [scoped cell

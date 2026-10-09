@@ -7,7 +7,8 @@
  * through Home's own catalog handlers, while the owner's worker runs. It
  * refuses an offer of a space declaring another kind or none, or whose root is
  * not where the space's genesis reserves it, and a forged row a third identity
- * appends directly.
+ * appends directly. It registers an offer of a room the real FabriChat manager
+ * created, whose space declares its kind and is rooted at the room.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -28,6 +29,10 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
+
+// The reviewed action a FabriChat start is admitted from, as
+// `../fabrichat/schemas.tsx` names it.
+const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
 
 /** A catalog entry, as the owner reads it. */
 type Entry = {
@@ -190,6 +195,37 @@ describe("share intake across runtimes", () => {
       host: entry?.host,
       kind: "fabrichat-room",
     });
+  });
+
+  it("registers an offer of a room the FabriChat manager created", async () => {
+    await sender.send("createChatGroup", {
+      requestId: "chat",
+      title: "Real room",
+      members: [owner.identity.did()],
+    }, START_ACTION);
+    await harness.settle();
+    expect(await sender.read(["chatRequests", "chat", "status"])).toBe("done");
+    const room = await sender.link(["chatRequests", "chat", "entry", "room"]);
+    // The manager joins the sender to the room it creates, which holds no one
+    // else yet.
+    expect(await sender.read(["participants", "length"], { piece: room }))
+      .toBe(1);
+    expect(await sender.read(["participants", 0, "name"], { piece: room }))
+      .toBe("Sender");
+    await sender.send("offerAgain", {
+      id: "real room",
+      space: room.space,
+      title: "Real room",
+    });
+    await harness.settleUntil(async () => await delivered(sender, "real room"));
+
+    // The intake decides an inbox's offers in order, so this offer was
+    // decided by the time an offer after it is registered.
+    await createAndOffer("after the real room");
+
+    expect((await catalog())?.offers[receiptKey(sender, "real room")]?.space)
+      .toBe(room.space);
+    expect((await catalog())?.entries[room.space]?.state).toBe("saved");
   });
 
   it("registers an offer arriving while the owner's worker runs, without a restart", async () => {

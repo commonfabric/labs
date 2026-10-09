@@ -1,4 +1,3 @@
-import type { JSONSchema as SchemaDocJSONSchema } from "@commonfabric/api";
 import {
   deepFreeze,
   type FabricPlainObject,
@@ -8,10 +7,8 @@ import {
   taggedHashStringOf,
   valueEqual,
 } from "@commonfabric/data-model";
-import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
 import {
   classifySchemaMeta,
-  collectExternalSchemaRefHashes,
   collectSchemaMetaRefHashes,
   MalformedSchemaMetaError,
   SCHEMA_META_MEMBER,
@@ -22,7 +19,6 @@ import {
   type SqliteOperation,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
-import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
@@ -118,9 +114,11 @@ import {
   RESERVED_SIBLINGS,
   type ReservedSibling,
 } from "../reserved-sibling-seam.ts";
+import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import {
-  isRuntimeSecretId,
+  isRuntimeSecretOwnRead,
   readRuntimeSecret,
+  readsRuntimeSecretValue,
   RUNTIME_SECRET_SCHEMA,
   RUNTIME_SECRET_WRITER,
   runtimeSecretLink,
@@ -128,7 +126,10 @@ import {
 import { ignoreReadForScheduling } from "../scheduler.ts";
 import { CooperativeYield } from "../scheduler/cooperative-yield.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
-import { lookupSchemaDocument } from "../schema-registry.ts";
+import {
+  deliverSchemaDocumentClosure,
+  linkSchemaRefHashes,
+} from "../schema-doc-delivery.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
 import type { URI } from "../sigil-types.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
@@ -360,6 +361,27 @@ export type CfcInstrumentationHooks = {
 // mutating method like Array.prototype.push [[Set]]s through the view and
 // lands in the throwing trap.
 const readOnlyCfcViews = new WeakMap<object, object>();
+
+/**
+ * The errors a transaction's commit callbacks receive when its commit promise
+ * rejects, each standing for the rejection held in its `reason`.
+ */
+const commitPromiseRejections = new WeakSet<object>();
+
+/**
+ * The rejection a commit promise rejected with, when `error` is the error a
+ * transaction's commit callbacks receive for that rejection, or `undefined`
+ * for any other error. The commit's own settlement rejects with that same
+ * rejection, so a callback reading it here sees what the committer's
+ * settlement handler sees.
+ */
+export function commitPromiseRejectionOf(
+  error: unknown,
+): { readonly reason: unknown } | undefined {
+  return isObjectOrArray(error) && commitPromiseRejections.has(error)
+    ? { reason: (error as { reason?: unknown }).reason }
+    : undefined;
+}
 
 const throwCfcReadOnly = (): never => {
   throw new Error(
@@ -1615,6 +1637,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return this.#narrowestReadScope;
   }
 
+  noteReadScope(scope: CellScope): void {
+    this.#recordReadScope({ scope });
+  }
+
   resetNarrowestReadScope(scope: CellScope = "space"): void {
     this.#narrowestReadScope = scope;
     // The caller is about to re-read to learn the scope of what it reads. A
@@ -1681,6 +1707,30 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (scopeRank(scope) > scopeRank(this.#narrowestReadScope)) {
       this.#narrowestReadScope = scope;
     }
+  }
+
+  /**
+   * The read chokepoint of the runtime-secret namespace: no executed code
+   * reads a runtime secret's value, whatever link or id names it. The reads
+   * that pass are `runtime-secret.ts`'s own, whose marker is private to that
+   * module, and reads inside a privileged system write; a read of a document
+   * field other than the value, such as its label envelope, holds nothing
+   * secret and passes too.
+   */
+  #assertRuntimeSecretUnread(
+    address: Pick<IMemorySpaceAddress, "id" | "path">,
+    options: IReadOptions | undefined,
+  ): void {
+    if (
+      !readsRuntimeSecretValue(address) ||
+      this.#privilegedSystemWriteDepth > 0 ||
+      isRuntimeSecretOwnRead(options?.meta)
+    ) {
+      return;
+    }
+    throw new Error(
+      `${address.id} is a runtime secret: only the runtime reads it.`,
+    );
   }
 
   #prepareRead(address: Pick<IMemorySpaceAddress, "scope">): void {
@@ -2653,29 +2703,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): void {
     if (!getContentAddressedSchemasConfig()) return;
     if (value === undefined) return;
-    const hashes = new Set<string>();
     // Link positions, and the document's `schema` metadata member — the
     // two schema positions the commit boundary and result assembly read.
-    // `$alias` records are binding vocabulary by CONTEXT — in a
-    // transaction's written values they are plain data, and scanning them
-    // here would treat data that merely looks like a binding as a schema
-    // carrier. Binding schemas externalized by the pattern serializer
-    // resolve through the realm registry. A `cid:` document is not
-    // link-scanned (the closure writes this very method issues are `cid:`
-    // installs, and a schema document's keywords may carry link-shaped
-    // data); its `schema` member is read like any other document's.
-    if (!address.id.startsWith("cid:")) {
-      mapLinkSchemas(value, (schema) => {
-        for (
-          const hash of collectExternalSchemaRefHashes(
-            schema as SchemaDocJSONSchema,
-          )
-        ) {
-          hashes.add(hash);
-        }
-        return schema;
-      });
-    }
+    // Binding schemas externalized by the pattern serializer resolve
+    // through the realm registry. A `cid:` document is not link-scanned
+    // (the closure writes this very method issues are `cid:` installs, and
+    // a schema document's keywords may carry link-shaped data); its
+    // `schema` member is read like any other document's.
+    const hashes = address.id.startsWith("cid:")
+      ? new Set<string>()
+      : linkSchemaRefHashes(value);
     // The member's own form was refused ahead of the write
     // (`#refuseMalformedSchemaMeta`), so what remains here is a reference
     // to stage or an inline schema with nothing to stage.
@@ -2708,21 +2745,15 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * store — need their documents delivered whatever the flag says.
    */
   stageSchemaDocClosure(space: MemorySpace, rootHash: string): void {
-    walkSchemaDocumentClosure({
-      roots: [rootHash],
-      load: (hash) => {
+    const { missing } = deliverSchemaDocumentClosure(
+      [rootHash],
+      (hash) => {
         const key = `${space}|${hash}`;
-        if (this.#ensuredSchemaDocs.has(key)) return { kind: "settled" };
+        if (this.#ensuredSchemaDocs.has(key)) return true;
         this.#ensuredSchemaDocs.add(key);
-        if (this.tx.isContentAddressedDocPersisted?.(space, hash) === true) {
-          return { kind: "settled" };
-        }
-        const document = lookupSchemaDocument(hash);
-        return document === undefined
-          ? undefined
-          : { kind: "verified", schema: document };
+        return this.tx.isContentAddressedDocPersisted?.(space, hash) === true;
       },
-      onVerified: (hash, document) => {
+      (hash, document) => {
         this.#runPrivilegedSystemWrite(() => {
           this.writeOrThrow(
             {
@@ -2735,14 +2766,14 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           );
         });
       },
-      onMissing: (hash) => {
-        logger.warn(
-          "schema-doc-materialize",
-          "A staged reference names a schema document the registry cannot supply:",
-          `cid:${hash}`,
-        );
-      },
-    });
+    );
+    for (const hash of missing.keys()) {
+      logger.warn(
+        "schema-doc-materialize",
+        "A staged reference names a schema document the registry cannot supply:",
+        `cid:${hash}`,
+      );
+    }
   }
 
   /**
@@ -3275,6 +3306,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): Result<IAttestation, ReadError> {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     return this.tx.read(address, options);
@@ -3287,6 +3319,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
+    for (const path of paths) {
+      this.#assertRuntimeSecretUnread({ id: address.id, path }, readOptions);
+    }
     this.#prepareRead(address);
     if (this.tx.trackReadPaths) {
       return this.tx.trackReadPaths(address, paths, readOptions);
@@ -3307,6 +3342,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): FabricValue {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     const readResult = this.tx.read(address, options);
@@ -3922,6 +3958,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           message: "Transaction commit promise rejected",
           reason,
         };
+        commitPromiseRejections.add(error);
         this.#statusOverride = {
           status: "error",
           journal: this.tx.journal,
@@ -4218,6 +4255,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   getNarrowestReadScope(): CellScope {
     return this.#wrapped.getNarrowestReadScope();
+  }
+
+  noteReadScope(scope: CellScope): void {
+    this.#wrapped.noteReadScope(scope);
   }
 
   resetNarrowestReadScope(scope?: CellScope): void {

@@ -6,7 +6,13 @@
  * outcome is recorded either. A refused run logs its refusal, which is why
  * console warnings are allowed.
  */
-import { assert, pattern, TESTS, Writable } from "commonfabric";
+import {
+  type AddIntegrity,
+  assert,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
 import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
@@ -22,6 +28,17 @@ import {
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
+/** An empty shared-space catalog, as a manager lists its rooms from. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
+
+// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
+// because a room's participants link only a document that carries a label.
+type TestProfile = AddIntegrity<
+  ChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
+
 // A stand-in for a principal, a base58btc key as a principal's is.
 const BOB = "did:key:z6MkBob";
 
@@ -34,15 +51,11 @@ const statusOf = (
 ): string => requests.get()?.[id]?.status ?? "none";
 
 export default pattern(() => {
-  const catalog = Writable.of<SharedSpaceCatalogStorage>({
-    entries: {},
-    offers: {},
-  });
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const notices = Writable.of<ChatManagerNotice[]>([]);
   const manager = FabriChatManagerCore({
-    myProfile: Writable.of<ChatProfile>({ name: "Tester" }),
-    sharedSpaceCatalog: catalog,
+    myProfile: Writable.of<TestProfile>({ name: "Tester" }),
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: notices,

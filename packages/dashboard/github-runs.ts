@@ -39,6 +39,10 @@
  * a run be started again for thirty days after it was created, so those lists
  * are read back no further than that. A run that is gone when it is read again
  * is dropped.
+ *
+ * A `RunLists` given a file keeps its heads there as well, with the readers
+ * each is held for, so that a dashboard that restarts reads each list from the
+ * top only until it reaches a run it held before, as any reading does.
  */
 
 import {
@@ -46,6 +50,7 @@ import {
   GitHubStatusError,
   RUN_LIST_ACCESS,
 } from "./lib.ts";
+import { RunListFile, type SavedHead } from "./run-list-file.ts";
 
 /** A workflow run, as far as any part of the dashboard reads one. */
 export interface GitHubRun {
@@ -145,6 +150,10 @@ export const RERUN_MS = 30 * 86_400_000;
 
 /** The head of one workflow's list, and the readers it is held for. */
 class Head {
+  /** The repository whose workflow this is. */
+  readonly repo: string;
+  /** The workflow, by its file name or its id. */
+  readonly workflow: string | number;
   /** The runs from the newest down, newest first, with none missing. */
   runs: GitHubRun[] = [];
   /** Whether `runs` reaches the end of the list. */
@@ -152,7 +161,8 @@ class Head {
   /**
    * How many places nearer the top of the list than its place in `runs` the
    * last run held was found, which runs deleted above it and still held make
-   * more than zero.
+   * more than zero, and runs that landed at the top of the list after it was
+   * read make less than zero.
    */
   drift = 0;
   /** When the top of the list was last read, and how many runs that read. */
@@ -168,11 +178,49 @@ class Head {
   usedAt = Date.now();
   #queue: Promise<void> = Promise.resolve();
 
+  /** Constructs an instance holding none of `repo`'s `workflow` runs. */
+  constructor(repo: string, workflow: string | number) {
+    this.repo = repo;
+    this.workflow = workflow;
+  }
+
+  /** The head as a file keeps it. */
+  get saved(): SavedHead {
+    return {
+      repo: this.repo,
+      workflow: this.workflow,
+      runs: this.runs,
+      complete: this.complete,
+      drift: this.drift,
+      readAt: this.readAt,
+      usedAt: this.usedAt,
+      readers: [...this.reach].map(([reader, { id, at }]) => ({
+        reader,
+        id,
+        at,
+      })),
+    };
+  }
+
   /** Runs `task` once every task given before it has finished. */
   exclusive<T>(task: () => Promise<T>): Promise<T> {
     const result = this.#queue.then(task);
     this.#queue = result.then(() => {}, () => {});
     return result;
+  }
+
+  /**
+   * Takes the runs and readers a file kept as `saved`. The next reading reads
+   * the top of the list, whenever the top was last read.
+   */
+  restore(saved: SavedHead): void {
+    this.runs = saved.runs;
+    this.complete = saved.complete;
+    this.drift = saved.drift;
+    this.readAt = saved.readAt;
+    for (const { reader, id, at } of saved.readers) {
+      this.reach.set(reader, { id, at });
+    }
   }
 }
 
@@ -243,6 +291,17 @@ class RunList {
  */
 export class RunLists {
   #heads = new Map<string, Head>();
+  #file: RunListFile | undefined;
+  #saving: Promise<void> = Promise.resolve();
+  #unsaved = false;
+
+  /**
+   * Constructs an instance that keeps its heads in the file at `file`, when
+   * given, starting from the heads it holds, and in memory alone otherwise.
+   */
+  constructor(file?: string) {
+    this.#file = file === undefined ? undefined : new RunListFile(file);
+  }
 
   /**
    * Reads a workflow's runs that `reading` wants, newest first, from the
@@ -268,23 +327,73 @@ export class RunLists {
       if (now - head.usedAt > READER_TTL_MS) this.#heads.delete(key);
     }
     const key = `${repo} ${workflow}`;
-    const held = this.#heads.get(key) ?? new Head();
-    this.#heads.set(key, held);
-    held.usedAt = now;
-    const list = new RunList(request, repo, workflow);
-    return await held.exclusive(async () => {
-      await readTop(list, held, newest);
-      await recheck(list, held, reading);
-      const count = await readDown(list, held, reading);
-      if (count > 0) {
-        held.reach.set(reading.reader, {
-          id: held.runs[count - 1].id,
-          at: Date.now(),
+    let held = this.#heads.get(key);
+    if (held === undefined) {
+      const head = new Head(repo, workflow);
+      this.#heads.set(key, head);
+      held = head;
+      const file = this.#file;
+      if (file !== undefined) {
+        // The head starts from the one the file holds, unless nobody has read
+        // that one for READER_TTL_MS, before any reading of it.
+        head.exclusive(async () => {
+          const saved = await file.load(repo, workflow);
+          if (saved !== undefined && now - saved.usedAt <= READER_TTL_MS) {
+            head.restore(saved);
+          }
         });
       }
-      trim(held);
-      return held.runs.slice(0, count).filter((run) => reading.wants(run));
+    }
+    held.usedAt = now;
+    const list = new RunList(request, repo, workflow);
+    try {
+      return await held.exclusive(async () => {
+        await readTop(list, held, newest);
+        await recheck(list, held, reading);
+        const count = await readDown(list, held, reading);
+        if (count > 0) {
+          held.reach.set(reading.reader, {
+            id: held.runs[count - 1].id,
+            at: Date.now(),
+          });
+        }
+        trim(held);
+        return held.runs.slice(0, count).filter((run) => reading.wants(run));
+      });
+    } finally {
+      // A reading that fails keeps the runs it read, in the file as in
+      // memory, so the next one, in this process or after a restart, reads on
+      // from them.
+      await this.#save();
+    }
+  }
+
+  /**
+   * Helper for `runs()`, which writes the heads to the file, once each write
+   * already asked for has finished, unless one of those wrote them after the
+   * latest change. A write that fails is logged, and the heads are written
+   * again after the next reading.
+   */
+  async #save(): Promise<void> {
+    const file = this.#file;
+    if (file === undefined) return;
+    this.#unsaved = true;
+    this.#saving = this.#saving.then(async () => {
+      if (!this.#unsaved) return;
+      this.#unsaved = false;
+      try {
+        await file.save(
+          () => [...this.#heads.values()].map((head) => head.saved),
+          Date.now() - READER_TTL_MS,
+        );
+      } catch (error) {
+        console.error(
+          `run lists could not be saved to ${file.path}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     });
+    await this.#saving;
   }
 }
 
@@ -406,10 +515,10 @@ async function recheck(
 
 /**
  * Helper for `RunLists.runs()`, which offers `head`'s runs to `reading` until
- * it stops, reading further down the list when the runs held run out first. A
- * run the reader wants, held unfinished, is read again by its id before it is
- * offered, unless this reading read it from the list. Returns how many runs
- * were offered.
+ * it stops, reading further down the list when the runs held run out first,
+ * and recording that the reader read the runs it read there. A run the reader
+ * wants, held unfinished, is read again by its id before it is offered, unless
+ * this reading read it from the list. Returns how many runs were offered.
  */
 async function readDown(
   list: RunList,
@@ -429,6 +538,14 @@ async function readDown(
       for (const run of added) head.fresh.add(run.id);
       head.complete = ended;
       head.drift = drift;
+      if (added.length > 0) {
+        // The reader has read every run held, so a reading that fails further
+        // down still holds the runs it read.
+        head.reach.set(reading.reader, {
+          id: added[added.length - 1].id,
+          at: Date.now(),
+        });
+      }
       if (dropped > 0) {
         // Runs offered already that turned out to be deleted are taken back.
         index -= dropped;
@@ -604,5 +721,5 @@ function narrow(run: GitHubRun): GitHubRun {
     updated_at: run.updated_at,
     html_url: run.html_url,
     head_commit: run.head_commit && { message: run.head_commit.message },
-  };
+  } satisfies Record<keyof GitHubRun, unknown>;
 }

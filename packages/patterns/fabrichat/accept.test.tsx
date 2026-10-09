@@ -4,7 +4,8 @@
  * creator, and the accepting manager takes the counterpart from that label: it
  * refuses an event naming someone else, and with no counterpart named, records
  * the creator. The room offers its other member the control that asks their
- * manager to list it, until the manager does.
+ * manager to list it, until the manager does, and accepting the room lists
+ * them among its participants.
  */
 import {
   action,
@@ -24,6 +25,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  readSharedSpaceCatalog,
   registerSharedSpace,
   type SharedSpaceCatalogStorage,
 } from "../system/shared-space-catalog.ts";
@@ -159,9 +161,10 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
+  const catalog = emptyCatalog();
   const manager = FabriChatManagerCore({
     myProfile: bobProfile,
-    sharedSpaceCatalog: emptyCatalog(),
+    sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -223,6 +226,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           reasonOf(requests, "a-1") ===
             "The counterpart is not the room's creator." &&
           manager.rooms.length === 0 &&
+          Object.keys(readSharedSpaceCatalog(catalog).entries).length === 0 &&
           addDisplay(adder[UI]) === "flex"
         ),
       },
@@ -233,6 +237,18 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           addDisplay(adder[UI]) === "none"
         ),
+      },
+      // Accepting it registers its space in Bob's catalog, as a saved
+      // FabriChat room, from which the manager lists it.
+      {
+        assertion: assert(() => {
+          const entries = Object.values(
+            readSharedSpaceCatalog(catalog).entries,
+          );
+          return entries.length === 1 &&
+            entries[0]?.kind === CHAT_ROOM_OFFER_KIND &&
+            entries[0]?.state === "saved";
+        }),
       },
       // Accepting the room lists Bob among its participants, without a step
       // of his own.

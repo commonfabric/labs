@@ -161,9 +161,9 @@ provide, the document says so, under the heading "Prerequisites".
    carries its target's label across the space boundary, and copied bytes do not
    ([cross-space integrity](../cfc-cross-space-integrity.md), §1).
 2. **Membership is the room space's.** Its access list decides who can read and
-   write, and its root lists the profiles its participants contributed: for a
-   room in a space of its own, the room itself. The room keeps nothing beside
-   them.
+   write, and its root lists the profiles its participants contributed, which
+   for a room in a space of its own is the room itself. The room keeps no
+   membership beyond that list.
 3. **History is attested.** Messages and reactions are `AuthoredByCurrentUser`
    and `TrustedActionWrite`. A message's sender can
    edit or delete it, each change recorded as a new version, and a message can
@@ -182,11 +182,12 @@ provide, the document says so, under the heading "Prerequisites".
 7. **Every conversation is a space's chat.** A room's membership is its
    space's membership by construction, with nothing to keep in step. A direct
    or group conversation gets a space created for it, whose root is the room: a
-   social space in its own right, which lists its participants itself. A space
-   that already exists, such as a container, can have its own chat too, and
-   keeps its own root. A room can be part of any other social space as well,
-   through a placement and an adapter, and there the other space's root stays
-   the root.
+   social space in its own right, which lists its participants itself, and
+   which declares itself a `fabrichat-room`
+   ([space kinds](../../features/space-kinds.md)). A space that already exists,
+   such as a container, can have its own chat too, and keeps its own root. A
+   room can be part of any other social space as well, through a placement and
+   an adapter, and there the other space's root stays the root.
 8. **Clients send to the room directly.** Neither a placement nor an adapter
    relays a send. A reviewed gesture reaches the room's own writer, so the
    room's write policy names only the room's own surfaces.
@@ -255,10 +256,9 @@ names the ones it needs, and they are gathered here:
   as well ([random space identities](../random-space-identities.md)).
 - **Delivering a notice.** A room is offered to its recipient through the
   share inbox their profile points at when the request that creates it names
-  their profile, and their host registers it in their Home's catalog, where
-  their manager lists it. A member whose profile the request doesn't name is
-  reached by nothing but a notice, and nothing delivers a notice to a principal
-  who shares no space with the sender end to end (see
+  their profile. A member whose profile the request doesn't name is reached by
+  nothing but a notice, and nothing delivers a notice to a principal who shares
+  no space with the sender end to end (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -279,11 +279,11 @@ The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
 in `schemas.tsx`. The room's stored records and the handlers that write them are
 in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
 home pattern holds a manager, and `#chatManager` resolves to it (see
-[`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)); the
-manager lists the rooms Home's shared-space catalog keeps. Home's
-**Chats** tab renders the manager: the user's rooms, each a link that opens the
-room as a page of its own, the controls that start a direct or a group chat,
-and, when the session's latest start was refused, the reason. A refusal of text that isn't a principal
+[`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)), but
+home renders it nowhere of its own: a page shows it at its path in home's
+result, with the user's rooms, each a link that opens the room as a page of its
+own, the controls that start a direct or a group chat, and, when the session's
+latest start was refused, the reason. A refusal of text that isn't a principal
 also shows the text. Where the runtime lacks a prerequisite, the patterns depart
 from this design, as below.
 
@@ -291,19 +291,21 @@ from this design, as below.
 
 - **Membership is set at creation, then the space's.** The manager creates a
   space for a conversation with `FabriChatRoom.inSpace()`, with the room as its
-  root, naming grants: the creator and each other member OWNER, and everyone
-  WRITE for a group made joinable by its link. After that, who is in it
-  changes through the space's own tools, and through the room's add control,
-  from which any OWNER admits someone as OWNER with `grantSpaceAccess()`. A
-  client that draws natively can offer it too, through the sanctioned issuing
-  path (see [`clients.md`](clients.md#the-sanctioned-issuing-path)). A room in
-  a space of its own keeps the space's participants, through `addParticipant`,
-  the roster's one writer (`packages/patterns/loom/participants.tsx`): the
-  manager that creates or accepts the room adds its user, from an event that
-  follows. As a stop-gap, a member whose manager has done neither, as when the
-  share intake registered an offer of the room, is not on the roster, and is
-  shown once they write, as an author. A room in an existing social space lists
-  that space's participants, then those who joined the room.
+  root and the space declaring itself a `fabrichat-room`, naming grants: the
+  creator and each other member OWNER, and everyone WRITE for a group made
+  joinable by its link. After that, who is in it changes through the space's
+  own tools, and through the room's add control, from which any OWNER admits
+  someone as OWNER with `grantSpaceAccess()`. A client that draws natively can
+  offer it too, through the sanctioned issuing path (see
+  [`clients.md`](clients.md#the-sanctioned-issuing-path)).
+- **A room keeps its own participants.** A room in a space of its own keeps
+  the space's participants through `addParticipant`, the roster's one writer
+  (`packages/patterns/loom/participants.tsx`): the manager that creates or
+  accepts the room adds its user, from an event that follows. As a stop-gap, a
+  member whose manager has done neither is not on the roster, and is shown
+  among the participants only once they write, as an author. A room in an
+  existing social space lists that space's participants, then those who
+  joined the room itself.
 - **Principals.** A handler learns the principal it acts for
   (`currentPrincipal()`), so a room keys its request memory by the sender's
   principal, and the manager refuses a direct room with the user themself and
@@ -367,23 +369,34 @@ from this design, as below.
   writes the windows of the session that sent the event, wherever it runs; an
   event the server itself emitted has no session, and can't open one.
 - **Notices and offers.** A manager's notice id is `[recipient, requestId]` as
-  JSON, and an offer's `id` is the `requestId` alone. Nothing delivers a notice
-  yet (see [first contact](FabriChatManager.md#first-contact)), so the manager's
+  JSON, and an offer's `id` is the `requestId` alone. An offer reaches the
+  recipient's inbox, and their host's share intake vets it and registers the
+  room's space in their Home's shared-space catalog
+  ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
+  where their manager lists it. And only an `openDirect` that names `profile`
+  offers a room: the rendered start controls name a counterpart by principal,
+  and a group's members are principals. Nothing delivers a notice yet (see
+  [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
-  creator to send on. And a room shows a viewer whose manager
-  doesn't list it a control that asks the manager to `accept` it, so
-  whoever opens the room's link can add it to their chats.
+  creator to send on. And a room shows a viewer whose manager doesn't list it a
+  control that asks the manager to `accept` it, so whoever opens the room's link
+  can add it to their chats.
 - **The index is the catalog's.** The manager's `rooms` lists the
-  `fabrichat-room` entries Home's shared-space catalog keeps as saved
-  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), each
-  room found as its space's root. Creating a room registers its space there,
-  in the creating transaction once the space's name has resolved, and so does
-  accepting one; forgetting a room archives its entry. A room offered to the
-  user is registered there by the host that vets the offer. A direct room's
-  counterpart is the one `direct` holds the room under, or else the room's
-  labeled creator, and `openDirect` finds only a room `direct` holds. A room
-  tells whether the viewer's chats list it from the catalog itself, which the
-  manager offers as `sharedSpaceCatalog`.
+  `fabrichat-room` entries the user's Home shared-space catalog keeps as saved,
+  each room found as its space's root. Creating a room registers its space in
+  the user's Home shared-space catalog
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), in the
+  creating transaction once the space's name has resolved, and so does accepting
+  a room a manager created. Each room registered is registered under the
+  manager's own host, since a pattern can't read which host serves a space.
+  Finding a direct room again, or accepting a room, restores its entry if it was
+  archived, and forgetting a room archives its entry, at the revision the
+  request names. A direct room's counterpart is the one `direct` holds the room
+  under, or else the room's labeled creator, and `openDirect` finds only a room
+  `direct` holds. A room tells whether the viewer's chats list it from the
+  catalog itself, which the manager offers as `sharedSpaceCatalog`. Accepting a
+  space's own chat is refused, since the catalog lists rooms by their own
+  spaces.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

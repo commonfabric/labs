@@ -1055,18 +1055,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // A manager's index entry gained `revision`, the revision of the room's
     // entry in the user's catalog, which a request to forget the room names,
-    // so that a choice made since by another client is not overridden. The
-    // recorded entry left extra fields open, so a stored request outcome's
-    // entry admitted a `revision` of any type; the candidate types it as a
-    // string. No recorded outcome holds one.
+    // so that a choice made since by another client is not overridden, and a
+    // refused outcome gained `code`, which a client acts on. The recorded
+    // outcomes left extra fields open, so a stored outcome admitted either of
+    // any type; the candidate types them. No recorded outcome holds either.
     pattern: "fabrichat/manager.tsx",
     baselines: [
       "20261005T182129Z-yX4jdpH1wLhIowBh",
       "20261006T233809Z-8LxrZWka1s7az21n",
+      "20261008T155754Z-m9jfHg3UGeF0e9_8",
+      "20261008T210909Z-Kyy64jL0hYC-5p6Q",
     ],
     paths: ["argument.requests.*"],
     reason:
-      "a manager's index entry now types `revision`, which the recorded entry left open; no stored request outcome holds one",
-    record: "docs/history/fabrichat-rooms-as-roots-break.md",
+      "a manager's index entry now types `revision`, and a refused outcome `code`, which the recorded outcomes left open; no stored request outcome holds either",
+    record: "docs/history/fabrichat-index-revision-break.md",
   },
 ];

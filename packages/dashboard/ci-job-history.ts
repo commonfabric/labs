@@ -31,6 +31,7 @@ import {
 } from "./lib.ts";
 import type { GitHubCredential } from "./github-auth.ts";
 import { RunLists } from "./github-runs.ts";
+import { dashboardCacheFile } from "./history-files.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
 import {
   distinctTrendDays,
@@ -1045,18 +1046,24 @@ export class CiJobHistoryCollector {
   #workflowRequests = new Map<CiHistorySourceKey, CiWorkflowDiscovery>();
   // The history and the Gantt read a workflow's runs to different depths, so
   // each keeps its own, and neither waits behind the other's reading.
-  #historyRuns = new RunLists();
-  #ganttRuns = new RunLists();
+  #historyRuns: RunLists;
+  #ganttRuns: RunLists;
   #ganttRequests = new Map<string, CiGanttRequest>();
 
   constructor(
     store = new CiJobHistoryStore(),
     request: GitHubRequest = performanceGithub,
     detail = new CiGanttDetailStore(() => ganttDetailDirectory(store.file)),
+    runLists: { history: RunLists; gantt: RunLists } = {
+      history: new RunLists(),
+      gantt: new RunLists(),
+    },
   ) {
     this.#store = store;
     this.#github = request;
     this.#detail = detail;
+    this.#historyRuns = runLists.history;
+    this.#ganttRuns = runLists.gantt;
   }
 
   #newProgress(
@@ -2759,15 +2766,27 @@ const productionStore = new CiJobHistoryStore();
 const productionDetail = new CiGanttDetailStore(() =>
   ganttDetailDirectory(productionStore.file)
 );
+// Each collector keeps the runs it reads in files of its own, named after
+// `name`.
+const productionRunLists = (name: string) => ({
+  history: new RunLists(
+    dashboardCacheFile(`fabric-wall-run-lists-${name}-history.json`),
+  ),
+  gantt: new RunLists(
+    dashboardCacheFile(`fabric-wall-run-lists-${name}-gantt.json`),
+  ),
+});
 const productionCollector = new CiJobHistoryCollector(
   productionStore,
   performanceGithub,
   productionDetail,
+  productionRunLists("ci"),
 );
 const commitGanttCollector = new CiJobHistoryCollector(
   productionStore,
   github,
   productionDetail,
+  productionRunLists("commit-ci"),
 );
 
 // Collects a chart and writes the renderer's input file, without ever holding

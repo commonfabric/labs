@@ -27,6 +27,7 @@ import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schem
 import {
   collectExternalSchemaRefHashes,
   containsExternalSchemaRef,
+  isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import type { MemorySpace, Result, Unit } from "@commonfabric/memory/interface";
 import {
@@ -90,7 +91,12 @@ import {
   parseLink,
   schemaForSpaceCrossing,
 } from "./link-utils.ts";
-import { canFollowScopedLink, isCellScope, scopeRank } from "./scope.ts";
+import {
+  canFollowScopedLink,
+  isCellScope,
+  noteDeclaredReadScope,
+  scopeRank,
+} from "./scope.ts";
 import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
 import {
   type Activity,
@@ -2693,6 +2699,32 @@ const schemaScopeForSelector = (selector?: SchemaPathSelector) =>
 const schemaFollowScopeCap = (schema: unknown): SchemaScope | undefined =>
   ContextualFlowControl.getSchemaScopeCap(schema as JSONSchema | undefined);
 
+const _schemaScopeCapCache = new WeakMap<object, SchemaScope | undefined>();
+
+/**
+ * {@link schemaFollowScopeCap}, memoized by schema identity. Handle
+ * construction asks it of every element read as a handle, and the elements
+ * of one array share one declaration, so the reference resolution behind the
+ * answer runs once per declaration rather than once per element. A schema
+ * whose root is a content-addressed reference is answered from the closure
+ * the registry holds at the time, which may not hold it yet, so that answer
+ * is never kept.
+ */
+function schemaFollowScopeCapMemoized(
+  schema: JSONSchema | undefined,
+): SchemaScope | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  if (_schemaScopeCapCache.has(schema)) {
+    return _schemaScopeCapCache.get(schema);
+  }
+  const cap = schemaFollowScopeCap(schema);
+  const ref = (schema as { $ref?: unknown }).$ref;
+  if (!(typeof ref === "string" && isExternalSchemaRef(ref))) {
+    _schemaScopeCapCache.set(schema, cap);
+  }
+  return cap;
+}
+
 /**
  * The key `TraversalContext.missingLinkTargetDocs` holds a document under: its
  * space, its scope and its id, since one id names a different document in
@@ -2901,6 +2933,7 @@ function followPointer(
     ]);
     return [notFound(target), selector];
   }
+  noteDeclaredReadScope(tx, schemaScope, link.scope);
   if (selector !== undefined) {
     // We'll need to re-root the selector for the target doc
     // Remove the portions of doc.path from selector.path, limiting schema if
@@ -6386,6 +6419,13 @@ function getNextCellLink(
         ? combined
         : schemaForSpaceCrossing(tx, doc.address.space, combined),
     };
+    // A handle built over a link is that link followed from the position
+    // the handle is declared at, as much as a value read through it is.
+    noteDeclaredReadScope(
+      tx,
+      schemaFollowScopeCapMemoized(schema),
+      lastLink.scope,
+    );
     noteLinkCrossing(context, doc.address, target);
     return target;
   }

@@ -145,6 +145,7 @@ describe("cf agent runner", () => {
       deps.selectSandboxRuntime = () =>
         selectHarnessJobSandboxRuntime({
           platform: "darwin",
+          arch: "aarch64",
           env: { HOME: home },
         });
 
@@ -206,11 +207,22 @@ describe("cf agent runner", () => {
         await Deno.remove(home, { recursive: true });
       }
 
-      if (Deno.build.os === "darwin") {
+      // A Mac, and Linux, default to the native runtime, which this home has
+      // no store for (and which Linux runs for root alone).
+      const native = Deno.build.os === "darwin"
+        ? "macOS"
+        : Deno.build.os === "linux"
+        ? "Linux"
+        : undefined;
+      if (native !== undefined) {
         expect(selected).toBeInstanceOf(HarnessControlError);
         expect(selected).toMatchObject({
           message: expect.stringMatching(
-            /^No sandbox runtime is named, so the default applies, which on macOS is the native `runsc` runtime, and .* select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`\.$/,
+            new RegExp(
+              "^No sandbox runtime is named, so the default applies, which " +
+                `on ${native} is the native \`runsc\` runtime, and .* ` +
+                "select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`\\.$",
+            ),
           ),
         });
       } else {

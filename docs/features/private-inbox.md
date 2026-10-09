@@ -439,7 +439,7 @@ offer is registered when:
   `Runtime.spaceKind()` reads it;
 - `space` has a root, its space cell linking a piece in `space` itself, and
   that piece is at the address the space's genesis commit reserves for a root
-  `inSpace()` makes with `root: true`: the address `IN_SPACE_ROOT_CAUSE`
+  `inSpace()` makes with `root: true`: the address `inSpaceRootCause(space)`
   derives in `space`.
 
 The kind check reads the kind the space's creator declared, which nobody can
@@ -452,10 +452,11 @@ says: a member with `WRITE` can link another document as the space's root,
 and the intake refuses an offer of the space while it does. A consumer of the
 catalog reads the live root when it opens the space.
 
-A FabriChat manager creates each room as its space's root, in a space declaring
-the kind `fabrichat-room`, so the intake admits the rooms it offers. A room in
-a space whose root is something else is refused as `space-root-missing`, and
-stays in the inbox.
+FabriChat's manager creates each room as its space's root, at that reserved
+address, in a space that declares itself a `fabrichat-room`, so an offer of a
+room it creates passes both checks while the space's root stays at that
+address. A room in a space created without a kind is refused, as above,
+however it was made.
 
 Each refusal has a reason of its own, which its log entry names. A final one
 decides its row for good, and any other leaves the row to be vetted again, as

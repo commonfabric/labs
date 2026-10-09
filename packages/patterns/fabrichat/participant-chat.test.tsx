@@ -52,6 +52,10 @@ import {
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+/** An empty shared-space catalog, as a manager lists its rooms from. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 type ChipArg = Parameters<typeof ParticipantChip>[0];
 
 /** The reviewed surface and action a person writes their own profile from. */
@@ -213,10 +217,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   );
   const manager = FabriChatManagerCore({
     myProfile: profile,
-    sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
-      entries: {},
-      offers: {},
-    }),
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),

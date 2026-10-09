@@ -985,6 +985,23 @@ const graphWatchRootQueries = (watches: readonly WatchSpec[]) =>
       }))
     );
 
+/**
+ * A failure to hand a message to the host's send, carrying what failed as its
+ * cause. It is a failure of the connection, not of whatever request the message
+ * answers: a commit whose verdict could not be delivered is already applied, so
+ * the connection closes and the client's replay is answered from the record.
+ */
+class DeliveryError extends Error {
+  /** Constructs an instance for the delivery failure `cause`. */
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error ? cause.message : "Memory message delivery failed",
+      { cause },
+    );
+    this.name = "DeliveryError";
+  }
+}
+
 class Connection {
   #ready = false;
   #closed = false;
@@ -1020,6 +1037,14 @@ class Connection {
   #pendingReceives = 0;
   #receiveIdle: PromiseWithResolvers<void> | null = null;
 
+  /**
+   * The request ids a response has gone out for, each kept until its frame's
+   * handling ends, so that a request is answered once: a failure after its
+   * response left is not answered again on the same id. A frame whose failure
+   * is left to the host keeps its id, which no later request shares.
+   */
+  #answered = new Set<string>();
+
   readonly #server: Server;
   readonly #sendRaw: Send;
 
@@ -1035,14 +1060,19 @@ class Connection {
   }
 
   #send(message: ServerMessage): void {
-    const schemaStart = performance.now();
-    const prepared = this.#syncSchemaTable
-      ? compressServerMessageSchemas(message)
-      : message;
-    timing.time(schemaStart, "memory", "response", "prepareSchemas");
-    const sendStart = performance.now();
-    this.#sendRaw(prepared);
-    timing.time(sendStart, "memory", "response", "sendRaw");
+    if (message.type === "response") this.#answered.add(message.requestId);
+    try {
+      const schemaStart = performance.now();
+      const prepared = this.#syncSchemaTable
+        ? compressServerMessageSchemas(message)
+        : message;
+      timing.time(schemaStart, "memory", "response", "prepareSchemas");
+      const sendStart = performance.now();
+      this.#sendRaw(prepared);
+      timing.time(sendStart, "memory", "response", "sendRaw");
+    } catch (cause) {
+      throw new DeliveryError(cause);
+    }
   }
 
   /** Whether the peer declared the expression result identity contract. */
@@ -1382,7 +1412,12 @@ class Connection {
     // behind them (04-protocol.md §4.13.4). Everything else keeps the
     // connection's order.
     if (parsed !== null && isPresenceClientMessage(parsed)) {
-      this.#receivePresence(parsed);
+      try {
+        this.#receivePresence(parsed);
+      } catch (error) {
+        if (!this.#answerFailedRequest(parsed, error)) throw error;
+      }
+      this.#answered.delete(parsed.requestId);
       return;
     }
     this.#pendingReceives += 1;
@@ -1401,9 +1436,13 @@ class Connection {
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
           await this.#receiveOrdered(parsed);
+        } catch (error) {
+          if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
           timing.time(startedAt, "memory", "frame", "handle");
         }
+        const requestId = requestIdOf(parsed);
+        if (requestId !== undefined) this.#answered.delete(requestId);
       });
     } finally {
       this.#pendingReceives = Math.max(0, this.#pendingReceives - 1);
@@ -1483,6 +1522,52 @@ class Connection {
       }
     });
     return current;
+  }
+
+  /**
+   * Helper for `receive()`, which answers a request whose handling threw with
+   * an error response on its own request id, so that the connection carries
+   * on: every error is returned in a response (04-protocol.md §4.7). A commit
+   * is answered with a `TransactionError` and any other request with a
+   * `QueryError`, while an engine `ProtocolError` keeps its own name, as the
+   * handlers name the failures they classify themselves.
+   *
+   * Returns whether it answered. A failure to deliver a response, an accepted
+   * commit's verdict among them, is a `DeliveryError` and is left to the
+   * caller, as is a frame naming no request and a failure after the request's
+   * response has already gone out, a commit's deferred self-revocation among
+   * them: a request is answered once. The host then closes the connection, and
+   * the client replays what it was waiting for, or learns on reconnecting what
+   * the lost message would have told it.
+   */
+  #answerFailedRequest(
+    parsed: ClientMessage | OversizedClientMessage | null,
+    error: unknown,
+  ): boolean {
+    const requestId = requestIdOf(parsed);
+    if (
+      error instanceof DeliveryError || parsed === null ||
+      requestId === undefined || this.#answered.has(requestId)
+    ) {
+      return false;
+    }
+    console.error(
+      `memory v2: handling a ${parsed.type} request failed; answering it with an error response`,
+      error,
+    );
+    this.#send({
+      type: "response",
+      requestId,
+      error: toError(
+        error instanceof Engine.ProtocolError
+          ? error.name
+          : parsed.type === "transact"
+          ? "TransactionError"
+          : "QueryError",
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+    return true;
   }
 
   #requireSession(
@@ -2102,6 +2187,17 @@ const spaceOfFrame = (
   return message.space;
 };
 
+/**
+ * The request a frame names, or `undefined` for one naming none: a frame that
+ * could not be read, or a `hello`.
+ */
+const requestIdOf = (
+  message: ClientMessage | OversizedClientMessage | null,
+): string | undefined => {
+  if (message === null || !("requestId" in message)) return undefined;
+  return typeof message.requestId === "string" ? message.requestId : undefined;
+};
+
 const isPresenceClientMessage = (
   message: ClientMessage | OversizedClientMessage,
 ): message is
@@ -2511,6 +2607,8 @@ export class Server {
   memoryProtocolFlags(): MemoryProtocolFlags {
     return {
       ...getMemoryProtocolFlags(),
+      // Server execution is attached through the observer, and only then.
+      serverExecution: this.#serverExecutionObserver !== undefined,
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
       routedAuthV1: false,
