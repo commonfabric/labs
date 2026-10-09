@@ -140,47 +140,67 @@ instance names.
 
 A parent set up under a pattern that did not name an instance holds that
 instance's child at the positional spot. The first setup under a pattern that
-names it carries the child over (`planInstanceCarryOver`):
+names it carries the child over (`planInstanceCarryOver`), taking the first of
+these that applies:
 
-- where the pattern the parent last set up, which `patternSetupIdentity`
-  names, is loaded, the child is the one at the `legacyPartialCause` that
-  pattern gives the same instance name;
-- otherwise, it is the one set-up child, among the positional spots the
-  parent's manifest records, whose `patternIdentity` is the instance's own
-  child pattern identity. No such child, more than one, or one that two
-  instances would each take, carries nothing over.
+1. Where the pattern the parent last set up, which `patternSetupIdentity`
+   names, is loaded, the child is the one at the `legacyPartialCause` that
+   pattern gives the same instance name. This is exact.
+2. Otherwise, it is the one set-up child, among the positional spots the
+   parent's manifest records, whose `patternIdentity` is the instance's own
+   child pattern identity. This is exact too. More than one such child, or one
+   that two instances would each take, goes on to the next step.
+3. Otherwise, it is the child at the instance's own `legacyPartialCause`,
+   which is where the child runs with no instance names, unless the parent
+   shows the children have moved spots: that child carries an instance name
+   stamp, or it runs a pattern identity other than the instance's own while
+   another sub-pattern node sets up the identity it runs, or a child of the
+   instance's own identity runs at another positional spot the manifest
+   records.
+4. Otherwise nothing is carried over. The instance starts fresh, and the setup
+   logs `instance-carry-over` naming it, its positional cause and the child
+   left set up there, if any.
 
-A child is carried over by one instance at most.
+A child is carried over by one instance at most. A start's pre-sync loads the
+previous pattern by identity first. The carried child's link is recorded by
+instance name in the parent's `instanceChildren` meta, and binding the
+instance reads it there on every later start, so carrying a child over is a
+one-time transition for each deployed parent.
 
-A start's pre-sync loads that previous pattern by identity first. The carried
-child's link is recorded by instance name in the parent's `instanceChildren`
-meta, and binding the instance reads it there on every later start. An
-instance that carries nothing over starts fresh, and the setup logs
-`instance-carry-over` naming it, its positional cause and the child left set
-up there, if any.
+Step 3 is what a parent does with no instance names at all, short of a sign
+that its children moved, so carrying a child over is never worse than running
+positionally. It is exact wherever the previous pattern builds or an identity
+matches. The corner left is a parent with no setup marker, or whose stored
+source no longer compiles, whose children's pattern identities all changed,
+and whose children moved in the same update. There a child can take another's
+state, as it does with no instance names; the vintage gate catches it loudly
+where a schema then refuses the stored argument.
 
 A named instance stamps its name on the child it sets up, in the child's
 `instanceName` meta. A child is refused (`refuseDisplacedChild`), with an
 error naming both pattern identities, where it would set up:
 
-- over a child stamped with another instance's name, or one another instance
-  carries, whether for a named instance or for a positional spot;
-- at a positional spot, over a stored child of another pattern identity when
-  the parent shows the children have moved spots: a child of the incoming
-  identity runs at another positional spot, or another positional spot of the
-  pattern sets up the stored identity.
+- over a child stamped with another instance's name, for a named instance or
+  for a positional spot;
+- over a child another instance carries, recorded in the parent's
+  `instanceChildren`, for a named instance or for a positional spot, whatever
+  the two pattern identities;
+- at a positional spot, over a stored child of another pattern identity, when
+  a child of the incoming identity runs at another positional spot of the
+  parent;
+- at a positional spot, over a stored child of another pattern identity, when
+  another positional spot of the pattern sets up the stored identity.
 
-A stored child of a different identity with none of those signs is taken for
-the same child under a newer version of its own source, since a child's
-identity changes whenever its own source does.
+The last two see a shift between positional children, which carry no instance
+names. A stored child of a different identity with none of those signs is
+taken for the same child under a newer version of its own source, since a
+child's identity changes whenever its own source does, so none of the
+refusals blocks an ordinary update of a child's source. Where a pre-fix
+child's identity changed in the same update, the movement checks have nothing
+to judge by and let the setup through.
 
 What this leaves open:
 
-- A parent whose previous pattern is not loaded, because it carries no setup
-  marker or its stored source no longer compiles, carries over only children
-  whose own pattern identity is unchanged. Any other child of a named instance
-  starts fresh with the warning above, and the deployed child stays where it
-  is, unreached.
 - Anonymous roots other than named instances stay positional: an instance not
   bound to a `const`, a `.map()` output and the element children under it.
   When such a root moves to a number nothing held, its children are minted
@@ -188,9 +208,9 @@ What this leaves open:
   over them.
 - A runtime change to how a pattern lowers, which adds or removes an
   anonymous root, renumbers positional roots with no change to the pattern's
-  source. A named instance is immune to that; carrying its child over relies
-  on the previous pattern compiling under today's runtime to the numbering it
-  was deployed with.
+  source. A named instance is immune to that; carrying its child over in step
+  1 relies on the previous pattern compiling under today's runtime to the
+  numbering it was deployed with.
 
 ### Transaction provenance
 

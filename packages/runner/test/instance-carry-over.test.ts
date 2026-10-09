@@ -31,6 +31,8 @@ const COUNTER = [
 
 const OTHER = COUNTER.replace("Counter", "Other");
 
+const THIRD = COUNTER.replace("Counter", "Third");
+
 /**
  * A parent of `body`, which builds the children the result `{ views, aCount,
  * sCount? }` names. A child bound to a `const` is a named instance; one bound
@@ -45,12 +47,14 @@ const parentProgram = (
   files: [
     { name: "/counter.tsx", contents: counter },
     { name: "/other.tsx", contents: OTHER },
+    { name: "/third.tsx", contents: THIRD },
     {
       name: "/main.tsx",
       contents: [
         "import { pattern } from 'commonfabric';",
         "import { Counter } from './counter.tsx';",
         "import { Other } from './other.tsx';",
+        "import { Third } from './third.tsx';",
         "export default pattern<Record<string, never>>(() => {",
         body,
         "});",
@@ -244,7 +248,7 @@ describe("instance-carry-over", () => {
       });
     });
 
-    it("starts fresh, and reports it, when the parent carries no setup marker and the child's own source changed", async () => {
+    it("keeps its deployed child's state at its own positional spot when the parent carries no setup marker and the child's own source changed", async () => {
       const cell = await deployedParent("no-setup-marker-newer-child", {
         marker: "absent",
       });
@@ -252,12 +256,54 @@ describe("instance-carry-over", () => {
 
       const result = await update(cell, NAMED_WITH_NEWER_COUNTER);
 
-      expect(result.aCount).toBe(0);
+      expect(result.aCount).toBe(7);
+      expect(freshStarts() - before).toBe(0);
+    });
+
+    it("keeps each deployed child's state at its own positional spot when the parent carries no setup marker and two deployed children run its pattern", async () => {
+      const cell = await deployedParent("no-setup-marker-two-candidates", {
+        marker: "absent",
+        deployed: DEPLOYED_TWO,
+        named: NAMED_TWO,
+        counts: { aCount: 7, bCount: 9 },
+      });
+
+      const result = await update(cell, NAMED_TWO);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 7,
+        bCount: 9,
+      });
+    });
+
+    it("starts fresh, and reports it, when the parent carries no setup marker and no deployed child sits at its positional spot", async () => {
+      // `a` and `b` both match the one deployed child by identity, so it goes
+      // to neither that way. `a` then takes it at its own positional spot,
+      // and `b`, which the deployed parent never had, finds nothing at its
+      // own.
+
+      const cell = await deployedParent("no-setup-marker-new-instance", {
+        marker: "absent",
+      });
+      const before = freshStarts();
+
+      const result = await update(cell, NAMED_TWO);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 7,
+        bCount: 0,
+      });
       expect(freshStarts() - before).toBe(1);
     });
 
-    it("starts fresh, and reports it, when the parent carries no setup marker and two deployed children run its pattern", async () => {
-      const cell = await deployedParent("no-setup-marker-two-candidates", {
+    it("starts fresh, and reports it, rather than take the child at its positional spot when another instance sets up the pattern that child runs", async () => {
+      // `s` is inserted ahead of two deployed `Counter` children, so its own
+      // positional spot holds one of them. Both match `a` and `b` alike, so
+      // neither is carried over by identity, and `a` and `b` setting up
+      // `Counter` is the sign that the children have moved. The second
+      // fresh start is `b`'s, whose own spot holds nothing.
+
+      const cell = await deployedParent("no-setup-marker-moved", {
         marker: "absent",
         deployed: DEPLOYED_TWO,
         named: NAMED_TWO,
@@ -265,27 +311,22 @@ describe("instance-carry-over", () => {
       });
       const before = freshStarts();
 
-      const result = await update(cell, NAMED_TWO);
+      const result = await update(
+        cell,
+        parentProgram([
+          "  const s = Other({ label: 's' });",
+          "  const a = Counter({ label: 'a' });",
+          "  const b = Counter({ label: 'b' });",
+          "  return {",
+          "    views: [s, a, b],",
+          "    sCount: s.count,",
+          "    aCount: a.count,",
+          "    bCount: b.count,",
+          "  };",
+        ].join("\n")),
+      );
 
-      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
-        aCount: 0,
-        bCount: 0,
-      });
-      expect(freshStarts() - before).toBe(2);
-    });
-
-    it("starts fresh, and reports it, when the parent carries no setup marker and another instance would take the same deployed child", async () => {
-      const cell = await deployedParent("no-setup-marker-contested", {
-        marker: "absent",
-      });
-      const before = freshStarts();
-
-      const result = await update(cell, NAMED_TWO);
-
-      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
-        aCount: 0,
-        bCount: 0,
-      });
+      expect(result.sCount).toBe(0);
       expect(freshStarts() - before).toBe(2);
     });
 
@@ -380,11 +421,32 @@ describe("instance-carry-over", () => {
   });
 
   describe("a positional child", () => {
-    it("refuses to set up over a child that has moved spots", async () => {
+    it("refuses to set up over a child whose own pattern another positional spot sets up", async () => {
       const cell = await deployedParent("positional-moved");
 
       await expect(update(cell, POSITIONAL_WITH_SIBLING)).rejects.toThrow(
-        /refusing to set up .*#Other over the child of .*#Counter/,
+        /refusing to set up .*#Other for a positional spot over the child of .*#Counter: another positional spot of its parent sets up .*#Counter/,
+      );
+    });
+
+    it("refuses to set up over a child of another pattern when a child of its own pattern runs at another positional spot", async () => {
+      const positional = parentProgram([
+        "  const [o, a] = [Other({ label: 'o' }), Counter({ label: 'a' })];",
+        "  return { views: [o, a], aCount: a.count, oCount: o.count };",
+      ].join("\n"));
+      const cell = await deployedParent("positional-incoming-elsewhere", {
+        deployed: positional,
+        named: positional,
+      });
+
+      await expect(update(
+        cell,
+        parentProgram([
+          "  const [a, t] = [Counter({ label: 'a' }), Third({ label: 't' })];",
+          "  return { views: [a, t], aCount: a.count, tCount: t.count };",
+        ].join("\n")),
+      )).rejects.toThrow(
+        /refusing to set up .*#Counter for a positional spot over the child of .*#Other: a child of .*#Counter runs at another positional spot/,
       );
     });
 

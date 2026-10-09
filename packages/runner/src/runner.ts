@@ -13014,8 +13014,9 @@ export class Runner {
    * this is exact wherever that pattern is loaded in this runtime. Where it is
    * not, an instance carries over the one child, among the positional spots
    * the parent's manifest records, that runs the instance's own child pattern
-   * identity, and none when no spot or more than one does. A child is carried
-   * over by one instance at most.
+   * identity; failing that, the child at its own positional cause, unless the
+   * parent shows the children have moved spots. A child is carried over by
+   * one instance at most.
    */
   #planInstanceCarryOver(
     resultCell: Cell<any>,
@@ -13121,15 +13122,33 @@ export class Runner {
       carried.set(pick.entry.name, child);
       unmatched.splice(unmatched.indexOf(pick.entry), 1);
     }
+    // What is left takes the child at its own positional spot, which is where
+    // the child runs with no instance names, unless the parent shows the
+    // children have moved spots.
     for (const { name, module, descriptor } of unmatched) {
-      // What runs at the instance's own positional spot is where its child
-      // runs with no instance names, and stays there unreached.
       const left = this.#childAtPartialCause(
         tx,
         parent,
         module,
         descriptor.legacyPartialCause!,
       );
+      const link = left.getAsNormalizedFullLink();
+      if (
+        getPatternIdentityRef(left) !== undefined && !claimed.has(link.id) &&
+        !this.#positionalChildMoved(
+          tx,
+          parent,
+          pattern,
+          manifest,
+          module,
+          descriptor,
+          left,
+        )
+      ) {
+        claimed.add(link.id);
+        carried.set(name, link);
+        continue;
+      }
       uncarried.push({
         name,
         legacyPartialCause: descriptor.legacyPartialCause,
@@ -13225,6 +13244,50 @@ export class Runner {
       found = link;
     }
     return found;
+  }
+
+  /**
+   * Whether the parent `resultCell` shows that `child`, at the positional
+   * cause `descriptor` gives a named instance of module `module` without its
+   * name, is not that instance's child: `child` runs a pattern identity other
+   * than the instance's own, and either another sub-pattern node of `pattern`
+   * sets up the identity `child` runs, or a child of the instance's own
+   * identity runs at another positional spot the parent's manifest records.
+   */
+  #positionalChildMoved(
+    tx: IExtendedStorageTransaction | undefined,
+    resultCell: Cell<any>,
+    pattern: Pattern,
+    manifest: readonly InternalCellDescriptor[],
+    module: Module,
+    descriptor: DerivedInternalCellDescriptor,
+    child: Cell<any>,
+  ): boolean {
+    const held = getPatternIdentityRef(child);
+    const wanted = this.#runtime.patternManager.getArtifactEntryRef(
+      module.implementation as Pattern,
+    );
+    if (held === undefined || wanted === undefined) return false;
+    if (getInstanceNameStamp(child) !== undefined) return true;
+    if (samePatternRef(held, wanted)) return false;
+    for (const node of subPatternNodes(pattern)) {
+      if (deepEqual(node.partialCause, descriptor.partialCause)) continue;
+      const other = this.#runtime.patternManager.getArtifactEntryRef(
+        node.module.implementation as Pattern,
+      );
+      if (other !== undefined && samePatternRef(other, held)) return true;
+    }
+    for (const entry of manifest) {
+      if (!isPositionalPartialCause(entry.partialCause)) continue;
+      if (deepEqual(entry.partialCause, descriptor.legacyPartialCause)) {
+        continue;
+      }
+      const ref = getPatternIdentityRef(
+        this.#childAtPartialCause(tx, resultCell, module, entry.partialCause),
+      );
+      if (ref !== undefined && samePatternRef(ref, wanted)) return true;
+    }
+    return false;
   }
 
   /**
@@ -13377,17 +13440,18 @@ export class Runner {
       );
       if (otherRef !== undefined && samePatternRef(otherRef, incoming)) {
         throw new Error(
-          `refusing to set up ${describe(incoming)} over the child of ` +
-            `${describe(stored)}: a child of ${describe(incoming)} runs at ` +
-            "another positional spot of its parent, so the children have " +
-            "moved spots",
+          `refusing to set up ${describe(incoming)} for ${holder} over the ` +
+            `child of ${describe(stored)}: a child of ${describe(incoming)} ` +
+            "runs at another positional spot of its parent, so the children " +
+            "have moved spots",
         );
       }
       if (wanted !== undefined && samePatternRef(wanted, stored)) {
         throw new Error(
-          `refusing to set up ${describe(incoming)} over the child of ` +
-            `${describe(stored)}: another positional spot of its parent ` +
-            `sets up ${describe(stored)}, so the children have moved spots`,
+          `refusing to set up ${describe(incoming)} for ${holder} over the ` +
+            `child of ${describe(stored)}: another positional spot of its ` +
+            `parent sets up ${describe(stored)}, so the children have moved ` +
+            "spots",
         );
       }
     }
