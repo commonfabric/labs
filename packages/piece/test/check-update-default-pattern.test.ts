@@ -1122,7 +1122,7 @@ describe("opening a space root", () => {
       return staleRef;
     }
 
-    it.only("keeps a root that follows the official source pinned when the client cannot reproduce the advertised identity", async () => {
+    it("keeps a root that follows the official source pinned when the client cannot reproduce the advertised identity", async () => {
       const staleRef = await pinRootTheClientCannotReplace();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
 
@@ -1157,7 +1157,7 @@ describe("opening a space root", () => {
       );
     });
 
-    it.only("keeps a root that follows nothing pinned when the client cannot reproduce the advertised identity", async () => {
+    it("keeps a root that follows nothing pinned when the client cannot reproduce the advertised identity", async () => {
       await setup();
       await controller.recreateDefaultPattern({
         customProgram: {
@@ -1214,7 +1214,7 @@ describe("opening a space root", () => {
       );
     });
 
-    it.only("does not compile the official source again after following it was refused in the same lookup", async () => {
+    it("does not compile the official source again after following it was refused in the same lookup", async () => {
       const staleRef = await pinRootTheClientCannotReplace();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
       const sourceFetchesBefore = stub.sourceFetches();
@@ -3010,7 +3010,7 @@ describe("opening a space root", () => {
     expect(displaced?.symbol).toBe("legacyHome");
   });
 
-  it.only("surfaces a clear error when the official pattern cannot be compiled", async () => {
+  it("surfaces a clear error when the official pattern cannot be compiled", async () => {
     // The roll-forward's compile of the official source is a failure surface
     // too: if the toolshed serves un-compilable source, the operator gets one
     // clear error naming the refusal, not a raw compiler stack.

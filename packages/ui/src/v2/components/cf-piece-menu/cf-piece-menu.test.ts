@@ -4791,7 +4791,7 @@ describe("describeFollowState", () => {
     expect(refusal("argument-mismatch").canForce).toBe(false);
   });
 
-  it.only("says a mismatch with the advertised identity lasts until the host's deployment finishes or this client runs the host's version", () => {
+  it("says a mismatch with the advertised identity lasts until the host's deployment finishes or this client runs the host's version", () => {
     // A host part-way through a deployment can serve modules that compile to
     // another identity than the one it advertises, and that ends when the
     // deployment does. So does a runtime that compiles the source to another
