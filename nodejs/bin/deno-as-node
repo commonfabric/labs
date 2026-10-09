@@ -1,0 +1,128 @@
+#!/usr/bin/env node
+//
+// Stands in for the `deno` executable under the Node port: translates a
+// `deno run`, `deno test`, or `deno eval` command line into the equivalent
+// `cfnode` one and runs it, exiting with its status.
+//
+//   deno-as-node run [<flags>] <script> [<args>...]
+//   deno-as-node test [<flags>] <files>...
+//   deno-as-node eval [<flags>] <code>
+//
+// Under the port, `Deno.execPath()` names this file, and a `Deno.Command` for
+// `deno` runs it, so code that re-invokes "the running Deno" gets Node.
+// Permission, lock, and type-check flags have no Node counterpart and are
+// dropped. `--v8-flags` become Node flags (Node takes V8 flags directly), and
+// `--preload` becomes `--import`.
+
+import { spawnSync } from "node:child_process";
+import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const binDir = path.dirname(fileURLToPath(import.meta.url));
+const cfnode = path.join(binDir, "cfnode");
+
+/** Flags dropped along with the value that follows them as a separate word. */
+const DROPPED_WITH_VALUE = new Set([
+  "--lock",
+  "--config",
+  "-c",
+  "--import-map",
+  "--seed",
+  "--log-level",
+]);
+
+/** Prefixes of flags dropped as a single word. */
+const DROPPED_PREFIXES = [
+  "--allow-",
+  "--deny-",
+  "--unstable",
+  "--no-check",
+  "--check",
+  "--lock",
+  "--no-lock",
+  "--frozen",
+  "--shuffle",
+  "--config=",
+  "--import-map=",
+  "--reload",
+  "--cached-only",
+  "--no-prompt",
+  "--no-remote",
+  "--no-npm",
+  "--node-modules-dir",
+  "--vendor",
+  "--quiet",
+  "--seed=",
+  "--log-level=",
+  "--permit-no-files",
+  "--parallel",
+];
+
+const DROPPED_EXACT = new Set(["-A", "-q", "-r"]);
+
+function usage(message) {
+  process.stderr.write(`deno-as-node: ${message}\n`);
+  process.exit(2);
+}
+
+/** Splits `args` into translated Node flags and the remaining operands. */
+function translateFlags(args) {
+  const nodeFlags = [];
+  let i = 0;
+  for (; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") {
+      i++;
+      break;
+    }
+    if (!arg.startsWith("-")) break;
+    if (DROPPED_EXACT.has(arg)) continue;
+    if (DROPPED_WITH_VALUE.has(arg)) {
+      i++;
+      continue;
+    }
+    if (DROPPED_PREFIXES.some((p) => arg.startsWith(p))) continue;
+    if (arg.startsWith("--v8-flags=")) {
+      nodeFlags.push(...arg.slice("--v8-flags=".length).split(","));
+    } else if (arg.startsWith("--preload=") || arg === "--preload") {
+      const target = arg === "--preload" ? args[++i] : arg.slice(10);
+      nodeFlags.push(`--import=${pathToFileURL(path.resolve(target)).href}`);
+    } else if (arg.startsWith("--filter=") || arg === "--filter") {
+      const pattern = arg === "--filter" ? args[++i] : arg.slice(9);
+      nodeFlags.push(`--test-name-pattern=${pattern}`);
+    } else if (arg.startsWith("--inspect") || arg.startsWith("--env-file")) {
+      nodeFlags.push(arg);
+    } else {
+      usage(`unsupported flag: ${arg}`);
+    }
+  }
+  return { nodeFlags, operands: args.slice(i) };
+}
+
+const [subcommand, ...rest] = process.argv.slice(2);
+const { nodeFlags, operands } = translateFlags(rest);
+let nodeArgs;
+switch (subcommand) {
+  case "run":
+    if (operands.length === 0) usage("`run` needs a script");
+    nodeArgs = [...nodeFlags, ...operands];
+    break;
+  case "test":
+    nodeArgs = [...nodeFlags, "--test", "--test-reporter=spec", ...operands];
+    break;
+  case "eval":
+    if (operands.length !== 1) usage("`eval` takes one code argument");
+    nodeArgs = [...nodeFlags, "--input-type=module", "-e", operands[0]];
+    break;
+  default:
+    usage(`unsupported subcommand: ${subcommand}`);
+}
+
+// A `deno` started from inside a `node --test` file is a run of its own, not
+// one of the parent's test files, which this variable would make it.
+const env = { ...process.env };
+delete env.NODE_TEST_CONTEXT;
+
+const result = spawnSync(cfnode, nodeArgs, { stdio: "inherit", env });
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);

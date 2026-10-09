@@ -141,12 +141,21 @@ class ChildProcess {
   }
 }
 
+/**
+ * The stand-in for the `deno` executable: `Deno.execPath()` names it, and a
+ * `Deno.Command` for `deno` runs it.
+ */
+const DENO_AS_NODE = fileURLToPath(
+  new URL("../bin/deno-as-node", import.meta.url),
+);
+
 class Command {
   #command;
   #options;
 
   constructor(command, options = {}) {
     this.#command = command instanceof URL ? command.pathname : String(command);
+    if (this.#command === "deno") this.#command = DENO_AS_NODE;
     this.#options = options;
   }
 
@@ -368,6 +377,7 @@ Object.assign(Deno, {
   serve,
   unrefTimer,
   refTimer,
+  execPath: () => DENO_AS_NODE,
   // Deno's `args` are the script's arguments only.
   args: process.argv.slice(2),
 });
