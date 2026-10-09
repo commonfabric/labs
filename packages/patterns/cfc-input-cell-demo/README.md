@@ -33,9 +33,15 @@ Hand both to a run as input cells. The names are operator-authored prose and are
 the whole of what the model is told each token stands for — the values
 themselves never enter the prompt:
 
-The sandbox is the platform's native `runsc` runtime, which the run takes where
-no runtime is named. Its CFC policy comes from the native store: an enforcing
-run refuses to start without one rather than degrading quietly.
+The sandbox defaults to native `runsc` on Apple-silicon macOS and Linux. Intel
+Macs and other platforms refuse an unnamed runtime. On Linux, the default
+network requires `pasta` and `setpriv` on `PATH`; root also needs `unshare`, and
+non-root users need unprivileged user namespaces.
+`CF_HARNESS_DOCKER_NETWORK_MODE` set to `none` or `host` bypasses these network
+helpers; rootless runsc still requires a user namespace. Refusals name the
+missing prerequisite or sysctl and its remedy. Its CFC policy comes from the
+native store: an enforcing run refuses to start without one rather than
+degrading quietly.
 
 ```sh
 deno task --cwd packages/cf-harness run \

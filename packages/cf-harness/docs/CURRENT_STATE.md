@@ -289,10 +289,10 @@ The driver keeps its `runsc` state under the run's own scratch directory and
 registers nothing anywhere.
 
 A run stays on the runtime it started on, since another runtime need not keep
-the CFC labels of a run's files where that one kept them. The Docker driver's
-did not, under Docker Desktop on macOS: it kept them in a directory the Docker
-runtime's registration named, where the native runtime keeps them as extended
-attributes of the host's files. So, on every platform:
+the CFC labels of a run's files where that one kept them. A legacy Docker
+registration on Docker Desktop names a directory holding those labels; the
+native runtime keeps them as extended attributes of the host's files. So, on
+every platform:
 
 - **A resumed run** whose state records the Docker driver is refused before
   anything runs. The runtime a run started on is `sandboxRuntime` in its state,
@@ -403,9 +403,11 @@ operator summary, as `runsc (default on macOS: the native store at <store>)`,
 `(named by --sandbox-runtime)` or `(named by CF_HARNESS_SANDBOX_RUNTIME)`.
 
 `sandbox` is the driver's default network. On macOS it is the VM's network. On
-Linux under the default it is `pasta`'s network namespace, taken as runsc's host
-network, with egress and the host at `host.docker.internal`, as above; with no
-`pasta` configured it is runsc's own network stack, loopback alone.
+Linux under the platform default it is `pasta`'s network namespace, taken as
+runsc's host network, with egress and the host at `host.docker.internal`.
+Missing `pasta` refuses that default. A named Linux `runsc` using `sandbox`,
+with no `pasta` configured, uses runsc's own network stack, loopback alone.
+`none` and `host` bypass pasta and use their respective network modes.
 `CF_HARNESS_DOCKER_NETWORK_MODE` keeps the name and the vocabulary of the Docker
 driver it was first read by, which maps onto the driver's as follows:
 
