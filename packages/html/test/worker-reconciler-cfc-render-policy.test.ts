@@ -4233,10 +4233,15 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
             labelMap: {
               version: 1,
+              // The tally's evidence is the stamp its write minted on the
+              // value, which a value-intrinsic rule reads at observation.
               entries: [{
                 path: [],
+                label: { confidentiality: [policyRef] },
+              }, {
+                path: [],
+                origin: "minted",
                 label: {
-                  confidentiality: [policyRef],
                   integrity: [{ type: "TallyComplete", space: subjectSpace }],
                 },
               }],
