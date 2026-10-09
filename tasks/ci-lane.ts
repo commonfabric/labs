@@ -45,6 +45,7 @@ import * as path from "@std/path";
 import {
   FragmentWriter,
   NAME_SEPARATOR,
+  readRegistrations,
   recordsDir,
   testIdentityKey,
   type TestRecord,
@@ -849,9 +850,19 @@ export async function runBatch(
    * `describe` ran as far as its tests.
    */
   passedOver: TestRecord[];
+
+  /**
+   * The names this batch's test processes registered over every execution,
+   * by the repository-relative file that registered them, as
+   * `readRegistrations()` reads them. That file is the unit for a suite
+   * whose units are files. A file whose processes left no name map is not
+   * here.
+   */
+  registered: Map<string, Set<string>>;
 }> {
   const records: TestRecord[] = [];
   const passedOver: TestRecord[] = [];
+  const registered = new Map<string, Set<string>>();
   const conflicts: TestRecord[] = [];
   let ok = true;
   let seconds = 0;
@@ -961,6 +972,11 @@ export async function runBatch(
         records.push(record);
       }
       for (const conflict of collected.conflicts) conflicts.push(conflict);
+      for (const [file, names] of await readRegistrations(batchSpool)) {
+        const known = registered.get(file);
+        if (known === undefined) registered.set(file, names);
+        else for (const name of names) known.add(name);
+      }
       await Deno.remove(batchSpool, { recursive: true }).catch(() => {});
       await Deno.mkdir(batchSpool, { recursive: true });
     }
@@ -1036,6 +1052,7 @@ export async function runBatch(
     unexplained,
     silent: [...silent].sort(),
     passedOver,
+    registered,
   };
 }
 
@@ -1048,12 +1065,22 @@ export interface Accounting {
   excused: string[];
 
   /**
-   * Identities the batch was asked to run and no record accounts for.
-   * An excused failure beside one of these is not excused: an invocation
-   * that recorded a failure and then stopped has run almost nothing
-   * while satisfying any weaker test.
+   * Identities the batch was asked to run and no record accounts for,
+   * which the tree holds or may hold. An excused failure beside one of
+   * these is not excused: an invocation that recorded a failure and then
+   * stopped has run almost nothing while satisfying any weaker test.
    */
   unaccounted: string[];
+
+  /**
+   * Identities the batch was asked to run that the tree holds no test
+   * for, as the names their unit's own test processes registered show. A
+   * manifest carries one for a test renamed since it was published, and
+   * for a test only a branch ever ran, in a file the tree still holds.
+   * An invocation that stopped cannot have left one of these unrecorded,
+   * since there was nothing to record, so an excusal stands beside them.
+   */
+  absent: string[];
 
   /**
    * The units a failure was seen in, whether or not it was excused. A
@@ -1072,10 +1099,16 @@ export interface Accounting {
  * has seen, and no record will ever carry its name, because a real record
  * is named for a test rather than for a file.
  *
- * An identity that went unaccounted for while its unit recorded is
- * ordinary churn — a manifest is hours old by construction, and a test
- * renamed since records under the new name — so it costs an excusal
- * rather than the run.
+ * An identity that went unaccounted for while its unit recorded costs an
+ * excusal rather than the run, unless `registered` shows the tree holds
+ * no such test. A manifest is hours old by construction, and it holds
+ * every identity any run recorded in a file the tree still holds, so it
+ * names tests renamed since and tests that only a branch ever ran. No run
+ * of this tree can record one of those, and its missing record says
+ * nothing about whether an invocation stopped, so it is set apart as
+ * absent and an excusal stands beside it. Where `registered` says nothing
+ * about a unit, as for a suite whose processes leave no name map, the
+ * identity stays unaccounted for.
  *
  * Whether every execution ran what it was asked to is not a question for
  * this. A batch's records arrive as one list however many executions
@@ -1087,6 +1120,7 @@ export function accountFor(
   asked: readonly Selection[],
   records: readonly TestRecord[],
   nonGating: ReadonlySet<string>,
+  registered: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): Accounting {
   const gating: string[] = [];
   const excused: string[] = [];
@@ -1108,20 +1142,58 @@ export function accountFor(
     if (location?.level === "unit") failedUnits.add(location.unit);
     (nonGating.has(key) ? excused : gating).push(key);
   }
-  const unaccounted = asked
-    .filter((selection) => selection.entry.suite === batch.suite.id)
-    .filter((selection) =>
-      isStandIn(selection.entry)
-        ? !heardUnits.has(selection.entry.unit)
-        : !heard.has(testIdentityKey(selection.entry.test))
-    )
-    .map((selection) => testIdentityKey(selection.entry.test));
+  const unaccounted: string[] = [];
+  const absent: string[] = [];
+  for (const selection of asked) {
+    if (selection.entry.suite !== batch.suite.id) continue;
+    if (isStandIn(selection.entry)) {
+      if (!heardUnits.has(selection.entry.unit)) {
+        unaccounted.push(testIdentityKey(selection.entry.test));
+      }
+      continue;
+    }
+    const key = testIdentityKey(selection.entry.test);
+    if (heard.has(key)) continue;
+    const names = registered.get(selection.entry.unit);
+    if (registersNoSuchTest(names, selection.entry.test.n)) absent.push(key);
+    else unaccounted.push(key);
+  }
   return {
     gating: [...new Set(gating)].sort(),
     excused: [...new Set(excused)].sort(),
     unaccounted: [...new Set(unaccounted)].sort(),
+    absent: [...new Set(absent)].sort(),
     failedUnits: [...failedUnits].sort(),
   };
+}
+
+/**
+ * Whether the names a unit's test processes registered show its tree
+ * holds no test named `name`. No registration at all shows nothing.
+ *
+ * A name is held where it was registered, and where it encloses a name
+ * that was: the bdd re-export records each leaf's whole chain and not the
+ * `describe` blocks along it, so a nested `describe` is known by the
+ * leaves inside it. A leaf missing from the registrations shows it absent
+ * only where the registrations hold leaves under its outermost
+ * `describe`, or do not hold that `describe` at all. A process whose bdd
+ * re-export recorded no leaves registered each outermost `describe` and
+ * nothing beneath it, and a leaf missing from that says nothing.
+ */
+function registersNoSuchTest(
+  registered: ReadonlySet<string> | undefined,
+  name: string,
+): boolean {
+  if (registered === undefined) return false;
+  const outermost = name.split(NAME_SEPARATOR)[0]!;
+  let leavesRecorded = outermost === name;
+  for (const other of registered) {
+    if (other === name || other.startsWith(name + NAME_SEPARATOR)) {
+      return false;
+    }
+    if (other.startsWith(outermost + NAME_SEPARATOR)) leavesRecorded = true;
+  }
+  return leavesRecorded || !registered.has(outermost);
 }
 
 /** Says what a batch's records came to, where they came to anything. */
@@ -1149,17 +1221,26 @@ export function describeAccounting(
         `judge a change by, which do not fail this run:`
       : `${suite}: ${accounting.excused.length} failures a flake rate ` +
         `would excuse, which fail this run because the batch did not ` +
-        `account for everything it was asked to run:`,
+        `account for everything it was asked to run that the tree holds:`,
     accounting.excused,
   );
   // Named whenever there are any, because this is the one list that
-  // decides whether an excusal holds, and a rename is what it usually
-  // is. A summary saying the batch left something unaccounted for and
-  // not saying what is a message nobody can act on.
+  // decides whether an excusal holds. A summary saying the batch left
+  // something unaccounted for and not saying what is a message nobody can
+  // act on.
   section(
     `${suite}: ${accounting.unaccounted.length} identities no record ` +
-      `accounts for, which a rename since the manifest would explain:`,
+      `accounts for, which the tree holds or may hold:`,
     accounting.unaccounted,
+  );
+  // Named as well, though they decide nothing: a rename among them keeps
+  // its history under the old name until an alias joins it to the new
+  // one, and this is where its author sees that it needs one.
+  section(
+    `${suite}: ${accounting.absent.length} identities the tree holds no ` +
+      `test for, which a rename since the manifest, or a test only a ` +
+      `branch ran, would explain:`,
+    accounting.absent,
   );
   section(
     `${suite}: ${silent.length} units an execution recorded nothing for, ` +
@@ -2149,11 +2230,12 @@ export async function runLane(
         mine.selections,
         [...result.records, ...result.passedOver],
         nonGating,
+        result.registered,
       );
       // An invocation is excused only when it accounted for every
-      // identity it was asked to run: one that recorded a failure and
-      // then stopped has run almost nothing while satisfying any weaker
-      // test.
+      // identity it was asked to run that the tree holds: one that
+      // recorded a failure and then stopped has run almost nothing while
+      // satisfying any weaker test.
       const excusing = accounting.unaccounted.length === 0;
       describeAccounting(batch.suite.id, accounting, excusing, result.silent);
       if (

@@ -479,13 +479,24 @@ that prompt by failing a change for a reason its author cannot act on,
 which is the cost this whole section exists to avoid paying.
 
 An invocation is excused only when it accounted for every identity it was
-asked to run, since one that recorded a withheld failure and then stopped
-has run almost nothing while satisfying any weaker test. A stand-in for a
-unit the store has never seen is accounted for by that unit recording
-anything at all, because no record can carry a stand-in's name: a record
-is named for a test and a stand-in for a file. And a unit that recorded
-nothing recorded nothing under any name, which fails the run whether or
-not anything was there to excuse.
+asked to run that the tree holds, since one that recorded a withheld
+failure and then stopped has run almost nothing while satisfying any
+weaker test. A stand-in for a unit the store has never seen is accounted
+for by that unit recording anything at all, because no record can carry a
+stand-in's name: a record is named for a test and a stand-in for a file.
+And a unit that recorded nothing recorded nothing under any name, which
+fails the run whether or not anything was there to excuse.
+
+What the tree holds is what the unit's own test processes registered. A
+manifest holds every identity any run recorded in a file the tree still
+holds, so it names tests renamed since it was published and tests only a
+branch ever ran, and no run of this tree can record one of those. Where a
+unit's processes registered their file's tests and none by an identity's
+name, nor any inside it, that identity is absent, and its missing record
+says nothing about whether the invocation stopped. Only a registration
+shows a test absent. A process that died before it could say what it
+registered shows nothing, and an identity it left unrecorded withdraws the
+excusal like any other.
 
 The rule is per invocation and not per set of them. A consumer that runs
 an identity several times, or that reaches one unit through several
@@ -1004,7 +1015,7 @@ one and that the run was not failed by it. Whether a run excused an identity is
 a fact about that run, and a consumer reads it from what the run recorded rather
 than working it out again from the manifest. A run that did not apply the rule
 excused nothing, and one that did withdraws an excusal wherever an invocation
-left an identity it was asked to run unaccounted for. That a
+left an identity it was asked to run, and the tree holds, unaccounted for. That a
 test is new is likewise a claim about the store rather than about one run: an
 identity the store has never seen is new, and an identity absent from one run's
 records is only absent from that run.

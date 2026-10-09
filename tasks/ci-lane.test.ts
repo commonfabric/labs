@@ -5,6 +5,8 @@ import { fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
 import {
+  NAME_MAP_PREFIX,
+  NAME_MAP_SUFFIX,
   type TestIdentity,
   testIdentityKey,
   type TestRecord,
@@ -3323,6 +3325,7 @@ describe("reading a batch's records against what it was asked to run", () => {
       gating: [],
       excused: [],
       unaccounted: [],
+      absent: [],
       failedUnits: [],
     });
   });
@@ -3434,6 +3437,7 @@ describe("reading a batch's records against what it was asked to run", () => {
             gating: [],
             excused: ["unit\tbakery\tflaky"],
             unaccounted: [],
+            absent: [],
             failedUnits: [],
           },
           excusing,
@@ -3466,6 +3470,7 @@ describe("reading a batch's records against what it was asked to run", () => {
           gating: ["unit\tbakery\tglaze > burns"],
           excused: ["unit\tbakery\tflaky"],
           unaccounted: ["unit\tbakery\tglaze > sets"],
+          absent: ["unit\tbakery\tglaze > cools"],
           failedUnits: [UNIT],
         },
         false,
@@ -3480,6 +3485,7 @@ describe("reading a batch's records against what it was asked to run", () => {
         "unit\tbakery\tglaze > burns",
         "unit\tbakery\tflaky",
         "unit\tbakery\tglaze > sets",
+        "unit\tbakery\tglaze > cools",
         UNIT,
       ]
     ) {
@@ -3500,6 +3506,7 @@ describe("reading a batch's records against what it was asked to run", () => {
           gating: [],
           excused: [],
           unaccounted: [],
+          absent: [],
           failedUnits: [UNIT],
         },
         true,
@@ -3522,6 +3529,90 @@ describe("reading a batch's records against what it was asked to run", () => {
       new Set(),
     );
     expect(found.unaccounted).toEqual([]);
+  });
+
+  describe("an identity no record accounts for, read against what its unit registered", () => {
+    const key = (n: string) => testIdentityKey({ k: "unit", s: "bakery", n });
+
+    /** What the batch found for `name`, given its unit's registrations. */
+    function reading(name: string, registered: readonly string[] | undefined) {
+      return accountFor(
+        batch(),
+        asked(name),
+        [record("glaze > sets", "pass")],
+        new Set(),
+        registered === undefined
+          ? new Map()
+          : new Map([[UNIT, new Set(registered)]]),
+      );
+    }
+
+    it("sets it apart as absent where its unit registered no test by that name", () => {
+      // The manifest carries a test the tree does not hold, renamed since
+      // or only ever run on a branch. No run of this tree records it.
+      const found = reading("glaze > cools", ["glaze", "glaze > sets"]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [],
+        [key("glaze > cools")],
+      ]);
+    });
+
+    it("keeps it unaccounted for where its unit registered it", () => {
+      // The tree holds the test and nothing recorded it, which is what an
+      // invocation that stopped part way through leaves.
+      const found = reading("glaze > cools", [
+        "glaze",
+        "glaze > sets",
+        "glaze > cools",
+      ]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("keeps it unaccounted for where its unit registered nothing", () => {
+      // A process that never unloaded wrote no registrations, and a suite
+      // without the preload writes none at all.
+      const found = reading("glaze > cools", undefined);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("keeps a describe unaccounted for where its unit registered a test inside it", () => {
+      // Registrations hold each leaf's whole chain and not the describes
+      // along it, so a nested describe is known by the leaves inside it.
+      const found = reading("glaze > icing", [
+        "glaze",
+        "glaze > sets",
+        "glaze > icing > sets",
+      ]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > icing")],
+        [],
+      ]);
+    });
+
+    it("keeps a leaf unaccounted for where its unit registered its describe and no leaf at all", () => {
+      // A process whose bdd re-export recorded no leaves registered each
+      // outermost describe and nothing beneath it, which says nothing
+      // about any leaf.
+      const found = reading("glaze > cools", ["glaze"]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("sets a leaf apart as absent where its unit never registered its outermost describe", () => {
+      const found = reading("glaze > cools", ["proof", "proof > rises"]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [],
+        [key("glaze > cools")],
+      ]);
+    });
   });
 });
 
@@ -3999,6 +4090,60 @@ describe("what a lane does with the batches it was given", () => {
     expect(ok).toBe(false);
     // So nothing says the run did not fail for it.
     expect(excusedIn(measured)).toEqual([]);
+  });
+
+  describe("an excused failure beside an identity its unit's registrations speak to", () => {
+    /**
+     * The manifest that withholds the one identity as flaky, and asks for
+     * another in the same unit that nothing records.
+     */
+    function askingForCools(): Manifest {
+      const manifest = withholding();
+      manifest.entries.push({
+        ...manifest.entries[0]!,
+        test: { k: "unit", s: "bakery", n: "glaze > cools" },
+        flakeRate: 0,
+      });
+      return manifest;
+    }
+
+    /**
+     * Writes the name map a test process of the unit leaves as it
+     * unloads, holding `names`, and then exits as a failing run does.
+     */
+    function registering(names: readonly string[]): string {
+      const map = { names: Object.fromEntries(names.map((n) => [n, UNIT])) };
+      return `Deno.writeTextFileSync(
+         \`\${dir}/${NAME_MAP_PREFIX}\${crypto.randomUUID()}${NAME_MAP_SUFFIX}\`,
+         ${JSON.stringify(JSON.stringify(map))},
+       );
+       Deno.exit(1);`;
+    }
+
+    it("stays green where the unit registered no test by that name", async () => {
+      // The manifest carries a test the tree does not hold, renamed since
+      // or only ever run on a branch, and no run of this tree records it.
+      const { ok, measured } = await run(
+        recording(registering(["glaze", "glaze > sets"]), "fail"),
+        { full: true, manifest: askingForCools() },
+      );
+      expect(ok).toBe(true);
+      expect(excusedIn(measured)).toEqual([glaze]);
+    });
+
+    it("fails where the unit registered that test and nothing recorded it", async () => {
+      // The tree holds the test, so the invocation that recorded the
+      // withheld failure stopped before it.
+      const { ok, measured } = await run(
+        recording(
+          registering(["glaze", "glaze > sets", "glaze > cools"]),
+          "fail",
+        ),
+        { full: true, manifest: askingForCools() },
+      );
+      expect(ok).toBe(false);
+      expect(excusedIn(measured)).toEqual([]);
+    });
   });
 
   it("fails when a unit it was asked to run recorded nothing", async () => {

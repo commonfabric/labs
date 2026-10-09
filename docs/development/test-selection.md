@@ -1438,7 +1438,14 @@ than from what a command exited with. A runner that failed only on
 identities a flake rate excuses has told the run nothing it should stop
 for, and a runner that exited zero having run none of its unit has. So a
 unit that recorded nothing fails the lane, and an excusal holds only for
-an invocation that accounted for every identity it was asked to run.
+an invocation that accounted for every identity it was asked to run that
+the tree holds. The lane reads what the tree holds from the name maps the
+registration preload leaves in the spool: an identity a unit's processes
+did not register, nor any test inside it, is one the manifest carries
+from a rename or from a branch, and the lane's job summary lists it
+apart from the identities that withdraw an excusal. A unit whose
+processes left no name map shows nothing, so an identity it left
+unrecorded withdraws the excusal.
 
 ## What the dashboard shows
 
@@ -1593,7 +1600,8 @@ itself.
   flake counts for the test. Such a test is not also listed as a first failure.
   Which failures a run excused is a fact about that run: a lane excuses a flaky
   test's failure only where its batch accounted for every identity it was asked
-  to run, and a run that did not apply the rule excused nothing. The lanes
+  to run that the tree holds, and a run that did not apply the rule excused
+  nothing. The lanes
   record each identity they excused, and the report reads those records one
   artifact at a time. Each `test-records-tests-<lane>-a<attempt>` artifact
   holds one lane's attempt. An identity counts as excused only where every

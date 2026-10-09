@@ -12,6 +12,7 @@ import {
   NAME_MAP_SUFFIX,
   parseSkipList,
   readNameMaps,
+  readRegistrations,
   repositoryPathOf,
   repositoryRootOf,
   runDirectory,
@@ -342,6 +343,72 @@ describe("registration", () => {
         const names = await readNameMaps(dir);
         expect(names.size).toBe(1);
         expect(names.get("good")).toBe("packages/a/one.test.ts");
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+  });
+
+  describe("readRegistrations()", () => {
+    it("returns each file's names from every map a spool holds", async () => {
+      // Every execution of a unit writes a map of its own, and what the
+      // file registered is all of them together.
+      const dir = await Deno.makeTempDir();
+      try {
+        await writeNameMap(dir, "01", {
+          "glaze": "packages/a/one.test.ts",
+          "glaze > sets": "packages/a/one.test.ts",
+        });
+        await writeNameMap(dir, "02", {
+          "glaze > cools": "packages/a/one.test.ts",
+          "proof": "packages/a/two.test.ts",
+        });
+        const registered = await readRegistrations(dir);
+        expect(
+          [...registered].map(([file, names]) => [file, [...names].sort()]),
+        ).toEqual([
+          ["packages/a/one.test.ts", [
+            "glaze",
+            "glaze > cools",
+            "glaze > sets",
+          ]],
+          ["packages/a/two.test.ts", ["proof"]],
+        ]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("keeps a name two files both registered under each of them", async () => {
+      // Which file holds a test is not what this answers, so a shared
+      // name is not ambiguous here the way it is to `readNameMaps()`.
+      const dir = await Deno.makeTempDir();
+      try {
+        await writeNameMap(dir, "01", { shared: "packages/a/one.test.ts" });
+        await writeNameMap(dir, "02", { shared: "packages/b/two.test.ts" });
+        const registered = await readRegistrations(dir);
+        expect(registered.get("packages/a/one.test.ts")).toEqual(
+          new Set(["shared"]),
+        );
+        expect(registered.get("packages/b/two.test.ts")).toEqual(
+          new Set(["shared"]),
+        );
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("returns no file for a spool holding no readable map", async () => {
+      // A process that never unloaded wrote nothing, and nothing then
+      // says what its file holds.
+      const dir = await Deno.makeTempDir();
+      try {
+        await Deno.writeTextFile(
+          join(dir, `${NAME_MAP_PREFIX}01${NAME_MAP_SUFFIX}`),
+          "{not json",
+        );
+        expect((await readRegistrations(dir)).size).toBe(0);
+        expect((await readRegistrations("/nonexistent-spool")).size).toBe(0);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }

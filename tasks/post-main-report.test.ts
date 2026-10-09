@@ -1284,8 +1284,8 @@ describe("post-main-report", () => {
 
       it("reports a first failure where the lane recorded excusing nothing", async () => {
         // A lane withdraws an excusal from a batch that did not account
-        // for everything it was asked to run, and fails the run for it,
-        // whatever the manifest holds back.
+        // for everything it was asked to run that the tree holds, and
+        // fails the run for it, whatever the manifest holds back.
 
         const written = await reporting(laned({
           records: { ...laned().records, 1: here(false) },
