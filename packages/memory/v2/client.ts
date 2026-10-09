@@ -1448,7 +1448,15 @@ export class Client {
       // replacing it would send the key's statement twice, and a router
       // closes the connection on a second statement for a challenge it has
       // accepted.
-      if (attempt === 0) this.#authenticated.delete(principal.did);
+      if (attempt === 0) {
+        this.#authenticated.delete(principal.did);
+        // The authentication replaced may be one still under way, sending
+        // a statement kept from a refusal for now. Dropping that statement
+        // makes this renewal sign a challenge of its own, as a lease's
+        // renewal always does, where it would send the kept one again
+        // beside the copy that is unanswered.
+        this.#refusedStatements.delete(principal.did);
+      }
       void this.#authenticate(principal, false, true).catch((error) => {
         // A renewal refused for now is tried again after a backoff, so the
         // grant does not lapse and leave the principal's opens to a final

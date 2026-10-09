@@ -1195,6 +1195,61 @@ Deno.test("a key released while its authentication is unanswered is not renewed 
   }
 });
 
+Deno.test("a lease's renewal signs a challenge of its own while a refused statement's resend is unanswered", async () => {
+  setModernCellRepConfig(true);
+  const random = Math.random;
+  // No jitter: a held mount sends its refused statement again 1,025 ms on.
+  Math.random = () => 0;
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // Statement 1 is the first mount's, admitted. 2 is the first renewal's,
+  // admitted late. 3 answers a pushed challenge and is refused for now. 4 is
+  // a second mount's, refused for now. 5 is its resend, and from there on
+  // nothing is answered.
+  const { p, auths, pushChallenge, release } = routedPeer(
+    (n) => n === 3 || n === 4,
+    {
+      held: (type, count) =>
+        type === "connection.auth" &&
+        (count === 2 || count === 3 || count >= 5),
+    },
+  );
+  const client = await connect({ transport: p.transport });
+  try {
+    const key = namedSigner(identity.did());
+    await client.mount(identity.did(), {}, key);
+    await time.tickAsync(480_000);
+    await tickUntil(time, () => auths().length >= 2, 0, 40);
+    pushChallenge();
+    await tickUntil(time, () => auths().length >= 3, 0, 40);
+    assertEquals(auths().length, 3);
+    // The renewal's lease is admitted now, so it is renewed 480 s from now.
+    const fires = (Math.floor(Date.now() / 1000) + 600) * 1000 - 120_000;
+    release();
+    await tickUntil(time, () => false, 0, 10);
+    // A mount as the same key 1.1 s before that renewal: its statement is
+    // refused for now, and it sends the statement again 1,025 ms later.
+    await time.tickAsync(fires - 1100 - Date.now());
+    const mount = settling(client.mount(elsewhere, {}, key));
+    await tickUntil(time, () => auths().length >= 4, 0, 40);
+    await time.tickAsync(1030);
+    await tickUntil(time, () => auths().length >= 5, 0, 40);
+    assertEquals(auths().length, 5);
+    assertEquals(auths()[4].statement, auths()[3].statement);
+    // The renewal comes due while that resend is unanswered. It must not
+    // send the kept statement a second time: a router closes the
+    // connection on a second statement for a challenge it has accepted.
+    await time.tickAsync(fires - Date.now() + 5);
+    await tickUntil(time, () => auths().length >= 6, 0, 40);
+    assertEquals(auths().length, 6);
+    assert(auths()[5].statement !== auths()[4].statement);
+    assertEquals(mount, { settled: false });
+  } finally {
+    await client.close();
+    time.restore();
+    Math.random = random;
+  }
+});
+
 Deno.test("a renewal refused for now after a pushed challenge was admitted leaves the admitted lease's renewal armed", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
