@@ -3495,6 +3495,24 @@ Deno.test(
 );
 
 Deno.test(
+  "Mergeable-push misuse: flags a push a guard on a read below a fallback depends on",
+  () => {
+    const findings = collectMergeablePushMisuses(
+      `const fn = (input) => {
+        report(input.key("users").get());
+        const first = (input.key("users").get() ?? [])[0]?.name ?? "";
+        if (first === "a") return;
+        input.key("users").push({ name: "a" });
+      };`,
+    );
+
+    assertEquals(findings.length, 1);
+    assertEquals(findings[0]!.path.join("."), "users");
+    assertEquals(findings[0]!.kind, "read-dependent-push");
+  },
+);
+
+Deno.test(
   "Mergeable-push misuse: flags an iterate-dedup-then-push to the same collection",
   () => {
     const findings = collectMergeablePushMisuses(

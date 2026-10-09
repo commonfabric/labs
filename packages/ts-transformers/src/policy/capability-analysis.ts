@@ -3475,6 +3475,13 @@ export function analyzeFunctionCapabilities(
           ts.isPropertyAccessExpression(target) &&
           REF_RESOLVING_METHODS.has(target.name.text)
         ) {
+          // A `.get()` is still a read of its receiver for the
+          // read-then-mergeable-`push` check, though not one of its whole
+          // shape.
+          const receiver = READER_METHODS.has(target.name.text)
+            ? resolveSourceRef(target.expression)
+            : undefined;
+          if (receiver) recordMergeableReadSite(receiver, current);
           current.arguments.forEach(visit);
           visitOperandsOfResolvedRef(target.expression, belowFallback);
         } else {
