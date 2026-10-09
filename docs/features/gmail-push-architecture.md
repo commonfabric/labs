@@ -191,7 +191,7 @@ sequenceDiagram
     Note over G,T: Every time mail arrives
     G->>P: publish {emailAddress, historyId}
     P->>T: POST /api/spaces/<registry DID>/ingest-push/gmail (OIDC token, over the internet)
-    T->>T: verify the token; find the mailbox's latest channels
+    T->>T: verify the token, then find the mailbox's latest channels
     T->>T: replace the cell's record if the history id is newer
     T-->>P: 200 {delivered}
     T-->>S: the cell changed (memory connection)
