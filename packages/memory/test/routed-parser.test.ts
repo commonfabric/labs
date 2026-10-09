@@ -157,6 +157,31 @@ describe("routed untrusted parsers", () => {
     // The fixed cap this replaced would have refused it.
     expect(() => decodeRoutedFrame(encoded, true, 100_000)).toThrow();
   });
+  it("bounds the holdings a frame names, and not its watches", () => {
+    const cap = DEFAULT_ROUTED_HOST_LIMITS.frameSlots;
+    const frame = (fields: Record<string, unknown>) =>
+      `fvj1:${JSON.stringify({ type: "session.watch.set", ...fields })}`;
+    const watches = (length: number) =>
+      Array.from({ length }, (_, i) => ({ id: `w${i}` }));
+    // More watches than a session may hold by default still parse, on the
+    // way in and on the way out: the toolshed answers that request, and the
+    // slot cap is what bounds the frame.
+    const many = frame({ watches: watches(5000) });
+    expect(decodeRoutedFrame(many, false, cap).body.type).toBe(
+      "session.watch.set",
+    );
+    expect(
+      decodeRoutedFrame(encodeRoutedFrame(many, cap), true, cap).body.type,
+    ).toBe("session.watch.set");
+    expect(() => decodeRoutedFrame(many, false, 5000)).toThrow();
+    expect(
+      decodeRoutedFrame(frame({ holdings: Array(8192).fill(0) }), false, cap)
+        .body.type,
+    ).toBe("session.watch.set");
+    expect(() =>
+      decodeRoutedFrame(frame({ holdings: Array(8193).fill(0) }), false, cap)
+    ).toThrow();
+  });
   it("checks DIDs rather than accepting a did:key prefix", () => {
     expect(isCanonicalEd25519DID(space)).toBe(true);
     for (

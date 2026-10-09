@@ -9,10 +9,10 @@ import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
-import { ROUTED_HOLDINGS_LIMIT, ROUTED_WATCH_LIMIT } from "./routed-limits.ts";
+import { ROUTED_HOLDINGS_LIMIT } from "./routed-limits.ts";
 import { requireRouted } from "./routed-wire.ts";
 
-export { ROUTED_HOLDINGS_LIMIT, ROUTED_WATCH_LIMIT };
+export { ROUTED_HOLDINGS_LIMIT };
 
 /** Maximum raw public-stage frame bytes. */
 export const ROUTED_RAW_LIMIT = 8 * 1024 * 1024;
@@ -249,19 +249,15 @@ export function parseRoutedText(
     const session = routedObject(body.session);
     if (session.sessionId !== undefined) routedIdentifier(session.sessionId);
   }
-  for (
-    const [field, limit] of [
-      ["watches", ROUTED_WATCH_LIMIT],
-      ["holdings", ROUTED_HOLDINGS_LIMIT],
-    ] as const
-  ) {
-    if (body[field] !== undefined) {
-      const collection = body[field];
-      requireRouted(
-        (Array.isArray(collection) || isPlainObject(collection)) &&
-          Object.keys(collection).length <= limit,
-      );
-    }
+  // A frame's `watches` have no count bound of their own: the slot cap and
+  // the byte caps bound the frame, and a toolshed's `limits.watchesPerSession`
+  // bounds what a session may hold.
+  if (body.holdings !== undefined) {
+    const holdings = body.holdings;
+    requireRouted(
+      (Array.isArray(holdings) || isPlainObject(holdings)) &&
+        Object.keys(holdings).length <= ROUTED_HOLDINGS_LIMIT,
+    );
   }
   return {
     payload,

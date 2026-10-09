@@ -480,6 +480,12 @@ Deno.test("redeemed Mode A tickets are single use; control renews and releases a
 
 Deno.test("routed host limits are config over defaults, and must nest", () => {
   assertEquals(routedHostLimits(), DEFAULT_ROUTED_HOST_LIMITS);
+  // A session's watch IDs are configuration, sized to fit one frame.
+  assertEquals(routedHostLimits().watchesPerSession, 2048);
+  assertEquals(
+    routedHostLimits({ watchesPerSession: 40960 }).watchesPerSession,
+    40960,
+  );
   // No code ceiling: far above the old 256 contexts and 64 sessions.
   assertEquals(
     routedHostLimitsFor({
@@ -498,6 +504,8 @@ Deno.test("routed host limits are config over defaults, and must nest", () => {
       { sessionsPerContext: 10000 },
       { sessionsPerRouter: 20000 },
       { holdingsPerPrincipal: 5000000 },
+      // More watch IDs in one session than its context may hold.
+      { watchesPerSession: 40961 },
       { principalsPerContext: 130, proofsPerContext: 300 },
       // No proof left for a remembered principal or an active one's renewal.
       { proofsPerContext: 143 },
@@ -519,6 +527,8 @@ Deno.test("routed host limits are config over defaults, and must nest", () => {
       [{ proofsPerContext: 143 }, "proofsPerContext"],
       [{ tickets: 511 }, "tickets"],
       [{ sessionsPerRouter: 20000 }, "sessionsPerRouter"],
+      [{ watchesPerSession: 40961 }, "watchesPerSession"],
+      [{ watchesPerContext: 2047 }, "watchesPerSession"],
       [{ unknownLimit: 1 }, "unknownLimit"],
     ] as [Partial<RoutedHostLimits>, string][]
   ) {
@@ -601,7 +611,9 @@ Deno.test("a request past a capacity limit is denied, and the context goes on", 
   } finally {
     await f.close();
   }
-  f = await fixture("watch-limit", { limits: { watchesPerContext: 1500 } });
+  f = await fixture("watch-limit", {
+    limits: { watchesPerContext: 1500, watchesPerSession: 1500 },
+  });
   try {
     const first = await f.open();
     const second = await f.open();
@@ -772,55 +784,98 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
   }
 });
 
-Deno.test("watch IDs added past a session's bound are refused, and the socket stays open", async () => {
-  const f = await fixture("watch-add-bound");
+Deno.test("a session's watch IDs are bounded by configuration, and a mutation past the bound is refused with the socket open", async (t) => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
       (_, i) => ({ id: `${prefix}${i}`, kind: "graph", query: { roots: [] } }),
     );
-  try {
-    const session = await f.open();
-    const mutate = (type: string, list: unknown[]) =>
-      f.request({
-        type,
-        space: f.space.did(),
-        sessionId: session.sessionId,
-        watches: list,
-      });
-    // One request names at most 1,024 watch IDs, and the session holds them.
-    assert((await mutate("session.watch.set", watches("a", 1024))).ok);
-    // One more ID, added by a later request, is within that request's bound
-    // and would leave the session with more than its own.
-    const reasons = await refusalReasons(async () => {
-      const added = await mutate("session.watch.add", watches("b", 1));
-      assertEquals(
-        (added.error as { message?: string }).message,
-        "Routed memory request denied",
-      );
-      // A fixed bound: refused for good.
-      assertEquals(
-        (added.error as { retriable?: boolean }).retriable,
-        undefined,
-      );
+  await t.step("the configured bound", async () => {
+    const f = await fixture("watches-per-session", {
+      limits: { watchesPerSession: 8 },
     });
-    assertEquals(reasons, ["frame-limit"]);
-    assertEquals(f.socket.readyState, 1);
-    // The refusal changed nothing the session holds: an ID it already has
-    // is still added, and a replacement set at the bound is still taken.
-    assert((await mutate("session.watch.add", watches("a", 1))).ok);
-    assert((await mutate("session.watch.set", watches("c", 1024))).ok);
-    assertEquals(f.socket.readyState, 1);
-  } finally {
-    await f.close();
-  }
+    try {
+      const session = await f.open();
+      const mutate = (type: string, list: unknown[]) =>
+        f.request({
+          type,
+          space: f.space.did(),
+          sessionId: session.sessionId,
+          watches: list,
+        });
+      assert((await mutate("session.watch.set", watches("a", 8))).ok);
+      const reasons = await refusalReasons(async () => {
+        // One more ID, added by a later request, and a replacement set that
+        // names one more than a session may hold.
+        for (
+          const [type, list] of [
+            ["session.watch.add", watches("b", 1)],
+            ["session.watch.set", watches("c", 9)],
+          ] as const
+        ) {
+          const refused = await mutate(type, list);
+          assertEquals(
+            (refused.error as { message?: string } | undefined)?.message,
+            "Routed memory request denied",
+            JSON.stringify(refused),
+          );
+          // Refused for good.
+          assertEquals(
+            (refused.error as { retriable?: boolean }).retriable,
+            undefined,
+          );
+        }
+      });
+      assertEquals(reasons, ["frame-limit", "frame-limit"]);
+      assertEquals(f.socket.readyState, 1);
+      // The refusals changed nothing the session holds: an ID it already
+      // has is still added, and a replacement set at the bound is taken.
+      assert((await mutate("session.watch.add", watches("a", 1))).ok);
+      assert((await mutate("session.watch.set", watches("d", 8))).ok);
+      assertEquals(f.socket.readyState, 1);
+    } finally {
+      await f.close();
+    }
+  });
+  await t.step("the default bound of 2,048, in one frame", async () => {
+    const f = await fixture("watches-per-session-default");
+    try {
+      const session = await f.open();
+      const mutate = (type: string, list: unknown[]) =>
+        f.request({
+          type,
+          space: f.space.did(),
+          sessionId: session.sessionId,
+          watches: list,
+        });
+      // A frame's watches have no count bound of their own.
+      assert((await mutate("session.watch.set", watches("a", 2048))).ok);
+      const reasons = await refusalReasons(async () => {
+        const refused = await mutate("session.watch.set", watches("b", 2049));
+        assertEquals(
+          (refused.error as { retriable?: boolean } | undefined)?.retriable,
+          undefined,
+          JSON.stringify(refused),
+        );
+        assert(refused.error !== undefined);
+      });
+      assertEquals(reasons, ["frame-limit"]);
+      assertEquals(f.socket.readyState, 1);
+    } finally {
+      await f.close();
+    }
+  });
 });
 
 Deno.test("holdings and views named on a watch add leave a session's counted usage as it was", async () => {
   setServerExecutionConfig(true);
   // Two views and four holdings are all the context may hold of each.
   const f = await fixture("add-names-watches", {
-    limits: { watchesPerContext: 2, holdingsPerContext: 4 },
+    limits: {
+      watchesPerContext: 2,
+      watchesPerSession: 2,
+      holdingsPerContext: 4,
+    },
   });
   const view = (i: number) => ({
     id: `v${i}`,
@@ -1554,7 +1609,7 @@ Deno.test("omitted views retain their quota across watch replacements and resume
   setServerExecutionConfig(true);
   // Sixteen sessions of 64 views fill a context limited to 1,024 watches.
   const f = await fixture("retained-views", {
-    limits: { watchesPerContext: 1024 },
+    limits: { watchesPerContext: 1024, watchesPerSession: 1024 },
   });
   const views = Array.from(
     { length: 64 },
@@ -2177,6 +2232,7 @@ Deno.test("quota totals return to zero after sessions, watches and refusals come
       sessionsPerToolshed: 3,
       sessionsPerPrincipal: 3,
       watchesPerContext: 10,
+      watchesPerSession: 10,
       watchesPerRouter: 10,
       watchesPerToolshed: 10,
       watchesPerPrincipal: 10,
@@ -2276,6 +2332,7 @@ Deno.test("quota totals return to zero across socket replacement and context clo
       sessionsPerToolshed: 3,
       sessionsPerPrincipal: 3,
       watchesPerContext: 10,
+      watchesPerSession: 10,
       watchesPerRouter: 10,
       watchesPerToolshed: 10,
       watchesPerPrincipal: 10,

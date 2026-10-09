@@ -290,26 +290,33 @@ context to router to toolshed, a context's proofs must cover its principal
 history and a renewal for each active principal, and every allowed router's
 contexts must fit the sockets and tickets at once (`routedHostLimitsFor`); a
 limit that fails, or one the toolshed does not know, is named in the error.
-`frameSlots` is the one limit the router must match rather than cover:
-`max_frame_slots == frameSlots`, a check for the infra preflight beside the
-limits it compares already, and the SDK sends and accepts at most
-`ROUTED_FRAME_SLOTS` (150,000), which must not exceed either. The infra router
-README's capacity section has the arithmetic and maps each limit to the
-router's.
+Two limits are ones the router must match rather than cover, each a check for
+the infra preflight beside the limits it compares already. One is
+`max_frame_slots == frameSlots`; the SDK sends and accepts at most
+`ROUTED_FRAME_SLOTS` (150,000), which must not exceed either. The other is
+`max_watches_per_session == watchesPerSession`, the watch IDs one session may
+hold, default 2,048, which may not exceed `watchesPerContext`. The two are
+sized together: a session is restored by one `session.watch.set` that names
+its whole watch set, so that many watches must fit one frame. At the 42 slots
+a watch measured on the rehearsal, 2,048 watches are about 87,000 slots, inside
+150,000 with room for heavier selectors. A frame's `watches` have no count
+bound of their own. The infra router README's capacity section has the
+arithmetic and maps each limit to the router's.
 
 The toolshed answers one request it refuses and leaves the data socket open.
 A request over a session, watch (views included) or holdings limit, or one
 whose principal's grant expired after the router forwarded it, is denied
 marked `retriable`, so the client holds the session and tries again; a request
 for a session the toolshed revoked, or a principal it released, after the
-router forwarded it is denied for good, as is a watch mutation that would
-leave a session with more than 1,024 watch IDs or 64 views (`frame-limit`).
+router forwarded it is denied for good, as is a watch mutation, a set or an
+add, that would leave a session with more than `watchesPerSession` watch IDs
+or 64 views (`frame-limit`).
 Each is logged in the toolshed's own journal, never the router's, as a
 `routed-memory-verdict` with verdict `request-refused` and reason
 `session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
 `principal-expired`, `session-not-held` or `principal-not-held`. A frame that
-itself names more than 1,024 watches or 8,192 holdings is malformed, and so is
-a request whose `watches`, `holdings` or `views` is not a JSON list. Such a
+itself names more than 8,192 holdings is malformed, and so is a request whose
+`watches`, `holdings` or `views` is not a JSON list. Such a
 request is not answered: it closes the socket, as the router closes the
 client's connection on one. The SDK therefore declares at most 8,192 holdings
 on a routed connection. A session that holds more declares the first 8,192,

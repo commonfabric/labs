@@ -89,6 +89,20 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
       Error,
       "invalid routed limit: frameSlots",
     );
+    // So are the watch IDs one session may hold, defaulting to the router's
+    // `max_watches_per_session`; they may not pass a context's watches.
+    assertEquals(policy.config.limits.watchesPerSession, 2048);
+    write({ ...config, limits: { watchesPerSession: 4096 } });
+    assertEquals(
+      new MemoryRouterPolicy(path).config.limits.watchesPerSession,
+      4096,
+    );
+    write({ ...config, limits: { watchesPerSession: 40961 } });
+    assertThrows(
+      () => new MemoryRouterPolicy(path),
+      Error,
+      "invalid routed limit: watchesPerSession",
+    );
     // The limits must fit every allowed router at once: the defaults fit
     // two, and fewer sockets than two routers' contexts and links do not.
     const second = (await Identity.fromRaw(new Uint8Array(32).fill(20))).did();

@@ -16,7 +16,6 @@ import {
   parseRoutedJson,
   ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_QUEUE_LIMIT,
-  ROUTED_WATCH_LIMIT,
   routedFlags,
   routedIdentifier,
   routedObject,
@@ -117,6 +116,16 @@ export interface RoutedHostLimits {
   watchesPerRouter: number;
   watchesPerToolshed: number;
   watchesPerPrincipal: number;
+  /**
+   * Watch IDs one session may hold; its views, at most 64, are apart. A
+   * watch mutation that would leave a session with more is refused for
+   * good. A client restores a session by sending its whole watch set in one
+   * `session.watch.set`, so this is sized together with `frameSlots`: that
+   * many watches must fit one frame. Must equal the router's
+   * `max_watches_per_session` (a check for the infra preflight, as for
+   * `frameSlots`).
+   */
+  watchesPerSession: number;
   holdingsPerContext: number;
   holdingsPerRouter: number;
   holdingsPerToolshed: number;
@@ -156,6 +165,10 @@ export const DEFAULT_ROUTED_HOST_LIMITS: Readonly<RoutedHostLimits> = {
   watchesPerRouter: 262144,
   watchesPerToolshed: 524288,
   watchesPerPrincipal: 81920,
+  // At the 42 slots a watch measured on the rehearsal, 2,048 watches are
+  // about 87,000 slots, inside the default frame of 150,000 with room for
+  // heavier selectors.
+  watchesPerSession: 2048,
   holdingsPerContext: 327680,
   holdingsPerRouter: 2097152,
   holdingsPerToolshed: 4194304,
@@ -163,22 +176,16 @@ export const DEFAULT_ROUTED_HOST_LIMITS: Readonly<RoutedHostLimits> = {
   frameSlots: ROUTED_DEFAULT_SLOT_LIMIT,
 };
 
-/**
- * Watch IDs one session may hold: as many as one frame may name. A client
- * sends a session's whole set in one `session.watch.set` when it restores
- * the session, so a session may not hold more than a frame can carry, and
- * the bound stays fixed.
- */
-const WATCHES_PER_SESSION = ROUTED_WATCH_LIMIT;
 /** Views one session may hold; bounds one frame, so it stays fixed. */
 const VIEWS_PER_SESSION = 64;
 
 /**
  * `overrides` over the defaults. Capacity is the deployment's to size, so
  * only consistency is checked: each limit is a positive integer, the
- * per-context, per-router and per-toolshed limits nest, a context's proofs
- * cover its principal history and a renewal for each active principal, and
- * a link's contexts can each hold a ticket. {@link routedHostLimitsFor}
+ * per-context, per-router and per-toolshed limits nest, one session's
+ * watch IDs fit its context's, a context's proofs cover its principal
+ * history and a renewal for each active principal, and a link's contexts
+ * can each hold a ticket. {@link routedHostLimitsFor}
  * checks the limits that depend on how many routers a toolshed admits.
  *
  * @throws If a limit is unknown, not a positive safe integer, or out of order.
@@ -202,6 +209,10 @@ export function routedHostLimits(
     requireLimit(router <= toolshed, `${kind}PerRouter`);
     requireLimit(principal <= toolshed, `${kind}PerPrincipal`);
   }
+  requireLimit(
+    limits.watchesPerSession <= limits.watchesPerContext,
+    "watchesPerSession",
+  );
   requireLimit(
     limits.principalsPerContext <= limits.principalHistoryPerContext,
     "principalsPerContext",
@@ -261,7 +272,7 @@ const RETRIABLE_REFUSALS: ReadonlySet<RefusalReason> = new Set([
 /**
  * A request refused on its own: answered, not a closed socket. A capacity
  * refusal, or one for a grant that expired in flight, is marked retriable;
- * one past a fixed bound on what a session holds (`frame-limit`), or for a
+ * one past a bound on what one session holds (`frame-limit`), or for a
  * session or principal the context no longer holds, is final.
  */
 class RoutedRequestRefusal extends Error {
@@ -1355,13 +1366,16 @@ export class RoutedMemoryHost {
             };
             const holdings = named(body.holdings, session.holdings);
             const views = named(body.views, session.views);
-            // Fixed bounds on what one session holds, refused for good. The
-            // request is well formed, and for a `session.watch.add` whether
-            // it fits depends on the IDs the session already holds, so it
-            // is answered and the socket stays open, as the router answers
-            // it; the router counts views as watches, as this does.
+            // Bounds on what one session holds, refused for good: the watch
+            // IDs by `limits.watchesPerSession`, the views by a fixed 64.
+            // The request is well formed, and for a `session.watch.add`
+            // whether it fits depends on the IDs the session already holds,
+            // so it is answered and the socket stays open, as the router
+            // answers it; a `session.watch.set` that names more IDs than a
+            // session may hold is answered the same way.
             if (
-              watches.size > WATCHES_PER_SESSION || views > VIEWS_PER_SESSION
+              watches.size > this.#limits.watchesPerSession ||
+              views > VIEWS_PER_SESSION
             ) {
               throw new RoutedRequestRefusal("frame-limit");
             }

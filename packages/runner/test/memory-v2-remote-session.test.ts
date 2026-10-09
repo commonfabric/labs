@@ -1000,6 +1000,47 @@ describe("WebSocketTransport failure signaling", () => {
     });
   });
 
+  it("sends a routed frame naming more watches than a session may hold", async () => {
+    // The router and the toolshed answer a watch mutation past a session's
+    // bound, so the transport does not refuse it for them: a frame's
+    // watches have no count bound of their own, only the slot cap.
+    const frame = `fvj1:${
+      JSON.stringify({
+        type: "session.watch.add",
+        requestId: "r1",
+        sessionId: "s1",
+        watches: Array.from(
+          { length: DEFAULT_ROUTED_HOST_LIMITS.watchesPerSession + 1 },
+          (_, i) => ({ id: `w${i}` }),
+        ),
+      })
+    }`;
+    await withTransport(async (transport, socket) => {
+      try {
+        const hello = transport.send("hello");
+        const activeSocket = socket();
+        activeSocket.openConnection();
+        await hello;
+        transport.setRoutedMessagesEnabled(true);
+        // As text, and as a compressed envelope.
+        await transport.send(frame);
+        transport.setMessageCompressionEnabled(true);
+        await transport.send(frame);
+        expect(activeSocket.sent).toHaveLength(3);
+        expect(activeSocket.sent[1]).toBe(frame);
+        expect(
+          decodeRoutedFrame(
+            activeSocket.sent[2] as Uint8Array,
+            true,
+            ROUTED_FRAME_SLOTS,
+          ).payload,
+        ).toBe(frame);
+      } finally {
+        await transport.close();
+      }
+    });
+  });
+
   it("applies ROUTED_FRAME_SLOTS to a raw routed frame when compression is off", async () => {
     await withTransport(async (transport, socket) => {
       const exact = routedFrameOf(ROUTED_FRAME_SLOTS);
