@@ -85,3 +85,45 @@ export const INITIAL_RUN_SYNC_HOLD_TIMEOUT_MS = 2_000;
  * entry is the one to lose.
  */
 export const MAX_ACTION_STATS = 20_000;
+
+// Remote-echo breaker (docs/plans/scheduler-remote-echo-breaker.md). A
+// reactive computation that reads and writes one document, re-triggered by a
+// remote change to that same document and writing a differing value back,
+// counts one echo cycle per such run. ECHO_TRIP_THRESHOLD cycles within
+// ECHO_WINDOW_MS on one (action, document) pair trip the breaker. The window
+// opens at the pair's first counted cycle and the count starts over once it
+// has run out, so a steady cadence trips only when it fits the threshold
+// into one window. Before a trip, a run that does not change the document
+// (convergence) clears the pair. The pair is one session's view of one
+// document, so what fills the window is that session's own cadence, which a
+// loop sets by its round trip through the server: the Topics social space's
+// loops ran between three and sixty echoes per session per ten seconds, and
+// forty seconds is the shortest window that holds twelve of the slowest at
+// the cadence it sustained for hours; a minute leaves margin for a window
+// that opens between two of its echoes
+// (test/scheduler-remote-echo-breaker-traces.test.ts replays them). Over a
+// minute an honest derivation on that space changed one document at most
+// five times. The values await a live per-space rate signal (Topic 913)
+// before any default-on decision.
+export const ECHO_WINDOW_MS = 60_000;
+export const ECHO_TRIP_THRESHOLD = 12;
+// Capped exponential backoff on the tripped action's re-run. Once a pair has
+// tripped, every further echo renews the backoff one step longer, so at the
+// cap a looping pair re-runs at most once every ECHO_BACKOFF_MAX_MS: about
+// 0.03/s, against the 0.3/s to 6/s per pair the Topics loops ran at.
+export const ECHO_BACKOFF_BASE_MS = 500;
+export const ECHO_BACKOFF_MAX_MS = 30_000;
+// A tripped pair is cleared by a convergence step, or by this long a quiet
+// stretch since its last echo. It is longer than the backoff cap, so a loop
+// still running at the cap never looks quiet, and longer than the window,
+// which resets only pairs that have not tripped: a tripped pair outlives a
+// lapsed window, since the window would otherwise cancel a backoff before
+// its deadline. Derived from both so that raising either keeps both
+// relations; a test pins them.
+export const ECHO_QUIET_RESET_MS = 2 *
+  Math.max(ECHO_WINDOW_MS, ECHO_BACKOFF_MAX_MS);
+// Per-(action, document) pair states kept before the least recently touched is
+// dropped. A pair key arrives per document a self-referential computation
+// writes; the entries are hints whose loss costs only a forgotten cycle count,
+// so a bounded table is safe (BoundedKeyMap, oldest-evicted).
+export const MAX_ECHO_PAIRS = 4_096;

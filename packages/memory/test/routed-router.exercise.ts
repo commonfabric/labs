@@ -240,6 +240,7 @@ Deno.writeTextFileSync(
     max_principal_history: 64,
     max_principals_per_challenge: 64,
     max_watches_per_connection: 1024,
+    max_watches_per_session: 1024,
     max_holdings_per_connection: 8192,
     max_requests_per_connection: 256,
     modern_cell_rep: modernCellRep,

@@ -63,6 +63,9 @@ export const EXPERIMENTAL_ENV_VARS = {
   // declared arm. Env-reachable so every server-side process can be flipped
   // either way, and an explicit value always wins over the constant.
   serverExecution: "EXPERIMENTAL_SERVER_EXECUTION",
+  // Remote-echo breaker (docs/plans/scheduler-remote-echo-breaker.md):
+  // default-off; env-reachable so a deployment can enable it for dogfooding.
+  remoteEchoBreaker: "EXPERIMENTAL_REMOTE_ECHO_BREAKER",
   viewScopedReplication: "EXPERIMENTAL_VIEW_SCOPED_REPLICATION",
   webViewScopedReplication: "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
   sharedMemoryConnection: "EXPERIMENTAL_SHARED_MEMORY_CONNECTION",
@@ -155,6 +158,10 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   lazyMaterialization: "server",
   // The whole point of the flag is which side computes what is stored.
   serverExecution: "server",
+  // Under server execution the server runs the derivations, so a client and
+  // server that disagreed on whether to rate-limit a shared document's re-runs
+  // would write it at different cadences; the deployment decides.
+  remoteEchoBreaker: "server",
   // Defaults are published fleet-wide; each session negotiates the mode.
   viewScopedReplication: "server",
   webViewScopedReplication: "server",

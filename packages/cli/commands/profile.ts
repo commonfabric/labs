@@ -13,6 +13,12 @@ import { cliText } from "../lib/cli-name.ts";
 import { getDidFromFile } from "../lib/identity.ts";
 import { createProfile } from "../lib/profile.ts";
 import { profileNameProtection } from "../lib/profile-name-protection.ts";
+import {
+  PROFILE_ROOT_REPAIR_REFUSAL_EXIT_CODES,
+  PROFILE_ROOT_REPAIR_VERSION,
+  profileSpaceRoot,
+  ProfileSpaceRootRefusal,
+} from "../lib/profile-space-root.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
 import { projectWishValue, readWish } from "../lib/wish.ts";
@@ -148,8 +154,69 @@ export async function profileRepairNameProtectionAction(
 }
 
 /**
+ * Inspects every profile a store snapshot or the identity's own Home names,
+ * or applies the plan whose receipt was reviewed. A run that refuses prints
+ * its refusal as JSON and ends with that refusal's exit status.
+ */
+export async function profileRepairRootAction(
+  options: ProfileCommandOptions & {
+    fromSnapshot?: string;
+    cell?: string[];
+    apply?: boolean;
+    expect?: string;
+  },
+  run: typeof profileSpaceRoot = profileSpaceRoot,
+  setExitCode: (code: number) => void = (code) => {
+    Deno.exitCode = code;
+  },
+): Promise<void> {
+  if (!!options.apply !== (options.expect !== undefined)) {
+    throw new ValidationError(
+      "Use --apply and --expect <inspection> together.",
+      { exitCode: 1 },
+    );
+  }
+  if (options.fromSnapshot === undefined && options.cell !== undefined) {
+    throw new ValidationError(
+      "Use --cell only with --from-snapshot.",
+      { exitCode: 1 },
+    );
+  }
+  setQuietMode(!!options.quiet);
+  const { space: home, ...connectionConfig } = await connection(options);
+  let report;
+  try {
+    report = await run({
+      ...connectionConfig,
+      ...(options.fromSnapshot === undefined
+        ? { home }
+        : { snapshot: absPath(options.fromSnapshot) }),
+      ...(options.cell === undefined ? {} : { cells: options.cell }),
+      expectedInspection: options.expect,
+      jsonOutput: true,
+    });
+  } catch (error) {
+    if (!(error instanceof ProfileSpaceRootRefusal)) throw error;
+    render({
+      repairVersion: PROFILE_ROOT_REPAIR_VERSION,
+      refused: {
+        reason: error.reason,
+        message: error.message,
+        ...(error.space === undefined ? {} : { space: error.space }),
+      },
+    }, { json: true });
+    setExitCode(PROFILE_ROOT_REPAIR_REFUSAL_EXIT_CODES[error.reason]);
+    return;
+  }
+  render(report, { json: true });
+}
+
+/**
  * Connection flags shared by `cf profile` verbs. Create and show use the
- * identity's home space; repair takes the profile's explicit full address.
+ * identity's home space. `repair-name-protection` takes one profile's explicit
+ * full address; `repair-root` takes its profiles from the identity's home
+ * space, or from a store snapshot, or only the full addresses repeated
+ * `--cell` flags name.
  */
 // Typed as the other subcommand builders are: cliffy's `.command()` overloads
 // take a `Command<any>`, and a builder returning the narrowed option type is
@@ -174,7 +241,7 @@ export const profile = new Command()
   .name("profile")
   .description(
     cliText(
-      "Your profile: create, locate, or repair its stored name protection.",
+      "Your profile: create, locate, or repair its stored name protection; or, as an operator, make every profile its space's root.",
     ),
   )
   .default("help")
@@ -241,6 +308,62 @@ its display name.`,
           },
         ) => {
           await profileRepairNameProtectionAction(options);
+        },
+      ),
+  )
+  .command(
+    "repair-root",
+    connected(
+      cliText(
+        `Make each existing profile its space's root.
+
+Without --from-snapshot, the profiles are the ones your own Home lists, read
+live. With it, this is an operator's command across a whole store: the
+profiles come from a snapshot of the store's space databases, read offline:
+each Home's profile list, with profiles no Home lists reported and skipped
+unless named with --cell. Each profile is inspected live, as your own identity,
+and the plan prints as JSON with an inspection receipt. Repeat with --apply
+--expect <inspection> to apply it. Always prints JSON.
+It refuses a server that runs server execution, or does not say whether it
+does, exiting 4: serve the store with server execution off. An apply whose
+receipt no longer matches refuses too, exiting 3. A refusal writes nothing and
+prints its reason as JSON.`,
+      ),
+    )
+      .option(
+        "--from-snapshot <dir:string>",
+        "Directory holding a snapshot of the store's space databases.",
+      )
+      .option(
+        "--cell <address:string>",
+        "Repair only this full profile address, with --from-snapshot. Repeatable.",
+        { collect: true },
+      )
+      .option("--apply", "Apply the inspected plan.")
+      .option(
+        "--expect <inspection:string>",
+        "Exact run inspection receipt required with --apply.",
+      )
+      .example(
+        cliText(
+          `cf profile repair-root --from-snapshot ./snapshot -i ./admin.key -a <url>`,
+        ),
+        "Inspect every profile the snapshot's Homes list.",
+      )
+      .example(
+        cliText(`cf profile repair-root -i ./me.key -a <url>`),
+        "Inspect every profile your own Home lists.",
+      )
+      .action(
+        async (
+          options: ProfileCommandOptions & {
+            fromSnapshot?: string;
+            cell?: string[];
+            apply?: boolean;
+            expect?: string;
+          },
+        ) => {
+          await profileRepairRootAction(options);
         },
       ),
   );

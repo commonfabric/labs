@@ -1188,6 +1188,26 @@ function scheduleIntervalNowTick(
   }, delay);
 }
 
+/**
+ * The ticking cell of the interval `#now` timer for `space` and `intervalMs`:
+ * content-addressed by interval, so one document per space and interval is
+ * shared by every piece that wishes for it, in whichever session acquires it
+ * first.
+ */
+function intervalNowCell(
+  runtime: Runtime,
+  space: MemorySpace,
+  intervalMs: number,
+  tx: IExtendedStorageTransaction,
+): Cell<number> {
+  return runtime.getCell<number>(
+    space,
+    { wish: { now: true, interval: intervalMs } },
+    undefined,
+    tx,
+  );
+}
+
 function acquireIntervalNowTimer(
   runtime: Runtime,
   space: MemorySpace,
@@ -1198,14 +1218,7 @@ function acquireIntervalNowTimer(
   const key = intervalNowTimerKey(space, intervalMs);
   let timer = timers.get(key);
   if (!timer) {
-    // Content-addressed by interval, so all instances in the same space with
-    // the same interval share one cell.
-    const cell = runtime.getCell<number>(
-      space,
-      { wish: { now: true, interval: intervalMs } },
-      undefined,
-      tx,
-    );
+    const cell = intervalNowCell(runtime, space, intervalMs, tx);
     timer = { cell, timerId: undefined, generation: 0, refCount: 0 };
     timers.set(key, timer);
   }
@@ -1317,8 +1330,33 @@ function handleIntervalNow(
   const intervalMs = seconds * 1000;
 
   // Acquire the shared timer for this (space, interval), releasing the
-  // previously-held one when the interval changes.
+  // previously-held one when the interval changes. The ticking cell is shared
+  // across sessions, so another session may already have written it. A
+  // replica that has not loaded it reads it as absent, and the first tick
+  // staged on that read is refused as stale, taking every commit of the same
+  // batch that read this wish's result down with it. Hold the wish until the
+  // cell has loaded; the acquisition then reads the stored tick, or a
+  // confirmed absence it may fill. The previous interval keeps beating
+  // through the wait, and is released when the replacement's load fails:
+  // the wish reports the failure and holds no timer nothing consumes.
   if (state.intervalMs !== intervalMs) {
+    try {
+      ctx.readiness.requireDocument(
+        intervalNowCell(ctx.runtime, ctx.parentCell.space, intervalMs, ctx.tx),
+        ctx.tx,
+      );
+    } catch (error) {
+      if (!(error instanceof DocumentPending) && state.intervalMs !== 0) {
+        releaseIntervalNowTimer(
+          ctx.runtime,
+          ctx.parentCell.space,
+          state.intervalMs,
+        );
+        state.intervalMs = 0;
+        state.cell = undefined;
+      }
+      throw error;
+    }
     if (state.intervalMs !== 0) {
       releaseIntervalNowTimer(
         ctx.runtime,

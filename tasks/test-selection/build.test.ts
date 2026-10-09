@@ -424,6 +424,14 @@ describe("build", () => {
             },
             durationMs: 17,
           }),
+          record({
+            test: {
+              k: "gate",
+              s: "ci",
+              n: "ci-lane passes batch workspace-unit",
+            },
+            durationMs: 1,
+          }),
         ]),
         new AliasResolver([{
           date: "2026-08-21",
@@ -441,6 +449,7 @@ describe("build", () => {
         ran: 40,
         spent: 92,
         units: 17,
+        passes: 1,
       }]);
     });
 
@@ -476,6 +485,14 @@ describe("build", () => {
             },
             durationMs: 17,
           }),
+          record({
+            test: {
+              k: "gate",
+              s: "ci",
+              n: "ci-lane passes batch workspace-unit",
+            },
+            durationMs: 1,
+          }),
         ]),
         NO_ALIASES,
       );
@@ -488,6 +505,7 @@ describe("build", () => {
           ran: 40,
           spent: 92,
           units: 17,
+          passes: 1,
         },
       ]);
     });
@@ -1135,8 +1153,7 @@ describe("build", () => {
     it("carries what lanes measured into the next run", () => {
       // The fit reads a week of them, and a publisher run folds a few
       // hours of objects, so they survive the aggregate rather than
-      // being read again each time. A batch stored without saying
-      // whether coverage was on for it is carried as it was.
+      // being read again each time.
       const aggregate = emptyAggregate("2026-08-20");
       aggregate.lanes = [
         { day: "2026-08-20", capability: "fuse", seconds: 14.8 },
@@ -1147,17 +1164,38 @@ describe("build", () => {
           ran: 10,
           spent: 30,
           units: 4,
+          passes: 1,
         },
         {
           day: "2026-08-20",
           suite: "runner-unit",
+          measured: false,
           ran: 10,
           spent: 20,
           units: 4,
+          passes: 2,
         },
       ];
       expect(parseAggregate(JSON.stringify(aggregate))?.lanes)
         .toEqual(aggregate.lanes);
+    });
+
+    it("drops a stored batch that does not say how many passes it made", () => {
+      // The fit charges a suite per pass, so a batch that does not say how
+      // many it made is one the fit cannot read.
+      const aggregate = emptyAggregate("2026-08-20");
+      const stored = {
+        day: "2026-08-20",
+        suite: "runner-unit",
+        measured: false,
+        ran: 10,
+        spent: 20,
+        units: 4,
+      };
+      const object = JSON.parse(JSON.stringify(aggregate));
+      object.lanes = [stored, { ...stored, passes: 1 }];
+      expect(parseAggregate(JSON.stringify(object))?.lanes)
+        .toEqual([{ ...stored, passes: 1 }]);
     });
 
     it("carries a figure a later reader stored in a batch", () => {
@@ -1174,6 +1212,7 @@ describe("build", () => {
         ran: 10,
         spent: 30,
         units: 4,
+        passes: 1,
         invocations: 3,
       }];
       later.lanes = lanes;
@@ -1873,6 +1912,10 @@ describe("a batch read one shard at a time", () => {
         test: { k: "gate", s: "ci", n: "ci-lane units batch runner-unit" },
         durationMs: 4,
       }),
+      record({
+        test: { k: "gate", s: "ci", n: "ci-lane passes batch runner-unit" },
+        durationMs: 1,
+      }),
     ]),
     stored(
       `${CI_NAME}2`,
@@ -1972,6 +2015,10 @@ describe("the days a fold keeps a lane's measurements over", () => {
           test: { k: "gate", s: "ci", n: "ci-lane units batch runner-unit" },
           durationMs: 4,
         }),
+        record({
+          test: { k: "gate", s: "ci", n: "ci-lane passes batch runner-unit" },
+          durationMs: 1,
+        }),
       ],
     );
   }
@@ -1995,6 +2042,7 @@ describe("the days a fold keeps a lane's measurements over", () => {
         ran: 10,
         spent: 30,
         units: 4,
+        passes: 1,
       },
     ]);
   });
@@ -2055,6 +2103,7 @@ describe("the days a fold keeps a lane's measurements over", () => {
         ran: 10,
         spent: 30,
         units: 4,
+        passes: 1,
       },
     ]);
   });

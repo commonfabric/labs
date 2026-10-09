@@ -383,6 +383,20 @@ export interface ExperimentalOptions {
    */
   agentBuiltin?: boolean | undefined;
 
+  /**
+   * Bound the remote-echo write loop in the scheduler
+   * (`docs/plans/scheduler-remote-echo-breaker.md`): a derivation that writes a
+   * document, sees a remote change to that document re-trigger it, and writes
+   * again, because another session is writing the same document from the other
+   * side. Each run succeeds and commits, so the retry budget and
+   * committed-write backpressure never see it; under this flag the scheduler
+   * counts the successful re-runs per `(action, document)` pair and backs the
+   * action off with capped exponential backoff once they sustain. Defaults to
+   * off; a new guardrail that changes write cadence under a loop, enabled
+   * deliberately for dogfooding before any default-on decision.
+   */
+  remoteEchoBreaker?: boolean | undefined;
+
   /** Global default for server-selected view replication. Defaults to off. */
   viewScopedReplication?: boolean | undefined;
 

@@ -3414,7 +3414,9 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * none, more than one, or a claim in some other form. It also means that
  * `target` is `undefined`, which is what a value that cannot be read yet reads
  * as. It is never a guess, and a caller refuses whatever needs a principal. A
- * label that cannot be read throws instead.
+ * label the caller cannot observe, a refused read among them, returns
+ * `undefined` as well, as missing metadata does; a label stored in a form the
+ * runtime cannot interpret throws.
  *
  * It reads the label, and no contents of the value beyond the link pointers
  * needed to reach it. In a reactive computation
@@ -3445,8 +3447,9 @@ export declare function principalOf(
  * caller can tell a label that attests no principal from one that attests
  * several, and refuse the second while admitting the first.
  *
- * `[]` means the label attests none. A non-empty array lists the DIDs it
- * attests, in the order they first appear. `undefined` means a claim there is
+ * `[]` means the label attests none, or that the caller cannot observe it, a
+ * refused read among them, as with missing metadata. A non-empty array lists
+ * the DIDs it attests, in the order they first appear. `undefined` means a claim there is
  * in some other form, from which no principal can be read, or that `target` is
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,
  * `options.label` included; it can be called where `principalOf()` can,

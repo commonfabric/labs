@@ -806,6 +806,18 @@ Diagnostics emitted in all modes:
     enforce the target-language matrix's "statement-boundary imperative
     constructs" Unsupported row and have been live since the boundary PR
     (#3154).
+- **Error** `module-scope:let-declaration` / `module-scope:var-declaration`
+  - a `let` or `var` statement directly at module scope, exported or not
+    (`reportModuleScopeMutableBindings`). Module state is `const`. The module
+    verifier refuses a non-exported one at load and lets an exported one
+    through, since that compiles to an assignment to `exports`, so for an
+    exported binding this is the only refusal. An ambient `declare let` /
+    `declare var` is not reported, and neither is a `let` or `var` inside a
+    function body, where they are ordinary code. One diagnostic per statement,
+    however many bindings it declares. Under
+    `TransformationOptions.storedSource` it reports as a **Warning**, so a
+    stored pattern that exports one still reloads
+    (`test/transformers/pattern-context-validation.test.ts`)
 
 Removed diagnostic (behavior change, PR #3154 pattern-language-boundary): the
 former `pattern-context:map-on-fallback` error no longer exists.
@@ -3294,8 +3306,9 @@ Only two top-level statement kinds are inspected
 declarations, imports — passes through unchanged:
 
 1. **`const` variable statements** (any declarator with an initializer;
-   `let`/`var` lists are skipped via the `NodeFlags.Const` check — the verifier
-   independently rejects non-`const` module state, per
+   `let`/`var` lists are skipped via the `NodeFlags.Const` check —
+   pattern-context validation reports them (§6.5), and the verifier
+   independently rejects non-`const` module state that is not exported, per
    `module-loading-verifier-and-engine-design.md`). Export modifiers are
    irrelevant to the check and preserved.
 2. **Export assignments** (`export default expr`) — same predicate, plus the
@@ -3932,10 +3945,10 @@ Four shapes are rewritten:
    `test/transform.test.ts`). Declarations with destructuring names or
    without initializers are left alone. The declaration keyword is **not**
    checked: top-level `let f = …`/`var g = …` direct functions are wrapped
-   too (verified by direct pipeline run); the runtime verifier rejects
-   non-`const` top-level bindings regardless ("Top-level mutable bindings are
-   not allowed in SES mode", `compiled-bundle-verifier.ts`
-   `verifyVariableStatement`). When detection unwrapped a type wrapper, the
+   too (verified by direct pipeline run). Pattern-context validation has
+   already reported them (§6.5), and the runtime verifier rejects a
+   non-exported one regardless ("Top-level mutable bindings are not allowed in
+   SES mode", `compiled-bundle-verifier.ts` `verifyVariableStatement`). When detection unwrapped a type wrapper, the
    **original** wrapped expression is what gets hardened
    (`const wrapped = __cfHardenFn(((x: number) => x + 1) as unknown);`,
    verified by direct pipeline run); TS emit erases the type wrapper before
@@ -4293,9 +4306,10 @@ lists).
 
 - Overloaded functions: signatures untouched, one `__cfHardenFn(f);` after
   the implementation (direct pipeline run).
-- `let`/`var` direct functions: wrapped by the transformer, then rejected by
-  the verifier as mutable top-level bindings (direct pipeline run;
-  `verifyVariableStatement`).
+- `let`/`var` direct functions: wrapped by this stage after pattern-context
+  validation has reported them (`module-scope:let-declaration` /
+  `module-scope:var-declaration`, §6.5); the verifier also rejects a
+  non-exported one as a mutable top-level binding (`verifyVariableStatement`).
 - Anonymous `export default function`: a single in-place
   `export default __cfHardenFn(function …);` statement, no synthetic binding
   (§17.2 item 2). The declaration's hoisted-binding semantics are not

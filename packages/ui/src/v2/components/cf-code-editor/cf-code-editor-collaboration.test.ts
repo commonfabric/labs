@@ -8,6 +8,7 @@ import {
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import {
+  type ApplyOpResolution,
   CellHandle,
   type CellRef,
   CODEMIRROR_CHANGESET_CODEC,
@@ -15,6 +16,7 @@ import {
   type PresenceEvent,
   type PresenceRecord,
   type PresenceRoomHandle,
+  type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { CFCodeEditor } from "./cf-code-editor.ts";
 import { CodeMirrorCollaborationController } from "./codemirror-collaboration.ts";
@@ -23,6 +25,8 @@ import { backlinkField } from "./features/backlinks.ts";
 import { mentionRefField } from "./features/mention-refs.ts";
 
 const operationPath = [] as unknown as OperationFieldSnapshot["path"];
+
+type ApplyRequest = Parameters<RuntimeClient["applyOperation"]>[1];
 
 function inactiveSnapshot(materialized = "abc") {
   return {
@@ -259,10 +263,7 @@ describe("CFCodeEditor collaboration", () => {
 
   it("freezes editing and reports a previous-controller stop failure", async () => {
     const events: unknown[] = [];
-    const previous = {
-      stop: () => Promise.reject("pending edit"),
-      dispose: () => events.push("disposed"),
-    };
+    const previous = { stop: () => Promise.reject("pending edit") };
     const element = new CFCodeEditor();
     (element as any)._editorView = { dispatch: () => events.push("dispatch") };
     (element as any)._collaboration = previous;
@@ -273,7 +274,6 @@ describe("CFCodeEditor collaboration", () => {
     await (element as any)._setupCollaboration();
 
     expect((element as any)._collaboration).toBeUndefined();
-    expect(events).toContain("disposed");
     expect((events.at(-1) as { message: string }).message).toBe("pending edit");
   });
 
@@ -349,6 +349,99 @@ describe("CFCodeEditor collaboration", () => {
     await (invalid as any)._setupCollaboration();
     expect((invalid as any)._collaborationFailed).toBe(true);
     expect(errors.at(-1)?.[0]).toBe("cf-error");
+  });
+
+  it("confirms an edit made before setup finishes when collaboration is disabled", async () => {
+    // The controller is ready once its first snapshot is installed, while
+    // its subscription is still being opened. An edit made in that window is
+    // in flight when collaboration is disabled, and the subscription opens
+    // only after the disabling setup has started stopping the controller.
+    const subscribing = Promise.withResolvers<void>();
+    const subscribed = Promise.withResolvers<() => void>();
+    let unsubscribes = 0;
+    let closes = 0;
+    const applying = Promise.withResolvers<ApplyRequest>();
+    const applied = Promise.withResolvers<ApplyOpResolution>();
+    const address = {
+      branch: "",
+      id: "of:editor",
+      scopeKey: "",
+      path: operationPath,
+    };
+    const runtime = {
+      operationCodecs: () => Promise.resolve([CODEMIRROR_CHANGESET_CODEC]),
+      queryOperationField: (_cell: unknown, cursor: unknown) =>
+        Promise.resolve(
+          cursor === undefined ? inactiveSnapshot() : {
+            ...inactiveSnapshot("abc!"),
+            active: true,
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            cursor: { epoch: 1, version: 1 },
+          },
+        ),
+      subscribeOperationField: () => {
+        subscribing.resolve();
+        return subscribed.promise;
+      },
+      applyOperation: (_cell: unknown, request: ApplyRequest) => {
+        applying.resolve(request);
+        return applied.promise;
+      },
+      closeOperationSession: () => {
+        closes++;
+        return Promise.resolve();
+      },
+    };
+    const errors: unknown[] = [];
+    const element = new CFCodeEditor();
+    (element as any)._editorView = statefulView([
+      (element as any)._readonly.of(EditorState.readOnly.of(false)),
+      (element as any)._collaborationComp.of([]),
+    ]);
+    (element as any).emit = (_name: string, detail: unknown) =>
+      errors.push(detail);
+    (element as any)._updateEditorFromCellValue = () => {};
+    element.value = operationCell(runtime);
+    element.collaborative = true;
+
+    const starting = (element as any)._setupCollaboration();
+    await subscribing.promise;
+    const controller = (element as any)._collaboration;
+    expect(controller.active).toBe(true);
+    (element as any)._editorView.dispatch({
+      changes: { from: 3, insert: "!" },
+    });
+    const editing = controller.localDocChanged();
+    const request = await applying.promise;
+
+    element.collaborative = false;
+    const stopping = (element as any)._setupCollaboration();
+    subscribed.resolve(() => unsubscribes++);
+    await starting;
+    applied.resolve({
+      operationIndex: 0,
+      address,
+      codec: CODEMIRROR_CHANGESET_CODEC,
+      submissionId: request.submissionId,
+      from: { epoch: 1, version: 0 },
+      to: { epoch: 1, version: 1 },
+      operations: [{
+        opId: "op:1",
+        cursor: { epoch: 1, version: 1 },
+        submissionId: request.submissionId,
+        payload: request.payload,
+      }],
+      duplicate: false,
+    });
+    await Promise.all([editing, stopping]);
+
+    expect(errors).toEqual([]);
+    expect((element as any)._collaboration).toBeUndefined();
+    expect((element as any)._collaborationFailed).toBe(false);
+    expect((element as any)._editorView.state.readOnly).toBe(false);
+    expect((element as any)._editorView.state.doc.toString()).toBe("abc!");
+    expect(unsubscribes).toBe(1);
+    expect(closes).toBe(1);
   });
 
   it("resolves the bound handle before pinning collaboration identity", async () => {

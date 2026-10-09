@@ -6,6 +6,14 @@ import { HealthResponseSchema } from "./health.handlers.ts";
 
 const tags = ["Health"];
 
+/** Commits over one window of the memory server's commit rates
+ * (packages/memory/v2/commit-rates.ts `CommitWindowCounts`). */
+const commitWindowCounts = z.object({
+  accepted: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  operations: z.number().int().nonnegative(),
+});
+
 export const index = createRoute({
   path: "/_health",
   method: "get",
@@ -49,6 +57,34 @@ export const stats = createRoute({
               bytes: z.number().int().nonnegative(),
               budgetBytes: z.number().int().positive(),
               maxEntries: z.number().int().positive(),
+            }),
+          ),
+        }).optional(),
+        // The memory server's commit rates over the last minute and ten
+        // minutes (packages/memory/v2/commit-rates.ts `CommitRatesReport`)
+        // — present whenever a memory server is co-hosted in this process.
+        commitRates: z.object({
+          storm: z.object({
+            commitsPerMinute: z.number().positive(),
+            sustainedSeconds: z.number().positive(),
+          }),
+          activeSpaces: z.number().int().nonnegative(),
+          storms: z.number().int().nonnegative(),
+          spaces: z.array(
+            z.object({
+              space: z.string(),
+              minute: commitWindowCounts,
+              tenMinutes: commitWindowCounts,
+              storm: z.object({ since: z.number() }).optional(),
+              activeWriters: z.number().int().nonnegative(),
+              writers: z.array(
+                z.object({
+                  session: z.string(),
+                  principal: z.string().optional(),
+                  minute: commitWindowCounts,
+                  tenMinutes: commitWindowCounts,
+                }),
+              ),
             }),
           ),
         }).optional(),

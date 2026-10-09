@@ -113,6 +113,7 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
     deployment: "local-mode-a",
     epochs,
     ownership,
+    limits: { watchesPerSession: 1024 },
     routers: new Map([[config.router, new Set(["127.0.0.1"])]]),
   });
   const listener = await listenRoutedMemory({

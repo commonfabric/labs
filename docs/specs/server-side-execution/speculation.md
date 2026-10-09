@@ -226,9 +226,27 @@ currency. The existing overlay and retirement rules below still apply.
   `executor-dprime-w0.test.ts` ("OW51 refusal re-trigger"),
   mutation-verified on the clean-bit seam.
 
+  **A handler that resolves a cell through the dead-end waits for the
+  document.** `resolveAsCell()` hands back a cell rather than a value,
+  so nothing refuses it, and the cell it would hand back names the
+  document the walk stopped at, not the one the chain reaches past it:
+  a served handler keeping or sending that cell passes on the wrong
+  link, which a labeled slot then refuses. In a handler the run is
+  withdrawn instead (`dispatchedHandlerNotRun`) while that document's
+  load is in flight, and runs again once it lands, as a handler reading
+  the label of a document still loading is
+  ([`principal-of.md`](../../features/principal-of.md)). A walk that
+  crossed no hop, one starting at a handle minted from a stored link,
+  asks for its dead-end document itself, as a same-space hop's target
+  is asked for, so the withdrawal has a load to wait on. Pinned in
+  `packages/runner/test/executor-cross-space.test.ts` (a served
+  handler resolving a foreign cell through a document the serving
+  runtime has not loaded keeps the document the chain reaches).
+
   Implementation: `link-resolution.ts` (`pendingHopDoc` /
   `viaLinkHop`), `schema.ts`'s lazy branch, `schema-view.ts`
-  (`UnresolvedInputError`); pinned in
+  (`UnresolvedInputError`), `cell.ts`'s `resolveAsCell()` with
+  `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
   `packages/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
   control still flows; its case has no previous result, so it does not

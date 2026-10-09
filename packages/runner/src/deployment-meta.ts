@@ -66,6 +66,7 @@ export const SHELL_FLAG_SOURCES = {
   viewScopedReplication: "build",
   webViewScopedReplication: "build",
   readerSchemaPrecedence: "build",
+  remoteEchoBreaker: "build",
   // Whether a connection may carry several spaces is how the deployment
   // routes connections: a deployment whose router terminates client
   // connections turns it on, and one that routes each connection by the

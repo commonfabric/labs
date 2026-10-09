@@ -4,8 +4,8 @@
 `schemas.tsx` defines its public contract and re-exports the participant
 roster's types from `participants.tsx`, which also holds the roster's one
 writer, `addParticipant`. The shared inputs are `title`, `panels`,
-`presentation`, `participants`, and `chatRoom`; `viewerState` belongs to one
-session.
+`presentation`, `participants`, and `chatRoom`; `hiddenPanels` and
+`privatePanels` belong to one user, and `viewerState` to one session.
 
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
@@ -162,6 +162,56 @@ unique; focus must be staged. Omitting focus clears it. Structural actions read
 the current collection inside their handler transaction, so conflicts retry
 against current membership rather than applying a stale client's list.
 
+`retitleLoom({title})` sets the Loom's title, which is also its name.
+`retitlePanel({panel, titleOverride})` sets the title a panel shows in place of
+its target's; an empty title clears it. `retargetPanel({panel, target})` points
+a URL or piece panel at a new target, `{kind: "url", url}` or
+`{kind: "piece", piece}`, in place: the occurrence keeps its position, its
+staging and focus, its title, and its adder, and the target it leaves is
+untouched. Each writes only the fields it names, `retitlePanel` the title and
+`retargetPanel` the kind and the target's key, removing the other kind's key
+when the kind changes, so a panel's adder fields, which only `admitPanel`
+writes, are never rewritten. Both refuse a panel that is not in the Loom, and
+`retargetPanel` also refuses a document panel, whose content is its producer's,
+and a URL a panel may not hold. Any member may retitle or retarget any panel:
+only removal turns on who added it. The runtime handles an invocation of any of
+the root's streams once: a caller that sends an event again under an invocation
+id the root has handled is refused with `receipt-exists` and changes nothing, so
+retrying after a lost reply cannot overwrite a newer edit.
+
+`hiddenPanels` holds the shared occurrences one user has hidden from their own
+view. It is a per-user input: every session of that user reads the same list,
+and no other user's runtime reads it. `hidePanel({panel})` adds an occurrence in
+the Loom to the acting user's list, refuses one that is not in the Loom, and
+changes nothing for one already hidden. `unhidePanel({panel})` takes one off the
+list, including one removed from the Loom since. A hide changes no other user's
+view and leaves `panels` as it is. `viewerPanels` is the viewer's own list:
+`panels` without the occurrences they have hidden, in the shared order, with
+their private panels placed as described below. The root renders the shared
+panels with a Hide button on each and a Show button for each hidden one. The
+list decides what the viewer is shown, not what they may read: a hidden
+occurrence stays in `panels`.
+
+`privatePanels` holds one user's private panels, a per-user input as
+`hiddenPanels` is. Each entry is `{panel, before?}`: an occurrence that lives in
+a space other than the Loom's, and the shared occurrence it shows just ahead of.
+`addPrivatePanel({panel, before?})` adds one for the acting user. It refuses an
+occurrence in the Loom's own space, a URL panel whose URL a panel may not hold,
+and a `before` that is not in the Loom; adding one already there changes
+nothing. A private panel is private by the access list of the space its
+occurrence lives in: every member may read what the Loom's space holds, and a
+per-user list says where an entry is kept, not who may read what it links.
+`movePrivatePanel({panel, before?})` anchors one anew: `before` is a shared
+occurrence, or another of the user's private panels, whose anchor it then takes,
+and without `before` the panel shows after every shared one.
+`removePrivatePanel({panel})` takes one off the list and leaves its occurrence
+as it is. In `viewerPanels`, each private panel shows just ahead of its anchor,
+or after the shared panels while its anchor is not shown, and private panels
+anchored alike keep the order of the list. The root renders the viewer's private
+panels as cards of their own, after the shared ones, each with a Remove button.
+A private loom shown in a social loom is a private panel whose piece is that
+loom's root, so several social looms can each show one private loom.
+
 `participants` lists the Fabric profiles of the Loom's participants, each as the
 live profile cell in its own space. It records no DID and no name: a profile
 names its principal in its label, and its name and avatar are read from it when
@@ -201,7 +251,7 @@ stays named until `setChatRoom` clears it, as any link does. The input holds the
 link in a record, `{ room? }`, because a handler's cell for a field holding a
 link writes through it, so replacing the link there would write into the room.
 
-Run and attach all eight tests when deploying or updating source:
+Run and attach all eleven tests when deploying or updating source:
 
 ```sh
 deno task cf test packages/patterns/loom/main.test.tsx
@@ -212,6 +262,9 @@ deno task cf test packages/patterns/loom/url-view.test.tsx
 deno task cf test packages/patterns/loom/adder-profile.test.tsx
 deno task cf test packages/patterns/loom/actor-attribution.test.tsx
 deno task cf test packages/patterns/loom/chat-room.test.tsx
+deno task cf test packages/patterns/loom/retitle-retarget.test.tsx
+deno task cf test packages/patterns/loom/overlay.test.tsx
+deno task cf test packages/patterns/loom/private-panels.test.tsx
 
 deno task cf piece new packages/patterns/loom/main.tsx \
   --root packages/patterns \
@@ -222,7 +275,10 @@ deno task cf piece new packages/patterns/loom/main.tsx \
   --test packages/patterns/loom/url-view.test.tsx \
   --test packages/patterns/loom/adder-profile.test.tsx \
   --test packages/patterns/loom/actor-attribution.test.tsx \
-  --test packages/patterns/loom/chat-room.test.tsx
+  --test packages/patterns/loom/chat-room.test.tsx \
+  --test packages/patterns/loom/retitle-retarget.test.tsx \
+  --test packages/patterns/loom/overlay.test.tsx \
+  --test packages/patterns/loom/private-panels.test.tsx
 ```
 
 Repeat all `--test` arguments with every `piece setsrc`. A source closure for

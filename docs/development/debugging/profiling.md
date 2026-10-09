@@ -561,8 +561,8 @@ process:
   space's own bounds): per space, `entries` and `bytes` against `budgetBytes`
   and `maxEntries`, and the lifetime `hits`, `misses`, `evictions`,
   `patchReplays` and `resumes`. The occupancy figures (`entries`, `bytes`, and
-  which spaces appear at all) are a snapshot of the moment — the one exception
-  to the paragraph below; the five counters accumulate. `hits` and `misses`
+  which spaces appear at all) are a snapshot of the moment — an exception to
+  the paragraph below, as `commitRates` is; the five counters accumulate. `hits` and `misses`
   count reads of a document and nothing else, and each read that resolved to a
   stored revision lands in one of the two; a read of an entity that has no
   revision at all moves neither, so the two do not sum to the reads a space
@@ -592,15 +592,51 @@ process:
   `resumes` cannot reach the number of rebuilds, because the commit right after
   a snapshot has no row before it to resume from, so roughly one rebuild per
   snapshot interval is a non-resume for a reason unrelated to residency.
+- `commitRates` — the memory server's commit rates (`CommitRateTracker` in
+  `packages/memory/v2/commit-rates.ts`): the busiest of the spaces with a
+  commit in the last ten minutes, and for each the busiest of the sessions
+  that committed to it. A space and a writer both carry `minute` and
+  `tenMinutes`, the commits of the last sixty seconds and of the last ten
+  minutes, each as `accepted`, `rejected` and `operations`, the operations
+  those commits carried whether or not they were applied. The ratio of
+  operations to commits is the shape of the traffic: a person's edit is a
+  few commits of several operations, and a loop is many commits of one.
+  Every commit the engine decides counts, whichever path brought it: a
+  client's `transact`, the server's own direct writes under its `server:`
+  session, a delegated append, a served access-list change, and the serving
+  loop's wave commits under the service session they are recorded under; a
+  `transact` the server refuses before it reaches the engine counts too, as
+  rejected. A writer is a session together with the principal the commit
+  named, so one session reopened under another identity is two writers, and
+  a commit from a session the server does not know is counted under its id
+  with no principal. `storm` on a space is present while its commits per
+  minute have stayed at or over the threshold for the sustained window, and
+  names when that run began; a run ends the moment expiry takes the minute
+  under the threshold, whether or not anything read the tracker then. The
+  thresholds in effect ride along as the report's own `storm`, from
+  `CF_COMMIT_STORM_PER_MINUTE` and `CF_COMMIT_STORM_SUSTAINED_SECONDS`
+  ([`CONFIGURATION.md`](../CONFIGURATION.md#memory-store)), and `storms` is
+  how many retained spaces are in one right now, listed or not. The response
+  stays bounded whatever the process serves: `spaces` is the union of the
+  top sixteen by the minute and the top sixteen by the ten minutes, ordered
+  by the minute's commits and then the ten minutes', a space's `writers` is
+  the same union of its top eight, and `activeSpaces` and `activeWriters`
+  say how many there were to choose from among the ones retained. The
+  tracker keeps at most 1,024 spaces and 256 writers per space, evicting the
+  one that committed longest ago past that, so at a cap the count is the
+  cap. A count is exact to the second a commit landed in.
+  [Alerting on a write storm](#alerting-on-a-write-storm) says what to do
+  with it.
 - `servingLoop` — the serving loop's counters
   ([`serving-loop.md` §7](../../specs/server-side-execution/serving-loop.md)),
   present only when this process serves. `settle.series` is a ready-made
   per-authored-input latency series: admission to watermark coverage, with the
   wave and cycle counts behind each entry.
 
-Everything here accumulates for the process's whole life, across every space it
-has served, so a phase is a difference between two captures rather than any
-single one — and **only `count` and `totalTime` subtract**. `min`, `max`, `p50`,
+Everything here but `commitRates`, which is a window rather than a lifetime,
+accumulates for the process's whole life, across every space it has served, so
+a phase is a difference between two captures rather than any single one — and
+**only `count` and `totalTime` subtract**. `min`, `max`, `p50`,
 `p95` and the CDF describe the whole lifetime; differencing them yields a number
 that looks like a phase percentile and is not one. What a diff of the two
 additive fields does give you honestly is the phase's call count and its mean.
@@ -645,6 +681,76 @@ evaluation through response assembly. `memory/response/prepareSchemas` against
 schema-table compression and the hand-off to the transport;
 `memory.compression/send/encode` is the websocket compression that follows, on
 whichever side is sending.
+
+### Alerting on a write storm
+
+A write storm is one space committed to far faster than any person drives it:
+on the Topics space, four sessions re-persisting the same documents ten times
+a second between them, which held the instance serving it at full CPU for a
+day. `commitRates` is the five-minute diagnosis. The space is at the top of
+`spaces`, its `storm` field says when the run began, and its `writers` name
+the sessions and principals to look at, with `operations` close to the commit
+count where the loop writes one document per commit. Reading it again after a
+deploy is what verifies the fix: the space's `minute` falls to its steady rate
+while `tenMinutes` still carries the storm, and ten minutes later both do.
+
+The server judges a storm itself, so an alert needs no window arithmetic of
+its own: a space whose commits in the last sixty seconds have stayed at or
+over `CF_COMMIT_STORM_PER_MINUTE` for `CF_COMMIT_STORM_SUSTAINED_SECONDS`
+(120 and 300 unless set) is in one until that count falls under the threshold.
+The same decision leaves the process as the `storm` attribute of the
+`ct.memory.commits` counter, which every decided commit increments with the
+space DID (`space.did`) and its `outcome` (`ok` or `rejected`), on the memory
+server's `memory-server` meter beside `ct.memory.operation.*`.
+Under Deno's native OpenTelemetry (`OTEL_DENO` with `--unstable-otel`, which
+the deployed toolshed runs under) the counter reaches the host's collector
+and SigNoz with the rest of the meter; with `OTEL_ENABLED` alone it is an API
+no-op, as the runtime bridge's instruments are.
+
+The alert rule itself lives in SigNoz, which this repository does not
+configure, so wiring it is a step on the host rather than a change here.
+SigNoz keeps the dotted OpenTelemetry names, and its PromQL quotes them. An
+alert on
+
+```promql
+sum by ("space.did") (rate({"ct.memory.commits",storm="true"}[1m])) > 0
+```
+
+fires for the spaces with a storm-labelled commit in the trailing minute, so
+it raises as soon as the first such commit is exported and can stay raised
+for up to a minute after the server clears the storm, plus the collector's
+export delay either way; it needs no sustain of its own because the server
+has applied one. A rule over the raw rate,
+
+```promql
+sum by ("space.did") (rate({"ct.memory.commits"}[1m])) * 60
+```
+
+above the threshold for the sustained window, says the same thing with the
+thresholds held in SigNoz rather than in the server's environment, and is the
+one to reach for when the two should differ. A collector configured to
+normalize names instead exposes the same series under its own spelling, and
+the rule names that one. The host's netdata and the ops agent watch the
+process, not this counter: a CPU alarm from either says an instance is busy,
+and `commitRates` on that instance says which space and whose sessions made it
+so.
+
+The defaults are held to the Topics space's own history by
+`packages/memory/test/commit-rates-traces.test.ts`, which replays ten-minute
+stretches of the space's 2026-08-18 export through the tracker. The densest
+stretches of the July 2026 storms ran at four to seven hundred commits a
+minute and are reported within the sustained window plus the first minute
+needed to reach the threshold. The busiest stretches of the three quiet weeks
+after them are cold board loads, which put up to 346
+commits into one minute and nothing into the next, and in those weeks the
+space never stayed over the threshold for a second minute. One stretch of the
+July 22 storm ran at about a hundred commits a minute, touching the threshold
+for a few seconds and never holding it: two sessions alternating one result
+slot at the cadence a saturated server gave them. The alarm is for the rate at which a space
+saturates its server, and a loop under that rate is what the scheduler's
+remote-echo breaker, which counts one session's rewrites of one document,
+exists for
+([`../../plans/scheduler-remote-echo-breaker.md`](../../plans/scheduler-remote-echo-breaker.md)).
 
 ### Profile the process
 

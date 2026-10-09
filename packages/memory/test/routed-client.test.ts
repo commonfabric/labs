@@ -1,5 +1,6 @@
 /** SDK protocol failures use a synthetic transport; authority is tested separately. */
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
@@ -892,6 +893,7 @@ function routedPeer(
     helloLife = 60,
     laterFlags,
     ungreeted = () => false,
+    onAuth = () => {},
   }: {
     /** Answers sent only when the test calls `release`. */
     held?: (type: string, count: number) => boolean;
@@ -903,6 +905,9 @@ function routedPeer(
     laterFlags?: ReturnType<typeof flags>;
     /** Hellos left unanswered until the test calls `greet`. */
     ungreeted?: (hello: number) => boolean;
+
+    /** Reports each authentication after its response is sent or held. */
+    onAuth?: (count: number) => void;
   } = {},
 ) {
   const log: { type: string; at: number; statement?: unknown }[] = [];
@@ -962,6 +967,7 @@ function routedPeer(
           },
         }
       );
+      onAuth(count);
     } else if (type === "session.open") {
       log.push({ type: "open", at: Date.now() });
       respond(() =>
@@ -1283,42 +1289,49 @@ Deno.test("a lease's renewal signs a challenge of its own while a refused statem
 Deno.test("a renewal refused for now after a pushed challenge was admitted leaves the admitted lease's renewal armed", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const renewed = Promise.withResolvers<void>();
   // The renewal's request for a challenge is answered late, after the
   // router has pushed a challenge and admitted its answer; the statement
   // the renewal then signs is the third, and is refused for now.
   const { p, log, auths, pushChallenge, release } = routedPeer(
     (n) => n === 3,
-    { held: (type, count) => type === "connection.challenge" && count === 1 },
+    {
+      held: (type, count) => type === "connection.challenge" && count === 1,
+      onAuth: (count) => {
+        if (count === 4) renewed.resolve();
+      },
+    },
   );
   const client = await connect({ transport: p.transport });
   try {
-    const session = await client.mount(identity.did(), {}, principal());
-    await time.tickAsync(470_000);
-    await tickUntil(
-      time,
-      () => log.some((e) => e.type === "challenge"),
-      1000,
-      30,
+    // The synthetic signer settles in microtasks, so advancing the clock
+    // measures the renewal timer independently of native signing work.
+    const session = await client.mount(
+      identity.did(),
+      {},
+      namedSigner(identity.did()),
     );
-    assertEquals(log.filter((e) => e.type === "challenge").length, 1);
+    await time.tickAsync(480_000);
+    expect(log.filter((e) => e.type === "challenge").length).toBe(1);
     pushChallenge();
-    await tickUntil(time, () => auths().length >= 2, 0, 40);
-    assertEquals(auths().length, 2);
+    await time.tickAsync(0);
+    expect(auths().length).toBe(2);
     release();
-    await tickUntil(time, () => auths().length >= 3, 0, 40);
-    assertEquals(auths().length, 3);
+    await time.tickAsync(0);
+    expect(auths().length).toBe(3);
     // The key holds the lease its second statement was admitted for, and
     // that lease's renewal is armed, so the refusal arms no retry: nothing
     // is sent in the next ten seconds.
-    await tickUntil(time, () => false, 1000, 10);
-    assertEquals(auths().length, 3);
+    await time.tickAsync(10_000);
+    expect(auths().length).toBe(3);
     // The admitted lease is renewed two minutes before it ends.
-    await time.tickAsync(460_000);
-    await tickUntil(time, () => auths().length >= 4, 1000, 30);
-    assertEquals(auths().length, 4);
-    const gap = (auths()[3].at - auths()[1].at) / 1000;
-    assert(gap >= 479 && gap <= 481, `renewed after ${gap} s`);
-    assertEquals(session.closeError, undefined);
+    await time.tickAsync(469_999);
+    expect(auths().length).toBe(3);
+    await time.tickAsync(1);
+    await renewed.promise;
+    expect(auths().length).toBe(4);
+    expect(auths()[3].at - auths()[1].at).toBe(480_000);
+    expect(session.closeError).toBeUndefined();
   } finally {
     await client.close();
     time.restore();

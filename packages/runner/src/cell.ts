@@ -161,6 +161,7 @@ import {
   txToReactivityLog,
 } from "./scheduler.ts";
 import { mintEventId, scopeCallerEventId } from "./scheduler/event-identity.ts";
+import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   type CellViewRef,
@@ -3724,6 +3725,21 @@ export class CellImpl<T extends FabricValue>
       readTx,
       readTx.getCfcState().dereferenceTraces.slice(tracesBefore),
     );
+    // A resolution that stopped at a document this replica has not received
+    // names that document, not the one the chain reaches past it, and a
+    // handler would keep or pass on the wrong cell. Its run waits for the
+    // document instead.
+    if (link.pendingHopDoc === true) {
+      const run = patternRun(this.#runtime);
+      if (run?.kind === "handler") {
+        withdrawHandlerWhileLoading(
+          this.#runtime,
+          run.tx,
+          link,
+          `a cell was resolved through \`${link.id}\` while its document was still loading`,
+        );
+      }
+    }
     link = maybeConvertArrayPathToDataURILink(readTx, link);
     return createCell(
       this.#runtime,
@@ -4709,12 +4725,26 @@ function requireTransaction(
 function patternRunTx(
   runtime: Runtime,
 ): IExtendedStorageTransaction | undefined {
+  return patternRun(runtime)?.tx;
+}
+
+/**
+ * Returns the kind and the transaction of the handler or lift of `runtime`
+ * that is running, while that transaction is open.
+ */
+function patternRun(
+  runtime: Runtime,
+):
+  | { kind: "handler" | "lift"; tx: IExtendedStorageTransaction }
+  | undefined {
   let frame = getTopFrame();
   while (frame !== undefined && frame.frameKind === undefined) {
     frame = frame.parent;
   }
   const tx = frame?.runtime === runtime ? frame.tx : undefined;
-  return tx?.status().status === "ready" ? tx : undefined;
+  return frame?.frameKind !== undefined && tx?.status().status === "ready"
+    ? { kind: frame.frameKind, tx }
+    : undefined;
 }
 
 /**

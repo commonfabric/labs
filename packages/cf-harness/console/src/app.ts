@@ -13,7 +13,8 @@ import { html, LitElement, nothing, type TemplateResult } from "lit";
 import {
   cancelTurn,
   type ConsoleFlow,
-  type ConsoleRunSummary,
+  type ConsoleListedRun,
+  type ConsoleRunSource,
   type HarnessChatEventEnvelope,
   listRuns,
   readRunFlow,
@@ -35,9 +36,19 @@ interface Piece {
 
 /** A run and the `delegate_task` children it started. */
 interface RunNode {
-  run: ConsoleRunSummary;
+  run: ConsoleListedRun;
   children: RunNode[];
 }
+
+/**
+ * What a run row says about where a run came from, for a run this console did
+ * not make. The console's own runs carry no label: they are the ordinary case.
+ */
+const SOURCE_LABELS: Readonly<Record<ConsoleRunSource, string | undefined>> = {
+  console: undefined,
+  ask: "/ask",
+  agent: "agent()",
+};
 
 /**
  * The run list as a tree. A subagent run names its parent, so a child sits
@@ -45,7 +56,7 @@ interface RunNode {
  * where it would read as work someone asked for directly.
  */
 export const runTree = (
-  runs: readonly ConsoleRunSummary[],
+  runs: readonly ConsoleListedRun[],
 ): readonly RunNode[] => {
   const nodes = new Map<string, RunNode>(
     runs.map((run) => [run.runId, { run, children: [] }]),
@@ -70,6 +81,16 @@ export const runTree = (
   return roots;
 };
 
+/** Selects a new console parent run to open while a turn is executing. */
+export const freshConsoleRun = (
+  runs: readonly ConsoleListedRun[],
+  beforeTurn: ReadonlySet<string>,
+): ConsoleListedRun | undefined =>
+  runs.find((run) =>
+    run.source === "console" && run.parentRunId === undefined &&
+    !beforeTurn.has(run.runId)
+  );
+
 export class ConsoleApp extends LitElement {
   static override properties = {
     sessionId: { attribute: false },
@@ -91,7 +112,7 @@ export class ConsoleApp extends LitElement {
   declare view: View;
   declare sessionId: string | undefined;
   declare turnId: string | undefined;
-  declare runs: readonly ConsoleRunSummary[];
+  declare runs: readonly ConsoleListedRun[];
   declare openRunId: string | undefined;
 
   /** The open run's conversation map, which the third column draws. */
@@ -233,10 +254,9 @@ export class ConsoleApp extends LitElement {
   async #refresh(): Promise<void> {
     await this.#loadRuns();
     if (this.openRunId === undefined) {
-      // The turn's own run is whichever appeared after it started.
-      const fresh = this.runs.find((run) =>
-        run.parentRunId === undefined && !this.#runIdsBeforeTurn.has(run.runId)
-      );
+      // The turn's own run is whichever of this console's appeared after it
+      // started; an `/ask` or `agent()` run can appear in the meantime too.
+      const fresh = freshConsoleRun(this.runs, this.#runIdsBeforeTurn);
       if (fresh !== undefined) {
         this.openRunId = fresh.runId;
       }
@@ -430,6 +450,7 @@ export class ConsoleApp extends LitElement {
 
   #runRow(node: RunNode, depth: number): TemplateResult {
     const run = node.run;
+    const sourceLabel = SOURCE_LABELS[run.source];
     return html`
       <button
         class="run ${this.openRunId === run.runId ? "open" : ""}"
@@ -439,6 +460,9 @@ export class ConsoleApp extends LitElement {
       >
         <div class="run-title">${run.title ?? run.runId}</div>
         <div class="run-meta">
+          ${sourceLabel === undefined
+            ? nothing
+            : html`<span class="run-source">${sourceLabel}</span> ·`}
           <span
             class=${run.status === "failed"
               ? "bad"

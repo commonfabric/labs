@@ -204,6 +204,12 @@ and atomically consumes it. Client flags are canonical sorted JSON, with exactly
 the client's negotiated values. A ticket confers no principal or space authority
 by itself. Link control is never accepted on a data socket.
 
+The router accepts the toolshed's `serverExecution` flag but omits it from
+the client handshake. Execution posture is therefore unknown on a routed
+connection: toolsheds can have different postures or change them after a
+restart, so an intersection cannot establish that execution is off. Operations
+requiring a confirmed execution-off posture must refuse an unknown one.
+
 ## Toolshed authority and lifecycle
 
 `RoutedMemoryHost` requires `acl.mode=enforce`, explicit ACL documents and an
