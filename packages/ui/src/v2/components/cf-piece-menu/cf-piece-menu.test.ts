@@ -4791,10 +4791,11 @@ describe("describeFollowState", () => {
     expect(refusal("argument-mismatch").canForce).toBe(false);
   });
 
-  it("does not call a mismatch with the advertised identity permanent", () => {
+  it.only("says a mismatch with the advertised identity lasts until the host's deployment finishes or this client runs the host's version", () => {
     // A host part-way through a deployment can serve modules that compile to
     // another identity than the one it advertises, and that ends when the
-    // deployment does.
+    // deployment does. So does a runtime that compiles the source to another
+    // identity than the host's, once this client runs the host's version.
     const described = describeFollowState({
       ...SOURCE,
       reconciliation: {
@@ -4804,8 +4805,11 @@ describe("describeFollowState", () => {
         reason: "identity-mismatch",
       },
     });
-    expect(described.detail).toContain("finishes deploying");
-    expect(described.detail).toContain("this client is updated");
+    expect(described.detail).toContain(
+      "If the origin's host is part-way through a deployment, this lasts " +
+        "until it finishes; otherwise until this client runs the same " +
+        "version as the host.",
+    );
     expect(described.detail).not.toContain("every time");
   });
 

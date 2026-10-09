@@ -66,6 +66,7 @@ import {
   sendEvent,
   setPatternRepository,
   setPatternSource,
+  type SourceRefusal,
   type SpaceCellContents,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
@@ -2886,13 +2887,18 @@ export class PiecesController<T = unknown> {
       // the host's, or that fetches it while the host is part-way through a
       // deployment, can reach an identity the host does not advertise. A root
       // moved there would be moved back by the next client that agrees with the
-      // host, so the roll-forward takes what following the origin would, or
-      // nothing.
-      const refused = (detail: string) =>
+      // host, so the roll-forward takes only the identity the origin
+      // advertises, or nothing, and says what would end its refusal.
+      const refused = (refusal: SourceRefusal) =>
         clearError(
-          `was refused (${detail}); that lasts until the host's deployment ` +
-            `finishes, or until this client is updated to the runtime the ` +
-            `host runs`,
+          `was refused (${refusal.detail}); ` +
+            (refusal.reason === "identity-mismatch"
+              ? "if the origin's host is part-way through a deployment, this " +
+                "lasts until it finishes; otherwise until this client runs " +
+                "the same version as the host"
+              : "the source the host advertises does not compile on this " +
+                "runtime, which lasts until the host serves other source, " +
+                "or until this client runs the same version as the host"),
           migrationError,
         );
       const candidate = await runtime.sourceReconciler.compileSystemSource(
@@ -2907,7 +2913,7 @@ export class PiecesController<T = unknown> {
           migrationError,
         );
       }
-      if (candidate.outcome === "refused") throw refused(candidate.detail);
+      if (candidate.outcome === "refused") throw refused(candidate);
       const { pattern: officialPattern, ref: officialRef } = candidate;
 
       // Already current: the pinned pattern IS the official entry (same identity

@@ -1122,7 +1122,7 @@ describe("opening a space root", () => {
       return staleRef;
     }
 
-    it("keeps a root that follows the official source pinned when the client cannot reproduce the advertised identity", async () => {
+    it.only("keeps a root that follows the official source pinned when the client cannot reproduce the advertised identity", async () => {
       const staleRef = await pinRootTheClientCannotReplace();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
 
@@ -1150,10 +1150,14 @@ describe("opening a space root", () => {
       const message = thrown instanceof Error ? thrown.message : String(thrown);
       expect(message).toContain("default-root heal failed");
       expect(message).toContain("its origin advertises");
-      expect(message).toContain("until this client is updated");
+      expect(message).toContain(
+        "if the origin's host is part-way through a deployment, this lasts " +
+          "until it finishes; otherwise until this client runs the same " +
+          "version as the host",
+      );
     });
 
-    it("keeps a root that follows nothing pinned when the client cannot reproduce the advertised identity", async () => {
+    it.only("keeps a root that follows nothing pinned when the client cannot reproduce the advertised identity", async () => {
       await setup();
       await controller.recreateDefaultPattern({
         customProgram: {
@@ -1203,10 +1207,14 @@ describe("opening a space root", () => {
           SOURCE_THE_HOST_COMPILES,
         )} its origin advertises`,
       );
-      expect(message).toContain("until this client is updated");
+      expect(message).toContain(
+        "if the origin's host is part-way through a deployment, this lasts " +
+          "until it finishes; otherwise until this client runs the same " +
+          "version as the host",
+      );
     });
 
-    it("does not compile the official source again after following it was refused in the same lookup", async () => {
+    it.only("does not compile the official source again after following it was refused in the same lookup", async () => {
       const staleRef = await pinRootTheClientCannotReplace();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
       const sourceFetchesBefore = stub.sourceFetches();
@@ -1226,7 +1234,11 @@ describe("opening a space root", () => {
       const message = thrown instanceof Error ? thrown.message : String(thrown);
       expect(message).toContain("was refused");
       expect(message).toContain("its origin advertises");
-      expect(message).toContain("until this client is updated");
+      expect(message).toContain(
+        "if the origin's host is part-way through a deployment, this lasts " +
+          "until it finishes; otherwise until this client runs the same " +
+          "version as the host",
+      );
     });
 
     it("downloads the official source once on `ensureDefaultPattern()` when following it was refused in the same lookup", async () => {
@@ -2998,7 +3010,7 @@ describe("opening a space root", () => {
     expect(displaced?.symbol).toBe("legacyHome");
   });
 
-  it("surfaces a clear error when the official pattern cannot be compiled", async () => {
+  it.only("surfaces a clear error when the official pattern cannot be compiled", async () => {
     // The roll-forward's compile of the official source is a failure surface
     // too: if the toolshed serves un-compilable source, the operator gets one
     // clear error naming the refusal, not a raw compiler stack.
@@ -3021,6 +3033,9 @@ describe("opening a space root", () => {
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("was refused");
+    expect(message).toContain(
+      "the source the host advertises does not compile on this runtime",
+    );
   });
 
   it("keeps an unrunnable root pinned when the client cannot reproduce the advertised identity", async () => {

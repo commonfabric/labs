@@ -252,8 +252,8 @@ export function describeFollowState(
 /** What follows from a refusal, and what would end it. */
 function refusalOutlook(reconciliation: PieceReconciliationView): string {
   switch (reconciliation.reason) {
-    // The one refusal with no override behind it needs to say so, or its box
-    // reads as one whose button someone forgot to add.
+    // Data that does not fit has no override behind it, and says so, or its
+    // box reads as one whose button someone forgot to add.
     case "argument-mismatch":
       return "The new source cannot run on the data this piece holds, so " +
         "there is nothing to overrule — the data would have to change " +
@@ -263,9 +263,10 @@ function refusalOutlook(reconciliation: PieceReconciliationView): string {
     // compile to the identity it advertises, as can a host whose runtime
     // differs from this client's.
     case "identity-mismatch":
-      return "The piece is running the source it last accepted. This lasts " +
-        "until the origin's host finishes deploying, or until this client " +
-        "is updated to match it.";
+      return "The piece is running the source it last accepted. If the " +
+        "origin's host is part-way through a deployment, this lasts until it " +
+        "finishes; otherwise until this client runs the same version as the " +
+        "host.";
     // Source written for a newer runtime than this client's can compile at
     // the origin's host and fail here.
     case "source-invalid":
