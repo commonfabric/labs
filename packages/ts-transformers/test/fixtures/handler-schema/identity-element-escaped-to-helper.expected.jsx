@@ -139,7 +139,7 @@ const addThroughLocalHoldingRoot = handler({
     properties: {
         panel: {
             $ref: "#/$defs/Panel",
-            asCell: ["readonly"]
+            asCell: ["comparable"]
         }
     },
     required: ["panel"],
@@ -191,7 +191,7 @@ const addThroughRootFallback = handler({
     properties: {
         panel: {
             $ref: "#/$defs/Panel",
-            asCell: ["readonly"]
+            asCell: ["comparable"]
         }
     },
     required: ["panel"],
@@ -242,7 +242,7 @@ const addThroughArrayHoldingRoot = handler({
     properties: {
         panel: {
             $ref: "#/$defs/Panel",
-            asCell: ["readonly"]
+            asCell: ["comparable"]
         }
     },
     required: ["panel"],
