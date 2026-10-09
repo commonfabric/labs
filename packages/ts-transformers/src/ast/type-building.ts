@@ -144,12 +144,10 @@ export function qualifyCommonFabricTypeRefs(
     member: ts.ImportTypeNode,
   ): string | undefined => {
     const argument = member.argument;
-    const specifier =
-      ts.isLiteralTypeNode(argument) && ts.isStringLiteral(argument.literal)
-        ? argument.literal.text
-        : undefined;
-    return specifier !== undefined && /^\.\.?\//.test(specifier)
-      ? resolveModulePath(context.sourceFile.fileName, specifier)
+    return ts.isLiteralTypeNode(argument) &&
+        ts.isStringLiteral(argument.literal) &&
+        /^\.\.?\//.test(argument.literal.text)
+      ? resolveModulePath(context.sourceFile.fileName, argument.literal.text)
       : undefined;
   };
 

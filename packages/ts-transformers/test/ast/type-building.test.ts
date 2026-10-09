@@ -616,3 +616,44 @@ Deno.test("qualifyCommonFabricTypeRefs leaves both members of a union whose impo
     'import("../../commonfabric").Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
   );
 });
+
+Deno.test('qualifyCommonFabricTypeRefs qualifies a union member an import type of "commonfabric" names by its spelling', () => {
+  const { type, node, checker, print, sourceFile } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? cell({ a: 1 }) : undefined;",
+    ].join("\n"),
+  );
+  assert(ts.isUnionTypeNode(node));
+  const [member, rest] = node.types;
+  assert(ts.isImportTypeNode(member));
+  const spelled = ts.factory.createUnionTypeNode([
+    ts.factory.updateImportTypeNode(
+      member,
+      ts.factory.createLiteralTypeNode(
+        ts.factory.createStringLiteral("commonfabric"),
+      ),
+      member.attributes,
+      member.qualifier,
+      member.typeArguments,
+      member.isTypeOf,
+    ),
+    rest,
+  ]);
+  assertEquals(
+    print(spelled),
+    'import("commonfabric").Cell<{ a: number; }> | undefined',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(spelled, type, {
+    checker,
+    factory: ts.factory,
+    sourceFile,
+  });
+
+  assertEquals(
+    print(qualified),
+    "__cfHelpers.Cell<{ a: number; }> | undefined",
+  );
+});
