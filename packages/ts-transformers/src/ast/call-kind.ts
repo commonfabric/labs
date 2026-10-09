@@ -567,16 +567,16 @@ export function getLiftAppliedInnerCall(
  * the unit to relocate without minting a new kind or widening the lift-applied
  * gate.
  *
- * Guards against multi-application chains (`handler(cb)(x)(y)`) the same way
- * lift-applied recognition does — only the single-application form is the
- * canonical lowered handler shape.
+ * Only the single application is the canonical lowered handler shape. The
+ * builder resolver follows one call level, so in `handler(cb)(x)(y)` the
+ * callee `handler(cb)(x)` resolves to no builder.
  */
 export function isHandlerAppliedCall(
   call: ts.CallExpression,
   checker: ts.TypeChecker,
 ): boolean {
   const target = stripWrappers(call.expression);
-  if (!ts.isCallExpression(target) || isMultiApplicationChain(call)) {
+  if (!ts.isCallExpression(target)) {
     return false;
   }
   const builderKind = resolveBuilderExpressionKind(target, checker, new Set(), {
@@ -1511,18 +1511,11 @@ function resolveExpressionKind(
     // The plain unapplied builder case (e.g. __cfHelpers.lift(cb) on its
     // own, or a pattern() call) has `target` not as a CallExpression.
     //
-    // Guard against multi-application chains like `lift(cb)(x)(y)`: only
-    // the SINGLE-application form is canonical lift-applied. If the
-    // outer-outer call's inner expression (`target.expression`) is itself
-    // a call AND that inner call's expression (`target.expression.expression`)
-    // is ALSO a call, we have an over-application and should NOT classify
-    // as lift-applied — even if the chain happens to resolve through a
-    // lift symbol via factory-following. (CT-1615 Berni review §2.2.)
-    if (
-      builderKind.builderName === "lift" &&
-      ts.isCallExpression(target) &&
-      !isMultiApplicationChain(target)
-    ) {
+    // Only the single application `lift(cb)(input)` is lift-applied. The
+    // builder resolver follows one call level, so a call `target` it resolves
+    // is the `lift(...)` factory call itself: in `lift(cb)(x)(y)` the callee
+    // `lift(cb)(x)` is what the factory returned and resolves to no builder.
+    if (builderKind.builderName === "lift" && ts.isCallExpression(target)) {
       const liftAppliedKind: CallKind = {
         kind: "lift-applied",
         symbol: builderKind.symbol,
@@ -1540,10 +1533,13 @@ function resolveExpressionKind(
     return syntheticHelperKind;
   }
 
+  // A callee that is itself a call is whatever that call returned. The
+  // builder resolver above classifies the one such callee that has a kind, the
+  // factory a builder call returns; calling anything a call returned is
+  // otherwise not a call of the runtime export that produced it.
   if (ts.isCallExpression(target)) {
-    const result = resolveExpressionKind(target.expression, checker, seen);
-    cache.set(expression, result ?? null);
-    return result;
+    cache.set(expression, null);
+    return undefined;
   }
 
   let symbol: ts.Symbol | undefined;
@@ -1629,23 +1625,6 @@ function resolveExpressionKind(
 
   cache.set(expression, null);
   return undefined;
-}
-
-/**
- * For a lift-applied candidate `outerCall` (already known to be a
- * CallExpression whose builder resolution points at lift), return true if
- * the call is part of a multi-application chain like `lift(cb)(x)(y)` —
- * i.e. the inner call's *own* callee is also a CallExpression.
- *
- * Canonical lift-applied is exactly one application: `lift(cb)(input)`.
- * Anything deeper is not a Phase-1 lowered shape and should not be
- * classified as `kind: "lift-applied"`. (CT-1615 Berni review §2.2.)
- */
-function isMultiApplicationChain(outerCall: ts.CallExpression): boolean {
-  const innerCallee = stripWrappers(outerCall.expression);
-  if (!ts.isCallExpression(innerCallee)) return false;
-  const innerCalleeCallee = stripWrappers(innerCallee.expression);
-  return ts.isCallExpression(innerCalleeCallee);
 }
 
 /**
@@ -1886,11 +1865,15 @@ function resolveBuilderExpressionKind(
       cache?.set(expression, null);
       return undefined;
     }
+    // A call returns a builder's factory only when it calls the builder itself
+    // (`lift(cb)`, `handler(cb)`), so its callee is resolved without following
+    // factory results again. What a factory returns in turn, as `lift(cb)(x)`,
+    // is not a factory.
     return resolveBuilderExpressionKind(
       target.expression,
       checker,
       seen,
-      options,
+      { followFactoryResults: false },
     );
   }
 
