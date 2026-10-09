@@ -430,3 +430,22 @@ Deno.test("qualifyCommonFabricTypeRefs leaves an import type naming a module of 
 
   assertStrictEquals(qualified, node);
 });
+
+Deno.test("qualifyCommonFabricTypeRefs leaves an import type of the commonfabric module itself, which names no export", () => {
+  const { type, checker, print } = printProbeType(
+    'import { cell } from "commonfabric";\nexport const probe = cell({ a: 1 });',
+  );
+  const node = ts.factory.createImportTypeNode(
+    ts.factory.createLiteralTypeNode(
+      ts.factory.createStringLiteral("commonfabric"),
+    ),
+  );
+  assertEquals(print(node), 'import("commonfabric")');
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+  });
+
+  assertStrictEquals(qualified, node);
+});
