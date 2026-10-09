@@ -1353,7 +1353,7 @@ export class SourceReconciler {
       return {
         outcome: "refused",
         reason: "source-invalid",
-        detail: `its \`${
+        detail: `the source's \`${
           program.mainExport ?? "default"
         }\` export is not a pattern`,
       };
