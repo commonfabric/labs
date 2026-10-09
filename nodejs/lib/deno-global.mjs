@@ -7,6 +7,7 @@ import * as http from "node:http";
 import { Readable, Writable } from "node:stream";
 import * as nodeTest from "node:test";
 import { fileURLToPath } from "node:url";
+import * as util from "node:util";
 import { Deno as shim } from "@deno/shim-deno";
 
 // ---------------------------------------------------------------------------
@@ -331,6 +332,30 @@ function refTimer(id) {
   const timer = typeof id === "object" ? id : timersById.get(id)?.deref();
   timer?.ref?.();
 }
+
+// ---------------------------------------------------------------------------
+// Deno.customInspect: an object's `[Symbol.for("Deno.customInspect")]`
+// method is honored by Node's `util.inspect()` (and so `console.log()` and
+// `Deno.inspect()`) through an accessor for Node's own symbol on
+// `Object.prototype`, which yields an adapter wherever Deno's method exists.
+
+const DENO_CUSTOM_INSPECT = Symbol.for("Deno.customInspect");
+
+Object.defineProperty(Object.prototype, util.inspect.custom, {
+  configurable: true,
+  enumerable: false,
+  get() {
+    const denoInspect = this?.[DENO_CUSTOM_INSPECT];
+    if (typeof denoInspect !== "function") return undefined;
+    return function (_depth, options, inspect) {
+      return denoInspect.call(
+        this,
+        (v, o) => inspect(v, o ?? options),
+        options,
+      );
+    };
+  },
+});
 
 // ---------------------------------------------------------------------------
 
