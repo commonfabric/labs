@@ -2127,11 +2127,13 @@ adjustments:
   non-empty paths
 - a node the type-driven shrink builds keeps the scope wrapper and the default
   of the type it stands for, at every level it retains. A scoped value read
-  whole, which no payload of an array narrows, is printed as its type, which
-  keeps the wrapper and is read as the annotation spelling the value where one
-  does (`SchemaHint.spelledBy`), so what only that annotation's syntax says,
-  a `typeof` binding in an alias's declaration among it, is kept. Otherwise a
-  scope wrapper wraps
+  whole is printed as its type, which keeps the wrapper and is read as the
+  annotation spelling the value where one does (`SchemaHint.spelledBy`), so
+  what only that annotation's syntax says, a `typeof` binding in an alias's
+  declaration among it, is kept; an array that paths through its elements read
+  as well is the exception, since those paths narrow it from its payloads, and
+  a path that reads the array itself, as `length` does, is not one of them.
+  Otherwise a scope wrapper wraps
   the shrunk value as `__cfHelpers.PerUser<...>` (or the wrapper of its scope)
   whether the type's alias names it or the type carries only its scope brand,
   as a wrapper reached through an alias of the author's own does

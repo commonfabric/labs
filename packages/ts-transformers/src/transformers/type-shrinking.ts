@@ -942,10 +942,11 @@ function shrinkTypeToNode(
   // the wrapper, and is read as the declaration spelling the value where one
   // does (`SchemaHint.spelledBy`), which a wrapper built around the payloads'
   // prints is not. An array that paths through its elements read as well is
-  // built from its payloads, which those paths narrow.
+  // built from its payloads, which those paths narrow; a path that reads the
+  // array itself, as `length` does, narrows nothing.
   if (
     scopeWrapper && normalized.some((path) => path.length === 0) &&
-    (normalized.every((path) => path.length === 0) ||
+    (getArrayItemPaths(normalized).length === 0 ||
       !scopeWrapper.payload.some((payload) =>
         isArrayShapeType(payload, checker)
       ))
