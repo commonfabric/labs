@@ -340,7 +340,10 @@ const addPrivatePanel = handler<
   insertionIndex(panels.get(), before);
   const list = privatePanels.get() ?? [];
   if (list.some((entry) => holdsPanel(entry, panel))) return;
-  privatePanels.push(before === undefined ? { panel } : { panel, before });
+  privatePanels.set([
+    ...list,
+    before === undefined ? { panel } : { panel, before },
+  ]);
 });
 
 /**
