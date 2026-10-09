@@ -39,6 +39,7 @@ import {
   isWellFormedDID,
   NAME,
   pattern,
+  type PerSession,
   principalOf,
   spaceAccess,
   spaceOf,
@@ -1054,11 +1055,18 @@ export const FabriChatManagerCore = pattern<
         )
         : [];
     });
-    const found = savedRooms.map((entry) => FoundRoom({ space: entry.space }));
+    // A room's space is read under the reader's own access, so a principal it
+    // refuses finds nothing there that the others find. Each room is found,
+    // and everything read from it derived, per session: a value stored once
+    // for every reader, which readers derive differently, is one their
+    // runtimes overwrite without end.
+    const found = savedRooms.map((entry) =>
+      FoundRoom.asScope("session")({ space: entry.space })
+    );
     // Each saved room once it resolves and reads as a room, newest first. The
     // room's own records are read here, beside the entry they belong to, so
     // they are read in the run that lists them.
-    const newestFirst = computed((): ChatIndexEntry[] => {
+    const newestFirst = computed((): PerSession<ChatIndexEntry[]> => {
       const self = principalOf(myProfile, "represents-principal");
       const stored = direct.get() ?? {};
       return savedRooms.flatMap((entry, index): ChatIndexEntry[] => {
@@ -1096,7 +1104,9 @@ export const FabriChatManagerCore = pattern<
       draft,
       startRefusal,
     };
-    const shown = computed((): ShownEntry[] =>
+    // Per session, as `newestFirst` is: a group's label is the title its room
+    // holds.
+    const shown = computed((): PerSession<ShownEntry[]> =>
       newestFirst.map((entry) => ({
         room: entry.room,
         ...(entry.revision === undefined ? {} : { revision: entry.revision }),
