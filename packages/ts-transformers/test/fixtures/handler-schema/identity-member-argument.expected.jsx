@@ -19,6 +19,7 @@ type PanelEvent = {
 };
 type Selection = {
     selected: Writable<Panel | undefined>;
+    unused: Writable<Panel>;
 };
 const compareMember = handler({
     type: "object",
@@ -51,6 +52,39 @@ const compareMember = handler({
     required: ["selected"]
 } as const satisfies __cfHelpers.JSONSchema, (event, state) => {
     if (equals(state.selected, event.panel))
+        return;
+});
+const compareDestructured = handler({
+    type: "object",
+    properties: {
+        panel: {
+            $ref: "#/$defs/Panel",
+            asCell: ["comparable"]
+        }
+    },
+    required: ["panel"],
+    $defs: {
+        Panel: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                }
+            },
+            required: ["name"]
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema, {
+    type: "object",
+    properties: {
+        selected: {
+            type: "unknown",
+            asCell: ["comparable"]
+        }
+    },
+    required: ["selected"]
+} as const satisfies __cfHelpers.JSONSchema, (event, { selected }) => {
+    if (equals(selected, event.panel))
         return;
 });
 const compareMemberAsMethodArgument = handler({
@@ -114,8 +148,8 @@ const compareMemberInLift = lift(({ state, other }: {
 // FIXTURE: identity-member-argument
 // Verifies: a member handed to a known identity call is compared, not read,
 // so it is a comparable cell as a destructured binding compared the same way
-// is.
-export { compareMember, compareMemberAsMethodArgument, compareMemberInLift };
+// is, and in every spelling the state's unused member is pruned.
+export { compareDestructured, compareMember, compareMemberAsMethodArgument, compareMemberInLift, };
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);

@@ -5,11 +5,20 @@ interface Panel {
 }
 
 type PanelEvent = { panel: Writable<Panel> };
-type Selection = { selected: Writable<Panel | undefined> };
+type Selection = {
+  selected: Writable<Panel | undefined>;
+  unused: Writable<Panel>;
+};
 
 const compareMember = handler<PanelEvent, Selection>((event, state) => {
   if (equals(state.selected, event.panel)) return;
 });
+
+const compareDestructured = handler<PanelEvent, Selection>(
+  (event, { selected }) => {
+    if (equals(selected, event.panel)) return;
+  },
+);
 
 const compareMemberAsMethodArgument = handler<PanelEvent, Selection>(
   (event, state) => {
@@ -24,5 +33,10 @@ const compareMemberInLift = lift((
 // FIXTURE: identity-member-argument
 // Verifies: a member handed to a known identity call is compared, not read,
 // so it is a comparable cell as a destructured binding compared the same way
-// is.
-export { compareMember, compareMemberAsMethodArgument, compareMemberInLift };
+// is, and in every spelling the state's unused member is pruned.
+export {
+  compareDestructured,
+  compareMember,
+  compareMemberAsMethodArgument,
+  compareMemberInLift,
+};

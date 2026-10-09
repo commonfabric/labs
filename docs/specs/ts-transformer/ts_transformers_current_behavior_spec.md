@@ -2289,8 +2289,11 @@ computation's input schema:
   whole unwrapped identity-only input becomes `unknown`; a wrapped one becomes
   `OpaqueCell<unknown>`, or `ComparableCell<unknown>` for comparable use.
   Identity-only cell leaves receive the same opaque/comparable wrappers, while
-  mixed summaries still retain and shrink their ordinary read/write paths
-  (`transformers/type-shrinking.ts`; `test/type-shrinking.test.ts`).
+  mixed summaries still retain and shrink their ordinary read/write paths.
+  Identity paths are retained like any other path, so a summary holding only
+  identity paths prunes the members none of them reaches
+  (`transformers/type-shrinking.ts`; `test/type-shrinking.test.ts`; fixture
+  `handler-schema/identity-member-argument`).
 - In a handler's state, an identity path that ends at an element of a top-level
   array property (`[name, <index>]`) also records an `items: false` schema hint
   on that property, so the element's schema is its identity wrapper and nothing
