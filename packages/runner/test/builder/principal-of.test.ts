@@ -584,6 +584,77 @@ describe("principalOf()", () => {
     });
   });
 
+  describe("a load in flight", () => {
+    /**
+     * Makes the storage manager report a load in flight for every document,
+     * which is the state a first read of a document leaves while the load it
+     * started has not landed.
+     */
+    const loading = () => {
+      Object.assign(storage, { pendingLoadGeneration: () => 1 });
+    };
+
+    it("withdraws the handler that reads its label while its load is in flight", () => {
+      loading();
+      const tx = edit();
+      const target = runtime.getCell(space, "still-loading");
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun?.reason).toContain(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
+    it("withdraws the handler that reads the label of a scoped document loading for the identity its transaction demands", () => {
+      // Only Bob's instance of the document is loading. The runtime acts for
+      // Alice, and the transaction demands Bob, as a served run demands its
+      // actor.
+
+      Object.assign(storage, {
+        pendingLoadGeneration: (key: string) =>
+          key.includes(encodeURIComponent(bob.did())) ? 1 : undefined,
+      });
+      const tx = edit();
+      tx.tx.scopeKeyIdentity = { principal: bob.did() };
+      const target = runtime.getCell(
+        space,
+        "still-loading-for-bob",
+        undefined,
+        undefined,
+        "user",
+      );
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun?.reason).toContain(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
+    it("leaves a reactive computation that reads its label while its load is in flight to run", () => {
+      loading();
+      const tx = edit();
+      const target = runtime.getCell(space, "still-loading");
+      expect(callIn(tx, target, "represents-principal", "lift"))
+        .toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+
+    it("leaves the handler that reads its label to run, returning `undefined`, when no load is in flight", () => {
+      const tx = edit();
+      const target = runtime.getCell(space, "never-written");
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+
+    it("leaves the handler that reads the label of a document it holds to run, while a load is in flight", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      loading();
+      const tx = edit();
+      expect(callIn(tx, profile, "represents-principal")).toBe(bob.did());
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+  });
+
   describe("in a compiled pattern", () => {
     /** Compiles and runs `PROBE_PATTERN` over `profile`. */
     const runProbe = async (profile: Cell<unknown>) => {

@@ -127,6 +127,19 @@ of the runtime uses for label metadata, in the calling code's own transaction.
 The read is a dependency like any other, so a computation that called
 `principalOf()` runs again when the label changes.
 
+A document whose load is still in flight has no label to read yet, and that is
+not its state. A computation needs nothing for it, since the load's arrival
+runs the computation again. A handler runs once per event, so in a handler the
+call withdraws the run instead, through the transaction's
+`dispatchedHandlerNotRun`, and the scheduler runs the handler again once the
+load lands; this is what lets a served handler read the label of a cell its
+event names, a cell whose document the serving runtime may never have read
+before. The call withdraws only when the replica has no local basis for the
+document, not even a confirmed absence, and a load for it is in flight. A
+withdrawal therefore always has a load to wait on: once the load for a
+document that does not exist has settled, its absence is confirmed, and the
+handler's next run reads it as unlabeled and gives `undefined`.
+
 ## What the result discloses
 
 What a claim names is public by design. The label-metadata classification in
@@ -180,7 +193,12 @@ stored labels of each shape above, claims the runtime minted in a handler
 (`authored-by` against that handler's `currentPrincipal()`, and
 `represents-principal`), the refused pattern-written claim and the refused
 write-back of a returned DID, the reads the call makes, a lift that runs again
-on a label-only change beside one that holds the same cell and does not, and
-the call in a compiled pattern's handler and `computed()`.
+on a label-only change beside one that holds the same cell and does not, the
+withdrawal of a handler that reads a document still loading beside the cases
+that do not withdraw, and the call in a compiled pattern's handler and
+`computed()`. `packages/runner/test/executor-cross-space.test.ts` covers a
+served handler reading the label of a foreign document its event reaches
+through a link chain, and one whose chain reaches a document that does not
+exist.
 `packages/runner/test/cfc/represents-principal.test.ts` covers
 `exactPrincipalAttestations()` for both kinds.
