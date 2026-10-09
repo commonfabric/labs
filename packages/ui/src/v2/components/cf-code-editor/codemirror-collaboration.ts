@@ -392,7 +392,10 @@ export class CodeMirrorCollaborationController {
     );
   }
 
-  /** Flushes local updates before detaching without releasing durable state. */
+  /**
+   * Flushes local updates before detaching without releasing durable state.
+   * The controller is disposed whether or not the flush confirms them all.
+   */
   async stop(): Promise<void> {
     if (this.#disposed) return;
     if (!this.#ready) {
@@ -411,10 +414,8 @@ export class CodeMirrorCollaborationController {
           "CodeMirror collaboration cannot stop with local edits pending",
         );
       }
+    } finally {
       this.dispose();
-    } catch (error) {
-      this.#closing = false;
-      throw error;
     }
   }
 

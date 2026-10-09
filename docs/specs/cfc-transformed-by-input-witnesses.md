@@ -109,6 +109,9 @@ read's confidential locations:
 - A reference probe (`followRef`) keeps its own entries. A pointer's link
   entry is the link write's, with no `TransformedBy`, so a probe that observes
   which reference sits at a slot without reading the slot retains no witness.
+  A probe of a slot that holds no reference finds the value stored there, so
+  it resolves its location as a shallow read of the slot does, unless the
+  transaction wrote at, above or beneath the slot.
   A read of the slot itself resolves the slot's value stamp, which is where a
   reference the writer supplied carries its writer (see "References the
   writer supplied" below). A reference followed

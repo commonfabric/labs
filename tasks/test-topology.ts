@@ -96,23 +96,6 @@ export function wholeUnits(suites: readonly Suite[]): Set<string> {
   );
 }
 
-/**
- * The process each unit runs in, where its suite names one, against the
- * unit written as `<suite>\t<unit>`. The packer charges a suite's process
- * setup once for each process a lane starts.
- */
-export function unitProcesses(
-  suites: readonly Suite[],
-): Map<string, string> {
-  return new Map(
-    suites.flatMap((suite) =>
-      [...suite.processes ?? []].map((
-        [unit, process],
-      ) => [`${suite.id}\t${unit}`, process])
-    ),
-  );
-}
-
 /** One suite's claim on a record. */
 export interface Claim {
   suite: Suite;

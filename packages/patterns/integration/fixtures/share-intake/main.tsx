@@ -300,7 +300,6 @@ export default pattern<MainInput, MainOutput>((
     privateInbox,
     profiles,
     offered,
-    rooms,
     direct,
     requests,
     outgoingNotices,
@@ -314,7 +313,6 @@ export default pattern<MainInput, MainOutput>((
   );
   const chats = FabriChatManagerCore({
     myProfile: Writable.of<StandInProfile>({ name: "Sender" }),
-    rooms,
     // The sender's own catalog, apart from the one the intake registers in.
     sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
       entries: {},

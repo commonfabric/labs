@@ -845,8 +845,8 @@ const locateLinuxStore = (home: string | undefined): string => {
  * no CFC policy is found and none was named. Each message says what is in the
  * way. Also, for the runtime, where a default CFC policy could not be
  * examined for any reason but its not being there.
- * @throws Error when the runtime is not `runsc` or `docker`, or the network
- * mode is not one of its values.
+ * @throws Error when the runtime is an unknown name, or the network mode is
+ * not one of its values.
  */
 export const resolveSandboxRuntimeSelection = async (
   env: Record<string, string | undefined>,

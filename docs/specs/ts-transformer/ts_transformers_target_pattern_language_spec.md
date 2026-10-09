@@ -88,6 +88,7 @@ Each construct family is classified as one of:
 | Direct top-level `.get()` reads with no lowerable expression site | Unsupported | A read with nothing to carry it stays outside the language, because there is no site to lower into a lift: statement position (`count.get();`) and a reactive array-method callback (`rows.map((row) => row.cell.get())`), whose callback becomes a sub-pattern over per-element cells rather than pattern-body code. These move into an explicit computation callback such as `computed`, `action`, `lift`, or `handler` |
 | `.get()` on ordinary opaque/reactive values | Unsupported | Pattern inputs, `computed` results, `lift` results, and other ordinary reactive values should be read directly rather than through `.get()` |
 | Statement-boundary imperative constructs in top-level pattern-owned code (`let`, loops, function creation, early return) | Unsupported | Top-level pattern context is intentionally declarative; imperative statement structure belongs in explicit callback bodies such as `computed`, `action`, `lift`, or `handler` |
+| `let` and `var` at module scope, exported or not | Unsupported | Module state is `const`. A value that changes belongs in a cell the pattern owns, and imperative code that needs a `let` or `var` belongs inside a function body, where both are ordinary code. The compiler reports either keyword at module scope; an ambient `declare let` or `declare var` emits nothing and is outside this row |
 
 ## 4.1 Authoring Context Guide
 

@@ -201,7 +201,9 @@ import {
 import { type ConsolePolicyReport, consolePolicyReport } from "./policy.ts";
 import { liveCanonicalRedirect } from "./src/mount.ts";
 import {
-  listConsoleRuns,
+  type ConsoleRunRoots,
+  findConsoleRunRoot,
+  listAllConsoleRuns,
   readConsoleRun,
   readConsoleRunArtifact,
   readConsoleRunFamilyGraph,
@@ -536,6 +538,12 @@ interface ConsoleConfig extends HarnessSessionConfig {
   port: number;
   harnessHome: string;
 
+  /**
+   * The agent runner's work root, whose `/ask` and `agent()` runs the Runs
+   * list shows beside this console's own; absent for `none`.
+   */
+  agentRunsRoot?: string;
+
   /** Whether a task may declare a browser host (`--allow-browser-host`). */
   allowBrowserHost: boolean;
 
@@ -637,6 +645,7 @@ export const CONSOLE_STRING_FLAGS = [
   "port",
   "workspace",
   "artifact-root",
+  "agent-runs-root",
   "model",
   "reasoning-effort",
   "research-reasoning-effort",
@@ -917,15 +926,25 @@ export const resolveConsoleConfig = async (
   const spaceDb = flag("space-db") ?? nonEmpty(env.CF_HARNESS_SPACE_DB);
   const spaceDbPath = spaceDb === undefined ? undefined : resolve(cwd, spaceDb);
 
+  const harnessHome = resolve(
+    nonEmpty(env.CF_HARNESS_HOME) ??
+      join(nonEmpty(env.HOME) ?? cwd, ".cf-harness"),
+  );
+  // The agent runner's work root, which `cf agent` resolves from the same
+  // `CF_HARNESS_HOME` this does, so a console started anywhere on the machine
+  // lists the `/ask` and `agent()` runs without being told where they are.
+  // `none` reads only this console's own runs.
+  const agentRuns = flag("agent-runs-root") ??
+    nonEmpty(env.CF_HARNESS_CONSOLE_AGENT_RUNS_ROOT) ??
+    join(harnessHome, "agent-runs");
+
   const config: Omit<ConsoleConfig, "healthFacts"> = {
     port,
     workspace: workspacePath,
     artifactRoot,
+    ...(agentRuns === "none" ? {} : { agentRunsRoot: resolve(cwd, agentRuns) }),
     ...sandbox,
-    harnessHome: resolve(
-      nonEmpty(env.CF_HARNESS_HOME) ??
-        join(nonEmpty(env.HOME) ?? cwd, ".cf-harness"),
-    ),
+    harnessHome,
     model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ??
       DEFAULT_HARNESS_MODEL,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
@@ -1850,7 +1869,7 @@ export class ConsoleServer {
     }
     if (request.method === "GET" && url.pathname === "/api/runs") {
       return Response.json({
-        runs: await listConsoleRuns(this.#config.artifactRoot),
+        runs: await listAllConsoleRuns(this.#runRoots()),
       });
     }
     if (request.method === "GET" && url.pathname.startsWith("/api/runs/")) {
@@ -1959,11 +1978,23 @@ export class ConsoleServer {
       : Response.json(result);
   }
 
+  /** Where the Runs list and every per-run route read runs from. */
+  #runRoots(): ConsoleRunRoots {
+    return {
+      console: this.#config.artifactRoot,
+      ...(this.#config.agentRunsRoot !== undefined
+        ? { agentRuns: this.#config.agentRunsRoot }
+        : {}),
+    };
+  }
+
   /**
    * One run's artifacts: the run whole, one named artifact of it, or one tool
    * output. The path is read rather than pattern-matched because a run id is
    * a path segment and the store is what decides whether it is a legal one —
    * a name this cannot resolve is a 404 rather than a read of somewhere else.
+   * The run is read from whichever root holds it, the console's own or one of
+   * the agent runner's.
    */
   async #run(url: URL): Promise<Response> {
     const [runId, kind, name, ...rest] = url.pathname
@@ -1973,7 +2004,11 @@ export class ConsoleServer {
     if (runId === undefined || runId === "" || rest.length > 0) {
       return new Response("not found", { status: 404 });
     }
-    const root = this.#config.artifactRoot;
+    const found = await findConsoleRunRoot(this.#runRoots(), runId);
+    if (found === undefined) {
+      return new Response("not found", { status: 404 });
+    }
+    const root = found.artifactRoot;
     if (kind === undefined || kind === "") {
       const detail = await readConsoleRun(root, runId, await this.#display());
       return detail === undefined
@@ -2805,7 +2840,8 @@ export const consoleStartupBanner = (
   ...harnessFabricSessionPostureBanner(config.fabricSession),
   ...consoleSandboxBanner(config),
   `  workspace:  ${config.workspace}`,
-  `  artifacts:  ${config.artifactRoot}\n`,
+  `  artifacts:  ${config.artifactRoot}`,
+  `  agent runs: ${config.agentRunsRoot ?? "(not read)"}\n`,
 ];
 
 /**

@@ -1386,25 +1386,29 @@ request may name fewer tools and fewer turns, and, under a profile that admits
 one, declare a browser host (below); leaving it out declines the browser. It may
 set nothing else. A job runs through the same `cf-harness` path as an agent run,
 with no fabric session. Every tool call, including delegated calls, counts as
-progress; prose, reasoning and ordinary tool results do not. A `step` carries
-`{turn, tool}`, and a `command` records each command the host ran for it.
-Children add `child: {profile, childRunId, parentToolCallId, depth}` to either
-body. The harness admits one level of delegation, so depth is `1`. Only a
-child's `browser` tool steps carry `action` (such as `click` or `snapshot`),
-without the operation's arguments or page content. Other child tool steps, such
-as `submit_result`, omit `action`.
+progress, and so does its return; prose and reasoning do not. A `step` carries
+`{turn, tool}`, and the same step again with `returned: true` once the calls of
+that turn have returned and the loop's model has the turn. A `command` records
+each command the host ran for it. Children add
+`child: {profile, childRunId, parentToolCallId, depth}` to either body. The
+harness admits one level of delegation, so depth is `1`. Only a child's
+`browser` tool steps carry `action` (such as `click` or `snapshot`), without the
+operation's arguments or page content. Other child tool steps, such as
+`submit_result`, omit `action`.
 
-The lane coalesces consecutive steps with the same tool, child and browser
-action, ignoring turn numbers. Thus N identical browser operations publish one
-step; changing action or child publishes a new one. Commands are never
-coalesced, and a command breaks the step's repetition. Volume is bounded by
-these visible transitions plus command receipts, rather than transcript size.
-The job snapshot's `step` names the active child's tool until the parent's
+The lane coalesces consecutive steps with the same tool, child, browser action
+and `returned`, ignoring turn numbers. Thus N identical browser operations in
+successive turns publish 2N steps, a call and its return each, and the time
+between a step and the next is either the call or the model's turn after it;
+changing action or child publishes a new one. Commands are never coalesced, and
+a command breaks the step's repetition. Volume is bounded by these visible
+transitions plus command receipts, rather than transcript size. The job
+snapshot's `step` names the active child's tool until the parent's
 `delegate_task` result arrives. Among pending siblings the latest activity wins,
-including command receipts; a returning child reveals its sibling's last step,
-and the parent's step resumes when no child remains. Children cannot delegate
-further; nested progress needs lineage in the harness's transcript contract
-before that restriction is widened.
+including returns and command receipts; a returning child reveals its sibling's
+last step, and the parent's step resumes when no child remains. Children cannot
+delegate further; nested progress needs lineage in the harness's transcript
+contract before that restriction is widened.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an

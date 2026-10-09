@@ -282,6 +282,21 @@ describe("parseMemoryProtocolFlags", () => {
     );
     assertEquals(parseMemoryProtocolFlags({ spaceKind: "true" }), null);
   });
+  it("keeps an absent server-execution flag absent, and a boolean one as given", () => {
+    assertEquals(
+      "serverExecution" in parseMemoryProtocolFlags({})!,
+      false,
+    );
+    assertEquals(
+      parseMemoryProtocolFlags({ serverExecution: true })?.serverExecution,
+      true,
+    );
+    assertEquals(
+      parseMemoryProtocolFlags({ serverExecution: false })?.serverExecution,
+      false,
+    );
+    assertEquals(parseMemoryProtocolFlags({ serverExecution: "true" }), null);
+  });
   it("negotiates view replication as an optional server-execution capability", () => {
     try {
       setServerExecutionConfig(false);

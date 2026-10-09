@@ -43,7 +43,11 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { type DID, Identity } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
-import type { MemoryAclMode } from "@commonfabric/memory/v2/server";
+import type {
+  AdmittedCommitNotice,
+  MemoryAclMode,
+  Server as MemoryServer,
+} from "@commonfabric/memory/v2/server";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
@@ -75,10 +79,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./multi-runtime-ipc.ts";
-import {
-  awaitAdmitted,
-  type CommitWatchableServer,
-} from "../../runner/test/support/serving-waits.ts";
+import { awaitAdmitted } from "../../runner/test/support/serving-waits.ts";
 
 import type { initializePiecesController } from "./pieces-controller.ts";
 
@@ -720,7 +721,7 @@ export class MultiRuntimeSession {
 /** The in-process server a harness hosts, when it hosts one. */
 type HostedServer = {
   /** The memory server, whose admitted commits include the serving loop's. */
-  readonly server: CommitWatchableServer;
+  readonly server: Pick<MemoryServer, "watchAdmittedCommits">;
 
   /** The server's `idle()`, which covers storage and not a serving loop. */
   idle(): Promise<void>;
@@ -1011,6 +1012,33 @@ export class MultiRuntimeHarness {
       await this.settle();
       return await predicate();
     });
+  }
+
+  /**
+   * Runs `during`, and returns every commit the hosted server admitted while
+   * it ran, oldest first: the sessions' own and the serving loop's alike.
+   * Throws on a harness that targets a running toolshed, whose commits this
+   * process does not see.
+   */
+  async admittedCommitsDuring(
+    during: () => Promise<void>,
+  ): Promise<AdmittedCommitNotice[]> {
+    if (this.#server === undefined) {
+      throw new Error(
+        "admittedCommitsDuring() watches the server the harness hosts, and " +
+          "this harness targets a running toolshed",
+      );
+    }
+    const admitted: AdmittedCommitNotice[] = [];
+    const stopWatching = this.#server.server.watchAdmittedCommits((notice) => {
+      admitted.push(notice);
+    });
+    try {
+      await during();
+    } finally {
+      stopWatching();
+    }
+    return admitted;
   }
 
   /**

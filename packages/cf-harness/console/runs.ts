@@ -340,9 +340,9 @@ export const summarizeConsoleRun = (
  * looking for is the one at the top. Runs updated in the same millisecond are
  * ordered by run id, so two requests reading the same state list them alike.
  */
-export const sortConsoleRuns = (
-  runs: readonly ConsoleRunSummary[],
-): readonly ConsoleRunSummary[] =>
+export const sortConsoleRuns = <Run extends ConsoleRunSummary>(
+  runs: readonly Run[],
+): readonly Run[] =>
   [...runs].sort((left, right) =>
     left.updatedAt === right.updatedAt
       ? left.runId.localeCompare(right.runId)

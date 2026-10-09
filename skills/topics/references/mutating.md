@@ -1,19 +1,40 @@
 # Create, update, and connect Topics
 
 Part of `skills/topics/SKILL.md`, which is the map. This is the detail on every
-write: creating a Topic and recovering its address, what a call's answer does
-and does not prove, the Topic verbs, references between Topics, and the
-editorial conventions every write follows.
+write: the run's invocation session, creating a Topic and recovering its
+address, what a call's answer does and does not prove, the Topic verbs,
+references between Topics, and the editorial conventions every write follows.
+
+## One invocation session per run
+
+Every write below passes `--invocation`, the caller's own id for that one
+mutation. An id is replayable only within the invocation session it was chosen
+in, so `cf` refuses an id when no session is in scope (`CF_INVOCATION_SESSION`
+or `--invocation-session`). The session has to outlive any one shell, because a
+retry may come from a later tool call. Mint it once, at the start of the run,
+into a file at a path private to this run:
+
+```bash
+(umask 077 && set -C && s="$(deno task cf invocation-session new)" && echo "$s" > '<run session file>')
+```
+
+The file is written only once the mint succeeds. `set -C` makes a second mint
+fail rather than replace the session. A run that minted a fresh session per
+command would make every retry a new invocation, and a retried write would land
+twice. Treat the file as a credential: `umask 077` makes it readable only by
+you. Never print its contents.
+
+Every write command below starts by reading the session back into the
+environment. Replace every angle-bracketed invocation placeholder with an id
+unique to that logical mutation, and reuse that id only to retry the same
+mutation.
 
 ## Create and recover the address
 
-Mint one invocation session for the agent run. Replace every angle-bracketed
-invocation placeholder below with an id unique to that logical mutation, and
-reuse that id only to retry the same mutation. Create through the board and
-project the returned Topic to its address:
+Create through the board and project the returned Topic to its address:
 
 ```bash
-export CF_INVOCATION_SESSION="$(deno task cf invocation-session new)"
+export CF_INVOCATION_SESSION="$(cat '<run session file>')"
 CREATE="$(deno task cf piece call --cell "$TOPICS_BOARD" \
   --invocation '<unique-topic-create-id>' \
   addTopic \
@@ -48,8 +69,8 @@ So treat every call envelope, and every absence of one, as an observation rather
 than proof of durable state, and read back after every mutation. For `addTopic`,
 use a distinctive title and compare the narrow board index before and after the
 call; if the result is uncertain, recover its `$link` there rather than blindly
-creating another Topic. Retrying on the strength of a timeout is how one Topic
-becomes two.
+creating another Topic. Retrying under a new id on the strength of a timeout is
+how one Topic becomes two.
 
 ```bash
 deno task cf cell get "$TOPICS_BOARD" index --step --select @,title
@@ -91,14 +112,14 @@ filed — but it is not inert: running a topic whose stored state predates a
 version bump performs that migration, and the migration is a durable write. A
 bulk filing is worth a pass over every topic it created.
 
-Use one invocation session per agent run and an explicit invocation id per
-logical mutation. Retry an uncertain mutation only with that same session/id
-pair. The full retry and receipt model is in `skills/cf/SKILL.md` and
+Retry an uncertain mutation only with the same session and id. The full retry
+and receipt model is in `skills/cf/SKILL.md` and
 `docs/common/verbs/over-the-cli.md`.
 
 ## Update through Topic verbs
 
 ```bash
+export CF_INVOCATION_SESSION="$(cat '<run session file>')"
 deno task cf piece call --cell "$TOPIC" --invocation '<unique-set-title-id>' setTitle \
   '{"title":"<complete new title>","agentName":"Sol"}'
 deno task cf piece call --cell "$TOPIC" --invocation '<unique-set-body-id>' setBody \
@@ -124,6 +145,7 @@ the index row for the Topic being referenced; the row's `{"$link": …}` object
 passes in that position as it was printed, too:
 
 ```bash
+export CF_INVOCATION_SESSION="$(cat '<run session file>')"
 export OTHER_TOPIC='<canonical /of:... address from another index row>'
 deno task cf piece call --cell "$TOPIC" --invocation '<unique-mention-id>' mention \
   "{\"topic\":\"$OTHER_TOPIC\"}"

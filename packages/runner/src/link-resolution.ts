@@ -984,6 +984,20 @@ export function resolveLinkTracingDereferences(
         link.scope === "space"
       ) {
         pendingDeadEnd = true;
+        // Each hop this walk crossed had its target asked for above. A walk
+        // that crossed none starts at a handle minted from a stored link,
+        // whose hop was crossed before the walk began, so its document is
+        // asked for here, as a same-space hop's target is.
+        if (
+          !followedHop &&
+          runtime.storageManager.shouldPullDoc?.(
+              link.space,
+              link.id,
+              link.scope,
+            ) === true
+        ) {
+          kickDocPull(runtime, link, true);
+        }
       }
       break;
     }

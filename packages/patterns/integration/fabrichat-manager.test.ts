@@ -23,6 +23,7 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   EmulatedStorageManager,
@@ -71,6 +72,26 @@ const profileSchema = {
   type: "object",
   properties: { name: { type: "string" } },
   ifc: { addIntegrity: ["fabrichat-test-profile"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
+
+// The writer that stands in for a profile's own handlers, which a
+// `represents-principal` claim needs.
+const PROFILE_WRITER = "fabrichat-manager-test-profile";
+
+// A profile labeled as representing the principal that writes it, as a
+// Fabric profile is.
+const ownProfileSchema = {
+  type: "object",
+  properties: { name: { type: "string" } },
+  ifc: {
+    addIntegrity: [{
+      kind: "represents-principal",
+      subject: { __ctCurrentPrincipal: true },
+    }],
+    ownerPrincipal: { __ctCurrentPrincipal: true },
+    writeAuthorizedBy: [PROFILE_WRITER],
+  },
   // deno-lint-ignore no-explicit-any
 } as any;
 
@@ -175,6 +196,43 @@ describe("fabrichat-manager", () => {
       manager.key("rooms").asSchema(entryListSchema).get() as any[];
     return { manager, send, rooms, profile };
   };
+
+  it("reads a chip's `target.name`, arriving as the link to a profile, as that profile's cell", async () => {
+    const { send, manager } = await startManager();
+    // The test's own profile, labeled as representing the principal the
+    // manager runs for.
+    const tx = runtime.edit();
+    setCfcImplementationIdentity(tx, {
+      kind: "builtin",
+      builtinId: PROFILE_WRITER,
+    });
+    const own = runtime.getCell(home, "own profile", ownProfileSchema, tx);
+    own.set({ name: "Tester" });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const link = own.toSigilLinkOrNull();
+    if (link === null) throw new Error("The profile has no link.");
+
+    // A bound target property crosses from the page as the link to its cell,
+    // which is what the worker hands the stream; text in its place names no
+    // one.
+    await send("openDirect", { requestId: "d-linked", target: { name: link } });
+    await send("openDirect", {
+      requestId: "d-text",
+      target: { name: "Tester" },
+    });
+    const requests = manager.key("requests").get() as Record<
+      string,
+      unknown
+    >;
+    expect(requests["d-linked"]).toEqual({
+      status: "refused",
+      reason: "The counterpart is this user.",
+    });
+    expect(requests["d-text"]).toEqual({
+      status: "refused",
+      reason: "The counterpart is not a principal.",
+    });
+  });
 
   it("creates each room as its space's root, at the address the space's genesis reserves for one", async () => {
     const { send, rooms } = await startManager();

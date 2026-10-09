@@ -30,6 +30,7 @@ import {
   principalOf,
   SELF,
   spaceAccess,
+  spaceOf,
   Stream,
   UI,
   VIEWS,
@@ -42,6 +43,10 @@ import {
   participantEntries,
   type ParticipantRosterCell,
 } from "../loom/participants.tsx";
+import {
+  isSharedSpaceCatalog,
+  type SharedSpaceCatalogStorage,
+} from "../system/shared-space-catalog.ts";
 import { isInMain, type ShownIn } from "./logic.ts";
 import {
   type ActivityCell,
@@ -79,12 +84,12 @@ import {
   type AboutRecord,
   CHAT_ADD_MEMBER_ACTION,
   CHAT_ADD_MEMBER_SURFACE,
+  CHAT_ROOM_OFFER_KIND,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatDisplay,
-  type ChatIndexEntry,
   type ChatProfile,
   type ChatRoomAbout,
   type ChatRoomActivity,
@@ -128,8 +133,14 @@ export interface JoinRoomEvent {
  * click on its chat control, whose target names the person to chat with.
  */
 export interface StartDirectEvent {
-  /** The chat control, naming the other person's principal. */
-  readonly target?: { readonly dataset?: { readonly counterpart?: string } };
+  /** The chat control, naming the other person by their profile. */
+  readonly target?: {
+    /** The other person's profile, bound as the control's `name`. */
+    // `Cell<…>` is written out rather than reached through an alias: the
+    // event's schema marks a reference position only where the wrapper is
+    // written in the event type.
+    readonly name?: Cell<ChatProfile>;
+  };
 }
 
 /** What a participant's chip needs. */
@@ -164,8 +175,11 @@ export interface ParticipantChipOutput {
  * One participant, shown by their profile, with a control that starts a direct
  * chat with them. The control shows only where it can start one: for someone
  * other than the viewer, whose profile attests a principal, to a viewer who
- * has a manager. It names the participant to the manager by the principal
- * their profile's `represents-principal` label attests.
+ * has a manager. It names the participant to the manager by their profile,
+ * bound as the control's `name`, which crosses into the click's event as the
+ * profile's own cell; the manager reads whom it names from the profile's
+ * `represents-principal` label, and offers the room through the share inbox
+ * the profile points at.
  */
 export const ParticipantChip = pattern<
   ParticipantChipInput,
@@ -195,7 +209,7 @@ export const ParticipantChip = pattern<
         >
           <cf-button
             data-ui-action={CHAT_START_ACTION}
-            data-counterpart={counterpart}
+            $name={participant}
             size="sm"
             variant="ghost"
             onClick={startDirect}
@@ -222,18 +236,28 @@ const askToList = handler<unknown, {
   accept?.send({ room });
 });
 
+/**
+ * Whether `catalog` keeps the room in `space` as one of its user's chats; a
+ * catalog that doesn't read as one keeps none.
+ */
+const listsRoomIn = (catalog: unknown, space: string | undefined): boolean => {
+  if (!isSharedSpaceCatalog(catalog) || space === undefined) return false;
+  const entry = catalog.entries[space];
+  return entry?.kind === CHAT_ROOM_OFFER_KIND && entry.state === "saved";
+};
+
 /** What the control adding a room to the viewer's chats needs. */
 export interface AddToChatsInput {
   /** The room. */
   room: Cell<ChatRoomLink>;
 
   /**
-   * The rooms the viewer's manager lists; absent when the viewer has no
-   * manager.
+   * The shared-space catalog the viewer's manager lists its rooms from; absent
+   * when the viewer has no manager.
    */
-  listed?: ChatIndexEntry[];
+  catalog?: SharedSpaceCatalogStorage;
 
-  /** The viewer's manager's `accept`, when `listed` is present. */
+  /** The viewer's manager's `accept`, when `catalog` is present. */
   accept?: Stream<AcceptRoomEvent>;
 }
 
@@ -252,16 +276,16 @@ export interface AddToChatsOutput {
  * notice their client delivered.
  */
 export const AddToChats = pattern<AddToChatsInput, AddToChatsOutput>(
-  ({ room, listed, accept }) => {
+  ({ room, catalog, accept }) => {
     // TODO(danfuzz): A stop-gap. Remove this control once creating a room
-    // offers it to every member, so that every member's manager lists it
+    // offers it to every member, so that every member's catalog lists it
     // without a step of their own.
     const add = askToList({ room, accept });
     // Whether the viewer's manager lists the room differs by viewer, so the
     // control is hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
     const addDisplay = computed((): ChatDisplay =>
-      listed !== undefined && !listed.some((entry) => equals(entry.room, room))
+      catalog !== undefined && !listsRoomIn(catalog, spaceOf(room))
         ? "flex"
         : "none"
     );
@@ -939,7 +963,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     const managerWish = wish<{
       openDirect: Stream<StartDirectEvent>;
       accept: Stream<AcceptRoomEvent>;
-      rooms: ChatIndexEntry[];
+      sharedSpaceCatalog: SharedSpaceCatalogStorage;
     }>({ query: "#chatManager" });
     const startsDirect = computed(() => managerWish.result !== undefined);
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a
@@ -984,7 +1008,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         <cf-screen>
           <AddToChats
             room={self}
-            listed={managerWish.result?.rooms}
+            catalog={managerWish.result?.sharedSpaceCatalog}
             accept={managerWish.result?.accept}
           />
           {room[UI]}

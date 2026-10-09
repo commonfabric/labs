@@ -1,18 +1,18 @@
 /**
  * FabriChat's way in, driven through the page alone by two people, each in a
- * browser of their own, on a home that holds the real FabriChat manager. Home
- * renders the manager nowhere of its own, so each person opens it as a page
- * of its own, at its path in home's result. The second person creates a
- * profile and reads their chat address off their manager. The first creates
- * a profile, starts a direct chat with that address, sees the room listed in
- * their manager, and follows the link their notice shows to the room's page.
- * The second opens that page and adds the room to their chats, after which
- * each sees the other among the room's participants, before either has
- * written. The second sends a message, which the first sees on the room's
- * page; the second's manager then lists the room too. Last, the first opens their manager again, creates a
- * group from the group controls of that new page, and starts another chat,
- * whose row's link opens the new room.
+ * browser of their own, on a home that holds the real FabriChat manager. Each
+ * person opens the manager as a page of its own, at its path in home's result.
+ * The second person creates a profile and reads their chat address off their
+ * manager. The first creates a profile, starts a direct chat with that address,
+ * sees the room listed in their manager, and follows the link their notice
+ * shows to the room's page. The second opens that page and adds the room to
+ * their chats, after which each sees the other among the room's participants,
+ * before either has written. The second sends a message, which the first sees
+ * on the room's page; the second's manager then lists the room too. Last, the
+ * first opens their manager again, creates a group from the group controls of
+ * that new page, and starts another chat, whose row's link opens the new room.
  */
+
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
@@ -24,6 +24,7 @@ import {
   clickTrustedAction,
   collectBrowserLoadSummary,
   fillCfInput,
+  fillCfTextarea,
   waitForRuntimeIdle,
   waitForSettledText,
   waitForText,
@@ -58,10 +59,17 @@ describe("fabrichat-join", () => {
   // Someone the first person chats with second, who never opens a page.
   let thirdIdentity: Identity;
 
+  // Two people who share a group room and nothing else, so that a direct chat
+  // between them is new.
+  let groupOwnerIdentity: Identity;
+  let groupMemberIdentity: Identity;
+
   beforeAll(async () => {
     firstIdentity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
     thirdIdentity = await Identity.generate({ implementation: "noble" });
+    groupOwnerIdentity = await Identity.generate({ implementation: "noble" });
+    groupMemberIdentity = await Identity.generate({ implementation: "noble" });
   });
 
   it("lets two people start a direct chat from home, join it from its link, and exchange a message", async () => {
@@ -154,6 +162,53 @@ describe("fabrichat-join", () => {
     expect(newRoomView.spaceDid).not.toBe(roomView.spaceDid);
     expect(newRoomView.spaceDid).not.toBe(firstIdentity.did());
   });
+
+  it("starts a direct chat from a participant's chip in a group room", async () => {
+    const owner = firstShell.page();
+    const member = secondShell.page();
+
+    await gotoHome(secondShell, groupMemberIdentity);
+    await createProfileAtHome(member, "Grace Hopper");
+    await openChatManager(secondShell, groupMemberIdentity);
+    const memberAddress = await readChatAddress(member);
+
+    // The owner creates a group with the member, and opens its page.
+    const groupTitle = "Chip team";
+    await gotoHome(firstShell, groupOwnerIdentity);
+    await createProfileAtHome(owner, "Ada Lovelace");
+    await openChatManager(firstShell, groupOwnerIdentity);
+    await fillCfInput(owner, "#fabrichat-group-title", groupTitle);
+    // The group's members field is the manager page's one textarea.
+    await fillCfTextarea(owner, "cf-textarea", memberAddress);
+    await clickButtonWithExactText(owner, "Create group");
+    await waitForSettledText(owner, "#fabrichat-rooms", groupTitle);
+    const roomId = await clickCellLink(owner, groupTitle);
+    const roomView = await waitForPieceSelected(owner, roomId);
+
+    // The member opens the group's page and adds it to their chats, and then
+    // sees the owner among its participants.
+    await secondShell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: roomView,
+      identity: groupMemberIdentity,
+    });
+    await waitForSettledText(member, "#fabrichat-messages", EMPTY_ROOM_TEXT);
+    await clickButtonWithExactText(member, "Add to my chats");
+    await waitForUnrendered(member, "#fabrichat-add-to-chats");
+    await waitForSettledText(member, "cf-profile-badge", "Ada Lovelace");
+
+    // The owner's chip is the page's one chat start: the member's own chip
+    // offers none. Its click names the owner by their profile, and the
+    // member's manager lists the direct room it starts under the owner's
+    // address, which it reads off that profile.
+    await clickTrustedAction(member, START_ACTION);
+    await openChatManager(secondShell, groupMemberIdentity);
+    await waitForSettledText(
+      member,
+      "#fabrichat-rooms",
+      `With ${groupOwnerIdentity.did()}`,
+    );
+  });
 });
 
 /** Opens `identity`'s home on `shell`. */
@@ -170,7 +225,7 @@ async function gotoHome(
 
 /**
  * Opens `identity`'s chat manager on `shell`, as a page of its own at its path
- * in home's result, since home renders it nowhere. Home must already exist.
+ * in home's result. Home must already exist.
  */
 async function openChatManager(
   shell: ShellIntegration,

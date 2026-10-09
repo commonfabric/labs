@@ -316,8 +316,48 @@ reads on down the list. The head is kept as deep as the deepest of its readers
 last read, and a reader that has not read for a day stops holding it. Each part
 of the dashboard that reads runs keeps its own `RunLists`, and so do CI
 history and its Gantt, and the benchmarks tile and its drill-down, so that a
-deep reading, such as CI history's after a restart, never holds up a shallower
-one of the same workflow.
+deep reading, such as CI history's the first time it reads a workflow, never
+holds up a shallower one of the same workflow. The publisher's activity, which
+reads a workflow no tile reads, reads through the tile context's.
+
+Each `RunLists` the server reads through keeps its heads in a file in the
+dashboard cache directory, so a restart does not cost a reading from scratch,
+and neither does a deploy when the cache directory is on a volume that outlasts
+it. The tiles that read runs through the shared tile context, the publisher's
+activity among them, share `fabric-wall-run-lists-tiles.json`; the ci tile keeps
+`fabric-wall-run-lists-ci.json`; the benchmarks tile and its drill-down keep
+`fabric-wall-run-lists-benchmarks.json` and
+`fabric-wall-run-lists-benchmarks-drill-down.json`; CI history and its Gantt
+keep `fabric-wall-run-lists-ci-history.json` and
+`fabric-wall-run-lists-ci-gantt.json`; and the commit CI Gantt's collector keeps
+`fabric-wall-run-lists-commit-ci-history.json` and
+`fabric-wall-run-lists-commit-ci-gantt.json`. A file holds, for each workflow,
+the runs of its head, whether they reach the end of the list, the oldest run
+each reader last read and when, and when the top of the list was last read. A
+`RunLists` takes a workflow's head from its file whenever it starts holding one,
+and reads the list as it reads one it holds: from the top until it reaches a run
+in the file, so a run deleted from the top of the list meanwhile is dropped.
+Every held run the reader wants that had not finished is read again by its id
+before the reader is given it, and the reader's filtered lists are read again,
+so a run started again meanwhile is found as it would have been. The file is
+written after every reading, including one that fails. A reading that reads
+further down the list records, as it goes, that its reader read that deep, so
+the runs it read are kept even when it fails, and a CI history walk that GitHub
+breaks off goes on from where it stopped, in the same process or the next. A
+head nobody has read for a day is dropped, so a dashboard that has been down for
+longer reads from scratch.
+
+Processes that share a file lock it while each puts its heads in place of the
+ones the file holds and replaces the file whole. Of two heads of one workflow,
+the one whose top was read last is kept. A head was whole when it was saved, and
+a head taken from the file reads its list from the top until it reaches a run it
+holds, so either one can be restored. Every version of the dashboard reads the
+file the same way, without a version number. A head is cut back above the first
+run that lacks a field the dashboard reads or holds one it cannot use, so the
+runs from there down are read from GitHub again; a head whose own fields cannot
+be used, or that records a time later than the present, is dropped; fields the
+dashboard does not know are ignored and not written back; and a file that cannot
+be read at all is replaced.
 
 GitHub lists runs newest first, and a newer run has the larger id. Runs land at
 the top of the list and can be deleted from anywhere in it between two
@@ -1271,7 +1311,7 @@ it.
 | `PROD_PROXY` | production | optional proxy for reaching tailnet hosts. Use `socks5h://127.0.0.1:1055` with the Tailscale userspace proxy. Also accepts `socks5://`, `http://`, and `https://`; invalid values and URLs containing credentials fail closed instead of fetching directly. Setting it also moves the tailnet name checks onto the proxy, since a dashboard that needs a proxy cannot resolve MagicDNS names itself. The bastion check needs a SOCKS5 proxy to do that, and stays gray over an `http://` or `https://` one. |
 | `COMMON_FABRIC_URL` | production | override the public-site URL (e.g. the `www` host if the apex redirects). |
 | `DASHBOARD_REPO` | CI tiles, github users | which repo the CI tiles read. Its owner is the organization the **github users** tile reads (default `commonfabric/labs`). |
-| `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory). |
+| `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory), including the `fabric-wall-run-lists-*.json` files that keep the run-list reader's runs across restarts. |
 | `SIGNOZ_UI_URL` | prod errors, dau | browser-facing SigNoz URL for the explorer pop-outs: **prod errors** links to `/logs/logs-explorer` and **dau** to `/traces-explorer` under it. Defaults to `SIGNOZ_URL` when that is a public `https://` URL. An in-cluster `http://` URL, which a browser cannot reach, leaves both tiles with no pop-out at all, so set this whenever the server reaches SigNoz over one. |
 | `PROD_SERVICE` | prod errors, dau | the `service.name` production reports under in SigNoz, which both trace-reading tiles scope to. Defaults to `toolshed-production`. A name outside `[A-Za-z0-9._-]` is ignored, since it lands inside a query expression. |
 | `DAU_EXCLUDE_DIDS` | dau | comma-separated identity DIDs to leave out of the count — the server's own identity, `MEMORY_SERVICE_DIDS`, background services. Until it is set the count is an upper bound. See [dau](#dau) below. |
@@ -1548,8 +1588,8 @@ Notes:
     CI history reads the workflow's runs through the run-list reader, back to
     the first run created a day before the window opens, and takes the
     successful pushes to main from them. For labs that is around a hundred pages
-    the first time after the dashboard starts, and after that only the runs
-    that landed since the last collection. A Gantt of every run, or of every
+    the first time, and after that, across restarts too, only the runs that
+    landed since the last collection. A Gantt of every run, or of every
     main push whatever it concluded, reads the same runs, stopping at 150 runs
     or at the first run created a day before the 45-day window, and charts the
     runs that started inside it.
