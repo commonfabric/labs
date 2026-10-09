@@ -583,3 +583,36 @@ Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own r
     "Cell<{ a: number; }> | __cfHelpers.Cell<{ b: number; }>",
   );
 });
+
+Deno.test("qualifyCommonFabricTypeRefs leaves both members of a union whose import types name the commonfabric declarations' path and a module of the program's own at it", () => {
+  const { type, node, checker, print, sourceFile } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      'import { mine } from "../../commonfabric";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? mine({ a: 1 }) : cell({ b: 2 });",
+    ].join("\n"),
+    {
+      "/commonfabric.ts": [
+        "interface Other<T> { mine: T; }",
+        "export { Other as Cell };",
+        "export declare function mine<T>(value: T): Other<T>;",
+      ].join("\n"),
+    },
+  );
+  assertEquals(
+    print(node),
+    'import("../../commonfabric").Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+    sourceFile,
+  });
+
+  assertEquals(
+    print(qualified),
+    'import("../../commonfabric").Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+});

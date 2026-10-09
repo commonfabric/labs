@@ -136,27 +136,21 @@ export function qualifyCommonFabricTypeRefs(
     return isCommonFabricSymbol(type.symbol) ? type.symbol.name : undefined;
   };
 
-  // Whether the specifier of `member`, an import type, names the module
-  // `constituent` is declared in: by the name `"commonfabric"`, for a
-  // commonfabric export, or by a path relative to the file the node was
-  // printed for.
-  const importTypeNames = (
+  // The module the specifier of `member`, an import type, names by a path
+  // relative to the file the node was printed for, as a path from the root
+  // without an extension (`resolveModulePath()`), or `undefined` for any
+  // other specifier.
+  const importTypeModulePath = (
     member: ts.ImportTypeNode,
-    constituent: ts.Type,
-  ): boolean => {
+  ): string | undefined => {
     const argument = member.argument;
     const specifier =
       ts.isLiteralTypeNode(argument) && ts.isStringLiteral(argument.literal)
         ? argument.literal.text
         : undefined;
-    if (specifier === "commonfabric") {
-      return commonFabricExportName(constituent) !== undefined;
-    }
-    return specifier !== undefined && /^\.\.?\//.test(specifier) &&
-      isDeclaredInModule(
-        constituent,
-        resolveModulePath(context.sourceFile.fileName, specifier),
-      );
+    return specifier !== undefined && /^\.\.?\//.test(specifier)
+      ? resolveModulePath(context.sourceFile.fileName, specifier)
+      : undefined;
   };
 
   // The symbol a type name the printer wrote bare stands for in the file it
@@ -174,12 +168,12 @@ export function qualifyCommonFabricTypeRefs(
   };
 
   // For a union/intersection member TypeNode, find the constituent Type to
-  // pair it with. Matches by name (order-independent): a member printed as `X`
-  // is paired with the one constituent named `X`, when that constituent is the
-  // commonfabric export `X`. Returns undefined when there's no constituent
-  // info or no such constituent — in which case the member is walked with no
-  // paired Type (safe: it can only be rewritten through a `"commonfabric"`
-  // specifier, never misattributed).
+  // pair it with (order-independent): the one constituent the member was
+  // printed from, when that constituent is the commonfabric export the member
+  // names. Returns undefined when there's no constituent info or no such
+  // constituent — in which case the member is walked with no paired Type
+  // (safe: it can only be rewritten through a `"commonfabric"` specifier,
+  // never misattributed).
   const pairedConstituentForMember = (
     member: ts.TypeNode,
     unionOrIntersectionType: ts.Type | undefined,
@@ -201,27 +195,44 @@ export function qualifyCommonFabricTypeRefs(
     // The name a member is printed with does not say which constituent it
     // is: a module of the program's own can export a type under a
     // commonfabric export's name while declaring it under another
-    // (`export { Other as Cell }`). So an import-type member is paired only
-    // with a constituent of its name that its specifier names, and a bare
-    // one only with a constituent the name stands for in the file it was
-    // printed for. Then require an UNAMBIGUOUS match: two constituents can
-    // still qualify, two commonfabric types that differ in their type
-    // arguments (`Cell<A> | Cell<B>`, both printed as `Cell<...>`), where
-    // picking the first would walk the member's nested type args against the
-    // wrong constituent's args and could mis-rewrite a nested generic. On
+    // (`export { Other as Cell }`). A bare member is paired only with a
+    // constituent the name stands for in the file it was printed for, or,
+    // for a name not in scope there, which the printer writes for a type it
+    // cannot reach by a name in scope, with a constituent declared under it.
+    // An import-type member's specifier is a path without an extension,
+    // which names `/commonfabric.ts` and `/commonfabric.d.ts` alike, so the
+    // member is paired only with a constituent of its name declared in the
+    // one file of that path the union's constituents come from. Then require
+    // an UNAMBIGUOUS match: two constituents can still qualify, two
+    // commonfabric types that differ in their type arguments
+    // (`Cell<A> | Cell<B>`, both printed as `Cell<...>`), where picking the
+    // first would walk the member's nested type args against the wrong
+    // constituent's args and could mis-rewrite a nested generic. On
     // ambiguity, or when the one constituent is not the commonfabric export
     // the member names, return undefined: the member is left unpaired
     // (un-normalized) rather than risk a wrong rewrite — the safe degradation
     // this helper already documents.
-    const bareTarget = ts.isImportTypeNode(member)
-      ? undefined
-      : resolveBareTypeName(memberName);
-    const named = constituents.filter((constituent) => {
-      const declared = constituent.aliasSymbol ?? constituent.symbol;
-      return ts.isImportTypeNode(member)
-        ? declared?.name === memberName && importTypeNames(member, constituent)
-        : declared !== undefined && declared === bareTarget;
-    });
+    let named: ts.Type[] = [];
+    if (ts.isImportTypeNode(member)) {
+      const modulePath = importTypeModulePath(member);
+      const inModule = constituents.filter((constituent) => {
+        const fileName = declaringFileName(constituent);
+        return fileName !== undefined && modulePathOf(fileName) === modulePath;
+      });
+      if (new Set(inModule.map(declaringFileName)).size === 1) {
+        named = inModule.filter((constituent) =>
+          (constituent.aliasSymbol ?? constituent.symbol).name === memberName
+        );
+      }
+    } else {
+      const bareTarget = resolveBareTypeName(memberName);
+      named = constituents.filter((constituent) => {
+        const declared = constituent.aliasSymbol ?? constituent.symbol;
+        return bareTarget !== undefined
+          ? declared === bareTarget
+          : declared?.name === memberName;
+      });
+    }
     return named.length === 1 &&
         commonFabricExportName(named[0]) === memberName
       ? named[0]
@@ -480,15 +491,21 @@ function resolveModulePath(fromFile: string, specifier: string): string {
 }
 
 /**
- * Whether `type` is declared in the module at `modulePath`
- * (`resolveModulePath()`), as the file of that name or its `index`.
+ * The file that declares `type`, as a path from the root (`rootedPath()`), or
+ * `undefined` for a type no declaration states.
  */
-function isDeclaredInModule(type: ts.Type, modulePath: string): boolean {
+function declaringFileName(type: ts.Type): string | undefined {
   const fileName = (type.aliasSymbol ?? type.symbol)?.declarations?.[0]
     ?.getSourceFile().fileName;
-  if (fileName === undefined) return false;
-  const module = rootedPath(fileName).replace(/(\.d)?\.[cm]?[jt]sx?$/, "");
-  return module === modulePath || module === `${modulePath}/index`;
+  return fileName && rootedPath(fileName);
+}
+
+/**
+ * The path a module specifier names `fileName` by: without its extension, and
+ * without an `index` file's name.
+ */
+function modulePathOf(fileName: string): string {
+  return fileName.replace(/(\.d)?\.[cm]?[jt]sx?$/, "").replace(/\/index$/, "");
 }
 
 /**
