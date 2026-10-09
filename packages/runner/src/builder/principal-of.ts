@@ -197,10 +197,10 @@ function attestedPrincipals(
  * then found no label because the label has not arrived, which is not the
  * document's state, and a handler runs once per event: the scheduler runs a
  * withdrawn one again once the load lands (`dispatchedHandlerNotRun`). A
- * document with no load in flight reads as unlabeled, as one that does not
- * exist or whose read the manager refuses must, so a withdrawal always has a
- * load to wait on. A reactive computation needs none of this, since the
- * load's arrival runs it again.
+ * withdrawal therefore always has a load to wait on, and a document that does
+ * not exist withdraws the handler at most until its absence is confirmed. A
+ * reactive computation needs none of this, since the load's arrival runs it
+ * again.
  */
 function withdrawWhileLabelLoads(
   runtime: Runtime,
@@ -208,10 +208,18 @@ function withdrawWhileLabelLoads(
   link: NormalizedFullLink,
 ): void {
   const { storageManager } = runtime;
-  const key = entityKey(link, runtime.scopeKeyIdentity);
+  // The instance a scoped read reaches is the one the transaction demands,
+  // as a served run's is its actor's, so the load and the local basis are
+  // looked up for that instance.
+  const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
+  const key = entityKey(link, identity);
   if (storageManager.pendingLoadGeneration?.(key) === undefined) return;
   const { replica } = storageManager.open(link.space);
-  if (replica.hasLocalDocumentCoverage?.(link.id, link.scope) === true) return;
+  if (
+    replica.hasLocalDocumentCoverage?.(link.id, link.scope, identity) === true
+  ) {
+    return;
+  }
   tx.dispatchedHandlerNotRun ??= {
     reason:
       `the label of \`${link.id}\` was read while its document was still loading`,

@@ -136,9 +136,9 @@ load lands; this is what lets a served handler read the label of a cell its
 event names, a cell whose document the serving runtime may never have read
 before. The call withdraws only when the replica has no local basis for the
 document, not even a confirmed absence, and a load for it is in flight. A
-document with no load in flight reads as unlabeled, so a document that does
-not exist, or one the manager refuses to read, gives `undefined` rather than
-holding the handler back.
+withdrawal therefore always has a load to wait on: once a document that does
+not exist has loaded, its absence is confirmed, and the handler run again
+reads it as unlabeled and gives `undefined`.
 
 ## What the result discloses
 

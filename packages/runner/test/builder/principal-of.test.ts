@@ -604,6 +604,30 @@ describe("principalOf()", () => {
       );
     });
 
+    it("withdraws the handler that reads the label of a scoped document loading for the identity its transaction demands", () => {
+      // Only Bob's instance of the document is loading. The runtime acts for
+      // Alice, and the transaction demands Bob, as a served run demands its
+      // actor.
+
+      Object.assign(storage, {
+        pendingLoadGeneration: (key: string) =>
+          key.includes(encodeURIComponent(bob.did())) ? 1 : undefined,
+      });
+      const tx = edit();
+      tx.tx.scopeKeyIdentity = { principal: bob.did() };
+      const target = runtime.getCell(
+        space,
+        "still-loading-for-bob",
+        undefined,
+        undefined,
+        "user",
+      );
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun?.reason).toContain(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
     it("leaves a reactive computation that reads its label while its load is in flight to run", () => {
       loading();
       const tx = edit();
