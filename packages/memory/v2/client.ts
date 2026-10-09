@@ -913,7 +913,6 @@ export class Client {
         );
       }
     };
-    requireCapabilities();
     // A mount whose caller has cancelled it sends nothing more.
     const requireUncancelled = (): void => {
       if (options.signal?.aborted) throw mountCancelled(options.signal);
@@ -924,14 +923,16 @@ export class Client {
     // the connection that is gone. A reopen fails then, for its reconnect
     // to retry; a mount waits for the reconnect and signs again.
     for (;;) {
+      // Checked each round: a round after the first follows a reconnect or
+      // a held mount's wait. The caller may have cancelled the mount
+      // meanwhile, and the next connection's server may advertise other
+      // capabilities than the one the first round was checked against.
+      requireUncancelled();
+      requireCapabilities();
       if (
         typeof auth === "object" && this.serverFlags?.connectionAuth === true
       ) {
         try {
-          requireUncancelled();
-          // A mount held below may have waited through a reconnect, and
-          // the next connection's server may advertise other capabilities.
-          requireCapabilities();
           const principal = await this.#authenticate(auth, whileConnected);
           if (principal !== STALE) {
             requireUncancelled();

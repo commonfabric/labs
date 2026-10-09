@@ -2040,6 +2040,109 @@ Deno.test("a mount cancelled while it waits for the reconnect sends nothing on t
   }
 });
 
+Deno.test("a signed open's round after a reconnect is checked as its first round is", async (t) => {
+  setModernCellRepConfig(true);
+  // A direct server without connection authentication: each open is signed.
+  const signedFlags = (spaceKind: boolean) => ({
+    ...flags(),
+    connectionAuth: false,
+    routedAuthV1: false,
+    spaceKind,
+  });
+  const direct = () => ({ audience: identity.did(), challenge: challenge() });
+  /** A peer that greets its second hello as `second` says, and counts opens. */
+  const signedPeer = (second: () => string | undefined) => {
+    let opens = 0;
+    const p = peer(
+      (hello_) =>
+        hello_ === 1 ? frame(hello(direct(), signedFlags(true))) : second(),
+      (body, push) => {
+        if (body.type === "session.open") opens++;
+        push({
+          type: "response",
+          requestId: body.requestId,
+          ok: body.type === "session.open"
+            ? {
+              sessionId: "sdk-session",
+              sessionToken: "sdk-token",
+              serverSeq: 0,
+              sessionOpen: direct(),
+            }
+            : {},
+        });
+      },
+    );
+    return { p, opens: () => opens };
+  };
+  await t.step(
+    "a mount cancelled while it waits for the reconnect signs nothing",
+    async () => {
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      // The reconnect's hello is answered only when the test says.
+      const { p, opens } = signedPeer(() => undefined);
+      const client = await connect({ transport: p.transport });
+      try {
+        let signs = 0;
+        p.drop();
+        await time.tickAsync(0);
+        assertEquals(p.hellos(), 2);
+        const caller = new AbortController();
+        const mount = settling(
+          client.mount(identity.did(), {}, () => {
+            signs++;
+            return undefined;
+          }, caller.signal),
+        );
+        await time.tickAsync(0);
+        caller.abort(new Error("the space was closed"));
+        p.raw(frame(hello(direct(), signedFlags(true))));
+        await tickUntil(time, () => false, 1000, 3);
+        assertEquals(client.isConnected(), true);
+        assertEquals((mount.failure as Error)?.message, "the space was closed");
+        assertEquals(signs, 0);
+        assertEquals(opens(), 0);
+      } finally {
+        await client.close();
+        time.restore();
+      }
+    },
+  );
+  await t.step(
+    "a mount that declares a kind fails against a next server that seals none",
+    async () => {
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      const { p, opens } = signedPeer(() =>
+        frame(hello(direct(), signedFlags(false)))
+      );
+      const client = await connect({ transport: p.transport });
+      try {
+        // The connection drops while the open is being signed.
+        let signs = 0;
+        const signing = Promise.withResolvers<undefined>();
+        const mount = settling(
+          client.mount(identity.did(), { spaceKind: "notes" }, () => {
+            signs++;
+            return signing.promise;
+          }),
+        );
+        await tickUntil(time, () => signs >= 1, 0, 40);
+        p.drop();
+        await time.tickAsync(0);
+        assertEquals(p.hellos(), 2);
+        signing.resolve(undefined);
+        await tickUntil(time, () => mount.settled, 0, 40);
+        assertEquals((mount.failure as Error)?.name, "ProtocolError");
+        // The open that declares a kind is neither signed again nor sent.
+        assertEquals(signs, 1);
+        assertEquals(opens(), 0);
+      } finally {
+        await client.close();
+        time.restore();
+      }
+    },
+  );
+});
+
 Deno.test("a mount held through a reconnect is held to the next connection's capabilities", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
