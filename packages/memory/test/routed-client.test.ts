@@ -1147,6 +1147,45 @@ Deno.test("a key released while a refusal for now is on its way is not authentic
   }
 });
 
+Deno.test("a key released while its authentication is unanswered is not renewed when the answer admits it", async (t) => {
+  setModernCellRepConfig(true);
+  for (
+    const attempt of ["a pushed challenge's answer", "a renewal"] as const
+  ) {
+    await t.step(attempt, async () => {
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      // The second statement is admitted, but only after the key is
+      // released.
+      const { p, auths, pushChallenge, release } = routedPeer(() => false, {
+        held: (type, count) => type === "connection.auth" && count === 2,
+      });
+      const client = await connect({ transport: p.transport });
+      try {
+        await client.mount(identity.did(), {}, principal());
+        if (attempt === "a renewal") {
+          await time.tickAsync(479_000);
+          await tickUntil(time, () => auths().length >= 2);
+        } else {
+          pushChallenge();
+          await tickUntil(time, () => auths().length >= 2, 0, 40);
+        }
+        assertEquals(auths().length, 2);
+        await client.release(identity.did());
+        release();
+        await time.tickAsync(0);
+        // No renewal is armed for the released key: the client has no
+        // timer left, and nothing is sent through the lease just admitted.
+        assertEquals(time.next(), false);
+        await tickUntil(time, () => false, 60_000, 11);
+        assertEquals(auths().length, 2);
+      } finally {
+        await client.close();
+        time.restore();
+      }
+    });
+  }
+});
+
 Deno.test("a renewal refused for now after a pushed challenge was admitted leaves the admitted lease's renewal armed", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));

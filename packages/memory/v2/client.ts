@@ -1285,21 +1285,17 @@ export class Client {
    * refusal for now passes over seconds.
    *
    * It arms nothing when the connection of `epoch` is gone, since the next
-   * connection authenticates the key itself; when the key has been
-   * released; or when a renewal is already armed for the key. An
-   * authentication admitted after the refused one began arms that renewal,
-   * and replacing it with a retry would leave the admitted lease without
-   * one.
+   * connection authenticates the key itself, or when a renewal is already
+   * armed for the key. An authentication admitted after the refused one
+   * began arms that renewal, and replacing it with a retry would leave the
+   * admitted lease without one.
    */
   #retryRenewal(
     principal: SessionPrincipal,
     epoch: number,
     attempt: number,
   ): void {
-    if (
-      this.#staleSince(epoch) || !this.#routedSigners.has(principal.did) ||
-      this.#renewals.has(principal.did)
-    ) return;
+    if (this.#staleSince(epoch) || this.#renewals.has(principal.did)) return;
     // A router's refusal for now passes over seconds; a direct server's
     // retries at the reconnect backoff.
     const floor = this.#sessionOpenAuthContext?.deployment === undefined
@@ -1316,6 +1312,9 @@ export class Client {
   /**
    * Sets the timer that authenticates `principal` again after `delayMs`.
    * Attempt 0 renews a lease; a later attempt follows a refusal for now.
+   * It sets none for a key released since its authentication began, whether
+   * that authentication was then admitted or refused for now: a released
+   * key is not kept authenticated.
    */
   #armRenewal(
     principal: SessionPrincipal,
@@ -1323,6 +1322,7 @@ export class Client {
     attempt: number,
     delayMs: number,
   ): void {
+    if (!this.#routedSigners.has(principal.did)) return;
     this.#cancelRenewal(principal.did);
     const timer = setTimeout(() => {
       this.#renewals.delete(principal.did);
