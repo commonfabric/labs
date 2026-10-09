@@ -1,7 +1,8 @@
-import type {
-  CellScope,
-  EchoBreakerClearReport,
-  ScopeKeyIdentity,
+import {
+  type EchoBreakerClearReport,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -12,7 +13,6 @@ import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
-import { normalizeCellScope } from "../scope.ts";
 import { entityKey } from "./keys.ts";
 import type { ReactivityLog } from "./types.ts";
 import {
@@ -49,17 +49,21 @@ export interface EchoStep {
   readonly changed: boolean;
 }
 
-/** A document as the breaker reports it: where it lives and which it is. */
+/**
+ * A document as the breaker reports it: where it lives and which it is,
+ * down to the scope instance the run wrote — on a serving runtime, the
+ * demanding session's, not the runtime's own.
+ */
 export interface EchoDocument {
   readonly space: MemorySpace;
   readonly id: string;
-  readonly scope: CellScope;
+  readonly scopeKey: ScopeKey;
 }
 
 /**
  * What the breaker tells its owner as it happens: a pair tripped, or a
- * tripped pair cleared — by a convergence step, by its quiet reset, or by
- * its action being retired.
+ * tripped pair cleared — by a convergence step, by its quiet reset, by its
+ * action being retired, or by its eviction from the bounded table.
  */
 export type EchoBreakerEvent =
   | {
@@ -145,7 +149,7 @@ export function computeEchoSteps(
       candidates.set(key, {
         space: read.space,
         id: read.id,
-        scope: normalizeCellScope(read.scope),
+        scopeKey: read.scopeKey ?? resolveScopeKey(read.scope, identity),
       });
     }
   }
@@ -200,6 +204,10 @@ interface EchoPairState {
 /** Separates the action id from the document key in a pair key. */
 const PAIR_SEPARATOR = "\u001F";
 
+/** The action id a pair key begins with. */
+const actionIdOf = (key: string): string =>
+  key.slice(0, key.indexOf(PAIR_SEPARATOR));
+
 /**
  * Bounds the remote-echo write loop (docs/plans/scheduler-remote-echo-breaker.md):
  * a reactive computation that writes a document, sees a remote change to that
@@ -214,13 +222,25 @@ const PAIR_SEPARATOR = "\u001F";
  * its backoff one step longer on every further echo, so the rate bound holds
  * at the cap, and is cleared by a convergence step or by
  * {@link ECHO_QUIET_RESET_MS} without an echo. The table is bounded
- * ({@link MAX_ECHO_PAIRS}); a lost entry costs only a forgotten count.
+ * ({@link MAX_ECHO_PAIRS}); a lost entry costs only a forgotten count, and a
+ * tripped one is reported cleared.
  */
 export class RemoteEchoBreaker {
   #trips = 0;
   #cyclesObserved = 0;
 
-  readonly #pairs = new BoundedKeyMap<string, EchoPairState>(MAX_ECHO_PAIRS);
+  /** The `now` of the observation in progress, for a clear an eviction
+   * reports. */
+  #observedAt = 0;
+
+  readonly #pairs = new BoundedKeyMap<string, EchoPairState>(MAX_ECHO_PAIRS, {
+    onEvict: (key, state) => {
+      if (state.backoffStreak > 0) {
+        this.#cleared(actionIdOf(key), state, "evicted", this.#observedAt);
+      }
+    },
+  });
+
   readonly #onEvent: ((event: EchoBreakerEvent) => void) | undefined;
 
   /**
@@ -265,6 +285,7 @@ export class RemoteEchoBreaker {
     steps: readonly EchoStep[],
     now: number,
   ): number | undefined {
+    this.#observedAt = now;
     let maxDeadline: number | undefined;
     let clearedTripped = false;
 

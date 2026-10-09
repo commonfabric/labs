@@ -254,15 +254,20 @@ rising order of plumbing:
 3. **The memory server's health route** — every trip, and every clear of a
    tripped pair, is reported on the space's own memory session
    (`session.report`, memory protocol §4.14) to the server holding the space,
-   which lists it on `/api/health/stats` under `sessionReports`, beside the
-   same sessions' `commitRates`, and counts it as `ct.memory.echo_breaker`.
-   A browser, the `cf` CLI, and a serving runtime all report this way, since
-   each already holds an authenticated session routed to that server, and a
-   clear says how the loop ended (`convergence`, `quiet`, or `retired`) with
-   its renewals and how long it was held. That is what judges the breaker in
-   production: a trip followed by the session's commit rate falling to one
-   per backoff is a loop held, a long hold ending in convergence is a loop
-   that settled, and a short one is a candidate false trip.
+   which lists it on `/api/health/stats` under `sessionReports`, beside the same
+   sessions' `commitRates`, and counts it as `ct.memory.echo_breaker`. A
+   browser, the `cf` CLI, and a serving runtime all report this way, since each
+   already holds an authenticated session routed to that server. A report names
+   the document's scope instance, so a serving runtime's reports for different
+   demanding sessions stay apart, and a clear says how the loop ended
+   (`convergence`, `quiet`, `retired`, or `evicted`) with its renewals and how
+   long it was held. The reports are what judge the breaker in production: a
+   trip followed by the session's commit rate falling to one per backoff is a
+   loop held, a long hold ending in convergence is a loop that settled, and a
+   short one is a candidate false trip. Reporting is best-effort: a server
+   without `sessionReportV1` gets none, and a report lost to a dropped
+   connection is not resent, so a missing report is not evidence that no loop
+   formed.
 
 ## 4. Interaction with the existing bounds and with server execution
 

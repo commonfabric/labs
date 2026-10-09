@@ -100,7 +100,7 @@ function replay(trace: Trace): number[] {
       ACTION,
       [{
         docKey: trace.label,
-        document: { space: SPACE, id: trace.label, scope: "space" },
+        document: { space: SPACE, id: trace.label, scopeKey: "space" },
         changed,
       }],
       seconds * 1000,

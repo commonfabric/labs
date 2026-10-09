@@ -8,12 +8,8 @@
  * construction: the recent list is a ring.
  */
 
-import type {
-  CellScope,
-  EchoBreakerClearReport,
-  SessionReport,
-} from "../v2.ts";
-import { SESSION_REPORT_TEXT_MAX } from "../v2.ts";
+import type { EchoBreakerClearReport, SessionReport } from "../v2.ts";
+import { isScopeKey, SESSION_REPORT_TEXT_MAX } from "../v2.ts";
 
 /** Reports kept in full, newest last. */
 const DEFAULT_RECENT = 64;
@@ -48,19 +44,31 @@ export type SessionReportsReport = {
   recent: RecordedSessionReport[];
 };
 
-const SCOPES: ReadonlySet<string> = new Set(["space", "user", "session"]);
 const CLEAR_REASONS: ReadonlySet<string> = new Set([
   "convergence",
   "quiet",
   "retired",
+  "evicted",
 ]);
+
+/**
+ * Whether `text` holds a control character, a line break among them, which
+ * would let report text forge a line of the server's log.
+ */
+const hasControlCharacter = (text: string): boolean => {
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+};
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isBoundedText = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 &&
-  value.length <= SESSION_REPORT_TEXT_MAX;
+  value.length <= SESSION_REPORT_TEXT_MAX && !hasControlCharacter(value);
 
 const isCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -68,23 +76,24 @@ const isCount = (value: unknown): value is number =>
 /**
  * Returns `value` as a session report when it is one of the shapes section
  * 4.14 defines, with every string within {@link SESSION_REPORT_TEXT_MAX} and
- * every count a non-negative integer, and `null` otherwise. The result is a
- * fresh object holding only the defined fields, so nothing else a client sent
- * reaches the log.
+ * free of control characters, the scope key canonical, and every count a
+ * non-negative integer, and `null` otherwise. The result is a fresh object
+ * holding only the defined fields, so nothing else a client sent reaches the
+ * log.
  */
 export const parseSessionReport = (value: unknown): SessionReport | null => {
   if (!isPlainRecord(value) || value.kind !== "echo-breaker") return null;
   const document = value.document;
   if (
     !isPlainRecord(document) || !isBoundedText(document.id) ||
-    typeof document.scope !== "string" || !SCOPES.has(document.scope) ||
+    !isBoundedText(document.scopeKey) || !isScopeKey(document.scopeKey) ||
     !isBoundedText(value.action)
   ) {
     return null;
   }
   const named = {
     kind: "echo-breaker" as const,
-    document: { id: document.id, scope: document.scope as CellScope },
+    document: { id: document.id, scopeKey: document.scopeKey },
     action: value.action,
   };
   if (value.event === "trip") return { ...named, event: "trip" };
@@ -120,6 +129,7 @@ export class SessionReportLog {
     convergence: 0,
     quiet: 0,
     retired: 0,
+    evicted: 0,
   };
 
   /**

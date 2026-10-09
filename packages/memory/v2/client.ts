@@ -70,6 +70,7 @@ import {
   validatePresencePublication,
 } from "./presence.ts";
 import type { Server } from "./server.ts";
+import { parseSessionReport } from "./session-reports.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
@@ -1088,7 +1089,11 @@ export class Client {
     this.#signedOpens = Promise.resolve();
     const ack = Promise.withResolvers<void>();
     this.#helloPending = ack;
-    const expectedFlags = getMemoryProtocolFlags();
+    // `sessionReportV1` is the server's capability alone: the client reads it
+    // from `hello.ok` and never offers it, since an older routed host refuses
+    // a hello carrying a flag it does not know.
+    const { sessionReportV1: _serverOnly, ...expectedFlags } =
+      getMemoryProtocolFlags();
     try {
       const hello = {
         type: "hello",
@@ -1735,20 +1740,23 @@ export class SpaceSession {
    * advertise `sessionReportV1`, or while the connection is down, and a
    * refusal is swallowed, since a diagnostic that fails to arrive costs only
    * the diagnostic. Strings longer than the protocol allows are cut to fit,
-   * so the server never refuses a report for its length.
+   * so the server never refuses a report for its length, and a report the
+   * server would still refuse as malformed is not sent: the server could not
+   * answer it under its request id.
    */
   async sendReport(report: SessionReport): Promise<void> {
     if (this.#closed || this.#client.serverFlags?.sessionReportV1 !== true) {
       return;
     }
-    const fitted: SessionReport = {
+    const fitted = parseSessionReport({
       ...report,
       action: report.action.slice(0, SESSION_REPORT_TEXT_MAX),
       document: {
         ...report.document,
         id: report.document.id.slice(0, SESSION_REPORT_TEXT_MAX),
       },
-    };
+    });
+    if (fitted === null) return;
     try {
       await this.#client.request({
         type: "session.report",

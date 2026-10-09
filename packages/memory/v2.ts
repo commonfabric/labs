@@ -2134,9 +2134,14 @@ export type EchoBreakerReportDocument = {
   /** The document's id. */
   id: string;
 
-  /** The scope the document was written at; the report's session resolves
-   * the instance. */
-  scope: CellScope;
+  /**
+   * The scope instance the action wrote, resolved: `space`, a principal's
+   * `user:` instance, or a session's `session:` instance. A serving runtime
+   * runs actions for many sessions and reports them all on its own, so the
+   * report names the instance rather than leaving the reporting session to
+   * stand for it.
+   */
+  scopeKey: ScopeKey;
 };
 
 /**
@@ -2157,7 +2162,8 @@ export type EchoBreakerTripReport = {
 /**
  * A tripped breaker cleared: the action wrote `document` without changing
  * it (`convergence`), saw no echo for the breaker's quiet reset (`quiet`),
- * or was unregistered (`retired`).
+ * was unregistered (`retired`), or lost its pair to the breaker's bounded
+ * table (`evicted`).
  */
 export type EchoBreakerClearReport = {
   kind: "echo-breaker";
@@ -2167,7 +2173,7 @@ export type EchoBreakerClearReport = {
   /** The action's scheduler id, cut to {@link SESSION_REPORT_TEXT_MAX}. */
   action: string;
 
-  reason: "convergence" | "quiet" | "retired";
+  reason: "convergence" | "quiet" | "retired" | "evicted";
 
   /** Echoes the pair saw after it tripped, each of which renewed the
    * backoff. */

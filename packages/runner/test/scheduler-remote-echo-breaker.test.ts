@@ -3,7 +3,11 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { type ScopeKeyIdentity, toDocumentPath } from "@commonfabric/memory/v2";
+import {
+  resolveScopeKey,
+  type ScopeKeyIdentity,
+  toDocumentPath,
+} from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/data-model";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -40,7 +44,7 @@ const STEP_SPACE = "did:key:steps" as IMemorySpaceAddress["space"];
 
 /** The document a synthetic step for `docKey` names. */
 function stepDocument(docKey: string): EchoDocument {
-  return { space: STEP_SPACE, id: docKey, scope: "space" };
+  return { space: STEP_SPACE, id: docKey, scopeKey: "space" };
 }
 
 /** An echo step (a run that changed the document) for `docKey`. */
@@ -177,7 +181,7 @@ describe("scheduler-remote-echo-breaker", () => {
       );
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:d`,
-        document: { space: alpha, id: "of:d", scope: "space" },
+        document: { space: alpha, id: "of:d", scopeKey: "space" },
         changed: true,
       }]);
     });
@@ -189,7 +193,7 @@ describe("scheduler-remote-echo-breaker", () => {
       const steps = computeEchoSteps(tx([]), log([doc], []), [doc], session1);
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:d`,
-        document: { space: alpha, id: "of:d", scope: "space" },
+        document: { space: alpha, id: "of:d", scopeKey: "space" },
         changed: false,
       }]);
     });
@@ -208,7 +212,7 @@ describe("scheduler-remote-echo-breaker", () => {
       );
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:input`,
-        document: { space: alpha, id: "of:input", scope: "space" },
+        document: { space: alpha, id: "of:input", scopeKey: "space" },
         changed: false,
       }]);
     });
@@ -225,7 +229,10 @@ describe("scheduler-remote-echo-breaker", () => {
       expect(steps).toEqual([]);
     });
 
-    it("keys two session instances of one document apart", () => {
+    it("keys and names two session instances of one document apart", () => {
+      // A serving runtime reports every demander's runs on its own session,
+      // so the step's document names the instance itself.
+
       const doc = address(alpha, "of:d", "session");
       const [first] = computeEchoSteps(
         tx([written(doc, "B", "A")]),
@@ -242,6 +249,12 @@ describe("scheduler-remote-echo-breaker", () => {
       expect(first.changed).toBe(true);
       expect(second.changed).toBe(true);
       expect(first.docKey).not.toBe(second.docKey);
+      expect(first.document.scopeKey).toBe(
+        resolveScopeKey("session", session1),
+      );
+      expect(second.document.scopeKey).toBe(
+        resolveScopeKey("session", session2),
+      );
     });
   });
 
@@ -450,6 +463,34 @@ describe("scheduler-remote-echo-breaker", () => {
           expect(clears.every((event) => event.reason === "retired")).toBe(
             true,
           );
+        });
+
+        it("reports an evicted clear for a tripped pair the bounded table drops", () => {
+          const { breaker, events } = recording();
+          trip(breaker, "d");
+          const tripTime = ECHO_TRIP_THRESHOLD - 1;
+          const start = 1000;
+          for (let i = 0; i < MAX_ECHO_PAIRS; i++) {
+            breaker.observe(ACTION, [echo(`d-${i}`)], start + i);
+          }
+          expect(breaker.accessForTestingOnly.pairState(ACTION, "d"))
+            .toBeUndefined();
+          expect(events.at(-1)).toEqual({
+            event: "clear",
+            actionId: ACTION,
+            document: stepDocument("d"),
+            reason: "evicted",
+            renewals: 0,
+            trippedMs: start + MAX_ECHO_PAIRS - 1 - tripTime,
+          });
+        });
+
+        it("reports nothing for an untripped pair the bounded table drops", () => {
+          const { breaker, events } = recording();
+          for (let i = 0; i < MAX_ECHO_PAIRS + 50; i++) {
+            breaker.observe(ACTION, [echo(`d-${i}`)], i);
+          }
+          expect(events).toEqual([]);
         });
 
         it("reports nothing for a pair that converges before it trips", () => {
@@ -776,7 +817,7 @@ describe("scheduler-remote-echo-breaker", () => {
           1,
         );
         expect(trips.every((report) => report.space === space)).toBe(true);
-        expect(trips.every((report) => report.document.scope === "space"))
+        expect(trips.every((report) => report.document.scopeKey === "space"))
           .toBe(true);
 
         tagB.value = "A";

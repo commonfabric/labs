@@ -629,7 +629,8 @@ process:
   with it.
 - `sessionReports` — the diagnostics clients reported about their own
   sessions over the memory protocol's `session.report`
-  ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), kept by
+  ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), best-effort
+  and only from clients whose server advertises `sessionReportV1`, kept by
   `SessionReportLog` in `packages/memory/v2/session-reports.ts`. The one
   reporter is the scheduler's remote-echo breaker
   ([plan](../../plans/scheduler-remote-echo-breaker.md)): `echoBreaker.trips`
@@ -637,10 +638,13 @@ process:
   document another writer kept rewriting back, and `echoBreaker.clears` counts
   how tripped actions ended — `convergence` when the action wrote the
   document without changing it, `quiet` when it saw no echo for the
-  breaker's quiet reset, `retired` when the action was unregistered. Both are
-  lifetime counts. `recent` lists the newest 64 reports in full, oldest first,
-  each with the `space`, the reporting `session` and its `principal`, the
-  `document` (`id` and `scope`), the `action`'s scheduler id, and for a clear
+  breaker's quiet reset, `retired` when the action was unregistered, `evicted`
+  when the breaker's bounded table dropped the pair. Both are lifetime counts.
+  `recent` lists the newest 64 reports in full, oldest first, each with the
+  `space`, the reporting `session`, its `principal` where the server knows
+  one, the `document` (`id`, and `scopeKey`, the scope instance the action
+  wrote — on a serving runtime a demanding session's rather than the
+  reporter's own), the `action`'s scheduler id, and for a clear
   its `reason`, its `renewals` — echoes after the trip, each renewing the
   backoff — and `trippedMs`. A trip with many renewals and a long
   `trippedMs` is a loop the breaker held; a clear by `convergence` after a
@@ -652,7 +656,8 @@ process:
   wave and cycle counts behind each entry.
 
 Everything here but `commitRates`, which is a window rather than a lifetime,
-accumulates for the process's whole life, across every space it has served, so
+and `sessionReports.recent`, which keeps only the newest reports, accumulates
+for the process's whole life, across every space it has served, so
 a phase is a difference between two captures rather than any single one — and
 **only `count` and `totalTime` subtract**. `min`, `max`, `p50`,
 `p95` and the CDF describe the whole lifetime; differencing them yields a number
@@ -716,9 +721,12 @@ while `tenMinutes` still carries the storm, and ten minutes later both do.
 loop. A breaker that tripped on a storming space reports it on its own
 session, so the same server lists a `trip` naming the session `commitRates`
 blames and the document it kept rewriting, and that session's `minute` falls
-to about one commit per backoff while the breaker holds it. A storm with no
-trip from its writers is a loop the breaker does not see, such as a client on
-a build without it or a loop between two documents rather than one. The
+to about one commit per backoff while the breaker holds it, where the tripped
+action is most of what that session writes; its other actions' commits still
+count. A storm with no trip from its writers is a loop the breaker does not
+see, such as a client on a build without it or a loop between two documents
+rather than one, or a report that did not arrive, since reporting is
+best-effort. The
 reports also leave the process as the `ct.memory.echo_breaker` counter on the
 same `memory-server` meter, with `space.did`, the `event` (`trip` or `clear`),
 and for a clear its `reason`.

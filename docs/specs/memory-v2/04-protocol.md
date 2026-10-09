@@ -64,8 +64,7 @@ The client MUST declare its protocol version in the first WebSocket message:
     "sessionReadCeiling": true,
     "presenceV1": true,
     "sessionClose": true,
-    "admissionNotice": true,
-    "sessionReportV1": true
+    "admissionNotice": true
   }
 }
 ```
@@ -310,7 +309,9 @@ again.
 reports about its own session with `session.report` (section 4.14). It is
 build-inherent and defaults to `false` when absent: a client connected to an
 older server keeps its reports to itself rather than sending a message the
-server would refuse.
+server would refuse. Only the server advertises it. A client's `hello` leaves
+it out, since an older routed host refuses a `hello` carrying a flag it does
+not know.
 
 `spaceKind` advertises that the server seals the kind a space's genesis commit
 declares, and reports it in the result of every `session.open` it admits
@@ -1890,13 +1891,17 @@ action ended.
 
 type SpaceId = string;
 type SessionId = string;
-type CellScope = "space" | "user" | "session";
+/** `space`, `user:<principal>`, or `session:<principal>:<session>`, each part
+ * URI-component encoded. */
+type ScopeKey = string;
 
 interface EchoBreakerReportDocument {
   id: string;
-  /** The scope the document was written at; the session resolves the
-   * instance. */
-  scope: CellScope;
+  /** The scope instance the action wrote, resolved. A serving runtime reports
+   * the runs it serves for many sessions on its own session, so the report
+   * names the instance rather than leaving the reporting session to stand for
+   * it. */
+  scopeKey: ScopeKey;
 }
 
 interface EchoBreakerTripReport {
@@ -1912,9 +1917,9 @@ interface EchoBreakerClearReport {
   event: "clear";
   document: EchoBreakerReportDocument;
   action: string;
-  /** Converged on the document, quiet for the breaker's reset, or the action
-   * unregistered. */
-  reason: "convergence" | "quiet" | "retired";
+  /** Converged on the document, quiet for the breaker's reset, the action
+   * unregistered, or the pair dropped from the breaker's bounded table. */
+  reason: "convergence" | "quiet" | "retired" | "evicted";
   /** Echoes after the trip, each of which renewed the backoff. */
   renewals: number;
   /** Milliseconds from the trip to the clear. */
@@ -1934,14 +1939,17 @@ The request receives a `response` whose `ok` is empty. It requires an open
 session for `space` on the same connection, as presence does; a session the
 connection does not hold gets a `SessionError`, and a routed connection is
 re-authorized for `READ` on the space as it is for presence. Every string
-carries at most 512 characters and every count is a non-negative integer; the
-server records only the fields defined here, under the session and the
-principal it was opened as. A report is best-effort on the client: it is not
-sent to a server that does not advertise the capability or while the connection
-is down, and a refusal is not surfaced, since a lost report costs only the
-diagnostic. `SpaceSession.sendReport(report)` is the client library's entry
-point, and it cuts an over-long string to fit rather than send one the server
-would refuse.
+carries at most 512 characters and no control character, since the server
+writes report text into its log; `scopeKey` is a canonical scope key; and every
+count is a non-negative integer. A report that breaks one of these is answered
+as an unparseable message. The server records only the fields defined here,
+under the session and the principal it was opened as. A report is best-effort
+on the client: it is not sent to a server that does not advertise the
+capability or while the connection is down, and a refusal is not surfaced,
+since a lost report costs only the diagnostic. `SpaceSession.sendReport(report)`
+is the client library's entry point. It cuts an over-long string to fit, and
+does not send a report the server would still refuse, since an unparseable
+message is answered under no request id.
 
 ## Routed public-stage Mode A
 

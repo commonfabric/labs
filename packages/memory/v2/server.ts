@@ -1462,27 +1462,16 @@ class Connection {
 
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload);
-    // A presence message is handled as it is handed over, not behind the
-    // frames already queued here: it carries no seq and settles nothing.
-    // Whether it can overtake a frame ahead of it on the socket is the
-    // host's business — one that hands frames over one at a time keeps it
-    // behind them (04-protocol.md §4.13.4). Everything else keeps the
-    // connection's order.
-    if (parsed !== null && isPresenceClientMessage(parsed)) {
+    // A presence message or a session report is handled as it is handed
+    // over, not behind the frames already queued here: it carries no seq and
+    // settles nothing, and the space a report describes is often the one
+    // whose frames are queued deepest (04-protocol.md §4.14). Whether it can
+    // overtake a frame ahead of it on the socket is the host's business — one
+    // that hands frames over one at a time keeps it behind them
+    // (04-protocol.md §4.13.4). Everything else keeps the connection's order.
+    if (parsed !== null && isImmediateClientMessage(parsed)) {
       try {
-        this.#receivePresence(parsed);
-      } catch (error) {
-        if (!this.#answerFailedRequest(parsed, error)) throw error;
-      }
-      this.#answered.delete(parsed.requestId);
-      return;
-    }
-    // A session report is handled as it is handed over, for the presence
-    // message's reasons, and one more: the space it describes is often the
-    // one whose frames are queued deepest (04-protocol.md §4.14).
-    if (parsed !== null && isSessionReportMessage(parsed)) {
-      try {
-        this.#receiveSessionReport(parsed);
+        this.#receiveImmediate(parsed);
       } catch (error) {
         if (!this.#answerFailedRequest(parsed, error)) throw error;
       }
@@ -1717,12 +1706,7 @@ class Connection {
     this.#server.detachSession(space, sessionId, this.id);
   }
 
-  #receivePresence(
-    message:
-      | PresenceJoinRequest
-      | PresencePublishRequest
-      | PresenceLeaveRequest,
-  ): void {
+  #receiveImmediate(message: ImmediateClientMessage): void {
     if (this.#closed) return;
     if (!this.#ready) {
       this.#send({
@@ -1737,25 +1721,11 @@ class Connection {
     ) {
       return;
     }
-    this.#send(this.#server.receivePresence(message, this));
-  }
-
-  #receiveSessionReport(message: SessionReportRequest): void {
-    if (this.#closed) return;
-    if (!this.#ready) {
-      this.#send({
-        type: "response",
-        requestId: message.requestId,
-        error: toError("ProtocolError", "memory hello is required first"),
-      });
-      return;
-    }
-    if (
-      !this.#requireSession(message.requestId, message.space, message.sessionId)
-    ) {
-      return;
-    }
-    this.#send(this.#server.receiveSessionReport(message, this));
+    this.#send(
+      message.type === "session.report"
+        ? this.#server.receiveSessionReport(message, this)
+        : this.#server.receivePresence(message, this),
+    );
   }
 
   async #receiveOrdered(
@@ -2294,9 +2264,20 @@ const isPresenceClientMessage = (
   message.type === "presence.join" || message.type === "presence.publish" ||
   message.type === "presence.leave";
 
-const isSessionReportMessage = (
+/**
+ * A request a connection handles as it is handed over rather than in frame
+ * order: presence, and a session report.
+ */
+type ImmediateClientMessage =
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
+  | SessionReportRequest;
+
+const isImmediateClientMessage = (
   message: ClientMessage | OversizedClientMessage,
-): message is SessionReportRequest => message.type === "session.report";
+): message is ImmediateClientMessage =>
+  isPresenceClientMessage(message) || message.type === "session.report";
 
 /**
  * The engine opener a test supplies in place of `Server`'s own step, which
@@ -3447,26 +3428,8 @@ export class Server {
     connection: Connection,
   ): ResponseMessage<PresenceJoinResult | Record<PropertyKey, never>> {
     const { requestId, space, sessionId, room } = message;
-    if (!this.isSessionAttached(space, sessionId, connection.id)) {
-      return respondTypedError(
-        requestId,
-        toError("SessionRevokedError", "Session is not attached"),
-      );
-    }
-    if (connection.routed) {
-      const engine = this.#resolvedEngines.get(space);
-      const session = this.#sessions.get(space, sessionId);
-      const deny = engine === undefined || session === null
-        ? toError("SessionRevokedError", "Routed memory authority ended")
-        : this.#authorizeCurrentSessionWithEngine(
-          engine,
-          space,
-          sessionId,
-          session,
-          "READ",
-        );
-      if (deny) return respondTypedError(requestId, deny);
-    }
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
     if (!isPresenceRoom(room)) {
       return respondTypedError(
         requestId,
@@ -3527,26 +3490,8 @@ export class Server {
     connection: Connection,
   ): ResponseMessage<Record<PropertyKey, never>> {
     const { requestId, space, sessionId, report } = message;
-    if (!this.isSessionAttached(space, sessionId, connection.id)) {
-      return respondTypedError(
-        requestId,
-        toError("SessionRevokedError", "Session is not attached"),
-      );
-    }
-    if (connection.routed) {
-      const engine = this.#resolvedEngines.get(space);
-      const session = this.#sessions.get(space, sessionId);
-      const deny = engine === undefined || session === null
-        ? toError("SessionRevokedError", "Routed memory authority ended")
-        : this.#authorizeCurrentSessionWithEngine(
-          engine,
-          space,
-          sessionId,
-          session,
-          "READ",
-        );
-      if (deny) return respondTypedError(requestId, deny);
-    }
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
     const principal = this.#sessions.get(space, sessionId)?.principal;
     this.#sessionReports.record({
       space,
@@ -3556,7 +3501,7 @@ export class Server {
         : { principal }),
       report,
     });
-    const document = `${report.document.scope} ${report.document.id}`;
+    const document = `${report.document.scopeKey} ${report.document.id}`;
     if (report.event === "trip") {
       echoBreakerReportCount.add(1, { "space.did": space, event: "trip" });
       console.warn(
@@ -3577,6 +3522,34 @@ export class Server {
       );
     }
     return { type: "response", requestId, ok: {} };
+  }
+
+  /**
+   * The error refusing a presence request or session report `connection`
+   * makes on `sessionId`, or `null` to handle it: the session must still be
+   * attached to the connection, and on a routed connection its routed
+   * authority must still hold `READ` on the space.
+   */
+  #refuseImmediateRequest(
+    space: string,
+    sessionId: string,
+    connection: Connection,
+  ): V2Error | null {
+    if (!this.isSessionAttached(space, sessionId, connection.id)) {
+      return toError("SessionRevokedError", "Session is not attached");
+    }
+    if (!connection.routed) return null;
+    const engine = this.#resolvedEngines.get(space);
+    const session = this.#sessions.get(space, sessionId);
+    return engine === undefined || session === null
+      ? toError("SessionRevokedError", "Routed memory authority ended")
+      : this.#authorizeCurrentSessionWithEngine(
+        engine,
+        space,
+        sessionId,
+        session,
+        "READ",
+      );
   }
 
   /** Ends every presence membership the connection holds. */

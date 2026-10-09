@@ -808,10 +808,11 @@ holds the measurements and the conditions for revisiting.
   re-runs with capped exponential backoff renewed on every further echo, so a
   continuing loop re-runs at most once per backoff. It logs one counted line
   per trip and exposes `scheduler.getEchoBreakerStats()`. A run that leaves the
-  document unchanged clears the pair. Each trip and each clear is also reported
-  on the space's memory session (`session.report`, memory protocol §4.14), so
-  the server holding the space counts it and lists it on `/api/health/stats`
-  under `sessionReports`, beside the same sessions' commit rates. It is
+  document unchanged clears the pair. Each trip and each clear is also
+  reported, best-effort, on the space's memory session (`session.report`,
+  memory protocol §4.14): a server that advertises `sessionReportV1` and
+  receives the report counts it and lists it on `/api/health/stats` under
+  `sessionReports`, beside the same sessions' commit rates. It is
   trigger-independent: it bounds the loop whatever made the two sides
   disagree, the guardrail Topic 911 waits for and the first of Topic 913's
   three.

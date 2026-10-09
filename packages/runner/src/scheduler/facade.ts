@@ -3463,6 +3463,21 @@ export class Scheduler {
    * action's re-runs (a tripped loop), `0` lifts the deferral (a convergence
    * that ended the loop), and `undefined` leaves the gate untouched.
    */
+  #observeRemoteEcho(
+    action: Action,
+    actionId: string,
+    steps: readonly EchoStep[],
+  ): void {
+    const deadline = this.#echoBreaker.observe(
+      actionId,
+      steps,
+      performance.now(),
+    );
+    if (deadline === undefined) return;
+    if (deadline > 0) this.#gates.setEchoBackoff(action, deadline);
+    else this.#gates.clearEchoBackoff(action);
+  }
+
   /**
    * Reports a breaker trip or clear to the memory server serving the
    * document's space, on that space's session (memory-v2 `04-protocol.md`
@@ -3477,7 +3492,7 @@ export class Scheduler {
       if (!hasSessionReportStorageCapability(provider)) return;
       const named = {
         kind: "echo-breaker" as const,
-        document: { id: event.document.id, scope: event.document.scope },
+        document: { id: event.document.id, scopeKey: event.document.scopeKey },
         action: event.actionId,
       };
       provider.sendReport(
@@ -3495,21 +3510,6 @@ export class Scheduler {
         error,
       ]);
     }
-  }
-
-  #observeRemoteEcho(
-    action: Action,
-    actionId: string,
-    steps: readonly EchoStep[],
-  ): void {
-    const deadline = this.#echoBreaker.observe(
-      actionId,
-      steps,
-      performance.now(),
-    );
-    if (deadline === undefined) return;
-    if (deadline > 0) this.#gates.setEchoBackoff(action, deadline);
-    else this.#gates.clearEchoBackoff(action);
   }
 
   /**

@@ -48,11 +48,13 @@ const serverStartTimestamp = Date.now();
 export const stats: AppRouteHandler<StatsRoute> = (c) => {
   // The serving loop's §7 counters
   // (docs/specs/server-side-execution/serving-loop.md §7): present only
-  // when an ExecutorHost runs in this process (the ON arm); the OFF-arm
-  // response is byte-identical to today. Phase 6 nests the memory
+  // when an ExecutorHost runs in this process (the ON arm), so an OFF-arm
+  // response carries no serving-loop block at all. Phase 6 nests the memory
   // server's push-priority counters (protocol.md §3) under the same
-  // ON-arm-only block — all-zero OFF by construction, but the block's
-  // very presence stays flag-gated so the OFF response never changes.
+  // ON-arm-only block — all-zero OFF by construction, but the block's very
+  // presence stays flag-gated, so the OFF arm never shows it. The memory
+  // server's own diagnostics below follow whether one is co-hosted, not the
+  // flag.
   const servingLoop = getServingLoopStats();
   const push = getPushPriorityStats();
   // The memory server's decoded-document caches, one per open space:

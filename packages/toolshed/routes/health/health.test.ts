@@ -233,7 +233,7 @@ Deno.test("health routes", async (t) => {
         expect(empty.sessionReports).toEqual({
           echoBreaker: {
             trips: 0,
-            clears: { convergence: 0, quiet: 0, retired: 0 },
+            clears: { convergence: 0, quiet: 0, retired: 0, evicted: 0 },
           },
           recent: [],
         });
@@ -248,18 +248,21 @@ Deno.test("health routes", async (t) => {
           invocation: { aud: audience, challenge: challenge.value },
           authorization: {},
         }));
-        const document = { id: "of:health-stats-report", scope: "space" };
+        const document = {
+          id: "of:health-stats-report",
+          scopeKey: "space" as const,
+        };
         const action = "cf:module/abc:__cfLift_1:xyz";
         await mounted.sendReport({
           kind: "echo-breaker",
           event: "trip",
-          document: { id: document.id, scope: "space" },
+          document,
           action,
         });
         await mounted.sendReport({
           kind: "echo-breaker",
           event: "clear",
-          document: { id: document.id, scope: "space" },
+          document,
           action,
           reason: "convergence",
           renewals: 2,
@@ -268,13 +271,25 @@ Deno.test("health routes", async (t) => {
         const populated = await stats();
         expect(populated.sessionReports.echoBreaker).toEqual({
           trips: 1,
-          clears: { convergence: 1, quiet: 0, retired: 0 },
+          clears: { convergence: 1, quiet: 0, retired: 0, evicted: 0 },
         });
         expect(
           populated.sessionReports.recent.map((
             report: { event: string; principal?: string; space: string },
           ) => [report.event, report.principal, report.space]),
         ).toEqual([["trip", principal, space], ["clear", principal, space]]);
+        // The schema refuses a clear without its reason.
+        const [listedTrip, listedClear] = populated.sessionReports.recent;
+        const { reason: _reason, ...unexplained } = listedClear;
+        expect(
+          declared.safeParse({
+            ...populated,
+            sessionReports: {
+              ...populated.sessionReports,
+              recent: [listedTrip, unexplained],
+            },
+          }).success,
+        ).toBe(false);
         // The schema refuses a malformed count.
         expect(
           declared.safeParse({

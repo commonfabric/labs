@@ -7,14 +7,14 @@ import { SESSION_REPORT_TEXT_MAX, type SessionReport } from "../v2.ts";
 const trip: SessionReport = {
   kind: "echo-breaker",
   event: "trip",
-  document: { id: "of:fid1:shared", scope: "space" },
+  document: { id: "of:fid1:shared", scopeKey: "space" },
   action: "cf:module/abc:__cfLift_1:xyz",
 };
 
 const clear: SessionReport = {
   kind: "echo-breaker",
   event: "clear",
-  document: { id: "of:fid1:shared", scope: "space" },
+  document: { id: "of:fid1:shared", scopeKey: "space" },
   action: "cf:module/abc:__cfLift_1:xyz",
   reason: "convergence",
   renewals: 3,
@@ -31,25 +31,69 @@ describe("session-reports", () => {
       expect(parseSessionReport(clear)).toEqual(clear);
     });
 
+    it("returns a report naming a session's scope instance", () => {
+      const instance = {
+        ...trip,
+        document: {
+          id: "of:fid1:shared",
+          scopeKey: "session:did%3Akey%3Aalice:session-1",
+        },
+      };
+      expect(parseSessionReport(instance)).toEqual(instance);
+    });
+
+    it("returns a clear by eviction", () => {
+      const evicted = { ...clear, reason: "evicted" };
+      expect(parseSessionReport(evicted)).toEqual(evicted);
+    });
+
     it("returns `null` for a kind or an event it does not define", () => {
       expect(parseSessionReport({ ...trip, kind: "other" })).toBeNull();
       expect(parseSessionReport({ ...trip, event: "pause" })).toBeNull();
     });
 
-    it("returns `null` for a scope it does not define", () => {
+    it("returns `null` for a scope key that is not canonical", () => {
+      for (const scopeKey of ["global", "user:", "session:did:key:alice"]) {
+        expect(
+          parseSessionReport({
+            ...trip,
+            document: { id: "of:fid1:shared", scopeKey },
+          }),
+        ).toBeNull();
+      }
       expect(
         parseSessionReport({
           ...trip,
-          document: { id: "of:fid1:shared", scope: "global" },
+          document: { id: "of:fid1:shared", scope: "space" },
         }),
       ).toBeNull();
+    });
+
+    it("returns `null` for text holding a line break or another control character", () => {
+      // The server writes report text into its log, where a line break would
+      // start a line of the client's choosing.
+
+      expect(
+        parseSessionReport({ ...trip, action: "cf:lift\n[memory] forged" }),
+      ).toBeNull();
+      expect(
+        parseSessionReport({
+          ...trip,
+          document: { id: "of:fid1:shared\r", scopeKey: "space" },
+        }),
+      ).toBeNull();
+      expect(parseSessionReport({ ...trip, action: "cf:\u007flift" }))
+        .toBeNull();
     });
 
     it("returns `null` for a string longer than the protocol allows", () => {
       const long = "x".repeat(SESSION_REPORT_TEXT_MAX + 1);
       expect(parseSessionReport({ ...trip, action: long })).toBeNull();
       expect(
-        parseSessionReport({ ...trip, document: { id: long, scope: "space" } }),
+        parseSessionReport({
+          ...trip,
+          document: { id: long, scopeKey: "space" },
+        }),
       ).toBeNull();
     });
 
@@ -98,7 +142,7 @@ describe("session-reports", () => {
           });
           expect(log.report().echoBreaker).toEqual({
             trips: 2,
-            clears: { convergence: 1, quiet: 1, retired: 0 },
+            clears: { convergence: 1, quiet: 1, retired: 0, evicted: 0 },
           });
         });
 
