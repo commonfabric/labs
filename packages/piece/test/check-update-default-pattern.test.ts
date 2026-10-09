@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub as stubMethod } from "@std/testing/mock";
 import {
   getMetaLink,
   getPatternIdentityRef,
@@ -1270,6 +1271,51 @@ describe("opening a space root", () => {
         symbol: "default",
       });
     });
+  });
+
+  it("names the start failure when the roll-forward fails for a reason of its own", async () => {
+    await setup();
+    const root = (await controller.ensureDefaultPattern()).getCell();
+    const staleRef = {
+      identity: await identityForSource(
+        patternSource("unloadable-root-whose-roll-forward-fails"),
+      ),
+      symbol: "default",
+    };
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        staleRef,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    stub.setSource(SOURCE_V2);
+    // The roll-forward reads the root again once it has moved it, and that
+    // read is what fails here. The lookup does not follow the root's origin,
+    // which would otherwise take the new source before the start.
+    const lookUp = controller.getDefaultPattern.bind(controller);
+    using _reread = stubMethod(
+      controller,
+      "getDefaultPattern",
+      (open) =>
+        open === false
+          ? Promise.reject(new Error("the root could not be read again"))
+          : lookUp(open),
+    );
+
+    let thrown: unknown;
+    try {
+      await controller.getDefaultPattern({ reconcile: false, start: true });
+    } catch (error) {
+      thrown = error;
+    }
+
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("default-root heal failed");
+    expect(message).toContain("Could not load pattern");
+    expect(message).toContain("the root could not be read again");
   });
 
   it("keeps a root pinned when the host does not say which identity it offers", async () => {
