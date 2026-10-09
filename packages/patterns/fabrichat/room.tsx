@@ -315,6 +315,9 @@ interface AddMemberState {
   /** Whether the room is one a manager created in a space of its own. */
   ownSpace: boolean;
 
+  /** The room's kind, which a direct room's space keeps to its two members. */
+  kind: ChatRoomKind;
+
   /** What the session's latest add came to, which the control shows. */
   outcome: Writable<string>;
 }
@@ -322,15 +325,21 @@ interface AddMemberState {
 /**
  * Admits the person whose chat address the control holds to the room's space,
  * with OWNER, so that they too may add others, from a trusted gesture on
- * `ChatAddMemberSurface`. Only an OWNER of the space may admit someone, and
- * the session is shown what came of it.
+ * `ChatAddMemberSurface`. Only an OWNER of the space may admit someone, only
+ * to a group room, and the session is shown what came of it.
  */
 const commitAddMember = handler<AddMemberEvent, AddMemberState>(
-  (event, { room, ownSpace, outcome }) => {
+  (event, { room, ownSpace, kind, outcome }) => {
     // A space's own chat shares its space, whose members are its own
     // business, whatever a rendering shows.
     if (!ownSpace) {
       outcome.set("Members of this chat are added by its space.");
+      return;
+    }
+    // A direct room is a conversation between two people, whatever reaches
+    // its stream.
+    if (kind === "direct") {
+      outcome.set("A direct chat keeps its two members.");
       return;
     }
     const member = event?.target?.value?.trim() ?? "";
@@ -367,13 +376,16 @@ export interface AddMemberInput {
    * space's own chat shares its space, whose members are its own business.
    */
   ownSpace: boolean;
+
+  /** The room's kind; a direct room's space keeps to its two members. */
+  kind: ChatRoomKind;
 }
 
 /** What the control adding a member to a room provides. */
 export interface AddMemberOutput {
   /**
-   * The control, shown only to an OWNER of a room in a space of its own whose
-   * profile has resolved, as the room's other controls are.
+   * The control, shown only to an OWNER of a group room in a space of its own
+   * whose profile has resolved, as the room's other controls are.
    */
   [UI]: VNode;
 
@@ -382,18 +394,18 @@ export interface AddMemberOutput {
 }
 
 /**
- * Offers an OWNER of a room's space a way to admit someone else to it, by
- * their chat address.
+ * Offers an OWNER of a group room's space a way to admit someone else to it,
+ * by their chat address.
  */
 export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
-  ({ room, myProfile, ownSpace }) => {
+  ({ room, myProfile, ownSpace, kind }) => {
     const outcome = new Writable.perSession<string>("");
-    const add = commitAddMember({ room, ownSpace, outcome });
+    const add = commitAddMember({ room, ownSpace, kind, outcome });
     // Who may add differs by viewer, and what came of an add by session, so
     // both are hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
     const addDisplay = computed((): ChatDisplay =>
-      ownSpace && myProfile?.get() !== undefined &&
+      ownSpace && kind !== "direct" && myProfile?.get() !== undefined &&
         spaceAccess(room) === "OWNER"
         ? "flex"
         : "none"
@@ -660,7 +672,7 @@ export const FabriChatRoomCore = pattern<
   const participants = computed(() => participantsOf(listed, entries));
   const join = addParticipant({ roster });
   const canSend = computed(() => canActIn(messages, myProfile));
-  const addMember = AddMember({ room: messages, myProfile, ownSpace });
+  const addMember = AddMember({ room: messages, myProfile, ownSpace, kind });
   const cannotSend = computed(() => !canSend);
   // The policy is a document of its own, which `about` links.
   const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);

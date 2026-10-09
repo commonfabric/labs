@@ -97,8 +97,8 @@ which needs no event, but can't open other windows, send, or react.
 
 A room keeps no membership of its own. Who is in its space, and with what
 access, is the space's business: its access list changes through the space's
-own tools, such as the CLI's `cf acl`, and, for a room in a space of its own,
-through the room's [`addMember`](#addmembertarget--value-string-), from
+own tools, such as the CLI's `cf acl`, and, for a group room in a space of its
+own, through the room's [`addMember`](#addmembertarget--value-string-), from
 which any OWNER admits someone else as OWNER. Its root lists its
 participants' profiles, claims each member contributes by joining the space: a
 room in a space of its own is that root, and keeps them itself, each added
@@ -506,12 +506,14 @@ output but not in `[VIEWS]`.
 - **Admitted:** as a trusted gesture on `ChatAddMemberSurface`, from the room's
   rendered add control or from a client's own control through the sanctioned
   issuing path (see [`clients.md`](clients.md#the-sanctioned-issuing-path)),
-  from an OWNER of the room's space, for a room in a space of its own.
+  from an OWNER of the room's space, for a group room in a space of its own.
 - **Effect:** grants the principal OWNER on the room's space, so they too may
   add others. Granting someone the OWNER they already hold changes nothing.
-- **Refused:** an address that is not a principal's DID, a sender without
-  OWNER, a room that shares an existing space, and anything the space's access
-  list refuses. The rendering tells the session what came of its add.
+- **Refused:** a direct room, whose space keeps its two members; an address
+  that is not a principal's DID, a sender without OWNER, a room that shares an
+  existing space, and anything the space's access list refuses. The rendering
+  tells the session what came of its add, and shows a direct room no add
+  control.
 
 ### `addParticipant(profile: Cell<ChatProfile>)`
 

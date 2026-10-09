@@ -192,6 +192,30 @@ describe("fabrichat spaces across runtimes", () => {
       .toBe("Growing team");
   });
 
+  it("refuses an add to a direct room, even from its counterpart's own control", async () => {
+    const room = await start("openDirect", {
+      requestId: "d-add",
+      counterpart: member.identity.did(),
+    });
+    const participants = await member.read(["participants", "length"], {
+      piece: room,
+    });
+
+    // The counterpart holds OWNER, as a member admitted at creation does, and
+    // sends from the room's control, yet a direct room keeps its two members.
+    await member.send(
+      "addMember",
+      { target: { value: stranger.identity.did() } },
+      ADD_MEMBER_ACTION,
+      { piece: room },
+    );
+    await harness.settle();
+    await expect(stranger.read(["about", "kind"], { piece: room })).rejects
+      .toThrow(`lacks READ on space ${room.space}`);
+    expect(await member.read(["participants", "length"], { piece: room }))
+      .toBe(participants);
+  });
+
   it("lets a direct room's counterpart read it, and refuses a stranger", async () => {
     const room = await start("openDirect", {
       requestId: "d-1",

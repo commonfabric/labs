@@ -1,7 +1,7 @@
 /**
- * A FabriChat room's add control: shown to an OWNER of a room the manager
- * created in a space of its own, and refusing what it can refuse before it
- * grants anything. That an add admits someone to the room's space is
+ * A FabriChat room's add control: shown to an OWNER of a group room the
+ * manager created in a space of its own, and refusing what it can refuse
+ * before it grants anything. That an add admits someone to the room's space is
  * something only a space other than the test's own shows, so
  * `../integration/fabrichat-spaces-multi-runtime.test.ts` checks it.
  */
@@ -90,6 +90,12 @@ export default pattern(() => {
     about: { kind: "group" as const, title: "Team" },
     ...emptyRecords(),
   } as RoomArg);
+  // A direct room a manager created, which keeps its two members.
+  const directRoom = FabriChatRoomCore({
+    myProfile: profile,
+    about: { kind: "direct" as const },
+    ...emptyRecords(),
+  } as RoomArg);
   // A space's own chat, which has no `about`.
   const sharedRoom = FabriChatRoomCore({
     myProfile: profile,
@@ -98,13 +104,14 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
-      // The viewer is an OWNER of the test's space, so a room in a space of
-      // its own offers them the control once their profile has resolved, and
-      // a space's own chat does not.
+      // The viewer is an OWNER of the test's space, so a group room in a
+      // space of its own offers them the control once their profile has
+      // resolved, and neither a direct room nor a space's own chat does.
       {
         assertion: assert(() =>
           displayOf(ownRoom[UI], "fabrichat-add-member") === "flex" &&
           displayOf(unresolvedRoom[UI], "fabrichat-add-member") === "none" &&
+          displayOf(directRoom[UI], "fabrichat-add-member") === "none" &&
           displayOf(sharedRoom[UI], "fabrichat-add-member") === "none" &&
           shownOutcome(ownRoom[UI]) === "none:"
         ),
@@ -118,6 +125,19 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           shownOutcome(ownRoom[UI]) === "block:That isn't a chat address."
+        ),
+      },
+      // A direct room refuses an add, whatever reaches its stream, a
+      // principal's address included.
+      {
+        action: directRoom.addMember,
+        event: typed(BOB),
+        trustedUi: addGesture,
+      },
+      {
+        assertion: assert(() =>
+          shownOutcome(directRoom[UI]) ===
+            "block:A direct chat keeps its two members."
         ),
       },
       // A space's own chat refuses an add, whatever reaches its stream.
