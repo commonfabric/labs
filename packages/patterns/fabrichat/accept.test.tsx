@@ -6,7 +6,9 @@
  * the creator. The room offers its other member the control that asks their
  * manager to list it, until the manager does, and accepting the room lists
  * them among its participants. A start with the creator finds a room listed
- * as theirs, preferring the one `direct` holds, rather than creating another.
+ * as theirs, preferring the one `direct` holds and otherwise the newest,
+ * rather than creating another, and keeps it in `direct`, so a start finds it
+ * again once it is forgotten.
  */
 import {
   action,
@@ -235,6 +237,26 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       offer: { from: setup.aliceDid.get(), id: "d-1" },
     })
   );
+  // Alice's second room, registered in the same catalog as her first, as
+  // admitted later.
+  const action_register_offered_again = action(() =>
+    register.send({
+      space: spaceOf(setup.heldAgain.key("room")) ?? "",
+      host: "http://localhost",
+      kind: CHAT_ROOM_OFFER_KIND,
+      offer: { from: setup.aliceDid.get(), id: "d-2" },
+      since: Date.now() + 3_600_000,
+    })
+  );
+  const action_forget_reused = action(() => {
+    const space = spaceOf(setup.heldAgain.key("room")) ?? "";
+    offered.forget.send({
+      requestId: "forget-reused",
+      room: setup.heldAgain.key("room").resolveAsCell(),
+      revision: readSharedSpaceCatalog(offeredCatalog).entries[space]
+        ?.revision,
+    });
+  });
   // Alice's second room, registered as a host registers an offered one, in
   // the catalog of the manager that accepted her first, as admitted later.
   const registerAgain = registerSharedSpace({ catalog });
@@ -313,8 +335,16 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           offered.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
       },
-      // A start with Alice finds that room, creates none, and keeps it in
-      // `direct` from then on.
+      // With a second room of Alice's listed, newer, a start with her finds
+      // the newer, creates none, and keeps it in `direct` from then on.
+      { action: action_register_offered_again },
+      {
+        assertion: assert(() =>
+          offered.rooms.length === 2 &&
+          spaceOf(offered.rooms[0]?.room) ===
+            spaceOf(setup.heldAgain.key("room"))
+        ),
+      },
       {
         action: offered.openDirect,
         event: { requestId: "reuse", counterpart: setup.aliceDid },
@@ -323,13 +353,40 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() => {
           const outcome = offeredRequests.get()["reuse"];
-          const space = spaceOf(setup.held.key("room"));
+          const space = spaceOf(setup.heldAgain.key("room"));
           return space !== undefined && outcome?.status === "done" &&
             spaceOf(outcome.entry?.room) === space &&
-            offered.rooms.length === 1 &&
+            offered.rooms.length === 2 &&
             Object.keys(readSharedSpaceCatalog(offeredCatalog).entries)
-                .length === 1 &&
+                .length === 2 &&
             spaceOf(offeredDirect.get()[setup.aliceDid.get()]?.room) === space;
+        }),
+      },
+      // Once that room is forgotten, a start with Alice finds it again
+      // through `direct`, rather than the room still listed, and lists it
+      // again.
+      { action: action_forget_reused },
+      {
+        assertion: assert(() =>
+          offeredRequests.get()["forget-reused"]?.status === "done" &&
+          offered.rooms.length === 1 &&
+          spaceOf(offered.rooms[0]?.room) === spaceOf(setup.held.key("room"))
+        ),
+      },
+      {
+        action: offered.openDirect,
+        event: { requestId: "reuse-again", counterpart: setup.aliceDid },
+        trustedUi: startGesture,
+      },
+      {
+        assertion: assert(() => {
+          const outcome = offeredRequests.get()["reuse-again"];
+          const space = spaceOf(setup.heldAgain.key("room"));
+          return space !== undefined && outcome?.status === "done" &&
+            spaceOf(outcome.entry?.room) === space &&
+            offered.rooms.length === 2 &&
+            Object.keys(readSharedSpaceCatalog(offeredCatalog).entries)
+                .length === 2;
         }),
       },
       // With a second room of Alice's listed, newest, beside the one `direct`
