@@ -4,6 +4,12 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Audits and reports
 
+- [FabriChat reconciliation with main](fabrichat-reconciliation-2026-10-09.md) — 2026-10-09; retained independent room layout and sender-chosen request IDs, narrow manager room references, bounded acceptance for four unmerged Home baselines, and preserved compatibility evidence.
+
+- [FabriChat system membership](fabrichat-system-membership-2026-09-30.md) — 2026-09-30; system-owned membership scope revision, removal of room administration contracts, and bounded acceptance of intermediate PR baselines.
+- [FabriChat revised-spec reconciliation](fabrichat-revised-spec-2026-10-02.md) — 2026-10-02. Retaining protected storage while adopting PR 8412's revised contracts, and recording bounded compatibility exceptions.
+
+- [FabriChat protocol replacement](fabrichat-protocol-replacement-2026-09-29.md) — 2026-09-29; deliberate replacement of the example contract, bounded compatibility acceptance, and no automatic migration of old message storage.
 - [The Topics space write storm](development/performance/2026-10-07-topics-space-write-storm.md) — 2026-10-07; the Estuary toolshed instance owning the shared Topics space at 95% main-thread CPU for a day, with 19.4 of its 23 hours in `memory/frame/handle`, traced through the space's 2.29-million-commit history to four client sessions each re-persisting the same six computed documents with a value that differed only in the scope of a link, a link at session scope against the same link at space scope or its declared empty default, because output placement followed the narrowest instance a reader held rather than the narrowest scope its inputs declared; the storm began thirty minutes after the 2026-10-06 deploy and peaked at about 50 commits per second.
 
 - [Generic-normalization baseline cleanup](development/generic-normalization-baseline-cleanup-2026-10-03.md) — PR #8395 after Opus's second review: remove 14 never-shipped candidate records, restore the existing acceptance registry, and record only the final contracts.

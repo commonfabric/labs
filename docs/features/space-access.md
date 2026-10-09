@@ -97,6 +97,14 @@ is not membership: `spaceReaderRole()` returns no role for it, and neither does
 the render membership lookup, so `spaceAccess(target)` agrees with both and
 returns `undefined`.
 
+A handler that reads an access list still loading into its replica withdraws
+its transaction. The scheduler runs it again when the load settles, so the
+temporary `undefined` cannot commit a refusal or consume the event. This applies
+to both `spaceAccess()` and `spaceAccessOf()`, and only while a load is in flight
+and the replica has no local basis for the list. A confirmed absent list remains
+`undefined` without withdrawing the handler. Reactive computations rerun when
+the list arrives through their ordinary read dependencies.
+
 A `target` of `undefined` is a target not known yet, and returns `undefined`. A
 computation that takes its target by value, rather than as a cell, reads
 `undefined` for it while the value it names cannot be read, which is exactly

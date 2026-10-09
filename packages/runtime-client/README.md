@@ -78,6 +78,15 @@ decides nothing, and no verdict is reported while it stands. `cf-cfc-authorship`
 draws its badge from this helper, and a host that draws no Lit component calls
 it directly.
 
+A VDOM mount activates the persisted piece that produces its resolved target.
+The mount watches reference changes, so selecting another linked piece also
+activates that piece in the viewer's runtime. Startup runs alongside rendering;
+normal subscriptions deliver the resulting view. Unmounting cancels pending
+startup and releases the reference watcher without stopping a graph that other
+consumers may use. Cells without pattern metadata remain ordinary render data.
+View-scoped replication supplies producers through its existing demand
+lifecycle.
+
 ## Diagnosing pending writes
 
 `RuntimeClient.getStorageDiagnostics()` asks the worker for a current storage

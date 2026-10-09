@@ -6867,7 +6867,8 @@ export class Runner {
   /**
    * Prepares a named piece's run for another attempt after its start
    * transaction was refused over a policy manifest another participant
-   * installed first. Resolves `"retry"` when the caller should run it again,
+   * installed first, or a stale read while clients execute the piece.
+   * Resolves `"retry"` when the caller should run it again,
    * `"terminal"` when the caller's failure arm should run as it does for any
    * other refusal, and `"settled"` when the start was stopped or the runtime
    * torn down during the wait, so there is nothing left to report.
@@ -6880,10 +6881,11 @@ export class Runner {
    * lands the setup, so this is the retry `Runtime.editWithRetry()` gives any
    * other retrying writer: wait for the refusal's catch-up, then prepare the
    * run from the start, where the install reads the manifest as present.
-   * Every other refusal stays terminal, a stale read over the piece's own
-   * documents included: whether a re-commit converges against a serving
-   * side's derived writes is a different question, which
-   * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
+   * A client-executed piece can also lose a read of its ordinary documents
+   * to another participant. It follows this same fresh-transaction path so
+   * intentional argument changes survive. Under server execution, stale reads
+   * instead use `#catchUpAndStartOnStaleRead()` without recommitting setup.
+   * Refusals outside these two conflict classes stay terminal.
    *
    * The refused install is torn down only while it is still the key's current
    * registration, and the ownership token goes back to pending for the wait,
@@ -6904,7 +6906,9 @@ export class Runner {
     // and a newer lifecycle epoch.
     const key = this.#getDocKey(resultCell);
     if (
-      !refusalNamesPolicyManifest(error) ||
+      !(refusalNamesPolicyManifest(error) ||
+        (!this.#runtime.experimental.serverExecution &&
+          isStaleReadConflict(error))) ||
       installedRegistration === undefined ||
       this.#cancels.get(key) !== installedRegistration
     ) {
@@ -6915,8 +6919,8 @@ export class Runner {
     this.#registerPendingDeferredStart(key, ownership);
     logger.info(
       "piece-start-commit-retrying",
-      "piece-run start lost a policy manifest install to another " +
-        "participant; running it again once storage has caught up",
+      "piece-run start lost its read basis to another participant; " +
+        "running it again once storage has caught up",
       resultCell.getAsNormalizedFullLink().id,
       error,
     );
@@ -6970,10 +6974,11 @@ export class Runner {
    *
    * ON-ONLY: under OFF a stale confirmed read on a deferred start means another
    * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
-   * arm of a commit-gated start stays terminal. A named piece's run refused
-   * over a policy manifest another participant installed first is not that
-   * story either: `#retryPieceRunStart()` runs it again in a fresh
-   * transaction, under either arm, when this recovery declines.
+   * arm of a commit-callback start stays terminal. A named piece's run uses
+   * `#retryPieceRunStart()` when this recovery declines: a policy manifest
+   * another participant installed first qualifies under either arm, and a
+   * stale read under OFF qualifies for a fresh transaction retaining the
+   * caller's argument.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
@@ -9956,27 +9961,22 @@ export class Runner {
     // For event preflight, writable-input links are narrower than traversing
     // captured argument objects and avoid treating broad closures as demand.
     for (const read of reads) {
-      let target = read;
-      if (read.overwrite === "redirect") {
-        try {
-          const { overwrite: _overwrite, ...resolved } = resolveLink(
-            this.#runtime,
-            depTx,
-            read,
-            "writeRedirect",
-          );
-          target = {
-            ...resolved,
-            schema: resolved.schema ?? read.schema,
-          };
-        } catch (error) {
-          logger.debug("scheduler-read-redirect", () => [
-            "Unable to resolve scheduler read redirect",
-            { read, error },
-          ]);
-        }
-      }
-      this.#runtime.getCellFromLink(target, target.schema, depTx)?.get();
+      // A property traversal follows readable handles while leaving opaque
+      // references intact. Its reader schema governs every redirect crossing.
+      const readerSchema = read.schema ?? true;
+      const inputSchema = cfcSchemaWithInheritedDefs(
+        { type: "object", properties: { input: readerSchema } },
+        isObjectNotArray(readerSchema)
+          ? resolveExternalRootRefForStructure(readerSchema).$defs
+          : undefined,
+      );
+      const input = this.#runtime.getImmutableCell(
+        read.space,
+        { input: this.#runtime.getCellFromLink(read).getAsLink() },
+        inputSchema,
+        depTx,
+      );
+      input.get({ traverseCells: true });
     }
   }
 
@@ -12318,6 +12318,7 @@ export class Runner {
     }
 
     const builtinIdentity = resolveBuiltinImplementationIdentity(module);
+    const enclosingIdentity = tx.getCfcState().implementationIdentity;
     if (builtinIdentity) {
       setCfcImplementationIdentity(tx, builtinIdentity);
     }
@@ -12393,6 +12394,11 @@ export class Runner {
       );
     } finally {
       if (builtinFrame) popFrame(builtinFrame);
+      if (builtinIdentity) {
+        // Synchronous initialization shares its caller's transaction. Writes
+        // after this invocation belong to that caller again.
+        setCfcImplementationIdentity(tx, enclosingIdentity);
+      }
     }
 
     // Handle both legacy (just Action) and new (RawBuiltinResult) return formats

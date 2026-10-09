@@ -83,6 +83,202 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
+    "pattern": "fabrichat/manager.tsx",
+    "baselines": [
+      "20260930T023438Z-Y-613Y51HslhC28m",
+      "20261001T015717Z-vI52ahn9Rpt-mR4y",
+    ],
+    "paths": [
+      "result.$VIEWS.chats.direct.*.room.$UI",
+    ],
+    "reason":
+      "The manager exposes narrow room references under the accepted FabriChat specification. These unmerged PR 8235 snapshots exposed each room's rendering and full protocol through the index instead.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-09.md",
+  },
+  {
+    "pattern": "fabrichat/manager.tsx",
+    "baselines": [
+      "20261002T181229Z-qn4Egf1Y6qOBV_Je",
+    ],
+    "paths": [
+      "result.$VIEWS.chats.direct.*.room.$NAME",
+    ],
+    "reason":
+      "The manager exposes narrow room references under the accepted FabriChat specification. These unmerged PR 8235 snapshots exposed each room's rendering and full protocol through the index instead.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-09.md",
+  },
+  {
+    "pattern": "fabrichat/room.tsx",
+    "baselines": [
+      "20260930T023438Z-nmyAM6alfm9vz1sp",
+      "20260930T194947Z-9hxxaZZOi7aQ8lgV",
+      "20260930T204159Z-9_2YGyVaYQeqpr9d",
+    ],
+    "paths": [
+      "argument.about",
+      "result.add",
+    ],
+    "reason":
+      "The retained independent FabriChat room uses its own linked metadata and reviewed writer policy. Its streams require sender-chosen request IDs, as the specification requires; existing stored layouts are not automatically migrated.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-09.md",
+  },
+  {
+    "pattern": "fabrichat/room.tsx",
+    "baselines": [
+      "20261001T015617Z-3iEHJmcmUiml6Jqi",
+      "20261002T001307Z-ycwUPVCm6pd4PwMA",
+      "20261002T181229Z-piaZFYc99ZxvPBW8",
+    ],
+    "paths": [
+      "argument.about",
+    ],
+    "reason":
+      "The retained independent FabriChat room uses its own linked metadata and reviewed writer policy. Its streams require sender-chosen request IDs, as the specification requires; existing stored layouts are not automatically migrated.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-09.md",
+  },
+  {
+    "pattern": "fabrichat/room.tsx",
+    "baselines": [
+      "20261002T164437Z-1xU0r9QuhxWHgK6y",
+      "20261003T224731Z-o9skqwp4KfLbCDBT",
+      "20261005T182129Z-3RSVlUS0NdLuz2VP",
+      "20261005T224806Z-OeD1Mc2I_LQ_d8L_",
+      "20261006T233809Z-D8hKhP8UI9lV8o-V",
+      "20261006T235529Z-O5mJyExuecHZTzFi",
+      "20261007T155000Z-IuMW8BStP8yd3YI4",
+      "20261008T151801Z-2znk1fYLY0WPYJEd",
+      "20261008T164416Z-F91XV4kdnGBtzoC7",
+      "20261008T170824Z-jJ7xN7PhS-C9R7kR",
+      "20261008T220159Z-qhC4uKph2n7h9FAc",
+      "20261008T231303Z-tDxf_330zvg25E0f",
+      "20261009T151612Z-bGNnPCNd9MdwuN-E",
+      "20261009T161814Z-XcQsGUlUHykDvj3q",
+    ],
+    "paths": [
+      "argument.about",
+      "result.$VIEWS.room.deleteMessage.requestId",
+    ],
+    "reason":
+      "The retained independent FabriChat room uses its own linked metadata and reviewed writer policy. Its streams require sender-chosen request IDs, as the specification requires; existing stored layouts are not automatically migrated.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-09.md",
+  },
+  {
+    "pattern": "system/home.tsx",
+    "baselines": [
+      "20260930T023439Z-1pBKUK1T-dKGS4kd",
+      "20260930T194947Z-dvn-cmHzFRd8Igu0",
+      "20261001T015717Z-nO7yodw-u15L1y37",
+    ],
+    "paths": [
+      "result.chatManager.$VIEWS.chats.direct.*.room.$UI",
+    ],
+    "reason":
+      "The manager exposes narrow room references under the accepted FabriChat specification. These unmerged PR 8235 snapshots exposed each room's rendering and full protocol through the index instead.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-09.md",
+    "requiredPatternOverride": {
+      "rulingBy": "Dan (@danfuzz)",
+      "on": "2026-10-09",
+      "reason":
+        "Directed PR 8235 to merge main while treating the current FabriChat specification as firm decisions and retaining its independent implementation where reasonable. This accepts the narrow manager room references in Home only against the four baselines recorded by this unmerged branch, not against a published main Home contract.",
+    },
+  },
+  {
+    "pattern": "system/home.tsx",
+    "baselines": [
+      "20261002T181229Z-HSDSXqacR5Zpy5Ks",
+    ],
+    "paths": [
+      "result.chatManager.$VIEWS.chats.direct.*.room.$NAME",
+    ],
+    "reason":
+      "The manager exposes narrow room references under the accepted FabriChat specification. These unmerged PR 8235 snapshots exposed each room's rendering and full protocol through the index instead.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-09.md",
+    "requiredPatternOverride": {
+      "rulingBy": "Dan (@danfuzz)",
+      "on": "2026-10-09",
+      "reason":
+        "Directed PR 8235 to merge main while treating the current FabriChat specification as firm decisions and retaining its independent implementation where reasonable. This accepts the narrow manager room references in Home only against the four baselines recorded by this unmerged branch, not against a published main Home contract.",
+    },
+  },
+  {
+    pattern: "fabrichat/adapter.tsx",
+    baselines: ["20261002T164437Z-2PzF8f6WgNbffWBh"],
+    paths: ["argument.placement", "result.$VIEWS.chat.canSend"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    pattern: "fabrichat/placement.tsx",
+    baselines: ["20261002T164437Z-YHxasJyb9fC8x4pe"],
+    paths: ["argument.room", "result.$VIEWS.chat.canSend"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    "pattern": "fabrichat/adapter.tsx",
+    "baselines": [
+      "20260930T023438Z-_SkOTm6m5M7lOfTT",
+      "20260930T194946Z-EvahrQYPJhsPhmYO",
+    ],
+    "paths": [
+      "argument.placement.$VIEWS.chat.recentActivity[].what",
+      "result.placement.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/main.tsx",
+    "baselines": [
+      "20260930T023438Z-88tuD6LmNbIOvJVX",
+      "20260930T194946Z-KEI7keFejPNhIeF0",
+    ],
+    "paths": [
+      "result.$VIEWS.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/placement.tsx",
+    "baselines": [
+      "20260930T023438Z-7rYdOFuObWLMJLfB",
+      "20260930T194947Z-ssl1VJkx_ZuvRVEj",
+    ],
+    "paths": [
+      "argument.room.$VIEWS.room.recentActivity[].what",
+      "result.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    pattern: "fabrichat/main.tsx",
+    baselines: [
+      "20260924T175254Z-lVPuvyO2neYxy2fr",
+      "20260924T182554Z-N3p-f7YPbqOkTZYM",
+      "20260924T225103Z-YjE9_Hki8UCUTFpT",
+      "20260924T230240Z-uI7tdMbhqscACz7z",
+      "20260924T232405Z-TEJvpSwlmDpuRRiN",
+      "20260924T234624Z-jlyRd4GdKsxMivd8",
+      "20260925T003944Z-G5oUMsfWQHE_IsdJ",
+      "20260925T010354Z-I1gvu92zRWpwqeGC",
+      "20260925T024902Z-cnnWs44Auqp7mCiB",
+      "20260925T153146Z-TdaJ74eecwaKd76W",
+      "20260925T155413Z-A_iQ8cehCGOyaBlJ",
+      "20260925T161227Z-Q_coiTXjbDNnn1pD",
+    ],
+    paths: ["argument", "result.messages"],
+    reason:
+      "replace the FabriChat example with the requested room/manager protocol; old message storage is not migrated",
+    record: "docs/history/fabrichat-protocol-replacement-2026-09-29.md",
+  },
+  {
     // The profile gained its owner-protected share inbox pointer (`inbox`,
     // optional, undefaulted). The picker consumes a stored profile, and the
     // proof compares the new property's `ifc` label against a baseline that
@@ -1034,23 +1230,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits",
     record: "docs/history/fabrichat-room-link-messages-break.md",
-  },
-  {
-    // A room's `about` record names `commitStart` and a reviewed `ChatStart`
-    // on `ChatStartSurface` as its only writer, where it named `commitManager`
-    // with no gesture. The record is written once, as the room is created, so
-    // a room that exists keeps the one it has.
-    pattern: "fabrichat/room.tsx",
-    baselines: [
-      "20261002T164437Z-1xU0r9QuhxWHgK6y",
-      "20261003T224731Z-o9skqwp4KfLbCDBT",
-      "20261005T182129Z-3RSVlUS0NdLuz2VP",
-      "20261005T224806Z-OeD1Mc2I_LQ_d8L_",
-    ],
-    paths: ["argument.about"],
-    reason:
-      "a room's `about` record now requires a reviewed start to write it, a write policy the recorded label, naming a writer with no gesture, differs from",
-    record: "docs/history/fabrichat-start-reviewed-break.md",
   },
   {
     // A manager's index entry gained `revision`, the revision of the room's

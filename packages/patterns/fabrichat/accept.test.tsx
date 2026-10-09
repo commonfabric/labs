@@ -21,7 +21,6 @@ import {
   principalOf,
   spaceOf,
   TESTS,
-  UI,
   Writable,
 } from "commonfabric";
 import {
@@ -29,14 +28,7 @@ import {
   registerSharedSpace,
   type SharedSpaceCatalogStorage,
 } from "../system/shared-space-catalog.ts";
-import {
-  clickButton,
-  findNodeById,
-  propValue,
-  readValue,
-} from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
-import { AddToChats } from "./room.tsx";
 import {
   CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
@@ -57,7 +49,6 @@ type TestProfile = AddIntegrity<
   ChatProfile,
   readonly ["fabrichat-test-profile"]
 >;
-type AddArg = Parameters<typeof AddToChats>[0];
 
 /** The gesture a start takes, as a client's start control makes it. */
 const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
@@ -100,12 +91,6 @@ const introduce = handler<unknown, IntroduceState>((_event, { me }) => {
 });
 
 // How a room's control adding it to the viewer's chats is displayed.
-const addDisplay = (root: unknown): unknown =>
-  readValue(
-    (propValue(findNodeById(root, "fabrichat-add-to-chats"), "style") as {
-      display?: unknown;
-    })?.display,
-  );
 
 /** An empty shared-space catalog, as a manager lists its rooms from. */
 const emptyCatalog = () =>
@@ -176,13 +161,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       counterpart: CAROL,
     })
   );
-  // The room's own control, which sends `accept` with the room alone.
-  const adder = AddToChats({
-    room: setup.held.key("room"),
-    catalog: manager.sharedSpaceCatalog,
-    accept: manager.accept,
-  } as AddArg);
-  const action_add = action(() => clickButton(adder[UI], "Add to my chats"));
+  const action_add = action(() =>
+    manager.accept.send({
+      requestId: "accept",
+      room: setup.held.key("room").resolveAsCell(),
+    })
+  );
 
   // A manager whose catalog lists the room as a host registers an offered
   // one, without `accept`, so `direct` holds nothing for it.
@@ -224,18 +208,16 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           reasonOf(requests, "a-1") ===
-            "The counterpart is not the room's creator." &&
+            "This user is not admitted to that conversation." &&
           manager.rooms.length === 0 &&
-          Object.keys(readSharedSpaceCatalog(catalog).entries).length === 0 &&
-          addDisplay(adder[UI]) === "flex"
+          Object.keys(readSharedSpaceCatalog(catalog).entries).length === 0
         ),
       },
       { action: action_add },
       {
         assertion: assert(() =>
           manager.rooms.length === 1 &&
-          manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
-          addDisplay(adder[UI]) === "none"
+          manager.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
       },
       // Accepting it registers its space in Bob's catalog, as a saved

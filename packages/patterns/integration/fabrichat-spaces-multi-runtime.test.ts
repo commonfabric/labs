@@ -19,6 +19,7 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { FabricValue } from "@commonfabric/data-model";
+import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -32,6 +33,14 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
+
+/** The CFC write gate's refusals in one runtime. */
+function writeRefusals(
+  counts: Record<string, Record<string, { total: number }> | number>,
+): number {
+  const cfc = counts.cfc;
+  return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
+}
 
 // The reviewed action a start is admitted from, as
 // `../fabrichat/schemas.tsx` names it.
@@ -203,5 +212,59 @@ describe("fabrichat spaces across runtimes", () => {
       .toBe("direct");
     await expect(stranger.read(["about", "kind"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
+  });
+
+  it("lets an invited member send through the manager-created root room", async () => {
+    const refusalsBefore = await Promise.all(
+      [starter, member].map(async (session) =>
+        writeRefusals(await session.loggerCounts())
+      ),
+    );
+    await member.send("claimProfile", { name: "Invited member" }, {
+      surface: "FabriChatTestProfileSurface",
+      action: "FabriChatTestWriteProfile",
+    });
+    await member.client().call("selectProfile", { path: ["memberProfile"] });
+    await harness.settle();
+    expect(await member.read(["memberPrincipal"])).toBe(member.identity.did());
+    const room = await start("openDirect", {
+      requestId: "d-member-send",
+      counterpart: member.identity.did(),
+    });
+    expect(await member.read(["canSend"], { piece: room })).toBe(true);
+    await member.send(
+      "sendMessage",
+      {
+        requestId: "invited-message",
+        version: {
+          body: "A message from the invited member",
+          sentAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+        },
+      },
+      { surface: "ChatSendSurface", action: "ChatSend" },
+      { piece: room },
+    );
+    await harness.settle();
+    expect(await member.read(["messages", "count"], { piece: room })).toBe(1);
+    expect(
+      await starter.read(["messages", "latest", "messages", 0, "body"], {
+        piece: room,
+      }),
+    ).toBe("A message from the invited member");
+    expect(
+      await member.link([
+        "messages",
+        "latest",
+        "messages",
+        0,
+        "authorProfile",
+      ], { piece: room }),
+    ).toEqual(await member.link(["memberProfile"]));
+    const refusalsAfter = await Promise.all(
+      [starter, member].map(async (session) =>
+        writeRefusals(await session.loggerCounts())
+      ),
+    );
+    expect(refusalsAfter).toEqual(refusalsBefore);
   });
 });

@@ -1,101 +1,60 @@
 /**
- * `FabriChatAdapter`: renders one placement for hosts that render VDOM
- * (`docs/specs/fabrichat/FabriChatAdapter.md`). A container holds the adapter,
- * which links to its placement, which links to its room.
- *
- * When the viewer can read the room, the adapter embeds the room's own
- * `[UI]`, composer and all, so every gesture is made on the room's own
- * reviewed surfaces. It re-exports the placement's `chat` group, so a host
- * drawing a container's pieces natively finds it on the piece it holds.
+ * Embeds a placement's room rendering and re-exports its data face by link.
+ * The room owns every reviewed writer surface and all composer state.
  */
+
 import {
   type Cell,
   computed,
   NAME,
   pattern,
+  type PerSpace,
   UI,
   VIEWS,
   type VNode,
 } from "commonfabric";
-import { type FabriChatPlacementView, type PlacedRoom } from "./placement.tsx";
-import { type ChatDisplay } from "./schemas.tsx";
+import type { ChatPlacementOutput, ChatPlacementView } from "./placement.tsx";
 
-/** A placement as an adapter reads it through its link. */
-export interface AdaptedPlacement {
-  /** The placed room. */
-  room: Cell<PlacedRoom>;
-
-  /** The placement's data face. */
-  [VIEWS]: { chat: FabriChatPlacementView };
-}
-
-/** What an adapter holds. */
-export interface FabriChatAdapterInput {
-  /** The placement, set when the adapter is created. */
-  placement: AdaptedPlacement;
-}
-
-/** What an adapter offers. */
-export interface FabriChatAdapterOutput {
-  /**
-   * The placed room's title, for lists of pieces: `"Chat"` for a room with no
-   * title, and `"Chat (unavailable)"` for a room the viewer can't read.
-   */
+/** A container's rendering adapter for one placement. */
+export interface ChatAdapterOutput {
   [NAME]: string;
-
-  /** The room's own rendering, or why there is none. */
+  placement: PerSpace<Cell<ChatPlacementOutput>>;
   [UI]: VNode;
-
-  /** The placement. */
-  placement: AdaptedPlacement;
-
-  /** The placement's data face, re-exported by link. */
-  [VIEWS]: { chat: FabriChatPlacementView };
+  [VIEWS]: { chat: Cell<ChatPlacementView> };
 }
 
-/** A placed chat, rendered: the room's own rendering, or why there is none. */
-const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
-  ({ placement }) => {
-    const chat = placement[VIEWS].chat;
-    const isMember = computed(() => chat.state === "member");
-    // Whether the viewer can read the room differs by viewer, so both parts
-    // are always rendered and one is hidden by a prop: a tree built
-    // differently per viewer is stored once for everyone, and runtimes that
-    // built it differently overwrite each other without end. Each part is
-    // `hidden` until its display has a value, as `FabriChatMessageRow` says.
-    const roomDisplay = computed(
-      (): ChatDisplay => (isMember ? "block" : "none"),
-    );
-    const unavailableDisplay = computed(
-      (): ChatDisplay => (isMember ? "none" : "block"),
-    );
-
-    return {
-      [NAME]: computed(() =>
-        isMember ? chat.about?.title ?? "Chat" : "Chat (unavailable)"
-      ),
-      [UI]: (
-        <cf-vstack>
-          <div
-            id="fabrichat-adapter-room"
-            hidden
-            style={{ display: roomDisplay }}
-          >
-            <cf-render $cell={placement.room} />
-          </div>
-          <div
-            id="fabrichat-adapter-unavailable"
-            hidden
-            style={{ display: unavailableDisplay }}
-          >
-            <cf-empty-state message="This chat can't be read right now." />
-          </div>
-        </cf-vstack>
-      ),
-      placement,
-      [VIEWS]: { chat },
-    };
-  },
-);
+/** Renders the room's own UI when the reader can reach it. */
+export const FabriChatAdapter = pattern<
+  { placement: PerSpace<Cell<ChatPlacementOutput>> },
+  ChatAdapterOutput
+>(({ placement }) => {
+  const chat = placement.key(VIEWS).key("chat");
+  const state = computed(() => chat.key("state").get());
+  return {
+    [NAME]: "FabriChat",
+    placement,
+    [UI]: (
+      <cf-screen>
+        <div
+          hidden
+          style={{ display: state === "member" ? "block" : "none" }}
+        >
+          <cf-render $cell={placement.key("room")} />
+        </div>
+        <div
+          hidden
+          style={{ display: state === "member" ? "none" : "block" }}
+        >
+          <cf-empty-state
+            message={state === "not-member"
+              ? "You are not a member of this conversation."
+              : "Conversation unavailable."}
+          />
+        </div>
+      </cf-screen>
+    ),
+    [VIEWS]: { chat },
+  };
+});
 
 export default FabriChatAdapter;

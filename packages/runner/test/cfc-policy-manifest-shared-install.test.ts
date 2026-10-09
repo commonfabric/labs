@@ -267,10 +267,10 @@ describe("cfc-policy-manifest-shared-install", () => {
     // Reports the start commits the second runtime makes as refused with what
     // `refusal` returns for each attempt, counting from 1, and passes the
     // commit's own verdict through where it returns nothing. A refused commit
-    // still goes through, so what the start installed stands as it would
-    // behind a real stale-read refusal, which leaves the install in place for
-    // the re-run: what these cases measure is how the start answers the
-    // verdict.
+    // still goes through: these cases measure how the start answers a verdict,
+    // including its catch-up, retry budget, and cancellation ownership. They
+    // do not exercise a storage rejection or prove that recovery retains the
+    // caller's arguments after one.
     const refuseStarts = (
       refusal: (
         attempt: number,
@@ -324,16 +324,22 @@ describe("cfc-policy-manifest-shared-install", () => {
       expect(failures).toEqual([]);
     });
 
-    it("reports a start refused over the piece's own documents without running it again", async () => {
-      await setUpByFirstParticipant();
+    it("reports a start still refused over the piece's own documents once its retries are spent", async () => {
+      const piece = await setUpByFirstParticipant();
       const failures = observeStartFailures();
-      const attempts = refuseStarts(() => staleReadOf("of:not-a-manifest"));
+      let catchUps = 0;
+      const refusal = staleReadOf(piece.getAsNormalizedFullLink().id, () => {
+        catchUps++;
+        return Promise.resolve();
+      });
+      const attempts = refuseStarts(() => refusal);
 
       await runShared(rtB, "b-piece secret");
       await rtB.idle();
 
-      expect(attempts.count).toBe(1);
-      expect(failures).toHaveLength(1);
+      expect(attempts.count).toBe(6);
+      expect(catchUps).toBe(5);
+      expect(failures).toEqual([refusal]);
     });
 
     it("reports a start still refused over the manifest once its retries are spent", async () => {
@@ -418,6 +424,31 @@ describe("cfc-policy-manifest-shared-install", () => {
 
       expect(attempts.count).toBe(1);
       expect(failures).toHaveLength(1);
+    });
+
+    it("reports a terminal CFC refusal without waiting for catch-up or running it again", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      let catchUps = 0;
+      const refusal = {
+        name: "CfcCommitRefusalError",
+        message:
+          "CFC enforcement rejected commit: writePolicyAnyOf failed at /brief",
+        reasons: ["writePolicyAnyOf failed at /brief"],
+        readyToRetry: () => {
+          catchUps++;
+          return Promise.resolve();
+        },
+      } as unknown as CommitError;
+      expect(isRetryableCommitRejection(refusal)).toBe(false);
+      const attempts = refuseStarts(() => refusal);
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(catchUps).toBe(0);
+      expect(failures).toEqual([refusal]);
     });
 
     it("reports a manifest refusal whose start was stopped before its verdict", async () => {

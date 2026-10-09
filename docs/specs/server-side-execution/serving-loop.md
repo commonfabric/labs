@@ -1174,10 +1174,17 @@ transaction of its own, so the speculative-consequence sanction
 above — written for the deferred-start transaction — has nothing
 to govern there; the load walk's own setup/instantiation writes
 keep the sanctioned `bookkeeping` stamp of the piece-start site,
-exactly as a reload's do. The OFF arm keeps the refusal terminal
-(a cross-tab race is the cross-tab mutex's story — this OFF
-sentence is the COORDINATOR's conservative default, not part of
-the 2026-08-24 ruling; the owner may re-rule it).
+exactly as a reload's do. The OFF arm of a commit-callback deferred
+start keeps the refusal terminal. A named-family run under OFF,
+which sets up a piece after loading its dependencies, can instead
+lose its read basis to another participant's writes. That run
+awaits the conflict's catch-up and retries its setup in a fresh
+transaction, retaining the caller's argument. It uses the same
+bounded recovery and cancellation ownership as a named run whose
+policy-manifest install loses a race. Only stale-read conflicts
+and policy-manifest conflicts qualify; authorization and CFC
+refusals remain terminal. The ON arm continues to start from served
+documents without recommitting the refused setup.
 
 - The accumulator is a layered view: store snapshot at the wave's input
   seq + previously sealed writes. Actions run serially per space, so a

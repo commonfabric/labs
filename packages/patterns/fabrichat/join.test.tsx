@@ -14,19 +14,9 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import type { ParticipantRoster } from "../loom/participants.tsx";
-import {
-  type ActivityCounters,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
-import { FabriChatRoomCore } from "./room.tsx";
+import { testRoomAbout, testRoomStorage } from "./room-test-fixture.ts";
+import { FabriChatRoom } from "./room.tsx";
 import type { ChatProfile } from "./schemas.tsx";
-
-type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 
 // A stand-in for a viewer's `#profile`, labeled, as a Fabric profile is,
 // because the participants link only a document that carries a label.
@@ -35,27 +25,18 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-/** A room's records, with none of them holding anything yet. */
-const freshRecords = () => ({
-  messages: Writable.of<MessagesValue>([] as MessagesValue),
-  reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-  requests: Writable.of<RequestMemo[]>([]),
-  usedTimes: Writable.of<UsedTime[]>([]),
-  activity: Writable.of<SentActivity[]>([]),
-  counters: Writable.of<ActivityCounters[]>([]),
-  roster: Writable.of<ParticipantRoster>({}),
-});
-
 export default pattern(() => {
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
 
+  const ownDescription = testRoomAbout({ kind: "group", standalone: true });
+  const sharedDescription = testRoomAbout({ kind: "group", standalone: false });
   // A room in a space of its own, as a manager creates it, with `about`.
-  const alice = FabriChatRoomCore({
+  const alice = FabriChatRoom({
     myProfile: aliceProfile,
-    about: { kind: "group" as const, title: "Team" },
-    ...freshRecords(),
-  } as RoomArg);
+    about: ownDescription.about,
+    ...testRoomStorage({}),
+  });
   const action_add_alice = action(() =>
     alice.addParticipant.send({ profile: aliceProfile })
   );
@@ -64,8 +45,12 @@ export default pattern(() => {
   );
 
   // A space's own chat, which has no `about`.
-  const chat = FabriChatRoomCore(
-    { myProfile: aliceProfile, ...freshRecords() } as RoomArg,
+  const chat = FabriChatRoom(
+    {
+      myProfile: aliceProfile,
+      about: sharedDescription.about,
+      ...testRoomStorage({}),
+    },
   );
   const action_add_bob_to_chat = action(() =>
     chat.addParticipant.send({ profile: bobProfile })
@@ -73,6 +58,8 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { action: ownDescription.initialize },
+      { action: sharedDescription.initialize },
       { assertion: assert(() => alice.participants.length === 0) },
       // Anyone may add a profile, which is listed once however often it is
       // added, in the order each was first added.

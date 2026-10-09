@@ -14,8 +14,8 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 
 - The contract's own records: `about`, its messages, and `recentActivity` with
   its next `seq` and `recentActivityExpiredThrough`. The messages are a list
-  ordered by `sentAt`. Each message's reactions are a keyed collection,
-  projected as a list in the contract.
+  ordered by `sentAt`. Each message links its reactions as separately
+  authored documents, projected as a list in the contract.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
 - The times the room has used, so it can make each new one unique, each kept
@@ -72,10 +72,9 @@ and the composer event's time as the proposed `sentAt`.
 Every handler in the table first checks its event's sender and `requestId`
 against a keyed collection of the requests the room has acted on, and does
 nothing for one it finds. It records the request there in the same transaction
-as its effect, and the collection drops a request once it was recorded longer
-ago than the greater of `proposedTimeMaxAgeNsec` plus `proposedTimeMaxLeadNsec`,
-and `recentActivityWindowNsec`. The collection keeps a request even after its
-message is obliterated: it says only that the sender made a request, not what,
+as its effect, and retains that identity for the room's lifetime. The collection
+keeps a request even after its message is obliterated: it says only that the
+sender made a request, not what,
 and without it a late redelivery of the original send would send the message
 again. The two bounds of its window for proposed times are constants of the
 pattern, documented beside it.
@@ -106,15 +105,11 @@ the opposite of what the person meant. `commitSendReaction` and
 `commitDeleteReaction` each change nothing when the reaction is already as
 asked.
 
-`commitSendReaction` keeps each reaction at an address within its message
-derived from its reactor's profile and its emoji. One person's one reaction to
-one message has a single address in every session, which is how the room meets
-[`ChatReaction`](ChatReaction.md#uniqueness)'s uniqueness rule without reading
-the list. The reactions are a separately authorized part of the message:
-`commitSend` and `commitEdit` can't write them, and the reaction handlers can
-write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
-the runtime's write policies can split one document this way is a prerequisite
-to check.
+`commitSendReaction` finds a reaction by its reactor profile and emoji, and
+changes nothing when that pair is already present. Its transaction reads the
+message's reaction list before appending, so concurrent attempts conflict and
+re-evaluate against the committed list. Each reaction is a separately authored
+document; editing a message preserves its reaction references.
 
 `about.record` is stored as `AuthoredByCurrentUser`, written once by the handler
 that creates the room, so it is labeled with its creator, and `about` links it.
@@ -166,25 +161,11 @@ the room is created from the same settings the handlers read.
   ([custom space roots](../../features/custom-space-roots.md)), and declares
   the space's kind ([space kinds](../../features/space-kinds.md)).
 - **Per-session state written by a handler.** `windows` is a `PerSession` cell
-  linked from the room's `PerSpace` message list, a nesting the scoped-cell
-  design provides across a `Cell` boundary (see [scoped cell
-  instances](../scoped-cell-instances.md)). `openWindow`'s handler has to write
-  the instance belonging to the session that sent the event, including when the
-  handler runs somewhere other than that session's client. Whether the runtime
-  does that today is still to check.
-- **A write policy split within one document.** A message's reactions are
-  written only by the reaction handlers (and obliteration), and the rest of the
-  message only by the message handlers (see
-  [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether one document's write
-  policies can be split between writers this way is still to check. If not,
-  reactions move to a record of their own, keyed by message.
-- **Redelivery ends.** Two things can make an event arrive, or run, more than
-  once. A client runtime re-submits an event when it can't tell whether its
-  append committed, and the memory ignores a re-submission by its event id, but
-  only while the client's append queue remembers the event, which lasts as long
-  as the client's process. And a served handler runs an event again until its
-  run is recorded as complete. The room's request memory covers both only as
-  long as it lasts (see [writers](#writers)). So the room relies on every event
-  being run to completion, or dropped, within the memory, including one queued
-  while its client was offline and appended much later. Whether the runtime
-  guarantees this is still to check.
+  linked from the room's `PerSpace` message list. The runtime selects the
+  originating session's instance for handler writes, including served events.
+- **Separately authorized records.** Message and reaction documents retain
+  their own labels and writer policies through cell references.
+- **Unbounded redelivery.** The runtime establishes no finite upper bound on
+  event redelivery. Request identities and used times remain for the room's
+  lifetime, including after obliteration. Expiring them after the proposed-time
+  window would allow a delayed deletion or reaction to execute again.

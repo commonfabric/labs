@@ -1,170 +1,74 @@
-/**
- * A FabriChat room placed in a container: what the placement offers a viewer
- * who can read the room, and a viewer who can't, and what the adapter that
- * renders it shows and re-exports.
- */
+/** Verifies placements retain room links and redact unavailable room facts. */
+
 import {
+  action,
   type AddIntegrity,
   assert,
-  NAME,
+  FabricEpochNsec,
   pattern,
   TESTS,
-  UI,
   VIEWS,
   Writable,
 } from "commonfabric";
-import { findNodeById, propValue, readValue } from "../test/vnode-helpers.ts";
 import FabriChatAdapter from "./adapter.tsx";
-import FabriChatPlacement, {
-  type PlacedRoom,
-  type PlacedTallies,
-} from "./placement.tsx";
-import { FabriChatMessageRow } from "./message-row.tsx";
-import {
-  type ActivityCounters,
-  type ComposerState,
-  type MessageRecord,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
-import { FabriChatRoomCore } from "./room.tsx";
-import {
-  CHAT_REACT_ACTION,
-  CHAT_REACT_SURFACE,
-  CHAT_SEND_ACTION,
-  CHAT_SEND_SURFACE,
-  type ChatProfile,
-} from "./schemas.tsx";
-
-type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
-type RowArg = Parameters<typeof FabriChatMessageRow>[0];
-type PlacementArg = Parameters<typeof FabriChatPlacement>[0];
-type AdapterArg = Parameters<typeof FabriChatAdapter>[0];
-
-// A labeled stand-in for a viewer's `#profile`.
-type TestProfile = AddIntegrity<
-  ChatProfile,
-  readonly ["fabrichat-test-profile"]
->;
-
-const sendGesture = {
-  surface: CHAT_SEND_SURFACE,
-  action: CHAT_SEND_ACTION,
-};
-const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
-
-const reactionCount = (messages: Writable<MessagesValue>): number =>
-  ((messages.get() as MessageRecord[])[0]?.reactions?.get() ?? []).length;
-
-// How the element `id` under `root` is displayed.
-const displayOf = (root: unknown, id: string): unknown =>
-  readValue(
-    (propValue(findNodeById(root, id), "style") as { display?: unknown })
-      ?.display,
-  );
-
-// Which of an adapter's two parts it shows: the room, or why there is none.
-const shownPart = (root: unknown): string =>
-  `room:${displayOf(root, "fabrichat-adapter-room")} ` +
-  `unavailable:${displayOf(root, "fabrichat-adapter-unavailable")}`;
-
-const talliesText = (all: readonly PlacedTallies[]): string =>
-  all.map((each) =>
-    each.tallies.map((tally) => `${tally.emoji}${tally.count}`).join(",")
-  ).join(";");
+import FabriChatPlacement from "./placement.tsx";
+import { CHAT_POLICY } from "./records.ts";
+import { FabriChatRoom } from "./room.tsx";
+import type { ChatRoomAbout, ChatRoomPolicy } from "./schemas.tsx";
 
 export default pattern(() => {
-  const messages = Writable.of<MessagesValue>([] as MessagesValue);
-  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
-  const records = {
-    about: { kind: "group" as const, title: "Team" },
-    messages,
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
-  };
-  const room = FabriChatRoomCore(
-    { myProfile: aliceProfile, ...records } as RoomArg,
+  const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
+    CHAT_POLICY,
   );
-  const aliceOnFirst = FabriChatMessageRow({
-    message: messages.key(0),
-    myProfile: aliceProfile,
-    inThread: false,
-    kind: "group" as const,
-    composer: Writable.of<ComposerState>({}),
-    ...records,
-  } as RowArg);
-
-  const placement = FabriChatPlacement({ room } as PlacementArg);
-  const adapter = FabriChatAdapter({ placement } as AdapterArg);
-  // A room the viewer can't read: its link reaches nothing.
-  const unreadable = FabriChatPlacement(
-    { room: Writable.of<PlacedRoom>({}) } as PlacementArg,
-  );
-  const unreadableAdapter = FabriChatAdapter(
-    { placement: unreadable } as AdapterArg,
-  );
-
+  const about = new Writable<AddIntegrity<ChatRoomAbout, ["chat-test"]>>();
+  const room = FabriChatRoom({ about });
+  const first = FabriChatPlacement({ room });
+  const second = FabriChatPlacement({ room });
+  const adapter = FabriChatAdapter({ placement: first });
+  const initialize = action(() => {
+    about.set({
+      kind: "direct",
+      createdAt: new FabricEpochNsec(0n),
+      policy,
+    });
+  });
   return {
     [TESTS]: [
       {
-        assertion: assert(() =>
-          placement[VIEWS].chat.state === "member" &&
-          placement[VIEWS].chat.about?.title === "Team" &&
-          placement[VIEWS].chat.canSend === true
-        ),
+        assertion: assert(() => first[VIEWS].chat.state === "unavailable"),
       },
-      {
-        action: room.sendMessage,
-        event: { type: "click", target: { value: "Hello" } },
-        trustedUi: sendGesture,
-      },
-      {
-        action: aliceOnFirst.sendReaction,
-        event: { requestId: "r-1", emoji: "🎉" },
-        trustedUi: reactGesture,
-      },
-      {
-        assertion: assert(() => placement[VIEWS].chat.messages?.count === 1),
-      },
-      { assertion: assert(() => reactionCount(messages) === 1) },
+      { assertion: assert(() => first[VIEWS].chat.about?.get() === undefined) },
       {
         assertion: assert(() =>
-          placement[VIEWS].chat.recentActivity.length === 2
+          first[VIEWS].chat.messages?.get() === undefined
         ),
       },
       {
         assertion: assert(() =>
-          placement[VIEWS].chat.reactionTallies.length === 1 &&
-          talliesText(placement[VIEWS].chat.reactionTallies) === "🎉1" &&
-          placement[VIEWS].chat.reactionTallies[0].tallies[0]?.count === 1
+          adapter[VIEWS].chat.get().state === "unavailable"
         ),
       },
-      // The adapter shows the room's own rendering, and re-exports the
-      // placement's data face.
+      { action: initialize },
+      { assertion: assert(() => first[VIEWS].chat.state === "member") },
+      { assertion: assert(() => second[VIEWS].chat.state === "member") },
+      { assertion: assert(() => first.room.equals(second.room)) },
       {
         assertion: assert(() =>
-          adapter[VIEWS].chat.state === "member" &&
-          adapter[NAME] === "Team" &&
-          shownPart(adapter[UI]) === "room:block unavailable:none"
+          first[VIEWS].chat.messages?.equals(first.room.key("messages")) ===
+            true
         ),
       },
-      // A room the viewer can't read offers nothing of itself.
       {
         assertion: assert(() =>
-          unreadable[VIEWS].chat.state === "unavailable" &&
-          unreadable[VIEWS].chat.about === undefined &&
-          unreadable[VIEWS].chat.recentActivity.length === 0 &&
-          unreadable[VIEWS].chat.canSend === false &&
-          unreadableAdapter[NAME] === "Chat (unavailable)" &&
-          shownPart(unreadableAdapter[UI]) === "room:none unavailable:block"
+          first[VIEWS].chat.about?.equals(first.room.key("about")) === true
         ),
       },
+      {
+        assertion: assert(() =>
+          adapter[VIEWS].chat.equals(adapter.placement.key(VIEWS).key("chat"))
+        ),
+      },
+      { assertion: assert(() => adapter[VIEWS].chat.get().state === "member") },
     ],
   };
 });

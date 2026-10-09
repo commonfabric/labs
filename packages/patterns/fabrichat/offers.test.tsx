@@ -3,14 +3,16 @@
  * direct chat with Alice from her participant chip, whose click names her
  * profile, which points at her private inbox; the room is offered there, in
  * the envelope a share inbox takes, and a notice is queued for her all the
- * same. A request naming a profile other than the counterpart's is refused. Each person writes their own
- * profile here, so its label names them, as a Fabric profile's does.
+ * same. A request naming a profile other than the counterpart's is refused.
+ * Each person writes their own profile here, so its label names them, as a
+ * Fabric profile's does.
  */
 import {
   action,
   assert,
   type Cell,
   currentPrincipal,
+  FabricEpochNsec,
   handler,
   isWellFormedDID,
   multiUserTest,
@@ -29,14 +31,12 @@ import PrivateInbox, {
 import type { ShareInboxPiece } from "../system/profile-home.tsx";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
-  type ActivityCounters,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
-import { FabriChatRoomCore } from "./room.tsx";
+  FabriChatRoom,
+  type StoredActivity,
+  type StoredMemory,
+  type StoredMessage,
+} from "./room.tsx";
+import { CHAT_POLICY } from "./records.ts";
 import {
   CHAT_ROOM_OFFER_KIND,
   CHAT_SEND_ACTION,
@@ -49,7 +49,7 @@ import {
   type ChatRequestOutcome,
 } from "./schemas.tsx";
 
-type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
+type RoomArg = Parameters<typeof FabriChatRoom>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
 /** An empty shared-space catalog, as a manager lists its rooms from. */
@@ -65,8 +65,6 @@ const profileGesture = { surface: PROFILE_SURFACE, action: PROFILE_ACTION };
 
 const sendGesture = { surface: CHAT_SEND_SURFACE, action: CHAT_SEND_ACTION };
 const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
-
-const typed = (text: string) => ({ type: "click", target: { value: text } });
 
 /**
  * A person's own profile, labeled with the principal who wrote it, which only
@@ -158,12 +156,9 @@ const isOrigin = (value: string): boolean => {
 
 /** The room's records, which every participant's room shares. */
 interface Records {
-  messages: Writable<MessagesValue>;
-  reactionLists: Writable<ReactionList[]>;
-  requests: Writable<RequestMemo[]>;
-  usedTimes: Writable<UsedTime[]>;
-  activity: Writable<SentActivity[]>;
-  counters: Writable<ActivityCounters[]>;
+  messages: Writable<StoredMessage[]>;
+  memory: Writable<StoredMemory>;
+  activity: Writable<StoredActivity[]>;
 }
 
 /** What every session receives from the setup. */
@@ -179,12 +174,15 @@ interface Setup {
 
 export const setup = pattern(() => ({
   records: {
-    messages: Writable.of<MessagesValue>([] as MessagesValue),
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
+    messages: Writable.of<StoredMessage[]>([]),
+    memory: Writable.of<StoredMemory>({
+      requests: {},
+      authors: {},
+      usedTimes: {},
+      nextSeq: 1,
+      expiredThrough: 0,
+    }),
+    activity: Writable.of<StoredActivity[]>([]),
   },
   aliceDid: Writable.of<string>(""),
   bobDid: Writable.of<string>(""),
@@ -205,24 +203,33 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const action_note_principal = action(() =>
     setup.aliceDid.set(currentPrincipal() ?? "")
   );
-  const room = FabriChatRoomCore({
+  const sentAt = Writable.of(new FabricEpochNsec(0n));
+  const captureTime = action(() =>
+    sentAt.set(new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n))
+  );
+  const room = FabriChatRoom({
     myProfile: profile,
-    about: { kind: "group" as const },
-    messages: setup.records.messages,
-    reactionLists: setup.records.reactionLists,
-    requests: setup.records.requests,
-    usedTimes: setup.records.usedTimes,
+    about: {
+      kind: "group" as const,
+      createdAt: new FabricEpochNsec(0n),
+      policy: Writable.of(CHAT_POLICY),
+    },
+    records: setup.records.messages,
+    memory: setup.records.memory,
     activity: setup.records.activity,
-    counters: setup.records.counters,
   } as RoomArg);
 
   return {
     [TESTS]: [
       { action: writeProfile, event: {}, trustedUi: profileGesture },
       { action: action_note_principal },
+      { action: captureTime },
       {
-        action: room.composerSend,
-        event: typed("Hello from Alice"),
+        action: room.sendMessage,
+        event: {
+          requestId: "alice-message",
+          version: { body: "Hello from Alice", sentAt },
+        },
         trustedUi: sendGesture,
       },
       // Nothing is offered yet.

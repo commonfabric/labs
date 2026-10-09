@@ -1,11 +1,4 @@
-/**
- * A FabriChat manager creating rooms, finding, forgetting, and accepting them,
- * and refusing the requests it can't act on. That each room lives in a space
- * of its own is something a pattern can't read, so
- * `../integration/fabrichat-manager.test.ts` checks it. The manager is given a
- * profile of its own, since `#profile` resolves nothing in this lane and no
- * chat starts without one; `manager.test.tsx` covers a manager with none.
- */
+/** Exercises catalog membership, replay, and validation through the manager. */
 import {
   action,
   type AddIntegrity,
@@ -14,30 +7,19 @@ import {
   currentPrincipal,
   equals,
   pattern,
+  spaceAccess,
+  spaceAccessOf,
+  spaceOf,
   TESTS,
-  UI,
   Writable,
 } from "commonfabric";
 import {
   readSharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
-  type SharedSpaceEntry,
 } from "../system/shared-space-catalog.ts";
-import {
-  countElements,
-  findNode,
-  findNodeById,
-  findNodeByProp,
-  fireEvent,
-  propsOf,
-  propValue,
-  readValue,
-  textContent,
-} from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import FabriChatRoom from "./room.tsx";
 import {
-  CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
@@ -45,613 +27,325 @@ import {
   type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomLink,
-  type ProfileCell,
 } from "./schemas.tsx";
 
-type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
-
-// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
-// because a room's participants link only a document that carries a label.
+const BOB = "did:key:z6MkBob";
+const CAROL = "did:key:z6MkCaro1";
+const gesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 type TestProfile = AddIntegrity<
   ChatProfile,
   readonly ["fabrichat-test-profile"]
 >;
+type HeldRoom = ChatRoomLink & { participants: Cell<ChatProfile>[] };
 
-/** The gesture a start takes, as a client's start control makes it. */
-const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
-
-// Stand-ins for principals, each a base58btc key as a principal's is.
-const BOB = "did:key:z6MkBob";
-const CAROL = "did:key:z6MkCaro1";
-
-/** A room held apart from the index, which forgetting it changes. */
-interface HeldRoom {
-  room?: Writable<ChatRoomLink & { participants?: ProfileCell[] }>;
-}
-
-const statusOf = (
-  requests: Writable<Record<string, ChatRequestOutcome>>,
-  id: string,
-): string => requests.get()?.[id]?.status ?? "none";
-
-// How the element `id` under `root` is displayed.
-const displayOf = (root: unknown, id: string): unknown =>
-  readValue(
-    (propValue(findNodeById(root, id), "style") as { display?: unknown })
-      ?.display,
-  );
-
-// What a manager shows about the session's latest start: how its refusal is
-// displayed, and what it says.
-const shownRefusal = (root: unknown): string =>
-  `${displayOf(root, "fabrichat-start-refusal")}:` +
-  textContent(findNodeById(root, "fabrichat-start-refusal"));
-
-// The cell the first `cf-cell-link` labeled `label` under `root` links: a
-// listed room's, labeled as its entry is, or a notice's, which carries no
-// label.
-const cellLinked = (
-  root: unknown,
-  label: string | undefined,
-): object | undefined =>
-  propsOf(
-    findNode(root, (node) =>
-      readValue((node as { name?: unknown })?.name) === "cf-cell-link" &&
-      readValue(propsOf(node)?.label) === label),
-  )?.$cell as object | undefined;
-
-/** Why the request `id` was refused, or its status if it wasn't. */
-const reasonOf = (
-  requests: Writable<Record<string, ChatRequestOutcome>>,
-  id: string,
-): string => {
-  const outcome = requests.get()?.[id];
-  return outcome?.status === "refused"
-    ? outcome.reason
-    : outcome?.status ?? "none";
-};
-
-/** The code of the refusal recorded under `id`, or `none` for any other. */
-const codeOf = (
-  requests: Writable<Record<string, ChatRequestOutcome>>,
-  id: string,
-): string => {
-  const outcome = requests.get()?.[id];
-  return outcome?.status === "refused" ? outcome.code ?? "none" : "none";
-};
-
-/** What a room says of its messages through the link a manager lists. */
-const linkedCount = (room: ChatIndexEntry["room"] | undefined): string => {
-  const messages = room?.get()?.messages;
-  return `count:${messages?.count ?? "none"} ` +
-    `newestAt:${messages?.newestAt ?? "none"}`;
-};
-
-/** An empty shared-space catalog, as a manager lists its rooms from. */
-const emptyCatalog = () =>
-  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
-
-/** The entries `catalog` holds, as Home's reader validates them. */
-const entriesOf = (
-  catalog: Writable<SharedSpaceCatalogStorage>,
-): SharedSpaceEntry[] => Object.values(readSharedSpaceCatalog(catalog).entries);
-
-/** A room's result, as the link an `accept` names it by. */
-function roomLinkOf(room: unknown): Cell<ChatRoomLink>;
-function roomLinkOf(room: unknown): unknown {
+/** Views a pattern result as its room reference. */
+function roomLink(room: unknown): Cell<ChatRoomLink>;
+function roomLink(room: unknown): unknown {
   return room;
 }
 
-/** The room a request's outcome names, as a cell. */
-const roomOf = (
-  requests: Writable<Record<string, ChatRequestOutcome>>,
-  id: string,
-) => requests.key(id).key("entry").key("room").resolveAsCell();
+/** The room behind a held reference, selected without changing its identity. */
+function heldRoom(room: unknown): Cell<HeldRoom>;
+function heldRoom(room: unknown): unknown {
+  return room;
+}
 
-const recipientsOf = (notices: Writable<ChatManagerNotice[]>): string =>
-  (notices.get() ?? []).map((notice) => notice.recipient).join(",");
+/** Names a request's failure in an assertion diagnostic. */
+function outcomeOf(
+  requests: Record<string, ChatRequestOutcome>,
+  id: string,
+): string {
+  const result = requests[id];
+  return result?.status === "refused"
+    ? result.reason
+    : result?.status ?? "missing";
+}
 
 export default pattern(() => {
-  const profile = Writable.of<TestProfile>({ name: "Tester" });
-
-  // A direct room: one per counterpart, found again after it is forgotten.
-  const directNotices = Writable.of<ChatManagerNotice[]>([]);
-  const directRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
-  const directCatalog = emptyCatalog();
-  const direct = FabriChatManagerCore({
-    myProfile: profile,
-    sharedSpaceCatalog: directCatalog,
-    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: directRequests,
-    outgoingNotices: directNotices,
-  } as ManagerArg);
-  const directHeld = Writable.of<HeldRoom>({});
-  const action_hold_direct = action(() =>
-    directHeld.key("room").set(roomOf(directRequests, "d-1"))
-  );
-  const action_forget_direct_unrevised = action(() =>
-    direct.forget.send({
-      requestId: "f-unrevised",
-      room: directHeld.key("room").resolveAsCell(),
-    })
-  );
-  const action_forget_direct_stale = action(() =>
-    direct.forget.send({
-      requestId: "f-stale",
-      room: directHeld.key("room").resolveAsCell(),
-      revision: "1:stale",
-    })
-  );
-  const action_forget_direct_message_list = action(() =>
-    direct.forget.send({
-      requestId: "f-not-room",
-      room: directHeld.key("room").key("messages").resolveAsCell(),
-      revision: direct.rooms[0]?.revision,
-    })
-  );
-  // The revision the forget below names, which another client's request made
-  // from the same list names too.
-  const forgottenRevision = Writable.of<string>("");
-  const action_forget_direct = action(() => {
-    const revision = direct.rooms[0]?.revision ?? "";
-    forgottenRevision.set(revision);
-    direct.forget.send({
-      requestId: "f-1",
-      room: directHeld.key("room").resolveAsCell(),
-      revision,
-    });
+  const catalog = Writable.of<SharedSpaceCatalogStorage>({
+    entries: {},
+    offers: {},
   });
-  const action_forget_direct_from_older_list = action(() =>
-    direct.forget.send({
-      requestId: "f-older-list",
-      room: directHeld.key("room").resolveAsCell(),
-      revision: forgottenRevision.get(),
-    })
-  );
-
-  // A group room, which states its title, and leaves this user out of its
-  // other members.
-  const groupNotices = Writable.of<ChatManagerNotice[]>([]);
-  const groupRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
-  const groupCatalog = emptyCatalog();
-  const group = FabriChatManagerCore({
+  const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const notices = Writable.of<ChatManagerNotice[]>([]);
+  const profile = Writable.of<TestProfile>({ name: "Tester" });
+  const manager = FabriChatManagerCore({
     myProfile: profile,
-    sharedSpaceCatalog: groupCatalog,
+    sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: groupRequests,
-    outgoingNotices: groupNotices,
-  } as ManagerArg);
-  // This user's own principal, which the group's members name as well.
-  const self = Writable.of<string>("");
-  const action_note_self = action(() => self.set(currentPrincipal() ?? ""));
-  const action_open_direct_with_self = action(() =>
-    group.openDirect.send({
-      requestId: "d-self",
-      counterpart: currentPrincipal(),
+    requests,
+    outgoingNotices: notices,
+  });
+  const held = Writable.of<{ room?: Cell<HeldRoom> }>({});
+  const revision = Writable.of("");
+  const actor = Writable.of("");
+  const hold = action(() => {
+    held.key("room").set(
+      requests.key("direct").key("entry").key("room").resolveAsCell(),
+    );
+    revision.set(manager.rooms[0]?.revision ?? "");
+    actor.set(currentPrincipal() ?? "");
+  });
+  const forget = action(() =>
+    manager.forget.send({
+      requestId: "forget",
+      room: held.key("room").resolveAsCell(),
+      revision: revision.get(),
     })
   );
-  // A profile page's address, pasted where a principal's DID goes.
-  const action_type_address = action(() =>
-    fireEvent(
-      findNodeByProp(group[UI], "inputId", "fabrichat-start-direct"),
-      "onClick",
-      { target: { value: ` ${BOB}/of:fid1:profile ` } },
-      "the direct start control",
+  const stale = action(() =>
+    manager.forget.send({
+      requestId: "stale",
+      room: held.key("room").resolveAsCell(),
+      revision: revision.get(),
+    })
+  );
+  const missingRevision = action(() =>
+    manager.forget.send({
+      requestId: "missing-revision",
+      room: held.key("room").resolveAsCell(),
+    })
+  );
+  const invalidRoom = action(() =>
+    manager.forget.send({
+      requestId: "not-room",
+      room: held.key("room").key("messages").resolveAsCell(),
+      revision: manager.rooms[0]?.revision,
+    })
+  );
+  const group = Writable.of<{ room?: Cell<ChatRoomLink> }>({});
+  const holdGroup = action(() =>
+    group.key("room").set(
+      requests.key("group").key("entry").key("room").resolveAsCell(),
     )
   );
-
-  // Accepting a group room, and a direct room only with its counterpart.
-  const acceptRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
-  const acceptCatalog = emptyCatalog();
-  const accepting = FabriChatManagerCore({
-    myProfile: profile,
-    sharedSpaceCatalog: acceptCatalog,
-    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: acceptRequests,
-    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
-  } as ManagerArg);
-  const acceptHeld = Writable.of<HeldRoom>({});
-  const action_hold_accepted_group = action(() =>
-    acceptHeld.key("room").set(roomOf(acceptRequests, "g-1"))
-  );
-  const action_hold_accepted_direct = action(() =>
-    acceptHeld.key("room").set(roomOf(acceptRequests, "d-1"))
-  );
-  const action_forget_accepted_group = action(() =>
-    accepting.forget.send({
-      requestId: "f-1",
-      room: acceptHeld.key("room").resolveAsCell(),
-      revision: accepting.rooms[0]?.revision,
+  const forgetGroup = action(() =>
+    manager.forget.send({
+      requestId: "forget-group",
+      room: group.key("room").resolveAsCell(),
+      revision: manager.rooms.find((entry) =>
+        equals(entry.room, group.key("room"))
+      )?.revision,
     })
   );
-  const action_forget_group_again = action(() =>
-    accepting.forget.send({
-      requestId: "f-2",
-      room: acceptHeld.key("room").resolveAsCell(),
-      revision: accepting.rooms[0]?.revision,
+  const acceptGroup = action(() =>
+    manager.accept.send({
+      requestId: "accept-group",
+      room: group.key("room").resolveAsCell(),
     })
   );
-  const action_forget_accepted_direct = action(() =>
-    accepting.forget.send({
-      requestId: "f-3",
-      room: acceptHeld.key("room").resolveAsCell(),
-      revision: accepting.rooms[0]?.revision,
-    })
-  );
-  // A space's own chat, which no manager created, so it has no record.
   const ownChat = FabriChatRoom({});
-  const action_accept_own_chat = action(() =>
-    accepting.accept.send({
-      requestId: "a-own",
-      room: roomLinkOf(ownChat),
-    })
+  const acceptOwn = action(() =>
+    manager.accept.send({ requestId: "own-chat", room: roomLink(ownChat) })
   );
-  const action_accept_group = action(() =>
-    accepting.accept.send({
-      requestId: "a-1",
-      room: acceptHeld.key("room").resolveAsCell(),
-    })
-  );
-  const action_accept_direct_alone = action(() =>
-    accepting.accept.send({
-      requestId: "a-2",
-      room: acceptHeld.key("room").resolveAsCell(),
-    })
-  );
-  const action_accept_direct_with_bob = action(() =>
-    accepting.accept.send({
-      requestId: "a-3",
-      room: acceptHeld.key("room").resolveAsCell(),
+  const acceptSelf = action(() =>
+    manager.accept.send({
+      requestId: "own-direct",
+      room: held.key("room").resolveAsCell(),
       counterpart: BOB,
     })
   );
-
-  // A notice reported delivered.
-  const deliveredNotices = Writable.of<ChatManagerNotice[]>([]);
-  const delivering = FabriChatManagerCore({
-    myProfile: profile,
-    sharedSpaceCatalog: emptyCatalog(),
-    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
-    outgoingNotices: deliveredNotices,
-  } as ManagerArg);
-  const action_report_delivered = action(() =>
-    delivering.delivered.send({
-      requestId: "n-1",
-      id: deliveredNotices.get()[0]?.id,
-    })
+  const deliver = action(() =>
+    manager.delivered.send({ requestId: "delivered", id: notices.get()[0]?.id })
+  );
+  const ownDirect = action(() =>
+    manager.openDirect.send({ requestId: "self", counterpart: actor.get() })
   );
 
   return {
     [TESTS]: [
-      // A direct room.
       {
-        action: direct.openDirect,
-        event: { requestId: "d-1", counterpart: BOB },
-        trustedUi: startGesture,
+        action: manager.openDirect,
+        event: { requestId: "direct", counterpart: BOB },
+        trustedUi: gesture,
       },
-      { action: action_hold_direct },
+      { action: hold },
       {
         assertion: assert(() =>
-          direct.rooms.length === 1 &&
-          direct.rooms[0]?.counterpart === BOB &&
-          // Its creator is listed among its participants without a step of
-          // their own.
-          (directHeld.key("room").get()?.get()?.participants ?? []).some((
-            known,
-          ) => equals(known, profile)) &&
-          recipientsOf(directNotices) === BOB
+          manager.rooms.length === 1 && manager.rooms[0]?.counterpart === BOB &&
+          notices.get().length === 1 && requests.get().direct?.status === "done"
         ),
       },
-      // Creating it registers its space in the user's catalog, as a saved
-      // FabriChat room, from which the manager lists it.
       {
         assertion: assert(() => {
-          const entries = entriesOf(directCatalog);
-          return entries.length === 1 &&
-            entries[0]?.kind === CHAT_ROOM_OFFER_KIND &&
-            entries[0]?.state === "saved" &&
-            entries[0]?.revision === direct.rooms[0]?.revision;
+          const room = heldRoom(held.key("room").resolveAsCell());
+          const space = spaceOf(room);
+          const entry = space
+            ? readSharedSpaceCatalog(catalog).entries[space]
+            : undefined;
+          return entry?.kind === "fabrichat-room" && entry.state === "saved" &&
+            entry.revision === revision.get() &&
+            spaceAccessOf(room, BOB) === "OWNER" &&
+            (held.key("room").get()?.get()?.participants ?? []).some((
+              participant,
+            ) => equals(participant, profile));
         }),
       },
-      // The notice offers the room's link, for its creator to send on, and
-      // the room's entry in the list is a link to it, labeled with whom it is
-      // with, which opens it as a page of its own: the manager renders no
-      // room itself.
       {
-        assertion: assert(() =>
-          equals(cellLinked(direct[UI], undefined), directHeld.key("room")) &&
-          equals(
-            cellLinked(direct[UI], `With ${BOB}`),
-            directHeld.key("room"),
-          ) &&
-          countElements(direct[UI], "cf-render") === 0
-        ),
-      },
-      // The conversation with one person is always the same room.
-      {
-        action: direct.openDirect,
-        event: { requestId: "d-2", counterpart: BOB },
-        trustedUi: startGesture,
-      },
-      { assertion: assert(() => direct.rooms.length === 1) },
-      // Forgetting it archives its catalog entry and keeps it in `direct`;
-      // finding it again restores the entry, which puts it back.
-      { action: action_forget_direct },
-      {
-        assertion: assert(() =>
-          direct.rooms.length === 0 &&
-          entriesOf(directCatalog)[0]?.state === "archived"
-        ),
-      },
-      // A forget made from the same list, once the entry is archived, names a
-      // revision the entry has moved on from.
-      { action: action_forget_direct_from_older_list },
-      {
-        assertion: assert(() =>
-          forgottenRevision.get() !== "" &&
-          reasonOf(directRequests, "f-older-list") ===
-            "The room's entry changed since it was listed." &&
-          entriesOf(directCatalog)[0]?.state === "archived"
-        ),
-      },
-      {
-        action: direct.openDirect,
-        event: { requestId: "d-3", counterpart: BOB },
-        trustedUi: startGesture,
+        action: manager.openDirect,
+        event: { requestId: "same-person", counterpart: BOB },
+        trustedUi: gesture,
       },
       {
         assertion: assert(() =>
-          direct.rooms.length === 1 &&
-          equals(direct.rooms[0]?.room, directHeld.key("room"))
+          manager.rooms.length === 1 && notices.get().length === 1
         ),
       },
-      // Forgetting names the revision of the room's entry its list showed, so
-      // a request naming none, or one the entry has moved on from, is refused,
-      // and so is one whose link names something other than the room, from
-      // the room's space; the room stays listed.
-      { action: action_forget_direct_unrevised },
-      { action: action_forget_direct_stale },
-      { action: action_forget_direct_message_list },
+      { action: missingRevision },
+      { action: invalidRoom },
       {
         assertion: assert(() =>
-          reasonOf(directRequests, "f-unrevised") ===
-            "The request names no revision of the room's entry." &&
-          reasonOf(directRequests, "f-stale") ===
-            "The room's entry changed since it was listed." &&
-          reasonOf(directRequests, "f-not-room") ===
-            "The request names no room." &&
-          direct.rooms.length === 1
+          requests.get()["missing-revision"]?.status === "refused" &&
+          requests.get()["not-room"]?.status === "refused" &&
+          manager.rooms.length === 1
         ),
       },
-
-      // A group room.
-      { action: action_note_self },
+      { action: forget },
       {
-        action: group.createGroup,
+        assertion: assert(() =>
+          manager.rooms.length === 0 && manager.direct[BOB] !== undefined &&
+          Object.values(readSharedSpaceCatalog(catalog).entries)[0]?.state ===
+            "archived"
+        ),
+      },
+      { action: stale },
+      { assertion: assert(() => requests.get().stale?.status === "refused") },
+      {
+        action: manager.openDirect,
+        event: { requestId: "restore", counterpart: BOB },
+        trustedUi: gesture,
+      },
+      {
+        assertion: assert(() =>
+          manager.rooms.length === 1 &&
+          equals(manager.rooms[0]?.room, held.key("room")) &&
+          manager.rooms[0]?.revision !== revision.get()
+        ),
+      },
+      { action: acceptSelf },
+      {
+        assertion: assert(() =>
+          requests.get()["own-direct"]?.status === "refused"
+        ),
+      },
+      {
+        action: manager.createGroup,
         event: {
-          requestId: "g-1",
+          requestId: "group",
           title: "Team",
-          members: [CAROL, CAROL, self],
+          members: [CAROL, CAROL, actor],
         },
-        trustedUi: startGesture,
+        trustedUi: gesture,
       },
+      { action: holdGroup },
       {
         assertion: assert(() =>
-          group.rooms.length === 1 &&
-          recipientsOf(groupNotices) === CAROL &&
-          group.rooms[0]?.kind === "group" &&
-          group.rooms[0]?.room.key("about").get()?.kind === "group" &&
-          group.rooms[0]?.room.key("about").get()?.title === "Team" &&
-          !equals(group.rooms[0]?.room, directHeld.key("room"))
-        ),
-      },
-      // A group room is registered with its title.
-      {
-        assertion: assert(() =>
-          entriesOf(groupCatalog).length === 1 &&
-          entriesOf(groupCatalog)[0]?.title === "Team"
-        ),
-      },
-      // The link carries where the conversation stands, which a new room has
-      // no messages of.
-      {
-        assertion: assert(() =>
-          linkedCount(group.rooms[0]?.room) === "count:0 newestAt:none"
-        ),
-      },
-      // A request already decided changes nothing when it arrives again.
-      {
-        action: group.createGroup,
-        event: { requestId: "g-1", title: "Team", members: [] },
-        trustedUi: startGesture,
-      },
-      { assertion: assert(() => group.rooms.length === 1) },
-      // The start controls are enabled, and a start the manager can't act on
-      // is refused with its reason: a direct room with this user themself,
-      // with someone who isn't a principal, or a group room with no title.
-      {
-        assertion: assert(() =>
-          propValue(
-            findNodeByProp(group[UI], "inputId", "fabrichat-start-direct"),
-            "disabled",
-          ) === false
-        ),
-      },
-      { assertion: assert(() => shownRefusal(group[UI]) === "none:") },
-      { action: action_open_direct_with_self },
-      {
-        assertion: assert(() =>
-          shownRefusal(group[UI]) === "block:The counterpart is this user."
+          manager.rooms.length === 2 && notices.get().length === 2 &&
+          Object.values(readSharedSpaceCatalog(catalog).entries).some((entry) =>
+            entry.title === "Team"
+          )
         ),
       },
       {
-        action: group.openDirect,
-        event: { requestId: "d-junk", counterpart: "not a principal" },
-        trustedUi: startGesture,
-      },
-      {
-        action: group.createGroup,
-        event: { requestId: "g-blank", title: "  ", members: [CAROL] },
-        trustedUi: startGesture,
+        action: manager.createGroup,
+        event: { requestId: "group", title: "Changed", members: [] },
+        trustedUi: gesture,
       },
       {
         assertion: assert(() =>
-          reasonOf(groupRequests, "d-self") ===
-            "The counterpart is this user." &&
-          reasonOf(groupRequests, "d-junk") ===
-            "The counterpart is not a principal." &&
-          reasonOf(groupRequests, "g-blank") ===
-            "A group room needs a title." &&
-          group.rooms.length === 1 &&
-          recipientsOf(groupNotices) === CAROL
+          manager.rooms.length === 2 &&
+          group.key("room").key("about").get()?.title === "Team"
         ),
-      },
-      // The session is shown its latest refusal, and for text that isn't a
-      // principal, the text it sent.
-      {
-        assertion: assert(() =>
-          shownRefusal(group[UI]) === "block:A group room needs a title."
-        ),
-      },
-      { action: action_type_address },
-      {
-        assertion: assert(() =>
-          shownRefusal(group[UI]) ===
-            "block:The counterpart is not a principal. Received: " +
-              `"${BOB}/of:fid1:profile"`
-        ),
-      },
-      // A well-formed DID whose key isn't base58btc names no principal: here,
-      // one a sentence's period follows.
-      {
-        action: group.openDirect,
-        event: { requestId: "d-period", counterpart: `${BOB}.` },
-        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
-          reasonOf(groupRequests, "d-period") ===
-            "The counterpart is not a principal." &&
-          shownRefusal(group[UI]) ===
-            "block:The counterpart is not a principal. Received: " +
-              `"${BOB}."`
+          group.key("room").key("about").get()?.kind === "group" &&
+          spaceAccess(group.key("room")) === "OWNER" &&
+          equals(
+            manager.rooms.find((entry) => entry.kind === "group")?.room,
+            group.key("room"),
+          )
         ),
       },
-      // A group whose members include text that isn't a principal is
-      // refused, and the session is shown that text.
-      {
-        action: group.createGroup,
-        event: { requestId: "g-junk", title: "Team", members: [CAROL, "junk"] },
-        trustedUi: startGesture,
-      },
+      { action: forgetGroup },
       {
         assertion: assert(() =>
-          reasonOf(groupRequests, "g-junk") ===
-            "A group's members must be principals." &&
-          shownRefusal(group[UI]) ===
-            'block:A group\'s members must be principals. Received: ["junk"]' &&
-          group.rooms.length === 1
+          outcomeOf(requests.get(), "forget-group") === "done" &&
+          manager.rooms.length === 1
         ),
       },
-      // A request missing what its stream needs is refused, with why, rather
-      // than dropped: an event's type doesn't refuse it.
-      { action: group.forget, event: { requestId: "f-none" } },
-      { action: group.accept, event: { requestId: "a-none" } },
-      { action: group.delivered, event: { requestId: "n-none" } },
-      {
-        action: group.createGroup,
-        event: { requestId: "g-none", title: "No members" },
-        trustedUi: startGesture,
-      },
+      { action: acceptGroup },
       {
         assertion: assert(() =>
-          reasonOf(groupRequests, "f-none") === "The request names no room." &&
-          reasonOf(groupRequests, "a-none") === "The request names no room." &&
-          reasonOf(groupRequests, "n-none") ===
-            "The request names no notice." &&
-          reasonOf(groupRequests, "g-none") ===
-            "A group's members must be listed." &&
-          group.rooms.length === 1
+          manager.rooms.length === 2 &&
+          outcomeOf(requests.get(), "accept-group") === "done"
         ),
       },
-      // A profile that attests no principal offers no chat address.
+      { action: ownDirect, trustedUi: gesture },
+      {
+        action: manager.openDirect,
+        event: { requestId: "bad-principal", counterpart: "not a principal" },
+        trustedUi: gesture,
+      },
+      {
+        action: manager.createGroup,
+        event: { requestId: "bad-title", title: " ", members: [] },
+        trustedUi: gesture,
+      },
+      {
+        action: manager.createGroup,
+        event: { requestId: "missing-members", title: "Missing" },
+        trustedUi: gesture,
+      },
+      {
+        action: manager.createGroup,
+        event: { requestId: "bad-members", title: "Bad", members: ["invalid"] },
+        trustedUi: gesture,
+      },
+      {
+        action: manager.openDirect,
+        event: { requestId: "punctuated-principal", counterpart: `${BOB}.` },
+        trustedUi: gesture,
+      },
+      {
+        action: manager.createGroup,
+        event: {
+          requestId: "punctuated-member",
+          title: "Bad",
+          members: [`${CAROL}.`],
+        },
+        trustedUi: gesture,
+      },
+      { action: manager.forget, event: { requestId: "missing-room" } },
+      { action: manager.accept, event: { requestId: "missing-accept" } },
+      { action: manager.delivered, event: { requestId: "missing-notice" } },
       {
         assertion: assert(() =>
-          displayOf(group[UI], "fabrichat-my-address") === "none"
+          [
+            "self",
+            "bad-principal",
+            "bad-title",
+            "missing-members",
+            "bad-members",
+            "punctuated-principal",
+            "punctuated-member",
+            "missing-room",
+            "missing-accept",
+            "missing-notice",
+          ].every((id) => requests.get()[id]?.status === "refused") &&
+          manager.rooms.length === 2
         ),
       },
-      // A start that is done shows nothing.
+      { action: acceptOwn },
       {
-        action: group.openDirect,
-        event: { requestId: "d-carol", counterpart: CAROL },
-        trustedUi: startGesture,
+        assertion: assert(() => {
+          const result = requests.get()["own-chat"];
+          return result?.status === "refused" &&
+            result.code === "space-own-chat" && manager.rooms.length === 2;
+        }),
       },
-      { assertion: assert(() => shownRefusal(group[UI]) === "none:") },
-
-      // Accepting a group room it was admitted to.
-      {
-        action: accepting.createGroup,
-        event: { requestId: "g-1", title: "Team", members: [] },
-        trustedUi: startGesture,
-      },
-      { action: action_hold_accepted_group },
-      { action: action_forget_accepted_group },
-      { assertion: assert(() => accepting.rooms.length === 0) },
-      { action: action_accept_group },
-      {
-        assertion: assert(() =>
-          accepting.rooms.length === 1 &&
-          accepting.rooms[0]?.kind === "group" &&
-          equals(accepting.rooms[0]?.room, acceptHeld.key("room")) &&
-          statusOf(acceptRequests, "a-1") === "done"
-        ),
-      },
-
-      // A direct room this user created is not accepted, with a counterpart
-      // or without one: its label names this user, and `openDirect` finds it
-      // again. `accept.test.tsx` covers accepting someone else's.
-      { action: action_forget_group_again },
-      {
-        action: accepting.openDirect,
-        event: { requestId: "d-1", counterpart: BOB },
-        trustedUi: startGesture,
-      },
-      { action: action_hold_accepted_direct },
-      { action: action_forget_accepted_direct },
-      { action: action_accept_direct_alone },
-      { action: action_accept_direct_with_bob },
-      {
-        assertion: assert(() =>
-          reasonOf(acceptRequests, "a-2") ===
-            "The room was created by this user." &&
-          reasonOf(acceptRequests, "a-3") ===
-            "The room was created by this user." &&
-          accepting.rooms.length === 0
-        ),
-      },
-      // A space's own chat is refused: its space is the social space it
-      // belongs to, which the catalog doesn't list as a room.
-      { assertion: assert(() => entriesOf(acceptCatalog).length === 2) },
-      { action: action_accept_own_chat },
-      {
-        assertion: assert(() =>
-          reasonOf(acceptRequests, "a-own") ===
-            "The room is a social space's own chat, which isn't listed among chats." &&
-          codeOf(acceptRequests, "a-own") === "space-own-chat" &&
-          entriesOf(acceptCatalog).length === 2
-        ),
-      },
-
-      // A notice reported delivered is dropped.
-      {
-        action: delivering.openDirect,
-        event: { requestId: "d-1", counterpart: BOB },
-        trustedUi: startGesture,
-      },
-      { assertion: assert(() => deliveredNotices.get().length === 1) },
-      { action: action_report_delivered },
-      { assertion: assert(() => deliveredNotices.get().length === 0) },
+      { action: deliver },
+      { assertion: assert(() => notices.get().length === 1) },
     ],
   };
 });

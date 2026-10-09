@@ -1,0 +1,769 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ChatIndexEntry": {
+        "properties": {
+          "counterpart": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "direct",
+              "group"
+            ]
+          },
+          "revision": {
+            "description": "Catalog revision observed when a client chooses to forget the room.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "since": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "room",
+          "kind",
+          "since"
+        ],
+        "type": "object"
+      },
+      "ChatRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/ChatIndexEntry"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "enum": [
+                  "space-own-chat"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChatRoomLink": {
+        "properties": {
+          "about": {
+            "properties": {
+              "createdAt": {
+                "type": "FabricEpochNsec"
+              },
+              "kind": {
+                "enum": [
+                  "direct",
+                  "group"
+                ]
+              },
+              "policy": {
+                "$ref": "#/$defs/ChatRoomPolicy",
+                "asCell": [
+                  "cell"
+                ]
+              },
+              "record": {
+                "asCell": [
+                  "cell"
+                ],
+                "properties": {
+                  "createdAt": {
+                    "type": "FabricEpochNsec"
+                  },
+                  "kind": {
+                    "enum": [
+                      "direct",
+                      "group"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "policy"
+            ],
+            "type": "object"
+          },
+          "messages": {
+            "description": "Shared counts used by the manager's list, without session-owned windows.",
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "newestAt": {
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "SharedSpaceCatalogStorage": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "description": "Inputs whose cells may be shared with Home or an embedding host.",
+    "properties": {
+      "direct": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "properties": {},
+        "type": "object"
+      },
+      "outgoingNotices": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "recipient": {
+              "type": "string"
+            },
+            "room": {
+              "$ref": "#/$defs/ChatRoomLink",
+              "asCell": [
+                "cell"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "room",
+            "recipient"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "requests": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatRequestOutcome"
+        },
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "properties": {},
+        "type": "object"
+      },
+      "sharedSpaceCatalog": {
+        "$ref": "#/$defs/SharedSpaceCatalogStorage",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "entries": {},
+          "offers": {}
+        }
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "fabrichat/manager.tsx",
+  "resultSchema": {
+    "$comment": "Docs inherited from intersection constituents. Missing docs for: { $UI: VNode; $NAME: string; }.",
+    "$defs": {
+      "ChatIndexEntry": {
+        "properties": {
+          "counterpart": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "direct",
+              "group"
+            ]
+          },
+          "revision": {
+            "description": "Catalog revision observed when a client chooses to forget the room.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink"
+          },
+          "since": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "room",
+          "kind",
+          "since"
+        ],
+        "type": "object"
+      },
+      "ChatManagerFacts": {
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "createGroup": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "delivered": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "direct": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "forget": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "openDirect": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "outgoingNotices": {
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "recipient": {
+                  "type": "string"
+                },
+                "room": {
+                  "$ref": "#/$defs/ChatRoomLink"
+                }
+              },
+              "required": [
+                "id",
+                "room",
+                "recipient"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatRequestOutcome"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "rooms": {
+            "items": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "type": "array"
+          },
+          "sharedSpaceCatalog": {
+            "$ref": "#/$defs/SharedSpaceCatalogStorage",
+            "description": "Home's shared-space catalog, read directly by rooms."
+          }
+        },
+        "required": [
+          "rooms",
+          "sharedSpaceCatalog",
+          "direct",
+          "requests",
+          "outgoingNotices",
+          "openDirect",
+          "createGroup",
+          "accept",
+          "forget",
+          "delivered"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "description": "The share inbox through which a manager offers a newly created room."
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/ChatIndexEntry"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "enum": [
+                  "space-own-chat"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChatRoomLink": {
+        "properties": {
+          "about": {
+            "properties": {
+              "createdAt": {
+                "type": "FabricEpochNsec"
+              },
+              "kind": {
+                "enum": [
+                  "direct",
+                  "group"
+                ]
+              },
+              "policy": {
+                "$ref": "#/$defs/ChatRoomPolicy"
+              },
+              "record": {
+                "properties": {
+                  "createdAt": {
+                    "type": "FabricEpochNsec"
+                  },
+                  "kind": {
+                    "enum": [
+                      "direct",
+                      "group"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "policy"
+            ],
+            "type": "object"
+          },
+          "messages": {
+            "description": "Shared counts used by the manager's list, without session-owned windows.",
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "newestAt": {
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "ManagerStreamEvent": {
+        "properties": {
+          "counterpart": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "joinableByLink": {
+            "type": "boolean"
+          },
+          "members": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "profile": {
+            "$ref": "#/$defs/ChatProfile"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink"
+          },
+          "target": {
+            "properties": {
+              "dataset": {
+                "properties": {
+                  "chatCounterpart": {
+                    "type": "string"
+                  },
+                  "counterpart": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SharedSpaceCatalogStorage": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "description": "The home chat manager's public contract.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$VIEWS": {
+        "properties": {
+          "chats": {
+            "$ref": "#/$defs/ChatManagerFacts"
+          }
+        },
+        "required": [
+          "chats"
+        ],
+        "type": "object"
+      },
+      "accept": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "createGroup": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "delivered": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "direct": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "forget": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "openDirect": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "outgoingNotices": {
+        "items": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "recipient": {
+              "type": "string"
+            },
+            "room": {
+              "$ref": "#/$defs/ChatRoomLink"
+            }
+          },
+          "required": [
+            "id",
+            "room",
+            "recipient"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "requests": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatRequestOutcome"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "rooms": {
+        "items": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "type": "array"
+      },
+      "sharedSpaceCatalog": {
+        "$ref": "#/$defs/SharedSpaceCatalogStorage",
+        "description": "Home's shared-space catalog, read directly by rooms."
+      }
+    },
+    "required": [
+      "$VIEWS",
+      "rooms",
+      "sharedSpaceCatalog",
+      "direct",
+      "requests",
+      "outgoingNotices",
+      "openDirect",
+      "createGroup",
+      "accept",
+      "forget",
+      "delivered",
+      "$UI",
+      "$NAME"
+    ],
+    "type": "object"
+  }
+}

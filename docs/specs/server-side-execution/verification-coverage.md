@@ -6417,15 +6417,19 @@ supply; OW29/OW32/OW34 closed):
     > and with existing code, so the client just speculates, the
     > servers fills in, it converges, done)."
 
-    — owner (Berni), 2026-08-24. As built (`runner.ts`
-    `Runner.#catchUpAndStartOnStaleRead()` + `startFromServedState`; the
-    readiness `awaitCommitRetryReadiness` cherry-picked from closed
-    #6208 along with its discriminator — the retry itself
-    deliberately NOT brought): both deferred-start arms' stale-read
-    refusals, ON-ONLY (`experimental.serverExecution === true`, the
-    coordinator's conservative default — under OFF the refusal means
-    another CLIENT raced and cross-tab mutex semantics own that
-    story; OFF byte-identical, pinned). COVERED SHAPES, exactly (the
+    — owner (Berni), 2026-08-24. With
+    `experimental.serverExecution === true`, both deferred-start arms
+    recover stale-read refusals through
+    `Runner.#catchUpAndStartOnStaleRead()` and `startFromServedState`,
+    loading served documents without recommitting the refused setup.
+    With server execution off, a commit-callback deferred start keeps
+    a stale-read refusal terminal. A named-family run instead waits
+    for catch-up and retries setup in a fresh transaction with the
+    caller's argument, within the same bounded retry budget and
+    cancellation ownership as policy-manifest conflicts. Authorization
+    and CFC refusals remain terminal. The
+    [serving loop](serving-loop.md) describes these separate recovery
+    paths. COVERED SHAPES, exactly (the
     adversarial review's F4 — the class language is scoped to these,
     never "all conflicts"): the engine's stale-read family —
     `stale confirmed read` (validateConfirmedReads) and its sibling
@@ -6443,7 +6447,7 @@ supply; OW29/OW32/OW34 closed):
     same-family preempt-mode client shape (`commit preempted: …`,
     experimental `CF_CONFLICT_ADMISSION=preempt`, default off) —
     recorded, not silently extended; a b04-shaped death under THAT
-    message is that mode's own open item. THE RECOVERY, as
+    message is that mode's own open item. THE SERVED-STATE RECOVERY, as
     restructured by the review's F1 (+ Cubic P1 — the
     cancellation-authority root, both faces) and CORRECTED by the
     delta review's D1: it recovers only an attempt whose install is

@@ -1,10 +1,4 @@
-/**
- * A FabriChat room's add control: shown to an OWNER of a room the manager
- * created in a space of its own, and refusing what it can refuse before it
- * grants anything. That an add admits someone to the room's space is
- * something only a space other than the test's own shows, so
- * `../integration/fabrichat-spaces-multi-runtime.test.ts` checks it.
- */
+/** A standalone group's owner may add members; direct and social chats refuse. */
 import {
   type AddIntegrity,
   assert,
@@ -19,117 +13,103 @@ import {
   readValue,
   textContent,
 } from "../test/vnode-helpers.ts";
-import {
-  type ActivityCounters,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
-import { FabriChatRoomCore } from "./room.tsx";
-import {
-  CHAT_ADD_MEMBER_ACTION,
-  CHAT_ADD_MEMBER_SURFACE,
-  type ChatProfile,
-} from "./schemas.tsx";
+import { testRoomAbout, testRoomStorage } from "./room-test-fixture.ts";
+import { FabriChatRoom } from "./room.tsx";
+import type { ChatProfile } from "./schemas.tsx";
 
-type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
-
-// A stand-in for a viewer's `#profile`, labeled as a Fabric profile is.
-type TestProfile = AddIntegrity<
-  ChatProfile,
-  readonly ["fabrichat-test-profile"]
->;
-
-const addGesture = {
-  surface: CHAT_ADD_MEMBER_SURFACE,
-  action: CHAT_ADD_MEMBER_ACTION,
-};
-
-// A stand-in for a principal, a base58btc key as a principal's is.
-const BOB = "did:key:z6MkBob";
-
-// The add control delivers its field's text on the trusted click.
-const typed = (text: string) => ({ type: "click", target: { value: text } });
-
-// How the element `id` under `root` is displayed.
-const displayOf = (root: unknown, id: string): unknown =>
+/** The display state of a room's add control. */
+const displayOf = (root: unknown): unknown =>
   readValue(
-    (propValue(findNodeById(root, id), "style") as { display?: unknown })
-      ?.display,
+    (propValue(findNodeById(root, "fabrichat-add-member"), "style") as {
+      display?: unknown;
+    })?.display,
   );
 
-// What a room shows about the session's latest add: how it is displayed, and
-// what it says.
-const shownOutcome = (root: unknown): string =>
-  `${displayOf(root, "fabrichat-add-member-outcome")}:` +
+/** The refusal or result of the room's latest add gesture. */
+const outcomeOf = (root: unknown): string =>
   textContent(findNodeById(root, "fabrichat-add-member-outcome"));
 
-/** A room's records, every one empty. */
-const emptyRecords = () => ({
-  messages: Writable.of<MessagesValue>([] as MessagesValue),
-  reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-  requests: Writable.of<RequestMemo[]>([]),
-  usedTimes: Writable.of<UsedTime[]>([]),
-  activity: Writable.of<SentActivity[]>([]),
-  counters: Writable.of<ActivityCounters[]>([]),
-});
+const addGesture = { surface: "ChatAddMemberSurface", action: "ChatAddMember" };
+const BOB = "did:key:z6MkBob";
 
 export default pattern(() => {
-  const profile = Writable.of<TestProfile>({ name: "Alice" });
-  // A room a manager created, which says what it is.
-  const ownRoom = FabriChatRoomCore({
+  const profile = new Writable<AddIntegrity<ChatProfile, ["chat-test"]>>({
+    name: "Alice",
+  });
+  const groupDescription = testRoomAbout({ kind: "group", standalone: true });
+  const directDescription = testRoomAbout({ kind: "direct", standalone: true });
+  const socialDescription = testRoomAbout({ kind: "group", standalone: false });
+  const ownRoom = FabriChatRoom({
     myProfile: profile,
-    about: { kind: "group" as const, title: "Team" },
-    ...emptyRecords(),
-  } as RoomArg);
-  // The same kind of room, to a viewer whose profile hasn't resolved.
-  const unresolvedRoom = FabriChatRoomCore({
-    myProfile: Writable.of<TestProfile | undefined>(undefined),
-    about: { kind: "group" as const, title: "Team" },
-    ...emptyRecords(),
-  } as RoomArg);
-  // A space's own chat, which has no `about`.
-  const sharedRoom = FabriChatRoomCore({
+    about: groupDescription.about,
+    ...testRoomStorage({}),
+  });
+  const directRoom = FabriChatRoom({
     myProfile: profile,
-    ...emptyRecords(),
-  } as RoomArg);
-
+    about: directDescription.about,
+    ...testRoomStorage({}),
+  });
+  const sharedRoom = FabriChatRoom({
+    myProfile: profile,
+    about: socialDescription.about,
+    ...testRoomStorage({}),
+  });
   return {
     [TESTS]: [
-      // The viewer is an OWNER of the test's space, so a room in a space of
-      // its own offers them the control once their profile has resolved, and
-      // a space's own chat does not.
+      { action: groupDescription.initialize },
+      { action: directDescription.initialize },
+      { action: socialDescription.initialize },
+      { render: ownRoom[UI] },
+      { render: directRoom[UI] },
+      { render: sharedRoom[UI] },
       {
         assertion: assert(() =>
-          displayOf(ownRoom[UI], "fabrichat-add-member") === "flex" &&
-          displayOf(unresolvedRoom[UI], "fabrichat-add-member") === "none" &&
-          displayOf(sharedRoom[UI], "fabrichat-add-member") === "none" &&
-          shownOutcome(ownRoom[UI]) === "none:"
+          displayOf(ownRoom[UI]) === "flex" &&
+          displayOf(directRoom[UI]) === "none" &&
+          displayOf(sharedRoom[UI]) === "none"
         ),
       },
-      // Text that isn't a principal's DID admits no one.
+      { assertion: assert(() => outcomeOf(ownRoom[UI]) === "") },
       {
         action: ownRoom.addMember,
-        event: typed(`${BOB}/of:fid1:profile`),
+        event: { target: { value: `${BOB}/of:fid1:profile` } },
         trustedUi: addGesture,
       },
       {
         assertion: assert(() =>
-          shownOutcome(ownRoom[UI]) === "block:That isn't a chat address."
+          outcomeOf(ownRoom[UI]) === "That isn't a chat address."
         ),
       },
-      // A space's own chat refuses an add, whatever reaches its stream.
       {
-        action: sharedRoom.addMember,
-        event: typed(BOB),
+        action: ownRoom.addMember,
+        event: { target: { value: `${BOB}.` } },
         trustedUi: addGesture,
       },
       {
         assertion: assert(() =>
-          shownOutcome(sharedRoom[UI]) ===
-            "block:Members of this chat are added by its space."
+          outcomeOf(ownRoom[UI]) === "That isn't a chat address."
+        ),
+      },
+      {
+        action: sharedRoom.addMember,
+        event: { target: { value: BOB } },
+        trustedUi: addGesture,
+      },
+      {
+        assertion: assert(() =>
+          outcomeOf(sharedRoom[UI]) ===
+            "Members of this chat are managed by its space."
+        ),
+      },
+      {
+        action: directRoom.addMember,
+        event: { target: { value: BOB } },
+        trustedUi: addGesture,
+      },
+      {
+        assertion: assert(() =>
+          outcomeOf(directRoom[UI]) ===
+            "Members of this chat are managed by its space."
         ),
       },
     ],

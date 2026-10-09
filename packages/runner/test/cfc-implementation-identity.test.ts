@@ -8,6 +8,8 @@ import { createNodeFactory } from "../src/builder/module.ts";
 import { Runtime } from "../src/runtime.ts";
 import { resolvePolicyFacingImplementationIdentity } from "../src/cfc/implementation-identity.ts";
 import { getTopFrame } from "../src/builder/pattern.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import {
   getVerifiedProvenance,
   recordVerifiedProvenance,
@@ -64,6 +66,79 @@ describe("CFC builtin implementation identity", () => {
       kind: "builtin",
       builtinId: "test-builtin",
     });
+    tx.abort("test-complete");
+  });
+
+  for (const writer of ["nested-builtin", "caller"]) {
+    it(`checks synchronous builtin writes against ${writer} without borrowing the caller identity`, async () => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const activeRuntime = runtime;
+      runtime.moduleRegistry.addModuleByRef(
+        "nested-builtin",
+        raw((inputsCell) => {
+          const tx = cellTx(inputsCell)!;
+          activeRuntime.getCell(
+            signer.did(),
+            "builtin-owned-write",
+            { type: "number", ifc: { writeAuthorizedBy: [writer] } },
+            tx,
+          ).set(1);
+          return () => undefined;
+        }),
+      );
+      const tx = runtime.edit();
+      const caller = { kind: "builtin", builtinId: "caller" } as const;
+      setCfcImplementationIdentity(tx, caller);
+      runtime.runner.run(
+        tx,
+        runtime.moduleRegistry.getModule("nested-builtin"),
+        {},
+        runtime.getCell(signer.did(), "nested-result", undefined, tx),
+      );
+      expect(tx.getCfcState().implementationIdentity).toEqual(caller);
+      runtime.getCell(
+        signer.did(),
+        "caller-owned-write",
+        { type: "number", ifc: { writeAuthorizedBy: ["caller"] } },
+        tx,
+      ).set(2);
+      runtime.prepareTxForCommit(tx);
+      const result = await tx.commit().settled;
+      if (writer === "nested-builtin") {
+        expect(result.error).toBeUndefined();
+      } else {
+        expect(isCfcEnforcementRejection(result.error)).toBe(true);
+      }
+    });
+  }
+
+  it("clears the builtin identity when initialization throws without a caller identity", () => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const activeRuntime = runtime;
+    runtime.moduleRegistry.addModuleByRef(
+      "throwing-builtin",
+      raw(() => {
+        throw new Error("initialization failed");
+      }),
+    );
+    const tx = runtime.edit();
+    expect(() =>
+      activeRuntime.runner.run(
+        tx,
+        activeRuntime.moduleRegistry.getModule("throwing-builtin"),
+        {},
+        activeRuntime.getCell(signer.did(), "throwing-result", undefined, tx),
+      )
+    ).toThrow("initialization failed");
+    expect(tx.getCfcState().implementationIdentity).toBeUndefined();
     tx.abort("test-complete");
   });
 
