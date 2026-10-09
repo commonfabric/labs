@@ -321,7 +321,13 @@ request is not answered: it closes the socket, as the router closes the
 client's connection on one. The SDK therefore declares at most 8,192 holdings
 on a routed connection. A session that holds more declares the first 8,192,
 and the server delivers the documents left out a second time, since a document
-a session does not declare is one it is sent again.
+a session does not declare is one it is sent again. Two limits follow for such
+a session. The server removes only documents a session declares, so a document
+left out that is no longer in the session's watch set gets no remove, and the
+client keeps the value it last had for it until the document is watched again.
+And the documents left out all come back in one response frame, which must fit
+the 4 MiB the toolshed queues to a data socket; a response past that closes the
+socket.
 A proof is refused with verdict `proof-denied` and reason `proof-limit`,
 `principal-limit` or `principal-history-limit`, and the refusal closes its
 context, which ends the client's connection. The proofs live contexts hold are

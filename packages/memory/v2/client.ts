@@ -825,6 +825,14 @@ export class Client {
    * cut are sent a second time and none is skipped. A direct server takes
    * the whole list.
    *
+   * The cut has two costs beyond that second delivery. The server removes
+   * only documents the list names, so a document that was cut and has
+   * since left the session's watch set gets no remove: the replica keeps
+   * the value it last had for it until the document is watched again. And
+   * the documents cut all come back in the one response, which must fit
+   * the toolshed's 4 MiB bound on what it queues to a data socket; a
+   * response past it closes the socket.
+   *
    * @internal For `SpaceSession`.
    */
   declarableHoldings<Holdings extends SessionHolding[] | undefined>(
