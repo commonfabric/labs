@@ -149,7 +149,19 @@ warmed the file:
 | after stage 1 | 10.2 ms | 1.6 ms |
 
 The same twelve reads replayed 32 patch rows on both sides, which is the
-reconstruction doing identical work past the lookup. Compaction still writes
+reconstruction doing identical work past the lookup. On a snapshot of the
+production file taken 2026-10-09 (22.7 GB, after the storm), whose three
+worst documents are the storm's `computed:` instances at 184,391, 183,899
+and 183,857 rows each, the same measurement:
+
+| Engine | Twelve cold reads | The 184,391-row document |
+| --- | ---: | ---: |
+| before stage 1 | 1,493 ms (2,737 ms first run) | 246 ms (1,121 ms first run) |
+| after stage 1 | 66 ms (14 ms first run) | 5.6 ms (1.5 ms first run) |
+
+Both sides replayed 47 patch rows there. That is the engine's share of what
+a cold read of a storm document cost; the board-load and `transact` numbers
+through a served clone are the rest of stage 1. Compaction still writes
 the `set` that makes the history itself small; what stage 1 removed is the
 reason a long history degraded every read and every commit of the document
 that carried it.
@@ -878,9 +890,10 @@ decision should be made against; and the basis guard, because no store may
 be compacted until the engine can tell compacted history from absence.
 
 1. **The snapshot-bounded base search** — done ([labs#8628](https://github.com/commonfabric/labs/pull/8628)), measured on
-   the August copy as the table above shows. What remains of this stage is
-   the measurement on a clone of the current Topics file: cold board load and
-   `transact` round trips before and after, on the uncompacted store. That is
+   the August copy and on the 2026-10-09 production snapshot as the tables
+   above show. What remains of this stage is the measurement through a served
+   clone of that snapshot: cold board load and `transact` round trips before
+   and after, on the uncompacted store. That is
    where the 180 ms claim is tested rather than inferred, and where the
    question "is compaction still needed for latency, or only for disk?" gets
    its answer; it needs a fresh snapshot from the host.
