@@ -308,6 +308,80 @@ describe("authored source locations", () => {
     expect(formatted).toContain("1 | let x = 0;");
   });
 
+  describe("around a line the caller rewrote", () => {
+    // A rewrite that keeps the line count, as the engine's import
+    // normalization does, moves tokens within the lines it rewrites and
+    // leaves every later line where the one-line shift expects it.
+
+    const authored = "import a, {\n  b,\n} from './x';\nlet x = 0;";
+    const compiled = "// added\n" +
+      "import a from './x'; import { b } from './x';\n\n\nlet x = 0;";
+    const diagnosticAt = (line: number, column: number) => ({
+      severity: "error" as const,
+      type: "module-scope:let-declaration",
+      message: "a diagnostic",
+      fileName: "/main.ts",
+      line,
+      column,
+      start: 0,
+      length: 1,
+    });
+
+    it("names the compiler input's line and quotes its text for a diagnostic on the rewritten line", () => {
+      const formatted = formatTransformerDiagnostic(
+        diagnosticAt(2, 37),
+        compiled,
+        injectedOneLine("/main.ts", authored),
+      );
+
+      expect(formatted).toContain("/main.ts:2:37 - error:");
+      expect(formatted).toContain(
+        "2 | import a from './x'; import { b } from './x';",
+      );
+    });
+
+    it("names the authored line for a diagnostic after the rewritten one", () => {
+      const formatted = formatTransformerDiagnostic(
+        diagnosticAt(5, 1),
+        compiled,
+        injectedOneLine("/main.ts", authored),
+      );
+
+      expect(formatted).toContain("/main.ts:4:1 - error:");
+      expect(formatted).toContain("4 | let x = 0;");
+    });
+  });
+
+  it("quotes the authored text for a diagnostic that carries no source", () => {
+    // Diagnostics the emit reports reach `CompilationError` with no source
+    // text of their own.
+
+    const authored = "export const x: number = 'nope';";
+    const compiled = `// added\n${authored}`;
+    const file = ts.createSourceFile(
+      "/bad.ts",
+      compiled,
+      ts.ScriptTarget.ES2020,
+    );
+    const error = new CompilationError(
+      {
+        diagnostic: {
+          category: ts.DiagnosticCategory.Error,
+          code: 2322,
+          file,
+          start: compiled.indexOf("x:"),
+          length: 1,
+          messageText: "Type 'string' is not assignable to type 'number'.",
+        },
+      },
+      undefined,
+      injectedOneLine("/bad.ts", authored),
+    );
+
+    expect(error.line).toBe(1);
+    expect(error.displayInline()).toContain(`1 | ${authored}`);
+  });
+
   it("names the compiler input's line in a formatted transformer diagnostic without a lookup", () => {
     const formatted = formatTransformerDiagnostic(
       {

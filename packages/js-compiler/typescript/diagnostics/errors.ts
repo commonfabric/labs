@@ -62,8 +62,9 @@ export type AuthoredSourceLookup = (
 
 /**
  * A line of a compiler input as the author sees it, with the text to quote
- * around it. A line the authored text does not hold, one the caller added,
- * keeps the compiler input's line and text.
+ * around it. Only a line the shift carries over unchanged maps: a line the
+ * caller added, or one whose text it rewrote, keeps the compiler input's line
+ * and text, so a column always points into the text quoted with it.
  */
 export function authoredLocation(
   fileName: string,
@@ -74,9 +75,9 @@ export function authoredLocation(
   const authored = lookup?.(fileName);
   if (authored === undefined) return { line, source: compilerSource };
   const authoredLine = line + authored.lineOffset;
-  if (
-    authoredLine < 1 || authoredLine > authored.contents.split("\n").length
-  ) {
+  const authoredText = authored.contents.split("\n")[authoredLine - 1];
+  const compilerText = compilerSource.split("\n")[line - 1];
+  if (authoredText === undefined || authoredText !== compilerText) {
     return { line, source: compilerSource };
   }
   return { line: authoredLine, source: authored.contents };
@@ -136,7 +137,9 @@ export class CompilationError {
       );
       this.line = location.line;
       this.column = result.character + 1;
-      if (source !== undefined) this.source = location.source;
+      if (source !== undefined || authoredSource !== undefined) {
+        this.source = location.source;
+      }
     }
   }
 

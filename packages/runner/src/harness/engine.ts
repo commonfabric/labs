@@ -2083,15 +2083,16 @@ function injectMountSources(files: readonly Source[]): Source[] {
 // import ahead of the first content line and appends an `h` shim after the last
 // (packages/ts-transformers/src/core/cf-helpers.ts); only the leading import
 // moves the authored lines, so an injected file shifts by exactly one line.
-// Two kinds of file reach the compiler unchanged and keep their authored
-// lines: a stored legacy envelope, whose authored bytes already carry the
-// helper import (tolerated only on the storage-fed paths — `checkCFHelperVar`
-// rejects those bytes on every authoring path), and a file with no content
-// line to inject ahead of.
-export function helperInjectionLineOffset(contents: string): number {
+// Three kinds of file reach the compiler unchanged and keep their authored
+// lines: a declaration file, which the injector skips; a stored legacy
+// envelope, whose authored bytes already carry the helper import (tolerated
+// only on the storage-fed paths — `checkCFHelperVar` rejects those bytes on
+// every authoring path); and a file with no content line to inject ahead of.
+export function helperInjectionLineOffset(file: Source): number {
+  if (file.name.endsWith(".d.ts")) return 0;
   const { isLegacyInjectedEnvelope } = compilerStack();
-  if (isLegacyInjectedEnvelope(contents)) return 0;
-  if (findFirstContentLineIndex(contents.split("\n")) === null) return 0;
+  if (isLegacyInjectedEnvelope(file.contents)) return 0;
+  if (findFirstContentLineIndex(file.contents.split("\n")) === null) return 0;
   return -1;
 }
 
@@ -2108,7 +2109,7 @@ function builderSourceSiteOptionsForCompile(params: {
     params.sourceFiles.map((file) => [
       coverageFilenameFor(file.name, params.id, params.mounts),
       {
-        lineOffset: helperInjectionLineOffset(file.contents),
+        lineOffset: helperInjectionLineOffset(file),
         lineCount: lineCountOf(file.contents),
       },
     ]),
@@ -2143,7 +2144,7 @@ function authoredSourceForCompile(params: {
       coverageFilenameFor(file.name, params.id, params.mounts),
       {
         contents: file.contents,
-        lineOffset: helperInjectionLineOffset(file.contents),
+        lineOffset: helperInjectionLineOffset(file),
       },
     ]),
   );
@@ -2181,7 +2182,7 @@ function patternCoverageOptionsForCompile(
     params.sourceFiles.map((file) => [
       coverageFilenameFor(file.name, params.id, params.mounts),
       {
-        lineOffset: helperInjectionLineOffset(file.contents),
+        lineOffset: helperInjectionLineOffset(file),
         lineCount: lineCountOf(file.contents),
       },
     ]),
