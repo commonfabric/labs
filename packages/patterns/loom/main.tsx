@@ -74,16 +74,6 @@ function isHidden(
   return (hidden ?? []).some((entry) => entry.equals(panel));
 }
 
-/**
- * Whether `entry` holds `panel`. The handlers below compare private entries
- * only through this helper: a handler's state schema is inferred from the uses
- * its body shows, and an entry's panel compared with `equals` in the body
- * itself reads as `undefined` there.
- */
-function holdsPanel(entry: PrivatePanel, panel: Writable<Panel>): boolean {
-  return entry.panel.equals(panel);
-}
-
 /** The shared panels one viewer has not hidden, in the shared order. */
 function shownPanels(
   shared: readonly Writable<Panel>[],
@@ -339,7 +329,7 @@ const addPrivatePanel = handler<
   validatePanel(panel.get());
   insertionIndex(panels.get(), before);
   const list = privatePanels.get() ?? [];
-  if (list.some((entry) => holdsPanel(entry, panel))) return;
+  if (list.some((entry) => entry.panel.equals(panel))) return;
   privatePanels.set([
     ...list,
     before === undefined ? { panel } : { panel, before },
@@ -355,7 +345,7 @@ const removePrivatePanel = handler<
   { privatePanels: Writable<PrivatePanel[]> }
 >(({ panel }, { privatePanels }) => {
   const list = privatePanels.get() ?? [];
-  const next = list.filter((entry) => !holdsPanel(entry, panel));
+  const next = list.filter((entry) => !entry.panel.equals(panel));
   if (next.length !== list.length) privatePanels.set(next);
 });
 
@@ -376,10 +366,10 @@ const movePrivatePanel = handler<
   }
 >(({ panel, before }, { panels, privatePanels }) => {
   const list = privatePanels.get() ?? [];
-  if (!list.some((entry) => holdsPanel(entry, panel))) {
+  if (!list.some((entry) => entry.panel.equals(panel))) {
     throw new Error("The panel is not one of your private panels");
   }
-  const rest = list.filter((entry) => !holdsPanel(entry, panel));
+  const rest = list.filter((entry) => !entry.panel.equals(panel));
   if (before === undefined) {
     privatePanels.set([...rest, { panel }]);
     return;
@@ -388,7 +378,7 @@ const movePrivatePanel = handler<
     privatePanels.set([...rest, { panel, before }]);
     return;
   }
-  const index = rest.findIndex((entry) => holdsPanel(entry, before));
+  const index = rest.findIndex((entry) => entry.panel.equals(before));
   if (index < 0) {
     throw new Error("The insertion anchor is no longer in this Loom");
   }
