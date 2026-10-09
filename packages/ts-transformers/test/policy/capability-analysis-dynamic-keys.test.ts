@@ -249,6 +249,17 @@ describe("capability-analysis-dynamic-keys", () => {
       expect(read.readPaths).toContain("state.third");
     });
 
+    it("reads only the member a fallback's operand is read at below an element access", () => {
+      const read = usage(
+        `const read = ({ people }: {
+  people: Cell<{ name: string; email: string }[]>;
+}) => (people.get() ?? [])[0]?.name ?? "";`,
+      );
+
+      expect(read.readPaths).toContain("people.0.name");
+      expect(read.readPaths).not.toContain("people");
+    });
+
     it("records the reads inside a call at the top of a for..of iterable", () => {
       const read = usage(
         `const read = ({ table, self }: { table: Row[]; self: string }) => {
@@ -354,7 +365,11 @@ export default pattern<{ table: Row[]; self: string; key: string }>(
 `,
       );
 
-      expect(input.required).toEqual(["table", "self", "key"]);
+      expect((input.required as string[]).toSorted()).toEqual([
+        "key",
+        "self",
+        "table",
+      ]);
     });
   });
 

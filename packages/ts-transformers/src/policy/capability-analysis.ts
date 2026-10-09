@@ -266,6 +266,12 @@ const FALLBACK_OPERATORS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.QuestionQuestionToken,
   ts.SyntaxKind.BarBarToken,
 ]);
+
+/**
+ * The methods ref resolution steps through on a member spine: a cell's
+ * `.get()`, `.key()` and `.elementById()`, and a local map's `.get()`.
+ */
+const REF_RESOLVING_METHODS = new Set(["get", "key", "elementById"]);
 const PRECISE_CHAIN_METHODS = new Set([
   "map",
   "mapWithPattern",
@@ -3415,14 +3421,23 @@ export function analyzeFunctionCapabilities(
     };
 
     // Visits what resolving `expression` to a ref, in place of visiting it,
-    // leaves unvisited though it is evaluated: each operand of a fallback,
-    // wherever on the member spine it sits, the keys of the element accesses
-    // on the spine, and a call on the spine with its arguments and callbacks.
-    // An operand whose spine passes through a call is walked whole,
+    // leaves unvisited though it is evaluated, walking down the member spine:
+    // the key of each element access, and each operand of a fallback wherever
+    // on the spine it sits. A spine that passes through a call is walked
+    // whole, as the expression it belongs to would be, which visits the
+    // call's arguments and callbacks:
     // `table.find((row) => equals(self, row.topic))` in
     // `table.find(…)?.mentionedBy ?? []` among them; a read the walk repeats
-    // is a set entry, so recording it twice costs nothing.
-    const visitOperandsOfResolvedRef = (expression: ts.Expression): void => {
+    // is a set entry, so recording it twice costs nothing. Below a fallback,
+    // which ref resolution walks through and nothing else visits, a call it
+    // steps through (`.get()`, `.key()`, `.elementById()`) has only its
+    // arguments visited and its receiver walked: walking the `people.get()`
+    // in `(people.get() ?? [])[0]?.name` whole would read all of `people`,
+    // where the ref reads `name`.
+    const visitOperandsOfResolvedRef = (
+      expression: ts.Expression,
+      belowFallback = false,
+    ): void => {
       const current = unwrapExpression(expression);
       if (
         ts.isBinaryExpression(current) &&
@@ -3430,14 +3445,14 @@ export function analyzeFunctionCapabilities(
       ) {
         for (const operand of [current.left, current.right]) {
           if (resolveSourceRef(operand)) {
-            visitOperandsOfResolvedRef(operand);
+            visitOperandsOfResolvedRef(operand, true);
           } else {
             visit(operand);
           }
         }
         return;
       }
-      if (memberSpineContainsCall(current)) {
+      if (!belowFallback && memberSpineContainsCall(current)) {
         visit(current);
         return;
       }
@@ -3448,7 +3463,20 @@ export function analyzeFunctionCapabilities(
         if (ts.isElementAccessExpression(current)) {
           visit(current.argumentExpression);
         }
-        visitOperandsOfResolvedRef(current.expression);
+        visitOperandsOfResolvedRef(current.expression, belowFallback);
+        return;
+      }
+      if (ts.isCallExpression(current)) {
+        const target = unwrapExpression(current.expression);
+        if (
+          ts.isPropertyAccessExpression(target) &&
+          REF_RESOLVING_METHODS.has(target.name.text)
+        ) {
+          current.arguments.forEach(visit);
+          visitOperandsOfResolvedRef(target.expression, belowFallback);
+        } else {
+          visit(current);
+        }
       }
     };
 
