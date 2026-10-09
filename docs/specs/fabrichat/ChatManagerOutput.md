@@ -173,7 +173,7 @@ These rules hold for every stream:
 | --- | --- | --- |
 | [`openDirect`](#opendirectrequestid-string-counterpart-string-profile-cellchatprofile) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
 | [`createGroup`](#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
-| [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
+| [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string-keeparchived-boolean) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput-revision-string) | none | the entry removed from `rooms`; the room itself is untouched |
 | [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
 
@@ -196,9 +196,8 @@ outward act when it creates a room.
   outcome, and it is put back in `rooms` if it was forgotten, whatever its
   catalog entry's revision: starting the chat is the person's choice to have it
   listed, so this restore wins over a concurrent forget, from another device,
-  say. Otherwise, if `rooms` lists a direct room whose counterpart is
-  `counterpart`, a room they created and offered this user, that entry is the
-  outcome, the newest if there are several, and it is recorded in `direct`.
+  say. A room `counterpart` created and offered this user is in `direct` once
+  this user's host has accepted it for them (see [offers](#offers)).
   Otherwise, if a creation for the same `counterpart` is still pending under
   another `requestId`, the manager MUST resume that creation rather than start
   another, and records its outcome under both ids. Otherwise, creates a direct
@@ -241,7 +240,7 @@ Creates a group room. This is an outward act: it grants other people access.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
   `members` is absent, or a member is not a principal's DID.
 
-### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string)`
+### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
@@ -254,17 +253,24 @@ Creates a group room. This is an outward act: it grants other people access.
   [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room) and
   [`clients.md`](clients.md#finding-conversations)); a notice's claim of who
   sent it is only a hint. Ignored for a group room.
+- `keepArchived?: boolean` — Whether an archived entry for the room stays
+  archived. An acceptance this user's host makes on their behalf sets it (see
+  [offers](#offers)), since it is not the person's choice to have the room
+  listed. Absent or false, accepting the room restores an archived entry.
 
 Records a room this user has been admitted to.
 
 - **Admitted:** without a reviewed gesture, since it changes only this user's
   own index, beside adding them to the room's participants, which needs none.
   Whether to add a room to their index is the user's decision (see
-  [`clients.md`](clients.md#finding-conversations)).
+  [`clients.md`](clients.md#finding-conversations)), except for a room offered
+  to them, which their host accepts for them once it has vetted and registered
+  the offer.
 - **Effect:** records an entry in `rooms`, putting a forgotten room back
-  whatever its catalog entry's revision: accepting the room is the person's
-  choice to have it listed, so this restore wins over a concurrent forget. For
-  a direct room, the counterpart it
+  whatever its catalog entry's revision, unless `keepArchived` is set: accepting
+  the room is the person's choice to have it listed, so this restore wins over
+  a concurrent forget. With `keepArchived`, an archived entry stays archived,
+  and the rest of the effect is the same. For a direct room, the counterpart it
   records is the creator `about.record`'s label names, which it reads itself;
   once the room's space has a member set, it also checks that the counterpart is
   a member. For a direct room, it also records the entry in `direct`, unless
@@ -376,10 +382,15 @@ no inbox is offered nothing. The offer is the envelope a share inbox takes:
 
 The recipient's host reads each offer in the inboxes their Home holds, vets it,
 and registers the room's space in their Home's shared-space catalog
-([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)).
-A notice is produced for each other member offered nothing: one known only by
-their DID, who has no profile to reach an inbox through, or one whose profile
-points at no inbox. A member sent an offer gets no notice, and nothing tells the
+([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)). When
+that registers a new entry, the host then sends the room to the recipient's own
+manager's `accept`, with `keepArchived`, so the recipient's manager records the
+room as theirs, in `direct` under its creator for a direct room, and their later
+`openDirect` with the sender returns it rather than creating another. An entry
+already in the catalog, archived or not, gets no acceptance. A notice is
+produced for each other member offered nothing: one known only by their DID,
+who has no profile to reach an inbox through, or one whose profile points at no
+inbox. A member sent an offer gets no notice, and nothing tells the
 sender whether the offer arrived.
 
 ## Crossing creations

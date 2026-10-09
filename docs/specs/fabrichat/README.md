@@ -379,13 +379,14 @@ from this design, as below.
   recipient's inbox, and their host's share intake vets it and registers the
   room's space in their Home's shared-space catalog
   ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
-  where their manager lists it. The sender adds to the room's participants
-  each member it offers the room to, and queues a notice only for a member
-  offered nothing. A room is offered only to someone the request names by
-  profile, when the profile points at an inbox: an `openDirect` naming
-  `profile`, or a participant's chip, whose click names the participant's
-  profile. The manager's own start controls name a counterpart by principal,
-  and a group's members are principals.
+  where their manager lists it, and then sends the room to their manager's
+  `accept`, with `keepArchived`, which records a direct room in their `direct`.
+  The sender adds to the room's participants each member it offers the room to,
+  and queues a notice only for a member offered nothing. A room is offered only
+  to someone the request names by profile, when the profile points at an inbox:
+  an `openDirect` naming `profile`, or a participant's chip, whose click names
+  the participant's profile. The manager's own start controls name a
+  counterpart by principal, and a group's members are principals.
   Nothing delivers a notice yet (see
   [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
@@ -403,12 +404,11 @@ from this design, as below.
   Finding a direct room again, or accepting a room, restores its entry if it was
   archived, and forgetting a room archives its entry, at the revision the
   request names. A direct room's counterpart is the one `direct` holds the room
-  under, or else the room's labeled creator, and `openDirect` finds a room
-  `direct` holds, or else a direct room `rooms` lists with that counterpart,
-  which it then records in `direct`. A room tells whether the viewer's chats
-  list it from the catalog itself, which the manager offers as
-  `sharedSpaceCatalog`. Accepting a space's own chat is refused, since the
-  catalog lists rooms by their own spaces.
+  under, or else the room's labeled creator, and `openDirect` finds only a room
+  `direct` holds. A room tells whether the viewer's chats list it from the
+  catalog itself, which the manager offers as `sharedSpaceCatalog`. Accepting a
+  space's own chat is refused, since the catalog lists rooms by their own
+  spaces.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

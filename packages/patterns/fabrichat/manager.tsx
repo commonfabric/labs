@@ -8,7 +8,9 @@
  * keeps as saved: each room is its space's root, and the catalog lists the
  * space. The manager registers there each room it creates, and each room a
  * manager created that it accepts, and the host that vets an offer of a room
- * registers that room there. Forgetting a room archives its entry.
+ * registers that room there, and then has the manager accept it on the user's
+ * behalf, leaving an entry archived since archived. Forgetting a room archives
+ * its entry.
  *
  * It creates each room with `inSpace()` as the root of a space of its own,
  * which declares itself a `fabrichat-room`. The space grants the room's
@@ -965,7 +967,7 @@ export interface FabriChatManagerInput {
 
   /**
    * The direct room shared with each counterpart, for the rooms this manager
-   * created, accepted, or found listed when starting a chat.
+   * created or accepted, the ones its user's host accepted for them included.
    */
   direct?: DirectCell;
 

@@ -484,6 +484,19 @@ so an offer of a space already in the catalog under the same host and kind,
 archived or not, adds a receipt and leaves the entry as it is; one under another
 host or kind is a `conflict`, which writes nothing.
 
+When Home's handler returns `registered`, a new entry, the intake then accepts
+the room on the owner's behalf: it sends the space's root, the one vetting read,
+to Home's `chatManager.accept`, when Home has that stream, with `keepArchived`
+set. The manager records the room as an acceptance from the room itself would,
+a direct room in its `direct` under the room's creator, so the owner's later
+start of a chat with that creator finds it, and adds the owner's profile to the
+room's participants. `keepArchived` leaves the entry archived if the owner has
+archived it since the registration, so an acceptance the owner didn't make never
+lists a room they forgot. An entry that was already there, archived or not, gets
+no acceptance (see
+[`ChatManagerOutput`](../specs/fabrichat/ChatManagerOutput.md)). A send to the
+manager that throws is logged under `piece.share-intake`.
+
 Each row of an inbox is decided by its whole content, so a row that names
 another offer's `from` and `id` decides nothing about that offer. A row the
 intake sent, skipped for its receipt, or refused for something in the row itself
