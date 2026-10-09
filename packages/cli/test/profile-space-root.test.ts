@@ -12,6 +12,7 @@ import { join } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
@@ -32,6 +33,7 @@ import {
   openSpace,
 } from "@commonfabric/state-inspector";
 
+import { EmulatedStorageManager } from "../../runner/src/storage/v2-emulate.ts";
 import { TestStorageManager } from "../../runner/test/memory-v2-test-utils.ts";
 import {
   createProfileThroughHome,
@@ -102,6 +104,16 @@ describe("profileSpaceRoot()", () => {
     );
     pieces.dispose = () => Promise.resolve();
     return Promise.resolve(pieces);
+  };
+
+  /** The flags the test server reports in its handshake, read as the admin. */
+  const serverFlags = async (spaceConfig: SpaceConfig) => {
+    const manager = EmulatedStorageManager.connectTo(server!, { as: admin });
+    try {
+      return await manager.serverFlags(spaceConfig.space as MemorySpace);
+    } finally {
+      await manager.close();
+    }
   };
 
   const config = (
@@ -201,7 +213,7 @@ describe("profileSpaceRoot()", () => {
   });
 
   it("inspects each listed profile, and reports an unlisted one as skipped", async () => {
-    const report = await profileSpaceRoot(config(), { load });
+    const report = await profileSpaceRoot(config(), { load, serverFlags });
     expect(report.applied).toBe(false);
     const statusBySpace = Object.fromEntries(
       report.rows.map((row) => [row.named.space, row.status]),
@@ -223,16 +235,17 @@ describe("profileSpaceRoot()", () => {
     );
     expect(homeBySpace[unrooted.space]).toBe(unrootedOwner.did());
     expect(homeBySpace[unlisted.space]).toBeUndefined();
-    expect((await profileSpaceRoot(config(), { load })).inspection).toBe(
-      report.inspection,
-    );
+    expect((await profileSpaceRoot(config(), { load, serverFlags })).inspection)
+      .toBe(
+        report.inspection,
+      );
   });
 
   it("applies the inspected plan, after which every listed profile is its space's root", async () => {
-    const plan = await profileSpaceRoot(config(), { load });
+    const plan = await profileSpaceRoot(config(), { load, serverFlags });
     const applied = await profileSpaceRoot(
       config({ expectedInspection: plan.inspection }),
-      { load },
+      { load, serverFlags },
     );
     expect(applied.applied).toBe(true);
     expect(applied.summary).toEqual({ root: 3, unlisted: 1 });
@@ -241,7 +254,7 @@ describe("profileSpaceRoot()", () => {
     }
     expect(await rootIdOf(unlisted.space)).toBeUndefined();
 
-    const again = await profileSpaceRoot(config(), { load });
+    const again = await profileSpaceRoot(config(), { load, serverFlags });
     expect(again.summary).toEqual({ root: 3, unlisted: 1 });
   });
 
@@ -252,11 +265,11 @@ describe("profileSpaceRoot()", () => {
      * value, and the space cell's id.
      */
     const written = async (inspectOnly: boolean) => {
-      const plan = await profileSpaceRoot(config(), { load });
+      const plan = await profileSpaceRoot(config(), { load, serverFlags });
       if (!inspectOnly) {
         await profileSpaceRoot(
           config({ expectedInspection: plan.inspection }),
-          { load },
+          { load, serverFlags },
         );
       }
       const spaceCells = Object.fromEntries(
@@ -318,11 +331,14 @@ describe("profileSpaceRoot()", () => {
 
   it("repairs an unlisted profile it is given by address", async () => {
     const cells = [`//${unlisted.space}/${unlisted.id}`];
-    const plan = await profileSpaceRoot(config({ cells }), { load });
+    const plan = await profileSpaceRoot(config({ cells }), {
+      load,
+      serverFlags,
+    });
     expect(plan.rows.map((row) => row.status)).toEqual(["unrooted"]);
     await profileSpaceRoot(
       config({ cells, expectedInspection: plan.inspection }),
-      { load },
+      { load, serverFlags },
     );
     expect(await rootIdOf(unlisted.space)).toBe(await profileIdOf(unlisted));
   });
@@ -330,7 +346,7 @@ describe("profileSpaceRoot()", () => {
   it("reports a space file of the snapshot it cannot read", async () => {
     const damaged = "did:key:z6MkDamagedSpaceInTheSnapshotAAAAAAAAAAAAAAAA";
     await Deno.writeTextFile(`${snapshotDir}/${damaged}.sqlite`, "damaged");
-    const plan = await profileSpaceRoot(config(), { load });
+    const plan = await profileSpaceRoot(config(), { load, serverFlags });
     const row = plan.rows.find((r) => r.named.space === damaged);
     expect(row?.status).toBe("unreadable");
     expect(plan.summary.unreadable).toBe(1);
@@ -340,6 +356,7 @@ describe("profileSpaceRoot()", () => {
     const cell = `//${unrooted.space}/${unrooted.id}`;
     const plan = await profileSpaceRoot(config({ cells: [cell, cell] }), {
       load,
+      serverFlags,
     });
     expect(plan.rows.map((row) => row.status)).toEqual(["unrooted"]);
   });
@@ -355,7 +372,7 @@ describe("profileSpaceRoot()", () => {
       }
       return load(spaceConfig);
     };
-    const plan = await profileSpaceRoot(config(), { load: flaky });
+    const plan = await profileSpaceRoot(config(), { load: flaky, serverFlags });
     const failedRow = plan.rows.find((row) =>
       row.named.space === unrooted.space
     );
@@ -363,7 +380,7 @@ describe("profileSpaceRoot()", () => {
 
     const applied = await profileSpaceRoot(
       config({ expectedInspection: plan.inspection }),
-      { load: flaky },
+      { load: flaky, serverFlags },
     );
     const appliedRow = applied.rows.find((row) =>
       row.named.space === unrooted.space
@@ -376,8 +393,133 @@ describe("profileSpaceRoot()", () => {
     await expect(
       profileSpaceRoot(config({ expectedInspection: "not the plan" }), {
         load,
+        serverFlags,
       }),
     ).rejects.toThrow("changed after inspection");
     expect(await rootIdOf(unrooted.space)).toBeUndefined();
+  });
+
+  describe("by what the server says of server execution", () => {
+    // The space of every connection the run asks for. None is opened.
+    let opened: string[];
+    const openNone = (spaceConfig: SpaceConfig) => {
+      opened.push(spaceConfig.space);
+      return Promise.reject(new Error("a session was opened"));
+    };
+
+    /** Every session the test server holds on a listed profile's space. */
+    const sessionsOnProfiles = () =>
+      [unrooted, planted, rooted].flatMap((listed) =>
+        server!.accessForTestingOnly.sessionsForSpace(listed.space)
+      );
+
+    beforeEach(() => {
+      opened = [];
+    });
+
+    it("runs when the server reports server execution off", async () => {
+      expect(
+        (await serverFlags({ ...config(), space: unrooted.space }))
+          ?.serverExecution,
+      ).toBe(false);
+      const report = await profileSpaceRoot(config(), { load, serverFlags });
+      expect(report.summary.unrooted).toBe(1);
+    });
+
+    it("refuses, opening no session, when the server runs server execution", async () => {
+      server!.setServerExecutionObserver({});
+      await expect(
+        profileSpaceRoot(config(), { load: openNone, serverFlags }),
+      ).rejects.toThrow("runs server execution");
+      expect(opened).toEqual([]);
+      expect(sessionsOnProfiles()).toEqual([]);
+    });
+
+    it("refuses to apply, changing nothing, when the server runs server execution", async () => {
+      const plan = await profileSpaceRoot(config(), { load, serverFlags });
+      server!.setServerExecutionObserver({});
+      await expect(
+        profileSpaceRoot(config({ expectedInspection: plan.inspection }), {
+          load,
+          serverFlags,
+        }),
+      ).rejects.toThrow("runs server execution");
+      expect(await rootIdOf(unrooted.space)).toBeUndefined();
+    });
+
+    for (
+      const [shape, read] of [
+        [
+          "flags without `serverExecution`, as a server predating it sends",
+          async (spaceConfig: SpaceConfig) => {
+            const { serverExecution: _, ...rest } =
+              (await serverFlags(spaceConfig))!;
+            return rest;
+          },
+        ],
+        ["no flags at all", () => Promise.resolve(null)],
+        [
+          "nothing, from a connection that cannot read flags",
+          () => Promise.resolve(undefined),
+        ],
+      ] as const
+    ) {
+      it(`refuses, opening no session, when the server's handshake holds ${shape}`, async () => {
+        await expect(
+          profileSpaceRoot(config(), { load: openNone, serverFlags: read }),
+        ).rejects.toThrow("does not say whether it runs server execution");
+        expect(opened).toEqual([]);
+        expect(sessionsOnProfiles()).toEqual([]);
+      });
+    }
+
+    describe("as read from a server over the network", () => {
+      let standalone: StandaloneMemoryServer;
+      let keyDir: string;
+
+      /** A run against `standalone`, with no `serverFlags` of the test's. */
+      const runThere = async () =>
+        await profileSpaceRoot(
+          config({
+            apiUrl: standalone.url.href,
+            identity: join(keyDir, "admin.key"),
+          }),
+          { load: openNone },
+        );
+
+      beforeEach(async () => {
+        standalone = StandaloneMemoryServer.start({ connectionAuth: true });
+        keyDir = await Deno.makeTempDir({ prefix: "repair-root-key-" });
+        await Deno.writeFile(
+          join(keyDir, "admin.key"),
+          await Identity.generatePkcs8(),
+        );
+      });
+
+      afterEach(async () => {
+        await standalone.close();
+        await Deno.remove(keyDir, { recursive: true });
+      });
+
+      it("refuses, opening no session, when that server runs server execution", async () => {
+        standalone.server.setServerExecutionObserver({});
+        await expect(runThere()).rejects.toThrow("runs server execution");
+        expect(opened).toEqual([]);
+        expect(
+          [unrooted, planted, rooted].flatMap((listed) =>
+            standalone.server.accessForTestingOnly.sessionsForSpace(
+              listed.space,
+            )
+          ),
+        ).toEqual([]);
+      });
+
+      it("goes on to open each profile's space when that server runs none", async () => {
+        await runThere();
+        expect(opened.toSorted()).toEqual(
+          [unrooted.space, planted.space, rooted.space].toSorted(),
+        );
+      });
+    });
   });
 });

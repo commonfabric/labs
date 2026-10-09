@@ -15,12 +15,15 @@ import {
   type ProfileSpaceRootStatus,
   repairProfileSpaceRoot,
 } from "@commonfabric/piece/ops";
+import type { MemorySpace } from "@commonfabric/runner";
 import { parseCellReference } from "@commonfabric/runner/shared";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
 import {
   discoverProfiles,
   discoverSpaceDbs,
 } from "@commonfabric/state-inspector";
 
+import { loadIdentity } from "./identity.ts";
 import { loadPieces, type SpaceConfig } from "./piece.ts";
 
 /** What the repair is asked to do. */
@@ -81,6 +84,29 @@ export interface ProfileSpaceRootReport {
 /** Injectable effects, so a test can stand in for the live connection. */
 export interface ProfileSpaceRootDeps {
   load?: typeof loadPieces;
+
+  /**
+   * Reads the flags the server holding `config.space` reports in its
+   * handshake, opening no session there.
+   */
+  serverFlags?: (config: SpaceConfig) => Promise<ServerFlags>;
+}
+
+type ServerFlags = Awaited<
+  ReturnType<ReturnType<typeof StorageManager.open>["serverFlags"]>
+>;
+
+/** The default `ProfileSpaceRootDeps.serverFlags`, over a fresh connection. */
+async function readServerFlags(config: SpaceConfig): Promise<ServerFlags> {
+  const manager = StorageManager.open({
+    as: await loadIdentity(config.identity),
+    memoryHost: new URL(config.apiUrl),
+  });
+  try {
+    return await manager.serverFlags(config.space as MemorySpace);
+  } finally {
+    await manager.close();
+  }
 }
 
 interface Target {
@@ -115,15 +141,24 @@ function namedTarget(cell: string): Target {
  * profile whose own receipt has changed by the time its turn comes, or whose
  * inspection failed, is reported as `failed` and left alone.
  *
+ * Before it opens a session on any profile's space, it reads each such
+ * space's server handshake, and refuses to run when one reports server
+ * execution, or does not say whether it runs it. A session opened on a space a
+ * server executes has the server ensure that space's root, which in a profile
+ * space with none writes a junk root, so not even an inspection would leave
+ * the store as it found it.
+ *
  * @throws Error when the snapshot holds no space database, when a named
- *   address is not a full profile address, or when the run's receipt differs
- *   from `config.expectedInspection`.
+ *   address is not a full profile address, when a profile's server runs
+ *   server execution or does not say whether it does, or when the run's
+ *   receipt differs from `config.expectedInspection`.
  */
 export async function profileSpaceRoot(
   config: ProfileSpaceRootConfig,
   deps: ProfileSpaceRootDeps = {},
 ): Promise<ProfileSpaceRootReport> {
   const load = deps.load ?? loadPieces;
+  const serverFlags = deps.serverFlags ?? readServerFlags;
   const discovered = discoverSpaceDbs({
     dirs: [config.snapshot],
     defaultRoots: false,
@@ -220,6 +255,19 @@ export async function profileSpaceRoot(
       summary,
     };
   };
+
+  for (const space of new Set(targets.map((t) => t.space))) {
+    const flags = await serverFlags({ ...config, space });
+    if (flags?.serverExecution !== false) {
+      throw new Error(
+        `The server at ${config.apiUrl} ${
+          flags?.serverExecution === true
+            ? "runs server execution"
+            : "does not say whether it runs server execution"
+        } for ${space}, so opening a profile space there can write a root into it. Serve the store with server execution off and run the repair against that server, as "Making existing profiles their space's root" in the CLI README describes.`,
+      );
+    }
+  }
 
   const inspected = report(
     await each((pieces, target) => inspectProfileSpaceRoot(pieces, target.id)),
