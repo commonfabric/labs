@@ -97,6 +97,27 @@ Deno.test("resolveDefaultContainerUser keeps host UID/GID default on Linux", () 
   assertMatch(resolveDefaultContainerUser("linux") ?? "", /^\d+:\d+$/);
 });
 
+Deno.test("resolveDockerRunscSandboxConfig refuses a relative workspace mount path and a mount with no host path", () => {
+  assertThrows(
+    () =>
+      resolveDockerRunscSandboxConfig({
+        workspaceHostPath: "/tmp/workspace",
+        workspaceMountPath: "workspace",
+      }),
+    Error,
+    "workspaceMountPath must be an absolute non-root sandbox path",
+  );
+  assertThrows(
+    () =>
+      resolveDockerRunscSandboxConfig({
+        workspaceHostPath: "/tmp/workspace",
+        additionalMounts: [{ kind: "fabric-fuse", hostPath: " " }],
+      }),
+    Error,
+    "fabric-fuse hostPath must not be empty",
+  );
+});
+
 Deno.test("resolveDockerRunscSandboxConfig accepts explicit docker network mode", () => {
   const config = resolveDockerRunscSandboxConfig({
     workspaceHostPath: "/host/project",

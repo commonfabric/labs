@@ -99,6 +99,8 @@ import {
   processSandboxSelectionEnv,
   recordedSandboxRuntime,
   resolveSandboxRuntimeSelection,
+  type SandboxProcess,
+  sandboxProcessOf,
   sandboxRuntimeOfOptions,
   sandboxRuntimeResumeRefusal,
   type SandboxRuntimeSelection,
@@ -390,7 +392,8 @@ export type CfHarnessCliSignalHandler = (
   signal: CfHarnessCliSignal,
 ) => void | Promise<void>;
 
-export interface RunCfHarnessCliDependencies {
+export interface RunCfHarnessCliDependencies
+  extends Omit<SandboxProcess, "homeDir"> {
   cwd?: string;
   env?: Record<string, string | undefined>;
 
@@ -423,7 +426,7 @@ export interface RunCfHarnessCliDependencies {
   pathExists?: (path: string) => Promise<boolean>;
 
   /**
-   * The home the default runsc CFC policy and the default macOS runsc store
+   * The home the default runsc CFC policy and the default runsc stores
    * are looked up under, for an embedder that clears `HOME` from `env` (the
    * Loom local host); `env.HOME` otherwise.
    */
@@ -637,17 +640,29 @@ Options:
   --cfc-enforcement-mode <mode> disabled | observe | enforce-explicit | enforce-strict
   --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (docker runtime only; required for enforce-* modes)
   --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (docker runtime only; required for enforce-* modes)
-  --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
-  --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
+  --sandbox-image <image>       Docker driver only: the image for its runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
+  --sandbox-docker-runtime <n>  Docker driver only: its Docker runtime (default: runsc-cfc)
   --sandbox-runtime <kind>      docker or runsc: run runsc directly with no Docker; the
                                 same on Linux and on macOS through the darwin runsc. Tool
-                                calls may then name a sandbox session. With no runtime
-                                named, macOS runs runsc from the native cfc-vm store
-                                (CFC_VM_HOME, or ~/Library/Application Support/cfc-vm) and
-                                refuses to start where that store is not set up; every
-                                other platform runs docker
+                                calls may then name a sandbox session, except under pasta's
+                                network (the Linux default's). With no runtime
+                                named, macOS (Apple silicon only) runs runsc from the
+                                native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
+                                Support/cfc-vm), Linux runs it from the store under
+                                ~/.local/share/runsc-cfc, rootless for a process that is not
+                                root (the host must allow unprivileged user namespaces),
+                                with pasta (passt) giving it egress and the host as
+                                host.docker.internal; that network needs pasta and setpriv
+                                on PATH, and unshare too for root, which
+                                CF_HARNESS_DOCKER_NETWORK_MODE=none or host does not need;
+                                a process that is not root needs user namespaces whatever
+                                the network, for the rootless store runsc (and for pasta
+                                with a named runsc), and a refusal names the sysctl -w to
+                                run. Each refuses to start where its store is not set up;
+                                every other platform runs docker
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
-                                on Linux; on macOS the cfc-vm image marker, default
+                                on Linux, default images/kitchensink in the Linux store;
+                                on macOS the cfc-vm image marker, default
                                 images/kitchensink in the cfc-vm store)
   --sandbox-cfc-policy <path>   runsc runtime only: CFC policy file; --cfc is passed exactly
                                 when this is set (default: ~/.local/share/runsc-cfc/cfc-policy.json
@@ -708,8 +723,10 @@ Environment:
   CF_HARNESS_HOME               Local cf-harness credential/config directory
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge, which on the
-                                runsc runtime is runsc's own network stack, reported
-                                as sandbox)
+                                runsc runtime is reported as sandbox: on macOS the VM's
+                                network; on Linux under the default pasta's, with egress
+                                and the host as host.docker.internal; on Linux with no
+                                pasta configured, loopback alone)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_LOOM_COMMANDS_CONFIG Default host command broker configuration file
@@ -725,14 +742,14 @@ Environment:
   CF_HARNESS_PATTERN_INDEX_PUBLISH 0 applies --no-pattern-index-publish
   CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE 1 offers successful authored
                                 patterns to search immediately (default: recorded only)
-  CF_HARNESS_SANDBOX_IMAGE      Default value for --sandbox-image
-  CF_HARNESS_SANDBOX_DOCKER_RUNTIME Default value for --sandbox-docker-runtime
+  CF_HARNESS_SANDBOX_IMAGE      Docker driver only: default value for --sandbox-image
+  CF_HARNESS_SANDBOX_DOCKER_RUNTIME Docker driver only: default value for --sandbox-docker-runtime
   CF_HARNESS_SANDBOX_RUNTIME    Default value for --sandbox-runtime (docker | runsc)
   CF_HARNESS_SANDBOX_ROOTFS     Default value for --sandbox-rootfs
   CF_HARNESS_RUNSC_CFC_POLICY   Default value for --sandbox-cfc-policy
   CF_HARNESS_RUNSC_BINARY       runsc binary for the runsc runtime (default: runsc on PATH;
-                                for a runtime macOS defaulted to, bin/runsc in the cfc-vm
-                                store)
+                                for a runtime macOS or Linux defaulted to, bin/runsc in
+                                its store)
   CFC_VM_HOME                   The macOS cfc-vm store, read by the darwin runsc and by the
                                 macOS default (default: ~/Library/Application Support/cfc-vm)
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
@@ -1403,6 +1420,10 @@ type CliSandboxSelectionDependencies = Pick<
   | "pathExists"
   | "sandboxHomeDir"
   | "platform"
+  | "arch"
+  | "uid"
+  | "readSysctl"
+  | "which"
   | "sandboxRuntimeNamedBy"
   | "sandboxSelectionFlags"
 >;
@@ -1421,6 +1442,7 @@ const cliSandboxRuntimeSelection = (
     ...(deps.sandboxRuntimeNamedBy !== undefined
       ? { namedBy: deps.sandboxRuntimeNamedBy }
       : { platform: deps.platform ?? Deno.build.os }),
+    ...sandboxProcessOf(deps),
     flags: deps.sandboxSelectionFlags ?? true,
     cwd,
     ...(deps.pathExists !== undefined ? { pathExists: deps.pathExists } : {}),
@@ -1460,6 +1482,10 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxHomeDir"
     | "commandJobId"
     | "platform"
+    | "arch"
+    | "uid"
+    | "readSysctl"
+    | "which"
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
@@ -1910,6 +1936,10 @@ export const parseCfHarnessCliArgs = async (
     sandboxCfcPolicy,
     sandboxRunscBinary,
     sandboxRunscNetworkMode,
+    sandboxRunscRootless,
+    sandboxRunscNetworkHelper,
+    sandboxRunscUnshare,
+    sandboxRunscSetpriv,
     sandboxRuntimeChoice,
   } = await cliSandboxRuntimeSelection(
     env,
@@ -2187,6 +2217,12 @@ export const parseCfHarnessCliArgs = async (
     ...(sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode }
       : {}),
+    ...(sandboxRunscRootless === true ? { sandboxRunscRootless } : {}),
+    ...(sandboxRunscNetworkHelper !== undefined
+      ? { sandboxRunscNetworkHelper }
+      : {}),
+    ...(sandboxRunscUnshare !== undefined ? { sandboxRunscUnshare } : {}),
+    ...(sandboxRunscSetpriv !== undefined ? { sandboxRunscSetpriv } : {}),
     sandboxRuntimeChoice,
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),

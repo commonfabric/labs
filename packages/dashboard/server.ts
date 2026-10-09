@@ -34,6 +34,9 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { latestCiJobs, TILES } from "./registry.ts";
 import { makeCtx } from "./ctx.ts";
+import { RunLists } from "./github-runs.ts";
+import { greenBranchOf } from "./green-branch.ts";
+import { dashboardCacheFile } from "./history-files.ts";
 import {
   escapeHtml,
   friendlyError,
@@ -60,7 +63,10 @@ import {
   DashboardMessageStore,
 } from "./dashboard-message.ts";
 
-const ctx = makeCtx();
+const ctx = makeCtx(
+  greenBranchOf,
+  new RunLists(dashboardCacheFile("fabric-wall-run-lists-tiles.json")),
+);
 const views = new Map<string, TileView>();
 const lastRun = new Map<string, number>();
 const activityBadges = new Map<string, string>();

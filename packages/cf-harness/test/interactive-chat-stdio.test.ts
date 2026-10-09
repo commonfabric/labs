@@ -18,6 +18,7 @@ import { DEFAULT_PARENT_TOOL_IDS } from "../src/contracts/tool-descriptor.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
+  LINUX_HOME,
   NAMES_DOCKER,
   resolveInteractiveProvisioning,
   runHarnessInteractiveChatStdioCli,
@@ -1733,18 +1734,36 @@ Deno.test("a typo in a host-mount field is refused, not silently defaulted", asy
   }
 });
 
-Deno.test("no provisioning flags hand on nothing but how the sandbox runtime was selected", async () => {
+/**
+ * The selection Linux defaults to where nothing names a runtime: the native
+ * runtime, taken whole from the store under the home this file's entrypoints
+ * are given.
+ */
+const linuxDefault = (): SandboxRuntimeSelection => {
+  const store = join(LINUX_HOME, ".local", "share", "runsc-cfc");
+  return {
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: join(store, "images", "kitchensink"),
+    sandboxCfcPolicy: join(store, "cfc-policy.json"),
+    sandboxRunscBinary: join(store, "bin", "runsc"),
+    sandboxRunscNetworkHelper: join(LINUX_HOME, "bin", "pasta"),
+    sandboxRunscUnshare: join(LINUX_HOME, "bin", "unshare"),
+    sandboxRunscSetpriv: join(LINUX_HOME, "bin", "setpriv"),
+    sandboxRuntimeChoice: {
+      runtime: "runsc",
+      source: "default",
+      platform: "linux",
+      nativeStore: store,
+    },
+  };
+};
+
+Deno.test("no provisioning flags hand on nothing but the sandbox runtime selection", async () => {
   // The other half of the standalone-entrypoint contract: adding these flags
   // must not change what happens when nobody passes them, or every existing
   // embedder gets a behavior change for free. The one thing handed on is the
-  // record of how the runtime was selected, which sets nothing.
-  const defaulted: Pick<SandboxRuntimeSelection, "sandboxRuntimeChoice"> = {
-    sandboxRuntimeChoice: {
-      runtime: "docker",
-      source: "default",
-      platform: "linux",
-    },
-  };
+  // runtime Linux defaults to, from the store under the home.
+  const defaulted = linuxDefault();
   assertEquals(
     await resolveInteractiveProvisioning({}, Deno.cwd(), {}),
     defaulted,
@@ -1767,14 +1786,7 @@ Deno.test("no provisioning flags hand on nothing but how the sandbox runtime was
 Deno.test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
   assertEquals(
     await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd(), {}),
-    {
-      maxModelTurns: 32,
-      sandboxRuntimeChoice: {
-        runtime: "docker",
-        source: "default",
-        platform: "linux",
-      },
-    },
+    { maxModelTurns: 32, ...linuxDefault() },
   );
 });
 

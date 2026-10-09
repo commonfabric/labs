@@ -78,6 +78,7 @@ import {
 } from "../lib.ts";
 import type { GitHubCredential } from "../github-auth.ts";
 import { type GitHubRun, RunLists } from "../github-runs.ts";
+import { dashboardCacheFile } from "../history-files.ts";
 import {
   type Ctx,
   type Run,
@@ -561,7 +562,12 @@ export interface CiHealthTile extends Tile {
   jobs(): CiJobs | undefined;
 }
 
-export function createCiHealth(): CiHealthTile {
+/**
+ * Builds the ci tile, which reads every workflow's runs through `lists`.
+ */
+export function createCiHealth(
+  lists: RunLists = new RunLists(),
+): CiHealthTile {
   // The inventory is read on first use and shared until it goes stale. A read
   // that fails is not kept, so the next sweep tries again.
   let inventory: (() => Promise<RepoInventory[]>) | undefined;
@@ -583,8 +589,6 @@ export function createCiHealth(): CiHealthTile {
   // It reads with the credential the tile was given, like every other request
   // the tile makes.
   const attempts = new Map<number, CompletedAttempts>();
-  // Every workflow's runs, as far down as the last sweep read them.
-  const lists = new RunLists();
 
   const judge = (
     listing: Listing,
@@ -764,4 +768,6 @@ function logUnreadable(names: string[]): void {
   if (names.length > 0) console.error("ci: could not read:", names.join(", "));
 }
 
-export const ciHealth = createCiHealth();
+export const ciHealth = createCiHealth(
+  new RunLists(dashboardCacheFile("fabric-wall-run-lists-ci.json")),
+);

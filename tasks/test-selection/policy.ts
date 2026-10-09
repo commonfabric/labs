@@ -179,11 +179,6 @@ export const MIN_CORRECTION_SPAN_SECONDS = LANE_BUDGET_SECONDS / 10;
  * slope fitted too high only over-charges, where one fitted too low lets
  * a lane pack work it has no time for: two batches of one suite have
  * fitted a slope of zero, which says a second of its tests costs nothing.
- *
- * It is also how many of the batches a suite's fit is still reading must
- * carry a figure before the fit narrows to those alone. The fit narrows by
- * one figure at a time, so each count is taken among the batches left by
- * the figures before it, which `fitSuite()` describes.
  */
 export const MIN_CORRECTION_SAMPLES = 3;
 
@@ -215,9 +210,10 @@ export const HEALTH_TOO_LONG_JUMP = 20;
  * fit, which is capacity rather than calibration, so those lanes are not
  * counted.
  *
- * The fit charges a suite what nine batches in ten spent, so some lanes
- * run long by design: a day's pull-request lanes run past their bound
- * something under one time in ten while the model holds.
+ * The fit charges a batch what a batch of its shape spends on average,
+ * so some lanes run long by design, and the safety margin is what keeps
+ * them few: about one pull-request lane in ten packed near its budget
+ * spends past the margin while the model holds.
  */
 export const HEALTH_OVERRUN_SHARE = 0.15;
 
@@ -233,9 +229,11 @@ export const HEALTH_MIN_LANES = 20;
  * over what they were charged may drift, either way, before the cost
  * model is reported broken for that suite.
  *
- * The fit charges a suite what nine batches in ten spent, so that
- * percentile sits near one while the model holds, and within about a
- * third of one for every suite that ten batches have measured.
+ * The fit charges a batch what a batch of its shape spends on average,
+ * so the median sits near one while the model holds and the ninetieth
+ * percentile above it, below two for every suite that ten batches have
+ * measured. A suite charged a fixed factor too little or too much moves
+ * both.
  */
 export const HEALTH_DRIFT_FACTOR = 2;
 
@@ -770,9 +768,7 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why:
       "Up when a slope is being fitted from too little and swinging about; " +
-      "down when a suite's real slope takes too long to be believed. It " +
-      "is also how many of the batches a suite's fit is still reading " +
-      "must carry a figure before the batches lacking it are left out.",
+      "down when a suite's real slope takes too long to be believed.",
   },
   {
     name: "HEALTH_TOO_LONG_FACTOR",

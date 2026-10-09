@@ -886,7 +886,7 @@ describe("launch", () => {
       await expect(
         prepareConsoleLaunch(
           NAMED_ARGS,
-          {},
+          { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
           io({
             readDockerRuntimes: () =>
               Promise.resolve({ unreadable: "daemon is not running" }),
@@ -1247,7 +1247,8 @@ describe("launch", () => {
           "--fabric-cfc-enforcement-mode",
           "observe",
         ],
-        {},
+        // The two sidecar directories are the Docker driver's.
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         io(),
       );
 

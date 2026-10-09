@@ -90,6 +90,7 @@ import {
   parseLink,
 } from "../link-utils.ts";
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
+import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
@@ -902,10 +903,9 @@ const observationInputWitnesses = (
 // otherwise, so the enforcement consumed sets are byte-identical to today when
 // the flag is off. `addCfcTriggerReads` keeps only payload paths of documents
 // that are not content-addressed, so entries here are user-data addresses
-// only. Treated as RECURSIVE reads (the conservative
-// direction: the whole triggering value could have influenced the decision to
-// run). No `meta` — trigger entries never carry the internal-verifier marker,
-// so they always count.
+// only. Each is read where `triggerReadAt` says, recursively unless it is the
+// invalidation of a link probe. No `meta` — trigger entries never carry the
+// internal-verifier marker, so they always count.
 const triggerReadSources = (
   tx: IExtendedStorageTransaction,
 ): Array<{
@@ -922,11 +922,27 @@ const triggerReadSources = (
     space: trigger.space,
     id: trigger.id as URI,
     scope: normalizeCellScope(trigger.scope),
-    path: canonicalizeLogicalPath(trigger.path),
+    ...triggerReadAt(trigger.path),
     type: "application/json" as const,
-    nonRecursive: false,
     meta: {},
   }));
+};
+
+/**
+ * Returns where a trigger read (§8.9.2) at `path` is taken, and whether
+ * shallowly. A trigger is read recursively at its own path, the conservative
+ * direction: the whole triggering value could have influenced the decision to
+ * run. A trigger at the sub-path where a link exposes its recognizable form is
+ * the invalidation of a probe of the slot, so it is read as the probe observed
+ * it, the slot itself, shallowly. That sub-path's segments are not child
+ * segments, and no `*` template beneath the slot matches them (§4.6.3).
+ */
+const triggerReadAt = (
+  path: readonly string[],
+): { path: readonly string[]; nonRecursive: boolean } => {
+  const logical = canonicalizeLogicalPath(path);
+  const slot = probedSlotPath(logical);
+  return { path: slot, nonRecursive: slot.length < logical.length };
 };
 
 const joinLabelValues = (
@@ -4096,16 +4112,17 @@ const forEachFlowObservation = (
     }
     const id = trigger.id as URI;
     const scope = normalizeCellScope(trigger.scope);
+    const at = triggerReadAt(trigger.path);
     if (
       consume(
         trigger.space,
         id,
         scope,
         "application/json",
-        trigger.path,
+        at.path,
         {
           shape: "value",
-          nonRecursive: false,
+          nonRecursive: at.nonRecursive,
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
@@ -4115,8 +4132,11 @@ const forEachFlowObservation = (
     ) {
       return true;
     }
-    // A trigger read of a `length` observes its parent's membership.
-    const lengthOf = triggerReadLengthParent(trigger.path);
+    // A trigger read of a `length` observes its parent's membership. A
+    // probe's trigger, read shallowly at its slot, is no read of a `length`.
+    const lengthOf = at.nonRecursive
+      ? undefined
+      : triggerReadLengthParent(at.path);
     if (
       lengthOf !== undefined &&
       consume(
@@ -4357,7 +4377,7 @@ const deriveFlowJoinImpl = (
     metadata: CfcMetadata | undefined;
     indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
     labels: Map<string, IFCLabel | undefined>;
-    witnesses: Map<string, CfcAtom[] | undefined>;
+    witnesses: Map<string, () => CfcAtom[] | undefined>;
   }>();
   // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
   const ownRestamps = ownRestampContainerPaths(tx);
@@ -4378,6 +4398,55 @@ const deriveFlowJoinImpl = (
   // The followed slots whose own label is confidential, by document and
   // path: references that count as followed whatever their target carries.
   const confidentialFollowedSlots = new Set<string>();
+  // The paths this transaction wrote, by document; built on first use.
+  let writtenPaths: Map<string, PathPrefixIndex> | undefined;
+  const valuesAsRead = new Map<string, { value: unknown } | undefined>();
+  /**
+   * Returns the value at `path` of the document `target` names as this
+   * transaction read it, or `undefined` when that is not known: the
+   * transaction wrote at, above or beneath `path`, so what it holds now is
+   * not what was read, or the document is a runtime secret, whose value only
+   * its own module reads. The stored label metadata is the state the reads
+   * consumed, so a value compared against it has to be that state too.
+   *
+   * A read records no value, so outside those two cases this returns the
+   * value at prepare. The writes it checks are `valueWriteTargets`', which
+   * leaves out content-addressed and reserved documents and the runtime's own
+   * link plumbing; none of those puts a value where a probe found a
+   * reference. A replica change after the read fails the commit's read-set
+   * validation instead, except for a read the commit does not validate
+   * (`ignoreReadForCommit`).
+   */
+  const valueAsRead = (
+    target: {
+      space: MemorySpace;
+      id: URI;
+      scope: ReturnType<typeof normalizeCellScope>;
+    },
+    path: readonly string[],
+  ): { value: unknown } | undefined => {
+    const key = stringTupleKey([targetKey(target), pathKey(path)]);
+    if (valuesAsRead.has(key)) return valuesAsRead.get(key);
+    if (writtenPaths === undefined) {
+      writtenPaths = new Map();
+      for (const [document, written] of valueWriteTargets(tx)) {
+        const index = new PathPrefixIndex();
+        for (const writtenPath of written.paths) index.add(writtenPath);
+        writtenPaths.set(document, index);
+      }
+    }
+    const read = isRuntimeSecretId(target.id) ||
+        writtenPaths.get(targetKey(target))?.overlaps(path)
+      ? undefined
+      : {
+        value: tx.readValueOrThrow({ ...target, path }, {
+          meta: INTERNAL_VERIFIER_META,
+          nonRecursive: true,
+        }),
+      };
+    valuesAsRead.set(key, read);
+    return read;
+  };
   forEachFlowObservation(
     tx,
     (space, id, scope, type, logicalPath, observation) => {
@@ -4528,34 +4597,52 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
-        // Skipped once the meet is empty, which no later observation can
-        // refill; the `undefined` cached then is never read into a nonempty
-        // meet.
-        document.witnesses.set(
-          labelKey,
-          entries === undefined || identity === undefined ||
-            inputWitnesses?.length === 0
+        // A shallow content read's locations are resolved over what a value
+        // read of them would consume; see `observationInputWitnesses`. So are
+        // those of a probe of a slot that holds no reference: what it finds
+        // there is the value stored at the slot, whose writer the value stamp
+        // records. A probe of a slot holding a reference, or of one whose
+        // value as read is not known, keeps its own entries: the pointer at a
+        // slot is labeled by the link write that put it there, which carries
+        // no `TransformedBy`, so a reference still retains no witness.
+        const observationEvidence = () => {
+          const read = probedSlot === undefined
             ? undefined
-            : observationInputWitnesses(
-              entries,
-              logicalPath,
-              observation.nonRecursive,
-              // A shallow content read's locations are resolved over what a
-              // value read of them would consume; see
-              // `observationInputWitnesses`. A `followRef` observation keeps
-              // its own entries: the pointer at a slot is labeled by the
-              // link write that put it there, which carries no
-              // `TransformedBy`, so a reference still retains no witness.
-              observation.shape === "shape"
-                ? consumedEntriesForRead(
-                  document.metadata!,
-                  logicalPath,
-                  { nonRecursive: true, consumes: "value", ...exclusion },
-                  indexFor("value"),
+            : valueAsRead({ space, id, scope }, probedSlot);
+          const at = observation.shape === "shape"
+            ? logicalPath
+            : read !== undefined && !isPrimitiveCellLink(read.value)
+            ? probedSlot
+            : undefined;
+          return at === undefined ? undefined : consumedEntriesForRead(
+            document.metadata!,
+            at,
+            { nonRecursive: true, consumes: "value", ...exclusion },
+            indexFor("value"),
+          );
+        };
+        // Computed on first use, since a followed slot's probe never uses it
+        // and resolving a probe's evidence may read the slot's value.
+        let computed: { witnesses: CfcAtom[] | undefined } | undefined;
+        document.witnesses.set(labelKey, () => {
+          computed ??= {
+            // Skipped once the meet is empty, which no later observation
+            // can refill.
+            witnesses: entries === undefined || identity === undefined ||
+                inputWitnesses?.length === 0 ||
+                !entries.some((entry) =>
+                  (entry.label.confidentiality?.length ?? 0) > 0
                 )
-                : undefined,
-            ),
-        );
+              ? undefined
+              : observationInputWitnesses(
+                entries,
+                logicalPath,
+                observation.nonRecursive,
+                observationEvidence(),
+              ),
+          };
+          return computed.witnesses;
+        });
         // A read that stops at a container observes its membership: for a
         // list, how long it is. The length is a value of its own, stamped by
         // whoever last changed it, and nothing else the read consumes says
@@ -4563,29 +4650,27 @@ const deriveFlowJoinImpl = (
         // every surviving member's witness. Its value stamps are a location
         // of the read. A record's key named `length` is read the same way,
         // which can only withhold a witness.
-        document.witnesses.set(
-          `${labelKey}#length`,
-          document.metadata === undefined ||
+        const lengthWitnesses = document.metadata === undefined ||
             observation.nonRecursive !== true ||
             observation.shape === "followRef" || identity === undefined ||
             inputWitnesses?.length === 0
-            ? undefined
-            : (() => {
-              const lengthPath = [...logicalPath, "length"];
-              const lengthEntries = consumedEntriesForRead(
-                document.metadata!,
-                lengthPath,
-                { nonRecursive: true, consumes: "value", ...exclusion },
-                indexFor("value"),
-              ).filter((entry) =>
-                pathKey(entry.path) ===
-                  pathKey(lengthPath)
-              );
-              return lengthEntries.length === 0
-                ? undefined
-                : observationInputWitnesses(lengthEntries, lengthPath, true);
-            })(),
-        );
+          ? undefined
+          : (() => {
+            const lengthPath = [...logicalPath, "length"];
+            const lengthEntries = consumedEntriesForRead(
+              document.metadata!,
+              lengthPath,
+              { nonRecursive: true, consumes: "value", ...exclusion },
+              indexFor("value"),
+            ).filter((entry) =>
+              pathKey(entry.path) ===
+                pathKey(lengthPath)
+            );
+            return lengthEntries.length === 0
+              ? undefined
+              : observationInputWitnesses(lengthEntries, lengthPath, true);
+          })();
+        document.witnesses.set(`${labelKey}#length`, () => lengthWitnesses);
       }
       // Every observation counts toward the input witnesses, `followRef`
       // included: which reference sits at a slot is information the
@@ -4598,8 +4683,8 @@ const deriveFlowJoinImpl = (
       // (`followedReferenceWitnesses`). A followed slot whose own label is
       // confidential is counted there even when its target is public.
       if (!observation.followedSlot) {
-        noteInputWitnesses(document.witnesses.get(labelKey));
-        noteInputWitnesses(document.witnesses.get(`${labelKey}#length`));
+        noteInputWitnesses(document.witnesses.get(labelKey)?.());
+        noteInputWitnesses(document.witnesses.get(`${labelKey}#length`)?.());
       } else if (label?.confidentiality?.length) {
         confidentialFollowedSlots.add(
           stringTupleKey([key, pathKey(probedSlotPath(logicalPath))]),
@@ -9635,7 +9720,11 @@ const collectConsumedLabelImpl = (
       canonicalizeLogicalPath(read.path),
       read.nonRecursive,
     );
-    const lengthOf = triggerReadLengthParent(read.path);
+    // A probe's trigger, read shallowly at its slot, is no read of a
+    // `length`.
+    const lengthOf = read.nonRecursive
+      ? undefined
+      : triggerReadLengthParent(read.path);
     if (lengthOf !== undefined) {
       collectAt(read, labels, lengthOf, true);
     }
