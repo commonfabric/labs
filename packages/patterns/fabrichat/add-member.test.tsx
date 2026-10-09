@@ -11,6 +11,7 @@ import {
   pattern,
   TESTS,
   UI,
+  VIEWS,
   Writable,
 } from "commonfabric";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
+  type AddMemberOutcome,
   CHAT_ADD_MEMBER_ACTION,
   CHAT_ADD_MEMBER_SURFACE,
   type ChatProfile,
@@ -50,8 +52,13 @@ const addGesture = {
 // A stand-in for a principal, a base58btc key as a principal's is.
 const BOB = "did:key:z6MkBob";
 
-// The add control delivers its field's text on the trusted click.
-const typed = (text: string) => ({ type: "click", target: { value: text } });
+// The add control delivers its field's text on the trusted click; a client
+// that draws natively names the add as well.
+const typed = (text: string, requestId?: string) => ({
+  type: "click",
+  ...(requestId === undefined ? {} : { requestId }),
+  target: { value: text },
+});
 
 // How the element `id` under `root` is displayed.
 const displayOf = (root: unknown, id: string): unknown =>
@@ -74,6 +81,7 @@ const emptyRecords = () => ({
   usedTimes: Writable.of<UsedTime[]>([]),
   activity: Writable.of<SentActivity[]>([]),
   counters: Writable.of<ActivityCounters[]>([]),
+  addRequests: Writable.of<Record<string, AddMemberOutcome>>({}),
 });
 
 export default pattern(() => {
@@ -116,6 +124,16 @@ export default pattern(() => {
           shownOutcome(ownRoom[UI]) === "none:"
         ),
       },
+      // A client that draws natively reads the same through the room's views:
+      // the viewer can add to a group room, and not to a direct room or a
+      // space's own chat.
+      {
+        assertion: assert(() =>
+          ownRoom[VIEWS].room.canAdd === true &&
+          directRoom[VIEWS].room.canAdd === false &&
+          sharedRoom[VIEWS].room.canAdd === false
+        ),
+      },
       // Text that isn't a principal's DID admits no one.
       {
         action: ownRoom.addMember,
@@ -128,17 +146,22 @@ export default pattern(() => {
         ),
       },
       // A direct room refuses an add, whatever reaches its stream, a
-      // principal's address included.
+      // principal's address included, and records the refusal under the
+      // add's `requestId`, with a code a client can act on.
       {
         action: directRoom.addMember,
-        event: typed(BOB),
+        event: typed(BOB, "add-1"),
         trustedUi: addGesture,
       },
       {
-        assertion: assert(() =>
-          shownOutcome(directRoom[UI]) ===
-            "block:A direct chat keeps its two members."
-        ),
+        assertion: assert(() => {
+          const recorded = directRoom[VIEWS].room.addRequests["add-1"];
+          return shownOutcome(directRoom[UI]) ===
+              "block:A direct chat keeps its two members." &&
+            recorded?.status === "refused" &&
+            recorded.code === "direct-room" &&
+            recorded.reason === "A direct chat keeps its two members.";
+        }),
       },
       // A space's own chat refuses an add, whatever reaches its stream.
       {

@@ -185,11 +185,22 @@ describe("fabrichat spaces across runtimes", () => {
       .toThrow(`lacks READ on space ${room.space}`);
 
     // A member admitted at creation holds OWNER, so their own add, from the
-    // room's control, admits the stranger.
-    await member.send("addMember", adding, ADD_MEMBER_ACTION, { piece: room });
+    // room's control, admits the stranger, and the room records it as done
+    // where the member's own views read it.
+    await member.send(
+      "addMember",
+      { ...adding, requestId: "add-stranger" },
+      ADD_MEMBER_ACTION,
+      { piece: room },
+    );
     await harness.settle();
     expect(await stranger.read(["about", "title"], { piece: room }))
       .toBe("Growing team");
+    expect(
+      await member.read(["$VIEWS", "room", "addRequests", "add-stranger"], {
+        piece: room,
+      }),
+    ).toEqual({ status: "done" });
   });
 
   it("refuses an add to a direct room, even from its counterpart's own control", async () => {
@@ -203,13 +214,29 @@ describe("fabrichat spaces across runtimes", () => {
 
     // The counterpart holds OWNER, as a member admitted at creation does, and
     // sends from the room's control, yet a direct room keeps its two members.
+    // Its views say they can't add, and the refusal carries its code.
+    expect(
+      await member.read(["$VIEWS", "room", "canAdd"], { piece: room }),
+    ).toBe(false);
     await member.send(
       "addMember",
-      { target: { value: stranger.identity.did() } },
+      {
+        requestId: "add-to-direct",
+        target: { value: stranger.identity.did() },
+      },
       ADD_MEMBER_ACTION,
       { piece: room },
     );
     await harness.settle();
+    expect(
+      await member.read(["$VIEWS", "room", "addRequests", "add-to-direct"], {
+        piece: room,
+      }),
+    ).toEqual({
+      status: "refused",
+      reason: "A direct chat keeps its two members.",
+      code: "direct-room",
+    });
     await expect(stranger.read(["about", "kind"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
     expect(await member.read(["participants", "length"], { piece: room }))
