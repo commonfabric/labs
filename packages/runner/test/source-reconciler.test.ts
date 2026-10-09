@@ -1570,6 +1570,56 @@ describe("piece source reconciliation", () => {
       expect(downloads).toBe(4);
     });
 
+    it("compiles once for an open that arrives during the compile after its source was retired", async () => {
+      // The retained source is retired while the first open compiles, as
+      // eviction or the retention limit retires it, so the second open
+      // resolves the source again and finds no retained entry to join
+      // through. The first compile is released as the second open's
+      // resolution returns, and runs on well past the second's arrival.
+      const identity = await identityFor(source("v1"));
+      createRuntime(servingFetch(() => identity, () => source("v1")));
+      const compile = runtime.patternManager.compilePattern.bind(
+        runtime.patternManager,
+      );
+      const resolve = runtime.harness.resolve.bind(runtime.harness);
+      const entered = defer<void>();
+      const release = defer<void>();
+      let calls = 0;
+      runtime.patternManager.compilePattern = async (...args) => {
+        if (calls++ === 0) {
+          entered.resolve();
+          await release.promise;
+        }
+        return await compile(...args);
+      };
+      let resolutions = 0;
+      runtime.harness.resolve = async (...args) => {
+        const program = await resolve(...args);
+        if (++resolutions === 2) release.resolve();
+        return program;
+      };
+      const first = open(runtime.getCell(signer.did(), "retired-first"));
+      let second: Promise<unknown> | undefined;
+      try {
+        await entered.promise;
+        runtime.sourceReconciler.accessForTestingOnly.suppliedSources.clear();
+        second = open(runtime.getCell(signer.did(), "retired-second"));
+        const [firstPattern, secondPattern] = await Promise.all([
+          first,
+          second,
+        ]);
+        expect(firstPattern).toBeDefined();
+        expect(secondPattern).toBe(firstPattern);
+        expect(resolutions).toBe(2);
+        expect(calls).toBe(1);
+      } finally {
+        release.resolve();
+        await Promise.all([first, second]);
+        runtime.harness.resolve = resolve;
+        runtime.patternManager.compilePattern = compile;
+      }
+    });
+
     it("shares a concurrent open's failed compile, and compiles again for the next open", async () => {
       // Both opens are held at the source download until both have asked for
       // the advertised identity, so they reach the compile together.

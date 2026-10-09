@@ -242,13 +242,6 @@ type SuppliedSource = {
    * its serialized graph carries `cid:` references minted from the registry.
    */
   compiled?: { pattern: Pattern; epoch: number };
-
-  /**
-   * The compile into the destination space in flight, and the schema registry
-   * epoch it started in, which opens arriving in that epoch join instead of
-   * compiling again.
-   */
-  compiling?: { promise: Promise<Pattern | undefined>; epoch: number };
 };
 
 /** Maximum retained source text and key size, measured in UTF-16 code units. */
@@ -297,6 +290,17 @@ export class SourceReconciler {
     weigh: suppliedSourceWeight,
   });
   readonly #suppliedSourceFlights = new Map<string, Promise<SuppliedSource>>();
+
+  /**
+   * The compiles of supplied source in flight, by the key their source is
+   * retained under, each with the schema registry epoch it started in. Kept
+   * apart from retention, so an open still finds a compile whose source has
+   * since been retired.
+   */
+  readonly #suppliedCompileFlights = new Map<
+    string,
+    { promise: Promise<Pattern | undefined>; epoch: number }
+  >();
   #disposed = false;
 
   constructor(runtime: Runtime) {
@@ -432,6 +436,7 @@ export class SourceReconciler {
     this.#disposed = true;
     this.#suppliedSources.clear();
     this.#suppliedSourceFlights.clear();
+    this.#suppliedCompileFlights.clear();
     for (const { abort } of this.#pending.values()) abort.abort();
     for (const { abort } of this.#passes) abort.abort();
     for (const { cancel } of this.#fabricFollowers.values()) cancel();
@@ -822,11 +827,9 @@ export class SourceReconciler {
       signal.throwIfAborted();
       const epoch = schemaRegistryEpoch();
       if (resolved.compiled?.epoch === epoch) return resolved.compiled.pattern;
-      // Only disposal stops a pass, and it stops every pass, so an open that
-      // joins another's compile is stopped exactly when that compile is. A
-      // compile that fails retires `resolved`, so nothing joins it again.
-      if (resolved.compiling?.epoch !== epoch) {
-        resolved.compiling = {
+      let flight = this.#suppliedCompileFlights.get(key);
+      if (flight?.epoch !== epoch) {
+        const started = {
           promise: this.#compileSupplied(
             key,
             resolved,
@@ -837,8 +840,19 @@ export class SourceReconciler {
           ),
           epoch,
         };
+        flight = started;
+        this.#suppliedCompileFlights.set(key, started);
+        void started.promise.catch(() => {}).finally(() => {
+          if (this.#suppliedCompileFlights.get(key) === started) {
+            this.#suppliedCompileFlights.delete(key);
+          }
+        });
       }
-      return await resolved.compiling.promise;
+      const compiled = await flight.promise;
+      // The compile answers for the pass that started it, and this pass may
+      // have been stopped since.
+      signal.throwIfAborted();
+      return compiled;
     });
   }
 
@@ -856,10 +870,10 @@ export class SourceReconciler {
     signal: AbortSignal,
     epoch: number,
   ): Promise<Pattern | undefined> {
-    // The destination must hold the closure behind its creation revision.
-    // A compiler hit still performs the destination's persistence work.
-    await prepareSourceClosureVerification();
     try {
+      // The destination must hold the closure behind its creation revision.
+      // A compiler hit still performs the destination's persistence work.
+      await prepareSourceClosureVerification();
       // Compiling writes to storage; a stopped pass must leave it alone.
       signal.throwIfAborted();
       const compiled = await this.#runtime.patternManager.compilePattern(
