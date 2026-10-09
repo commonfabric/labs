@@ -31,6 +31,10 @@
             "$ref": "#/$defs/ChatRoomKind",
             "description": "The room's kind, as its `about.kind` says."
           },
+          "revision": {
+            "description": "The revision of the room's entry in the user's catalog, as listed, which a\nrequest to forget the room names; absent where the entry is not one the\ncatalog keeps revisions of.",
+            "type": "string"
+          },
           "room": {
             "$ref": "#/$defs/ChatRoomLink",
             "asCell": [
@@ -39,7 +43,7 @@
             "description": "The room."
           },
           "since": {
-            "description": "When this user created or accepted it.",
+            "description": "When this user's catalog admitted it.",
             "type": "FabricEpochNsec"
           }
         },
@@ -113,8 +117,15 @@
           },
           {
             "properties": {
+              "code": {
+                "description": "Which refusal it is, for a client to act on, where a client has one to\ntake; absent for the others.",
+                "enum": [
+                  "space-own-chat"
+                ],
+                "type": "string"
+              },
               "reason": {
-                "description": "Why.",
+                "description": "Why, for a person to read.",
                 "type": "string"
               },
               "status": {
@@ -263,7 +274,7 @@
           "cell"
         ],
         "default": {},
-        "description": "The direct room shared with each counterpart.",
+        "description": "The direct room shared with each counterpart, for the rooms this manager\ncreated or accepted.",
         "properties": {},
         "type": "object"
       },
@@ -290,17 +301,6 @@
         "properties": {},
         "type": "object"
       },
-      "rooms": {
-        "asCell": [
-          "cell"
-        ],
-        "default": [],
-        "description": "The rooms this user belongs to.",
-        "items": {
-          "$ref": "#/$defs/ChatIndexEntry"
-        },
-        "type": "array"
-      },
       "sharedSpaceCatalog": {
         "$ref": "#/$defs/SharedSpaceCatalogStorage",
         "asCell": [
@@ -310,7 +310,7 @@
           "entries": {},
           "offers": {}
         },
-        "description": "The user's shared-space catalog, where each room this manager creates or\naccepts is registered: in a user's home space, Home's. A manager given\nnone keeps one of its own."
+        "description": "The user's shared-space catalog, which lists the rooms they belong to: in\na user's home space, Home's. A manager given none keeps one of its own."
       }
     },
     "type": "object"
@@ -348,12 +348,16 @@
             "$ref": "#/$defs/ChatRoomKind",
             "description": "The room's kind, as its `about.kind` says."
           },
+          "revision": {
+            "description": "The revision of the room's entry in the user's catalog, as listed, which a\nrequest to forget the room names; absent where the entry is not one the\ncatalog keeps revisions of.",
+            "type": "string"
+          },
           "room": {
             "$ref": "#/$defs/ChatRoomLink",
             "description": "The room."
           },
           "since": {
-            "description": "When this user created or accepted it.",
+            "description": "When this user's catalog admitted it.",
             "type": "FabricEpochNsec"
           }
         },
@@ -441,8 +445,15 @@
           },
           {
             "properties": {
+              "code": {
+                "description": "Which refusal it is, for a client to act on, where a client has one to\ntake; absent for the others.",
+                "enum": [
+                  "space-own-chat"
+                ],
+                "type": "string"
+              },
               "reason": {
-                "description": "Why.",
+                "description": "Why, for a person to read.",
                 "type": "string"
               },
               "status": {
@@ -635,6 +646,10 @@
               "$ref": "#/$defs/ChatIndexEntry"
             },
             "type": "array"
+          },
+          "sharedSpaceCatalog": {
+            "$ref": "#/$defs/SharedSpaceCatalogStorage",
+            "description": "The user's shared-space catalog, as stored, from which `rooms` is drawn. A\nreader in another piece finds a room's entry here by its space without\nthis manager's view having been computed."
           }
         },
         "required": [
@@ -644,9 +659,10 @@
           "forget",
           "delivered",
           "direct",
-          "rooms",
           "requests",
-          "outgoingNotices"
+          "outgoingNotices",
+          "rooms",
+          "sharedSpaceCatalog"
         ],
         "type": "object"
       },
@@ -677,6 +693,10 @@
           },
           "requestId": {
             "description": "Chosen by the sender; the outcome is recorded under it, except for a start\nthat would create a room without its reviewed `ChatStart`, which is\nrefused whole and records none.",
+            "type": "string"
+          },
+          "revision": {
+            "description": "The revision of a room's entry, as the list the request was made from\nshowed it, for a room to forget.",
             "type": "string"
           },
           "room": {
@@ -727,6 +747,11 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "SharedSpaceCatalogStorage": {
+        "additionalProperties": true,
+        "properties": {},
         "type": "object"
       }
     },
@@ -816,10 +841,15 @@
           "$ref": "#/$defs/ChatIndexEntry"
         },
         "type": "array"
+      },
+      "sharedSpaceCatalog": {
+        "$ref": "#/$defs/SharedSpaceCatalogStorage",
+        "description": "The user's shared-space catalog, as stored, from which `rooms` is drawn. A\nreader in another piece finds a room's entry here by its space without\nthis manager's view having been computed."
       }
     },
     "required": [
       "rooms",
+      "sharedSpaceCatalog",
       "direct",
       "requests",
       "outgoingNotices",
