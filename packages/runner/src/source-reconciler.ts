@@ -123,8 +123,22 @@ export type ReconcileOutcome =
   | "unavailable";
 
 /**
- * What each reconciliation result becomes on the piece, and which leave
- * nothing behind.
+ * Why a piece did not take what its origin offered, in the terms the record a
+ * reconciliation leaves keeps: the kind of refusal, and what the attempt
+ * reported in its own words.
+ */
+type SourceRefusal = {
+  readonly outcome: "refused";
+  readonly reason: PieceReconciliationReason;
+  readonly detail: string;
+};
+
+/** What following an origin came to, with a refusal saying why. */
+type FollowResult = Exclude<ReconcileOutcome, "refused"> | SourceRefusal;
+
+/**
+ * What each reconciliation result but a refusal becomes on the piece, and which
+ * leave nothing behind.
  *
  * The three results that end with the piece running what its origin holds are
  * one state to a reader: how it got there is the revision log's business, not
@@ -132,56 +146,42 @@ export type ReconcileOutcome =
  * itself, so a record would only restate what the piece already says.
  */
 const RECORDED_OUTCOME: Record<
-  ReconcileOutcome,
-  PieceReconciliationOutcome | undefined
+  Exclude<ReconcileOutcome, "refused">,
+  Exclude<PieceReconciliationOutcome, "refused"> | undefined
 > = {
   current: "followed",
   migrated: "followed",
   updated: "followed",
   unavailable: "unreachable",
-  refused: "refused",
   detached: undefined,
   unusable: undefined,
 };
 
-/**
- * What a reconciliation's result leaves on the piece it ran for.
- *
- * Throws for a refusal that does not name its reason: the panel offers a
- * different way out for each, so a refusal recorded without one would offer
- * the wrong one.
- */
+/** What a reconciliation's result leaves on the piece it ran for. */
 function reconciliationFor(
   state: FollowedPieceState,
-  outcome: ReconcileOutcome,
+  result: FollowResult,
 ): PieceReconciliation | undefined {
-  const recorded = RECORDED_OUTCOME[outcome];
-  if (recorded === undefined) return undefined;
-  if (recorded === "refused" && state.refusal === undefined) {
-    throw new Error("a refused reconciliation must name its reason");
+  const offered = state.offered === undefined ? {} : { offered: state.offered };
+  if (typeof result !== "string") {
+    return {
+      outcome: result.outcome,
+      at: Date.now(),
+      origin: state.storedSource,
+      ...offered,
+      reason: result.reason,
+      detail: result.detail,
+    };
   }
+  const recorded = RECORDED_OUTCOME[result];
+  if (recorded === undefined) return undefined;
   return {
     outcome: recorded,
     at: Date.now(),
     origin: state.storedSource,
-    ...(state.offered === undefined ? {} : { offered: state.offered }),
-    ...(recorded === "refused" ? { reason: state.refusal } : {}),
+    ...offered,
     ...(state.detail === undefined ? {} : { detail: state.detail }),
   };
-}
-
-/**
- * End a reconciliation by refusing what its origin offered, saying why in the
- * terms the record keeps and in the attempt's own words.
- */
-function refuse(
-  state: PieceState,
-  reason: PieceReconciliationReason,
-  detail: string,
-): "refused" {
-  state.refusal = reason;
-  state.detail = detail;
-  return "refused";
 }
 
 /**
@@ -240,9 +240,6 @@ type PieceState = {
    * says what it moved to, or what it declined.
    */
   offered?: { identity: string; symbol: string };
-
-  /** Why the piece refused what the origin offered, once it has. */
-  refusal?: PieceReconciliationReason;
 
   /** Why this reconciliation ended as it did, where it can say. */
   detail?: string;
@@ -603,9 +600,9 @@ export class SourceReconciler {
     // failure a reader most needs recorded is the one that records nothing.
     // A cancelled reconciliation is not an outcome at all, and keeps whatever
     // the piece already said.
-    let outcome: ReconcileOutcome;
+    let result: FollowResult;
     try {
-      outcome = await this.#dispatch(resultCell, state, signal);
+      result = await this.#dispatch(resultCell, state, signal);
     } catch (error) {
       if (signal.aborted || this.#disposed) throw error;
       // A reason has to be non-empty to survive being read back, and an error
@@ -616,8 +613,8 @@ export class SourceReconciler {
       await this.#record(resultCell, state, "unavailable", signal);
       throw error;
     }
-    await this.#record(resultCell, state, outcome, signal);
-    return outcome;
+    await this.#record(resultCell, state, result, signal);
+    return typeof result === "string" ? result : result.outcome;
   }
 
   /**
@@ -641,10 +638,10 @@ export class SourceReconciler {
   async #record(
     resultCell: Cell<unknown>,
     state: FollowedPieceState,
-    outcome: ReconcileOutcome,
+    result: FollowResult,
     signal: AbortSignal,
   ): Promise<void> {
-    const recorded = reconciliationFor(state, outcome);
+    const recorded = reconciliationFor(state, result);
     if (recorded === undefined || signal.aborted || this.#disposed) return;
     if (samePieceReconciliation(getPieceReconciliation(resultCell), recorded)) {
       return;
@@ -660,7 +657,7 @@ export class SourceReconciler {
     resultCell: Cell<unknown>,
     state: FollowedPieceState,
     signal: AbortSignal,
-  ): Promise<ReconcileOutcome> {
+  ): Promise<FollowResult> {
     const host = this.#runtime.hostForSpace(state.space).href;
     let origin = classifyPieceOriginString(state.storedSource, host);
 
@@ -702,7 +699,7 @@ export class SourceReconciler {
     state: FollowedPieceState,
     origin: PieceOriginKind,
     signal: AbortSignal,
-  ): Promise<ReconcileOutcome> {
+  ): Promise<FollowResult> {
     switch (origin.kind) {
       case "unusable":
         logger.warn("unusable-origin", () => [
@@ -740,7 +737,7 @@ export class SourceReconciler {
     origin: Extract<PieceOriginKind, { kind: "system" }>,
     signal: AbortSignal,
     claim?: OriginClaim,
-  ): Promise<ReconcileOutcome> {
+  ): Promise<FollowResult> {
     const fetch = this.#revalidatingFetch(signal);
     const target = this.#systemSourceUrl(origin.route, state.space);
     let answer = await this.#advertisedIdentity(target, fetch, signal);
@@ -1079,7 +1076,7 @@ export class SourceReconciler {
       { kind: "fabric-entity" | "fabric-pattern" }
     >,
     signal: AbortSignal,
-  ): Promise<ReconcileOutcome> {
+  ): Promise<FollowResult> {
     const runtime = this.#runtime;
     const destinationSpace = state.space;
     const ref = origin.ref;
@@ -1185,7 +1182,7 @@ export class SourceReconciler {
     signal: AbortSignal,
     advertisedIdentity?: string,
     claim?: OriginClaim,
-  ): Promise<ReconcileOutcome> {
+  ): Promise<FollowResult> {
     const runtime = this.#runtime;
     if (signal.aborted) return "unavailable";
     let candidate: Pattern;
@@ -1201,7 +1198,11 @@ export class SourceReconciler {
         state.storedSource,
         error,
       ]);
-      return refuse(state, "source-invalid", reconciliationDetail(error));
+      return {
+        outcome: "refused",
+        reason: "source-invalid",
+        detail: reconciliationDetail(error),
+      };
     }
     const candidateRef = runtime.patternManager.getArtifactEntryRef(candidate);
     if (candidateRef === undefined) {
@@ -1222,11 +1223,11 @@ export class SourceReconciler {
         advertisedIdentity,
         candidateRef,
       ]);
-      return refuse(
-        state,
-        "identity-mismatch",
-        "the source did not match the version its origin advertised",
-      );
+      return {
+        outcome: "refused",
+        reason: "identity-mismatch",
+        detail: "the source did not match the version its origin advertised",
+      };
     }
     state.offered = candidateRef;
     if (
@@ -1245,7 +1246,11 @@ export class SourceReconciler {
         candidateRef,
         refusal,
       ]);
-      return refuse(state, "incompatible-schema", refusal);
+      return {
+        outcome: "refused",
+        reason: "incompatible-schema",
+        detail: refusal,
+      };
     }
 
     const baseline = await preparePieceSourceTransitionBaseline(
@@ -1369,7 +1374,7 @@ export class SourceReconciler {
     state: PieceState,
     ref: string,
     operation: "origin-update" | "follow",
-  ): Promise<ReconcileOutcome> {
+  ): Promise<"migrated" | "unavailable"> {
     const runtime = this.#runtime;
     const baseline = await preparePieceSourceTransitionBaseline(
       runtime,
