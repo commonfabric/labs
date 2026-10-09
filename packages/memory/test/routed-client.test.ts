@@ -1332,6 +1332,35 @@ Deno.test("mounts waiting to send one refused statement all resolve when the con
   }
 });
 
+Deno.test("a refused statement whose wait outlasts its connection asks the next connection for no challenge", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // Seven seconds: the refused statement may be sent again a second later,
+  // and may not once that wait has run two seconds late.
+  const { p, log, auths } = routedPeer((n) => n === 1, { helloLife: 7 });
+  const client = await connect({ transport: p.transport });
+  try {
+    // The first mount is refused and held. The second, made right after,
+    // waits to send the refused statement again.
+    const mounts = [settling(client.mount(identity.did(), {}, principal()))];
+    await tickUntil(time, () => auths().length >= 1, 0, 40);
+    mounts.push(settling(client.mount(elsewhere, {}, principal())));
+    // The connection drops and comes back during that wait, and the wait
+    // then runs late. Its statement belongs to the connection that is
+    // gone, and so would a challenge asked for in its place.
+    await time.tickAsync(500);
+    p.drop();
+    time.tick(3000);
+    await tickUntil(time, () => mounts.every((mount) => mount.settled));
+    assertEquals(mounts, [{ settled: true }, { settled: true }]);
+    assertEquals(log.filter((e) => e.type === "challenge").length, 0);
+    assertEquals(auths().length, 2);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
 Deno.test("a mount whose refused statement may not be sent again signs a new challenge and goes on", async (t) => {
   setModernCellRepConfig(true);
   await t.step("after three resends", async () => {

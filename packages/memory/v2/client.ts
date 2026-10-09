@@ -1193,9 +1193,24 @@ export class Client {
     const authenticated = (async () => {
       let context: SessionOpenAuthContext;
       let signed: ConnectionAuth;
+      // A drop while the key signed, or while a refused statement waited,
+      // leaves the signature over a challenge of the connection that is
+      // gone; `hello` has emptied the map, so the next caller starts over on
+      // the new connection.
+      const requireCurrentConnection = (): void => {
+        if (!this.#staleSince(epoch)) return;
+        if (whileConnected) throw connectionLostWhileRestoring();
+        throw STALE_AUTHENTICATION;
+      };
       if (resend) {
         const wait = refused!.at + ROUTED_RETRY_FLOOR_MS - Date.now();
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (wait > 0) {
+          await new Promise((r) => setTimeout(r, wait));
+          // Checked here as well as below: a statement that may no longer
+          // be sent would otherwise ask the next connection for a
+          // challenge that this authentication then throws away.
+          requireCurrentConnection();
+        }
         // The wait may have taken longer than asked; the challenge is
         // checked again before the statement goes.
         resend = resendable(refused!);
@@ -1218,14 +1233,7 @@ export class Client {
           : held;
         signed = await principal.authorizeConnection(context);
       }
-      // A drop while the key signed, or while a refused statement waited,
-      // leaves the signature over a challenge of the connection that is
-      // gone; `hello` has emptied the map, so the next caller starts over on
-      // the new connection.
-      if (this.#staleSince(epoch)) {
-        if (whileConnected) throw connectionLostWhileRestoring();
-        throw STALE_AUTHENTICATION;
-      }
+      requireCurrentConnection();
       try {
         const result = await this.request<ConnectionAuthResult>({
           type: "connection.auth",
