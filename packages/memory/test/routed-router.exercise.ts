@@ -964,7 +964,7 @@ listener, spawner = map(int, sys.argv[1:])
 def state():
     output = subprocess.check_output([
         "systemctl", "show", unit,
-        "--property=MainPID,NRestarts,Type,ActiveState,SubState",
+        "--property=MainPID,InvocationID,NRestarts,Type,ActiveState,SubState",
     ], text=True)
     return dict(line.split("=", 1) for line in output.splitlines())
 
@@ -973,6 +973,7 @@ assert before["Type"] == "notify", before
 assert before["ActiveState"] == "active", before
 assert before["SubState"] == "running", before
 assert int(before["MainPID"]) == listener, before
+assert before["InvocationID"], before
 
 # A cursor replays every event after this point even if the restart happens
 # before journalctl attaches. Sync includes the completed initial start.
@@ -982,9 +983,12 @@ last = subprocess.check_output([
 ], text=True)
 cursor = json.loads(last)["__CURSOR"]
 journal = subprocess.Popen([
-    "journalctl", "--unit", unit, "--follow", "--output=json",
+    "journalctl", "--unit", unit, "--follow", "--lines=all", "--output=json",
     "--after-cursor", cursor, "--no-pager",
 ], stdout=subprocess.PIPE, text=True)
+events = []
+exit_event = restart_event = None
+after = None
 try:
     listener_fd = os.pidfd_open(listener)
     try:
@@ -999,9 +1003,32 @@ try:
 
     for line in journal.stdout:
         event = json.loads(line)
+        events.append(event)
+        if event.get("_PID") != "1" or event.get("UNIT") != unit:
+            continue
+        message_id = event.get("MESSAGE_ID")
+        if (message_id == "98e322203f7a4ed290d09fe03c09fe15"
+                and event.get("COMMAND") == "ExecStart"):
+            assert exit_event is None, events
+            assert event.get("INVOCATION_ID") == before["InvocationID"], event
+            assert event.get("EXIT_CODE") == "exited", event
+            assert int(event["EXIT_STATUS"]) != 0, event
+            exit_event = event
+        elif message_id == "5eb03494b6584870a536b337290809b3":
+            # Requires=/PartOf= can propagate the automatic restart through the
+            # target and fully stop this service, resetting NRestarts. This
+            # event records automatic recovery across that state transition.
+            assert exit_event is not None and restart_event is None, events
+            assert event.get("INVOCATION_ID") == before["InvocationID"], event
+            # This event also covers a manual start that accelerates a pending
+            # restart; systemd identifies that shortcut in its message.
+            assert "immediately on client request" not in event["MESSAGE"], event
+            restart_event = event
         # systemd emits UNIT_STARTED only after the Type=notify readiness.
-        if (event.get("MESSAGE_ID") == "39f53479d3a045ac8e11786248231fbf"
-                and event.get("UNIT") == unit):
+        elif message_id == "39f53479d3a045ac8e11786248231fbf":
+            assert exit_event is not None and restart_event is not None, events
+            assert event.get("INVOCATION_ID"), event
+            assert event["INVOCATION_ID"] != before["InvocationID"], event
             break
     else:
         raise AssertionError("journal ended before the listener restarted")
@@ -1011,7 +1038,11 @@ try:
     assert after["SubState"] == "running", after
     assert int(after["MainPID"]) > 0, after
     assert after["MainPID"] != before["MainPID"], (before, after)
-    assert int(after["NRestarts"]) == int(before["NRestarts"]) + 1, (before, after)
+    assert after["InvocationID"] == event["INVOCATION_ID"], (event, after)
+except BaseException:
+    print(json.dumps({"before": before, "after": after, "events": events}),
+          file=sys.stderr)
+    raise
 finally:
     journal.terminate()
     journal.wait()
