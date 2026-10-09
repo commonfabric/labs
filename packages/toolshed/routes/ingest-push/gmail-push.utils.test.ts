@@ -435,7 +435,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("matches the mailbox regardless of case", async () => {
-        const a = await bind(await channel("a"), "Alice@Example.com");
+        await bind(await channel("a"), "Alice@Example.com");
 
         const result = await push(envelope(notification()));
 

@@ -17,12 +17,7 @@
 
 import { errors, jwtVerify, type JWTVerifyGetKey } from "@panva/jose";
 import { sha256 } from "@commonfabric/content-hash";
-import type {
-  IExtendedStorageTransaction,
-  JSONSchema,
-  MemorySpace,
-  Runtime,
-} from "@commonfabric/runner";
+import type { JSONSchema, MemorySpace, Runtime } from "@commonfabric/runner";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 

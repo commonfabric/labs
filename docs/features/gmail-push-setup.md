@@ -372,7 +372,9 @@ cell, a second target:
 ```bash
 CF_GMAIL_ACCESS_TOKEN="$PERSONAL_TOKEN" cf ingest mint --space <space> --install-id gmail-personal --target /of:fid1:…personal
 CF_GMAIL_ACCESS_TOKEN="$WORK_TOKEN" cf ingest mint --space <space> --install-id gmail-work --target /of:fid1:…work
-``` A consent that returned a Google ID token can pass that instead, as
+```
+
+A consent that returned a Google ID token can pass that instead, as
 `CF_GMAIL_ID_TOKEN`, on a deployment whose `INGEST_GMAIL_OAUTH_CLIENT_IDS`
 names the consent's client.
 

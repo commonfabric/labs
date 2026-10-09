@@ -251,9 +251,11 @@ a log line.
   another mailbox moves it.
 - A proof and a target mint a gmail channel; a proof on a device channel
   answers 400.
-- A bound channel that is revoked, expired, or gone is skipped on delivery,
-  and gives up its place in the mailbox's list at the next mint that binds
-  that mailbox. Revoking is how delivery to a channel is stopped.
+- A bound channel that is revoked, expired, or gone is skipped on delivery.
+  Revoking is how delivery to a channel is stopped, and the revoking write
+  takes the channel out of the mailbox's list, so its place is free at once.
+  An expired channel, or one whose registration is gone, keeps its place
+  until the next mint that binds that mailbox, which prunes it.
 
 ## Setting up the Google side
 
