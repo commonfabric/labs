@@ -8918,7 +8918,10 @@ export class Runner {
           const { pattern, resultCell } = instance;
           const argumentMetaLink = getMetaLink(resultCell, "argument");
           const argumentLink = argumentMetaLink ??
-            this.#resumeArgumentStandIn(instance);
+            this.#resumeArgumentStandIn(
+              resultCell.getAsNormalizedFullLink().space,
+              instance.argumentInputs,
+            );
           if (argumentLink === undefined) continue;
           pending.delete(key);
           const planned = this.#cellsPatternNodes(
@@ -8960,17 +8963,18 @@ export class Runner {
 
   /**
    * The argument link a nested instance with no stored setup is planned
-   * against: an immutable document holding the inputs its parent's node
-   * binds it to, as a fresh run's pre-sync binds against the caller's
-   * argument. `undefined` for the root, which carries no such inputs.
+   * against: an immutable document in `space` holding `argumentInputs`, the
+   * inputs its parent's node binds it to, as a fresh run's pre-sync binds
+   * against the caller's argument. `undefined` without inputs, as for the
+   * root.
    */
   #resumeArgumentStandIn(
-    instance: ResumePatternInstance,
+    space: MemorySpace,
+    argumentInputs: FabricExecValue | undefined,
   ): NormalizedFullLink | undefined {
-    if (instance.argumentInputs === undefined) return undefined;
-    const { space } = instance.resultCell.getAsNormalizedFullLink();
+    if (argumentInputs === undefined) return undefined;
     return this.#runtime
-      .getImmutableCell(space, instance.argumentInputs, undefined)
+      .getImmutableCell(space, argumentInputs, undefined)
       .getAsNormalizedFullLink();
   }
 
@@ -9359,6 +9363,11 @@ export class Runner {
       resultCell,
       ...(argumentInputs === undefined ? {} : { argumentInputs }),
     });
+    // An instance with no stored argument link binds its nodes against the
+    // stand-in its inputs make, so its own pattern nodes resolve to their
+    // child result cells and the walk reaches every level below.
+    const argumentLink = getMetaLink(resultCell, "argument") ??
+      this.#resumeArgumentStandIn(link.space, argumentInputs);
 
     for (const descriptor of pattern.derivedInternalCells ?? []) {
       out.push(getDerivedInternalCell(resultCell, descriptor));
@@ -9376,7 +9385,14 @@ export class Runner {
       // setup mints rather than the unresolved head.
       let plan: NodePlan | undefined;
       try {
-        plan = this.#nodePlan(tx, node, resultCell, pattern);
+        plan = this.#nodePlan(
+          tx,
+          node,
+          resultCell,
+          pattern,
+          undefined,
+          argumentLink,
+        );
       } catch (error) {
         // A node whose outputs cannot be bound (e.g. they alias the argument
         // doc while the argument link is unavailable) or resolved contributes

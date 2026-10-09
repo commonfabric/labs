@@ -1336,12 +1336,27 @@ function handleIntervalNow(
   // staged on that read is refused as stale, taking every commit of the same
   // batch that read this wish's result down with it. Hold the wish until the
   // cell has loaded; the acquisition then reads the stored tick, or a
-  // confirmed absence it may fill.
+  // confirmed absence it may fill. The previous interval keeps beating
+  // through the wait, and is released when the replacement's load fails:
+  // the wish reports the failure and holds no timer nothing consumes.
   if (state.intervalMs !== intervalMs) {
-    ctx.readiness.requireDocument(
-      intervalNowCell(ctx.runtime, ctx.parentCell.space, intervalMs, ctx.tx),
-      ctx.tx,
-    );
+    try {
+      ctx.readiness.requireDocument(
+        intervalNowCell(ctx.runtime, ctx.parentCell.space, intervalMs, ctx.tx),
+        ctx.tx,
+      );
+    } catch (error) {
+      if (!(error instanceof DocumentPending) && state.intervalMs !== 0) {
+        releaseIntervalNowTimer(
+          ctx.runtime,
+          ctx.parentCell.space,
+          state.intervalMs,
+        );
+        state.intervalMs = 0;
+        state.cell = undefined;
+      }
+      throw error;
+    }
     if (state.intervalMs !== 0) {
       releaseIntervalNowTimer(
         ctx.runtime,
