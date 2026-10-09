@@ -401,9 +401,12 @@ function pass(name: string) {
  * Waits for a router role to create `path`. A role that never does, as the
  * link agent does not while it can open no toolshed link, fails the exercise
  * after `ms` instead of holding it open. The longest wait a working router
- * needs is its ten-second startup grace, when it starts with a toolshed down.
+ * needs is in the cell-representation gate, 43 to 44 seconds: the router is
+ * restarted with no toolshed it can link to, twelve seconds pass, and the
+ * toolshed then started has thirty seconds to come up. The bound is twice
+ * that.
  */
-async function waitFile(path: string, ms = 45_000) {
+async function waitFile(path: string, ms = 90_000) {
   const watcher = Deno.watchFs(path.slice(0, path.lastIndexOf("/")));
   let expired = false;
   // Closing the watcher ends the loop below.
