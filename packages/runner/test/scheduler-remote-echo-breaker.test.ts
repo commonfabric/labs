@@ -178,6 +178,7 @@ describe("scheduler-remote-echo-breaker", () => {
         log([doc], [doc]),
         [doc],
         session1,
+        { tracked: true },
       );
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:d`,
@@ -190,7 +191,9 @@ describe("scheduler-remote-echo-breaker", () => {
       // Storage drops a write of an equal value before it reaches the write
       // details, so an agreeing run leaves no write behind at all.
       const doc = address(alpha, "of:d");
-      const steps = computeEchoSteps(tx([]), log([doc], []), [doc], session1);
+      const steps = computeEchoSteps(tx([]), log([doc], []), [doc], session1, {
+        tracked: true,
+      });
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:d`,
         document: { space: alpha, id: "of:d", scopeKey: "space" },
@@ -209,6 +212,7 @@ describe("scheduler-remote-echo-breaker", () => {
         log([input], [output]),
         [input],
         session1,
+        { tracked: true },
       );
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:input`,
@@ -225,6 +229,7 @@ describe("scheduler-remote-echo-breaker", () => {
         log([inBeta], [inBeta]),
         [inAlpha],
         session1,
+        { tracked: true },
       );
       expect(steps).toEqual([]);
     });
@@ -239,12 +244,14 @@ describe("scheduler-remote-echo-breaker", () => {
         log([doc], [doc]),
         [doc],
         session1,
+        { tracked: true },
       );
       const [second] = computeEchoSteps(
         tx([written(doc, "B", "A")]),
         log([doc], [doc]),
         [doc],
         session2,
+        { tracked: true },
       );
       expect(first.changed).toBe(true);
       expect(second.changed).toBe(true);
@@ -264,6 +271,72 @@ describe("scheduler-remote-echo-breaker", () => {
       // window must never cancel a tripped pair's backoff.
       expect(ECHO_QUIET_RESET_MS).toBeGreaterThan(ECHO_BACKOFF_MAX_MS);
       expect(ECHO_QUIET_RESET_MS).toBeGreaterThan(ECHO_WINDOW_MS);
+    });
+  });
+
+  describe("computeEchoSteps() for an action the breaker does not track", () => {
+    // With no pair to clear, only an echo step can matter, so an untracked
+    // action's run is classified from its changed triggers alone.
+
+    const alpha = "did:key:alpha" as IMemorySpaceAddress["space"];
+    const session: ScopeKeyIdentity = {
+      principal: "did:key:p",
+      sessionId: "s1",
+    };
+    const doc: IMemorySpaceAddress = {
+      space: alpha,
+      id: "of:d" as IMemorySpaceAddress["id"],
+      scope: "space",
+      path: [],
+    };
+    const detail = (
+      previousValue: FabricValue,
+      value: FabricValue,
+    ): TransactionWriteDetail => ({
+      address: {
+        space: alpha,
+        id: doc.id,
+        scope: "space",
+        path: toDocumentPath(["value"]),
+      },
+      previousValue,
+      value,
+    });
+    const transaction = (details: readonly TransactionWriteDetail[]) => ({
+      getWriteDetails: () => details,
+    });
+
+    it("returns the echo step for a run that changed its trigger", () => {
+      const steps = computeEchoSteps(
+        transaction([detail("B", "A")]),
+        { reads: [doc], shallowReads: [], writes: [doc] },
+        [doc],
+        session,
+        { tracked: false },
+      );
+      expect(steps.map((step) => step.changed)).toEqual([true]);
+    });
+
+    it("returns no step for a run that left its trigger unchanged", () => {
+      const steps = computeEchoSteps(
+        transaction([]),
+        { reads: [doc], shallowReads: [], writes: [] },
+        [doc],
+        session,
+        { tracked: false },
+      );
+      expect(steps).toEqual([]);
+    });
+
+    it("returns no step for a changed trigger the run did not read", () => {
+      const steps = computeEchoSteps(
+        transaction([detail("B", "A")]),
+        { reads: [], shallowReads: [], writes: [doc] },
+        [doc],
+        session,
+        { tracked: false },
+      );
+      expect(steps).toEqual([]);
     });
   });
 
@@ -501,6 +574,44 @@ describe("scheduler-remote-echo-breaker", () => {
         });
       });
 
+      describe("tracks()", () => {
+        it("returns `false` for an action it holds no pair of", () => {
+          expect(new RemoteEchoBreaker().tracks(ACTION)).toBe(false);
+        });
+
+        it("returns `true` once an echo opens a pair for the action", () => {
+          const breaker = new RemoteEchoBreaker();
+          breaker.observe(ACTION, [echo("d")], 0);
+          expect(breaker.tracks(ACTION)).toBe(true);
+          expect(breaker.tracks("action-2")).toBe(false);
+        });
+
+        it("returns `false` once a convergence clears the action's last pair", () => {
+          const breaker = new RemoteEchoBreaker();
+          breaker.observe(ACTION, [echo("a"), echo("b")], 0);
+          breaker.observe(ACTION, [converge("a")], 1);
+          expect(breaker.tracks(ACTION)).toBe(true);
+          breaker.observe(ACTION, [converge("b")], 2);
+          expect(breaker.tracks(ACTION)).toBe(false);
+        });
+
+        it("returns `false` once the action is forgotten", () => {
+          const breaker = new RemoteEchoBreaker();
+          trip(breaker, "d");
+          breaker.forget(ACTION, 100);
+          expect(breaker.tracks(ACTION)).toBe(false);
+        });
+
+        it("returns `false` once the action's only pair is evicted", () => {
+          const breaker = new RemoteEchoBreaker();
+          breaker.observe(ACTION, [echo("d")], 0);
+          for (let i = 0; i < MAX_ECHO_PAIRS; i++) {
+            breaker.observe("action-2", [echo(`d-${i}`)], i);
+          }
+          expect(breaker.tracks(ACTION)).toBe(false);
+        });
+      });
+
       describe("stats()", () => {
         it("stops counting a pair as active once its deadline has passed", () => {
           const breaker = new RemoteEchoBreaker();
@@ -563,15 +674,12 @@ describe("scheduler-remote-echo-breaker", () => {
       await server?.close();
     });
 
-    /** A runtime on the shared server, with the breaker flag set as given. */
-    function connect(
-      breaker: boolean,
-    ): { storage: EmulatedStorageManager; runtime: Runtime } {
+    /** A runtime on the shared server. */
+    function connect(): { storage: EmulatedStorageManager; runtime: Runtime } {
       const storage = EmulatedStorageManager.connectTo(server, { as: signer });
       const runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: storage,
-        experimental: { remoteEchoBreaker: breaker },
       });
       return { storage, runtime };
     }
@@ -657,8 +765,8 @@ describe("scheduler-remote-echo-breaker", () => {
     }
 
     it("trips the breaker and stops the loop when two sessions disagree", async () => {
-      const a = connect(true);
-      const b = connect(true);
+      const a = connect();
+      const b = connect();
       try {
         await seed(a, b.runtime, DOC, "seed");
         subscribeTagWriter(a.runtime, { value: "A" }, "explicit");
@@ -688,8 +796,8 @@ describe("scheduler-remote-echo-breaker", () => {
       // a scheduling dependency, so the other session's commit re-triggers
       // the effect all the same. This is the loop as the storm ran it.
 
-      const a = connect(true);
-      const b = connect(true);
+      const a = connect();
+      const b = connect();
       try {
         await seed(a, b.runtime, DOC, "seed");
         subscribeTagWriter(a.runtime, { value: "A" }, "implicit");
@@ -708,8 +816,8 @@ describe("scheduler-remote-echo-breaker", () => {
     });
 
     it("holds each session to one re-run per backoff while the loop continues", async () => {
-      const a = connect(true);
-      const b = connect(true);
+      const a = connect();
+      const b = connect();
       try {
         await seed(a, b.runtime, DOC, "seed");
         const actionA = subscribeTagWriter(
@@ -754,8 +862,8 @@ describe("scheduler-remote-echo-breaker", () => {
     });
 
     it("clears the breaker once the two sessions agree", async () => {
-      const a = connect(true);
-      const b = connect(true);
+      const a = connect();
+      const b = connect();
       try {
         await seed(a, b.runtime, DOC, "seed");
         const tagA = { value: "A" };
@@ -795,8 +903,8 @@ describe("scheduler-remote-echo-breaker", () => {
       // one shared document, and a convergence clear from the session that
       // observed the agreed value.
 
-      const a = connect(true);
-      const b = connect(true);
+      const a = connect();
+      const b = connect();
       try {
         await seed(a, b.runtime, DOC, "seed");
         const tagA = { value: "A" };
@@ -840,26 +948,6 @@ describe("scheduler-remote-echo-breaker", () => {
       }
     });
 
-    it("keeps looping without the flag, and never trips", async () => {
-      const a = connect(false);
-      const b = connect(false);
-      try {
-        await seed(a, b.runtime, DOC, "seed");
-        subscribeTagWriter(a.runtime, { value: "A" }, "explicit");
-        subscribeTagWriter(b.runtime, { value: "B" }, "explicit");
-        await clock.settle();
-
-        const sequence = await drive(ECHO_TRIP_THRESHOLD * 3);
-
-        const tail = sequence.slice(-ECHO_TRIP_THRESHOLD);
-        expect(tail[tail.length - 1]).toBeGreaterThan(tail[0]);
-        expect(a.runtime.scheduler.getEchoBreakerStats().trips).toBe(0);
-        expect(b.runtime.scheduler.getEchoBreakerStats().trips).toBe(0);
-      } finally {
-        await dispose(a, b);
-      }
-    });
-
     it("does not trip a derivation re-run by a second session's edits", async () => {
       // One session edits a source document over and over, and the other runs
       // a derivation that reads the source and writes a SEPARATE output. The
@@ -867,8 +955,8 @@ describe("scheduler-remote-echo-breaker", () => {
       // source rather than its own output, so no run is an echo step.
       const SOURCE = "collab-source";
       const OUTPUT = "collab-output";
-      const editor = connect(true);
-      const deriver = connect(true);
+      const editor = connect();
+      const deriver = connect();
       try {
         await seed(editor, deriver.runtime, SOURCE, "v0");
         const derive: Action = (tx) => {
@@ -902,7 +990,7 @@ describe("scheduler-remote-echo-breaker", () => {
     });
 
     it("does not carry a retired registration's backoff into a new one", async () => {
-      const session = connect(true);
+      const session = connect();
       try {
         const action: Action = () => {};
         const options = { isEffect: true };

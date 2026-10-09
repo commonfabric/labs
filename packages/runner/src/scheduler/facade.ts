@@ -148,6 +148,7 @@ import {
 } from "./registration.ts";
 import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
 import {
+  computeEchoSteps,
   type EchoBreakerEvent,
   type EchoBreakerStats,
   type EchoStep,
@@ -474,8 +475,8 @@ export class Scheduler {
    * Bounds the remote-echo write loop
    * (docs/plans/scheduler-remote-echo-breaker.md). Fed a committed reactive
    * run's echo steps on success, it backs an action off through the gate once
-   * its re-runs sustain against a remote writer. Inert unless the
-   * `remoteEchoBreaker` flag wires `observeRemoteEcho` into the run state.
+   * its re-runs sustain against a remote writer, and reports each trip and
+   * clear to the memory server holding the document's space.
    */
   readonly #echoBreaker = new RemoteEchoBreaker({
     onEvent: (event) => this.#reportEchoBreakerEvent(event),
@@ -3446,14 +3447,16 @@ export class Scheduler {
         this.#executingAction = null;
         this.#currentActionId = undefined;
       },
-      // Wired only under the flag, so the off arm keeps its exact behavior and
-      // pays one optional-call check per successful reactive commit.
-      ...(this.runtime.experimental.remoteEchoBreaker === true
-        ? {
-          observeRemoteEcho: (action, actionId, steps) =>
-            this.#observeRemoteEcho(action, actionId, steps),
-        }
-        : {}),
+      classifyRemoteEcho: (actionId, tx, log, invalidCauses) =>
+        computeEchoSteps(
+          tx,
+          log,
+          invalidCauses,
+          tx.tx.scopeKeyIdentity ?? this.runtime.scopeKeyIdentity,
+          { tracked: this.#echoBreaker.tracks(actionId) },
+        ),
+      observeRemoteEcho: (action, actionId, steps) =>
+        this.#observeRemoteEcho(action, actionId, steps),
     };
   }
 
@@ -3515,8 +3518,7 @@ export class Scheduler {
   /**
    * The remote-echo breaker's visible counts
    * (docs/plans/scheduler-remote-echo-breaker.md §3): pairs whose backoff is in
-   * force now, the cumulative trip count, and echo cycles counted. All zero
-   * unless the `remoteEchoBreaker` flag is on.
+   * force now, the cumulative trip count, and echo cycles counted.
    */
   getEchoBreakerStats(): EchoBreakerStats {
     return this.#echoBreaker.stats(performance.now());

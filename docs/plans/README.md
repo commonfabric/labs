@@ -141,7 +141,7 @@ a record: archive it to `docs/history/plans/` following the procedure in
   health route beside the commit rates; and a two-session harness that trips
   the loop on purpose. The
   backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
-  Ships behind an experimental flag.
+  Always on, in every runtime.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future

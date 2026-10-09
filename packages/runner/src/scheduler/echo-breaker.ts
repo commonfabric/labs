@@ -129,12 +129,20 @@ export function echoBackoffDelayMs(streak: number): number {
  * The own-commit-source skip (`invalidation.ts`) has already removed a run
  * triggered by the echo of its OWN commit, so a cause that reaches here is
  * another writer.
+ *
+ * `options.tracked` says whether the breaker holds a pair of the run's
+ * action. An untracked action can only begin counting, which takes an echo
+ * step, so only its changed triggers are classified and its reads are
+ * scanned only when it has one. The common run — of an action the breaker is
+ * not tracking, that did not overwrite its own trigger — costs a pass over
+ * its writes and nothing more.
  */
 export function computeEchoSteps(
   tx: Pick<IExtendedStorageTransaction, "getWriteDetails">,
   log: ReactivityLog,
   invalidCauses: readonly IMemorySpaceAddress[] | undefined,
   identity: ScopeKeyIdentity,
+  options: { tracked: boolean },
 ): EchoStep[] {
   if (invalidCauses === undefined || invalidCauses.length === 0) return [];
   const causeKeys = new Set<string>();
@@ -142,25 +150,16 @@ export function computeEchoSteps(
     causeKeys.add(entityKey(cause, identity));
   }
 
-  const candidates = new Map<string, EchoDocument>();
-  for (const read of [...log.reads, ...log.shallowReads]) {
-    const key = entityKey(read, identity);
-    if (causeKeys.has(key) && !candidates.has(key)) {
-      candidates.set(key, {
-        space: read.space,
-        id: read.id,
-        scopeKey: read.scopeKey ?? resolveScopeKey(read.scope, identity),
-      });
-    }
-  }
-  if (candidates.size === 0) return [];
-
+  // The triggers this run changed. A run's writes and its triggers are both
+  // few, so this is the cheap half, and for an action the breaker holds no
+  // pair of it is the only half that can matter: with nothing to clear, a
+  // convergence step changes nothing, and an echo step needs a changed write.
   const changed = new Set<string>();
   for (const space of new Set(log.writes.map((write) => write.space))) {
     for (const detail of tx.getWriteDetails?.(space) ?? []) {
       const key = entityKey(detail.address, identity);
       if (
-        candidates.has(key) &&
+        causeKeys.has(key) &&
         !valueEqual(
           detail.previousValue as FabricValue,
           detail.value as FabricValue,
@@ -168,6 +167,24 @@ export function computeEchoSteps(
       ) {
         changed.add(key);
       }
+    }
+  }
+  if (!options.tracked && changed.size === 0) return [];
+
+  // The run's reads decide which triggers it read — the self-referential
+  // shape — and so which are candidates at all. An untracked action needs
+  // only its changed triggers confirmed; a tracked one needs every trigger it
+  // read, since one it did not change is the convergence that clears a pair.
+  const wanted = options.tracked ? causeKeys : changed;
+  const candidates = new Map<string, EchoDocument>();
+  for (const read of [...log.reads, ...log.shallowReads]) {
+    const key = entityKey(read, identity);
+    if (wanted.has(key) && !candidates.has(key)) {
+      candidates.set(key, {
+        space: read.space,
+        id: read.id,
+        scopeKey: read.scopeKey ?? resolveScopeKey(read.scope, identity),
+      });
     }
   }
 
@@ -235,11 +252,16 @@ export class RemoteEchoBreaker {
 
   readonly #pairs = new BoundedKeyMap<string, EchoPairState>(MAX_ECHO_PAIRS, {
     onEvict: (key, state) => {
+      const actionId = actionIdOf(key);
+      this.#countPair(actionId, -1);
       if (state.backoffStreak > 0) {
-        this.#cleared(actionIdOf(key), state, "evicted", this.#observedAt);
+        this.#cleared(actionId, state, "evicted", this.#observedAt);
       }
     },
   });
+
+  /** How many pairs each action holds, so `tracks()` is one lookup. */
+  readonly #pairsByAction = new Map<string, number>();
 
   readonly #onEvent: ((event: EchoBreakerEvent) => void) | undefined;
 
@@ -299,6 +321,7 @@ export class RemoteEchoBreaker {
           this.#cleared(actionId, existing, "convergence", now);
         }
         this.#pairs.delete(key);
+        this.#countPair(actionId, -1);
         continue;
       }
 
@@ -351,6 +374,7 @@ export class RemoteEchoBreaker {
       if (state.backoffStreak > 0) {
         maxDeadline = Math.max(maxDeadline ?? 0, state.deadline);
       }
+      if (existing === undefined) this.#countPair(actionId, 1);
       this.#pairs.set(key, state);
     }
 
@@ -374,6 +398,12 @@ export class RemoteEchoBreaker {
       }
       this.#pairs.delete(key);
     }
+    this.#pairsByAction.delete(actionId);
+  }
+
+  /** Whether the breaker holds any pair of `actionId`. */
+  tracks(actionId: string): boolean {
+    return this.#pairsByAction.has(actionId);
   }
 
   /**
@@ -391,6 +421,13 @@ export class RemoteEchoBreaker {
       trips: this.#trips,
       cyclesObserved: this.#cyclesObserved,
     };
+  }
+
+  /** Adjusts the pairs `actionId` holds by `delta`, forgetting it at none. */
+  #countPair(actionId: string, delta: number): void {
+    const count = (this.#pairsByAction.get(actionId) ?? 0) + delta;
+    if (count > 0) this.#pairsByAction.set(actionId, count);
+    else this.#pairsByAction.delete(actionId);
   }
 
   /** Tells the owner a tripped pair cleared at `now`, and how. */

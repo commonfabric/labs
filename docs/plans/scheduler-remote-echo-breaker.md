@@ -304,23 +304,24 @@ mixed-version case), which is why Topic 913's server-side commit cap is a
 separate, complementary guardrail that bounds a writer the runtime cannot
 reach.
 
-## 5. The experimental flag
+## 5. Always on
 
-The breaker ships behind `remoteEchoBreaker`, registered in
-[`../development/EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md):
+The breaker has no switch. It runs in every runtime — a browser tab, the `cf`
+CLI, and a serving runtime alike — because the loops it bounds run wherever a
+derivation runs, and a setting that has to reach each of those surfaces is
+configuration the runtime does not need. Two things make that safe to do
+without a staged rollout:
 
-- **Toggle:** `EXPERIMENTAL_REMOTE_ECHO_BREAKER` env, or
-  `RuntimeOptions.experimental.remoteEchoBreaker`.
-- **Default:** off. A new in-progress feature that changes write cadence under a
-  loop; it ships dormant and is enabled deliberately for dogfooding on a
-  dev space before any default-on decision.
-- **Authority:** server. Under server execution the server runs the
-  derivations, so a client and server that disagreed on whether to rate-limit
-  would diverge on write cadence for a shared document; the safe direction is
-  that the deployment decides.
-- **End state:** fold into base scheduler semantics and delete the flag once
-  the thresholds have been tuned against live rate data and the behavior has
-  soaked.
+- **It costs almost nothing where there is no loop.** The classifier runs
+  after every successful reactive commit, but for an action the breaker holds
+  no pair of it looks only at the run's writes against its triggers — both
+  small — and returns at once unless the run overwrote a document that
+  re-triggered it. The scan of the run's reads, and the convergence check,
+  happen only for an action the breaker is already tracking.
+- **What it does is visible.** Every trip and every clear is reported to the
+  health route beside the same sessions' commit rates (§3), so a false trip
+  shows up as a short hold ending in convergence, and the thresholds can be
+  tuned against what the reports and the rates show.
 
 ## 6. Tests
 
@@ -348,8 +349,7 @@ never a sleep or a poll, per
   at most once per cycle while the disagreement continues. Once the two agree,
   the session that reads the agreed value writes it again, storage drops the
   write, and that convergence step clears its pair; commits stop and nothing is
-  active. With the flag off the same loop keeps committing and never trips. A
-  derivation re-run past the threshold by another session's edits to its input
+  active. A derivation re-run past the threshold by another session's edits to its input
   does not trip. A re-subscribed action does not inherit the retired
   registration's backoff.
 
@@ -366,22 +366,23 @@ space- or user-scoped document does.
 
 `packages/runner/test/scoped-output-convergence.test.ts` runs the October
 storm's own pattern shape, a derivation over a per-session input in two
-sessions, with the breaker on as well as off: with the placement fix in, the
-sessions converge, the commit sequence stops moving on each arm, and on the
-breaker's arm it counts no cycle.
+sessions: with the placement fix in, the sessions converge, the commit
+sequence stops moving, and the breaker counts no cycle.
 
 ## Stages
 
-1. [x] **The breaker and the flag.** The `RemoteEchoBreaker` module, the
+1. [x] **The breaker.** The `RemoteEchoBreaker` module, the
    `echoBackoffUntil` gate field and its `eligibleAt` fold, the `run.ts`
-   finalize hook that computes the steps and applies the backoff, the flag, and
-   the unit tests. Flag off, no behavior change.
+   finalize hook that computes the steps and applies the backoff, and the unit
+   tests.
 2. [x] **The two-session tests** manufacturing the loop and proving the trip,
    the sustained rate bound, the convergence reset, and the no-trip on
    legitimate re-derivation.
 3. [x] **The health-route reports.** Trips and clears reported over the
    memory session and listed beside the per-session commit rates on
    `/api/health/stats`.
-4. [ ] **Tuning and graduation:** set the thresholds from live rate data, soak,
-   then fold in and delete the flag. Revisiting the sticky placement (Topic
-   911) unblocks once stage 1 is on.
+4. [x] **Always on.** The flag removed and the classifier's untracked path
+   made cheap, so the breaker runs in every runtime (§5). Revisiting the
+   sticky placement (Topic 911) is unblocked.
+5. [ ] **Tuning:** set the thresholds from the health route's trip reports
+   and the commit rates beside them.
