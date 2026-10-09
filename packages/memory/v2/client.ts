@@ -487,9 +487,13 @@ export class Client {
 
   /**
    * Per authenticated key, the timer that renews its authentication before
-   * the lease the server granted runs out.
+   * the lease the server granted runs out, and the unix second that lease
+   * ends at.
    */
-  #renewals = new Map<string, ReturnType<typeof setTimeout>>();
+  #renewals = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; expiresAt: number }
+  >();
 
   /**
    * The keys that have signed the challenge `#sessionOpenAuthContext` holds.
@@ -1151,7 +1155,11 @@ export class Client {
    * at: two minutes ahead, or halfway through a lease shorter than four. A
    * renewal signs a challenge asked for outright, since the one held may be
    * one the key has signed. A renewal the server refuses for good ends the
-   * sessions mounted as the key, as a refused reopen ends a session.
+   * sessions mounted as the key, as a refused reopen ends a session. One
+   * refused for now is armed again with the next `attempt`, which waits the
+   * reconnect backoff instead, a second or more against a router; the
+   * `connection/challenge` handler arms one that way when the router
+   * refuses the signature it asked for.
    */
   #scheduleRenewal(
     principal: SessionPrincipal,
@@ -1174,7 +1182,13 @@ export class Client {
       if (this.#closed || !this.#connected || epoch !== this.#connectionEpoch) {
         return;
       }
-      this.#authenticated.delete(principal.did);
+      // A first attempt replaces the authentication whose lease is running
+      // out. A retry has none to replace, since the refused attempt removed
+      // its own: one found here is another caller's, still under way, and
+      // the retry waits for that one. Replacing it would send the key's
+      // statement twice, and a router closes the connection on a second
+      // statement for a challenge it has accepted.
+      if (attempt === 0) this.#authenticated.delete(principal.did);
       void this.#authenticate(principal, false, true).catch((error) => {
         // A renewal refused for now is tried again after a backoff, so the
         // grant does not lapse and leave the principal's opens to a final
@@ -1191,19 +1205,24 @@ export class Client {
         }
       });
     }, delay);
-    this.#renewals.set(principal.did, timer);
+    this.#renewals.set(principal.did, { timer, expiresAt });
   }
 
-  #cancelRenewal(did: string): void {
-    const timer = this.#renewals.get(did);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      this.#renewals.delete(did);
-    }
+  /**
+   * Cancels the renewal armed for the key `did`, and returns the unix second
+   * the lease it would have renewed ends at, or `undefined` if none was
+   * armed.
+   */
+  #cancelRenewal(did: string): number | undefined {
+    const renewal = this.#renewals.get(did);
+    if (renewal === undefined) return undefined;
+    clearTimeout(renewal.timer);
+    this.#renewals.delete(did);
+    return renewal.expiresAt;
   }
 
   #cancelRenewals(): void {
-    for (const timer of this.#renewals.values()) clearTimeout(timer);
+    for (const { timer } of this.#renewals.values()) clearTimeout(timer);
     this.#renewals.clear();
   }
 
@@ -1416,15 +1435,33 @@ export class Client {
           ...this.#sessionOpenAuthContext,
           challenge: message.challenge,
         });
+        const epoch = this.#connectionEpoch;
         this.#authenticated.delete(principal.did);
-        this.#cancelRenewal(principal.did);
+        // The renewal must not run beside this authentication. If none was
+        // armed, nothing is known to be left of the key's lease.
+        const leaseEnd = this.#cancelRenewal(principal.did) ??
+          Math.floor(Date.now() / 1000);
         void this.#authenticate(principal, false, true, context.challenge)
           .catch((error) => {
             // Refused for now: the router has refused the opens waiting for
             // this signature for now too, and they are retried. Refused for
             // good: only the sessions mounted as this key end, as when a
             // renewal is. Neither touches the connection's other requests.
-            if (isRetriableAuthorizationError(error)) return;
+            if (isRetriableAuthorizationError(error)) {
+              // No open may have been waiting, and a mount that was may not
+              // be retried by its caller. The renewal cancelled above would
+              // then be the key's only other authentication, and without it
+              // the lease runs out and the key's sessions are denied for
+              // good. So the renewal is armed again as a refused renewal
+              // is, at its backoff, a second or more from now: unless the
+              // connection is gone, whose successor authenticates anew, or
+              // the key was released meanwhile.
+              if (
+                !this.#staleSince(epoch) &&
+                this.#routedSigners.has(principal.did)
+              ) this.#scheduleRenewal(principal, epoch, leaseEnd, 1);
+              return;
+            }
             if (isPermanentAuthorizationError(error)) {
               for (const session of [...this.#spaces]) {
                 if (session.principal === principal.did) {

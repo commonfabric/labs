@@ -859,6 +859,159 @@ Deno.test("a pushed challenge's signature refused for now leaves the connection'
   }
 });
 
+/**
+ * A router that admits every statement but the second, which answers a
+ * pushed challenge and is refused for now. A refusal the test holds back is
+ * pushed when it calls `refuse`.
+ */
+function refusingThePushedChallenge(holdRefusal = false) {
+  const sent: { at: number; statement: unknown }[] = [];
+  let challenges = 0;
+  let refuse = () => {};
+  const p = peer(frame(hello()), (body, push) => {
+    if (body.type === "connection.challenge") {
+      challenges++;
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: { challenge: challenge() },
+      });
+    } else if (body.type === "connection.auth") {
+      sent.push({ at: Date.now(), statement: body.statement });
+      if (sent.length === 2) {
+        refuse = () =>
+          push({
+            type: "response",
+            requestId: body.requestId,
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+              retriable: true,
+            },
+          });
+        if (!holdRefusal) refuse();
+        return;
+      }
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          principal: identity.did(),
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      push({
+        type: "response",
+        requestId: body.requestId,
+        ok: {
+          sessionId: `sdk-session-${body.space}`,
+          sessionToken: "sdk-token",
+          serverSeq: 0,
+        },
+      });
+    } else push({ type: "response", requestId: body.requestId, ok: {} });
+  });
+  /** Pushes a challenge that lasts a minute, as for a toolshed's new link. */
+  const pushChallenge = () =>
+    p.push({
+      type: "connection/challenge",
+      principal: identity.did(),
+      challenge: {
+        value: "33".repeat(32),
+        expiresAt: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+  return {
+    p,
+    sent,
+    challenges: () => challenges,
+    pushChallenge,
+    refuse: () => refuse(),
+  };
+}
+
+Deno.test("a pushed challenge's signature refused for now is sent again a second later, with no open waiting for it", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, sent, challenges, pushChallenge } = refusingThePushedChallenge();
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(identity.did(), {}, principal());
+    // The mount is over, so no open waits for this signature and no session
+    // retries when it is refused.
+    pushChallenge();
+    for (let i = 0; i < 40 && sent.length < 2; i++) await time.tickAsync(0);
+    assertEquals(sent.length, 2);
+    // The challenge cancelled the key's renewal. The refusal arms it again,
+    // so the statement goes once more, a second or more later.
+    for (let i = 0; i < 400 && sent.length < 3; i++) await time.tickAsync(25);
+    assertEquals(sent.length, 3);
+    assertEquals(sent[2].statement, sent[1].statement);
+    assert(sent[2].at - sent[1].at >= 1000, `${sent[2].at - sent[1].at} ms`);
+    assertEquals(challenges(), 0);
+    // Admitted, the key is renewed two minutes before its new lease ends.
+    for (let i = 0; i < 600 && sent.length < 4; i++) {
+      await time.tickAsync(1000);
+    }
+    assertEquals(sent.length, 4);
+    const gap = (sent[3].at - sent[2].at) / 1000;
+    assert(gap >= 479 && gap <= 481, `renewed after ${gap} s`);
+    assertEquals(session.closeError, undefined);
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a renewal armed again after a refusal waits for an authentication already under way", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, sent, pushChallenge } = refusingThePushedChallenge();
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(identity.did(), {}, principal());
+    pushChallenge();
+    for (let i = 0; i < 40 && sent.length < 2; i++) await time.tickAsync(0);
+    assertEquals(sent.length, 2);
+    // A mount as the same key, made while the refused statement waits its
+    // second, is the one that sends it again. The renewal comes due in the
+    // same millisecond and must not send it too: a router closes the
+    // connection on a second statement for a challenge it has accepted.
+    const mounted = client.mount(elsewhere, {}, principal());
+    for (let i = 0; i < 120; i++) await time.tickAsync(25);
+    await mounted;
+    assertEquals(sent.length, 3);
+    assertEquals(sent[2].statement, sent[1].statement);
+    assert(sent[2].at - sent[1].at >= 1000, `${sent[2].at - sent[1].at} ms`);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a key released while its pushed challenge is answered is not authenticated again", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, sent, pushChallenge, refuse } = refusingThePushedChallenge(true);
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(identity.did(), {}, principal());
+    pushChallenge();
+    for (let i = 0; i < 40 && sent.length < 2; i++) await time.tickAsync(0);
+    assertEquals(sent.length, 2);
+    await client.release(identity.did());
+    refuse();
+    for (let i = 0; i < 400; i++) await time.tickAsync(25);
+    assertEquals(sent.length, 2);
+    assertEquals(client.isConnected(), true);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
 Deno.test("closing a routed watch consumer settles queued and waiting iterators", async () => {
   const sync: SessionSync = {
     type: "sync",
