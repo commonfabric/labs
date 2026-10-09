@@ -8,7 +8,9 @@
  * refuses an offer of a space declaring another kind or none, or whose root is
  * not where the space's genesis reserves it, and a forged row a third identity
  * appends directly. It registers an offer of a room the real FabriChat manager
- * created, whose space declares its kind and is rooted at the room.
+ * created, whose space declares its kind and is rooted at the room, and of a
+ * direct room that manager offers through the owner's inbox itself, which a
+ * start of the owner's with its sender then finds.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -226,6 +228,69 @@ describe("share intake across runtimes", () => {
     expect((await catalog())?.offers[receiptKey(sender, "real room")]?.space)
       .toBe(room.space);
     expect((await catalog())?.entries[room.space]?.state).toBe("saved");
+  });
+
+  it("registers a direct room the FabriChat manager offers, which joins the owner to it and which the owner's start with its sender finds", async () => {
+    const profile = await owner.link(["profiles", 0]);
+    await sender.send("openChatDirect", {
+      requestId: "direct",
+      counterpart: owner.identity.did(),
+      // The owner's profile, as the link a participant's chip carries.
+      profile: {
+        "/": {
+          "link@1": {
+            id: profile.id,
+            path: profile.path,
+            space: profile.space,
+          },
+        },
+      },
+    }, START_ACTION);
+    await harness.settle();
+    expect(await sender.read(["chatRequests", "direct", "status"])).toBe(
+      "done",
+    );
+    const room = await sender.link(["chatRequests", "direct", "entry", "room"]);
+
+    // The owner was offered the room, so the manager joined them to it beside
+    // its creator, and queued no notice for them.
+    await harness.settleUntil(async () =>
+      (await sender.read(["participants", "length"], { piece: room })) === 2
+    );
+    const joined = [
+      await sender.link(["participants", 0], { piece: room }),
+      await sender.link(["participants", 1], { piece: room }),
+    ];
+    expect(joined.map(({ id, space }) => ({ id, space }))).toContainEqual({
+      id: profile.id,
+      space: profile.space,
+    });
+    expect(await sender.read(["participants", 0, "name"], { piece: room }))
+      .toBe("Sender");
+    const notices = (await sender.read(["chatNotices"])) as { id: string }[];
+    expect(notices.map(({ id }) => id)).not.toContain(
+      JSON.stringify([owner.identity.did(), "direct"]),
+    );
+
+    // The intake registers the room in the owner's catalog, and the owner's
+    // start with the room's creator finds it there rather than creating
+    // another.
+    await harness.settleUntil(async () =>
+      (await catalog())?.entries[room.space]?.state === "saved"
+    );
+    const listed = Object.keys((await catalog())?.entries ?? {}).length;
+    await owner.send("openOwnerChat", {
+      requestId: "owner direct",
+      counterpart: sender.identity.did(),
+    }, START_ACTION);
+    await harness.settle();
+    expect(await owner.read(["ownerChatRequests", "owner direct", "status"]))
+      .toBe("done");
+    expect(
+      (await owner.link(["ownerChatRequests", "owner direct", "entry", "room"]))
+        .space,
+    ).toBe(room.space);
+    expect(Object.keys((await catalog())?.entries ?? {}).length).toBe(listed);
   });
 
   it("registers an offer arriving while the owner's worker runs, without a restart", async () => {

@@ -362,38 +362,6 @@ function inboxOf(pointer: Cell<ShareInboxPiece>): unknown {
   return pointer;
 }
 
-/** The room's stream that adds a profile to its participants. */
-function joinStreamOf(
-  room: Cell<ChatRoomLink>,
-): Cell<{ addParticipant: Stream<{ profile: Cell<ChatProfile> }> }>;
-function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
-  return room;
-}
-
-/**
- * Helper for the handlers that follow a room's creation or acceptance, which
- * adds `profile` to the room's participants, through the room's own
- * `addParticipant`, the one writer its roster admits. A profile that hasn't
- * resolved is added to nothing.
- */
-const addToParticipants = (
-  room: Cell<ChatRoomLink> | undefined,
-  profile: Cell<ChatProfile> | undefined,
-): void => {
-  // TODO(danfuzz): A stop-gap. A member offered nothing, whose manager
-  // neither created nor accepted the room, is never added here, so isn't on
-  // the room's roster, and is shown among its participants only as an author,
-  // once they write. Add each member once their manager lists the room
-  // without a step of their own.
-  const resolved = profile?.resolveAsCell();
-  if (
-    room === undefined || resolved === undefined || resolved.get() === undefined
-  ) {
-    return;
-  }
-  joinStreamOf(room).key("addParticipant").send({ profile: resolved });
-};
-
 /**
  * The notice telling `recipient` of `room`, which the request `requestId`
  * created, keyed so that each request has at most one per recipient.
@@ -439,6 +407,9 @@ export interface OfferRoomEvent {
 interface OfferRoomsState {
   /** Notices waiting for a client to deliver them. */
   outgoingNotices: NoticesCell;
+
+  /** Adds a profile to a room's participants. */
+  joinRooms: Stream<JoinRoomsEvent>;
 }
 
 /**
@@ -455,7 +426,7 @@ interface OfferRoomsState {
  * not known, nothing is sent.
  */
 const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
-  (event, { outgoingNotices }) => {
+  (event, { outgoingNotices, joinRooms }) => {
     const space = spaceOf(event?.room);
     const from = currentPrincipal();
     if (!isWellFormedDID(space) || from === undefined) return;
@@ -479,7 +450,7 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
         continue;
       }
       inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
-      addToParticipants(event.room, profile);
+      joinRooms.send({ room: event.room, profile });
     }
   },
 );
@@ -496,14 +467,33 @@ export interface JoinRoomsEvent {
   profile: Cell<ChatProfile>;
 }
 
+/** The room's stream that adds a profile to its participants. */
+function joinStreamOf(
+  room: Cell<ChatRoomLink>,
+): Cell<{ addParticipant: Stream<{ profile: Cell<ChatProfile> }> }>;
+function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
+  return room;
+}
+
 /**
- * Adds the event's profile to the room's participants, so that whoever
- * creates or accepts a room is listed in it without a step of their own. It
- * runs as an event of its own, queued by the one that creates or accepts the
- * room, so that the room's streams exist when it sends.
+ * Adds the event's profile to the room's participants, through the room's own
+ * `addParticipant`, the one writer its roster admits, so that whoever creates
+ * or accepts a room, and each member it is offered to, is listed in it without
+ * a step of their own. It runs as an event of its own, queued by the one that
+ * creates, accepts, or offers the room, so that the room's streams exist when
+ * it sends. A profile that hasn't resolved is added to nothing.
  */
 const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
-  (event) => addToParticipants(event?.room, event?.profile),
+  (event) => {
+    // TODO(danfuzz): A stop-gap. A member offered nothing, whose manager
+    // neither created nor accepted the room, is never sent here, so isn't on
+    // the room's roster, and is shown among its participants only as an
+    // author, once they write. Add each member once their manager lists the
+    // room without a step of their own.
+    const profile = event?.profile?.resolveAsCell();
+    if (profile === undefined || profile.get() === undefined) return;
+    joinStreamOf(event.room).key("addParticipant").send({ profile });
+  },
 );
 
 /**
@@ -1181,6 +1171,7 @@ export const FabriChatManagerCore = pattern<
           : 0
       );
     });
+    const joining = joinRooms({});
     const records = {
       myProfile,
       catalog: sharedSpaceCatalog,
@@ -1188,8 +1179,8 @@ export const FabriChatManagerCore = pattern<
       rooms: newestFirst,
       requests,
       outgoingNotices,
-      offerRooms: offerRooms({ outgoingNotices }),
-      joinRooms: joinRooms({}),
+      offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),
+      joinRooms: joining,
       draft,
       startRefusal,
     };
