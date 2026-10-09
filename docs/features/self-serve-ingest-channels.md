@@ -2,8 +2,8 @@
 
 *Minting an ingest channel is a user action — "let my own device write into my own space." Today it is an operator action. This closes the create-authorization gap named in [ingest-channels-journal-sink.md](../plans/ingest-channels-journal-sink.md) §"Security model & the create-authorization gap".*
 
-**Status:** implemented (this branch), gated OFF by default —
-`INGEST_SELF_SERVE_ENABLED` · **Updated:** 2026-08-04 · **Depends on:** the landed `journal` sink (labs #4446) and first-party HTTP request proofs (`docs/specs/toolshed-access-control.md`)
+**Status:** implemented, mounted on every deployment · **Updated:**
+2026-10-09 · **Depends on:** the landed `journal` sink (labs #4446) and first-party HTTP request proofs (`docs/specs/toolshed-access-control.md`)
 
 ---
 
@@ -203,12 +203,15 @@ footnote:
 > derivable from public inputs. Where they are, the mint endpoint inherits a
 > space-takeover primitive.
 
-This is **enforced, not just documented**: the control plane is mounted only
-when `INGEST_SELF_SERVE_ENABLED` is set, and the default is off. Credentials
-issued under the old trust condition are not retracted by making space keys
-random, so a deployment that anyone outside its operators could reach while
-keys were derivable reviews its space ACLs and retires existing channels
-(`deno task retire-ingest-channels`) before enabling.
+Space keys are random now, and the control plane is mounted on every
+deployment. What the footnote warns of is a planted OWNER grant on a legacy
+named space, and such a grant already carries every power over the space
+that mint confers; what mint adds is a channel that outlives the grant's
+removal, which the channel's hard expiry bounds, the space's current owner
+can end by listing and revoking foreign channels, and an operator can end
+for every channel at once with `deno task retire-ingest-channels`. A
+deployment that anyone outside its operators could reach while keys were
+derivable reviews its space ACLs and retires existing channels the same way.
 
 Consequently the acceptance criterion "refused when naming a space you don't
 control" must be tested against a space with a **concrete, non-derived** owner,

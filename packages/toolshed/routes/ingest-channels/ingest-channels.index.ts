@@ -1,9 +1,7 @@
 import { bodyLimit } from "@hono/hono/body-limit";
 
-import { ingestGate } from "./gate.ts";
 import * as handlers from "./ingest-channels.handlers.ts";
 import * as routes from "./ingest-channels.routes.ts";
-import env from "@/env.ts";
 import { createRouter } from "@/lib/create-app.ts";
 import { requireFirstPartyHttpAuth } from "@/middlewares/first-party-http-auth.ts";
 import { createRateLimiter, rateLimit } from "@/middlewares/rate-limit.ts";
@@ -13,15 +11,6 @@ const router = createRouter();
 // What middleware covering the whole control plane is mounted on: every verb
 // under a space, and the one verb that names none.
 const everyVerb = [`${routes.SPACE_BASE}/*`, `${routes.CALLER_BASE}/list`];
-
-// Mounted FIRST so nothing downstream — not the body limit, not the rate
-// limiter, not signature verification — runs for a disabled deployment. See
-// INGEST_SELF_SERVE_ENABLED in env.ts for why the default is off: minting
-// issues a durable capability that outlives the trust conditions that
-// authorized it.
-for (const path of everyVerb) {
-  router.use(path, ingestGate(env.INGEST_SELF_SERVE_ENABLED));
-}
 
 // ORDER MATTERS: the body limit must run BEFORE the auth middleware.
 // `verifyFirstPartyHttpRequest` buffers the entire body (to hash it) *before*

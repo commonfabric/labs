@@ -118,8 +118,8 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 ## Ingest channels
 
 Not an OAuth integration: nothing here needs a client id and secret. The
-control plane is gated on `INGEST_SELF_SERVE_ENABLED`, and Gmail push on a
-service account.
+control plane is always mounted, and Gmail push is gated on a service
+account.
 
 ### Ingest registry
 

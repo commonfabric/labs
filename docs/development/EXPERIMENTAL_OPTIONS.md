@@ -58,7 +58,6 @@ was last checked against the code.
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
-| [`INGEST_SELF_SERVE_ENABLED`](#ingest_self_serve_enabled) | `INGEST_SELF_SERVE_ENABLED` env on toolshed | off | Alex Komoroske (self-serve ingest channels) | graduate on once named-space keys stop deriving from a public passphrase | implemented, off by default |
 | [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | off | Bernhard Seefeld (store read-through) | soak with the posture forced on, flip on, then delete the knob and the home-space session read path | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
 
@@ -1636,46 +1635,6 @@ the per-epic implementation notes).
 
 ## Category 6: Deployment feature gates
 
-### `INGEST_SELF_SERVE_ENABLED`
-
-- **Toggle via.** The `INGEST_SELF_SERVE_ENABLED` environment variable on
-  toolshed, read once at module load
-  ([`packages/toolshed/env.ts`](../../packages/toolshed/env.ts)). Not a
-  `RuntimeOptions` flag: it gates an HTTP router, not runtime behavior.
-- **Added by.** Alex Komoroske, in the self-serve ingest channels change.
-- **Purpose.** Gates the ingest-channel control plane
-  (`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
-  through which a
-  user holding their own identity key mints, lists, rotates, and revokes ingest
-  channels for spaces they own — without an operator. When off, the router
-  [404s every verb](../../packages/toolshed/routes/ingest-channels/gate.ts)
-  before the body limit, the rate limiter, or signature verification runs, so a
-  deployment that has not opted in does not advertise the endpoint. The data
-  plane (`/api/spaces/:space/ingest/:id` and `/api/ingest/:id`) and the
-  operator provisioning scripts are
-  unaffected by the flag.
-- **Current default and planned end state.** Off by default. The gate exists
-  because minting issues a durable bearer capability that outlives the trust
-  conditions that authorized it, and because authorization rests on the memory
-  ACL. New spaces get random keys and the memory server grants a space's own
-  DID nothing past genesis
-  ([random space identities](../specs/random-space-identities.md)), but a
-  legacy named space was given a key derived from the public passphrase
-  `"common user"`, and while the server treated that key as a permanent owner,
-  anyone who could reach the server could have granted themselves OWNER on
-  such a space, and such a grant survives until an operator removes it. The end
-  state is on by default.
-- **Status on 2026-09-29.** Implemented, off by default. Space creation
-  generates a random key. Every deployment has been reachable only on the
-  team's private network, so nobody outside the team minted a channel or
-  granted themselves OWNER under the old trust conditions; a deployment
-  reachable more widely would first retire its channels with
-  `retire-ingest-channels` and review its space ACLs, as
-  [`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md)
-  describes.
-- **Path to removal.** Turn the flag on by default, then delete the gate and
-  mount the router unconditionally.
-
 ### `SERVER_EXECUTION_STORE_READ_THROUGH`
 
 - **Toggle via.** The `SERVER_EXECUTION_STORE_READ_THROUGH` environment
@@ -2141,6 +2100,28 @@ server](#clients-that-are-not-built-alongside-their-server).
 
 These are recorded so that references to them elsewhere in the tree do not send
 a future reader hunting for a flag that no longer exists.
+
+### `INGEST_SELF_SERVE_ENABLED` (removed)
+
+Gated the ingest-channel control plane
+(`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
+through which a user holding their own identity key mints, lists, rotates,
+and revokes ingest channels for spaces they own. Added by Alex Komoroske in
+the self-serve ingest channels change; implemented and OFF by default
+throughout its life. Removed in the change that holds a gmail channel's
+mailbox binding in its registration (2026-10-09): the control plane is
+mounted unconditionally, and the environment variable is ignored. The gate
+existed because a mint hands out a capability that outlives the trust
+conditions that authorized it, and a legacy named space's key once derived
+from a public passphrase, so a planted OWNER grant on such a space could
+have minted. It was retired because a planted OWNER grant already carries
+every power over the space that mint confers and more, and what mint adds,
+survival of the channel past the grant's removal, is bounded by the
+channel's hard expiry, by the space's current owner listing and revoking
+foreign channels, and by `retire-ingest-channels`. The same `ingestGate`
+middleware still fronts the Gmail push route, on whether a push service
+account is configured. The feature's design is
+[`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md).
 
 ### `persistentSchedulerState` / `EXPERIMENTAL_PERSISTENT_SCHEDULER_STATE` (removed)
 

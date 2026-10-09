@@ -309,13 +309,12 @@ those into variables too, or run it from a file kept outside the repository.
 
 ## Toolshed settings
 
-Two environment variables on the deployment, and a third for ID-token
+One environment variable on the deployment, and a second for ID-token
 proofs, described in [`CONFIGURATION.md`](../development/CONFIGURATION.md):
 
 | Variable | Value |
 | --- | --- |
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | `<account>` |
-| `INGEST_SELF_SERVE_ENABLED` | `true`, which mounts the control plane that mint sits on |
 | `INGEST_GMAIL_OAUTH_CLIENT_IDS` | `<client id>`, to accept an ID token from that client as the mailbox proof. Unset, only an access token proves a mailbox. |
 
 The audience needs no setting: it defaults to `<service space>`. A deployment
@@ -323,10 +322,9 @@ that wants another sets `INGEST_GMAIL_PUSH_AUDIENCE`. The audience is compared
 as a string and does not have to resolve.
 
 For a hosted deployment these are set where that deployment's environment is
-managed, which is outside this repository. A request to
-`POST /api/ingest-channels/list` that returns 404 means
-`INGEST_SELF_SERVE_ENABLED` is off; 401 means it is on and the request was
-unsigned.
+managed, which is outside this repository. An unsigned request to
+`POST /api/ingest-channels/list` returns 401 on any deployment, which is the
+quick check that the control plane is reachable.
 
 ## Binding a mailbox
 

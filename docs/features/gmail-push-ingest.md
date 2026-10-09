@@ -96,9 +96,8 @@ A mailbox is bound by the mint verb of the
 [ingest-channel control plane](self-serve-ingest-channels.md), which gains
 two optional fields that come together, `target` and `gmail`, and nothing
 else. Mint keeps its first-party request proof, its ownership check, its
-16 KB body limit, its rate-limit bucket, and its gate on
-`INGEST_SELF_SERVE_ENABLED`. A mint carrying the fields answers 400 where
-Gmail push is not configured.
+16 KB body limit, and its rate-limit bucket. A mint carrying the fields
+answers 400 where Gmail push is not configured.
 
 ```json
 {
@@ -325,7 +324,7 @@ deployment is reached under more than one. A DID is a public identifier, and
 an audience is not a secret: what a push token proves rests on Google's
 signature and the service account.
 
-Minting at all, with or without a proof, needs `INGEST_SELF_SERVE_ENABLED`,
-which mounts the control plane. `INGEST_SERVICE_SPACE`, described in
+The control plane mint sits on is mounted on every deployment.
+`INGEST_SERVICE_SPACE`, described in
 [CONFIGURATION.md](../development/CONFIGURATION.md#ingest-registry), names
 the service space.
