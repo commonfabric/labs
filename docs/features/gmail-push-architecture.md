@@ -76,7 +76,11 @@ needs one topic for each client's project.
 ## Setting up
 
 Minting and binding happen once for each channel, and a mailbox can have up
-to eight channels bound to it, one for each install of a syncer. The watch is
+to eight channels bound to it, one for each install of a syncer. A mailbox
+that should wake more than one deployment has a channel bound on each, and
+each deployment has a subscription of its own on the topic;
+[the setup document](gmail-push-setup.md#several-deployments) has the
+commands. The watch is
 set once for the mailbox, whatever the number of channels, and is renewed
 daily.
 

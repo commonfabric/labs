@@ -195,6 +195,57 @@ gcloud auth print-identity-token --impersonate-service-account=<account> \
 The token's `aud` is `<audience>` and its `email` is `<account>`, which are the
 two values toolshed compares against its settings.
 
+### Several deployments
+
+A mailbox can wake more than one deployment: a staging toolshed and a
+production one, say, or two that a person runs a different weaver against.
+The fan-out happens in Pub/Sub, which delivers every message on a topic to
+every subscription on it, and nowhere in toolshed. One deployment never
+forwards a push to another.
+
+Each deployment gets a subscription of its own on the shared topic, created
+with the commands above, addressed to that deployment's service space and
+carrying that space's DID as the audience:
+
+```bash
+gcloud pubsub subscriptions create <subscription> --project <project> \
+  --topic <topic> \
+  --push-endpoint="<toolshed>/api/spaces/<service space>/ingest-push/gmail" \
+  --push-auth-service-account="<account>" \
+  --push-auth-token-audience="<service space>" \
+  --expiration-period=never
+```
+
+The service account can be the same for every subscription. The audience is
+what keeps the deployments apart: a token minted for one deployment's
+subscription names that deployment's service space, and every other
+deployment refuses it. A deployment Google cannot reach takes the pull
+variant above instead, with a relay of its own.
+
+Bindings do not cross deployments either. A binding lives in the registry of
+the deployment that handled the `gmail-bind`, and a push is delivered against
+the bindings of the deployment that received it. So the steps under
+[Binding a mailbox](#binding-a-mailbox) run once per deployment, each against
+that deployment: a space the user owns there, the WRITE grant for that
+deployment's identity, a `latest` channel, and a bind. A syncer bound to one
+toolshed does only its own; two syncers on one machine, each pointed at a
+different toolshed, each bind the same mailbox on their own. A deployment
+holding no binding for a mailbox acknowledges its notifications with
+`delivered: 0`.
+
+The watch is set once for the mailbox, whichever deployment or syncer sets
+it, since it names the topic and not a receiver. Renewing it from more than
+one place is harmless.
+
+Only the push path has to face the internet. Mint and bind are called by
+the syncer on the user's machine, with the user's own signing key, so they
+need only the reach the syncer already has to its toolshed, a private
+network included. Where a deployment sits behind something that admits
+public traffic by path, the rule to open is `/api/spaces/*/ingest-push/*`
+and nothing wider: the push route refuses everything without a token Google
+signed, and the control plane and data plane gain nothing from being
+reachable from outside.
+
 ## The OAuth client and a Gmail token
 
 Binding a mailbox and setting a watch both need a Google access token for the
