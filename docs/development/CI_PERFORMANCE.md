@@ -324,6 +324,18 @@ normally need. An individual step that hangs can therefore reach its step bound
 and report a failure before the outer job bound. The outer bound remains the
 final limit when several steps in one job consume unusual amounts of time.
 
+GitHub stops a step at its bound by sending SIGINT to the step's own process,
+then SIGTERM 7.5 seconds later, then killing it 2.5 seconds after that. The
+step's own process is its shell. A shell waiting on a command passes neither
+signal on, and SIGTERM ends the shell alone, so the command under it is left
+running into the job's later steps. What it prints from then on reaches no
+step's log, and what it writes races the steps that gather and upload it. The
+test lanes' step therefore runs the lane in place of the shell, and the lane
+passes the signals on to the tests it is running. It keeps the records of the
+tests that finished, records the batch it stopped as failed, and starts
+nothing more. "How continuous integration runs the lanes" in
+[test-selection.md](test-selection.md) says what a lane does then.
+
 The runner enforces the step bound, so the bound holds only while the runner is
 still responding. A job whose runner stops responding runs to the bound on the
 job, is cancelled, and keeps no log at all. Running out of memory is one way to

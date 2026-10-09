@@ -600,7 +600,7 @@ describe("what the capture does when it cannot write", () => {
 
   it("does nothing at all when there is no spool", () => {
     const { capture } = buildCapture({ registrar });
-    capture.names.set("a test", "packages/a/one.test.ts");
+    capture.attribute("a test", "packages/a/one.test.ts");
     // No spool is a run that was never recording, not a failed write.
     capture.flush();
   });
@@ -619,10 +619,53 @@ describe("what the capture does when it cannot write", () => {
     const spool = await Deno.makeTempDir();
     try {
       const { capture } = buildCapture({ registrar, spool });
-      capture.names.set("a test", "packages/a/one.test.ts");
+      capture.attribute("a test", "packages/a/one.test.ts");
       capture.flush();
       const names = await readNameMaps(spool);
       expect(names.get("a test")).toBe("packages/a/one.test.ts");
+    } finally {
+      await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  it("writes a name once the code registering it has run", async () => {
+    // A test run that is interrupted ends without unloading, so nothing
+    // waits for the end of the run to write the names its report needs.
+    const spool = await Deno.makeTempDir();
+    try {
+      const { capture } = buildCapture({ registrar, spool });
+      capture.attribute("a test", "packages/a/one.test.ts");
+      expect([...Deno.readDirSync(spool)]).toEqual([]);
+      await Promise.resolve();
+      const names = await readNameMaps(spool);
+      expect(names.get("a test")).toBe("packages/a/one.test.ts");
+    } finally {
+      await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  it("writes each name it learned once", async () => {
+    const spool = await Deno.makeTempDir();
+    try {
+      const { capture } = buildCapture({ registrar, spool });
+      capture.attribute("a test", "packages/a/one.test.ts");
+      capture.flush();
+      capture.attribute("another test", "packages/a/two.test.ts");
+      capture.flush();
+      capture.flush();
+      await Promise.resolve();
+      const written = [...Deno.readDirSync(spool)].map((entry) =>
+        Object.keys(
+          JSON.parse(Deno.readTextFileSync(join(spool, entry.name))).names,
+        )
+      ).sort();
+      expect(written).toEqual([["a test"], ["another test"]]);
+      expect(capture.names).toEqual(
+        new Map([
+          ["a test", "packages/a/one.test.ts"],
+          ["another test", "packages/a/two.test.ts"],
+        ]),
+      );
     } finally {
       await Deno.remove(spool, { recursive: true });
     }
@@ -636,7 +679,7 @@ describe("what the capture does when it cannot write", () => {
         spool,
         dir: "packages/b",
       });
-      capture.names.set("a test", "tools/one.test.ts");
+      capture.attribute("a test", "tools/one.test.ts");
       capture.flush();
       // A read scoped to that directory takes the map whole, file and
       // all, where a read scoped elsewhere is offered nothing: the file
@@ -656,7 +699,7 @@ describe("what the capture does when it cannot write", () => {
     const spool = await Deno.makeTempDir();
     try {
       const { capture } = buildCapture({ registrar, spool, dir: "" });
-      capture.names.set("a test", "packages/a/one.test.ts");
+      capture.attribute("a test", "packages/a/one.test.ts");
       capture.flush();
       expect(
         (await readNameMaps(spool, { ranIn: "" })).get("a test"),
@@ -671,7 +714,8 @@ describe("what the capture does when it cannot write", () => {
 
   it("says so and carries on when the spool cannot be made", async () => {
     // A file where the directory should be. Failing to record must not
-    // fail the test run that was recording.
+    // fail the test run that was recording, and what it could not write
+    // the next write carries.
     const parent = await Deno.makeTempDir();
     const spool = join(parent, "in-the-way");
     await Deno.writeTextFile(spool, "");
@@ -680,13 +724,20 @@ describe("what the capture does when it cannot write", () => {
     console.warn = (...parts: unknown[]) => said.push(parts.join(" "));
     try {
       const { capture } = buildCapture({ registrar, spool });
-      capture.names.set("a test", "packages/a/one.test.ts");
+      capture.attribute("a test", "packages/a/one.test.ts");
       capture.flush();
+      await Promise.resolve();
+      expect(said.join("\n")).toContain("cannot write a name map");
+      await Deno.remove(spool);
+      capture.attribute("another test", "packages/a/two.test.ts");
+      capture.flush();
+      const names = await readNameMaps(spool);
+      expect(names.get("a test")).toBe("packages/a/one.test.ts");
+      expect(names.get("another test")).toBe("packages/a/two.test.ts");
     } finally {
       console.warn = warn;
       await Deno.remove(parent, { recursive: true });
     }
-    expect(said.join("\n")).toContain("cannot write a name map");
   });
 });
 

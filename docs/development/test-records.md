@@ -406,6 +406,15 @@ leaves the map in the spool, and it applies `CF_TEST_SKIP_LIST`. Wrapping
 own, so a process with nothing to skip and no spool it may write leaves
 `Deno.test` alone and the report's own class names are read instead.
 
+The preload writes each test file's names into the spool as soon as the file
+has registered them, before any of that file's tests run, because a `deno test`
+interrupted by SIGINT exits without unloading. Such a run reports the test it
+was in the middle of as cancelled, and the ingestion records that test as
+skipped when the lane interrupted the run, since it neither passed nor failed.
+`deno test` also reports a test as cancelled when an error the test did not
+catch stops it, and in a run nothing interrupted the ingestion records that
+test as failed.
+
 Both of those need permissions. Reading `CF_TEST_RECORDS_DIR` and
 `CF_TEST_SKIP_LIST` needs `--allow-env`, and that one the test task
 grants: a task naming a restricted list of variables names those two

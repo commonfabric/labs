@@ -127,6 +127,9 @@ describe("what the wrappers do once a capture is installed", () => {
     const names = new Map<string, string>();
     const capture = {
       names,
+      attribute: (name: string, file: string) => {
+        names.set(name, file);
+      },
       skipped: (_file: string | undefined, name: string) => {
         asked.push(name);
         return skips.includes(name);

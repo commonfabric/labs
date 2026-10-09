@@ -43,6 +43,7 @@ import {
   type LaneDeps,
   type LaneOptions,
   lanePlan,
+  LaneStop,
   main,
   manifestMoment,
   markMeasuredFailures,
@@ -1507,6 +1508,148 @@ describe("running a lane's work", () => {
       {},
     );
     expect(result.records.map((record) => record.test.n)).toEqual(["probe"]);
+    await Deno.remove(workDir, { recursive: true });
+  });
+
+  it("passes a signal on to the command it is waiting for", async () => {
+    const stop = new LaneStop();
+    const hanging = () =>
+      new Deno.Command(Deno.execPath(), {
+        args: ["eval", "setInterval(() => {}, 1000)"],
+      }).spawn();
+    const waited = stop.wait(hanging());
+    stop.receive("SIGTERM");
+    const first = await waited;
+    expect(first.status.signal).toBe("SIGTERM");
+    expect(first.interrupted).toBe(true);
+    expect(stop.signal).toBe("SIGTERM");
+    // A command started once the lane was told to stop is sent the
+    // signal the lane was sent, and a later signal changes nothing.
+    stop.receive("SIGINT");
+    expect((await stop.wait(hanging())).status.signal).toBe("SIGTERM");
+    expect(stop.signal).toBe("SIGTERM");
+    // A command that has exited already has nothing left to stop, and
+    // was not interrupted.
+    const exited = new Deno.Command(Deno.execPath(), { args: ["eval", "0"] })
+      .spawn();
+    await exited.status;
+    expect(await stop.wait(exited)).toEqual({
+      status: { success: true, code: 0, signal: null },
+      interrupted: false,
+    });
+  });
+
+  it("fails a batch told to stop before it starts, having run nothing", async () => {
+    // What a batch measured is read as its cost only where it passed, and
+    // a batch that stopped part way measured only part of itself.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-batch-" });
+    const stop = new LaneStop();
+    stop.receive("SIGINT");
+    const result = await runBatch(
+      {
+        suite: runnable([
+          Deno.execPath(),
+          "eval",
+          `Deno.writeTextFileSync(${JSON.stringify(`${workDir}/ran`)}, "")`,
+        ]),
+        units: [{ unit: "a-unit", skip: [] }],
+        runs: new Map([["a-unit", 1]]),
+        projected: 0,
+      },
+      lane,
+      workDir,
+      undefined,
+      {},
+      undefined,
+      stop,
+    );
+    expect(result.ok).toBe(false);
+    expect(await exists(`${workDir}/ran`)).toBe(false);
+    await Deno.remove(workDir, { recursive: true });
+  });
+
+  it("keeps what a stopped execution recorded, and starts nothing after it", async () => {
+    // A lane that reaches its step's bound is sent SIGINT. The test
+    // runner it passes that on to writes its report before it exits, so
+    // what it finished is kept, and the test it was in the middle of
+    // neither passed nor failed.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-stop-" });
+    // The hanging test connects here once it is under way.
+    const started = Deno.listen({
+      transport: "unix",
+      path: `${workDir}/started`,
+    });
+    const after = `${workDir}/after`;
+    const fixture = `${workDir}/hang.test.ts`;
+    await Deno.writeTextFile(
+      fixture,
+      `Deno.test("probe", async (t) => {
+        await t.step("passes", () => {});
+        await t.step("hangs", async () => {
+          await Deno.connect({
+            transport: "unix",
+            path: ${JSON.stringify(`${workDir}/started`)},
+          });
+          await new Promise(() => setInterval(() => {}, 1000));
+        });
+      });`,
+    );
+    const stop = new LaneStop();
+    const result = runBatch(
+      {
+        suite: suite({
+          id: "probe",
+          recordSurfaces: [{ kind: "unit", scope: "probe" }],
+          units: ["hang.test.ts"],
+          locate: () => ({ level: "unit", unit: "hang.test.ts" }),
+          command: (_units, context) =>
+            Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "test",
+                "--no-config",
+                "--no-lock",
+                "--no-check",
+                "--allow-all",
+                `--junit-path=${context.outputDir}/report.xml`,
+                fixture,
+              ],
+              cwd: workDir,
+              junit: [{
+                path: `${context.outputDir}/report.xml`,
+                kind: "unit",
+                scope: "probe",
+              }],
+            }, {
+              command: [
+                Deno.execPath(),
+                "eval",
+                `Deno.writeTextFileSync(${JSON.stringify(after)}, "")`,
+              ],
+              cwd: workDir,
+            }]),
+        }),
+        units: [{ unit: "hang.test.ts", skip: [] }],
+        runs: new Map([["hang.test.ts", 2]]),
+        projected: 0,
+      },
+      lane,
+      workDir,
+      undefined,
+      {},
+      undefined,
+      stop,
+    );
+    const connection = await started.accept();
+    stop.receive("SIGINT");
+    const { ok, records } = await result;
+    expect(ok).toBe(false);
+    expect(
+      records.map((record) => [record.test.n, record.outcome]).sort(),
+    ).toEqual([["probe > hangs", "skip"], ["probe > passes", "pass"]]);
+    expect(await exists(after)).toBe(false);
+    connection.close();
+    started.close();
     await Deno.remove(workDir, { recursive: true });
   });
 
@@ -3601,9 +3744,10 @@ describe("what a lane does with the batches it was given", () => {
    */
   async function run(
     command: readonly string[],
-    over: { full?: boolean; manifest?: Manifest } = {},
+    over: { full?: boolean; manifest?: Manifest; stop?: LaneStop } = {},
   ): Promise<{ ok: boolean; measured: TestRecord[] }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const { stop } = over;
     const restore = outsideJob();
     const log = console.log;
     console.log = () => {};
@@ -3623,6 +3767,7 @@ describe("what a lane does with the batches it was given", () => {
           manifest: selecting(over.manifest),
           topology: topology(command),
           spool: () => spool,
+          ...(stop === undefined ? {} : { stop: () => stop }),
         },
       );
       const written = (await Promise.all(
@@ -3669,6 +3814,20 @@ describe("what a lane does with the batches it was given", () => {
     // while the lane reports red, or the other way about, is one commit
     // carrying both outcomes for the identity.
     expect(batchOutcome(measured)).toBe("pass");
+  });
+
+  it("fails a lane told to stop, runs nothing more, and says what it spent", async () => {
+    const stop = new LaneStop();
+    stop.receive("SIGINT");
+    const { ok, measured } = await run(recording(""), { stop });
+    expect(ok).toBe(false);
+    expect(batchOutcome(measured)).toBeUndefined();
+    // A stopped lane has failed, and what it measured about itself says
+    // so.
+    expect(
+      measured.find((record) => record.test.n === laneMeasurementName("spent"))
+        ?.outcome,
+    ).toBe("fail");
   });
 
   describe("what a lane records about itself as a whole", () => {
@@ -4225,6 +4384,59 @@ describe("what a lane does with the batches it was given", () => {
         console.log = log;
         restore();
         await Deno.remove(spool, { recursive: true });
+      }
+    });
+
+    it("runs nothing again once the lane is told to stop", async () => {
+      const manifest = manifestOf([{ unit: UNIT }]);
+      const workDir = await Deno.makeTempDir({ prefix: "lane-stopped-rerun-" });
+      const ran = `${workDir}/ran`;
+      const marking = suite({
+        id: "workspace-unit",
+        units: [UNIT],
+        locate: () => ({ level: "unit" as const, unit: UNIT }),
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: [
+              Deno.execPath(),
+              "eval",
+              `Deno.writeTextFileSync(${JSON.stringify(ran)}, "")`,
+            ],
+            cwd: context.root,
+          }]),
+      });
+      const stop = new LaneStop();
+      stop.receive("SIGINT");
+      try {
+        const reruns = await rerunFailures(
+          [{
+            batch: {
+              suite: marking,
+              units: [{ unit: UNIT, skip: [], cost: 1 }],
+              runs: new Map([[UNIT, 1]]),
+              projected: 1,
+            },
+            env: {},
+            failing: new Map([[UNIT, new Set([glaze])]]),
+          }],
+          manifest,
+          [{ entry: manifest.entries[0]!, reason: "full", repeats: 1 }],
+          {
+            lane: 1,
+            of: 1,
+            full: true,
+            dryRun: false,
+            laneCount: false,
+            root: REPOSITORY,
+          },
+          workDir,
+          undefined,
+          stop,
+        );
+        expect(reruns.unrun).toEqual([glaze]);
+        expect(await exists(ran)).toBe(false);
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
       }
     });
 

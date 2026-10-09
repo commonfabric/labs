@@ -304,12 +304,20 @@ export function parseSkipList(text: string): SkipList | undefined {
 /** What one test process captured, and what it was told not to run. */
 export interface RegistrationCapture {
   /** The file each registered name came from, repository-relative. */
-  names: Map<string, string>;
+  readonly names: ReadonlyMap<string, string>;
+
+  /**
+   * Notes that `name` was registered from `file`, and writes it into the
+   * spool once the code registering it has run, before any test does. A
+   * test run that is interrupted ends without unloading, and the names
+   * its report needs are in the spool already.
+   */
+  attribute(name: string, file: string): void;
 
   /** Whether a name registered from a file is on the skip list. */
   skipped(file: string | undefined, name: string): boolean;
 
-  /** Writes the captured name map into the spool. */
+  /** Writes the names noted since the last write into the spool. */
   flush(): void;
 }
 
@@ -330,9 +338,10 @@ export function activeCapture(): RegistrationCapture | undefined {
 
 /**
  * Wraps `Deno.test` so that every registration is attributed to its file
- * and checked against the skip list, and arranges for the captured map to
- * reach the spool when the process unloads. Returns undefined when there
- * was nothing to do and `Deno.test` was left alone.
+ * and checked against the skip list, and arranges for the captured names
+ * to reach the spool as they are registered and when the process unloads.
+ * Returns undefined when there was nothing to do and `Deno.test` was left
+ * alone.
  *
  * Called from a `--preload` module, so it runs before any test module and
  * needs nothing from the test files. Installing twice is a no-op: a
@@ -405,8 +414,9 @@ export interface CaptureOptions {
 
   /**
    * The repository-relative directory the map says it was written in, as
-   * it stood when the capture was built. `flush` runs at process unload,
-   * by which time a test may have changed the working directory.
+   * it stood when the capture was built. `flush` runs as each test file
+   * registers its tests, by which time a test of an earlier file may have
+   * changed the working directory.
    */
   dir?: string;
 }
@@ -425,18 +435,32 @@ export function buildCapture(
 } {
   const { dir, skips, spool } = options;
   const names = new Map<string, string>();
+  // What the next write carries. Each write is a map of its own, and a
+  // reader merges every map the spool holds.
+  let unwritten = new Map<string, string>();
+  let writing = false;
 
   const capture: RegistrationCapture = {
     names,
+    attribute: (name, file) => {
+      names.set(name, file);
+      unwritten.set(name, file);
+      if (writing) return;
+      writing = true;
+      queueMicrotask(() => {
+        writing = false;
+        capture.flush();
+      });
+    },
     skipped: (file, name) => {
       if (skips === undefined || file === undefined) return false;
       return skips[file]?.includes(name) ?? false;
     },
     flush: () => {
-      if (spool === undefined || names.size === 0) return;
+      if (spool === undefined || unwritten.size === 0) return;
       const map: NameMap = {
         ...(dir === undefined ? {} : { dir }),
-        names: Object.fromEntries(names),
+        names: Object.fromEntries(unwritten),
       };
       try {
         Deno.mkdirSync(spool, { recursive: true });
@@ -451,7 +475,9 @@ export function buildCapture(
           ),
           JSON.stringify(map),
         );
+        unwritten = new Map();
       } catch (error) {
+        // The names stay unwritten, and the next write carries them.
         console.warn(`test records: cannot write a name map: ${error}`);
       }
     },
@@ -473,7 +499,7 @@ export function buildCapture(
       return;
     }
     const file = runningFile();
-    if (file !== undefined) names.set(definition.name, file);
+    if (file !== undefined) capture.attribute(definition.name, file);
     if (capture.skipped(file, definition.name)) {
       through({ ...definition, ...extra, ignore: true });
       return;

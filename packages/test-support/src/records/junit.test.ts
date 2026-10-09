@@ -202,6 +202,45 @@ describe("junit", () => {
       expect(timed?.durationMs).toBe(10);
     });
 
+    it("records a cancelled test as skipped only where a signal interrupted the run", () => {
+      // `deno test` reports a test as cancelled when SIGINT reaches it
+      // part way through "glaze > sets" and "crumb", and also when an
+      // error the test did not catch stops it. A step still running is
+      // reported as skipped either way.
+      const report = `<testsuites>
+          <testsuite name="./glaze.test.ts">
+            <testcase name="glaze" classname="./glaze.test.ts" time="0.000">
+              <error message="Cancelled"/>
+            </testcase>
+            <testcase name="glaze &gt; pours" time="0.010"></testcase>
+            <testcase name="glaze &gt; sets"><skipped/></testcase>
+          </testsuite>
+          <testsuite name="./crumb.test.ts">
+            <testcase name="crumb" time="0.020">
+              <error message="Cancelled"/>
+            </testcase>
+            <testcase name="rise" time="0.020">
+              <failure message="Cancelled"/>
+            </testcase>
+          </testsuite>
+        </testsuites>`;
+      const outcomes = (interrupted: boolean) =>
+        ingestJUnit(report, { kind: "unit", scope: "bakery", interrupted })
+          .map((record) => [record.test.n, record.outcome]).sort();
+      expect(outcomes(true)).toEqual([
+        ["crumb", "skip"],
+        ["glaze > pours", "pass"],
+        ["glaze > sets", "skip"],
+        ["rise", "fail"],
+      ]);
+      expect(outcomes(false)).toEqual([
+        ["crumb", "fail"],
+        ["glaze > pours", "pass"],
+        ["glaze > sets", "skip"],
+        ["rise", "fail"],
+      ]);
+    });
+
     it("joins relative classnames onto the file prefix", () => {
       const records = ingestJUnit(DENO_SAMPLE, {
         kind: "unit",

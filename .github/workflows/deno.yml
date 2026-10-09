@@ -238,14 +238,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # A process in the lane that crashes natively leaves its core under
         # the job's temporary directory, where the upload of what a failing
-        # lane left behind finds it. The arguments are a list of words, and
+        # lane left behind finds it. The lane replaces the shell, because
+        # GitHub stops a step that reaches its bound by signalling the
+        # step's own process, and the lane is what passes that on to the
+        # tests it is running. The arguments are a list of words, and
         # splitting them is the point.
         run: |
           mkdir -p "$RUNNER_TEMP/ci-lane-cores"
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/ci-lane-cores/core.%e.%p"
           # shellcheck disable=SC2086
-          deno run -A tasks/ci-lane.ts $LANE_ARGS --described
+          exec deno run -A tasks/ci-lane.ts $LANE_ARGS --described
 
       - name: 📋 Upload what a failing lane left behind
         if: ${{ failure() }}

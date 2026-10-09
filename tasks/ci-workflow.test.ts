@@ -598,9 +598,11 @@ Deno.test("a lane runs the lane runner and holds the token alone", async () => {
       plan.run ?? "",
       "\ndeno run -A tasks/ci-lane.ts $LANE_ARGS --dry-run\n",
     );
+    // The lane replaces the step's shell, so the signal GitHub stops the
+    // step with reaches the lane, which passes it on to its tests.
     assertStringIncludes(
       lane.run ?? "",
-      "\ndeno run -A tasks/ci-lane.ts $LANE_ARGS --described\n",
+      "\nexec deno run -A tasks/ci-lane.ts $LANE_ARGS --described\n",
     );
     const steps = job.steps ?? [];
     assert(steps.indexOf(plan) < steps.indexOf(lane));
