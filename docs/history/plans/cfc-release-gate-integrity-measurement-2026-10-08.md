@@ -24,7 +24,7 @@ and recorded what failed.
 
 | Suite | `observe`: divergences | `enforce`: failures |
 | --- | --- | --- |
-| Runner CFC tests: `test/cfc*.test.ts` and `test/cfc/` (276 files); at `enforce`, with `test/external-content-observation.test.ts` and `test/builtins/` too (302 files) | none outside the leak's own regression tests, once template evidence counted (below) | 0 |
+| Runner CFC tests: `test/cfc*.test.ts` and `test/cfc/` (210 files, 276 tests); at `enforce`, with `test/external-content-observation.test.ts` and `test/builtins/` too (235 files, 302 tests) | none outside the leak's own regression tests, once template evidence counted (below) | 0 |
 | Pattern unit tests, `deno task integration pattern-tests` (212 files) | 0 | 0 |
 
 The first `observe` run found one honest divergence besides the leak's own

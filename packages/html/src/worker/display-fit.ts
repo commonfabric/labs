@@ -147,7 +147,12 @@ export function readRefusal(
       ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
       : { labelSource: "consumed", confidentiality, integrity };
   }
-  // The reads behind one rendered value are one access.
+  // The reads behind one rendered value are one access. Its clauses are
+  // watched as read, since the exchange at each location may consult a
+  // membership or a manifest for a clause the fit below no longer sees.
+  if (watch !== undefined) {
+    watchLabelSources(confidentiality, spaces, watch, sources);
+  }
   const access = exchangedAccessLabel(
     confidentiality,
     integrity,

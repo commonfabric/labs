@@ -82,7 +82,8 @@ value:
    path and, for a recursive read, the path of every entry beneath it, each
    resolved over the entries that resolve there, as the input witnesses
    resolve them. A link probe observes the slot it probes, and two
-   observations of one location that consumed the same integrity are one.
+   observations of one location that consumed the same clauses, integrity
+   and evidence are one.
 2. At each location, the value-intrinsic rules (`isValueIntrinsicExchangeRule`)
    run over that location's own clauses, matched against the integrity of the
    entries there that bind the current value: flow stamps and the writer's

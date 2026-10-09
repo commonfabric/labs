@@ -11,8 +11,8 @@ summary-form witness closes that when the endorsed code's confidential inputs
 share one provenance. It cannot help a computation that reads two confidential
 inputs of different provenance, because the meet of two writers' stamps is
 empty. An example is a threshold that the `policySecretHash` builtin wrote,
-compared with a count that the policy's commit step wrote
-([policy secrets](../specs/cfc-policy-secret.md)).
+compared with a count that the policy's commit step wrote (the policy-secret
+design in labs#8557).
 
 The specification's answer to probing a trusted computation does not add
 anything to the output's label. It requires integrity on the computation's
@@ -88,7 +88,9 @@ first. It has its own plan.
 
 1. **Requirements on the endorsed code's arguments, bound to its identity
    (chosen).** This adds no atom, and nothing new enters any label. It also
-   protects every rule that already guards on an identity.
+   protects every rule that already guards on an identity, once the endorsed
+   code declares what its arguments require; until it does, an identity guard
+   is as exposed to a stand-in as it is today.
 2. **A per-argument record on the output,
    `TransformedBy{codeHash, inputAt: {path, witness}}`, named by the rule.**
    Rejected because it is a third `TransformedBy` form, stacked on specs#51's
@@ -116,8 +118,9 @@ the endorsed identity with no declaration to check.
 by identity and symbol. When the function resolves to a verified artifact, the
 node reads its argument through that artifact's own argument schema, and checks
 the requirements that schema declares. A node whose module data carries a
-different schema is read as the artifact declares. A node that resolves to no
-verified artifact has no identity, so no identity guard matches its output.
+different schema is read as the artifact declares. A node whose function has
+neither a registered artifact nor verified provenance has no identity, so no
+identity guard matches its output.
 
 ### Attributing reads to an argument
 
@@ -269,6 +272,6 @@ keeps a fixed threshold:
 - [ ] **Builtin input requirements** for `policySecretHash`, with labs#8557.
 - [ ] **Documents.**
   - Update [input witnesses](../specs/cfc-transformed-by-input-witnesses.md)
-    and [policy secrets](../specs/cfc-policy-secret.md) ("A second
+    and, once labs#8557 lands, the policy-secret design ("A second
     confidential input").
   - Archive this plan.

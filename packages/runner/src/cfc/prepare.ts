@@ -1022,24 +1022,6 @@ const consumedLocations = (
   );
 
 /**
- * The locations an external content observation consumed, as a release gate
- * reads them: those its reads recorded, or, where it recorded none, one
- * location carrying its flow join's integrity, a meet over what the content
- * consumed, and no evidence. `index` tells the observation from the
- * transaction's others.
- */
-const externalContentLocations = (
-  observation: CfcExternalContentObservation,
-  index: number,
-): readonly ConsumedLocation[] =>
-  observation.locations ?? [{
-    key: stringTupleKey(["external-content", String(index)]),
-    confidentiality: observation.consumed.confidentiality ?? [],
-    integrity: observation.flow.integrity ?? [],
-    evidence: [],
-  }];
-
-/**
  * The location a label-metadata observation consumed: its clauses, and no
  * integrity, since metadata carries no evidence.
  */
@@ -7020,9 +7002,7 @@ const verifyInputRequirements = (
       });
     }
     for (
-      const [index, observation] of (
-        tx.getCfcState().externalContentObservations ?? []
-      ).entries()
+      const observation of tx.getCfcState().externalContentObservations ?? []
     ) {
       const gateLabel: IFCLabel = {
         confidentiality: observation.flow.confidentiality,
@@ -7037,7 +7017,7 @@ const verifyInputRequirements = (
         meta: {},
         journalIndex: -Infinity,
         label: gateLabel,
-        locations: () => externalContentLocations(observation, index),
+        locations: () => observation.locations,
       });
     }
     return gatedReads;
@@ -9988,11 +9968,9 @@ const collectConsumedLabelImpl = (
     );
   }
   for (
-    const [index, observation] of (
-      tx.getCfcState().externalContentObservations ?? []
-    ).entries()
+    const observation of tx.getCfcState().externalContentObservations ?? []
   ) {
-    for (const location of externalContentLocations(observation, index)) {
+    for (const location of observation.locations) {
       otherLocations.push(location);
     }
     for (const atom of observation.consumed.confidentiality ?? []) {

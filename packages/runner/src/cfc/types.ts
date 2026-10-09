@@ -857,11 +857,11 @@ export type CfcExternalContentObservation = {
   readonly consumed: IFCLabel;
 
   /**
-   * The labeled locations the content's reads consumed, as the release
-   * gates' per-access join reads them (`access-integrity.ts`). Absent, the
-   * content is one location vouched for by its flow join's integrity.
+   * The labeled locations the content's reads consumed, which the release
+   * gates evaluate exchange rules over (`access-integrity.ts`). A clause of
+   * `consumed` no location holds is evaluated as read, with no evidence.
    */
-  readonly locations?: readonly ConsumedLocation[];
+  readonly locations: readonly ConsumedLocation[];
 
   readonly labeledSpaces: readonly MemorySpace[];
   readonly sources: readonly {

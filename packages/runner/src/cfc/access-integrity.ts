@@ -20,7 +20,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 
 import { atomPropagationClass } from "./atom-classes.ts";
 import { uniqueCfcAtoms } from "./atoms.ts";
-import type { CfcConfClause } from "./clause.ts";
+import { type CfcConfClause, clausesEqual } from "./clause.ts";
 
 /** One location an access consumed, as a release gate reads it. */
 export type ConsumedLocation = {
@@ -116,7 +116,7 @@ export const exchangeEachObservation = (
   const consumed: CfcConfClause[] = [];
   for (const location of distinct) {
     const clauses = location.confidentiality.filter((clause) =>
-      confidentiality.some((read) => deepEqual(read, clause))
+      confidentiality.some((read) => clausesEqual(read, clause))
     );
     if (clauses.length === 0) continue;
     for (const clause of clauses) consumed.push(clause);
@@ -126,7 +126,7 @@ export const exchangeEachObservation = (
     for (const clause of left) exchanged.push(clause);
   }
   for (const clause of confidentiality) {
-    if (!consumed.some((other) => deepEqual(other, clause))) {
+    if (!consumed.some((other) => clausesEqual(other, clause))) {
       exchanged.push(clause);
     }
   }

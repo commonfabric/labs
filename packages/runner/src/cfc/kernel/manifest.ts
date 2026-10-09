@@ -234,7 +234,7 @@ export const MANIFEST: readonly ManifestRow[] = [
       "meet of hereditary atoms is inside `deriveFlowJoin`, and " +
       "`joinLocationIntegrity` is the class-aware join of the locations a " +
       "release gate's access consumed, counting two observations of one " +
-      "location once",
+      "location once when their label and evidence match",
   },
   {
     file: CORE,
