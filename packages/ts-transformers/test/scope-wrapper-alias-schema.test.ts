@@ -921,6 +921,30 @@ ${source}`,
         });
       }
 
+      it("caps the handle of a scoped alias of a labelled cell in the input and its capture", async () => {
+        // The labelled cell's alias is hoisted into a definition the input's
+        // payload only references; the cap is written with the cell.
+        const module = await transformed(
+          `import { computed, pattern, Writable, type Confidential, type PerSession } from "commonfabric";
+interface A { a: string }
+type Handle = Confidential<Writable<A>, ["owner"]>;
+export default pattern<{ handle: PerSession<Handle> }>(({ handle }) => ({
+  out: computed(() => handle.get().a),
+}));`,
+        );
+        const [capture] = callSchemas(module, "lift");
+
+        expect(
+          (patternSchemas(module).input.properties as Record<string, unknown>)
+            .handle,
+        ).toMatchObject({
+          asCell: [{ kind: "cell", scope: "session" }],
+          ifc: { confidentiality: ["owner"] },
+        });
+        expect((capture!.properties as Record<string, unknown>).handle)
+          .toMatchObject({ asCell: [{ scope: "session" }] });
+      });
+
       for (
         const [form, declared, read] of [
           [

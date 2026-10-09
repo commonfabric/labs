@@ -1046,7 +1046,12 @@ non-empty `asCell`, the scope merges into the **first** entry, turning a
 string entry into the object form (`applyScopeToAsCellEntry`) —
 `PerUser<Cell<string>>` → `{ asCell: [{ kind: "cell", scope: "user" }], type:
 "string" }`; otherwise a bare sibling key — `PerUser<string>` →
-`{ type: "string", scope: "user" }`. A wrapper around a cell **throws** beside
+`{ type: "string", scope: "user" }`. A payload that only references a cell's
+definition, as a labelled cell's alias is hoisted, is the cell written in
+place, with the cap on its first entry and the labels the references declare:
+`PerUser<Handle>` with `type Handle = Confidential<Writable<T>, […]>` reads as
+`PerUser<Confidential<Writable<T>, […]>>`, and the definition stays as it is
+for the references that hold no scope. A wrapper around a cell **throws** beside
 anything, `null` and `undefined` included, written outside it or inside, or in
 an alias the payload names, whose union is hoisted into a definition the
 payload references (`PerUser<Maybe>` with `type Maybe = Writable<T> | null`),

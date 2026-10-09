@@ -2203,6 +2203,32 @@ export class CommonFabricFormatter implements TypeFormatter {
       };
     }
 
+    // A cell an alias names may be a definition the payload only references,
+    // as a labelled cell's alias is hoisted. The cap is on its handle here, so
+    // the cell is written here, as written in place, beside the labels the
+    // references to it declare; the definition stays as it is for references
+    // that hold no scope.
+    const reached = referenceChain(schema, context.definitions);
+    const cellAt = reached.findIndex((link, index) =>
+      index > 0 && isHandleSchema(link)
+    );
+    if (cellAt > 0) {
+      const { $ref: _, ifc: __, ...beside } = schema;
+      const cell = reached[cellAt]!;
+      const [first, ...rest] = cell.asCell as AsCellEntry[];
+      let written: MutableJSONSchema = {
+        ...cell,
+        ...beside,
+        asCell: [applyScopeToAsCellEntry(first!, scope), ...rest],
+      };
+      for (const link of reached.slice(0, cellAt)) {
+        if (isObjectOrArray(link.ifc)) {
+          written = withIfcLabels(written, link.ifc);
+        }
+      }
+      return written;
+    }
+
     // A cell beside anything, `null` and `undefined` included, is an `anyOf`
     // branch, where the cap on following its handle would sit apart from the
     // slot's scope (`scopeAroundCellUnionError()`). The union, and the cell in

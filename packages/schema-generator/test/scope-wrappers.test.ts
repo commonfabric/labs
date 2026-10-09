@@ -400,6 +400,30 @@ type Handle = Confidential<Writable<string>, ["owner"]>;`;
     });
   }
 
+  it("caps the handle of a scope wrapper around an alias of a labelled cell as written in place", async () => {
+    // The labelled cell's alias is hoisted into a definition the payload only
+    // references, and the cap is on the handle here.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `${LABELLED_HANDLE}
+interface SchemaRoot {
+  aliased: PerSpace<Handle>;
+  inline: PerSpace<Confidential<Writable<string>, ["owner"]>>;
+  optional?: PerSpace<Handle>;
+}`,
+      "SchemaRoot",
+    );
+    const properties = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker, typeNode),
+    ).properties;
+
+    expect(properties?.aliased).toEqual(properties?.inline);
+    expect(properties?.optional).toEqual(properties?.inline);
+    expect(properties?.inline).toMatchObject({
+      asCell: [{ kind: "cell", scope: "space" }],
+      ifc: { confidentiality: ["owner"] },
+    });
+  });
+
   it("caps the handle of a scope wrapper around an alias of a cell", async () => {
     const { type, checker, typeNode } = await getTypeFromCode(
       "type Handle = Writable<string>; interface SchemaRoot { handle: PerSpace<Handle>; }",
