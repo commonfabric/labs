@@ -984,6 +984,32 @@ function instanceChildRecord(
   return { space: link.space, id: link.id, scope: link.scope };
 }
 
+/**
+ * The canonical keys of the partial causes in `descriptors` that a pattern
+ * names, with `.for()` or by a result key or node input, rather than one the
+ * builder generates.
+ */
+function namedPartialCauses(
+  descriptors: readonly { partialCause: JSONValue }[] | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const { partialCause } of descriptors ?? []) {
+    if (isObjectNotArray(partialCause) && "$generated" in partialCause) {
+      continue;
+    }
+    keys.add(hashStringOf(partialCause));
+  }
+  return keys;
+}
+
+/** The derived internal cell manifest `cell` holds, as setup recorded it. */
+function storedManifestOf(cell: Cell<any>): InternalCellDescriptor[] {
+  const stored = convertibleJsFromFabricValue(
+    cell.getMetaRaw("internal", { meta: ignoreReadForScheduling }),
+  );
+  return Array.isArray(stored) ? stored as InternalCellDescriptor[] : [];
+}
+
 /** Whether two `{ identity, symbol }` pattern references name one pattern. */
 function samePatternRef(
   a: { identity: string; symbol: string },
@@ -12990,11 +13016,9 @@ export class Runner {
    * instance's positional cause. That cause is the one the pattern the parent
    * last set up, which `patternSetupIdentity` names, gives the same name;
    * this is exact wherever that pattern is loaded in this runtime. Where it is
-   * not, an instance carries over the one child, among the positional spots
-   * the parent's manifest records, that runs the instance's own pattern
-   * identity, and failing that the child at the positional cause `pattern`
-   * itself gives the instance, which is where the child runs with no instance
-   * names. A child is carried over by one instance at most.
+   * not, the children at the positional spots the parent's manifest records
+   * are matched to instances by what they hold. A child is carried over by
+   * one instance at most.
    */
   #planInstanceCarryOver(
     resultCell: Cell<any>,
@@ -13054,36 +13078,95 @@ export class Runner {
         uncarried.push(name);
         continue;
       }
-      const child = previous !== undefined
-        ? this.#previousInstanceChild(tx, parent, previous, descriptor)
-        : this.#soleRecordedChild(tx, parent, manifest, node.module, claimed);
-      if (child !== undefined && !claimed.has(child.id)) {
-        claimed.add(child.id);
-        carried.set(name, child);
-      } else if (previous === undefined) {
+      if (previous === undefined) {
         unmatched.push({ name, module: node.module, descriptor });
-      } else {
-        uncarried.push(name);
+        continue;
       }
-    }
-    // What is left takes the child at the positional cause `pattern` itself
-    // gives it, which is where it runs with no instance names, once every
-    // child an identity matched is claimed.
-    for (const { name, module, descriptor } of unmatched) {
-      const child = this.#childAtPartialCause(
+      const child = this.#previousInstanceChild(
         tx,
         parent,
-        module,
-        descriptor.legacyPartialCause!,
+        previous,
+        descriptor,
       );
-      const link = child.getAsNormalizedFullLink();
-      if (getPatternIdentityRef(child) === undefined || claimed.has(link.id)) {
+      if (child === undefined || claimed.has(child.id)) {
         uncarried.push(name);
         continue;
       }
-      claimed.add(link.id);
-      carried.set(name, link);
+      claimed.add(child.id);
+      carried.set(name, child);
     }
+    // Without the previous pattern, the children at the positional spots the
+    // parent's manifest records are matched to instances by what the
+    // children hold, from the surest sign down, each pass claiming before the
+    // next: the instance's own child pattern identity, then the most `.for()`
+    // names in common with the instance's child pattern, and last, for a
+    // child pattern that names nothing, the instance's own positional spot.
+    const matchers: ((
+      candidate: Cell<any>,
+      module: Module,
+      descriptor: DerivedInternalCellDescriptor,
+    ) => number)[] = [
+      (candidate, module) => {
+        const ref = getPatternIdentityRef(candidate);
+        const wanted = this.#runtime.patternManager.getArtifactEntryRef(
+          module.implementation as Pattern,
+        );
+        return ref !== undefined && wanted !== undefined &&
+            samePatternRef(ref, wanted)
+          ? 1
+          : 0;
+      },
+      (candidate, module) => {
+        const wanted = namedPartialCauses(
+          (module.implementation as Pattern).derivedInternalCells,
+        );
+        const held = namedPartialCauses(storedManifestOf(candidate));
+        return [...held].filter((key) => wanted.has(key)).length;
+      },
+      (candidate, module, descriptor) =>
+        namedPartialCauses(
+              (module.implementation as Pattern).derivedInternalCells,
+            ).size === 0 &&
+          namedPartialCauses(storedManifestOf(candidate)).size === 0 &&
+          candidate.getAsNormalizedFullLink().id ===
+            this.#childAtPartialCause(
+              tx,
+              parent,
+              module,
+              descriptor.legacyPartialCause!,
+            ).getAsNormalizedFullLink().id
+          ? 1
+          : 0,
+    ];
+    for (const matcher of matchers) {
+      const scored = unmatched.map((entry) => ({
+        entry,
+        best: this.#bestRecordedChild(
+          tx,
+          parent,
+          manifest,
+          claimed,
+          (candidate) => matcher(candidate, entry.module, entry.descriptor),
+          entry.module,
+        ),
+      }));
+      for (const { entry, best } of scored) {
+        // A child two instances would each take goes to neither.
+        if (
+          best === undefined ||
+          scored.some((other) =>
+            other.entry !== entry && other.best?.link.id === best.link.id &&
+            other.best.score >= best.score
+          )
+        ) {
+          continue;
+        }
+        claimed.add(best.link.id);
+        carried.set(entry.name, best.link);
+        unmatched.splice(unmatched.indexOf(entry), 1);
+      }
+    }
+    for (const { name } of unmatched) uncarried.push(name);
     return { carried, uncarried };
   }
 
@@ -13139,38 +13222,45 @@ export class Runner {
   }
 
   /**
-   * The one unclaimed child, among the positional spots the parent
-   * `resultCell`'s manifest records, that runs the pattern identity of the
-   * child of `module`; `undefined` when no spot or more than one does.
+   * The unclaimed set-up child, among the positional spots the parent
+   * `resultCell`'s manifest records for a node with module `module`, that
+   * `score` scores highest, with its score, when one scores above zero and no
+   * other ties it.
    */
-  #soleRecordedChild(
+  #bestRecordedChild(
     tx: IExtendedStorageTransaction | undefined,
     resultCell: Cell<any>,
     manifest: readonly InternalCellDescriptor[],
-    module: Module,
     claimed: ReadonlySet<string>,
-  ): NormalizedFullLink | undefined {
-    const wanted = this.#runtime.patternManager.getArtifactEntryRef(
-      module.implementation as Pattern,
-    );
-    if (wanted === undefined) return undefined;
-    let found: NormalizedFullLink | undefined;
+    score: (candidate: Cell<any>) => number,
+    module: Module,
+  ): { link: NormalizedFullLink; score: number } | undefined {
+    let best: NormalizedFullLink | undefined;
+    let bestScore = 0;
+    let tied = false;
     for (const entry of manifest) {
       if (!isPositionalPartialCause(entry.partialCause)) continue;
-      const child = this.#childAtPartialCause(
+      const candidate = this.#childAtPartialCause(
         tx,
         resultCell,
         module,
         entry.partialCause,
       );
-      const ref = getPatternIdentityRef(child);
-      if (ref === undefined || !samePatternRef(ref, wanted)) continue;
-      const link = child.getAsNormalizedFullLink();
+      const link = candidate.getAsNormalizedFullLink();
       if (claimed.has(link.id)) continue;
-      if (found !== undefined) return undefined;
-      found = link;
+      if (getPatternIdentityRef(candidate) === undefined) continue;
+      const value = score(candidate);
+      if (value > bestScore) {
+        best = link;
+        bestScore = value;
+        tied = false;
+      } else if (value === bestScore && value > 0) {
+        tied = true;
+      }
     }
-    return found;
+    return tied || best === undefined
+      ? undefined
+      : { link: best, score: bestScore };
   }
 
   /**

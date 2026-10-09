@@ -218,6 +218,30 @@ describe("instance-carry-over", () => {
       expect(result.aCount).toBe(7);
     });
 
+    it("starts fresh, rather than take a deployed child another instance matches as well, when the parent carries no setup marker", async () => {
+      // Both children's patterns name `count`, so with `Counter`'s identity
+      // changed, the one deployed child matches `a` and `s` alike.
+
+      const cell = await deployedParent("no-setup-marker-ambiguous", "absent");
+
+      const result = await update(
+        cell,
+        parentProgram(
+          [
+            "  const s = Other({ label: 's' });",
+            "  const a = Counter({ label: 'a' });",
+            "  return { views: [s, a], aCount: a.count, sCount: s.count };",
+          ].join("\n"),
+          `${COUNTER}// A newer version.\n`,
+        ),
+      );
+
+      expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
+        aCount: 0,
+        sCount: 0,
+      });
+    });
+
     it("keeps the child it carried over across a further update", async () => {
       const cell = await deployedParent("further-update");
       await update(cell, NAMED_WITH_SIBLING);

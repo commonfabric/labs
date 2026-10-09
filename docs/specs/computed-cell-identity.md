@@ -145,11 +145,16 @@ names it carries the child over (`planInstanceCarryOver`):
 - where the pattern the parent last set up, which `patternSetupIdentity`
   names, is loaded, the child is the one at the `legacyPartialCause` that
   pattern gives the same instance name;
-- otherwise, it is the one child, among the positional spots the parent's
-  manifest records, whose `patternIdentity` is the instance's own child
-  pattern identity;
-- failing that, it is the child at the instance's own `legacyPartialCause`,
-  which is where the child runs with no instance names.
+- otherwise, the set-up children at the positional spots the parent's
+  manifest records are matched to the instances by what they hold, in passes
+  from the surest sign down, each claiming its children before the next: a
+  `patternIdentity` that is the instance's own child pattern identity; then
+  the most named partial causes in the child's own manifest that the
+  instance's child pattern also names; and last, for a child pattern that
+  names none, the child at the instance's own `legacyPartialCause`, which is
+  where it runs with no instance names. A pass takes a child only where one
+  candidate scores highest for the instance, and gives none to two instances
+  that would each take the same child.
 
 A child is carried over by one instance at most.
 
