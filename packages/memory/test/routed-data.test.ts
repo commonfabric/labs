@@ -961,7 +961,7 @@ Deno.test("holdings and views are counted as lists, and anything else closes the
     ] as const
   ) {
     await t.step(`${name} closes the socket`, async () => {
-      const f = await fixture("unlisted", { limits });
+      const f = await fixture("not-a-list", { limits });
       try {
         const session = await f.open();
         f.socket.receive(
