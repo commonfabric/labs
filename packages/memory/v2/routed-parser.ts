@@ -142,6 +142,17 @@ export function routedObject(value: unknown): Record<string, unknown> {
   return value;
 }
 
+/**
+ * The number of entries in a wire collection that may be a list or a record,
+ * as a frame's `watches` and `holdings` may. Anything else is refused. A
+ * record's `length` member is one entry, never its count, so the parser's
+ * bound and the toolshed's quota read every collection the same way.
+ */
+export function routedCollectionSize(collection: unknown): number {
+  requireRouted(Array.isArray(collection) || isPlainObject(collection));
+  return Object.keys(collection).length;
+}
+
 /** Validates a bounded routing/session/request identifier. */
 export function routedIdentifier(value: unknown): asserts value is string {
   requireRouted(
@@ -247,11 +258,7 @@ export function parseRoutedText(
     const [field, limit] of [["watches", 1024], ["holdings", 8192]] as const
   ) {
     if (body[field] !== undefined) {
-      const collection = body[field];
-      requireRouted(
-        (Array.isArray(collection) || isPlainObject(collection)) &&
-          Object.keys(collection).length <= limit,
-      );
+      requireRouted(routedCollectionSize(body[field]) <= limit);
     }
   }
   return {

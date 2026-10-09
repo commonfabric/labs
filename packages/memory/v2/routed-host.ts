@@ -16,6 +16,7 @@ import {
   parseRoutedJson,
   ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_QUEUE_LIMIT,
+  routedCollectionSize,
   routedFlags,
   routedIdentifier,
   routedObject,
@@ -1284,9 +1285,11 @@ export class RoutedMemoryHost {
           requireRouted(
             prior === undefined || prior.principal === body.principal,
           );
+          // The parser admits a list or a record of holdings, and this
+          // counts either; the Memory server then reads a list only.
           const holdings = body.holdings === undefined
             ? prior?.holdings ?? 0
-            : (body.holdings as unknown[]).length;
+            : routedCollectionSize(body.holdings);
           const reservation = prior === undefined
             ? `pending ${body.requestId}`
             : priorKey!;
@@ -1338,10 +1341,12 @@ export class RoutedMemoryHost {
             const key = `${parsed.space} ${body.sessionId}`;
             const holdings = body.holdings === undefined
               ? session.holdings
-              : (body.holdings as unknown[]).length;
+              : routedCollectionSize(body.holdings);
+            // The parser does not look at `views`, so this is where one
+            // that is neither a list nor a record is refused as malformed.
             const views = body.views === undefined
               ? session.views
-              : (body.views as unknown[]).length;
+              : routedCollectionSize(body.views);
             // A fixed bound on one request, refused for good; the router
             // refuses it before forwarding and counts views as watches, as
             // this does.

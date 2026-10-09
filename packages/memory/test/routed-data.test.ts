@@ -355,6 +355,29 @@ async function fixture(
   };
 }
 
+/**
+ * Runs `run` and returns the reasons of the `request-refused` verdicts the
+ * toolshed logged while it ran, in order. The answer a client gets names no
+ * reason, so the toolshed's journal line is the only place one can be read.
+ */
+async function refusalReasons(run: () => Promise<void>): Promise<string[]> {
+  const reasons: string[] = [];
+  using _info = stub(console, "info", (line: unknown) => {
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(String(line));
+    } catch {
+      return;
+    }
+    if (
+      entry.event === "routed-memory-verdict" &&
+      entry.verdict === "request-refused"
+    ) reasons.push(String(entry.reason));
+  });
+  await run();
+  return reasons;
+}
+
 Deno.test("redeemed Mode A tickets are single use; control renews and releases authority independently", async () => {
   const f = await fixture("lifecycle");
   try {
@@ -712,6 +735,110 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
   } finally {
     await f.close();
     resetServerExecutionConfig();
+  }
+});
+
+Deno.test("holdings and views sent as plain objects are counted by their keys", async () => {
+  const f = await fixture("keyed-collections", {
+    limits: { holdingsPerContext: 4 },
+  });
+  const holding = (i: number) => ({ id: `of:h${i}`, seq: 0 });
+  /** `length` entries as a plain object, the other shape the parser admits. */
+  const keyed = (length: number) =>
+    Object.fromEntries(
+      Array.from({ length }, (_, i) => [`k${i}`, holding(i)]),
+    );
+  /** Sends `body` and returns the next response, whichever request it names. */
+  const answer = async (body: Record<string, unknown>) => {
+    f.socket.receive(
+      encodeRoutedFrame(`fvj1:${JSON.stringify(body)}`, FRAME_SLOTS),
+    );
+    while (true) {
+      const message =
+        decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS).body;
+      if (message.type === "response") return message;
+    }
+  };
+  const open = (requestId: string, holdings: unknown) =>
+    answer({
+      type: "session.open",
+      requestId,
+      space: f.space.did(),
+      principal: f.principal.did(),
+      session: {},
+      holdings,
+    });
+  type Refusal = { name?: string; message?: string; retriable?: boolean };
+  try {
+    // Five keys are five holdings, one over the context's four.
+    let reasons = await refusalReasons(async () => {
+      const refused = await open("keyed-over", keyed(5));
+      assertEquals(refused.requestId, "keyed-over");
+      assertEquals((refused.error as Refusal).retriable, true);
+    });
+    assertEquals(reasons, ["holdings-limit"]);
+    // Four keys fit, so the toolshed's own limits pass the open on. The
+    // Memory server reads holdings as a list only and cannot parse this
+    // one, which it says under its own request ID.
+    reasons = await refusalReasons(async () => {
+      const passed = await open("keyed-fits", keyed(4));
+      assertEquals((passed.error as Refusal).name, "InvalidMessageError");
+    });
+    assertEquals(reasons, []);
+    // The totals are still numbers: a list over the limit is refused too.
+    reasons = await refusalReasons(async () => {
+      const refused = await open("listed-over", [0, 1, 2, 3, 4].map(holding));
+      assertEquals(refused.requestId, "listed-over");
+      assertEquals((refused.error as Refusal).retriable, true);
+    });
+    assertEquals(reasons, ["holdings-limit"]);
+    // A watch mutation counts its holdings and views the same way.
+    const session = await f.open();
+    const watchSet = (requestId: string, fields: Record<string, unknown>) =>
+      answer({
+        type: "session.watch.set",
+        requestId,
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        watches: [],
+        ...fields,
+      });
+    reasons = await refusalReasons(async () => {
+      const refused = await watchSet("watch-holdings", { holdings: keyed(5) });
+      assertEquals(refused.requestId, "watch-holdings");
+      assertEquals((refused.error as Refusal).retriable, true);
+      // Sixty-five keys are sixty-five views, one over a session's bound.
+      const views = await watchSet("watch-views", { views: keyed(65) });
+      assertEquals(views.requestId, "watch-views");
+      assertEquals((views.error as Refusal).retriable, undefined);
+    });
+    assertEquals(reasons, ["holdings-limit", "frame-limit"]);
+    assertEquals(f.socket.readyState, 1);
+    // Neither a list nor a record has no count, so it is malformed and
+    // closes the socket, as any malformed frame does.
+    f.socket.receive(
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "session.watch.set",
+            requestId: "watch-scalar",
+            space: f.space.did(),
+            sessionId: session.sessionId,
+            watches: [],
+            views: 3,
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
+    );
+    await Promise.race([
+      f.socket.closed.promise,
+      f.socket.take().then(() => {}, () => {}),
+    ]);
+    assertEquals(f.socket.readyState, 3);
+    assertEquals(f.link.readyState, 1);
+  } finally {
+    await f.close();
   }
 });
 
