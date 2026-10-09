@@ -8,7 +8,8 @@
  * initializer that counts the same way. It is not fixed by a type assertion
  * anywhere on the way, at the key, in the initializer of the variable it names
  * or further back, nor by a step that is not a declaration, such as an element
- * access, an operator or a parameter typed by its context, nor by a narrowing
+ * access, an operator, a parameter typed by its context or a property of a
+ * value cast to a type that declares it, nor by a narrowing
  * at the use, which a call between the test and the use can make stale. Such
  * a key reads as one that can name any member, so the read keeps every member
  * it could reach.
@@ -20,6 +21,8 @@ import ts from "typescript";
 
 import { analyzeFunctionCapabilities } from "../../src/policy/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { callSchemas, parseModule } from "../transformed-ast.ts";
+import { transformSource } from "../utils.ts";
 
 const PRELUDE = `import { type Cell } from "commonfabric";
 type Entry = { space: string; size: number };
@@ -232,6 +235,13 @@ const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
       expect(readsOnlyOfferA(usage)).toBe(true);
     });
 
+    it("reads the member a name destructured by a numeric property name names", () => {
+      const usage = catalogUsage(`const { 0: key } = { 0: "a" } as const;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(readsOnlyOfferA(usage)).toBe(true);
+    });
+
     it("reads the member a `.key()` argument's declared type names", () => {
       const usage = catalogUsage(`const KEY = "a";
 const read = (catalog: Cell<Catalog>) =>
@@ -404,6 +414,39 @@ const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
       expect(usage.readPaths).not.toEqual([]);
     });
 
+    it("reads past a key read from a value cast to a type that declares the property", () => {
+      const usage = catalogUsage(`const source = { key: anyKey };
+const holder = source as { key: "a" };
+const key = holder.key;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key destructured from a value cast to a type that declares the property", () => {
+      const usage = catalogUsage(`const source = { key: anyKey };
+const { key } = source as { key: "a" };
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key a generic type's property holds by an instantiation from a cast", () => {
+      const usage = catalogUsage(`function wrap<T>(value: T): { key: T } {
+  return { key: value };
+}
+const key = wrap(anyKey as "a").key;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
     it("reads past a key cast to a literal type inside parentheses and `satisfies`", () => {
       const usage = catalogUsage(
         `const read = (catalog: Cell<Catalog>) =>
@@ -480,6 +523,63 @@ const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
       expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
         .toBe(false);
       expect(usage.readPaths).not.toEqual([]);
+    });
+  });
+
+  describe("a lift reading through a key a cast fixes further back", () => {
+    /**
+     * The members of `offers` a lift's input requires, for a pattern whose
+     * computed reads `catalog.offers[key].space` after the statements `setup`
+     * give `key` its value from the string `raw`.
+     */
+    async function offersRequired(setup: string): Promise<unknown> {
+      const output = await transformSource(
+        `import { computed, pattern } from "commonfabric";
+
+type Entry = { space: string; size: number };
+type Catalog = { offers: { a: Entry; b: Entry } };
+
+export default pattern<{ catalog: Catalog; raw: string }>(
+  ({ catalog, raw }) => {
+    const space = computed(() => {
+      ${setup}
+      return catalog.offers[key].space;
+    });
+    return { space };
+  },
+);
+`,
+        { types: COMMONFABRIC_TYPES },
+      );
+      const [input] = callSchemas(parseModule(output), "lift");
+      const properties = input?.properties as
+        | Record<string, { properties: Record<string, { required?: unknown }> }>
+        | undefined;
+      return properties?.catalog.properties.offers.required;
+    }
+
+    it("keeps every offer for a key read from a value cast to a type that declares it", async () => {
+      expect(
+        await offersRequired(`const source = { key: raw };
+      const holder = source as { key: "a" };
+      const key = holder.key;`),
+      ).toEqual(["a", "b"]);
+    });
+
+    it("keeps every offer for a key destructured from a value cast to a type that declares it", async () => {
+      expect(
+        await offersRequired(`const source = { key: raw };
+      const { key } = source as { key: "a" };`),
+      ).toEqual(["a", "b"]);
+    });
+
+    it("keeps every offer for a key a generic property holds by an instantiation from a cast", async () => {
+      expect(
+        await offersRequired(
+          `const wrap = <T,>(value: T): { key: T } => ({ key: value });
+      const key = wrap(raw as "a").key;`,
+        ),
+      ).toEqual(["a", "b"]);
     });
   });
 });

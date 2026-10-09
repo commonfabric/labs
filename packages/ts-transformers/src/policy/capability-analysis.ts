@@ -598,7 +598,7 @@ function getLiteralElementText(
  * dynamic. A literal and a Common Fabric key (`NAME`) fix it, and so does a
  * key whose declared type is a single string or number literal: a
  * `const KEY = "k"`, an enum member, a parameter typed `"k"`
- * (`getDeclaredKeyType()`). A type assertion is not taken for the key's value,
+ * (`getDeclaredType()`). A type assertion is not taken for the key's value,
  * whether at the key (`key as "k"`) or anywhere on the way from the key to the
  * declarations that type it.
  */
@@ -617,7 +617,7 @@ function getStaticPathKey(
   if (!checker) {
     return undefined;
   }
-  const type = getDeclaredKeyType(key, checker);
+  const type = getDeclaredType(key, checker);
   return type && getLiteralKeyText(type);
 }
 
@@ -650,44 +650,58 @@ function skipKeyWrappers(expression: ts.Expression): ts.Expression {
 }
 
 /**
- * The type a key is judged by when its value comes from declarations alone,
- * or `undefined` when it does not. A literal and `as const` state their own
- * type. A reference to a variable, parameter, enum member or property is
- * judged by the type it is declared with (`getDeclaredSymbolType()`), not the
- * type flow narrowing gives it at this use, since a narrowing can go stale: a
- * call between the test and the use can assign the variable again. A non-null
- * assertion is judged by its operand, less `null` and `undefined`, and a call
- * by the return type its signature writes. Anything else, a type assertion
- * for a value, an element access or an operator among them, is judged by
- * nothing, and so is a key that reaches one on the way to its declaration:
- * `const key = raw as "a"`, and a `const` initialized from that one.
+ * The type `expression` is judged by when its type comes from declarations
+ * alone, or `undefined` when it does not; a key is judged by it, and so is
+ * the receiver of a property a key reads. A literal and `as const` state
+ * their own type, and an object literal, a `new` expression and `this` take
+ * theirs from declarations, the members they hold judged where they are read.
+ * A reference to a variable, parameter, enum member or property is judged by
+ * the type it is declared with (`getDeclaredSymbolType()`), not the type flow
+ * narrowing gives it at this use, since a narrowing can go stale: a call
+ * between the test and the use can assign the variable again; a property
+ * counts only when its receiver does. A non-null assertion is judged by its
+ * operand, less `null` and `undefined`, and a call by the return type its
+ * signature writes. Anything else, a type assertion for a value, an element
+ * access or an operator among them, is judged by nothing, and so is an
+ * expression that reaches one on the way to its declarations:
+ * `const key = raw as "a"`, a `const` initialized from that one, and a
+ * property of a value cast to a type that declares it.
  */
-function getDeclaredKeyType(
+function getDeclaredType(
   expression: ts.Expression,
   checker: ts.TypeChecker,
   seen: Set<ts.Symbol> = new Set(),
 ): ts.Type | undefined {
-  const key = skipKeyWrappers(expression);
-  if (isLiteralElement(key)) {
-    return checker.getTypeAtLocation(key);
+  const node = skipKeyWrappers(expression);
+  if (
+    isLiteralElement(node) || ts.isObjectLiteralExpression(node) ||
+    ts.isNewExpression(node) || node.kind === ts.SyntaxKind.ThisKeyword
+  ) {
+    return checker.getTypeAtLocation(node);
   }
   if (
-    (ts.isAsExpression(key) || ts.isTypeAssertionExpression(key)) &&
-    ts.isConstTypeReference(key.type)
+    (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
+    ts.isConstTypeReference(node.type)
   ) {
-    return getDeclaredKeyType(key.expression, checker, seen) &&
-      checker.getTypeAtLocation(key);
+    return getDeclaredType(node.expression, checker, seen) &&
+      checker.getTypeAtLocation(node);
   }
-  if (ts.isNonNullExpression(key)) {
-    const declared = getDeclaredKeyType(key.expression, checker, seen);
+  if (ts.isNonNullExpression(node)) {
+    const declared = getDeclaredType(node.expression, checker, seen);
     return declared && checker.getNonNullableType(declared);
   }
-  if (ts.isIdentifier(key) || ts.isPropertyAccessExpression(key)) {
-    const symbol = checker.getSymbolAtLocation(key);
+  if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      !getDeclaredType(node.expression, checker, seen)
+    ) {
+      return undefined;
+    }
+    const symbol = checker.getSymbolAtLocation(node);
     return symbol && getDeclaredSymbolType(symbol, checker, seen);
   }
-  if (ts.isCallExpression(key)) {
-    const declaration = checker.getResolvedSignature(key)?.declaration;
+  if (ts.isCallExpression(node)) {
+    const declaration = checker.getResolvedSignature(node)?.declaration;
     return declaration && !ts.isJSDocSignature(declaration) && declaration.type
       ? checker.getTypeFromTypeNode(declaration.type)
       : undefined;
@@ -696,17 +710,20 @@ function getDeclaredKeyType(
 }
 
 /**
- * The type a key naming `symbol` is judged by (`getDeclaredKeyType()`): the
+ * The type a reference to `symbol` is judged by (`getDeclaredType()`): the
  * type `symbol` is declared with, when the declaration writes it, as a
  * parameter, a property signature and an annotated variable do, or takes it
  * from an initializer that is itself judged by something, as a `const`, an
  * object literal's property and a class field without an annotation do. An
- * enum member is judged by its type, and a destructured name by the property
- * it binds. A declaration whose initializer is judged by nothing, one with
- * neither an initializer nor a written type, such as a callback's parameter
- * typed by its context, and any other kind of declaration are judged by
- * nothing. `seen` holds the symbols on the way, and one met again is judged
- * by nothing.
+ * enum, an enum member, a namespace, a class and a function are their own
+ * declarations, and a destructured name is judged by the property it binds.
+ * The literal the symbol holds has to be the one its declaration states: a
+ * property a generic type declares as `T` holds whatever its instantiation,
+ * which a cast can drive, makes `T`. A declaration whose initializer is judged
+ * by nothing, one with neither an initializer nor a written type, such as a
+ * callback's parameter typed by its context, and any other kind of
+ * declaration are judged by nothing. `seen` holds the symbols on the way, and
+ * one met again is judged by nothing.
  */
 function getDeclaredSymbolType(
   symbol: ts.Symbol,
@@ -719,70 +736,92 @@ function getDeclaredSymbolType(
   const declaration = declared.valueDeclaration;
   if (!declaration || seen.has(declared)) return undefined;
   seen.add(declared);
+  const type = checker.getTypeOfSymbol(declared);
+  if (
+    declared.flags &
+    (ts.SymbolFlags.Enum | ts.SymbolFlags.EnumMember |
+      ts.SymbolFlags.ValueModule | ts.SymbolFlags.Class |
+      ts.SymbolFlags.Function)
+  ) {
+    const initializer = ts.isEnumMember(declaration)
+      ? declaration.initializer
+      : undefined;
+    return !initializer || getDeclaredType(initializer, checker, seen)
+      ? type
+      : undefined;
+  }
   if (ts.isShorthandPropertyAssignment(declaration)) {
     const value = checker.getShorthandAssignmentValueSymbol(declaration);
     return value && getDeclaredSymbolType(value, checker, seen);
   }
   let initializer: ts.Expression | undefined;
-  let typeWritten: boolean;
+  let written: ts.Type | undefined;
   if (ts.isBindingElement(declaration)) {
-    const property = getBoundPropertySymbol(declaration, checker);
-    if (!property || !getDeclaredSymbolType(property, checker, seen)) {
-      return undefined;
-    }
+    const property = getBoundPropertySymbol(declaration, checker, seen);
+    written = property && getDeclaredSymbolType(property, checker, seen);
+    if (!written) return undefined;
     initializer = declaration.initializer;
-    typeWritten = true;
-  } else if (ts.isEnumMember(declaration)) {
-    initializer = declaration.initializer;
-    typeWritten = true;
   } else if (ts.isPropertySignature(declaration)) {
-    typeWritten = declaration.type !== undefined;
+    written = declaration.type && checker.getTypeFromTypeNode(declaration.type);
   } else if (
     ts.isVariableDeclaration(declaration) || ts.isParameter(declaration) ||
     ts.isPropertyDeclaration(declaration)
   ) {
     initializer = declaration.initializer;
-    typeWritten = declaration.type !== undefined;
+    written = declaration.type && checker.getTypeFromTypeNode(declaration.type);
   } else if (ts.isPropertyAssignment(declaration)) {
     initializer = declaration.initializer;
-    typeWritten = false;
   } else {
     return undefined;
   }
-  const type = checker.getTypeOfSymbol(declared);
   if (initializer) {
-    const judged = getDeclaredKeyType(initializer, checker, seen);
-    // A declaration that writes no type takes its initializer's, and the
-    // literal it holds has to be the one the initializer is judged by: a
-    // generic call is judged by a type parameter, which the call's
-    // arguments, a cast among them, instantiate.
-    if (
-      !judged ||
-      (!typeWritten && getLiteralKeyText(judged) !== getLiteralKeyText(type))
-    ) {
-      return undefined;
-    }
-  } else if (!typeWritten) {
-    return undefined;
+    const judged = getDeclaredType(initializer, checker, seen);
+    if (!judged) return undefined;
+    written ??= judged;
   }
-  return type;
+  if (!written) return undefined;
+  const held = getLiteralKeyText(checker.getNonNullableType(type));
+  return held === undefined ||
+      held === getLiteralKeyText(checker.getNonNullableType(written))
+    ? type
+    : undefined;
 }
 
 /**
  * The property `element` binds from the value an object pattern destructures,
- * or `undefined` for an element of an array pattern, a rest element or one
- * keyed by a computed name.
+ * or `undefined` for an element of an array pattern, a rest element, one keyed
+ * by a computed name, one nested in another pattern, and one whose
+ * destructured value is judged by nothing (`getDeclaredType()`):
+ * `source as { key: "a" }` states a type the value need not have.
  */
 function getBoundPropertySymbol(
   element: ts.BindingElement,
   checker: ts.TypeChecker,
+  seen: Set<ts.Symbol>,
 ): ts.Symbol | undefined {
-  if (!ts.isObjectBindingPattern(element.parent) || element.dotDotDotToken) {
+  const pattern = element.parent;
+  if (!ts.isObjectBindingPattern(pattern) || element.dotDotDotToken) {
     return undefined;
   }
   const name = element.propertyName ?? element.name;
-  if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) return undefined;
-  return checker.getTypeAtLocation(element.parent).getProperty(name.text);
+  if (
+    !ts.isIdentifier(name) && !ts.isStringLiteral(name) &&
+    !ts.isNumericLiteral(name)
+  ) {
+    return undefined;
+  }
+  const source = pattern.parent;
+  if (!ts.isVariableDeclaration(source) && !ts.isParameter(source)) {
+    return undefined;
+  }
+  if (
+    source.initializer
+      ? !getDeclaredType(source.initializer, checker, seen)
+      : !source.type
+  ) {
+    return undefined;
+  }
+  return checker.getTypeAtLocation(pattern).getProperty(name.text);
 }
 
 /**

@@ -2059,10 +2059,13 @@ adjustments:
   return type. A type assertion anywhere on the way is not taken for the key's
   value, whether at the key (`offers[key as "k"]`), in the initializer of the
   variable the key names, or further back (`const key = asserted`, or
-  `holder.key` with `holder = { key: raw as "k" }`); `as const` is. A key
-  reached through anything else, such as an element access, an operator, a
-  getter, a parameter typed by its context, a generic call or a property no
-  declaration writes, does not fix the path. The same rule decides a `.key()` argument and a computed
+  `holder.key` with `holder = { key: raw as "k" }`); `as const` is. A property counts
+  only when its receiver does, so a property of a value cast to a type that
+  declares it does not, and only when it holds the literal its declaration
+  writes, so a generic property declared `T` that a cast instantiates does not.
+  A key reached through anything else, such as an element access, an
+  operator, a getter, a parameter typed by its context, a generic call or a
+  property no declaration writes, does not fix the path. The same rule decides a `.key()` argument and a computed
   property name (`policy/capability-analysis.ts`, `getStaticPathKey()`;
   `test/policy/capability-analysis-static-keys.test.ts`). A key that can name
   any member (`offers[key.get()]`, a `string`-typed variable or a widened
@@ -2080,7 +2083,7 @@ adjustments:
   (`items[selected.get()]`) is a read of its own wherever the access sits, and
   where the analysis resolves a fallback's operand or a `for..of` iterable to
   a ref in place of walking it, it still visits what that operand evaluates:
-  each operand of a fallback, wherever on the member spine it sits, a call on
+each operand of a fallback, wherever on the member spine it sits, a call on
   the spine with its arguments and callbacks, and the keys on the spine. A
   write through such a key (`counts.key(i).set(v)`) stays a wildcard and is
   also recorded as a write of the prefix, so the prefix's capability says it
