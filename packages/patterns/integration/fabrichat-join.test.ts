@@ -1,18 +1,18 @@
 /**
  * FabriChat's way in, driven through the page alone by two people, each in a
- * browser of their own, on a home that holds the real FabriChat manager. Home
- * renders the manager nowhere of its own, so each person opens it as a page
- * of its own, at its path in home's result. The second person creates a
- * profile and reads their chat address off their manager. The first creates
- * a profile, starts a direct chat with that address, sees the room listed in
- * their manager, and follows the link their notice shows to the room's page.
- * The second opens that page and adds the room to their chats, after which
- * each sees the other among the room's participants, before either has
- * written. The second sends a message, which the first sees on the room's
- * page; the second's manager then lists the room too. Last, the first opens their manager again, creates a
- * group from the group controls of that new page, and starts another chat,
- * whose row's link opens the new room.
+ * browser of their own, on a home that holds the real FabriChat manager. Each
+ * person opens the manager as a page of its own, at its path in home's result.
+ * The second person creates a profile and reads their chat address off their
+ * manager. The first creates a profile, starts a direct chat with that address,
+ * sees the room listed in their manager, and follows the link their notice
+ * shows to the room's page. The second opens that page and adds the room to
+ * their chats, after which each sees the other among the room's participants,
+ * before either has written. The second sends a message, which the first sees
+ * on the room's page; the second's manager then lists the room too. Last, the
+ * first opens their manager again, creates a group from the group controls of
+ * that new page, and starts another chat, whose row's link opens the new room.
  */
+
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
@@ -225,7 +225,7 @@ async function gotoHome(
 
 /**
  * Opens `identity`'s chat manager on `shell`, as a page of its own at its path
- * in home's result, since home renders it nowhere. Home must already exist.
+ * in home's result. Home must already exist.
  */
 async function openChatManager(
   shell: ShellIntegration,

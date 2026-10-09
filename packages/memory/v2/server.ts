@@ -2607,6 +2607,8 @@ export class Server {
   memoryProtocolFlags(): MemoryProtocolFlags {
     return {
       ...getMemoryProtocolFlags(),
+      // Server execution is attached through the observer, and only then.
+      serverExecution: this.#serverExecutionObserver !== undefined,
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
       routedAuthV1: false,

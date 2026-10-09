@@ -329,7 +329,12 @@ server](#clients-that-are-not-built-alongside-their-server).
   feature, but the per-class commit admission rows are enforced by the memory
   server under the flag, so the value lives beside the memory protocol flags.
   It is not a handshake capability — admission enforcement is server-local and
-  nothing about it is negotiated per connection.
+  nothing about it is negotiated per connection. A memory server does report,
+  in every `hello.ok`, whether server execution is attached to it
+  (`serverExecution`), as a fact a client reads before opening any session
+  rather than a capability the two agree on. A server that predates the flag
+  sends no `serverExecution` at all, and a client receiving none does not know
+  whether server execution is on.
 - **Added by.** Bernhard Seefeld, in server-execution v2 Phase 1 stage A
   (#5339;
   [`docs/plans/server-execution-v2.md`](../plans/server-execution-v2.md);

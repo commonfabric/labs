@@ -279,11 +279,10 @@ The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
 in `schemas.tsx`. The room's stored records and the handlers that write them are
 in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
 home pattern holds a manager, and `#chatManager` resolves to it (see
-[`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)), but
-home renders it nowhere of its own: a page shows it at its path in home's
-result, with the user's rooms, each a link that opens the room as a page of its
-own, the controls that start a direct or a group chat, and, when the session's
-latest start was refused, the reason. A refusal of text that isn't a principal
+[`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)). Home's
+**Chats** tab renders the manager: the user's rooms, each a link that opens the
+room as a page of its own, the controls that start a direct or a group chat,
+and, when the session's latest start was refused, the reason. A refusal of text that isn't a principal
 also shows the text. Where the runtime lacks a prerequisite, the patterns depart
 from this design, as below.
 
@@ -377,29 +376,33 @@ from this design, as below.
   JSON, and an offer's `id` is the `requestId` alone. An offer reaches the
   recipient's inbox, and their host's share intake vets it and registers the
   room's space in their Home's shared-space catalog
-  ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)), but
-  the manager lists only the rooms it records itself, not the catalog's, so the
-  offered room reaches the recipient's chats only as a notice's room does,
-  through `accept`. A room is offered only to someone the request names by
-  profile: an `openDirect` naming `profile`, or a participant's chip, whose
-  click names the participant's profile. The manager's own start controls name a
-  counterpart by principal, and a group's members are principals. Nothing
-  delivers a notice yet (see [first
-  contact](FabriChatManager.md#first-contact)), so the manager's rendering shows
-  each queued notice with a link to its room, for the room's creator to send on.
-  And a room shows a viewer whose manager doesn't list it a control that asks
-  the manager to `accept` it, so whoever opens the room's link can add it to
-  their chats.
-- **The catalog.** Creating a room registers its space in the user's Home
-  shared-space catalog
+  ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
+  where their manager lists it. A room is offered only to someone the request
+  names by profile: an `openDirect` naming `profile`, or a participant's chip,
+  whose click names the participant's profile. The manager's own start controls
+  name a counterpart by principal, and a group's members are principals.
+  Nothing delivers a notice yet (see
+  [first contact](FabriChatManager.md#first-contact)), so the manager's
+  rendering shows each queued notice with a link to its room, for the room's
+  creator to send on. And a room shows a viewer whose manager doesn't list it a
+  control that asks the manager to `accept` it, so whoever opens the room's link
+  can add it to their chats.
+- **The index is the catalog's.** The manager's `rooms` lists the
+  `fabrichat-room` entries the user's Home shared-space catalog keeps as saved,
+  each room found as its space's root. Creating a room registers its space in
+  the user's Home shared-space catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), in the
   creating transaction once the space's name has resolved, and so does accepting
   a room a manager created. Each room registered is registered under the
   manager's own host, since a pattern can't read which host serves a space.
   Finding a direct room again, or accepting a room, restores its entry if it was
-  archived. The manager's `rooms` is still its own list: forgetting a room
-  removes it from `rooms` and leaves its catalog entry saved, and a room the
-  share intake registers is not in `rooms`.
+  archived, and forgetting a room archives its entry, at the revision the
+  request names. A direct room's counterpart is the one `direct` holds the room
+  under, or else the room's labeled creator, and `openDirect` finds only a room
+  `direct` holds. A room tells whether the viewer's chats list it from the
+  catalog itself, which the manager offers as `sharedSpaceCatalog`. Accepting a
+  space's own chat is refused, since the catalog lists rooms by their own
+  spaces.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

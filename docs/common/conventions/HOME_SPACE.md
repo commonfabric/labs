@@ -233,7 +233,7 @@ The piece holds two things:
   before the request is staged.
 
 Home's **Agent runs** tab renders this queue beside Spaces, Favorites, Profile,
-and Self. Each row shows its task, state, age, and available token usage.
+Self, and Chats. Each row shows its task, state, age, and available token usage.
 Reported cost and estimated cost have separate labels; an unavailable estimate
 shows the harness's withheld reason when supplied. Missing counters and costs
 remain unavailable rather than displaying zero. Relative ages share a one-minute
@@ -269,10 +269,9 @@ requests produced for a client to deliver. It creates each room as the root
 of a space of its own. Everything it holds is private to the user, as the home
 space is.
 
-Home holds it but renders it nowhere of its own: a page shows it at its path
-in home's result, `chatManager`, with the user's rooms, each a link that opens
-the room as a page of its own, and the controls that start a direct or a group
-chat.
+Home's **Chats** tab renders it: the user's rooms, each a link that opens the
+room as a page of its own, and the controls that start a direct or a group
+chat. A page can also show it at its path in home's result, `chatManager`.
 
 A home space whose system home pattern was set up before it held a chat manager
 holds none until the home space is next opened, since nothing updates a piece
@@ -284,7 +283,9 @@ remedies, rather than resolving to nothing.
 Home hands the manager its shared-space catalog ([Shared-space
 catalog](../../features/shared-space-catalog.md)), and the manager registers
 there each room it creates, and each room a manager created that it accepts, as
-a `fabrichat-room` entry.
+a `fabrichat-room` entry. Its `rooms` is a view over the catalog: the saved
+`fabrichat-room` entries, a room offered to the user and registered by the share
+intake among them, and forgetting a room archives its entry.
 
 ## Custom Home Pattern
 
