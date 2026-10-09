@@ -219,7 +219,6 @@ import {
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
-  type CfcExternalContentObservation,
   type CfcLabelView,
   type CfcMetadata,
   type IFCLabel,
