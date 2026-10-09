@@ -346,8 +346,10 @@ export const scopeOfWrittenScopedUnion = (
  * The branches of the union `schema` is, through its chain of local
  * references in `definitions` (`referenceChain()`), each as the chain of the
  * schemas it reaches, and a branch that is itself a union read for its own
- * branches in turn. A definition met again on the way, as a recursive one
- * is, adds nothing. `undefined` where `schema` reaches no `anyOf`.
+ * branches in turn. A cell is a branch whatever its value holds: an `anyOf`
+ * on or behind it is its value's. A definition met again on the way, as a
+ * recursive one is, adds nothing. `undefined` where `schema` reaches no
+ * `anyOf` before a cell.
  */
 const unionBranches = (
   schema: MutableJSONSchemaObj,
@@ -355,8 +357,10 @@ const unionBranches = (
   reached = new Set<MutableJSONSchemaObj>(),
 ): MutableJSONSchemaObj[][] | undefined => {
   const chain = referenceChain(schema, definitions);
-  const union = chain.find((link) => Array.isArray(link.anyOf));
-  if (!union) return undefined;
+  const union = chain.find((link) =>
+    isHandleSchema(link) || Array.isArray(link.anyOf)
+  );
+  if (!union || isHandleSchema(union)) return undefined;
   if (reached.has(union)) return [];
   reached.add(union);
   return (union.anyOf as MutableJSONSchema[]).flatMap((branch) =>

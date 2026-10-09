@@ -921,6 +921,34 @@ ${source}`,
         });
       }
 
+      for (
+        const [position, source] of [
+          [
+            "a pattern input",
+            `export default pattern<{ handle: PerSession<Writable<A | null>> | null }>(({ handle }) => ({
+  handle,
+}));`,
+          ],
+          [
+            "a handler's state",
+            `export const write = handler<void, { handle: PerSession<Writable<A | null>> | null }>(
+  (_, { handle }) => {
+    if (handle) handle.set(null);
+  },
+);`,
+          ],
+        ] as const
+      ) {
+        it(`refuses one whose value may be \`null\` beside \`null\` as ${position}`, async () => {
+          // The cell's own value is a union, which is behind the cell.
+          await expect(transformed(
+            `import { computed, handler, pattern, Writable, type PerSession } from "commonfabric";
+interface A { a: string }
+${source}`,
+          )).rejects.toThrow(REFUSAL);
+        });
+      }
+
       it("caps the handle of a scoped alias of a labelled cell in the input and its capture", async () => {
         // The labelled cell's alias is hoisted into a definition the input's
         // payload only references; the cap is written with the cell.

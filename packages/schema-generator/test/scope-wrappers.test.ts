@@ -329,6 +329,10 @@ interface SchemaRoot {
         "PerSpace<Cell<string> | undefined>",
         "PerSpace<Cell<string>> | undefined",
         "PerUser<Cell<PerSession<Cell<string>> | null>>",
+        "PerSpace<Writable<string | null> | null>",
+        "PerSpace<Writable<string | null>> | null",
+        "PerSpace<Writable<string | undefined>> | undefined",
+        "PerSpace<Writable<{ a: string } | { b: number }>> | null",
       ]
     ) {
       const { type, checker, typeNode } = await getTypeFromCode(
@@ -378,6 +382,10 @@ type Handle = Confidential<Writable<string>, ["owner"]>;`;
       [
         "`undefined` in a union nested in an alias",
         `${LABELLED_HANDLE} type Inner = Handle | null; type Maybe = Inner | undefined;`,
+      ],
+      [
+        "`null`, the cell an alias of a labelled cell whose value is a union",
+        `${LABELLED_HANDLE} type Valued = Confidential<Writable<string | null>, ["owner"]>; type Maybe = Valued | null;`,
       ],
       [
         "`null` in a recursive definition",
