@@ -1269,7 +1269,13 @@ and the runs of an `agent()` built-in, under `<run-key>/artifacts/`, are
 labelled `agent()`. They open, map and graph like the console's own, but no
 session holds them, so they appear here and nowhere else. A run id two roots
 both hold is read from the console's own root first, then from `/ask` jobs, then
-from `agent()` runs. A work root that does not exist lists nothing.
+from `agent()` runs. Only checkpoints with the required run-state fields and an
+ID matching their directory are listed or take precedence; malformed and
+incomplete checkpoints are skipped individually. If no valid checkpoint holds an
+ID, a real run directory still permits artifact and tool-output reads. Lane,
+job, `artifacts` and run directories must be real directories: symlinked
+descendants are skipped by both listing and resolution. A work root that does
+not exist lists nothing.
 
 ### The map
 

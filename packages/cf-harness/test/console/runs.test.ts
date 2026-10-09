@@ -13,9 +13,11 @@ import {
   listConsoleRuns,
   readConsoleRun,
   readConsoleRunArtifact,
+  readConsoleRunFamilyGraph,
   readConsoleRunFlow,
   readConsoleToolOutput,
 } from "../../console/run-store.ts";
+import { writeRunRootFixture } from "./run-root-fixture.ts";
 import { createHarnessRunState } from "../../src/run-state.ts";
 import {
   createHarnessHandleTable,
@@ -424,6 +426,147 @@ describe("console/runs", () => {
         });
       });
 
+      for (
+        const level of [
+          "lane",
+          "local-lane",
+          "job",
+          "ask-artifacts",
+          "agent-artifacts",
+          "run",
+        ] as const
+      ) {
+        it(`rejects a symlinked ${level} descendant for listing and resolution`, async () => {
+          await withRoots(async (roots, base) => {
+            const outside = join(base, "outside");
+            let target: string;
+            let link: string;
+            if (level === "local-lane") {
+              await Deno.remove(join(roots.agentRuns, "local"), {
+                recursive: true,
+              });
+              target = join(outside, "local");
+              link = join(roots.agentRuns, "local");
+              await writeRun(
+                join(target, "job", "artifacts"),
+                "escaped",
+                "2026-01-01T00:00:05.000Z",
+              );
+            } else if (level === "lane") {
+              target = join(outside, "lane");
+              link = join(roots.agentRuns, "outside-lane");
+              await writeRun(
+                join(target, "artifacts"),
+                "escaped",
+                "2026-01-01T00:00:05.000Z",
+              );
+            } else if (level === "job") {
+              target = join(outside, "job");
+              link = join(roots.agentRuns, "local", "outside-job");
+              await writeRun(
+                join(target, "artifacts"),
+                "escaped",
+                "2026-01-01T00:00:05.000Z",
+              );
+            } else if (level === "run") {
+              await writeRun(outside, "escaped", "2026-01-01T00:00:05.000Z");
+              target = join(outside, "escaped");
+              link = join(roots.console, "escaped");
+            } else {
+              target = join(outside, "artifacts");
+              link = level === "ask-artifacts"
+                ? join(roots.agentRuns, "local", "outside-job", "artifacts")
+                : join(roots.agentRuns, "outside-lane", "artifacts");
+              await writeRun(target, "escaped", "2026-01-01T00:00:05.000Z");
+            }
+            await Deno.mkdir(join(link, ".."), { recursive: true });
+            await Deno.symlink(target, link);
+            expect((await listAllConsoleRuns(roots)).map((run) => run.runId))
+              .not.toContain("escaped");
+            expect(await findConsoleRunRoot(roots, "escaped")).toBeUndefined();
+          });
+        });
+      }
+
+      it("opens the listed ask duplicate when the console run is a symlink", async () => {
+        await withRoots(async (roots, base) => {
+          const outside = join(base, "outside");
+          await writeRun(outside, "asked", "2026-01-01T00:00:05.000Z");
+          await Deno.writeTextFile(
+            join(outside, "asked", "transcript.json"),
+            JSON.stringify([{ role: "user", content: "outside" }]),
+          );
+          await Deno.symlink(
+            join(outside, "asked"),
+            join(roots.console, "asked"),
+          );
+          const row = (await listAllConsoleRuns(roots)).find((run) =>
+            run.runId === "asked"
+          )!;
+          const found = (await findConsoleRunRoot(roots, "asked"))!;
+          expect(found.source).toBe(row.source);
+          expect(
+            (await readConsoleRun(found.artifactRoot, "asked"))?.summary.title,
+          ).toBe(row.title);
+        });
+      });
+
+      for (
+        const [kind, state] of [
+          ["malformed", "{"],
+          ["null", "null"],
+          ["incomplete", '{"runId":"asked"}'],
+          [
+            "wrong-identity",
+            JSON.stringify(runState("another-id", "2026-01-01T00:00:01.000Z")),
+          ],
+        ]
+      ) {
+        it(`skips a ${kind} state per run and resolves the valid lower-priority duplicate`, async () => {
+          await withRoots(async (roots) => {
+            await Deno.mkdir(join(roots.console, "asked"));
+            await Deno.writeTextFile(
+              join(roots.console, "asked", "run-state.json"),
+              state,
+            );
+            const rows = await listAllConsoleRuns(roots);
+            expect(
+              rows.filter((run) => run.source === "console").map((run) =>
+                run.runId
+              ),
+            ).toEqual(["mine"]);
+            expect(
+              rows.filter((run) => run.runId === "asked").map((run) =>
+                run.source
+              ),
+            ).toEqual(["ask"]);
+            expect((await findConsoleRunRoot(roots, "asked"))?.source).toBe(
+              "ask",
+            );
+            expect(await readConsoleRun(roots.console, "asked"))
+              .toBeUndefined();
+          });
+        });
+      }
+
+      it("prefers an ask job over an agent lane for the same run id", async () => {
+        await withRoots(async (roots) => {
+          await writeRun(
+            join(roots.agentRuns, "Key_abc-1", "artifacts"),
+            "asked",
+            "2026-01-01T00:00:09.000Z",
+          );
+          expect(
+            (await listAllConsoleRuns(roots)).filter((run) =>
+              run.runId === "asked"
+            ).map((run) => run.source),
+          ).toEqual(["ask"]);
+          expect((await findConsoleRunRoot(roots, "asked"))?.source).toBe(
+            "ask",
+          );
+        });
+      });
+
       it("finds a run directory that has no state yet, for its files", async () => {
         await withRoots(async (roots) => {
           const askRoot = join(roots.agentRuns, "local", "job-1", "artifacts");
@@ -456,6 +599,49 @@ describe("console/runs", () => {
           expect(await findConsoleRunRoot(roots, "spaced")).toBeUndefined();
           expect(await findConsoleRunRoot(roots, "tilde")).toBeUndefined();
         });
+      });
+    });
+
+    it("reads the selected job's family, neighbor handles and parent and child payloads", async () => {
+      await withArtifactRoot(async (base) => {
+        const fixture = await writeRunRootFixture(base);
+        const found = (await findConsoleRunRoot(fixture.roots, "asked"))!;
+        expect(found.artifactRoot).toBe(fixture.ask);
+        const detail = (await readConsoleRun(found.artifactRoot, "asked"))!;
+        expect(detail.summary.title).toBe("selected parent");
+        expect(
+          detail.handles.find((handle) => handle.token === fixture.token)?.ref,
+        ).toBe("/of:fid1:selected");
+        const flow = (await readConsoleRunFlow(found.artifactRoot, "asked"))!;
+        expect(
+          flow.turns[0].nodes.flatMap((node) => node.children).map((node) =>
+            node.runId
+          ),
+        ).toEqual([fixture.child]);
+        const graph =
+          (await readConsoleRunFamilyGraph(found.artifactRoot, "asked"))!;
+        expect(
+          graph.nodes.filter((node) => node.kind === "pattern").map((node) =>
+            node.patternId
+          ),
+        ).toEqual(["selected-parent", "selected-child"]);
+        expect(
+          graph.nodes.filter((node) => node.kind === "cell").map((node) =>
+            node.address
+          ),
+        ).toEqual(["/of:fid1:selected"]);
+        for (const runId of ["asked", fixture.child]) {
+          const root = (await findConsoleRunRoot(fixture.roots, runId))!;
+          expect(
+            JSON.parse(
+              (await readConsoleToolOutput(
+                root.artifactRoot,
+                runId,
+                fixture.outputName,
+              ))!,
+            ),
+          ).toEqual({ marker: "selected", runId });
+        }
       });
     });
 

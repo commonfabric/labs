@@ -81,6 +81,16 @@ export const runTree = (
   return roots;
 };
 
+/** Selects a new console parent run to open while a turn is executing. */
+export const freshConsoleRun = (
+  runs: readonly ConsoleListedRun[],
+  beforeTurn: ReadonlySet<string>,
+): ConsoleListedRun | undefined =>
+  runs.find((run) =>
+    run.source === "console" && run.parentRunId === undefined &&
+    !beforeTurn.has(run.runId)
+  );
+
 export class ConsoleApp extends LitElement {
   static override properties = {
     sessionId: { attribute: false },
@@ -246,10 +256,7 @@ export class ConsoleApp extends LitElement {
     if (this.openRunId === undefined) {
       // The turn's own run is whichever of this console's appeared after it
       // started; an `/ask` or `agent()` run can appear in the meantime too.
-      const fresh = this.runs.find((run) =>
-        run.source === "console" && run.parentRunId === undefined &&
-        !this.#runIdsBeforeTurn.has(run.runId)
-      );
+      const fresh = freshConsoleRun(this.runs, this.#runIdsBeforeTurn);
       if (fresh !== undefined) {
         this.openRunId = fresh.runId;
       }

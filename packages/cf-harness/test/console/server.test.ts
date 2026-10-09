@@ -26,6 +26,7 @@ import {
   harnessSessionEngineOptions,
 } from "../../src/session-assembly.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
+import { writeRunRootFixture } from "./run-root-fixture.ts";
 import { createHarnessRunState } from "../../src/run-state.ts";
 import {
   bashToolDescriptor,
@@ -3888,6 +3889,84 @@ describe("console/server", () => {
   });
 
   describe("GET /api/runs with the agent runner's work root", () => {
+    it("serves the selected job's family, handles, artifacts and parent and child tool outputs", async () => {
+      const base = await Deno.makeTempDir();
+      try {
+        const fixture = await writeRunRootFixture(base);
+        const reading = new ConsoleServer(
+          {
+            ...await config(),
+            artifactRoot: fixture.roots.console,
+            agentRunsRoot: fixture.roots.agentRuns,
+          },
+          (onEvent) =>
+            new HarnessInteractiveChatService({
+              createPromptLoop: answeringLoop,
+              now: advancingClock(),
+              onEvent,
+            }),
+        );
+        const json = async (path: string) => {
+          const response = await reading.handle(getRequest(path));
+          expect(response.status).toBe(200);
+          return await response.json();
+        };
+        const listed = await json("/api/runs");
+        expect(
+          listed.runs.filter((run: { runId: string }) => run.runId === "asked")
+            .map((
+              run: { source: string; title: string },
+            ) => [run.source, run.title]),
+        ).toEqual([["ask", "selected parent"]]);
+        const detail = await json("/api/runs/asked");
+        expect(detail.summary.title).toBe("selected parent");
+        expect(
+          detail.handles.find((handle: { token: string }) =>
+            handle.token === fixture.token
+          ).ref,
+        ).toBe("/of:fid1:selected");
+        const flow = await json("/api/runs/asked/flow");
+        expect(
+          flow.turns[0].nodes.flatMap((node: { children: unknown[] }) =>
+            node.children
+          ).map((node: { runId: string }) => node.runId),
+        ).toEqual([fixture.child]);
+        expect(flow.turns[0].text).toBe("selected parent");
+        expect(
+          flow.turns[0].nodes.flatMap((node: { reads: { ref: string }[] }) =>
+            node.reads
+          ).map((cell: { ref: string }) => cell.ref),
+        ).toEqual(["/of:fid1:selected"]);
+        expect(
+          flow.turns[0].nodes.flatMap((node: { children: unknown[] }) =>
+            node.children
+          ).flatMap((node: { reads: { ref: string }[] }) => node.reads).map((
+            cell: { ref: string },
+          ) => cell.ref),
+        ).toEqual(["/of:fid1:selected"]);
+        const graph = await json("/api/runs/asked/graph");
+        expect(
+          graph.nodes.filter((node: { kind: string }) =>
+            node.kind === "pattern"
+          ).map((node: { patternId: string }) => node.patternId),
+        ).toEqual(["selected-parent", "selected-child"]);
+        expect(
+          graph.nodes.filter((node: { kind: string }) => node.kind === "cell")
+            .map((node: { address: string }) => node.address),
+        ).toEqual(["/of:fid1:selected"]);
+        expect(await json("/api/runs/asked/artifacts/transcript.json")).toEqual(
+          detail.transcript,
+        );
+        for (const runId of ["asked", fixture.child]) {
+          expect(
+            await json(`/api/runs/${runId}/tool-outputs/${fixture.outputName}`),
+          ).toEqual({ marker: "selected", runId });
+        }
+      } finally {
+        await Deno.remove(base, { recursive: true });
+      }
+    });
+
     it("lists an /ask job's run and serves its detail, flow, graph and files", async () => {
       const base = await Deno.makeTempDir();
       try {

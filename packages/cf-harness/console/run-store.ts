@@ -13,7 +13,11 @@
  */
 
 import { join } from "@std/path";
-import { clauseAlternatives, type IFCLabel } from "@commonfabric/runner/cfc";
+import {
+  clauseAlternatives,
+  type IFCLabel,
+  isCfcEnforcementMode,
+} from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessRunState } from "../src/run-state.ts";
 import type {
@@ -73,11 +77,13 @@ const isSafeSegment = (segment: string): boolean =>
   SAFE_SEGMENT.test(segment) && segment !== "." && segment !== "..";
 
 /** The run directory, or `undefined` for a name that is not one. */
-const runRoot = (
+const runRoot = async (
   artifactRoot: string,
   runId: string,
-): string | undefined =>
-  isSafeSegment(runId) ? join(artifactRoot, runId) : undefined;
+): Promise<string | undefined> => {
+  const root = join(artifactRoot, runId);
+  return isSafeSegment(runId) && await isDirectory(root) ? root : undefined;
+};
 
 const readJson = async <Value>(path: string): Promise<Value | undefined> => {
   try {
@@ -87,6 +93,46 @@ const readJson = async <Value>(path: string): Promise<Value | undefined> => {
     // produced, is a run to describe from what it does have.
     return undefined;
   }
+};
+
+/**
+ * Reads a run checkpoint with its required fields and directory identity.
+ * Listing, resolution, detail and neighbor tables share this eligibility rule.
+ * Optional records retain their writer's schema; this checks the checkpoint's
+ * outer shape rather than interpreting those records.
+ */
+const readRunState = async (
+  root: string,
+  runId: string,
+): Promise<HarnessRunState | undefined> => {
+  const value = await readJson<unknown>(join(root, "run-state.json"));
+  return hasRunStateShape(value, runId) ? value : undefined;
+};
+
+/** Checks checkpoint identity and the required outer fields of its schema. */
+const hasRunStateShape = (
+  value: unknown,
+  runId: string,
+): value is HarnessRunState => {
+  if (
+    !isObjectNotArray(value) || value.runId !== runId ||
+    (typeof value.status !== "string" ||
+      !["pending", "running", "completed", "canceled", "failed"].includes(
+        value.status,
+      )) ||
+    typeof value.createdAt !== "string" ||
+    typeof value.updatedAt !== "string" ||
+    typeof value.currentDir !== "string" ||
+    !isCfcEnforcementMode(value.cfcEnforcementMode) ||
+    !Array.isArray(value.policyEvents) || !Array.isArray(value.toolOutputs) ||
+    (value.policyDecisions !== undefined &&
+      !Array.isArray(value.policyDecisions)) ||
+    (value.cfcInvocationContexts !== undefined &&
+      !Array.isArray(value.cfcInvocationContexts))
+  ) {
+    return false;
+  }
+  return true;
 };
 
 /** Reads omission evidence without confusing a bad record with no record. */
@@ -295,7 +341,10 @@ const safeSubdirectories = async (root: string): Promise<string[]> => {
   const names: string[] = [];
   try {
     for await (const entry of Deno.readDir(root)) {
-      if (entry.isDirectory && isSafeSegment(entry.name)) {
+      if (
+        entry.isDirectory && isSafeSegment(entry.name) &&
+        await isDirectory(join(root, entry.name))
+      ) {
         names.push(entry.name);
       }
     }
@@ -323,7 +372,7 @@ const LOCAL_JOBS_LANE = "local";
  * Shortcut: this walks the runner's whole work root on every request, which is
  * cheap at the hundreds of jobs a developer's machine holds. A runner that
  * prunes nothing will make it slow; an index of run id to job, kept by the
- * runner or cached here by the work root's mtime, is the way out.
+ * runner and updated as jobs write artifacts, is the way out.
  */
 export const consoleArtifactRoots = async (
   roots: ConsoleRunRoots,
@@ -338,18 +387,18 @@ export const consoleArtifactRoots = async (
   if (lanes.includes(LOCAL_JOBS_LANE)) {
     const local = join(roots.agentRuns, LOCAL_JOBS_LANE);
     for (const job of await safeSubdirectories(local)) {
-      found.push({
-        source: "ask",
-        artifactRoot: join(local, job, "artifacts"),
-      });
+      const artifactRoot = join(local, job, "artifacts");
+      if (await isDirectory(artifactRoot)) {
+        found.push({ source: "ask", artifactRoot });
+      }
     }
   }
   for (const lane of lanes) {
     if (lane === LOCAL_JOBS_LANE) continue;
-    found.push({
-      source: "agent",
-      artifactRoot: join(roots.agentRuns, lane, "artifacts"),
-    });
+    const artifactRoot = join(roots.agentRuns, lane, "artifacts");
+    if (await isDirectory(artifactRoot)) {
+      found.push({ source: "agent", artifactRoot });
+    }
   }
   return found;
 };
@@ -379,7 +428,7 @@ export const listAllConsoleRuns = async (
  * and then reads that one root, so a run's `delegate_task` children and the
  * neighbours its handles resolve against are the ones its own job wrote.
  *
- * The first root whose run has a readable state wins, which is the root
+ * The first root whose run has a valid state wins, which is the root
  * {@link listAllConsoleRuns} lists it from. A run directory with no state yet
  * — one still being written, or a child whose tool outputs a route names
  * directly — is still a run to read files from, so failing that the first
@@ -394,23 +443,23 @@ export const findConsoleRunRoot = async (
   }
   let holdsDirectory: ConsoleArtifactRoot | undefined;
   for (const candidate of await consoleArtifactRoots(roots)) {
-    const runDir = join(candidate.artifactRoot, runId);
-    const runState = await readJson<HarnessRunState>(
-      join(runDir, "run-state.json"),
-    );
+    const runDir = await runRoot(candidate.artifactRoot, runId);
+    if (runDir === undefined) continue;
+    const runState = await readRunState(runDir, runId);
     if (runState !== undefined) {
       return candidate;
     }
-    if (holdsDirectory === undefined && await isDirectory(runDir)) {
+    if (holdsDirectory === undefined) {
       holdsDirectory = candidate;
     }
   }
   return holdsDirectory;
 };
 
+/** Returns whether a path names a real directory rather than a symlink. */
 const isDirectory = async (path: string): Promise<boolean> => {
   try {
-    return (await Deno.stat(path)).isDirectory;
+    return (await Deno.lstat(path)).isDirectory;
   } catch {
     return false;
   }
@@ -425,30 +474,19 @@ export const listConsoleRuns = async (
   source: ConsoleRunSource = "console",
 ): Promise<readonly ConsoleListedRun[]> => {
   const summaries: ConsoleListedRun[] = [];
-  try {
-    // `Deno.readDir` reports a missing directory on its first step rather than
-    // at the call, so an artifact root that no run has been written to yet is
-    // caught around the walk rather than around the call.
-    for await (const entry of Deno.readDir(artifactRoot)) {
-      if (!entry.isDirectory || !isSafeSegment(entry.name)) {
-        continue;
-      }
-      const root = join(artifactRoot, entry.name);
-      const runState = await readJson<HarnessRunState>(
-        join(root, "run-state.json"),
-      );
-      if (runState === undefined) {
-        continue;
-      }
+  for (const name of await safeSubdirectories(artifactRoot)) {
+    const root = await runRoot(artifactRoot, name);
+    if (root === undefined) continue;
+    const runState = await readRunState(root, name);
+    if (runState === undefined) continue;
+    try {
       const transcript = await readJson<HarnessTranscriptMessage[]>(
         join(root, "transcript.json"),
-      ) ??
-        [];
+      ) ?? [];
       summaries.push({ ...summarizeConsoleRun(runState, transcript), source });
+    } catch {
+      // An unreadable record excludes this run, not the rest of the root.
     }
-  } catch {
-    // No run has been made yet, so there is no tree to list.
-    return [];
   }
   return sortConsoleRuns(summaries);
 };
@@ -515,13 +553,11 @@ export const readConsoleRun = async (
   runId: string,
   display: ConsoleDisplayFit = publicConsoleDisplay,
 ): Promise<ConsoleRunDetail | undefined> => {
-  const root = runRoot(artifactRoot, runId);
+  const root = await runRoot(artifactRoot, runId);
   if (root === undefined) {
     return undefined;
   }
-  const runState = await readJson<HarnessRunState>(
-    join(root, "run-state.json"),
-  );
+  const runState = await readRunState(root, runId);
   if (runState === undefined) {
     return undefined;
   }
@@ -830,10 +866,7 @@ const readNeighbouringHandles = async (
   const handles: ConsoleHandle[] = [];
   try {
     for (const name of names) {
-      const entry = { name };
-      const runState = await readJson<HarnessRunState>(
-        join(artifactRoot, entry.name, "run-state.json"),
-      );
+      const runState = await readRunState(join(artifactRoot, name), name);
       for (const entryHandle of runState?.handleTable?.entries ?? []) {
         handles.push({
           token: entryHandle.token,
@@ -865,7 +898,7 @@ export const readConsoleRunArtifact = async (
   runId: string,
   name: string,
 ): Promise<string | undefined> => {
-  const root = runRoot(artifactRoot, runId);
+  const root = await runRoot(artifactRoot, runId);
   if (
     root === undefined || !isSafeSegment(name) ||
     !(RUN_ARTIFACT_NAMES as readonly string[]).includes(name)
@@ -889,7 +922,7 @@ export const readConsoleToolOutput = async (
   runId: string,
   name: string,
 ): Promise<string | undefined> => {
-  const root = runRoot(artifactRoot, runId);
+  const root = await runRoot(artifactRoot, runId);
   if (root === undefined || !isSafeSegment(name) || !name.endsWith(".json")) {
     return undefined;
   }
