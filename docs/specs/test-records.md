@@ -477,8 +477,29 @@ Test jobs hold no record-store credential. Each recording job — which is every
 job running tests that "Recording" above does not exempt — spools records
 and uploads one credential-free `test-records-<job>-a<attempt>` artifact, `if:
 always()`. JUnit XML becomes records as it is gathered: leaf cases become
-records, and container cases — one per describe level, with overlapping times —
-are dropped by a name-prefix rule.
+records, and container cases — one per describe level and one per test or step
+that runs steps, with overlapping times — are recorded only where they say something the cases inside them do not. A
+container is a case another case's name is inside.
+
+A container that failed on its own account is recorded as a failure. It fails on
+its own account when its body or one of its hooks threw, or when it finished
+with a step still running, and Deno reports that failure on the container. A
+container whose only failure is that a case inside it failed is not recorded for
+that failure, since that case carries it. A recorded container takes the time it
+spent outside the cases directly inside it, since theirs is in their own records.
+
+A container the lane's manifest holds, as an identity in the unit that ran it, is
+recorded on every run with its outcome on its own account: a pass where it
+failed only through the cases inside it. Its history then holds its passes as
+well as its failures, which is what the publisher judges flakiness, catches, and
+the default branch's latest outcome by. The manifest holds a container once a
+run has recorded it, so a container becomes an identity of its own the first
+time it fails on its own account, and every `describe` does not. Until the
+manifest holds it, a rerun of its unit records nothing for it. A name the report
+gives to more than one case is not recorded this way: the bdd runner names the
+suite of a file's top-level hooks `global` in every file that has them, and that
+name says nothing about which of them passed. Outside a lane, nothing is known,
+and a container is recorded only when it fails on its own account.
 
 In `deno.yml` the recording jobs are the lanes of the `tests` job. Each lane
 ships one artifact, `test-records-tests-<lane>-a<attempt>`, and its shipping

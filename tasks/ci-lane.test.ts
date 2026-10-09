@@ -2713,6 +2713,69 @@ describe("what a lane records about itself", () => {
     await Deno.remove(spool, { recursive: true });
   });
 
+  it("records a test holding others where the manifest knows it in that unit", async () => {
+    // Its own outcome is a pass when nothing but what it holds failed. Only
+    // an identity the manifest holds in the unit that ran is kept, since a
+    // name the store has never seen would make every describe an identity,
+    // and one it knows from another unit is another test.
+    const recorded = async (bakeIn?: string) => {
+      const workDir = await Deno.makeTempDir({ prefix: "lane-known-" });
+      const report = `${workDir}/report.xml`;
+      const suiteUnderTest = suite({
+        id: "workspace-unit",
+        units: ["one", "two"],
+        locate: (record: { test: { s: string } }) =>
+          record.test.s === "bakery"
+            ? { level: "unit" as const, unit: "one" }
+            : undefined,
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: [
+              Deno.execPath(),
+              "eval",
+              `Deno.writeTextFileSync(${JSON.stringify(report)}, ${
+                JSON.stringify(
+                  '<?xml version="1.0"?><testsuites><testsuite name="s" ' +
+                    'tests="2" failures="0"><testcase name="bake" ' +
+                    'classname="test/bake.test.ts" time="0.75"/>' +
+                    '<testcase name="bake &gt; rises" ' +
+                    'classname="test/bake.test.ts" time="0.25"/>' +
+                    "</testsuite></testsuites>",
+                )
+              })`,
+            ],
+            cwd: context.root,
+            junit: [{ path: report, kind: "unit", scope: "bakery" }],
+          }]),
+      });
+      const manifest = manifestOf([
+        { test: { k: "unit", s: "bakery", n: "bake > rises" }, unit: "one" },
+        ...(bakeIn === undefined
+          ? []
+          : [{ test: { k: "unit", s: "bakery", n: "bake" }, unit: bakeIn }]),
+      ]);
+      const [batch] = batchesOf(
+        [suiteUnderTest],
+        pricedFor([suiteUnderTest], manifest),
+        [{ entry: manifest.entries[0]!, reason: "value", repeats: 1 }],
+      );
+      try {
+        const result = await runBatch(batch!, lane, workDir, undefined, {});
+        return result.records.map((record) =>
+          `${record.test.n}: ${record.outcome} in ${record.durationMs}ms`
+        ).sort();
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+      }
+    };
+    expect(await recorded("one")).toEqual([
+      "bake > rises: pass in 250ms",
+      "bake: pass in 500ms",
+    ]);
+    expect(await recorded("two")).toEqual(["bake > rises: pass in 250ms"]);
+    expect(await recorded()).toEqual(["bake > rises: pass in 250ms"]);
+  });
+
   it("reads back the suite and the coverage a batch measurement names", () => {
     // One place composes the name and one place takes it apart, so a
     // reader that took it apart itself could not part company with the

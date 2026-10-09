@@ -28,6 +28,7 @@ import {
   readSpool,
   recordsDir,
   serializeRecordLine,
+  type TestIdentity,
   type TestRecord,
 } from "@commonfabric/test-support/records";
 import {
@@ -116,6 +117,13 @@ export interface CollectOptions {
    * in. Absent, every record takes the declared variant.
    */
   surfaces?: ReadonlyArray<{ kind: string; scope: string }>;
+
+  /**
+   * Whether the caller already knows a test, recorded from a file, as an
+   * identity, which ingestion then records whenever it reports, even where
+   * it holds other tests.
+   */
+  known?: (test: TestIdentity, file: string | undefined) => boolean;
 }
 
 /** What one execution left behind. */
@@ -180,6 +188,7 @@ export async function collectRecords(
             fileByName,
           };
           if (spec.prefix !== undefined) ingestOptions.filePrefix = spec.prefix;
+          if (options.known !== undefined) ingestOptions.known = options.known;
           for (const record of ingestJUnit(xml, ingestOptions)) {
             records.push(record);
           }

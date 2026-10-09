@@ -6,6 +6,7 @@ import {
   activeCapture,
   asDefinition,
   buildCapture,
+  enclosingNames,
   fileForName,
   MACHINERY_MODULE_SUFFIXES,
   NAME_MAP_PREFIX,
@@ -151,6 +152,23 @@ describe("registration", () => {
     });
   });
 
+  describe("enclosingNames()", () => {
+    it("returns each enclosing name, outermost first", () => {
+      expect(enclosingNames("outer > inner > deep")).toEqual([
+        "outer",
+        "outer > inner",
+      ]);
+    });
+
+    it("cuts at separators that overlap", () => {
+      expect(enclosingNames("outer > > step")).toEqual(["outer", "outer >"]);
+    });
+
+    it("returns nothing for a name with no separator", () => {
+      expect(enclosingNames("outer>inner")).toEqual([]);
+    });
+  });
+
   describe("fileForName()", () => {
     const names = new Map([
       ["outer", "packages/a/outer.test.ts"],
@@ -168,6 +186,14 @@ describe("registration", () => {
       );
       expect(fileForName("outer > inner > deep", names)).toBe(
         "packages/a/inner.test.ts",
+      );
+    });
+
+    it("returns the file of a registered name that ends in the separator's mark", () => {
+      // A step of a test named "arrow >" reports as "arrow > > step".
+      const arrow = new Map([["arrow >", "packages/a/arrow.test.ts"]]);
+      expect(fileForName("arrow > > step", arrow)).toBe(
+        "packages/a/arrow.test.ts",
       );
     });
 

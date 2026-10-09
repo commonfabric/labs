@@ -1,10 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import {
-  dropContainerCases,
-  parseJUnit,
-} from "@commonfabric/test-support/records";
+import { parseJUnit, recordedCases } from "@commonfabric/test-support/records";
 import {
   mergeJUnitReports,
   runMemberBatches,
@@ -23,7 +20,7 @@ async function fixture(files: Record<string, string>): Promise<string> {
 /** The names and outcomes of the cases the report at `file` holds. */
 async function outcomes(file: string): Promise<Map<string, string>> {
   return new Map(
-    dropContainerCases(parseJUnit(await Deno.readTextFile(file)))
+    recordedCases(parseJUnit(await Deno.readTextFile(file)))
       .map((leaf) => [leaf.name, leaf.outcome]),
   );
 }
@@ -48,7 +45,7 @@ describe("run-test-batches", () => {
           '<testsuite name="./b.test.ts"><testcase name="b"/><testcase name="c"><failure/></testcase></testsuite>\n',
         ),
       ]);
-      expect(dropContainerCases(parseJUnit(merged)).map((leaf) => leaf.name))
+      expect(recordedCases(parseJUnit(merged)).map((leaf) => leaf.name))
         .toEqual(["a", "b", "c"]);
       expect(merged).toContain(
         '<testsuites name="deno test" tests="3" failures="1" errors="0" ' +

@@ -480,7 +480,11 @@ which is the cost this whole section exists to avoid paying.
 
 An invocation is excused only when it accounted for every identity it was
 asked to run, since one that recorded a withheld failure and then stopped
-has run almost nothing while satisfying any weaker test. A stand-in for a
+has run almost nothing while satisfying any weaker test. An identity that
+holds others is also accounted for by a record of anything it holds, since
+it ran for that record to exist, and a name its report gave to several
+cases is not recorded for itself
+([the record spec](test-records.md#ci-movement)). A stand-in for a
 unit the store has never seen is accounted for by that unit recording
 anything at all, because no record can carry a stand-in's name: a record
 is named for a test and a stand-in for a file. And a unit that recorded

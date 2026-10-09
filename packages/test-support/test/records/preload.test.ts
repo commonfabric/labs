@@ -10,11 +10,11 @@ import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { dirname, join } from "@std/path";
 import {
-  dropContainerCases,
   ingestJUnit,
   parseJUnit,
   preloadModulePath,
   readNameMaps,
+  recordedCases,
   recordingArguments,
   RECORDS_DIR_VARIABLE,
   serializeSkipList,
@@ -176,7 +176,7 @@ async function outcomes(
   fixture: Fixture,
 ): Promise<Map<string, "pass" | "fail" | "skip">> {
   const xml = await Deno.readTextFile(fixture.junit);
-  const leaves = dropContainerCases(parseJUnit(xml));
+  const leaves = recordedCases(parseJUnit(xml));
   return new Map(leaves.map((leaf) => [leaf.name, leaf.outcome]));
 }
 
@@ -396,6 +396,36 @@ Deno.test({ sanitizeOps: false }, function namedByItsFunction() {});
 Deno.test(function bodyAlone() {});
 `;
 
+// Tests that fail on their own account after what they hold has passed,
+// beside tests that fail only through what they hold, and one that holds a
+// step and passes.
+const OWN_FAILURE_FILE =
+  `import { afterAll, describe, it } from "@std/testing/bdd";
+Deno.test("stepped", async (t) => {
+  await t.step("passes", () => {});
+  throw new Error("the body failed");
+});
+Deno.test("stepped cleanly", async (t) => {
+  await t.step("passes", () => {});
+});
+Deno.test("stepped into a failure", async (t) => {
+  await t.step("fails", () => {
+    throw new Error("the step failed");
+  });
+});
+describe("torn down", () => {
+  afterAll(() => {
+    throw new Error("the teardown failed");
+  });
+  it("passes", () => {});
+});
+describe("holding a failure", () => {
+  it("fails", () => {
+    throw new Error("the leaf failed");
+  });
+});
+`;
+
 describe("preload", () => {
   it("records the file each test was registered from", async () => {
     const fixture = await makeFixture({
@@ -420,6 +450,49 @@ describe("preload", () => {
       const byName = new Map(records.map((r) => [r.test.n, r.file]));
       expect(byName.get("outer > kept")).toEqual("bdd.test.ts");
       expect(byName.get("bare kept")).toEqual("bare.test.ts");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("records a failure a test raised after what it holds passed", async () => {
+    const fixture = await makeFixture({ "own.test.ts": OWN_FAILURE_FILE });
+    try {
+      const run = await runFixture(fixture, ["own.test.ts"]);
+      assert(!run.success, output(run));
+      const records = ingestJUnit(await Deno.readTextFile(fixture.junit), {
+        kind: "unit",
+        scope: "fixture",
+        fileByName: await readNameMaps(fixture.spool),
+      });
+      const outcomes = records
+        .map((r) => `${r.test.n}: ${r.outcome} in ${r.file}`)
+        .sort();
+      expect(outcomes).toEqual([
+        "holding a failure > fails: fail in own.test.ts",
+        "stepped > passes: pass in own.test.ts",
+        "stepped cleanly > passes: pass in own.test.ts",
+        "stepped into a failure > fails: fail in own.test.ts",
+        "stepped: fail in own.test.ts",
+        "torn down > passes: pass in own.test.ts",
+        "torn down: fail in own.test.ts",
+      ]);
+
+      // A caller that knows a container's name records it on every run,
+      // passing where nothing but what it holds failed.
+      const known = ingestJUnit(await Deno.readTextFile(fixture.junit), {
+        kind: "unit",
+        scope: "fixture",
+        known: (test, file) =>
+          file === "own.test.ts" &&
+          ["stepped cleanly", "holding a failure"].includes(test.n),
+        fileByName: await readNameMaps(fixture.spool),
+      });
+      const passes = known
+        .filter((r) => !r.test.n.includes(" > ") && r.outcome === "pass")
+        .map((r) => r.test.n)
+        .sort();
+      expect(passes).toEqual(["holding a failure", "stepped cleanly"]);
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
     }
@@ -1016,7 +1089,7 @@ describe("preload", () => {
       // The report names both by the same identity, so the pair is one
       // passed case and one skipped one under that name.
       const xml = await Deno.readTextFile(fixture.junit);
-      const leaves = dropContainerCases(parseJUnit(xml))
+      const leaves = recordedCases(parseJUnit(xml))
         .filter((leaf) => leaf.name === "shared name")
         .map((leaf) => leaf.outcome)
         .sort();

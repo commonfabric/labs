@@ -43,9 +43,10 @@
 import { exists } from "@std/fs";
 import * as path from "@std/path";
 import {
+  enclosingNames,
   FragmentWriter,
-  NAME_SEPARATOR,
   recordsDir,
+  type TestIdentity,
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
@@ -416,6 +417,19 @@ export interface Batch {
    * batch spent, which is what says how far the calibration was out.
    */
   projected: number;
+
+  /**
+   * Every identity the manifest holds in the batch's units, as
+   * `knownKey()` names it. A test holding others is recorded on every run
+   * where it is one of these, and otherwise only when it fails on its own
+   * account. Absent, no such test is known.
+   */
+  known?: ReadonlySet<string>;
+}
+
+/** How `Batch.known` names an identity in a unit. */
+function knownKey(unit: Unit, test: TestIdentity): string {
+  return `${unit}\t${testIdentityKey(test)}`;
 }
 
 /**
@@ -431,17 +445,6 @@ export function batchRepeats(batch: Batch): number {
 /** The units of a batch that are still running on the `run`th time round. */
 export function unitsForRun(batch: Batch, run: number): UnitRequest[] {
   return batch.units.filter((unit) => (batch.runs.get(unit.unit) ?? 1) >= run);
-}
-
-/**
- * The names of every `describe` enclosing the test a name identifies,
- * outermost first: `"a > b > c"` is inside `"a"` and `"a > b"`.
- */
-function enclosingNames(name: string): string[] {
-  const chain = name.split(NAME_SEPARATOR);
-  return chain.slice(1).map((_, depth) =>
-    chain.slice(0, depth + 1).join(NAME_SEPARATOR)
-  );
 }
 
 /**
@@ -470,6 +473,7 @@ export function batchesOf(
     inUnit.set(key, [...inUnit.get(key) ?? [], entry]);
   }
   const batches = new Map<string, Batch>();
+  const known = new Map<string, Set<string>>();
   // What each unit was selected for: the names to run, and the most
   // repeats any one of them asked for.
   const selected = new Map<string, { names: Set<string>; repeats: number }>();
@@ -508,6 +512,9 @@ export function batchesOf(
         .map((entry) => entry.test.n),
       cost: runs.reduce((total, entry) => total + entry.cost, 0),
     };
+    const suiteKnows = known.get(suiteId) ?? new Set();
+    known.set(suiteId, suiteKnows);
+    for (const entry of all) suiteKnows.add(knownKey(unit, entry.test));
     const batch = batches.get(suiteId);
     if (batch === undefined) {
       batches.set(suiteId, {
@@ -519,6 +526,7 @@ export function batchesOf(
           suiteId,
           selections.filter(({ entry }) => entry.suite === suiteId),
         ),
+        known: suiteKnows,
       });
     } else {
       batch.units.push(request);
@@ -938,6 +946,16 @@ export async function runBatch(
         ...(batch.suite.variant === undefined
           ? {}
           : { variant: batch.suite.variant }),
+        known: (test, file) => {
+          const named = batch.suite.variant === undefined
+            ? test
+            : { ...test, v: batch.suite.variant };
+          const location = batch.suite.locate(
+            file === undefined ? { test: named } : { test: named, file },
+          );
+          return location?.level === "unit" &&
+            (batch.known?.has(knownKey(location.unit, named)) ?? false);
+        },
       });
       if (
         !outcome.ok &&
@@ -1099,8 +1117,9 @@ export function accountFor(
     const key = testIdentityKey(record.test);
     heard.add(key);
     // Ingestion drops the case a `describe` reports for itself wherever a
-    // leaf inside it reports, so a leaf's record, skipped or not, is what
-    // accounts for every `describe` enclosing it.
+    // leaf inside it reports, unless the batch knows it or it failed on its
+    // own account, so a leaf's record, skipped or not, is what accounts for
+    // every other `describe` enclosing it.
     for (const outer of enclosingNames(record.test.n)) {
       heard.add(testIdentityKey({ ...record.test, n: outer }));
     }
@@ -1331,7 +1350,7 @@ export async function rerunFailures(
     const startedAt = performance.now();
     const result = await runBatch(
       {
-        suite: batch.suite,
+        ...batch,
         units,
         runs: new Map(units.map(({ unit }) => [unit, 1])),
         projected: charge,
