@@ -61,12 +61,49 @@ export const releaseDraw = exchangeRule({
   post: { dropClause: true },
 });
 
-export const drawRules = exchangeRules([releaseDraw]);
+// Releases what \`drawWinner\` computes over a list \`collectHashes\` wrote,
+// when every confidential input that read was a hash the builtin wrote.
+export const releaseCollected = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: {
+    integrity: [{
+      type: "${TRANSFORMED_BY}",
+      identity: {
+        kind: "verified",
+        moduleIdentity: THIS_POLICY.moduleIdentity,
+        symbol: "drawWinner",
+      },
+      inputWitness: {
+        type: "${TRANSFORMED_BY}",
+        identity: {
+          kind: "verified",
+          moduleIdentity: THIS_POLICY.moduleIdentity,
+          symbol: "collectHashes",
+        },
+        inputWitness: {
+          type: "${TRANSFORMED_BY}",
+          identity: { kind: "builtin", builtinId: "policySecretHash" },
+        },
+      },
+    }],
+  },
+  post: { dropClause: true },
+});
+
+export const drawRules = exchangeRules([releaseDraw, releaseCollected]);
 
 export type DrawHash = Confidential<
   string,
   readonly [PolicyOf<typeof drawRules>]
 >;
+
+/** The hashes as one list, once every one of them is in. */
+export const collectHashes = lift(
+  (draw: { hashes: (string | undefined)[] }): string[] | undefined =>
+    draw.hashes.some((hash) => !hash)
+      ? undefined
+      : draw.hashes.map((hash) => hash!),
+);
 
 /** The candidate whose hash sorts first, once every hash is in. */
 export const drawWinner = lift(
@@ -132,7 +169,7 @@ import {
   policySecretHash,
   Writable,
 } from "commonfabric";
-import { type DrawHash, drawWinner } from "./policy.tsx";
+import { collectHashes, type DrawHash, drawWinner } from "./policy.tsx";
 import { type OtherHash, relabel } from "./other-policy.tsx";
 
 
@@ -161,6 +198,8 @@ interface Rooms {
   name: Writable<Default<string, "carol">>;
   items: Writable<Default<string[], ["alice", "bob"]>>;
   roomMapped: Writable<Default<RoomText, "">>;
+  roomCollected: Writable<Default<RoomText, "">>;
+  roomCollectedStandIn: Writable<Default<RoomText, "">>;
   roomWinner: Writable<Default<RoomText, "">>;
   roomEcho: Writable<Default<RoomText, "">>;
   roomRelabel: Writable<Default<RoomText, "">>;
@@ -172,6 +211,8 @@ export default pattern<Rooms>((
     name,
     items,
     roomMapped,
+    roomCollected,
+    roomCollectedStandIn,
     roomWinner,
     roomEcho,
     roomRelabel,
@@ -193,6 +234,14 @@ export default pattern<Rooms>((
     candidates: items,
     hashes: items.map((item) => policySecretHash<DrawHash>({ input: item })),
   });
+  const collectedWinner = drawWinner({
+    candidates: ["alice", "bob"],
+    hashes: collectHashes({ hashes: [alice, bob] }),
+  });
+  const collectedSteered = drawWinner({
+    candidates: ["alice", "bob"],
+    hashes: collectHashes({ hashes: [standIn(alice), bob] }),
+  });
   const steered = drawWinner({
     candidates: ["alice", "bob"],
     hashes: [standIn(alice), bob],
@@ -206,7 +255,11 @@ export default pattern<Rooms>((
     nameHash,
     winner,
     mappedWinner,
+    collectedWinner,
+    collectedSteered,
     steered,
+    roomCollected,
+    roomCollectedStandIn,
     roomWinner,
     roomEcho,
     roomRelabel,
@@ -218,6 +271,11 @@ export default pattern<Rooms>((
     publishStandIn: publish({ from: steered, to: roomStandIn }),
     rename: rename({ name }),
     publishMapped: publish({ from: mappedWinner, to: roomMapped }),
+    publishCollected: publish({ from: collectedWinner, to: roomCollected }),
+    publishCollectedStandIn: publish({
+      from: collectedSteered,
+      to: roomCollectedStandIn,
+    }),
   };
 });
 `;
@@ -240,8 +298,12 @@ type Draw = {
   nameHash?: string;
   winner?: string;
   mappedWinner?: string;
+  collectedWinner?: string;
+  collectedSteered?: string;
   steered?: string;
   roomMapped: string;
+  roomCollected: string;
+  roomCollectedStandIn: string;
   roomWinner: string;
   roomEcho: string;
   roomRelabel: string;
@@ -494,6 +556,55 @@ describe("policySecretHash()", () => {
         await send("publishMapped");
         expect((await read()).roomMapped).toBe("");
       });
+    });
+  });
+
+  it("releases what the endorsed function computes over a list of hashes an endorsed step collected", async () => {
+    // The collecting step returns nothing until every hash is in, so the list
+    // replaces a value of another kind, and the diff writes it empty before
+    // it writes the hashes.
+
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(
+        runtime,
+        "draw-collected",
+        async ({ result, send, read }) => {
+          const { winner } = await read();
+          await waitForCellValue<string>(
+            runtime,
+            result.key("collectedWinner"),
+            (value) => value === winner,
+            { stuckLabel: "the collected draw" },
+          );
+
+          await send("publishCollected");
+          expect((await read()).roomCollected).toBe(winner);
+        },
+      );
+    });
+  });
+
+  it("releases nothing computed over a collected list holding a value other code derived from a hash", async () => {
+    // The collecting step reads the stand-in as one of its inputs, so its
+    // stamp on the list carries no witness of the builtin, and the rule that
+    // pins the chain finds none.
+
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(
+        runtime,
+        "draw-collected-stand-in",
+        async ({ result, send, read }) => {
+          await waitForCellValue<string>(
+            runtime,
+            result.key("collectedSteered"),
+            (value) => value === "alice" || value === "bob",
+            { stuckLabel: "the collected stand-in draw" },
+          );
+
+          await send("publishCollectedStandIn");
+          expect((await read()).roomCollectedStandIn).toBe("");
+        },
+      );
     });
   });
 
