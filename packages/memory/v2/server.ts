@@ -85,6 +85,7 @@ import {
   type SessionOpenRequest,
   type SessionOpenResult,
   type SessionReadCeiling,
+  type SessionReportRequest,
   type SessionRevokedMessage,
   type SessionSync,
   type SessionViewHandle,
@@ -116,7 +117,17 @@ import {
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
 import { AdmissionWaiters } from "./admission-waiters.ts";
+import {
+  type CommitRatesReport,
+  CommitRateTracker,
+  commitStormThresholds,
+} from "./commit-rates.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
+import {
+  parseSessionReport,
+  SessionReportLog,
+  type SessionReportsReport,
+} from "./session-reports.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -254,6 +265,22 @@ const operationActiveWatchCount = operationMeter.createHistogram(
   "ct.memory.operation.active_watches",
   { description: "Active operation watches observed during sync assembly." },
 );
+const commitCount = operationMeter.createCounter(
+  "ct.memory.commits",
+  {
+    description:
+      "Commits decided on every path, by space, by outcome, and by whether " +
+      "the space was in a write storm at the time.",
+  },
+);
+const echoBreakerReportCount = operationMeter.createCounter(
+  "ct.memory.echo_breaker",
+  {
+    description:
+      "Remote-echo breaker trips and clears clients reported, by space, by " +
+      "event, and for a clear by how the trip ended.",
+  },
+);
 
 /**
  * Timing-only logger. It never logs — the statistics behind `time()` are
@@ -303,6 +330,12 @@ const QUERY_EVALUATION_CACHE_MAX_SPACES = 8;
 // state's parsed documents, which scale with the entities delivered.
 const QUERY_EVALUATION_CACHE_BUDGET = 32_768;
 const SLOW_QUERY_BUFFER_SIZE = 100;
+// The write-storm thresholds the commit-rate tracker judges a space by,
+// `CF_COMMIT_STORM_PER_MINUTE` and `CF_COMMIT_STORM_SUSTAINED_SECONDS`, read
+// the way the slow-query threshold is.
+const COMMIT_STORM_THRESHOLDS = commitStormThresholds((name) =>
+  Deno.env.get(name)
+);
 const DEFAULT_SESSION_OPEN_CHALLENGE_TTL_SECONDS = 300;
 
 /**
@@ -562,6 +595,26 @@ export const getDocumentCachesDiagnostics = ():
   | DocumentCachesDiagnostics
   | undefined => documentCachesDiagnosticsProviders.at(-1)?.();
 
+/** Live servers' commit-rate providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported. */
+const commitRatesProviders: (() => CommitRatesReport)[] = [];
+
+/** The co-hosted memory server's commit rates for the health route — the
+ * most recently constructed server still open; undefined when none is. */
+export const getCommitRates = (): CommitRatesReport | undefined =>
+  commitRatesProviders.at(-1)?.();
+
+/** Live servers' session-report providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported. */
+const sessionReportsProviders: (() => SessionReportsReport)[] = [];
+
+/** The co-hosted memory server's session reports for the health route — the
+ * most recently constructed server still open; undefined when none is. */
+export const getSessionReports = (): SessionReportsReport | undefined =>
+  sessionReportsProviders.at(-1)?.();
+
 const randomHex = (bytes: number): string => {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return [...data].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -734,6 +787,10 @@ type PublishTransactVerdict = (
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
   postCommit?: () => Promise<void>;
+
+  /** Whether the engine decided the commit, and so reported it to the
+   * server's commit observer; false for one refused before reaching it. */
+  engineDecided: boolean;
 };
 
 type SessionOpenAuthContext = {
@@ -1405,15 +1462,16 @@ class Connection {
 
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload);
-    // A presence message is handled as it is handed over, not behind the
-    // frames already queued here: it carries no seq and settles nothing.
-    // Whether it can overtake a frame ahead of it on the socket is the
-    // host's business — one that hands frames over one at a time keeps it
-    // behind them (04-protocol.md §4.13.4). Everything else keeps the
-    // connection's order.
-    if (parsed !== null && isPresenceClientMessage(parsed)) {
+    // A presence message or a session report is handled as it is handed
+    // over, not behind the frames already queued here: it carries no seq and
+    // settles nothing, and the space a report describes is often the one
+    // whose frames are queued deepest (04-protocol.md §4.14). Whether it can
+    // overtake a frame ahead of it on the socket is the host's business — one
+    // that hands frames over one at a time keeps it behind them
+    // (04-protocol.md §4.13.4). Everything else keeps the connection's order.
+    if (parsed !== null && isImmediateClientMessage(parsed)) {
       try {
-        this.#receivePresence(parsed);
+        this.#receiveImmediate(parsed);
       } catch (error) {
         if (!this.#answerFailedRequest(parsed, error)) throw error;
       }
@@ -1648,12 +1706,7 @@ class Connection {
     this.#server.detachSession(space, sessionId, this.id);
   }
 
-  #receivePresence(
-    message:
-      | PresenceJoinRequest
-      | PresencePublishRequest
-      | PresenceLeaveRequest,
-  ): void {
+  #receiveImmediate(message: ImmediateClientMessage): void {
     if (this.#closed) return;
     if (!this.#ready) {
       this.#send({
@@ -1668,7 +1721,11 @@ class Connection {
     ) {
       return;
     }
-    this.#send(this.#server.receivePresence(message, this));
+    this.#send(
+      message.type === "session.report"
+        ? this.#server.receiveSessionReport(message, this)
+        : this.#server.receivePresence(message, this),
+    );
   }
 
   async #receiveOrdered(
@@ -2208,6 +2265,21 @@ const isPresenceClientMessage = (
   message.type === "presence.leave";
 
 /**
+ * A request a connection handles as it is handed over rather than in frame
+ * order: presence, and a session report.
+ */
+type ImmediateClientMessage =
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
+  | SessionReportRequest;
+
+const isImmediateClientMessage = (
+  message: ClientMessage | OversizedClientMessage,
+): message is ImmediateClientMessage =>
+  isPresenceClientMessage(message) || message.type === "session.report";
+
+/**
  * The engine opener a test supplies in place of `Server`'s own step, which
  * opens the engine for a space or hands back the one already open. It
  * receives that step as `open`, so it can pause before it or fail in its
@@ -2257,6 +2329,8 @@ export class Server {
   /** Holds `documentCacheTotalBudgetBytes` across this server's engines and
    * keeps their recency; every engine this server opens reports to it. */
   #documentCacheCoordinator: Engine.DocumentCacheCoordinator;
+  #commitRates = new CommitRateTracker({ storm: COMMIT_STORM_THRESHOLDS });
+  #sessionReports = new SessionReportLog();
 
   /**
    * Synthesized session id for direct out-of-band document writes, such as
@@ -2534,12 +2608,14 @@ export class Server {
         DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
     );
     // Module-level providers for the health route (push-priority counters,
-    // Phase 6; document caches): the newest live server is reported, and
-    // close() withdraws exactly this server's.
+    // Phase 6; document caches; commit rates): the newest live server is
+    // reported, and close() withdraws exactly this server's.
     pushPriorityStatsProviders.push(this.#pushPriorityStatsProvider);
     documentCachesDiagnosticsProviders.push(
       this.#documentCachesDiagnosticsProvider,
     );
+    commitRatesProviders.push(this.#commitRatesProvider);
+    sessionReportsProviders.push(this.#sessionReportsProvider);
   }
 
   /**
@@ -2587,6 +2663,8 @@ export class Server {
    * exactly them and no other server's. */
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
+  #commitRatesProvider = () => this.commitRates();
+  #sessionReportsProvider = () => this.sessionReports();
 
   /** Every open engine's document-cache counters, keyed by space. A peek:
    * nothing is opened by asking. */
@@ -2604,9 +2682,47 @@ export class Server {
     };
   }
 
+  /** Every space with a commit in the last ten minutes, ranked, with the
+   * sessions behind those commits and whether the space is in a write
+   * storm. A read, which also lets go of the spaces and writers that have
+   * gone quiet. */
+  commitRates(): CommitRatesReport {
+    return this.#commitRates.report();
+  }
+
+  /** The diagnostics clients have reported about their sessions: running
+   * totals and the most recent reports in full (04-protocol.md §4.14). */
+  sessionReports(): SessionReportsReport {
+    return this.#sessionReports.report();
+  }
+
+  /** Helper for the engines' commit observer and for `transact()`'s own
+   * refusals, which counts one decided commit toward its space's rate and
+   * the `ct.memory.commits` counter, under the session and, where known,
+   * the principal it came from (an anonymous session carries none). */
+  #observeCommit(decision: Engine.CommitDecision & { space: string }): void {
+    const principal = decision.principal;
+    const { storm } = this.#commitRates.record({
+      space: decision.space,
+      session: decision.sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      accepted: decision.accepted,
+      operations: decision.operations,
+    });
+    commitCount.add(1, {
+      "space.did": decision.space,
+      outcome: decision.accepted ? "ok" : "rejected",
+      storm,
+    });
+  }
+
   memoryProtocolFlags(): MemoryProtocolFlags {
     return {
       ...getMemoryProtocolFlags(),
+      // Server execution is attached through the observer, and only then.
+      serverExecution: this.#serverExecutionObserver !== undefined,
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
       routedAuthV1: false,
@@ -3312,26 +3428,8 @@ export class Server {
     connection: Connection,
   ): ResponseMessage<PresenceJoinResult | Record<PropertyKey, never>> {
     const { requestId, space, sessionId, room } = message;
-    if (!this.isSessionAttached(space, sessionId, connection.id)) {
-      return respondTypedError(
-        requestId,
-        toError("SessionRevokedError", "Session is not attached"),
-      );
-    }
-    if (connection.routed) {
-      const engine = this.#resolvedEngines.get(space);
-      const session = this.#sessions.get(space, sessionId);
-      const deny = engine === undefined || session === null
-        ? toError("SessionRevokedError", "Routed memory authority ended")
-        : this.#authorizeCurrentSessionWithEngine(
-          engine,
-          space,
-          sessionId,
-          session,
-          "READ",
-        );
-      if (deny) return respondTypedError(requestId, deny);
-    }
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
     if (!isPresenceRoom(room)) {
       return respondTypedError(
         requestId,
@@ -3379,6 +3477,81 @@ export class Server {
     }
   }
 
+  /**
+   * Records one session report on behalf of `connection`, which has already
+   * established that the request's session is open on it, and returns the
+   * response to send (04-protocol.md §4.14). The report is counted, kept in
+   * the log the health route reads, and written to the server's log as one
+   * line; a session the connection no longer owns gets a
+   * `SessionRevokedError`.
+   */
+  receiveSessionReport(
+    message: SessionReportRequest,
+    connection: Connection,
+  ): ResponseMessage<Record<PropertyKey, never>> {
+    const { requestId, space, sessionId, report } = message;
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
+    const principal = this.#sessions.get(space, sessionId)?.principal;
+    this.#sessionReports.record({
+      space,
+      session: sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      report,
+    });
+    const document = `${report.document.scopeKey} ${report.document.id}`;
+    if (report.event === "trip") {
+      echoBreakerReportCount.add(1, { "space.did": space, event: "trip" });
+      console.warn(
+        `[memory-echo-breaker] session ${sessionId} on ${space} is ` +
+          `backing off action ${report.action}: it kept rewriting ` +
+          `${document} against another writer`,
+      );
+    } else {
+      echoBreakerReportCount.add(1, {
+        "space.did": space,
+        event: "clear",
+        reason: report.reason,
+      });
+      console.info(
+        `[memory-echo-breaker] session ${sessionId} on ${space} cleared ` +
+          `action ${report.action} on ${document} (${report.reason}) after ` +
+          `${report.trippedMs}ms and ${report.renewals} renewals`,
+      );
+    }
+    return { type: "response", requestId, ok: {} };
+  }
+
+  /**
+   * The error refusing a presence request or session report `connection`
+   * makes on `sessionId`, or `null` to handle it: the session must still be
+   * attached to the connection, and on a routed connection its routed
+   * authority must still hold `READ` on the space.
+   */
+  #refuseImmediateRequest(
+    space: string,
+    sessionId: string,
+    connection: Connection,
+  ): V2Error | null {
+    if (!this.isSessionAttached(space, sessionId, connection.id)) {
+      return toError("SessionRevokedError", "Session is not attached");
+    }
+    if (!connection.routed) return null;
+    const engine = this.#resolvedEngines.get(space);
+    const session = this.#sessions.get(space, sessionId);
+    return engine === undefined || session === null
+      ? toError("SessionRevokedError", "Routed memory authority ended")
+      : this.#authorizeCurrentSessionWithEngine(
+        engine,
+        space,
+        sessionId,
+        session,
+        "READ",
+      );
+  }
+
   /** Ends every presence membership the connection holds. */
   endPresenceForConnection(connectionId: string): void {
     this.#presence.leaveConnection(connectionId);
@@ -3422,6 +3595,8 @@ export class Server {
       documentCachesDiagnosticsProviders,
       this.#documentCachesDiagnosticsProvider,
     );
+    withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
     this.#cancelScheduledRefresh();
     for (const connection of [...this.#connections.values()]) {
       connection.close();
@@ -4885,8 +5060,10 @@ export class Server {
     return await this.#withSpacePublicationLock(message.space, async () => {
       const lockWaitMs = performance.now() - requestedAt;
       let outcome = "threw";
+      let engineDecided = false;
       try {
         const decision = await this.#decideTransaction(message, originating);
+        engineDecided = decision.engineDecided;
         outcome = decision.response.error?.name ?? "ok";
         let verdictError: { value: unknown } | undefined;
         try {
@@ -4920,13 +5097,30 @@ export class Server {
         const commit = message.commit as Partial<ClientCommit>;
         const count = (value: unknown): number | undefined =>
           Array.isArray(value) ? value.length : undefined;
+        const operations = count(commit.operations);
         recordSlowQueryDuration("transact", message.space, requestedAt, {
           lockWaitMs: Math.round(lockWaitMs),
-          operations: count(commit.operations),
+          operations,
           readsConfirmed: count(commit.reads?.confirmed),
           readsPending: count(commit.reads?.pending),
           outcome,
         });
+        // The engine reports every commit it decides to this server's
+        // commit observer, whichever path brought it. A commit refused
+        // before reaching the engine (an unknown session, a denied
+        // capability, a decision that threw) is counted here instead, so
+        // every decision counts exactly once, slow or not.
+        if (!engineDecided) {
+          this.#observeCommit({
+            space: message.space,
+            sessionId: message.sessionId,
+            ...(originating?.principal === undefined
+              ? {}
+              : { principal: originating.principal }),
+            accepted: outcome === "ok",
+            operations: operations ?? 0,
+          });
+        }
       }
     });
   }
@@ -5246,6 +5440,7 @@ export class Server {
     originating: SessionState | null,
   ): Promise<TransactDecision> {
     let postCommit: (() => Promise<void>) | undefined;
+    let engineDecided = false;
     const response = await tracer.startActiveSpan(
       "memory.transact",
       async (span): Promise<ResponseMessage<Engine.AppliedCommit>> => {
@@ -5379,6 +5574,7 @@ export class Server {
               "memory.commit.persist",
               (persistSpan) => {
                 try {
+                  engineDecided = true;
                   return Engine.applyCommit(engine, {
                     sessionId: message.sessionId,
                     space: message.space,
@@ -5611,7 +5807,7 @@ export class Server {
         }
       },
     );
-    return { response, postCommit };
+    return { response, postCommit, engineDecided };
   }
 
   async graphQuery(
@@ -9343,6 +9539,11 @@ export class Server {
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
         documentCacheCoordinator: this.#documentCacheCoordinator,
+        // Every commit this engine decides, on whichever path, counts
+        // toward the space's commit rate; the engine is this space's, so
+        // the space is known here whatever the committing caller named.
+        commitObserver: (decision) =>
+          this.#observeCommit({ ...decision, space }),
       });
     })();
     // The SYNC engine view (server-execution v2 Phase 5): the read-row
@@ -9891,6 +10092,23 @@ export const parseClientMessage = (
       revision: parsed.revision,
       name: parsed.name,
       facets,
+    };
+  }
+
+  if (
+    parsed.type === "session.report" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string"
+  ) {
+    const report = parseSessionReport(parsed.report);
+    if (report === null) return null;
+    return {
+      type: "session.report",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      report,
     };
   }
 

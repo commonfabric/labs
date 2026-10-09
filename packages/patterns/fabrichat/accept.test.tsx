@@ -19,10 +19,16 @@ import {
   multiUserTest,
   pattern,
   principalOf,
+  spaceOf,
   TESTS,
   UI,
   Writable,
 } from "commonfabric";
+import {
+  readSharedSpaceCatalog,
+  registerSharedSpace,
+  type SharedSpaceCatalogStorage,
+} from "../system/shared-space-catalog.ts";
 import {
   clickButton,
   findNodeById,
@@ -32,6 +38,7 @@ import {
 import { FabriChatManagerCore } from "./manager.tsx";
 import { AddToChats } from "./room.tsx";
 import {
+  CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
@@ -100,6 +107,10 @@ const addDisplay = (root: unknown): unknown =>
     })?.display,
   );
 
+/** An empty shared-space catalog, as a manager lists its rooms from. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
+
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
   requests: Writable<Record<string, ChatRequestOutcome>>,
@@ -113,16 +124,18 @@ const reasonOf = (
 
 // Creates a direct room with Bob, and hands it to him through the setup.
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
+  const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
     myProfile: Writable.of<TestProfile>({ name: "Alice" }),
-    rooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
   } as ManagerArg);
   const action_hand_over = action(() =>
-    setup.held.key("room").set(rooms.key(0).key("room").resolveAsCell())
+    setup.held.key("room").set(
+      requests.key("d-1").key("entry").key("room").resolveAsCell(),
+    )
   );
 
   return {
@@ -135,7 +148,9 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: startGesture,
       },
       { action: action_hand_over },
-      { assertion: assert(() => rooms.get()[0]?.counterpart !== undefined) },
+      {
+        assertion: assert(() => manager.rooms[0]?.counterpart !== undefined),
+      },
       { label: "alice-created" },
       { await: "bob-done" },
     ],
@@ -144,12 +159,12 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 
 // Accepts the room, with a counterpart that isn't its creator and with none.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
+  const catalog = emptyCatalog();
   const manager = FabriChatManagerCore({
     myProfile: bobProfile,
-    rooms,
+    sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -164,10 +179,30 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   // The room's own control, which sends `accept` with the room alone.
   const adder = AddToChats({
     room: setup.held.key("room"),
-    listed: manager.rooms,
+    catalog: manager.sharedSpaceCatalog,
     accept: manager.accept,
   } as AddArg);
   const action_add = action(() => clickButton(adder[UI], "Add to my chats"));
+
+  // A manager whose catalog lists the room as a host registers an offered
+  // one, without `accept`, so `direct` holds nothing for it.
+  const offeredCatalog = emptyCatalog();
+  const offered = FabriChatManagerCore({
+    myProfile: Writable.of<TestProfile>({ name: "Bob, offered" }),
+    sharedSpaceCatalog: offeredCatalog,
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+  } as ManagerArg);
+  const register = registerSharedSpace({ catalog: offeredCatalog });
+  const action_register_offered = action(() =>
+    register.send({
+      space: spaceOf(setup.held.key("room")) ?? "",
+      host: "http://localhost",
+      kind: CHAT_ROOM_OFFER_KIND,
+      offer: { from: setup.aliceDid.get(), id: "d-1" },
+    })
+  );
 
   return {
     [TESTS]: [
@@ -190,17 +225,30 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         assertion: assert(() =>
           reasonOf(requests, "a-1") ===
             "The counterpart is not the room's creator." &&
-          rooms.get().length === 0 &&
+          manager.rooms.length === 0 &&
+          Object.keys(readSharedSpaceCatalog(catalog).entries).length === 0 &&
           addDisplay(adder[UI]) === "flex"
         ),
       },
       { action: action_add },
       {
         assertion: assert(() =>
-          rooms.get().length === 1 &&
-          rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
+          manager.rooms.length === 1 &&
+          manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           addDisplay(adder[UI]) === "none"
         ),
+      },
+      // Accepting it registers its space in Bob's catalog, as a saved
+      // FabriChat room, from which the manager lists it.
+      {
+        assertion: assert(() => {
+          const entries = Object.values(
+            readSharedSpaceCatalog(catalog).entries,
+          );
+          return entries.length === 1 &&
+            entries[0]?.kind === CHAT_ROOM_OFFER_KIND &&
+            entries[0]?.state === "saved";
+        }),
       },
       // Accepting the room lists Bob among its participants, without a step
       // of his own.
@@ -209,6 +257,16 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           (setup.held.key("room").get()?.get()?.participants ?? []).some((
             known,
           ) => equals(known, bobProfile))
+        ),
+      },
+      // A room listed only by the catalog names its labeled creator as its
+      // counterpart.
+      { action: action_register_offered },
+      {
+        assertion: assert(() =>
+          offered.rooms.length === 1 &&
+          offered.rooms[0]?.kind === "direct" &&
+          offered.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
       },
       { label: "bob-done" },

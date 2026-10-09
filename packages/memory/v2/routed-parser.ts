@@ -133,6 +133,7 @@ export function routedIdentifier(value: unknown): asserts value is string {
 const flags = new Set([
   "genesisRoot",
   "spaceKind",
+  "serverExecution",
   "modernCellRep",
   "stableExpressionResultIds",
   "commitPreconditions",
@@ -150,6 +151,7 @@ const flags = new Set([
   "viewScopedReplicationV1",
   "sessionReadCeiling",
   "presenceV1",
+  "sessionReportV1",
   "sessionClose",
   "connectionAuth",
   "admissionNotice",

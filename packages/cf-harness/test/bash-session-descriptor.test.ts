@@ -2,10 +2,10 @@
  * The bash tool offers `session` only to a run that can use one: a run whose
  * sandbox has sessions, in a mode that allows them.
  *
- * The Docker runtime has none, and it is the default: a `session` input in
- * its tool manifest would change what every existing run sends the model and
- * invite a call that can only be refused. So on a runtime without sessions
- * the descriptor has to be the one main offers, byte for byte. The same holds
+ * A runtime that describes no sessions has none: a `session` input in its
+ * tool manifest would change what every such run sends the model and invite
+ * a call that can only be refused. So on a runtime without sessions the
+ * descriptor has to be the one main offers, byte for byte. The same holds
  * for a run in an enforcing mode on a runtime with sessions, which refuses
  * every session.
  */
@@ -50,8 +50,8 @@ const MAIN_BASH_DESCRIPTOR_JSON =
 const MAIN_BASH_WIRE_TOOL_JSON =
   '{"type":"function","name":"bash","description":"Run a shell command inside the target VM. Use this for navigation, search, and command-driven workflows.","parameters":{"type":"object","properties":{"command":{"type":"string"},"cwd":{"type":"string"},"timeoutMs":{"type":"number","minimum":0}},"required":["command"],"additionalProperties":false},"strict":null}';
 
-const dockerDescription: SandboxRuntimeDescription = {
-  kind: "docker-runsc-cfc",
+const sessionlessDescription: SandboxRuntimeDescription = {
+  kind: "runsc-cfc",
   defaultWorkingDirectory: "/workspace",
   cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
 };
@@ -86,14 +86,14 @@ for (const mode of CFC_ENFORCEMENT_MODES) {
 
   Deno.test(`the bash descriptor for a runtime without sessions is main's, byte for byte, under ${mode}`, () => {
     assertEquals(
-      JSON.stringify(bashToolDescriptorForRuntime(dockerDescription, run)),
+      JSON.stringify(bashToolDescriptorForRuntime(sessionlessDescription, run)),
       MAIN_BASH_DESCRIPTOR_JSON,
     );
     // `sessions: false` and `sessions` absent are the same answer.
     assertEquals(
       JSON.stringify(
         bashToolDescriptorForRuntime(
-          { ...dockerDescription, sessions: false },
+          { ...sessionlessDescription, sessions: false },
           run,
         ),
       ),
@@ -101,7 +101,7 @@ for (const mode of CFC_ENFORCEMENT_MODES) {
     );
     assertEquals(
       JSON.stringify(
-        builtinToolDescriptorForRuntime(bashTool, dockerDescription, run),
+        builtinToolDescriptorForRuntime(bashTool, sessionlessDescription, run),
       ),
       MAIN_BASH_DESCRIPTOR_JSON,
     );
@@ -265,14 +265,14 @@ const toolsSentToTheModel = async (
 };
 
 Deno.test("a run on a runtime without sessions sends the model main's bash tool", async () => {
-  const tools = await toolsSentToTheModel(dockerDescription);
+  const tools = await toolsSentToTheModel(sessionlessDescription);
   assertEquals(tools.map((tool) => tool.name), ["bash", "read_file"]);
   assertEquals(JSON.stringify(tools[0]), MAIN_BASH_WIRE_TOOL_JSON);
 });
 
 Deno.test("a run on a runtime with sessions sends the model a bash tool that takes `session`", async () => {
   const withSessions = await toolsSentToTheModel(runscDescription, "observe");
-  const without = await toolsSentToTheModel(dockerDescription, "observe");
+  const without = await toolsSentToTheModel(sessionlessDescription, "observe");
   assertEquals(withSessions.map((tool) => tool.name), ["bash", "read_file"]);
   const bash = withSessions[0] as {
     parameters?: { properties?: Record<string, unknown> };

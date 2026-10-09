@@ -1,0 +1,1 @@
+{"date": "2026-10-08", "from": {"k": "unit", "s": "ts-transformers", "n": "no golden output contains the inline import(\"commonfabric\") type form"}, "to": {"k": "unit", "s": "ts-transformers", "n": "no golden output contains an inline import type of commonfabric"}}

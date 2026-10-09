@@ -91,11 +91,22 @@ named as not taken rather than left out.
 7. **The sandbox runtime, and how it was chosen.** Read from each root run's own
    `run-state.json`: the runtime it executed on, and whether that was named, by
    a flag or the environment, or was the default of the platform it ran on. A
-   run on the native runtime and a run on Docker are different experiments with
-   the same tasks. How it was chosen is held to as well, because a default
-   belongs to the machine rather than the command: the same console command runs
-   on Docker on Linux and on the native runtime on macOS. A run written before
-   runs recorded the runtime reads as not recorded.
+   run on the native runtime and a run that an older cf-harness put on Docker
+   are different experiments with the same tasks. How it was chosen is held to
+   as well, because a default belongs to the machine rather than the command:
+   the same console command runs on the native runtime on an Apple-silicon Mac
+   and on Linux, and is refused elsewhere. Where that default cannot run it is
+   refused too: on any other Mac; where its store is not set up; and on Linux,
+   where a console that is not root gets no unprivileged user namespace
+   (`user.max_user_namespaces` 0, `kernel.unprivileged_userns_clone` 0 or
+   `kernel.apparmor_restrict_unprivileged_userns` 1; the refusal names the
+   `sudo sysctl -w` that allows them), which the store's rootless `runsc` needs
+   whatever the network and pasta needs even for a `runsc` named by
+   `CF_HARNESS_RUNSC_BINARY`, and where its default network finds no `pasta` or
+   `setpriv` (or, for root, no `unshare`), which a named `none` or `host`
+   network does not need. A named `runsc` takes no default, so none of those
+   refusals applies to it. A run written before runs recorded the runtime reads
+   as not recorded.
 
 ## Running a batch
 

@@ -8,6 +8,8 @@
  * activity is unavailable.
  */
 
+import type { RunLists } from "./github-runs.ts";
+
 export type Status = "good" | "warn" | "bad" | "unknown";
 
 // A render-ready snapshot produced by a tile's collect().
@@ -92,6 +94,11 @@ export interface Ctx {
   // data of its own has arrived since its last collection. Each ask brings
   // one more collection, so a tile asks only when such data arrives.
   collectAgain?(): void;
+  /**
+   * The run lists this context reads runs through, which a tile reading runs
+   * of its own reads through as well.
+   */
+  runLists?: RunLists;
   env(key: string): string | undefined;
 }
 

@@ -1542,7 +1542,8 @@ describe("agent runner", () => {
 
         /**
          * The platform the harness runs as and the home it finds, for a run
-         * that names no sandbox runtime. Absent, the run names Docker.
+         * that names no sandbox runtime. Absent, the run names `runsc`, with a
+         * binary and a rootfs nothing runs.
          */
         unnamedSandbox?: { platform: typeof Deno.build.os; home: string };
       } = {},
@@ -1576,13 +1577,19 @@ describe("agent runner", () => {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
             CF_HARNESS_GATEWAY_AUTH_MODE: "none",
             // Named, so the run does not take the default of the machine the
-            // suite runs on, which on macOS is that machine's native runtime.
+            // suite runs on, which on macOS and Linux is that machine's native
+            // runtime.
             ...(options.unnamedSandbox !== undefined
               ? { HOME: options.unnamedSandbox.home }
-              : { CF_HARNESS_SANDBOX_RUNTIME: "docker" }),
+              : {
+                CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+                CF_HARNESS_RUNSC_BINARY: "/nonexistent/agent-runner-test/runsc",
+                CF_HARNESS_SANDBOX_ROOTFS:
+                  "/nonexistent/agent-runner-test/rootfs",
+              }),
           },
           ...(options.unnamedSandbox !== undefined
-            ? { platform: options.unnamedSandbox.platform }
+            ? { platform: options.unnamedSandbox.platform, arch: "aarch64" }
             : {}),
           fabricSessionFactory: () => Promise.resolve({ pieces }),
           createPromptLoop: (options) => ({
@@ -1680,15 +1687,15 @@ describe("agent runner", () => {
       const refusal = messages.find((message) =>
         message.includes("No sandbox runtime is named")
       );
-      // The runner writes the harness's arguments itself, so the way to
-      // Docker it is told is the variable, and no flag.
+      // The runner writes the harness's arguments itself, so the way to a
+      // CFC policy it is told is the variable, and no flag.
       expect(refusal).toContain(
         `it is not set up at \`${
           join(home, "Library", "Application Support", "cfc-vm")
         }\``,
       );
       expect(refusal).toContain(
-        "select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`.",
+        "(name one with `CF_HARNESS_RUNSC_CFC_POLICY`)",
       );
       expect(refusal).not.toContain("--sandbox");
     });

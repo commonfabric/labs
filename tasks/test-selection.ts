@@ -35,7 +35,6 @@ import {
 import { maxOf } from "@commonfabric/utils/math";
 import {
   DIALS,
-  dialValue,
   EXCLUDED_FROM_COVERAGE_GATE,
   LANE_BUDGET_SECONDS,
   LANES,
@@ -48,11 +47,7 @@ import {
   lanePlan,
   resolveManifest,
 } from "./ci-lane.ts";
-import {
-  capabilitiesBySuite,
-  loadTopology,
-  unitProcesses,
-} from "./test-topology.ts";
+import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
 import {
   measuredCostLines,
@@ -150,7 +145,7 @@ export function dialLines(): string[] {
   const width = maxOf(DIALS.map((dial) => dial.name.length));
   for (const dial of DIALS) {
     lines.push(
-      `${pad(dial.name, width)}  ${dialValue(dial)} ${dial.unit} ` +
+      `${pad(dial.name, width)}  ${dial.value} ${dial.unit} ` +
         `(${dial.setBy})`,
     );
     lines.push(`${" ".repeat(width)}  ${dial.why}`);
@@ -749,7 +744,6 @@ export async function dispatch(
           manifest,
           previous: before.manifest,
           capabilities: capabilitiesBySuite(topology),
-          processes: unitProcesses(topology),
           observations: { charges: [], lanes: [] },
         });
       }

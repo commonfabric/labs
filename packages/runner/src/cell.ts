@@ -161,6 +161,8 @@ import {
   txToReactivityLog,
 } from "./scheduler.ts";
 import { mintEventId, scopeCallerEventId } from "./scheduler/event-identity.ts";
+import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
+import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   type CellViewRef,
   processDefaultValue,
@@ -619,15 +621,6 @@ export type StreamSendOptions = {
 // import runner internals — can produce an array the send path accepts.
 const mintedRuntimeInjectedKeys = new WeakSet<readonly string[]>();
 
-/**
- * Mint an injection-provenance marker for {@link StreamSendOptions}. The
- * returned (frozen) array is the capability: `Cell.set`'s stream branch
- * forwards `runtimeInjectedEventKeys` to dispatch only when it was minted
- * here, so an unminted array — anything a spoofing caller can construct —
- * is ignored and the closed-world gate judges the key like any other
- * undeclared field.
- */
-
 /** An error-status VIEW of a transaction (the durable-ack coupling;
  * verdict blocker, 2026-08-12): everything passes through except
  * `status()`, which reports the append/consequence failure — so a
@@ -658,6 +651,50 @@ const errorStatusTxView = (
   }) as IExtendedStorageTransaction;
 };
 
+/** A done-status VIEW of a transaction, the success counterpart of
+ * `errorStatusTxView()`: everything passes through except `status()`, which
+ * reports the transaction done. Handed to a caller whose event the server
+ * handled, as the overlay reported, when the speculative echo's own
+ * transaction failed — an echo that withdrew, or one its commit refused — so
+ * the caller reads the authoritative outcome rather than the echo's; and to
+ * the append report of an echo that withdrew, whose abort is no failure of
+ * the handler. */
+const doneStatusTxView = (
+  tx: IExtendedStorageTransaction,
+): IExtendedStorageTransaction => {
+  const status = () => ({
+    status: "done" as const,
+    journal: tx.status().journal,
+  });
+  return new Proxy(tx, {
+    get(target, prop, receiver) {
+      if (prop === "status") return status;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as IExtendedStorageTransaction;
+};
+
+/**
+ * Whether `tx` is a speculative echo that withdrew: its run named an
+ * `inSpace(...)` target this runtime leaves unresolved, so the transaction
+ * aborted without the handler having failed (see `InSpaceTargetUnresolved`).
+ */
+const isWithdrawnEcho = (tx: IExtendedStorageTransaction): boolean => {
+  const status = tx.status();
+  return status.status === "error" &&
+    (status.error as { reason?: unknown }).reason instanceof
+      InSpaceTargetUnresolved;
+};
+
+/**
+ * Mint an injection-provenance marker for {@link StreamSendOptions}. The
+ * returned (frozen) array is the capability: `Cell.set`'s stream branch
+ * forwards `runtimeInjectedEventKeys` to dispatch only when it was minted
+ * here, so an unminted array — anything a spoofing caller can construct —
+ * is ignored and the closed-world gate judges the key like any other
+ * undeclared field.
+ */
 export function markRuntimeInjectedEventKeys(
   keys: readonly string[],
 ): readonly string[] {
@@ -2241,15 +2278,24 @@ export class CellImpl<T extends FabricValue>
           // acknowledgment. The callback now settles from the APPEND
           // outcome + the intent's authoritative CONSEQUENCE: refusal,
           // a server-side handler error, or the dropped-event notice
-          // present an error-status view of the tx; only a delivered
-          // append whose handling consequenced (or a bare teardown,
-          // reported as such) passes the tx through untouched.
+          // present an error-status view of the tx. A delivered append
+          // whose handling consequenced passes the tx through, as a
+          // done-status view where the echo's own transaction failed; a
+          // bare teardown passes it through untouched.
           const onAppended = sendOptions?.onAppended;
           if (onCommit !== undefined || onAppended !== undefined) {
             const callerOnCommit = onCommit;
             onCommit = (echoTx: IExtendedStorageTransaction) => {
               void outcome.then(async (delivery) => {
-                onAppended?.(delivery, echoTx);
+                // An echo that withdrew aborted without the handler
+                // failing, so its append is reported as a clean one; the
+                // served handling decides the outcome below.
+                onAppended?.(
+                  delivery,
+                  delivery.delivered && isWithdrawnEcho(echoTx)
+                    ? doneStatusTxView(echoTx)
+                    : echoTx,
+                );
                 if (callerOnCommit === undefined) return;
                 if (!delivery.delivered) {
                   callerOnCommit(errorStatusTxView(
@@ -2275,7 +2321,15 @@ export class CellImpl<T extends FabricValue>
                   ));
                   return;
                 }
-                callerOnCommit(echoTx);
+                // Only a consequence the overlay observed is the served
+                // outcome; a runtime with no overlay reports the echo's own.
+                callerOnCommit(
+                  overlay !== undefined &&
+                    consequence.kind === "consequenced" &&
+                    echoTx.status().status === "error"
+                    ? doneStatusTxView(echoTx)
+                    : echoTx,
+                );
               });
             };
           }
@@ -3671,6 +3725,21 @@ export class CellImpl<T extends FabricValue>
       readTx,
       readTx.getCfcState().dereferenceTraces.slice(tracesBefore),
     );
+    // A resolution that stopped at a document this replica has not received
+    // names that document, not the one the chain reaches past it, and a
+    // handler would keep or pass on the wrong cell. Its run waits for the
+    // document instead.
+    if (link.pendingHopDoc === true) {
+      const run = patternRun(this.#runtime);
+      if (run?.kind === "handler") {
+        withdrawHandlerWhileLoading(
+          this.#runtime,
+          run.tx,
+          link,
+          `a cell was resolved through \`${link.id}\` while its document was still loading`,
+        );
+      }
+    }
     link = maybeConvertArrayPathToDataURILink(readTx, link);
     return createCell(
       this.#runtime,
@@ -4656,12 +4725,26 @@ function requireTransaction(
 function patternRunTx(
   runtime: Runtime,
 ): IExtendedStorageTransaction | undefined {
+  return patternRun(runtime)?.tx;
+}
+
+/**
+ * Returns the kind and the transaction of the handler or lift of `runtime`
+ * that is running, while that transaction is open.
+ */
+function patternRun(
+  runtime: Runtime,
+):
+  | { kind: "handler" | "lift"; tx: IExtendedStorageTransaction }
+  | undefined {
   let frame = getTopFrame();
   while (frame !== undefined && frame.frameKind === undefined) {
     frame = frame.parent;
   }
   const tx = frame?.runtime === runtime ? frame.tx : undefined;
-  return tx?.status().status === "ready" ? tx : undefined;
+  return frame?.frameKind !== undefined && tx?.status().status === "ready"
+    ? { kind: frame.frameKind, tx }
+    : undefined;
 }
 
 /**

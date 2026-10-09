@@ -9,6 +9,7 @@
  */
 
 import {
+  type AddIntegrity,
   type Cell,
   computed,
   currentPrincipal,
@@ -65,6 +66,15 @@ import Room, { type RoomOutput } from "./room.tsx";
  * default.
  */
 const OFFER_KIND = "fabrichat-room";
+
+/**
+ * The FabriChat manager's stand-in profile, labeled, as a Fabric profile is,
+ * because a room's participants link only a document that carries a label.
+ */
+type StandInProfile = AddIntegrity<
+  ChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
 
 /** A space a sender's handler created and offered, as the test reads it. */
 export interface OfferedSpace {
@@ -290,7 +300,6 @@ export default pattern<MainInput, MainOutput>((
     privateInbox,
     profiles,
     offered,
-    rooms,
     direct,
     requests,
     outgoingNotices,
@@ -303,8 +312,12 @@ export default pattern<MainInput, MainOutput>((
     "privateInboxRefusal",
   );
   const chats = FabriChatManagerCore({
-    myProfile: Writable.of<ChatProfile>({ name: "Sender" }),
-    rooms,
+    myProfile: Writable.of<StandInProfile>({ name: "Sender" }),
+    // The sender's own catalog, apart from the one the intake registers in.
+    sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
+      entries: {},
+      offers: {},
+    }),
     direct,
     requests,
     outgoingNotices,

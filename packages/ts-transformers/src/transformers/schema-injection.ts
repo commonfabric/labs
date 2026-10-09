@@ -1250,7 +1250,9 @@ function applyIdentityArrayItemSchemaHints(
   const grouped = new Map<string, boolean>();
   for (const path of identityPaths) {
     const [head, second] = path;
-    if (head && second !== undefined && /^\d+$/.test(second)) {
+    if (
+      path.length === 2 && head && second !== undefined && /^\d+$/.test(second)
+    ) {
       grouped.set(head, true);
     }
   }

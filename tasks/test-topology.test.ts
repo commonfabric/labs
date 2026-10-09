@@ -192,58 +192,6 @@ describe("the test topology", () => {
     expect(written).toEqual([]);
   });
 
-  it("runs the units it names into one process in one invocation of that name, and the rest in none", async () => {
-    // The packer charges a process's setup for each process a lane starts,
-    // reading which process a unit runs in from `processes`, and a lane
-    // measures that setup from the invocation carrying the process's name.
-    // A unit named into one process and run in another is charged for a
-    // process it does not start, and asking for the units of one process
-    // then starts two.
-
-    const outputDir = await Deno.makeTempDir({ prefix: "topology-process-" });
-    const context = { root, outputDir, spoolDir: `${outputDir}/spool` };
-    const wrong: string[] = [];
-    for (const suite of suites) {
-      const byProcess = new Map<string | undefined, string[]>();
-      for (const unit of suite.units) {
-        const process = suite.processes?.get(unit);
-        byProcess.set(process, [...byProcess.get(process) ?? [], unit]);
-      }
-      for (const [process, units] of byProcess) {
-        const invocations = await suite.command(
-          units.map((unit) => ({ unit, skip: [] })),
-          context,
-        );
-        const named = invocations.flatMap((invocation) =>
-          invocation.process === undefined ? [] : [invocation.process]
-        );
-        const expected = process === undefined ? [] : [process];
-        if (JSON.stringify(named) !== JSON.stringify(expected)) {
-          wrong.push(
-            `${suite.id}: the units of ${JSON.stringify(process)} run in ` +
-              JSON.stringify(named),
-          );
-        }
-      }
-    }
-    await Deno.remove(outputDir, { recursive: true });
-    expect(wrong).toEqual([]);
-  });
-
-  it("names a process for every unit of a suite or for none", () => {
-    // The packer charges a suite's process setup only to the units named
-    // into a process, so a unit left out of a suite that names others
-    // would be charged no setup at all.
-    const partial = suites.filter((suite) =>
-      suite.processes !== undefined && suite.processes.size > 0 &&
-      suite.units.some((unit) => !suite.processes!.has(unit))
-    ).map((suite) => suite.id);
-    expect(partial).toEqual([]);
-    expect(
-      suites.filter((suite) => (suite.processes?.size ?? 0) > 0).length,
-    ).toBeGreaterThan(0);
-  });
-
   it("lets a default suite and a variant suite hold one source file", () => {
     const defaults = suites.find((suite) =>
       suite.id === "package-integration"

@@ -9,12 +9,10 @@
  *   deno task --cwd packages/cf-harness console:launch \
  *     --fabric-api-url http://localhost:8000 --store <dir>
  *
- * The console needs an identity, a space, a toolshed URL, the store that
- * toolshed serves, and, on the Docker driver, the two `runsc-cfc` sidecar
- * directories the sandbox's mediation moves over. An operator transcribing
- * those by hand gets a console that starts cleanly and is wrong: a store keyed
- * to a superseded labs pin reads as "no data at cell", and sidecar directories
- * no registered runtime writes drop every input label in silence. So each
+ * The console needs an identity, a space, a toolshed URL, and the store that
+ * toolshed serves. An operator transcribing those by hand gets a console that
+ * starts cleanly and is wrong: a store keyed to a superseded labs pin reads as
+ * "no data at cell". So each
  * value is derived from the record that decides it, tagged with where it came
  * from, and printed once before the server binds. Anything that cannot be
  * derived is a named flag whose absence is an error naming it, never a default
@@ -22,12 +20,13 @@
  *
  * Which driver the console's sandbox runs on is read from the environment,
  * through the derivation every cf-harness entrypoint shares, and the server
- * reads the same variables the same way. A console on the direct runsc driver
- * reads no Docker runtime table and needs no sidecar directory; the launch
- * prints the `runsc` binary, rootfs and CFC policy the environment named in
- * their place. Where the environment names no driver, a launch by hand takes
- * its platform's default, and a launch with `--instance` is refused: loom
- * chooses the driver of each instance, and names it for the console it starts.
+ * reads the same variables the same way. The launch prints the `runsc`
+ * binary, rootfs and CFC policy the selection settled on. Where the
+ * environment names no driver, a launch by hand takes its platform's default,
+ * the native runtime on macOS and Linux, and is refused on every other
+ * platform, which has none; a launch with `--instance` is refused on every
+ * platform: loom chooses the driver of each instance, and names it for the
+ * console it starts. `docker` named is refused everywhere.
  *
  * A loom instance is one source among several rather than the shape of this
  * module: `--instance` reads the identity, space and toolshed URL off that
@@ -58,11 +57,6 @@ import { HarnessControlError } from "../src/control-errors.ts";
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../src/config.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
-  DEFAULT_DOCKER_BINARY,
-  registeredCfcSidecarHostDirs,
-} from "../src/sandbox/docker-runsc.ts";
-import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
-import {
   nativeStoreCfcPolicy,
   resolveSandboxRuntimeSelection,
   RUNSC_BINARY_ENV,
@@ -70,6 +64,8 @@ import {
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
+  type SandboxProcess,
+  sandboxProcessOf,
   type SandboxRuntimeChoice,
   sandboxRuntimeChoiceReason,
   type SandboxRuntimeSelection,
@@ -96,13 +92,8 @@ import {
   startConsoleServer,
 } from "./server.ts";
 
-export { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
-
 /** The port Weaver's harness-console setting and loom's proxy both address. */
 export const WEAVER_PAIRING_PORT = 8135;
-
-/** The Docker runtime whose registration sites the CFC sidecar transports. */
-const RUNSC_CFC_RUNTIME = "runsc-cfc";
 
 /**
  * The index and registry this deployment's consoles read. They belong to the
@@ -147,8 +138,6 @@ export const LAUNCHER_OWNED_VARIABLES = [
   "CF_HARNESS_FABRIC_CFC_POSTURE",
   "CF_HARNESS_FABRIC_CFC_FLOW_LABELS",
   "CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE",
-  "CF_HARNESS_RUNSC_CFC_RESULT_DIR",
-  "CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR",
   "CF_HARNESS_CONNECTOR_GRANTS",
   "CF_HARNESS_PATTERN_INDEX_URL",
   "CF_HARNESS_SKILLS_REGISTRY_URL",
@@ -196,21 +185,8 @@ export interface LoomInstanceRecords {
 export interface ConsoleLaunchRecords {
   /** Present only when `--instance` named a loom instance. */
   instance?: LoomInstanceRecords;
-  /**
-   * The runtime table `docker info --format '{{json .Runtimes}}'` reported, or
-   * `undefined` when it could not be read. The running daemon's table rather
-   * than the configuration on disk: an edited `daemon.json` the daemon has not
-   * reloaded names directories nothing writes.
-   */
-  dockerRuntimes?: unknown;
-  /** Why `dockerRuntimes` is absent, for error text. */
-  dockerRuntimesUnreadable?: string;
-  /**
-   * The sandbox runtime the launch environment selects. Absent, the console
-   * runs on the Docker driver and the launch does not report how that was
-   * selected.
-   */
-  sandbox?: ConsoleLaunchSandbox;
+  /** The sandbox runtime the launch environment selects. */
+  sandbox: ConsoleLaunchSandbox;
 }
 
 /** The sandbox runtime a launch's environment selects. */
@@ -262,8 +238,6 @@ export interface ConsoleLaunchOptions {
   noSkillsRegistry?: boolean;
   allowSkillScripts?: boolean;
   inheritedAllowSkillScripts?: boolean;
-  cfcResultDir?: string;
-  cfcInvocationContextDir?: string;
   posture?: string;
   flowLabels?: string;
   enforcementMode?: string;
@@ -528,60 +502,6 @@ export const resolveConsoleLaunchPlan = (
     }
   }
 
-  const runsc = records.sandbox?.selection.sandboxRuntimeKind === "runsc"
-    ? records.sandbox
-    : undefined;
-  let cfcResultDir: string | undefined;
-  let cfcInvocationContextDir: string | undefined;
-  if (runsc !== undefined) {
-    // The direct driver carries its CFC transport on descriptors, so a
-    // directory named here would be printed and exported while nothing reads
-    // it.
-    const named = options.cfcResultDir !== undefined
-      ? "--cfc-result-dir"
-      : options.cfcInvocationContextDir !== undefined
-      ? "--cfc-invocation-context-dir"
-      : undefined;
-    if (named !== undefined) {
-      const choice = runsc.selection.sandboxRuntimeChoice;
-      throw new Error(
-        `\`${named}\` names a sidecar directory of the Docker driver, and ` +
-          (choice.source === "default"
-            ? "this console is on the direct runsc driver, the default on " +
-              "macOS, which reads none"
-            : `\`${SANDBOX_RUNTIME_ENV}\` puts this console on the direct ` +
-              "runsc driver, which reads none") +
-          `; drop the flag, or set \`${SANDBOX_RUNTIME_ENV}=docker\` to run ` +
-          "on Docker",
-      );
-    }
-  } else {
-    const sidecars = registeredCfcSidecarHostDirs({
-      runtimeName: RUNSC_CFC_RUNTIME,
-      runtimes: records.dockerRuntimes,
-    });
-    const registrationSource = records.dockerRuntimesUnreadable ??
-      `no \`${RUNSC_CFC_RUNTIME}\` runtime \`docker info\` reports names it`;
-    cfcResultDir = options.cfcResultDir ?? sidecars.resultDir;
-    if (cfcResultDir === undefined) {
-      throw new Error(
-        `no directory is registered for \`--cfc-result-dir\`: ` +
-          `${registrationSource}; set \`--cfc-result-dir\` to the directory ` +
-          `the runtime writes its result sidecars to`,
-      );
-    }
-    cfcInvocationContextDir = options.cfcInvocationContextDir ??
-      sidecars.invocationContextDir;
-    if (cfcInvocationContextDir === undefined) {
-      throw new Error(
-        `no directory is registered for ` +
-          `\`--cfc-invocation-context-dir\`: ${registrationSource}; set ` +
-          `\`--cfc-invocation-context-dir\` to the directory the runtime ` +
-          `reads invocation contexts from`,
-      );
-    }
-  }
-
   if (
     options.patternIndexUrl !== undefined && options.noPatternIndex === true
   ) {
@@ -624,8 +544,6 @@ export const resolveConsoleLaunchPlan = (
     DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE;
 
   const deploymentDefault = "labs deployment default";
-  const registrationSourceName =
-    `\`${RUNSC_CFC_RUNTIME}\` as \`docker info\` reports it`;
 
   // The operator's one decision about skill scripts. Nothing about the fabric
   // implies it, so it is off unless someone says otherwise, and the printout
@@ -670,27 +588,7 @@ export const resolveConsoleLaunchPlan = (
       value: storeDirectoryPath(store.value),
       source: store.source,
     },
-    ...(runsc !== undefined ? runscResolvedValues(runsc) : [
-      ...(records.sandbox === undefined ? [] : [{
-        name: "sandbox",
-        value: "docker",
-        source: sandboxSource(records.sandbox.selection.sandboxRuntimeChoice),
-      }]),
-      {
-        name: "cfc results",
-        value: cfcResultDir!,
-        source: options.cfcResultDir === undefined
-          ? registrationSourceName
-          : NAMED,
-      },
-      {
-        name: "cfc contexts",
-        value: cfcInvocationContextDir!,
-        source: options.cfcInvocationContextDir === undefined
-          ? registrationSourceName
-          : NAMED,
-      },
-    ]),
+    ...runscResolvedValues(records.sandbox),
     {
       name: "posture",
       value: `${posture}, flow labels ${flowLabels}, ${enforcementMode}`,
@@ -738,12 +636,6 @@ export const resolveConsoleLaunchPlan = (
     CF_HARNESS_FABRIC_CFC_POSTURE: posture,
     CF_HARNESS_FABRIC_CFC_FLOW_LABELS: flowLabels,
     CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: enforcementMode,
-    ...(cfcResultDir !== undefined && cfcInvocationContextDir !== undefined
-      ? {
-        CF_HARNESS_RUNSC_CFC_RESULT_DIR: cfcResultDir,
-        CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: cfcInvocationContextDir,
-      }
-      : {}),
     MEMORY_DIR: storeDirectoryPath(store.value),
     ...(connectorGrants.length > 0
       ? { CF_HARNESS_CONNECTOR_GRANTS: JSON.stringify(connectorGrants) }
@@ -789,9 +681,10 @@ const runscResolvedValues = (
 ): ResolvedValue[] => {
   const { selection } = sandbox;
   const choice = selection.sandboxRuntimeChoice;
-  const store = choice.source === "default" && choice.runtime === "runsc"
-    ? choice.nativeStore
+  const native = choice.source === "default" && choice.runtime === "runsc"
+    ? choice
     : undefined;
+  const store = native?.nativeStore;
   const fromStore = store === undefined
     ? "harness default"
     : `the native store at \`${store}\``;
@@ -819,8 +712,9 @@ const runscResolvedValues = (
     // store's own is one only a defaulted native runtime takes.
     source: sandbox.policyNamed
       ? inherited(RUNSC_CFC_POLICY_ENV)
-      : store !== undefined &&
-          selection.sandboxCfcPolicy === nativeStoreCfcPolicy(store)
+      : native !== undefined &&
+          selection.sandboxCfcPolicy ===
+            nativeStoreCfcPolicy(native.platform, native.nativeStore)
       ? fromStore
       : "harness default",
   }];
@@ -922,15 +816,11 @@ export interface ConsoleLaunchIo {
     loomBinary: string,
     instance: string,
   ) => Promise<string>;
-  readDockerRuntimes: () => Promise<
-    { runtimes?: unknown; unreadable?: string }
-  >;
 }
 
 const REAL_IO: ConsoleLaunchIo = {
   readTextFile: readOptionalFile,
   readToolshedStoreDir,
-  readDockerRuntimes: () => readDockerRuntimes(DEFAULT_DOCKER_BINARY),
 };
 
 /** The launcher's flags that carry a value. */
@@ -945,8 +835,6 @@ const LAUNCH_STRING_FLAGS = [
   "store",
   "pattern-index-url",
   "skills-registry-url",
-  "cfc-result-dir",
-  "cfc-invocation-context-dir",
   "fabric-cfc-posture",
   "fabric-cfc-flow-labels",
   "fabric-cfc-enforcement-mode",
@@ -1000,19 +888,22 @@ const INSTANCE_RUNTIME_NAMED_BY = "Loom";
  * it, stopping short of serving: the plan, and the arguments after `--` that
  * belong to the console rather than to this launcher. `host.platform` is the
  * platform whose default sandbox runtime applies where `env` names none, as
- * `Deno.build.os` writes it, which it is when absent. A launch with
+ * `Deno.build.os` writes it, which it is when absent, and `host.arch` and
+ * `host.uid` describe the process that default is for. A launch with
  * `--instance` takes no such default, and returns in `sandboxRuntimeNamedBy`
  * who has to name the runtime, for the console it serves to hold to as well.
  *
- * @throws HarnessControlError where `env` names no sandbox runtime and the
- * launch is for a Loom instance; and where it names none on macOS and the
- * native runtime cannot be provided.
+ * @throws HarnessControlError where `env` names `docker`, the Docker driver
+ * this cf-harness no longer has; where it names no sandbox runtime and the
+ * launch is for a Loom instance, or runs on a platform with no default, which
+ * is every platform but macOS and Linux; and where it names none on macOS or
+ * Linux and the native runtime cannot be provided.
  */
 export const prepareConsoleLaunch = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   io: ConsoleLaunchIo = REAL_IO,
-  host: { platform?: SandboxPlatform } = {},
+  host: SandboxProcess & { platform?: SandboxPlatform } = {},
 ): Promise<{
   plan: ConsoleLaunchPlan;
   consoleArgs: string[];
@@ -1125,15 +1016,10 @@ export const prepareConsoleLaunch = async (
     ...(sandboxRuntimeNamedBy !== undefined
       ? { namedBy: sandboxRuntimeNamedBy }
       : { platform: host.platform ?? Deno.build.os }),
+    ...sandboxProcessOf(host),
     flags: false,
     cwd: Deno.cwd(),
   });
-  // Only the Docker driver has a runtime table to read. Not configurable
-  // there: that sandbox runs `docker`, so a launcher reading the table from
-  // anything else would print directories the runs never reach.
-  const docker = selection.sandboxRuntimeKind === "runsc"
-    ? {}
-    : await io.readDockerRuntimes();
 
   const plan = resolveConsoleLaunchPlan({
     ...(instance !== undefined ? { instance } : {}),
@@ -1143,12 +1029,6 @@ export const prepareConsoleLaunch = async (
       rootfsNamed: nonEmpty(env[SANDBOX_ROOTFS_ENV]) !== undefined,
       policyNamed: nonEmpty(env[RUNSC_CFC_POLICY_ENV]) !== undefined,
     },
-    ...(docker.runtimes !== undefined
-      ? { dockerRuntimes: docker.runtimes }
-      : {}),
-    ...(docker.unreadable !== undefined
-      ? { dockerRuntimesUnreadable: docker.unreadable }
-      : {}),
   }, {
     ...(flag("fabric-identity") !== undefined
       ? { identity: flag("fabric-identity")! }
@@ -1193,12 +1073,6 @@ export const prepareConsoleLaunch = async (
     allowSkillScripts: parsed["allow-skill-scripts"] === true,
     inheritedAllowSkillScripts:
       nonEmpty(env.CF_HARNESS_ALLOW_SKILL_SCRIPTS) === "1",
-    ...(flag("cfc-result-dir") !== undefined
-      ? { cfcResultDir: flag("cfc-result-dir")! }
-      : {}),
-    ...(flag("cfc-invocation-context-dir") !== undefined
-      ? { cfcInvocationContextDir: flag("cfc-invocation-context-dir")! }
-      : {}),
     ...(flag("fabric-cfc-posture") !== undefined
       ? { posture: flag("fabric-cfc-posture")! }
       : {}),
@@ -1242,9 +1116,10 @@ export const prepareConsoleLaunch = async (
  * and serves under it. Where `args` ask for help it prints the usage instead,
  * and reads and serves nothing. `host.platform` is the platform whose default
  * sandbox runtime applies to the launch and to the console it serves, as
- * `Deno.build.os` writes it, which it is when absent. `serve` is handed what
- * the console is to be told of where it runs: that platform, and, for a
- * launch with `--instance`, who has to name the runtime.
+ * `Deno.build.os` writes it, which it is when absent, with the process that
+ * default is for in `host.arch` and `host.uid`. `serve` is handed what the
+ * console is to be told of where it runs: that platform and process, and,
+ * for a launch with `--instance`, who has to name the runtime.
  */
 export const launchConsole = async (
   args: readonly string[] = Deno.args,
@@ -1256,7 +1131,7 @@ export const launchConsole = async (
   ) => Promise<void> = (consoleArgs, health, consoleHost) =>
     startConsoleServer(consoleArgs, undefined, undefined, health, consoleHost),
   io: ConsoleLaunchIo = REAL_IO,
-  host: { platform?: SandboxPlatform } = {},
+  host: SandboxProcess & { platform?: SandboxPlatform } = {},
 ): Promise<void> => {
   // A flag with no value first, on either side of `--`: the `-h` it leaves
   // behind is not a question.

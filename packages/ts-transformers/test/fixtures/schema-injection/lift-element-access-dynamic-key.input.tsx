@@ -11,7 +11,7 @@ type Catalog = {
 // FIXTURE: lift-element-access-dynamic-key
 // Verifies: a module-scope lift keeps an input member it reads through an element access, beside a second member
 //   catalog.get().offers[KEY]?.space shrinks catalog to offers, dropping the unread meta
-//   catalog.get().offers[ANY_KEY]?.space, whose key can name any member, reads catalog in full
+//   catalog.get().offers[ANY_KEY]?.space, whose key can name any member, reads offers in full and drops the unread meta too
 // Context: Explicitly typed lift inputs, as opposed to the closure-extracted computed inputs
 const constKey = lift((
   { catalog, n }: { catalog: Writable<Catalog>; n: Writable<number> },

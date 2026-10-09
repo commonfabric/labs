@@ -26,12 +26,15 @@ import {
   changeSharedSpaceMembership,
   readSharedSpaceCatalog,
   registerSharedSpace,
+  removeSharedSpace,
   type SharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
+  type SharedSpaceRemoval,
+  type SharedSpaceRemovalResult,
 } from "./shared-space-catalog.ts";
 import {
   type CreateProfileEvent,
@@ -152,6 +155,12 @@ export type HomeOutput = {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
+  // Only for an application undoing its own import of shared spaces: removes
+  // one entry no offer receipt names, at the revision the caller observed (see
+  // `removeSharedSpace` for what the caller must do). Home renders no control
+  // for it, and nothing a person invokes calls it: archive is how a person puts
+  // a shared space away.
+  removeSharedSpace: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
   createProfile: Stream<CreateProfileEvent>;
   // Gives Home the private inbox the deciding profile advertises: it adopts the
   // one the host vetted and names, with that profile, when the profile is in
@@ -382,7 +391,11 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
-    const chatManager = FabriChatManager({});
+    // Its panel renders after every other panel. A panel inserted ahead of an
+    // existing one changes the arguments a deployed Home's existing children
+    // are offered when they update: the profile picker's update over Home's
+    // vintages is refused for want of `profiles` (`deno task pattern-vintage`).
+    const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
       retainedPrivateInboxes,
@@ -414,6 +427,7 @@ const Home = pattern(
               <cf-tab value="profile">Profile</cf-tab>
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
+              <cf-tab value="chats">Chats</cf-tab>
             </cf-tab-list>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
@@ -513,6 +527,9 @@ const Home = pattern(
                 </cf-vstack>
               </cf-vstack>
             </cf-tab-panel>
+            <cf-tab-panel value="chats" id="home-chats">
+              {chatManager}
+            </cf-tab-panel>
           </cf-tabs>
         </cf-screen>
       ) as VNode,
@@ -537,6 +554,7 @@ const Home = pattern(
       // Exported handlers
       registerSharedSpace: registerSharedSpace({ catalog }),
       changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
+      removeSharedSpace: removeSharedSpace({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

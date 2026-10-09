@@ -30,7 +30,10 @@ import type {
   MemorySpace,
   StorageNotification,
 } from "../storage/interface.ts";
-import { ReplicaLoadFailureError } from "../storage/interface.ts";
+import {
+  hasSessionReportStorageCapability,
+  ReplicaLoadFailureError,
+} from "../storage/interface.ts";
 import {
   recordLocalReadWake,
   requireLocalReadCondition,
@@ -144,6 +147,14 @@ import {
   unsubscribeSchedulerAction,
 } from "./registration.ts";
 import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
+import {
+  captureEchoRun,
+  computeEchoSteps,
+  type EchoBreakerEvent,
+  type EchoBreakerStats,
+  type EchoRun,
+  RemoteEchoBreaker,
+} from "./echo-breaker.ts";
 import {
   readsOverlapWrites,
   SchedulerWriteIndex,
@@ -461,6 +472,17 @@ export class Scheduler {
   /** Called with each action {@link unsubscribe} is given. */
   #unsubscribeObservers = new Set<(action: Action) => void>();
 
+  /**
+   * Bounds the remote-echo write loop
+   * (docs/plans/scheduler-remote-echo-breaker.md). Fed a committed reactive
+   * run's echo steps on success, it backs an action off through the gate once
+   * its re-runs sustain against a remote writer, and reports each trip and
+   * clear to the memory server holding the document's space.
+   */
+  readonly #echoBreaker = new RemoteEchoBreaker({
+    onEvent: (event) => this.#reportEchoBreakerEvent(event),
+  });
+
   #currentActionId?: string;
   #dependencyGraphState!: DependencyGraphState;
   #dependencyUpdateState!: DependencyUpdateState;
@@ -594,6 +616,7 @@ export class Scheduler {
   get accessForTestingOnly(): {
     readonly actionStats: BoundedKeyMap<string, ActionStats>;
     readonly dependencyUpdateState: DependencyUpdateState;
+    readonly echoBreaker: RemoteEchoBreaker;
     readonly eventExecutionState: SchedulerEventExecutionState;
     readonly eventQueue: QueuedEvent[];
     readonly eventQueueState: SchedulerEventQueueState;
@@ -623,6 +646,7 @@ export class Scheduler {
       get dependencyUpdateState() {
         return outerThis.#dependencyUpdateState;
       },
+      echoBreaker: this.#echoBreaker,
       get eventExecutionState() {
         return outerThis.#eventExecutionState;
       },
@@ -944,6 +968,10 @@ export class Scheduler {
   ): void {
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
+    // The node record outlives the registration, so its echo gate would
+    // otherwise defer a later registration of the same action.
+    this.#echoBreaker.forget(this.#getActionId(action), performance.now());
+    this.#gates.clearEchoBackoff(action);
     for (const observer of [...this.#unsubscribeObservers]) observer(action);
   }
 
@@ -3323,6 +3351,7 @@ export class Scheduler {
       noteLineageRerun: (originTx) => {
         this.#lineage.noteRerun(originTx);
       },
+      lineageRunsAgain: (originTx) => this.#lineage.runsAgain(originTx),
       getOriginLocalSeq: (originTx, targetSpace) =>
         getCommitLocalSeq(originTx.tx, targetSpace),
       snapshotEventPreflightTraceContext: (trace) =>
@@ -3419,7 +3448,82 @@ export class Scheduler {
         this.#executingAction = null;
         this.#currentActionId = undefined;
       },
+      captureRemoteEcho: (tx, log, invalidCauses) =>
+        captureEchoRun(
+          tx,
+          log,
+          invalidCauses,
+          tx.tx.scopeKeyIdentity ?? this.runtime.scopeKeyIdentity,
+        ),
+      observeRemoteEcho: (action, actionId, run) =>
+        this.#observeRemoteEcho(action, actionId, run),
     };
+  }
+
+  /**
+   * Classify a successful reactive commit's run, captured at kickoff, against
+   * the pairs the remote-echo breaker holds as the commit lands, feed its echo
+   * steps to the breaker, and apply its verdict to the action's gate: a
+   * positive deadline defers the action's re-runs (a tripped loop), `0` lifts
+   * the deferral (a convergence that ended the loop), and `undefined` leaves
+   * the gate untouched.
+   */
+  #observeRemoteEcho(action: Action, actionId: string, run: EchoRun): void {
+    const steps = computeEchoSteps(run, {
+      tracked: this.#echoBreaker.tracks(actionId),
+    });
+    if (steps.length === 0) return;
+    const deadline = this.#echoBreaker.observe(
+      actionId,
+      steps,
+      performance.now(),
+    );
+    if (deadline === undefined) return;
+    if (deadline > 0) this.#gates.setEchoBackoff(action, deadline);
+    else this.#gates.clearEchoBackoff(action);
+  }
+
+  /**
+   * Reports a breaker trip or clear to the memory server serving the
+   * document's space, on that space's session (memory-v2 `04-protocol.md`
+   * §4.14), where it lands beside the session's commit rates. Best-effort and
+   * fire-and-forget: a disposed scheduler, a runtime tearing its writes down,
+   * and a provider or server without the capability all report nothing.
+   */
+  #reportEchoBreakerEvent(event: EchoBreakerEvent): void {
+    if (this.#disposed || this.runtime.writeTeardownSignal.aborted) return;
+    try {
+      const provider = this.runtime.storageManager.open(event.document.space);
+      if (!hasSessionReportStorageCapability(provider)) return;
+      const named = {
+        kind: "echo-breaker" as const,
+        document: { id: event.document.id, scopeKey: event.document.scopeKey },
+        action: event.actionId,
+      };
+      provider.sendReport(
+        event.event === "trip" ? { ...named, event: "trip" } : {
+          ...named,
+          event: "clear",
+          reason: event.reason,
+          renewals: event.renewals,
+          trippedMs: event.trippedMs,
+        },
+      );
+    } catch (error) {
+      logger.debug("echo-breaker-report-failed", () => [
+        "could not report a remote-echo breaker event",
+        error,
+      ]);
+    }
+  }
+
+  /**
+   * The remote-echo breaker's visible counts
+   * (docs/plans/scheduler-remote-echo-breaker.md §3): pairs whose backoff is in
+   * force now, the cumulative trip count, and echo cycles counted.
+   */
+  getEchoBreakerStats(): EchoBreakerStats {
+    return this.#echoBreaker.stats(performance.now());
   }
 
   #createGraphSnapshotState(): SchedulerGraphSnapshotState {

@@ -6,6 +6,26 @@ import { HealthResponseSchema } from "./health.handlers.ts";
 
 const tags = ["Health"];
 
+/** Commits over one window of the memory server's commit rates
+ * (packages/memory/v2/commit-rates.ts `CommitWindowCounts`). */
+const commitWindowCounts = z.object({
+  accepted: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  operations: z.number().int().nonnegative(),
+});
+
+/** The fields every recorded session report carries, whatever its event
+ * (packages/memory/v2/session-reports.ts `RecordedSessionReport`). */
+const sessionReportBase = z.object({
+  kind: z.literal("echo-breaker"),
+  document: z.object({ id: z.string(), scopeKey: z.string() }),
+  action: z.string(),
+  at: z.number(),
+  space: z.string(),
+  session: z.string(),
+  principal: z.string().optional(),
+});
+
 export const index = createRoute({
   path: "/_health",
   method: "get",
@@ -50,6 +70,61 @@ export const stats = createRoute({
               budgetBytes: z.number().int().positive(),
               maxEntries: z.number().int().positive(),
             }),
+          ),
+        }).optional(),
+        // The memory server's commit rates over the last minute and ten
+        // minutes (packages/memory/v2/commit-rates.ts `CommitRatesReport`)
+        // — present whenever a memory server is co-hosted in this process.
+        commitRates: z.object({
+          storm: z.object({
+            commitsPerMinute: z.number().positive(),
+            sustainedSeconds: z.number().positive(),
+          }),
+          activeSpaces: z.number().int().nonnegative(),
+          storms: z.number().int().nonnegative(),
+          spaces: z.array(
+            z.object({
+              space: z.string(),
+              minute: commitWindowCounts,
+              tenMinutes: commitWindowCounts,
+              storm: z.object({ since: z.number() }).optional(),
+              activeWriters: z.number().int().nonnegative(),
+              writers: z.array(
+                z.object({
+                  session: z.string(),
+                  principal: z.string().optional(),
+                  minute: commitWindowCounts,
+                  tenMinutes: commitWindowCounts,
+                }),
+              ),
+            }),
+          ),
+        }).optional(),
+        // The diagnostics clients reported about their sessions
+        // (packages/memory/v2/session-reports.ts `SessionReportsReport`):
+        // the remote-echo breaker's trips and clears since the server
+        // started, and the most recent reports in full — present whenever a
+        // memory server is co-hosted in this process.
+        sessionReports: z.object({
+          echoBreaker: z.object({
+            trips: z.number().int().nonnegative(),
+            clears: z.object({
+              convergence: z.number().int().nonnegative(),
+              quiet: z.number().int().nonnegative(),
+              retired: z.number().int().nonnegative(),
+              evicted: z.number().int().nonnegative(),
+            }),
+          }),
+          recent: z.array(
+            z.discriminatedUnion("event", [
+              sessionReportBase.extend({ event: z.literal("trip") }),
+              sessionReportBase.extend({
+                event: z.literal("clear"),
+                reason: z.enum(["convergence", "quiet", "retired", "evicted"]),
+                renewals: z.number().int().nonnegative(),
+                trippedMs: z.number().int().nonnegative(),
+              }),
+            ]),
           ),
         }).optional(),
         // The serving loop's counters (server-execution v2,

@@ -35,8 +35,8 @@ carries the previous store forward on a vendor bump, so an update does not empty
 the space.
 
 The instance records everything the console needs to share its fabric, and the
-launcher in step 2 reads those records itself. Two of them decide whether a run
-works at all, so they are worth knowing by name:
+launcher in step 2 reads those records itself. One of them decides whether a run
+works at all, so it is worth knowing by name:
 
 - **The store**, which `loom toolshed-store-dir <instance>` prints. Loom keys it
   by the labs commit it vendors, so the value changes under an operator on every
@@ -44,23 +44,12 @@ works at all, so they are worth knowing by name:
   reads the space as empty. It is printed as a `file://` URL, which is what the
   toolshed reads `MEMORY_DIR` as; the console reads that variable as a directory
   to walk, so it is given the plain path. A `file://` URL there walks nothing
-  and the console reads another store's cells as this space's.
-- **The `runsc-cfc` sidecar directories**, on the Docker driver, which are not
-  loom's at all: the Docker runtime registration names them in
-  `--cfc-result-dir` and `--cfc-invocation-context-dir`, and `docker info`
-  reports what the running daemon actually loaded. The harness asks only that
-  they are named, so a console pointed anywhere else starts cleanly and denies
-  every observation of the run. Fix a wrong one where the runtime is registered,
-  then restart Docker so the daemon reloads it — an edited `daemon.json` it has
-  not read is not what `docker info` reports, and the registration in force is
-  the one that counts.
-
-The rest — the identity key at `defaults.identity`, the space at
-`defaults.local_space`, and the toolshed URL at `defaults.server_urls.toolshed`
-— live in the instance's `pieces.json`
-(`~/.local/share/loom/instances/<instance>/pieces.json`). Loom's daemon listens
-on its base port plus the instance's port offset, and answers `/config` on
-whichever port that is:
+  and the console reads another store's cells as this space's. The rest — the
+  identity key at `defaults.identity`, the space at `defaults.local_space`, and
+  the toolshed URL at `defaults.server_urls.toolshed` — live in the instance's
+  `pieces.json` (`~/.local/share/loom/instances/<instance>/pieces.json`). Loom's
+  daemon listens on its base port plus the instance's port offset, and answers
+  `/config` on whichever port that is:
 
 ```sh
 curl -s http://127.0.0.1:<loom-port>/config | jq '{serverUrls, identityDid}'
@@ -88,52 +77,62 @@ Either way the flag calls one resolver, and that resolver is reachable directly
 when a console is wanted against a fabric that is already running:
 
 ```sh
-CF_HARNESS_SANDBOX_RUNTIME=docker \
+CF_HARNESS_SANDBOX_RUNTIME=runsc \
   deno task --cwd packages/cf-harness console:launch --instance <instance>
 ```
 
-The variable names the driver the instance runs on, `docker` or `runsc`, which a
-launch for an instance has to be told. It resolves the identity, the space and
-the toolshed URL from the instance's `pieces.json`, the store from
-`loom toolshed-store-dir`, and, on the Docker driver, the two sidecar
-directories from the `runsc-cfc` registration `docker info` reports. It prints
-every value beside the record that decided it, and serves on 8135 — the port
-Weaver's harness console setting and loom's proxy both address. Read the
-printout before opening Weaver: a value that is wrong names where to fix it, and
-those are three different places.
+The variable names the runtime the instance runs on, `runsc`, which a launch for
+an instance has to be told; loom also sets the runtime's binary, rootfs and CFC
+policy in the environment it starts the console from. It resolves the identity,
+the space and the toolshed URL from the instance's `pieces.json`, and the store
+from `loom toolshed-store-dir`. It prints every value beside the record that
+decided it, and serves on 8135 — the port Weaver's harness console setting and
+loom's proxy both address. Read the printout before opening Weaver: a value that
+is wrong names where to fix it.
 
 Which sandbox driver the console runs on comes from its environment, and the
 printout's `sandbox` row says which and why:
 
-- `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`. A console that
-  came up with a loom instance inherits the variable from loom, where loom sets
-  it, to the driver it chose for that instance.
+- `CF_HARNESS_SANDBOX_RUNTIME` names it, `runsc`. A console that came up with a
+  loom instance inherits the variable from loom, where loom sets it. `docker`,
+  the Docker driver cf-harness no longer has, is refused, saying so.
 - `--instance` says only whose console it is. It is the launch flag, and it does
   not choose a driver; the variable is loom's choice. A launch given
   `--instance` with the variable unset takes no default and does not start,
-  saying that Loom must name `docker` or `runsc`: a default could be another
-  driver than the one the instance's runs are on. Where the refusal shows
-  depends on what launched it. A console that `start-local-dev.sh` launches,
-  which is how loom starts its instance's console, does not start while the
-  fabric still comes up, and the refusal is written to
-  `packages/cf-harness/local-dev-console.log`, the console's log; the script's
-  own stderr says the console did not start, names that log, and prints its last
-  lines, the refusal among them. `console:launch --instance` run directly exits
-  with the refusal on its own stderr, and writes no log. A loom that does not
-  set the variable for the console it starts needs updating to one that does.
+  saying that Loom must name `runsc`: a default could be another runtime than
+  the one the instance's runs are on. Where the refusal shows depends on what
+  launched it. A console that `start-local-dev.sh` launches, which is how loom
+  starts its instance's console, does not start while the fabric still comes up,
+  and the refusal is written to `packages/cf-harness/local-dev-console.log`, the
+  console's log; the script's own stderr says the console did not start, names
+  that log, and prints its last lines, the refusal among them.
+  `console:launch --instance` run directly exits with the refusal on its own
+  stderr, and writes no log. A loom that does not set the variable for the
+  console it starts needs updating to one that does.
 - A console launched for no instance, by the start script on a labs dev fabric
-  or by hand, with the variable unset, takes its platform's default. A Mac runs
-  the native runtime, the direct driver over the cfc-vm store at `CFC_VM_HOME`
-  or `~/Library/Application Support/cfc-vm`, and the launch is refused where
-  that store is not set up, naming the store and what it lacks. Every other
-  platform runs Docker. Nothing falls back from one to the other: to put a Mac's
-  console on Docker, set `CF_HARNESS_SANDBOX_RUNTIME=docker` in the environment
-  the fabric starts from.
+  or by hand, with the variable unset, takes its platform's default. A Mac with
+  Apple silicon runs the native runtime, the direct driver over the cfc-vm store
+  at `CFC_VM_HOME` or `~/Library/Application Support/cfc-vm`, and the launch is
+  refused where that store is not set up, naming the store and what it lacks;
+  any other Mac is refused outright. Linux runs the native runtime too, the
+  direct driver over the store gVisor's Linux installer writes under
+  `~/.local/share/runsc-cfc`, rootless for a console that is not root, with
+  `pasta` (passt) for its default network. The launch is refused where the host
+  gives a user that is not root no unprivileged user namespace
+  (`user.max_user_namespaces` 0, `kernel.unprivileged_userns_clone` 0 or
+  `kernel.apparmor_restrict_unprivileged_userns` 1), naming the
+  `sudo sysctl -w <parameter>=<value>` that allows them, or running as root: the
+  store's rootless `runsc` needs one whatever the network, and pasta's network
+  needs one even for a `runsc` named by `CF_HARNESS_RUNSC_BINARY`, which runs as
+  it is. It is refused where the default network finds no `pasta` or `setpriv`
+  on `PATH` or, for root, no `unshare`, naming passt or util-linux to install (a
+  named `none` or `host` network needs none of the three), and where that store
+  is not set up, naming what it lacks. Every other platform has no default, and
+  the launch is refused there unless the variable names `runsc`.
 
-A console on the direct driver needs no sidecar directory and reads no Docker
-registration; the printout names its `runsc` binary, rootfs and CFC policy
-instead, each beside the variable or the store it came from, or beside
-`harness default` where neither named it.
+The printout names the console's `runsc` binary, rootfs and CFC policy, each
+beside the variable or the store it came from, or beside `harness default` where
+neither named it.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and
@@ -150,20 +149,21 @@ console untouched, so every other flag it takes —
 this one path:
 
 ```sh
-CF_HARNESS_SANDBOX_RUNTIME=docker \
+CF_HARNESS_SANDBOX_RUNTIME=runsc \
   deno task --cwd packages/cf-harness console:launch --instance <instance> \
   -- --host-mount name=corpus,source=/absolute/corpus,target=/corpus
 ```
 
 **A console that cannot start does not take the fabric down.** It needs its
-sandbox runtime (on a Mac the native store, elsewhere Docker, unless
-`CF_HARNESS_SANDBOX_RUNTIME` names one) and a connected model provider, and when
-either is missing the flag reports it in the script's output and in
-`packages/cf-harness/local-dev-console.log`, and the shell and toolshed keep
-running. A Mac whose native store is not set up is one such case: the log holds
-the refusal, with the store, what it lacks, and the variable that selects
-Docker. That is the shape to expect: the pair is the fabric, and the console is
-a surface on it.
+sandbox runtime (on a Mac or Linux the native store, which on Linux needs
+`pasta` and `setpriv` for its default network, `unshare` too for root, and
+unprivileged user namespaces for a user that is not root, unless
+`CF_HARNESS_SANDBOX_RUNTIME` names it with its settings) and a connected model
+provider, and when either is missing the flag reports it in the script's output
+and in `packages/cf-harness/local-dev-console.log`, and the shell and toolshed
+keep running. A Mac or a Linux host whose native store is not set up is one such
+case: the log holds the refusal, with the store and what it lacks. That is the
+shape to expect: the pair is the fabric, and the console is a surface on it.
 
 **One console per state directory.** The launcher names a directory per instance
 and port, so two consoles started this way keep separate runs, sessions and

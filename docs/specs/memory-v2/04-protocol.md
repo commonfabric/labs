@@ -88,7 +88,8 @@ If the server accepts the protocol, it returns:
     "sessionReadCeiling": true,
     "presenceV1": true,
     "sessionClose": true,
-    "admissionNotice": true
+    "admissionNotice": true,
+    "sessionReportV1": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -303,6 +304,14 @@ server sends the notice only on a connection where both peers advertise it: a
 client connected to an older server, or a server connected to an older client,
 leaves a refused principal to learn of a later grant by opening the session
 again.
+
+`sessionReportV1` advertises that the server records the diagnostics a client
+reports about its own session with `session.report` (section 4.14). It is
+build-inherent and defaults to `false` when absent: a client connected to an
+older server keeps its reports to itself rather than sending a message the
+server would refuse. Only the server advertises it. A client's `hello` leaves
+it out, since an older routed host refuses a `hello` carrying a flag it does
+not know.
 
 `spaceKind` advertises that the server seals the kind a space's genesis commit
 declares, and reports it in the result of every `session.open` it admits
@@ -521,6 +530,7 @@ interface HelloMessage {
     sessionClose?: boolean;
     connectionAuth?: boolean;
     admissionNotice?: boolean;
+    sessionReportV1?: boolean;
     spaceKind?: boolean;
   };
 }
@@ -1855,6 +1865,91 @@ rejoins every room the session was in, delivers the new snapshot — the server
 assigned a new participant id with the new connection — and republishes the
 last record at a fresh revision. A session that terminates ends its rooms with
 a `failure` event carrying the cause, and nothing follows it.
+
+## 4.14 Session Reports
+
+A session report is a diagnostic a client sends about its own session to the
+server serving the session's space, which counts it and keeps it where an
+operator reads the server's health. It rides the memory connection because every
+client already holds one, authenticated and routed to the server holding the
+space, so a report lands beside that server's commit rates for the same
+session (the health route's `commitRates` and `sessionReports`). Like a presence
+message it is not a commit, carries no `seq`, settles nothing, and is handled
+as it arrives rather than behind the ordered frame queue — which matters here,
+since the space a report describes is often the one with the deepest queue.
+The server advertises the capability as `sessionReportV1` (section 4.1.1).
+
+The one reporter is the scheduler's remote-echo breaker
+([`../../plans/scheduler-remote-echo-breaker.md`](../../plans/scheduler-remote-echo-breaker.md)):
+a `trip` says a reactive action kept rewriting a document, each time
+re-triggered by another writer's change to that same document, and that the
+client is now deferring the action's re-runs; a `clear` says how a tripped
+action ended.
+
+```typescript
+// Shown at module scope.
+
+type SpaceId = string;
+type SessionId = string;
+/** `space`, `user:<principal>`, or `session:<principal>:<session>`, each part
+ * URI-component encoded. */
+type ScopeKey = string;
+
+interface EchoBreakerReportDocument {
+  id: string;
+  /** The scope instance the action wrote, resolved. A serving runtime reports
+   * the runs it serves for many sessions on its own session, so the report
+   * names the instance rather than leaving the reporting session to stand for
+   * it. */
+  scopeKey: ScopeKey;
+}
+
+interface EchoBreakerTripReport {
+  kind: "echo-breaker";
+  event: "trip";
+  document: EchoBreakerReportDocument;
+  /** The action's scheduler id. */
+  action: string;
+}
+
+interface EchoBreakerClearReport {
+  kind: "echo-breaker";
+  event: "clear";
+  document: EchoBreakerReportDocument;
+  action: string;
+  /** Converged on the document, quiet for the breaker's reset, the action
+   * unregistered, or the pair dropped from the breaker's bounded table. */
+  reason: "convergence" | "quiet" | "retired" | "evicted";
+  /** Echoes after the trip, each of which renewed the backoff. */
+  renewals: number;
+  /** Milliseconds from the trip to the clear. */
+  trippedMs: number;
+}
+
+interface SessionReportRequest {
+  type: "session.report";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  report: EchoBreakerTripReport | EchoBreakerClearReport;
+}
+```
+
+The request receives a `response` whose `ok` is empty. It requires an open
+session for `space` on the same connection, as presence does; a session the
+connection does not hold gets a `SessionError`, and a routed connection is
+re-authorized for `READ` on the space as it is for presence. Every string
+carries at most 512 characters and no control character, since the server
+writes report text into its log; `scopeKey` is a canonical scope key; and every
+count is a non-negative integer. A report that breaks one of these is answered
+as an unparseable message. The server records only the fields defined here,
+under the session and the principal it was opened as. A report is best-effort
+on the client: it is not sent to a server that does not advertise the
+capability or while the connection is down, and a refusal is not surfaced,
+since a lost report costs only the diagnostic. `SpaceSession.sendReport(report)`
+is the client library's entry point. It cuts an over-long string to fit, and
+does not send a report the server would still refuse, since an unparseable
+message is answered under no request id.
 
 ## Routed public-stage Mode A
 

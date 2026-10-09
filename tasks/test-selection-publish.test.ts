@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import {
   byDayThenName,
+  chunksByRun,
   dayPartitions,
   inputChoice,
   livePrevious,
@@ -31,7 +32,7 @@ import {
   parseAggregate,
   reportFromText,
 } from "./test-selection/build.ts";
-import { emptyState } from "./test-selection/score.ts";
+import { CATCH_RULE, emptyState } from "./test-selection/score.ts";
 import { CATCH_WEIGHT_MAIN } from "./test-selection/policy.ts";
 import { stateObjectName, statePrefix } from "./test-selection/store.ts";
 import { MANIFEST_SCHEMA_VERSION } from "./test-selection/manifest.ts";
@@ -313,6 +314,41 @@ describe("test-selection-publish", () => {
       expect(ordered[0]).toBe(CI("2026/08/20", "1"));
     });
   });
+
+  describe("chunksByRun()", () => {
+    const lane = (run: string, n: number) =>
+      `labs/test-records/submissions/ci/v1/2026/08/20/run-${run}-tests-${n}-a1.ndjson`;
+
+    it("holds a workflow run's objects in one chunk", () => {
+      // The second chunk would otherwise begin part way through run 2,
+      // and the fold would judge what that run broke in two halves.
+      const names = [lane("1", 1), lane("2", 1), lane("2", 2), lane("3", 1)];
+      expect([...chunksByRun(names, 2)]).toEqual([
+        [lane("1", 1), lane("2", 1), lane("2", 2)],
+        [lane("3", 1)],
+      ]);
+    });
+
+    it("cuts at the size where a run ends there", () => {
+      const names = [lane("1", 1), lane("1", 2), lane("2", 1), lane("3", 1)];
+      expect([...chunksByRun(names, 2)]).toEqual([
+        [lane("1", 1), lane("1", 2)],
+        [lane("2", 1), lane("3", 1)],
+      ]);
+    });
+
+    it("reads each workstation object as a run of its own", () => {
+      const names = [
+        LOCAL("2026/08/20", "a"),
+        LOCAL("2026/08/20", "b"),
+        LOCAL("2026/08/20", "c"),
+      ];
+      expect([...chunksByRun(names, 2)]).toEqual([
+        names.slice(0, 2),
+        names.slice(2),
+      ]);
+    });
+  });
 });
 
 /** A store held in memory, answering the way the real one answers. */
@@ -484,6 +520,7 @@ function laneObject(
           batchMeasurementName("workspace-unit", measured, "units"),
           units,
         ),
+        figure(batchMeasurementName("workspace-unit", measured, "passes"), 1),
       ]
       : []),
     ...(projected === undefined ? [] : [
@@ -750,7 +787,7 @@ describe("publish()", () => {
       publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
     );
     expect(said).toContain("no suite has a measured cost in the last 7 day(s)");
-    expect(said).toContain("4 lane measurement(s) this run read");
+    expect(said).toContain("5 lane measurement(s) this run read");
     expect(said).toContain("the fold could not place");
   });
 
@@ -1331,6 +1368,100 @@ describe("publish() over a day that has been compacted", () => {
     expect(asked).toEqual([]);
   });
 
+  it("judges a day's local submissions beside that day's rollup", async () => {
+    // The default branch broke the test before the workstation run, and
+    // was fixed on the next day. Folded after both rollup days, the
+    // workstation failure would read as a change breaking a passing test.
+    const EARLIER = "2026/08/19";
+    const broken = `labs/test-records/aggregated/v1/${EARLIER}/shard-0.ndjson`;
+    const local = LOCAL(EARLIER, "ianh");
+    const { store, created } = fakeStore({
+      [broken]: object("c1", "fail", "2026-08-19T01:00:00.000Z"),
+      [local]: localObject("c9", "2026-08-19T02:00:00.000Z"),
+      [ROLLUP]: object("c2", "pass", "2026-08-20T01:00:00.000Z"),
+    }, { [EARLIER]: [broken], [DAY]: [ROLLUP] });
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "2"],
+        store,
+        NOW,
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const written = [...created.keys()].find((name) =>
+      name.startsWith(statePrefix())
+    )!;
+    const state = parseAggregate(await gunzipToText(created.get(written)!))!
+      .states[JSON.stringify(["unit", "memory", "space > writes"])]!;
+    expect(state.mainCatches).toBe(1);
+    expect(state.localCatches).toBe(0);
+  });
+
+  it("folds a day read raw before a later day read from its rollup", async () => {
+    // The default branch broke the test on the earlier day, which has no
+    // rollup, and the later day's rollup holds the fix. Folded after the
+    // fix, the failure would wait for a pass that has already gone by.
+    const EARLIER = "2026/08/19";
+    const { store, created } = fakeStore({
+      [CI(EARLIER, "1")]: object("c1", "fail", "2026-08-19T01:00:00.000Z"),
+      [ROLLUP]: object("c2", "pass", "2026-08-20T01:00:00.000Z"),
+    }, { [DAY]: [ROLLUP] });
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "2"],
+        store,
+        NOW,
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const written = [...created.keys()].find((name) =>
+      name.startsWith(statePrefix())
+    )!;
+    const state = parseAggregate(await gunzipToText(created.get(written)!))!
+      .states[JSON.stringify(["unit", "memory", "space > writes"])]!;
+    expect(state.mainCatches).toBe(1);
+    expect(state.pendingMain).toEqual([]);
+  });
+
+  it("settles how every day is read before folding any of it", async () => {
+    // A rollup the compactor writes while a long run is folding is left
+    // for a later run, rather than taken for a day part way through.
+    const EARLIER = "2026/08/19";
+    const { store } = fakeStore({
+      [CI(EARLIER, "1")]: object("c1", "fail", "2026-08-19T01:00:00.000Z"),
+      [ROLLUP]: object("c2", "pass", "2026-08-20T01:00:00.000Z"),
+    }, { [DAY]: [ROLLUP] });
+    const happened: string[] = [];
+    const watched: StoreAccess = {
+      ...store,
+      rollupShards: (day) => {
+        happened.push(`asked ${day}`);
+        return store.rollupShards(day);
+      },
+      read: (name) => {
+        happened.push(`read ${name}`);
+        return store.read(name);
+      },
+    };
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "2"],
+        watched,
+        NOW,
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    expect(happened).toEqual([
+      `asked ${EARLIER}`,
+      `asked ${DAY}`,
+      `read ${CI(EARLIER, "1")}`,
+      `read ${ROLLUP}`,
+    ]);
+  });
+
   it("still reads the local submissions of a settled day", async () => {
     // Rollups cover the continuous-integration area alone. A receipt
     // naming the day by itself would say the day is accounted for, and
@@ -1575,6 +1706,7 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
     return JSON.stringify({
       schema: MANIFEST_SCHEMA_VERSION,
       day: "2026-08-19",
+      catchRule: CATCH_RULE,
       folded: [],
       compacted: [],
       states: {
@@ -1690,6 +1822,7 @@ describe("publish() over a state written further ahead than it reads", () => {
     return JSON.stringify({
       schema,
       day,
+      catchRule: CATCH_RULE,
       folded: [],
       compacted: [],
       states: { [KEPT]: { ...emptyState(), mainCatches: 2 } },
@@ -1851,6 +1984,71 @@ describe("publish() over a state written further ahead than it reads", () => {
     // The state named for a day the wider window reaches carried two of
     // these, and the window carries the third.
     expect(entry?.inputs.catches).toBe(CATCH_WEIGHT_MAIN * 3);
+  });
+});
+
+describe("publish() over an aggregate other catch rules credited", () => {
+  const NOW = new Date("2026-08-20T12:00:00.000Z");
+  const STATE = stateObjectName("2026-08-19", "0");
+  const KEPT = JSON.stringify(["unit", "memory", "space > writes"]);
+  const EARLY = "2026/08/18";
+
+  /**
+   * The store a state that folded the two runs of an earlier day stands
+   * in: a failure on the default branch, then its fix. The state holds
+   * more catches than those runs give, which is what a state credited
+   * under other rules looks like to the rules in force.
+   */
+  function storeWith(catchRule?: number) {
+    return fakeStore({
+      ...seed(),
+      [CI(EARLY, "1")]: object("e1", "fail", "2026-08-18T01:00:00.000Z"),
+      [CI(EARLY, "2")]: object("e2", "pass", "2026-08-18T02:00:00.000Z"),
+      [STATE]: JSON.stringify({
+        schema: MANIFEST_SCHEMA_VERSION,
+        day: "2026-08-19",
+        ...(catchRule === undefined ? {} : { catchRule }),
+        folded: [CI(EARLY, "1"), CI(EARLY, "2")],
+        compacted: [],
+        states: { [KEPT]: { ...emptyState(), mainCatches: 5 } },
+        files: {},
+      }),
+    });
+  }
+
+  async function catchesOf(created: Map<string, Uint8Array>) {
+    return (await publishedManifest(created)).entries.find((one) =>
+      testIdentityKey(one.test) === KEPT
+    )?.inputs.catches;
+  }
+
+  it("folds every day the aggregate holds again", async () => {
+    const { store, created } = storeWith();
+    const said = await saying(() =>
+      publish(["--days", "1"], store, NOW, suites, noPrevious)
+    );
+    expect(said).toContain(
+      `${STATE} credited its catches under other rules, so this run ` +
+        `folds every day from 2026-08-18 again`,
+    );
+    // One catch from the earlier day and one from the window, and none
+    // of the five the state held.
+    expect(await catchesOf(created)).toBe(CATCH_WEIGHT_MAIN * 2);
+    const written = [...created.keys()].find((name) =>
+      name.startsWith(statePrefix())
+    )!;
+    const after = parseAggregate(await gunzipToText(created.get(written)!))!;
+    expect(after.catchRule).toBe(CATCH_RULE);
+    expect(after.folded).toContain(CI(EARLY, "1"));
+  });
+
+  it("folds onto an aggregate the rules in force credited", async () => {
+    const { store, created } = storeWith(CATCH_RULE);
+    const said = await saying(() =>
+      publish(["--days", "1"], store, NOW, suites, noPrevious)
+    );
+    expect(said).not.toContain("credited its catches under other rules");
+    expect(await catchesOf(created)).toBe(CATCH_WEIGHT_MAIN * 6);
   });
 });
 

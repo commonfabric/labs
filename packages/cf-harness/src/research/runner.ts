@@ -5,6 +5,12 @@
  */
 
 import { encodeHex } from "@std/encoding/hex";
+import type {
+  PatternIndexPattern,
+  PatternIndexProgram,
+  PatternIndexSearchRequest,
+  PatternIndexSearchResponse,
+} from "@commonfabric/pattern-index/client";
 import { sha256 } from "@commonfabric/content-hash";
 import {
   computeEntryIdentity,
@@ -51,12 +57,6 @@ import type {
   HarnessModelClient,
   HarnessModelUsage,
 } from "../model/client.ts";
-import type {
-  PatternIndexPattern,
-  PatternIndexProgram,
-  PatternIndexSearchRequest,
-  PatternIndexSearchResponse,
-} from "../pattern-index/client.ts";
 import { patternIndexDependencies } from "../pattern-index/composition.ts";
 import type { DescribeHandleResearchResult } from "../tools/describe-handle.ts";
 import {

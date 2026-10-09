@@ -20,8 +20,8 @@ permanently growing implementation plan.
 
 ## 2. Make dependency readiness contractual
 
-- Add a preflight surface for Docker daemon, selected runtime, sandbox image,
-  model gateway, mounts, Browser Access lease, and trusted CFC sidecar paths.
+- Add a preflight surface for the `runsc` binary, rootfs and CFC policy, model
+  gateway, mounts, and Browser Access lease.
 - Let product adapters reject a run before its first model turn when a required
   dependency is unavailable.
 - Keep capability discovery deterministic and side-effect free; report health

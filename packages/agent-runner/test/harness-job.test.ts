@@ -111,9 +111,12 @@ describe("runHarnessJob()", () => {
         env: {
           CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
           CF_HARNESS_GATEWAY_AUTH_MODE: "none",
-          // Named, so a job selects the same sandbox on every machine: a Mac
-          // otherwise takes the native runtime, from a store this has none of.
-          CF_HARNESS_SANDBOX_RUNTIME: "docker",
+          // Named, with a `runsc` and a rootfs nothing runs, so a job selects
+          // the same sandbox on every machine: macOS and Linux otherwise take
+          // the native runtime, from a store this has none of.
+          CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+          CF_HARNESS_RUNSC_BINARY: "/nonexistent/harness-job-test/runsc",
+          CF_HARNESS_SANDBOX_ROOTFS: "/nonexistent/harness-job-test/rootfs",
         },
         fabricSessionFactory: () =>
           Promise.reject(new Error("this job opens no fabric session")),
@@ -451,6 +454,7 @@ describe("runHarnessJob()", () => {
               HOME: home,
             },
             platform: "darwin",
+            arch: "aarch64",
             createPromptLoop: () => {
               looped = true;
               throw new Error("no loop is built for a refused job");
@@ -465,12 +469,12 @@ describe("runHarnessJob()", () => {
         const refusal = reported.find((message) =>
           message.includes("No sandbox runtime is named")
         );
-        // The job's argument list is written for it, so the way to Docker it
-        // is told is the variable, and no flag.
+        // The job's argument list is written for it, so the way to a CFC
+        // policy it is told is the variable, and no flag.
         expect(refusal).toContain(
-          "select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`.",
+          "(name one with `CF_HARNESS_RUNSC_CFC_POLICY`)",
         );
-        expect(refusal).not.toContain("--sandbox-runtime");
+        expect(refusal).not.toContain("--sandbox-");
       });
     }
 
@@ -509,27 +513,63 @@ describe("runHarnessJob()", () => {
 describe("selectHarnessJobSandboxRuntime()", () => {
   it("takes the runtime the environment names, on any platform", async () => {
     const selection = await selectHarnessJobSandboxRuntime({
-      platform: "darwin",
-      env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+      platform: "freebsd",
+      env: { CF_HARNESS_SANDBOX_RUNTIME: "runsc" },
     });
 
     expect(selection.sandboxRuntimeChoice).toEqual({
-      runtime: "docker",
+      runtime: "runsc",
       source: "environment",
     });
   });
 
-  it("takes Docker by default off macOS", async () => {
-    const selection = await selectHarnessJobSandboxRuntime({
-      platform: "linux",
-      env: {},
-    });
+  it("refuses `docker` named in the environment, as every job would be refused, naming the variable alone", async () => {
+    const refusal = await selectHarnessJobSandboxRuntime({
+      platform: "darwin",
+      env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+    }).then(() => undefined, (error: unknown) => error);
 
-    expect(selection.sandboxRuntimeChoice).toEqual({
-      runtime: "docker",
-      source: "default",
+    expect(refusal).toBeInstanceOf(HarnessControlError);
+    expect(String(refusal)).toContain(
+      "`CF_HARNESS_SANDBOX_RUNTIME=docker` names the Docker driver, which " +
+        "this cf-harness no longer has",
+    );
+    expect(String(refusal)).not.toContain("--sandbox-runtime");
+  });
+
+  it("refuses, as every job would be refused, off macOS and Linux, where no runtime is the default", async () => {
+    const refusal = await selectHarnessJobSandboxRuntime({
+      platform: "freebsd",
+      env: {},
+    }).then(() => undefined, (error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(HarnessControlError);
+    expect(String(refusal)).toContain(
+      "No sandbox runtime is named, and `freebsd` has no default",
+    );
+  });
+
+  it("refuses, as every job would be refused, on Linux for a runner that is not root on a host that allows it no user namespace", async () => {
+    const refusal = await selectHarnessJobSandboxRuntime({
       platform: "linux",
-    });
+      uid: () => 1000,
+      readSysctl: (name) =>
+        Promise.resolve(
+          name === "kernel.apparmor_restrict_unprivileged_userns"
+            ? "1"
+            : undefined,
+        ),
+      env: { HOME: "/home/runner" },
+    }).then(() => undefined, (error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(HarnessControlError);
+    expect(String(refusal)).toContain(
+      "this process is not root (uid 1000), so the store's `runsc` runs " +
+        "rootless, in a user namespace of its own, and " +
+        "`kernel.apparmor_restrict_unprivileged_userns` is 1",
+    );
+    // The runner writes the job's arguments itself, so it names no flag.
+    expect(String(refusal)).not.toContain("--sandbox-runtime");
   });
 
   it("refuses, as every job would be refused, on a Mac whose native runtime is not set up", async () => {
@@ -541,6 +581,7 @@ describe("selectHarnessJobSandboxRuntime()", () => {
     try {
       const refusal = await selectHarnessJobSandboxRuntime({
         platform: "darwin",
+        arch: "aarch64",
         env: { HOME: home },
       }).then(() => undefined, (error: unknown) => error);
 

@@ -19,6 +19,7 @@ import {
   FabricEpochNsec,
   isWellFormedDID,
 } from "commonfabric";
+import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
 // Reviewed surfaces
@@ -139,6 +140,25 @@ export interface ChatProfile {
 
 /** A live link to a person's profile. */
 export type ProfileCell = Cell<ChatProfile>;
+
+/**
+ * The part of a person's profile a manager reads: what a room reads, and
+ * where to offer the person a room. Only a manager reads the inbox pointer,
+ * so the inbox's shape is part of no room's contract.
+ */
+export interface ChatManagerProfile extends ChatProfile {
+  /**
+   * Where the person's offers are delivered, as the profile types its pointer:
+   * a link naming nothing of the inbox but its name. An inbox labels its
+   * offers confidential to its owner, and a run reading the pointer as a link
+   * to more of the inbox, or untyped, takes that label on, which then refuses
+   * its sends.
+   */
+  inbox?: ProfileInbox;
+}
+
+/** A live link to a person's profile, as a manager reads it. */
+export type ManagerProfileCell = Cell<ChatManagerProfile>;
 
 //
 // Room records
@@ -420,8 +440,15 @@ export interface ChatIndexEntry {
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When this user created or accepted it. */
+  /** When this user's catalog admitted it. */
   since: FabricEpochNsec;
+
+  /**
+   * The revision of the room's entry in the user's catalog, as listed, which a
+   * request to forget the room names; absent where the entry is not one the
+   * catalog keeps revisions of.
+   */
+  revision?: string;
 }
 
 /** The outcome of a manager request. */
@@ -441,9 +468,49 @@ export type ChatRequestOutcome =
     /** The request was refused. */
     status: "refused";
 
-    /** Why. */
+    /** Why, for a person to read. */
     reason: string;
+
+    /**
+     * Which refusal it is, for a client to act on, where a client has one to
+     * take; absent for the others.
+     */
+    code?: ChatRefusalCode;
   };
+
+/**
+ * A refusal a client can act on, which stays the same whatever its `reason`
+ * says. `space-own-chat`: `accept` named a social space's own chat, which a
+ * user's chats don't list, since the catalog lists rooms by their own spaces.
+ */
+export type ChatRefusalCode = "space-own-chat";
+
+/** The outcome of an add to a room's space, by its `requestId`. */
+export type AddMemberOutcome =
+  | {
+    /** The person was admitted, or held the access already. */
+    status: "done";
+  }
+  | {
+    /** The add was refused, and nothing was granted. */
+    status: "refused";
+
+    /** Why, for a person to read. */
+    reason: string;
+
+    /**
+     * Which refusal it is, for a client to act on, where a client has one to
+     * take; absent for the others.
+     */
+    code?: AddMemberRefusalCode;
+  };
+
+/**
+ * A refusal of an add a client can act on, which stays the same whatever its
+ * `reason` says. `direct-room`: the room is a direct room, whose space keeps
+ * its two members.
+ */
+export type AddMemberRefusalCode = "direct-room";
 
 /**
  * The `kind` of a room's own space, as the space declares it, and as an offer

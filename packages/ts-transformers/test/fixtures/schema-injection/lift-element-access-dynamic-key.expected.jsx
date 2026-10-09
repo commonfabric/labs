@@ -24,7 +24,7 @@ type Catalog = {
 // FIXTURE: lift-element-access-dynamic-key
 // Verifies: a module-scope lift keeps an input member it reads through an element access, beside a second member
 //   catalog.get().offers[KEY]?.space shrinks catalog to offers, dropping the unread meta
-//   catalog.get().offers[ANY_KEY]?.space, whose key can name any member, reads catalog in full
+//   catalog.get().offers[ANY_KEY]?.space, whose key can name any member, reads offers in full and drops the unread meta too
 // Context: Explicitly typed lift inputs, as opposed to the closure-extracted computed inputs
 const constKey = lift(({ catalog, n }: {
     catalog: Writable<Catalog>;
@@ -68,17 +68,6 @@ const anyKey = lift(({ catalog, n }: {
     type: "object",
     properties: {
         catalog: {
-            $ref: "#/$defs/Catalog",
-            asCell: ["readonly"]
-        },
-        n: {
-            type: "number",
-            asCell: ["readonly"]
-        }
-    },
-    required: ["catalog", "n"],
-    $defs: {
-        Catalog: {
             type: "object",
             properties: {
                 offers: {
@@ -93,20 +82,17 @@ const anyKey = lift(({ catalog, n }: {
                         },
                         required: ["space"]
                     }
-                },
-                meta: {
-                    type: "object",
-                    properties: {
-                        x: {
-                            type: "number"
-                        }
-                    },
-                    required: ["x"]
                 }
             },
-            required: ["offers", "meta"]
+            required: ["offers"],
+            asCell: ["readonly"]
+        },
+        n: {
+            type: "number",
+            asCell: ["readonly"]
         }
-    }
+    },
+    required: ["catalog", "n"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);

@@ -26,6 +26,7 @@ import {
   CATCH_WEIGHT_PR,
   CHURN_HALF_LIFE_DAYS,
   CHURN_WINDOW_DAYS,
+  COMMIT_REACH_DAYS,
   COST_WINDOW_DAYS,
   ENVIRONMENTAL_MIN_SOURCES,
   FLAKE_COMMIT_REACH,
@@ -33,6 +34,7 @@ import {
   FLAKE_WINDOW_DAYS,
   FRESHNESS_FLOOR,
   FRESHNESS_HALF_LIFE_DAYS,
+  MASS_FAILURE_MIN_IDENTITIES,
   PROVEN_SATURATION,
   SAME_COMMIT_REACH_DAYS,
   VALUE_FLOOR,
@@ -121,13 +123,38 @@ export interface IdentityState {
   /**
    * Failures on `main` that no later `main` run has judged yet. A
    * failure that the next `main` run passes was fixed by the change
-   * between them, which makes it a catch; one that is still failing is
-   * the same breakage continuing, and waits.
+   * between them, which makes it a catch unless it arrived in a crowd;
+   * one that is still failing is the same breakage continuing, and waits.
    */
-  pendingMain: Array<
-    { day: string; commit: string; seed?: number; source: string }
-  >;
+  pendingMain: Array<PendingMainFailure>;
 }
+
+/** A failure on `main` waiting for a later `main` run to judge it. */
+export interface PendingMainFailure {
+  day: string;
+  commit: string;
+  seed?: number;
+  source: string;
+
+  /**
+   * Whether the breakage arrived in a crowd: a run that newly broke at
+   * least `MASS_FAILURE_MIN_IDENTITIES` identities. Whichever of them a
+   * change runs sees that breakage, so it is no one test's catch.
+   */
+  crowded?: true;
+}
+
+/**
+ * Which set of rules credited the catches an aggregate holds: what
+ * decides whether a failure is a catch, and when and where it is counted.
+ * Change it to any other value in the same change that alters those. A
+ * catch is held as a count rather than as the failure it came from, so a
+ * count credited under other rules cannot be judged again by itself, and
+ * the publisher folds the whole history behind it again instead. The
+ * values are not ordered and nothing but equality is asked of them; an
+ * aggregate carrying none was written before the stamps began.
+ */
+export const CATCH_RULE = 1;
 
 /** A fresh, empty history. */
 export function emptyState(): IdentityState {
@@ -143,13 +170,6 @@ export function emptyState(): IdentityState {
     pendingMain: [],
   };
 }
-
-/**
- * How long a commit stays reachable: how late a re-run of it may arrive
- * and still be recognized as one. Past this a repeated commit is judged
- * as though it were new, which errs toward calling its failure a catch.
- */
-export const COMMIT_REACH_DAYS = 30;
 
 /** Days between two "yyyy-mm-dd" days, `later` minus `earlier`. */
 export function daysBetween(earlier: string, later: string): number {
@@ -200,7 +220,9 @@ const LONGEST_WINDOW_DAYS = Math.max(CHURN_WINDOW_DAYS, FLAKE_WINDOW_DAYS);
  * else is waiting beside them.
  * Nothing separates a failure a change fixed from one that healed
  * itself, so a failure that healed itself in one order is credited as a
- * catch as well.
+ * catch as well. A breakage that arrived in a crowd is no catch however
+ * it ends, since whichever of the crowd a change runs would have found
+ * it.
  */
 function resolvePendingMain(
   state: IdentityState,
@@ -238,6 +260,7 @@ function resolvePendingMain(
     bump(state.flakesByDay, first.day);
     return;
   }
+  if (first.crowded === true) return;
   creditCatch(state, "main", first.day, first.source);
 }
 
@@ -251,6 +274,22 @@ function pointOf(observation: Pick<Observation, "commit" | "seed">): string {
   return observation.seed === undefined
     ? observation.commit
     : `${observation.commit}#${observation.seed}`;
+}
+
+/**
+ * The run an observation belongs to, as the rule about crowds counts
+ * one: what one source saw at one point (see `pointOf`), and for a
+ * workstation, at one start. A workstation runs its uncommitted changes
+ * on top of the commit it names, so two of its runs at one commit ran
+ * two different trees. A continuous-integration run is held together by
+ * its point and source alone, so its lanes, and a rerun of some of them,
+ * count as one run.
+ */
+function runOf(observation: Observation): string {
+  const run = `${pointOf(observation)} ${observation.source}`;
+  return observation.place === "local"
+    ? `${run} ${observation.startedAt}`
+    : run;
 }
 
 /**
@@ -300,6 +339,13 @@ export interface FoldContext {
 
   /** Where and when each identity has been seen failing. */
   failures: Map<string, Array<{ day: string; source: string }>>;
+
+  /**
+   * The identities each run (see `runOf`) newly broke, with the run's
+   * day. A run's objects can arrive in more than one batch, so this
+   * outlives the batch and ages with the outcomes at a commit.
+   */
+  crowds: Map<string, { day: string; identities: Set<string> }>;
 }
 
 /** A context holding nothing, for a fold with no history behind it. */
@@ -310,6 +356,7 @@ export function emptyContext(): FoldContext {
     mainAtCommit: new Map(),
     credited: new Map(),
     failures: new Map(),
+    crowds: new Map(),
   };
 }
 
@@ -322,6 +369,7 @@ export interface StoredFoldContext {
   mainAtCommit: Array<[string, { day: string; outcome: "pass" | "fail" }]>;
   credited: Array<[string, string]>;
   failures: Array<[string, Array<{ day: string; source: string }>]>;
+  crowds?: Array<[string, { day: string; identities: string[] }]>;
 }
 
 /** The outcomes a record may carry, for validating a stored context. */
@@ -358,6 +406,10 @@ export function serializeContext(context: FoldContext): StoredFoldContext {
     mainAtCommit: [...context.mainAtCommit],
     credited: [...context.credited],
     failures: [...context.failures],
+    crowds: [...context.crowds].map(([run, crowd]) => [
+      run,
+      { day: crowd.day, identities: [...crowd.identities] },
+    ]),
   };
 }
 
@@ -424,6 +476,15 @@ export function parseContext(value: unknown): FoldContext {
     );
     if (kept.length > 0) context.failures.set(key, kept);
   }
+  for (const [run, crowd] of pairs(stored.crowds)) {
+    if (!isObjectOrArray(crowd)) continue;
+    const held = crowd as { day?: unknown; identities?: unknown };
+    if (!isDay(held.day) || !Array.isArray(held.identities)) continue;
+    const identities = held.identities.filter((key): key is string =>
+      typeof key === "string"
+    );
+    context.crowds.set(run, { day: held.day, identities: new Set(identities) });
+  }
   return context;
 }
 
@@ -443,6 +504,11 @@ export function trimContext(context: FoldContext, today: string): void {
   for (const [commit, seen] of context.outcomesAtCommit) {
     if (daysBetween(seen.day, today) > SAME_COMMIT_REACH_DAYS) {
       context.outcomesAtCommit.delete(commit);
+    }
+  }
+  for (const [run, crowd] of context.crowds) {
+    if (daysBetween(crowd.day, today) > SAME_COMMIT_REACH_DAYS) {
+      context.crowds.delete(run);
     }
   }
   context.recentCommits = context.recentCommits.filter((commit) =>
@@ -542,6 +608,20 @@ export function foldObservations(
     }
   }
 
+  // Already broken on the default branch, so a run elsewhere learned
+  // nothing about the change in front of it. What that branch says at
+  // this very commit outranks what it last said, and is known ahead of
+  // time so that the order this batch happened to arrive in cannot decide
+  // the verdict.
+  const brokenOnMain = (
+    key: string,
+    observation: Observation,
+    lastMain: IdentityState["lastMainOutcome"],
+  ): boolean => {
+    const here = mainAtCommit.get(`${key} ${pointOf(observation)}`);
+    return here === "fail" || (here === undefined && lastMain === "fail");
+  };
+
   // Outcomes at a commit, for as long as they can still be asked about.
   // Every identity runs at nearly every commit, so keeping all of them
   // costs the corpus times the commits: one measured day is 2.6 million
@@ -552,12 +632,39 @@ export function foldObservations(
   // commit ages out at `SAME_COMMIT_REACH_DAYS`, and one that never has
   // is remembered only as long as its rerun could plausibly still
   // arrive.
+  //
+  // What each run newly broke rides along: on the default branch, an
+  // identity whose previous run there did not fail; anywhere else, one
+  // the default branch was not already failing. Whether another rule sets a
+  // failure aside needs the whole batch, so `crowded` asks that later.
+  const crowds = context.crowds;
+  const lastMainOf = new Map<string, "pass" | "fail">();
   for (const observation of observations) {
     // A skip is a test that deliberately did not run, so it agrees with
     // nothing and contradicts nothing; counting it as disagreement would
     // read a skip beside a failure as the test disagreeing with itself.
     if (observation.outcome === "skip") continue;
     const key = testIdentityKey(observation.test);
+    const lastMain = lastMainOf.has(key)
+      ? lastMainOf.get(key)
+      : states.get(key)?.lastMainOutcome;
+    if (observation.place === "main") {
+      lastMainOf.set(key, observation.outcome);
+    }
+    if (
+      observation.outcome === "fail" &&
+      !(observation.place === "main"
+        ? lastMain === "fail"
+        : brokenOnMain(key, observation, lastMain))
+    ) {
+      const run = runOf(observation);
+      let crowd = crowds.get(run);
+      if (crowd === undefined) {
+        crowd = { day: observation.day, identities: new Set() };
+        crowds.set(run, crowd);
+      }
+      crowd.identities.add(key);
+    }
     const point = pointOf(observation);
     let seen = outcomesAtCommit.get(point);
     if (seen === undefined) {
@@ -580,6 +687,12 @@ export function foldObservations(
     seen.identities.set(key, outcomes);
   }
 
+  // It passed and failed at one commit in one order, with nothing between
+  // the two runs but chance.
+  const disagreed = (key: string, observation: Observation): boolean =>
+    (outcomesAtCommit.get(pointOf(observation))?.identities.get(key)?.size ??
+      0) > 1;
+
   const environmental = (key: string, day: string, source: string): boolean => {
     const nearby = new Set<string>([source]);
     for (const failure of failures.get(key) ?? []) {
@@ -589,6 +702,29 @@ export function foldObservations(
       nearby.add(failure.source);
     }
     return nearby.size >= ENVIRONMENTAL_MIN_SOURCES;
+  };
+
+  // A breakage a crowd of tests sees is found by whichever of them a
+  // change runs, so it says nothing about any one of them. The crowd is
+  // what one run newly broke and no other rule sets aside, counted once
+  // per run and batch.
+  const crowdSizes = new Map<string, number>();
+  const crowded = (observation: Observation): boolean => {
+    const run = runOf(observation);
+    let size = crowdSizes.get(run);
+    if (size === undefined) {
+      size = 0;
+      for (const key of crowds.get(run)?.identities ?? []) {
+        if (
+          !disagreed(key, observation) &&
+          !environmental(key, observation.day, observation.source)
+        ) {
+          size++;
+        }
+      }
+      crowdSizes.set(run, size);
+    }
+    return size >= MASS_FAILURE_MIN_IDENTITIES;
   };
 
   // A catch is attributed to the pair of the commit and the source that
@@ -610,6 +746,7 @@ export function foldObservations(
     if (observation.outcome === "skip") continue;
 
     bump(state.runsByDay, day);
+    const lastMain = state.lastMainOutcome;
     if (observation.place === "main") {
       resolvePendingMain(state, observation);
       state.lastMainOutcome = observation.outcome;
@@ -618,39 +755,29 @@ export function foldObservations(
 
     bump(state.failuresByDay, day);
 
-    const seen = outcomesAtCommit.get(pointOf(observation))?.identities.get(
-      key,
-    );
-    if ((seen?.size ?? 0) > 1) {
-      // It passed and failed at one commit in one order, with nothing
-      // between the two runs but chance.
+    if (disagreed(key, observation)) {
       bump(state.flakesByDay, day);
       continue;
     }
     if (environmental(key, day, observation.source)) continue;
-    if (observation.place !== "main") {
-      // Already broken on the default branch, so this run learned nothing
-      // about the change in front of it. What that branch says at this
-      // very commit outranks what it last said, and is known ahead of
-      // time so that the order this batch happened to arrive in cannot
-      // decide the verdict.
-      const here = mainAtCommit.get(`${key} ${pointOf(observation)}`);
-      if (
-        here === "fail" ||
-        (here === undefined && state.lastMainOutcome === "fail")
-      ) {
-        continue;
-      }
-    }
     if (observation.place === "main") {
       // Whether this was a catch depends on what the next `main` run
-      // says, so it waits.
-      state.pendingMain.push({
+      // says, so it waits. A failure continuing a breakage already
+      // waiting is part of that breakage, crowd and all.
+      const waiting = state.pendingMain;
+      const inCrowd = waiting.length > 0
+        ? waiting.some((pending) => pending.crowded === true)
+        : crowded(observation);
+      waiting.push({
         day,
         commit: observation.commit,
         ...(observation.seed === undefined ? {} : { seed: observation.seed }),
         source: observation.source,
+        ...(inCrowd ? { crowded: true as const } : {}),
       });
+      continue;
+    }
+    if (brokenOnMain(key, observation, lastMain) || crowded(observation)) {
       continue;
     }
     const attribution = `${key} ${observation.commit} ${observation.source}`;

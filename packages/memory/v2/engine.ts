@@ -682,6 +682,12 @@ ORDER BY seq DESC, op_index DESC
 LIMIT 1
 `;
 
+// The newest `set` or `delete` at or before a revision, searched no further
+// back than `:floor`, which is the newest snapshot's seq (see
+// {@link latestBaseAndSnapshot}). The index this walks does not cover `op`, so
+// every patch row in the range costs a table fetch; a document patched ten
+// thousand times since its last `set` has a snapshot within the last ten of
+// them, and the floor is what keeps the walk at that length.
 const SELECT_LATEST_BASE = `
 SELECT seq, op_index, op, data
 FROM revision
@@ -689,6 +695,7 @@ WHERE branch = :branch
   AND id = :id
   AND scope_key = :scope_key
   AND op IN ('set', 'delete')
+  AND seq >= :floor
   AND (
     seq < :seq OR
     (seq = :seq AND op_index <= :op_index)
@@ -1043,6 +1050,10 @@ export type Engine = {
    * engines (the open option of the same name), if it has one. */
   documentCacheCoordinator?: DocumentCacheCoordinator;
 
+  /** The observer of this engine's commit decisions (the open option of
+   * the same name), if it has one. */
+  commitObserver?: CommitObserver;
+
   /**
    * Where {@link cacheDocumentForRevision} puts entries while a commit is
    * open, so they reach {@link Engine.documentCache} only once its rows are
@@ -1167,6 +1178,36 @@ export class OpCodecError extends ProtocolError {
   override name = "OpCodecError";
 }
 
+/**
+ * One commit the engine decided, as reported to the engine's
+ * {@link CommitObserver}: what every path that applies a commit names,
+ * whichever path it was.
+ */
+export type CommitDecision = {
+  /** The space the committing caller named, where it named one. An engine
+   * serves one space, so whoever opened it knows which. */
+  space?: string;
+
+  /** The session the commit was recorded under. */
+  sessionId: SessionId;
+
+  /** The principal the caller named for the commit, where it named one. */
+  principal?: string;
+
+  /** Whether the commit is durable, or was rolled back. */
+  accepted: boolean;
+
+  /** The operations the commit carried, accepted or not. */
+  operations: number;
+};
+
+/**
+ * Called once per commit the engine decides, after an accepted commit is
+ * durable or a rejected one has rolled back. An error it throws is
+ * reported and does not undo the decision.
+ */
+export type CommitObserver = (decision: CommitDecision) => void;
+
 export type OpenOptions = {
   url: URL;
   snapshotInterval?: number;
@@ -1193,6 +1234,10 @@ export type OpenOptions = {
    * retained engine's direct reads included.
    */
   documentCacheCoordinator?: DocumentCacheCoordinator;
+
+  /** The observer every commit decision is reported to; see
+   * {@link CommitObserver}. */
+  commitObserver?: CommitObserver;
 };
 
 export type InvocationRecord = {
@@ -2040,6 +2085,7 @@ export const open = async (
     documentCacheBudgetBytes = DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries = DEFAULT_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheCoordinator,
+    commitObserver,
   }: OpenOptions,
 ): Promise<Engine> => {
   if (
@@ -2091,6 +2137,7 @@ export const open = async (
     ...(documentCacheCoordinator === undefined
       ? {}
       : { documentCacheCoordinator }),
+    ...(commitObserver === undefined ? {} : { commitObserver }),
     branchStates: new Map(),
   };
 };
@@ -3680,6 +3727,45 @@ const transformEffectsDocOperation = <
   return cloned;
 };
 
+/**
+ * Helper for the commit entry points, which takes down what the observer
+ * will be told about a commit at the moment it is applied, so a caller that
+ * reuses or edits its options afterwards changes nothing already recorded.
+ * The operation count is the submitted array length, including for rejected
+ * commits; malformed non-array operations count as zero.
+ */
+const decisionOf = (
+  options: ApplyCommitOptions,
+  accepted: boolean,
+): CommitDecision => {
+  const operations = options.commit.operations;
+  return {
+    ...(options.space === undefined ? {} : { space: options.space }),
+    sessionId: options.sessionId,
+    ...(options.principal === undefined
+      ? {}
+      : { principal: options.principal }),
+    accepted,
+    operations: Array.isArray(operations) ? operations.length : 0,
+  };
+};
+
+/**
+ * Helper for the commit entry points, which reports one decision to the
+ * engine's observer. It runs after the decision is settled, so an error
+ * the observer throws cannot undo a durable commit: it is reported and
+ * otherwise ignored.
+ */
+const observeCommit = (engine: Engine, decision: CommitDecision): void => {
+  const observer = engine.commitObserver;
+  if (observer === undefined) return;
+  try {
+    observer(decision);
+  } catch (error) {
+    console.error("memory v2: commit observer threw", error);
+  }
+};
+
 export const applyCommit = (
   engine: Engine,
   options: ApplyCommitOptions,
@@ -3717,10 +3803,33 @@ export const runAtomicCommit = <T>(
   }
   const staged = new Map<string, DocumentCacheEntry>();
   engine.stagedDocumentCache = staged;
+  // Every commit the operation applied, as the observer will be told of it
+  // once the transaction has settled: one that threw is rejected either
+  // way, and one that applied is accepted only if the transaction then
+  // commits, since an operation may catch a failed apply and carry on.
+  const decided: CommitDecision[] = [];
   try {
-    const applied = engine.database.transaction(() =>
-      operation((options) => applyCommitTransaction(engine, options))
-    ).immediate();
+    let applied: T;
+    try {
+      applied = engine.database.transaction(() =>
+        operation((options) => {
+          try {
+            const result = applyCommitTransaction(engine, options);
+            decided.push(decisionOf(options, true));
+            return result;
+          } catch (error) {
+            decided.push(decisionOf(options, false));
+            throw error;
+          }
+        })
+      ).immediate();
+    } catch (error) {
+      for (const decision of decided) {
+        observeCommit(engine, { ...decision, accepted: false });
+      }
+      throw error;
+    }
+    for (const decision of decided) observeCommit(engine, decision);
     // Durable now, so what was read from those rows can be remembered. A
     // revision the cache already holds was served from it rather than
     // staged, so a present key here is not expected; skipping it keeps the
@@ -4073,7 +4182,7 @@ export const applyWaveCommit = (
     outboxAppends?: readonly OutboxAppendRow[];
   },
 ): AppliedCommit => {
-  return engine.database.transaction(
+  const applyUnderTransaction = engine.database.transaction(
     (txEngine: Engine, txOptions: typeof options) => {
       const { waveBasis, basisInstances, outboxAppends, ...restOptions } =
         txOptions;
@@ -4238,7 +4347,17 @@ export const applyWaveCommit = (
       }
       return applied;
     },
-  ).immediate(engine, options);
+  );
+  const decision = decisionOf(options, true);
+  let applied: AppliedCommit;
+  try {
+    applied = applyUnderTransaction.immediate(engine, options);
+  } catch (error) {
+    observeCommit(engine, { ...decision, accepted: false });
+    throw error;
+  }
+  observeCommit(engine, decision);
+  return applied;
 };
 
 // Per-version record of stored schema documents whose content verified
@@ -7433,6 +7552,43 @@ const validateStatefulEntityRevisions = (
   }
 };
 
+/**
+ * The two rows a reconstruction at `(seq, opIndex)` can start from: the
+ * newest snapshot at or before `seq`, and the newest `set` or `delete` at or
+ * before the revision but no older than that snapshot. A base older than the
+ * snapshot never wins the choice between them (the snapshot already holds its
+ * effect and every patch since), so the base lookup is bounded below by the
+ * snapshot's seq rather than walking the document's whole patch history to
+ * find a `set` it would then discard.
+ */
+const latestBaseAndSnapshot = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
+): { baseRow: ReadRow | undefined; snapshotRow: SnapshotRow | undefined } => {
+  const { branch, id, scopeKey, seq, opIndex } = options;
+  const snapshotRow = engine.statements.selectLatestSnapshot.get({
+    branch,
+    id,
+    scope_key: scopeKey,
+    seq,
+  }) as SnapshotRow | undefined;
+  const baseRow = engine.statements.selectLatestBase.get({
+    branch,
+    id,
+    scope_key: scopeKey,
+    seq,
+    op_index: opIndex,
+    floor: snapshotRow?.seq ?? 0,
+  }) as ReadRow | undefined;
+  return { baseRow, snapshotRow };
+};
+
 /** Substring probe over the serialized rows reconstruction would read — the
  *  latest set/snapshot base and the patch span — without decoding any of
  *  them. A negative answer proves the reconstructed pre-state cannot contain
@@ -7448,19 +7604,13 @@ const storedEntitySourcesMayContainRef = (
   },
 ): boolean => {
   const { id, scopeKey, branch, seq, opIndex } = options;
-  const baseRow = engine.statements.selectLatestBase.get({
+  const { baseRow, snapshotRow } = latestBaseAndSnapshot(engine, {
     branch,
     id,
-    scope_key: scopeKey,
+    scopeKey,
     seq,
-    op_index: opIndex,
-  }) as ReadRow | undefined;
-  const snapshotRow = engine.statements.selectLatestSnapshot.get({
-    branch,
-    id,
-    scope_key: scopeKey,
-    seq,
-  }) as SnapshotRow | undefined;
+    opIndex,
+  });
 
   let baseSeq = 0;
   let baseOpIndex = -1;
@@ -7556,19 +7706,13 @@ const latestMaterializationSeq = (
   scopeKey: string,
   seq: number,
 ): number => {
-  const baseRow = engine.statements.selectLatestBase.get({
+  const { baseRow, snapshotRow } = latestBaseAndSnapshot(engine, {
     branch,
     id,
-    scope_key: scopeKey,
+    scopeKey,
     seq,
-    op_index: Number.MAX_SAFE_INTEGER,
-  }) as ReadRow | undefined;
-  const snapshotRow = engine.statements.selectLatestSnapshot.get({
-    branch,
-    id,
-    scope_key: scopeKey,
-    seq,
-  }) as SnapshotRow | undefined;
+    opIndex: Number.MAX_SAFE_INTEGER,
+  });
   return Math.max(baseRow?.seq ?? 0, snapshotRow?.seq ?? 0);
 };
 
@@ -7583,19 +7727,13 @@ const reconstructPatchedDocument = (
   },
 ): { document: EntityDocument; encodedBytes: number } => {
   const { id, scopeKey, branch, seq, opIndex } = options;
-  const baseRow = engine.statements.selectLatestBase.get({
+  const { baseRow, snapshotRow } = latestBaseAndSnapshot(engine, {
     branch,
     id,
-    scope_key: scopeKey,
+    scopeKey,
     seq,
-    op_index: opIndex,
-  }) as ReadRow | undefined;
-  const snapshotRow = engine.statements.selectLatestSnapshot.get({
-    branch,
-    id,
-    scope_key: scopeKey,
-    seq,
-  }) as SnapshotRow | undefined;
+    opIndex,
+  });
 
   let baseSeq = 0;
   let baseOpIndex = -1;

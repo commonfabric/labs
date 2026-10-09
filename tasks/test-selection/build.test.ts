@@ -17,6 +17,7 @@ import {
   departed,
   emptyAggregate,
   executionsFor,
+  firstDay,
   Fold,
   foldReports,
   lastRun,
@@ -36,6 +37,7 @@ import {
 import type { Suite } from "../test-topology/suite.ts";
 import { excusedMeasurementName } from "../lane-measurement.ts";
 import {
+  CATCH_RULE,
   COST_RULE,
   costSeconds,
   daysBetween,
@@ -424,6 +426,14 @@ describe("build", () => {
             },
             durationMs: 17,
           }),
+          record({
+            test: {
+              k: "gate",
+              s: "ci",
+              n: "ci-lane passes batch workspace-unit",
+            },
+            durationMs: 1,
+          }),
         ]),
         new AliasResolver([{
           date: "2026-08-21",
@@ -441,6 +451,7 @@ describe("build", () => {
         ran: 40,
         spent: 92,
         units: 17,
+        passes: 1,
       }]);
     });
 
@@ -476,6 +487,14 @@ describe("build", () => {
             },
             durationMs: 17,
           }),
+          record({
+            test: {
+              k: "gate",
+              s: "ci",
+              n: "ci-lane passes batch workspace-unit",
+            },
+            durationMs: 1,
+          }),
         ]),
         NO_ALIASES,
       );
@@ -488,6 +507,7 @@ describe("build", () => {
           ran: 40,
           spent: 92,
           units: 17,
+          passes: 1,
         },
       ]);
     });
@@ -971,6 +991,57 @@ describe("build", () => {
     });
   });
 
+  describe("firstDay()", () => {
+    it("is the earliest day folded from an object or from a rollup", () => {
+      const aggregate = emptyAggregate("2026-08-20");
+      aggregate.folded.push(
+        "labs/test-records/submissions/ci/v1/2026/08/19/run-2-a.ndjson",
+        "labs/test-records/submissions/local/someone/v1/2026/08/18/x.ndjson",
+      );
+      aggregate.compacted.push(`${CI_SOURCE}\t2026/08/17`);
+      expect(firstDay(aggregate)).toBe("2026-08-17");
+      aggregate.compacted.length = 0;
+      expect(firstDay(aggregate)).toBe("2026-08-18");
+    });
+
+    it("is absent for an aggregate that has folded nothing", () => {
+      expect(firstDay(emptyAggregate("2026-08-20"))).toBeUndefined();
+    });
+  });
+
+  describe("the rules an aggregate's catches were credited under", () => {
+    it("are the ones in force for a fresh aggregate", () => {
+      expect(emptyAggregate("2026-08-20").catchRule).toBe(CATCH_RULE);
+    });
+
+    it("are carried through a fold and a stored copy", () => {
+      const stamped = new Fold(
+        emptyAggregate("2026-08-19"),
+        NO_ALIASES,
+        "2026-08-20",
+      ).finish().aggregate;
+      expect(parseAggregate(JSON.stringify(stamped))?.catchRule).toBe(
+        CATCH_RULE,
+      );
+    });
+
+    it("are none for an aggregate written before the stamps began", () => {
+      // A fold onto it adds catches under the rules in force to ones
+      // credited under others, which is still not a stamp's worth.
+      const older = { ...emptyAggregate("2026-08-19") } as Record<
+        string,
+        unknown
+      >;
+      delete older.catchRule;
+      const parsed = parseAggregate(JSON.stringify(older))!;
+      expect(parsed.catchRule).toBeUndefined();
+      expect(
+        new Fold(parsed, NO_ALIASES, "2026-08-20").finish().aggregate
+          .catchRule,
+      ).toBeUndefined();
+    });
+  });
+
   describe("parseAggregate()", () => {
     it("round-trips an aggregate", () => {
       const aggregate = emptyAggregate("2026-08-20");
@@ -1135,8 +1206,7 @@ describe("build", () => {
     it("carries what lanes measured into the next run", () => {
       // The fit reads a week of them, and a publisher run folds a few
       // hours of objects, so they survive the aggregate rather than
-      // being read again each time. A batch stored without saying
-      // whether coverage was on for it is carried as it was.
+      // being read again each time.
       const aggregate = emptyAggregate("2026-08-20");
       aggregate.lanes = [
         { day: "2026-08-20", capability: "fuse", seconds: 14.8 },
@@ -1147,17 +1217,38 @@ describe("build", () => {
           ran: 10,
           spent: 30,
           units: 4,
+          passes: 1,
         },
         {
           day: "2026-08-20",
           suite: "runner-unit",
+          measured: false,
           ran: 10,
           spent: 20,
           units: 4,
+          passes: 2,
         },
       ];
       expect(parseAggregate(JSON.stringify(aggregate))?.lanes)
         .toEqual(aggregate.lanes);
+    });
+
+    it("drops a stored batch that does not say how many passes it made", () => {
+      // The fit charges a suite per pass, so a batch that does not say how
+      // many it made is one the fit cannot read.
+      const aggregate = emptyAggregate("2026-08-20");
+      const stored = {
+        day: "2026-08-20",
+        suite: "runner-unit",
+        measured: false,
+        ran: 10,
+        spent: 20,
+        units: 4,
+      };
+      const object = JSON.parse(JSON.stringify(aggregate));
+      object.lanes = [stored, { ...stored, passes: 1 }];
+      expect(parseAggregate(JSON.stringify(object))?.lanes)
+        .toEqual([{ ...stored, passes: 1 }]);
     });
 
     it("carries a figure a later reader stored in a batch", () => {
@@ -1174,6 +1265,7 @@ describe("build", () => {
         ran: 10,
         spent: 30,
         units: 4,
+        passes: 1,
         invocations: 3,
       }];
       later.lanes = lanes;
@@ -1873,6 +1965,10 @@ describe("a batch read one shard at a time", () => {
         test: { k: "gate", s: "ci", n: "ci-lane units batch runner-unit" },
         durationMs: 4,
       }),
+      record({
+        test: { k: "gate", s: "ci", n: "ci-lane passes batch runner-unit" },
+        durationMs: 1,
+      }),
     ]),
     stored(
       `${CI_NAME}2`,
@@ -1972,6 +2068,10 @@ describe("the days a fold keeps a lane's measurements over", () => {
           test: { k: "gate", s: "ci", n: "ci-lane units batch runner-unit" },
           durationMs: 4,
         }),
+        record({
+          test: { k: "gate", s: "ci", n: "ci-lane passes batch runner-unit" },
+          durationMs: 1,
+        }),
       ],
     );
   }
@@ -1995,6 +2095,7 @@ describe("the days a fold keeps a lane's measurements over", () => {
         ran: 10,
         spent: 30,
         units: 4,
+        passes: 1,
       },
     ]);
   });
@@ -2055,6 +2156,7 @@ describe("the days a fold keeps a lane's measurements over", () => {
         ran: 10,
         spent: 30,
         units: 4,
+        passes: 1,
       },
     ]);
   });

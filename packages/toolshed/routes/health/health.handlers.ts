@@ -3,8 +3,10 @@ import { resolveGitSha } from "@/lib/build-info.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 import type { DashRoute, IndexRoute, StatsRoute } from "./health.routes.ts";
 import {
+  getCommitRates,
   getDocumentCachesDiagnostics,
   getPushPriorityStats,
+  getSessionReports,
   getSlowQueries,
 } from "@commonfabric/memory/v2/server";
 import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
@@ -46,17 +48,27 @@ const serverStartTimestamp = Date.now();
 export const stats: AppRouteHandler<StatsRoute> = (c) => {
   // The serving loop's §7 counters
   // (docs/specs/server-side-execution/serving-loop.md §7): present only
-  // when an ExecutorHost runs in this process (the ON arm); the OFF-arm
-  // response is byte-identical to today. Phase 6 nests the memory
+  // when an ExecutorHost runs in this process (the ON arm), so an OFF-arm
+  // response carries no serving-loop block at all. Phase 6 nests the memory
   // server's push-priority counters (protocol.md §3) under the same
-  // ON-arm-only block — all-zero OFF by construction, but the block's
-  // very presence stays flag-gated so the OFF response never changes.
+  // ON-arm-only block — all-zero OFF by construction, but the block's very
+  // presence stays flag-gated, so the OFF arm never shows it. The memory
+  // server's own diagnostics below follow whether one is co-hosted, not the
+  // flag.
   const servingLoop = getServingLoopStats();
   const push = getPushPriorityStats();
   // The memory server's decoded-document caches, one per open space:
   // whether a corpus's working set stays resident between the walks that
   // read it. Present whenever a memory server is co-hosted.
   const documentCaches = getDocumentCachesDiagnostics();
+  // The memory server's commit rates over the last minute and ten minutes:
+  // which spaces are being written to, by which sessions, and whether one
+  // is in a write storm. Present whenever a memory server is co-hosted.
+  const commitRates = getCommitRates();
+  // The diagnostics clients reported about their sessions: the remote-echo
+  // breaker's trips and clears, beside the commit rates of the same
+  // sessions. Present whenever a memory server is co-hosted.
+  const sessionReports = getSessionReports();
   return c.json({
     timestamp: Date.now(),
     serverStart: serverStartTimestamp,
@@ -64,6 +76,8 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
     timingStats: getTimingStatsBreakdown(),
     slowQueries: [...getSlowQueries()],
     ...(documentCaches === undefined ? {} : { documentCaches }),
+    ...(commitRates === undefined ? {} : { commitRates }),
+    ...(sessionReports === undefined ? {} : { sessionReports }),
     ...(servingLoop === undefined ? {} : {
       servingLoop: { ...servingLoop, ...(push === undefined ? {} : { push }) },
     }),
@@ -161,6 +175,9 @@ export const dash: AppRouteHandler<DashRoute> = (c) => {
 <h2>Slow Queries</h2>
 <div id="slow"></div>
 
+<h2>Commit Rates</h2>
+<div id="rates"></div>
+
 <h2>Log Counts</h2>
 <div id="logs"></div>
 
@@ -170,6 +187,7 @@ export const dash: AppRouteHandler<DashRoute> = (c) => {
 const $summary = document.getElementById("summary");
 const $timing  = document.getElementById("timing");
 const $slow    = document.getElementById("slow");
+const $rates   = document.getElementById("rates");
 const $logs    = document.getElementById("logs");
 const $info    = document.getElementById("refresh-info");
 let serverStart = null;
@@ -207,6 +225,7 @@ function renderSummary(data) {
   if (data.serverStart) serverStart = data.serverStart;
   const totalLogs = typeof data.logCounts?.total === "number" ? data.logCounts.total : 0;
   const slowCount = Array.isArray(data.slowQueries) ? data.slowQueries.length : 0;
+  const storms = typeof data.commitRates?.storms === "number" ? data.commitRates.storms : 0;
   let timingOps = 0;
   if (data.timingStats) {
     for (const logger of Object.values(data.timingStats)) {
@@ -217,7 +236,8 @@ function renderSummary(data) {
     '<div class="card"><div class="label">Server Uptime</div><div class="value">' + fmtUptime(serverStart) + '</div></div>' +
     '<div class="card"><div class="label">Total Logs</div><div class="value">' + totalLogs.toLocaleString() + '</div></div>' +
     '<div class="card"><div class="label">Timed Ops</div><div class="value">' + timingOps + '</div></div>' +
-    '<div class="card"><div class="label">Slow Queries</div><div class="value' + (slowCount > 0 ? ' warn' : '') + '">' + slowCount + '</div></div>';
+    '<div class="card"><div class="label">Slow Queries</div><div class="value' + (slowCount > 0 ? ' warn' : '') + '">' + slowCount + '</div></div>' +
+    '<div class="card"><div class="label">Write Storms</div><div class="value' + (storms > 0 ? ' error' : '') + '">' + storms + '</div></div>';
 }
 
 function renderTiming(timingStats) {
@@ -303,6 +323,47 @@ function copySlow(el, idx, field) {
   else if (field === "selector") text = JSON.stringify(q.selector, null, 2);
   else return;
   copyText(el, text);
+}
+
+// One row per reported space: both windows' commits and operations, the
+// storm state, and the top writers as "session (principal): 1 min / 10 min".
+function renderRates(rates) {
+  if (!rates || !Array.isArray(rates.spaces) || rates.spaces.length === 0) {
+    $rates.innerHTML = '<div class="empty">No commits in the last ten minutes.</div>';
+    return;
+  }
+  const commits = (w) => (w.accepted + w.rejected).toLocaleString() + (w.rejected > 0 ? ' (' + w.rejected.toLocaleString() + ' rejected)' : '');
+  const ops = (w) => w.operations.toLocaleString();
+  let h = '<div class="meta">Storm threshold: ' + rates.storm.commitsPerMinute + ' commits/min sustained for ' + rates.storm.sustainedSeconds + ' s. '
+    + rates.activeSpaces + ' active space' + (rates.activeSpaces === 1 ? '' : 's') + ', ' + rates.storms + ' in a storm.</div>';
+  h += '<table><thead><tr>'
+    + '<th title="DID of the memory space committed to. Click to copy.">Space</th>'
+    + '<th class="num" title="Commits in the last 60 seconds, accepted and rejected">1 min</th>'
+    + '<th class="num" title="Operations carried by the last 60 seconds of commits">Ops</th>'
+    + '<th class="num" title="Commits in the last 10 minutes, accepted and rejected">10 min</th>'
+    + '<th class="num" title="Operations carried by the last 10 minutes of commits">Ops</th>'
+    + '<th title="When the run over the storm threshold began, once it has lasted the sustained window">Storm</th>'
+    + '<th class="num" title="Sessions with a commit in the last 10 minutes">Writers</th>'
+    + '<th title="Top writers over each window: session (principal): 1 min / 10 min commits">Top writers</th>'
+    + '</tr></thead><tbody>';
+  for (const s of rates.spaces) {
+    const storm = s.storm ? '<span class="error">since ' + fmtTime(s.storm.since) + '</span>' : '-';
+    const writers = s.writers.map((w) =>
+      escHtml(fmtSpace(w.session)) + (w.principal ? ' (' + escHtml(fmtSpace(w.principal)) + ')' : '') + ': ' + commits(w.minute) + ' / ' + commits(w.tenMinutes)
+    ).join('<br>');
+    h += '<tr>'
+      + '<td class="truncated copyable" title="' + escHtml(s.space) + '" onclick="copyText(this)">' + escHtml(fmtSpace(s.space)) + '</td>'
+      + '<td class="num' + (s.storm ? ' error' : '') + '">' + commits(s.minute) + '</td>'
+      + '<td class="num">' + ops(s.minute) + '</td>'
+      + '<td class="num">' + commits(s.tenMinutes) + '</td>'
+      + '<td class="num">' + ops(s.tenMinutes) + '</td>'
+      + '<td>' + storm + '</td>'
+      + '<td class="num">' + s.activeWriters + '</td>'
+      + '<td style="white-space: normal">' + writers + '</td>'
+      + '</tr>';
+  }
+  h += '</tbody></table>';
+  $rates.innerHTML = h;
 }
 
 function renderLogs(logCounts) {
@@ -548,6 +609,7 @@ async function refresh() {
     renderChartHistogram(data.slowQueries);
     renderTiming(data.timingStats);
     renderSlow(data.slowQueries);
+    renderRates(data.commitRates);
     renderLogs(data.logCounts);
     $info.textContent = "Last updated: " + new Date().toLocaleTimeString();
   } catch (e) {

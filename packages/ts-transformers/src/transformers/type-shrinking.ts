@@ -4847,18 +4847,13 @@ export function applyShrinkAndWrap(
     )
     : baseTypeNode;
   let shrunk: ts.TypeNode | undefined;
-  const retainedPathsCoveredByIdentityContainers = identityPaths.length > 0 &&
-    retainedPaths.every((path) =>
-      identityPaths.some((identityPath) =>
-        identityPath.length <= path.length &&
-        identityPath.every((segment, index) => segment === path[index])
-      )
-    );
+  // Identity paths are retained like any other path, so a summary holding
+  // only identity paths prunes the members none of them reaches; the identity
+  // pass below then narrows the leaves the shrink kept.
   if (
     !identityOnlyRoot &&
     !paramSummary.wildcard &&
-    retainedPaths.length > 0 &&
-    !retainedPathsCoveredByIdentityContainers
+    retainedPaths.length > 0
   ) {
     const shrinkBaseTypeNode = next;
     const hasDirectAccess = retainedPaths.some((path) => path.length === 0);

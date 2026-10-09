@@ -21,7 +21,7 @@ class RecordingRunner implements ProcessRunner {
   }
 }
 
-Deno.test("CfHarnessEngine builds the runsc sandbox when asked, with no docker transport floor", () => {
+Deno.test("CfHarnessEngine builds the runsc sandbox when asked", () => {
   const engine = new CfHarnessEngine({
     runId: "run-1",
     workspaceHostPath: "/host/project",
@@ -37,8 +37,6 @@ Deno.test("CfHarnessEngine builds the runsc sandbox when asked, with no docker t
   assertEquals(description.sessions, true);
   assertEquals(description.cfc?.image, "/images/kitchensink");
   assertEquals(engine.workspaceHostPath, "/host/project");
-  // No docker-runsc config is owned, so the sidecar transport floor never fires.
-  assertEquals(engine.ownedSandboxConfig, undefined);
 });
 
 Deno.test("CfHarnessEngine refuses the runsc sandbox without a workspace", () => {
@@ -223,7 +221,6 @@ Deno.test("CfHarnessEngine owns the runsc configuration a child can build on", (
     }],
     processRunner: new RecordingRunner(),
   });
-  assertEquals(engine.ownedSandboxConfig, undefined);
   assertEquals(engine.ownedRunscSandboxConfig?.rootfs, "/images/kitchensink");
   assertEquals(
     engine.ownedRunscSandboxConfig?.additionalMounts.map((m) => m.sandboxPath),

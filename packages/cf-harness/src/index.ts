@@ -61,7 +61,7 @@ export * from "./contracts/transcript.ts";
 export * from "./contracts/web-search.ts";
 export * from "./sandbox/types.ts";
 export * from "./sandbox/process-runner.ts";
-export * from "./sandbox/docker-runsc.ts";
+export * from "./sandbox/runsc.ts";
 export * from "./tools/registry.ts";
 export * from "./tools/bash.ts";
 export * from "./tools/delegate-task.ts";

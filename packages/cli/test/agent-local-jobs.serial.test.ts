@@ -377,6 +377,7 @@ describe("cf agent runner local jobs", () => {
         deps.selectSandboxRuntime = () =>
           selectHarnessJobSandboxRuntime({
             platform: "darwin",
+            arch: "aarch64",
             env: { HOME: home },
           });
         return home;
@@ -408,7 +409,7 @@ describe("cf agent runner local jobs", () => {
             expect(refusal).toMatchObject({
               exitCode: 1,
               message: expect.stringMatching(
-                /^No sandbox runtime is named, so the default applies, which on macOS is the native `runsc` runtime, and it is not set up at `.*`: .*\. Set it up there, or select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`\.$/,
+                /^No sandbox runtime is named, so the default applies, which on macOS is the native `runsc` runtime, and it is not set up at `.*`: .*\. Set it up there\.$/,
               ),
             });
             expect(events).toEqual([]);

@@ -34,6 +34,7 @@ import type {
   EntityIdListResult,
   EventAttentionResolveResult,
   GenesisRoot,
+  MemoryProtocolFlags,
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
@@ -41,6 +42,7 @@ import type {
   ScopeKey,
   ScopeKeyIdentity,
   SessionReadCeiling,
+  SessionReport,
   SessionSyncUpsert,
   SqliteDbRef,
   SqliteOperation,
@@ -379,19 +381,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * for nothing else, and is never stored, returned, or logged.
    *
    * `acl` must name a concrete OWNER, and must grant this manager's signer at
-   * least READ if this manager will open the space. `genesis.root` requires a
-   * host that supports root reservations; its complete source, cause,
+   * least READ if this manager will open the space. `genesis.root` is the
+   * reservation itself, or a function computing it from the new space's DID,
+   * which nothing knows before the key is generated. It requires a host that
+   * advertises the `genesisRoot` server flag; its complete source, cause,
    * arguments, and attached source roots are snapshotted in the genesis
    * receipt, and a later mount that declares a root intent must match it.
-   * `genesis.spaceKind` requires a host that advertises `spaceKind`, and is
-   * sealed the same way (`docs/features/space-kinds.md`).
+   * `genesis.spaceKind` requires a host that advertises the `spaceKind` server
+   * flag, and is sealed the same way (`docs/features/space-kinds.md`).
    *
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
   createSpace?(
     acl: ACL,
-    genesis?: { root?: GenesisRoot; spaceKind?: string },
+    genesis?: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
   ): Promise<MemorySpace>;
 
   /**
@@ -405,6 +412,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    *   advertise `spaceKind`, which leaves the kind unknown rather than absent.
    */
   spaceKind?(space: MemorySpace): Promise<string | undefined>;
+
+  /**
+   * The flags the memory server serving `space` advertises, read from a
+   * handshake alone, so that no session is opened on `space`: whatever a
+   * server does when a session opens there, such as serving the space and
+   * ensuring its root, has not happened when this returns. `undefined` when
+   * this manager cannot connect without opening a session, and `null` when
+   * the handshake carries no flags. Optional: emulated/test managers may omit
+   * it.
+   */
+  serverFlags?(
+    space: MemorySpace,
+  ): Promise<MemoryProtocolFlags | null | undefined>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
@@ -618,6 +638,18 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     IMemorySpaceAddress,
     "space" | "scope" | "id"
   >[];
+
+  /**
+   * Whether this manager refuses every read of `address` by construction: a
+   * serving manager reads no scoped instance of a space other than its home
+   * (protocol.md §2's fail-closed interim). Such a read returns no data
+   * however long it is waited for, so the manager registers no pending load
+   * for it, and a served run that reads it has read an absence that is not
+   * the document's state.
+   */
+  refusesReadByConstruction?(
+    address: Pick<IMemorySpaceAddress, "space" | "scope">,
+  ): boolean;
 
   /**
    * Generation of the currently in-flight load for an entity key, or
@@ -938,6 +970,27 @@ export const hasPresenceStorageCapability = (
   if (value === null || value === undefined) return false;
   const candidate = value as Partial<IPresenceStorageCapability>;
   return typeof candidate.joinPresenceRoom === "function";
+};
+
+/**
+ * A storage provider that reports diagnostics about its space session to the
+ * memory server serving the space (memory-v2 `04-protocol.md` §4.14).
+ */
+export interface ISessionReportStorageCapability {
+  /**
+   * Sends `report` on this provider's space session, best-effort: a server
+   * without the capability, a connection that is down, and a refusal all
+   * drop the report without an error.
+   */
+  sendReport(report: SessionReport): void;
+}
+
+export const hasSessionReportStorageCapability = (
+  value: unknown,
+): value is ISessionReportStorageCapability => {
+  if (value === null || value === undefined) return false;
+  const candidate = value as Partial<ISessionReportStorageCapability>;
+  return typeof candidate.sendReport === "function";
 };
 
 /**
@@ -1920,7 +1973,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * that minted a secret in its own transaction could read it back there
    * before its label is stored.
    *
-   * @throws Error without the runtime's authorization.
+   * @throws Error without the runtime's authorization, or when the stored
+   * value's schema cannot be resolved.
    */
   ensureRuntimeSecret(
     space: MemorySpace,
@@ -3492,9 +3546,12 @@ export type PullError =
 /** A serving runtime's refusal of a scoped read of a space other than its home
  * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
  * scope and the runtime's serving posture decide it, never transport or session
- * state, so the same read from the same runtime is refused every time. A served
- * event whose required load meets it terminalizes at once instead of spending
- * the delivery-failure budget (events.md §5). */
+ * state, so the same read from the same runtime is refused every time. So it is
+ * no load in flight: the storage manager registers no pending load for it. A
+ * served run that reads the document's value fails permanently in
+ * `dispatch-load` (events.md §5), and where the refusal reaches a load
+ * failure it is permanent evidence rather than a retryable `connection`
+ * failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
 }

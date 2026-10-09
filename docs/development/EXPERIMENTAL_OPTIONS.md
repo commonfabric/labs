@@ -329,7 +329,12 @@ server](#clients-that-are-not-built-alongside-their-server).
   feature, but the per-class commit admission rows are enforced by the memory
   server under the flag, so the value lives beside the memory protocol flags.
   It is not a handshake capability — admission enforcement is server-local and
-  nothing about it is negotiated per connection.
+  nothing about it is negotiated per connection. A memory server does report,
+  in every `hello.ok`, whether server execution is attached to it
+  (`serverExecution`), as a fact a client reads before opening any session
+  rather than a capability the two agree on. A server that predates the flag
+  sends no `serverExecution` at all, and a client receiving none does not know
+  whether server execution is on.
 - **Added by.** Bernhard Seefeld, in server-execution v2 Phase 1 stage A
   (#5339;
   [`docs/plans/server-execution-v2.md`](../plans/server-execution-v2.md);
@@ -1418,6 +1423,13 @@ the per-epic implementation notes).
 >   it, which parses as `false`, and a client then reports presence as
 >   unavailable rather than sending a message the server would refuse. It is
 >   permanent.
+> - **`sessionReportV1`** is a build-inherent capability, hardwired to `true`.
+>   It advertises that the server records the diagnostics a client reports
+>   about its own session — the `session.report` command of the memory
+>   protocol chapter's section 4.14 — and shows them on the health route.
+>   Older servers omit it, which parses as `false`, and a client then keeps its
+>   reports to itself rather than sending a message the server would refuse.
+>   It is permanent.
 > - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
 >   on both peers. It advertises the `session/admissible` push of the memory
 >   protocol chapter's section 4.2.2: a server tells a connection it refused a
@@ -1582,13 +1594,16 @@ the per-epic implementation notes).
   ([`packages/toolshed/env.ts`](../../packages/toolshed/env.ts)). Not a
   `RuntimeOptions` flag: it gates an HTTP router, not runtime behavior.
 - **Added by.** Alex Komoroske, in the self-serve ingest channels change.
-- **Purpose.** Gates the `/api/ingest-channels` control plane, through which a
+- **Purpose.** Gates the ingest-channel control plane
+  (`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
+  through which a
   user holding their own identity key mints, lists, rotates, and revokes ingest
   channels for spaces they own — without an operator. When off, the router
   [404s every verb](../../packages/toolshed/routes/ingest-channels/gate.ts)
   before the body limit, the rate limiter, or signature verification runs, so a
   deployment that has not opted in does not advertise the endpoint. The data
-  plane (`/api/ingest/:id`) and the operator provisioning scripts are
+  plane (`/api/spaces/:space/ingest/:id` and `/api/ingest/:id`) and the
+  operator provisioning scripts are
   unaffected by the flag.
 - **Current default and planned end state.** Off by default. The gate exists
   because minting issues a durable bearer capability that outlives the trust
@@ -2077,6 +2092,20 @@ server](#clients-that-are-not-built-alongside-their-server).
 
 These are recorded so that references to them elsewhere in the tree do not send
 a future reader hunting for a flag that no longer exists.
+
+### `remoteEchoBreaker` / `EXPERIMENTAL_REMOTE_ECHO_BREAKER` (removed)
+
+Gated the scheduler's remote-echo breaker, which bounds a reactive
+computation that keeps rewriting a document it reads, re-triggered each time
+by another writer's change to that same document
+([plan](../plans/scheduler-remote-echo-breaker.md)). Added off by default in
+#8587 (2026-10-08). The browser shell bakes experimental flags in at build
+time and had no define for it, so the flag could not reach the browser tabs
+where the loops it bounds run. It was deleted on 2026-10-09 to keep the
+runtime's configuration small: the breaker runs unconditionally, and its
+trips and clears are reported, best-effort, over each space's memory session
+to the health route (`sessionReports`, memory protocol §4.14), which is where
+its behavior is judged.
 
 ### `persistentSchedulerState` / `EXPERIMENTAL_PERSISTENT_SCHEDULER_STATE` (removed)
 

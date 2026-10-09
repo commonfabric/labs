@@ -1,17 +1,17 @@
 /**
- * Every number test selection can be tuned by, and nothing else holds any
- * of them. `deno task test-selection dials` prints these with their
+ * Every number that decides what test selection does or reports: which
+ * tests a run selects, how it scores and packs them, and what its reports
+ * and alarms say. `deno task test-selection dials` prints these with their
  * comments, and every manifest records the values it was built with, so a
  * manifest explains its own behavior and a change in what runs can always
- * be traced to a change here.
+ * be traced to a change here. Numbers that decide only how the tooling
+ * does its work, such as how many records the publisher fetches at once or
+ * how finely a duration is counted, live beside the code they govern.
  *
  * A **chosen** dial is a decision somebody made, and editing it is how the
- * decision changes. A **measured** dial is worked out from the data and
- * written back by the publisher, so the value here is only the seed used
- * before there is anything to measure. A **derived** dial is computed from
- * other dials, and editing it means editing those. The three look
- * identical in a source file, which is why `DIALS` says which each one is:
- * somebody who tunes a measured value is arguing with a tape measure.
+ * decision changes. A **derived** dial is computed from other dials, and
+ * editing it means editing those. The two look identical in a source
+ * file, which is why `DIALS` says which each one is.
  */
 
 /** How many jobs a pull request's tests are packed into. */
@@ -122,6 +122,13 @@ export const BREADTH_SATURATION = 2;
  */
 export const ENVIRONMENTAL_MIN_SOURCES = 5;
 
+/**
+ * Identities one run must newly break, one source at one commit in one
+ * order, before its failures read as the run or the change as a whole
+ * rather than as any one test.
+ */
+export const MASS_FAILURE_MIN_IDENTITIES = 50;
+
 /** Days over which a day's failure count halves. */
 export const CHURN_HALF_LIFE_DAYS = 14;
 
@@ -179,11 +186,6 @@ export const MIN_CORRECTION_SPAN_SECONDS = LANE_BUDGET_SECONDS / 10;
  * slope fitted too high only over-charges, where one fitted too low lets
  * a lane pack work it has no time for: two batches of one suite have
  * fitted a slope of zero, which says a second of its tests costs nothing.
- *
- * It is also how many of the batches a suite's fit is still reading must
- * carry a figure before the fit narrows to those alone. The fit narrows by
- * one figure at a time, so each count is taken among the batches left by
- * the figures before it, which `fitSuite()` describes.
  */
 export const MIN_CORRECTION_SAMPLES = 3;
 
@@ -196,7 +198,7 @@ export const MIN_CORRECTION_SAMPLES = 3;
  * the size of the suite, which is hundreds of tests or thousands, where
  * tests growing slow one at a time move it by a dozen at the most.
  * [Knowing when the cost model is
- * wrong](../../docs/plans/pull-request-test-selection.md#knowing-when-the-cost-model-is-wrong)
+ * wrong](../../docs/history/plans/pull-request-test-selection.md#knowing-when-the-cost-model-is-wrong)
  * has the manifests this was read from.
  */
 export const HEALTH_TOO_LONG_FACTOR = 2;
@@ -215,9 +217,10 @@ export const HEALTH_TOO_LONG_JUMP = 20;
  * fit, which is capacity rather than calibration, so those lanes are not
  * counted.
  *
- * The fit charges a suite what nine batches in ten spent, so some lanes
- * run long by design: a day's pull-request lanes run past their bound
- * something under one time in ten while the model holds.
+ * The fit charges a batch what a batch of its shape spends on average,
+ * so some lanes run long by design, and the safety margin is what keeps
+ * them few: about one pull-request lane in ten packed near its budget
+ * spends past the margin while the model holds.
  */
 export const HEALTH_OVERRUN_SHARE = 0.15;
 
@@ -233,9 +236,11 @@ export const HEALTH_MIN_LANES = 20;
  * over what they were charged may drift, either way, before the cost
  * model is reported broken for that suite.
  *
- * The fit charges a suite what nine batches in ten spent, so that
- * percentile sits near one while the model holds, and within about a
- * third of one for every suite that ten batches have measured.
+ * The fit charges a batch what a batch of its shape spends on average,
+ * so the median sits near one while the model holds and the ninetieth
+ * percentile above it, below two for every suite that ten batches have
+ * measured. A suite charged a fixed factor too little or too much moves
+ * both.
  */
 export const HEALTH_DRIFT_FACTOR = 2;
 
@@ -270,8 +275,19 @@ export const FLAKE_ANCHOR_EXECUTIONS = 5;
 /** The most times one item is run inside a lane. */
 export const MAX_EXECUTIONS = 10;
 
-/** The suite flake rate above which a suite's new items are repeated. */
-export const SUITE_FLAKE_PRIOR_RATE = 0.02;
+/**
+ * The most times a lane of the full run runs a unit again after its
+ * batches, where a test in the unit failed every time the batch ran it.
+ * The lane stops rerunning a unit once each such test has passed, since a
+ * pass beside a failure at one commit is what marks a test as flaky.
+ */
+export const RERUN_EXECUTIONS = 3;
+
+/**
+ * The seconds of reruns one lane of the full run may take on. A rerun
+ * starts only where what the lane is charged for it fits in what is left.
+ */
+export const RERUN_BUDGET_SECONDS = 300;
 
 /** Uncovered lines a change must add before the comment mentions it. */
 export const COVERAGE_COMMENT_LINES = 25;
@@ -288,9 +304,6 @@ export const LOCAL_COVERAGE_MAX_SETS = 2;
  * moment it publishes, and drops the rest.
  */
 export const LOCAL_COVERAGE_BASELINE_DAYS = 7;
-
-/** Weeks of rising debt before the coverage tile goes amber. */
-export const COVERAGE_TREND_WEEKS = 3;
 
 /** Days within which failures across branches read as the environment. */
 export const CATCH_BREADTH_WINDOW_DAYS = 2;
@@ -341,6 +354,13 @@ export const SAME_COMMIT_REACH_DAYS = 2;
 export const FLAKE_COMMIT_REACH = 8;
 
 /**
+ * How long a commit stays reachable: how late a re-run of it may arrive
+ * and still be recognized as one. Past this a repeated commit is judged
+ * as though it were new, which errs toward calling its failure a catch.
+ */
+export const COMMIT_REACH_DAYS = 30;
+
+/**
  * How alike two test names have to be before one is offered as the
  * other's new name, between zero and one. A rename usually keeps most of
  * a name, and below this the pairing is a guess: a wrong bridge silently
@@ -361,13 +381,8 @@ export const RENAME_MARGIN = 0.1;
 /** The most rename suggestions one comment carries. */
 export const RENAME_SUGGESTIONS = 5;
 
-/**
- * Catches a rename may discard before the alias gate fails a pull
- * request. Undefined switches the gate off, which is where it starts:
- * most renames cost nothing, so a gate that fired on every rename would
- * be noise nobody reads.
- */
-export const ALIAS_GATE_MIN_CATCHES: number | undefined = undefined;
+/** How many of the costliest identities no lane can hold a report names. */
+export const NAMED_UNSCHEDULABLE = 10;
 
 /**
  * Why a member carries no measured set. `size` is a member whose set is
@@ -459,27 +474,18 @@ export function exclusionKind(member: string): ExclusionKind | undefined {
   return exclusions.find((exclusion) => exclusion.member === member)?.kind;
 }
 
-/** Whether a dial is a decision, a measurement, or computed. */
-export type DialSource = "chosen" | "measured" | "derived";
+/** Whether a dial is a decision or computed. */
+export type DialSource = "chosen" | "derived";
 
 /** One dial, as `deno task test-selection dials` prints it. */
 export interface Dial {
   name: string;
-  value: number | string | undefined | readonly number[];
+  value: number | string;
   unit: string;
   setBy: DialSource;
 
   /** Why you would move it, and which way. */
   why: string;
-}
-
-/** Returns `dial`'s value as one line of text. */
-export function dialValue(dial: Dial): string {
-  return Array.isArray(dial.value)
-    ? dial.value.join(", ")
-    : dial.value === undefined
-    ? "off"
-    : String(dial.value);
 }
 
 /**
@@ -694,6 +700,16 @@ export const DIALS: readonly Dial[] = [
       "broken runner's failures still count as catches.",
   },
   {
+    name: "MASS_FAILURE_MIN_IDENTITIES",
+    value: MASS_FAILURE_MIN_IDENTITIES,
+    unit: "identities",
+    setBy: "chosen",
+    why: "How many identities one run must newly break before none of " +
+      "those failures is a catch. Up when a breakage that reached many " +
+      "tests still escaped the pull requests that ran some of them; down " +
+      "when one broken run still credits a catch to a whole suite.",
+  },
+  {
     name: "CHURN_HALF_LIFE_DAYS",
     value: CHURN_HALF_LIFE_DAYS,
     unit: "days",
@@ -783,9 +799,7 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why:
       "Up when a slope is being fitted from too little and swinging about; " +
-      "down when a suite's real slope takes too long to be believed. It " +
-      "is also how many of the batches a suite's fit is still reading " +
-      "must carry a figure before the batches lacking it are left out.",
+      "down when a suite's real slope takes too long to be believed.",
   },
   {
     name: "HEALTH_TOO_LONG_FACTOR",
@@ -887,14 +901,23 @@ export const DIALS: readonly Dial[] = [
       "still are not proven by what runs; down when they crowd a lane.",
   },
   {
-    name: "SUITE_FLAKE_PRIOR_RATE",
-    value: SUITE_FLAKE_PRIOR_RATE,
-    unit: "share of runs",
+    name: "RERUN_EXECUTIONS",
+    value: RERUN_EXECUTIONS,
+    unit: "runs of one unit",
     setBy: "chosen",
-    why:
-      "Up when too many suites count as flake-prone and their new items are " +
-      "repeated needlessly; down when new tests in a noisy suite land " +
-      "unrepeated and then flake.",
+    why: "The most times the full run runs a unit again where a test in it " +
+      "failed every time. Up when flaky tests on `main` fail every rerun " +
+      "and go on being counted as catches; down when a real break's reruns " +
+      "take time that tells nobody anything.",
+  },
+  {
+    name: "RERUN_BUDGET_SECONDS",
+    value: RERUN_BUDGET_SECONDS,
+    unit: "seconds",
+    setBy: "chosen",
+    why: "What one lane of the full run may spend rerunning its failures. " +
+      "Up when failures go without reruns for want of it; down when a " +
+      "broken `main` holds every lane this much longer than it needs.",
   },
   {
     name: "COVERAGE_COMMENT_LINES",
@@ -946,15 +969,6 @@ export const DIALS: readonly Dial[] = [
       "than anybody reads.",
   },
   {
-    name: "COVERAGE_TREND_WEEKS",
-    value: COVERAGE_TREND_WEEKS,
-    unit: "weeks",
-    setBy: "chosen",
-    why:
-      "Up when the tile goes amber too readily; down when debt climbs for a " +
-      "month before anybody is told.",
-  },
-  {
     name: "CATCH_BREADTH_WINDOW_DAYS",
     value: CATCH_BREADTH_WINDOW_DAYS,
     unit: "days",
@@ -989,6 +1003,16 @@ export const DIALS: readonly Dial[] = [
       "memory is the thing that will not fit.",
   },
   {
+    name: "COMMIT_REACH_DAYS",
+    value: COMMIT_REACH_DAYS,
+    unit: "days",
+    setBy: "chosen",
+    why: "How late a re-run of a commit may arrive and still be recognized " +
+      "as one rather than judged as a new commit. Up when re-runs landing " +
+      "later than this have their failures counted as catches; down when " +
+      "the fold's memory of commits is the thing that will not fit.",
+  },
+  {
     name: "RENAME_SIMILARITY",
     value: RENAME_SIMILARITY,
     unit: "share of the longer name's own part",
@@ -1017,12 +1041,12 @@ export const DIALS: readonly Dial[] = [
       "cut off; down when a comment carrying this many is one nobody reads.",
   },
   {
-    name: "ALIAS_GATE_MIN_CATCHES",
-    value: ALIAS_GATE_MIN_CATCHES,
-    unit: "catches",
+    name: "NAMED_UNSCHEDULABLE",
+    value: NAMED_UNSCHEDULABLE,
+    unit: "identities",
     setBy: "chosen",
-    why: "Off by default. Turn it on at a catch count to fail a pull request " +
-      "that discards that much history in a rename without an alias line, " +
-      "and lower the count as the alias file becomes routine.",
+    why: "How many of the costliest identities no lane can hold a report " +
+      "names before it counts the rest. Up when a report leaves out one " +
+      "worth seeing; down when the list is longer than anybody reads.",
   },
 ];

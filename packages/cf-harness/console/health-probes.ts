@@ -3,15 +3,11 @@
  * each row names; an unreadable response leaves that fact unknown.
  */
 
-import {
-  type HarnessPatternIndexClientFactory,
-  PatternIndexError,
-} from "../src/pattern-index/client.ts";
+import { type HarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
+import { PatternIndexError } from "@commonfabric/pattern-index/client";
 import { debugStr } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { basename, dirname, join } from "@std/path";
-import { DEFAULT_DOCKER_BINARY } from "../src/sandbox/docker-runsc.ts";
-import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import {
   assertRunscCfcPolicyForMode,
@@ -25,76 +21,6 @@ import {
   type ConsoleHealthRow,
   consoleHealthUrl,
 } from "./health.ts";
-
-/**
- * Checks the running daemon's registration without starting a sandbox.
- * `selected` describes how the console came to run on Docker, named or the
- * platform's default, and is carried in the runtime row's detail.
- */
-export const consoleSandboxHealthProbe = (
-  readRuntimes = () => readDockerRuntimes(DEFAULT_DOCKER_BINARY),
-  selected?: string,
-): ConsoleHealthProbe => {
-  const source = "docker info";
-  const detail = "docker info --format '{{json .Runtimes}}'";
-  const initial: ConsoleHealthFact[] = [{
-    id: "sandbox.docker",
-    group: "sandbox",
-    label: "Docker Daemon",
-    value: "not checked",
-    source,
-    detail,
-  }, {
-    id: "sandbox.runtime",
-    group: "sandbox",
-    label: "Sandbox Runtime",
-    value: "not checked",
-    source,
-    detail: withSelected(detail, selected),
-  }];
-  const unavailable = (checkedAt: string): ConsoleHealthRow[] =>
-    initial.map((row) => ({
-      ...row,
-      state: "unknown",
-      checkedAt,
-      value: "not verified",
-      reason: "The Docker runtime table could not be read.",
-      remedy: "Start Docker and check its runsc-cfc runtime registration.",
-    }));
-  return {
-    id: "sandbox",
-    initial,
-    unavailable,
-    read: async () => {
-      const result = await readRuntimes();
-      const checkedAt = new Date().toISOString();
-      if (!isObjectNotArray(result.runtimes)) {
-        return unavailable(checkedAt).map((row) => ({
-          ...row,
-          reason: result.unreadable ??
-            "Docker returned an invalid runtime table.",
-        }));
-      }
-      const registered = Object.hasOwn(result.runtimes, "runsc-cfc");
-      return [{
-        ...initial[0],
-        state: "ok",
-        checkedAt,
-        value: "responding",
-      }, {
-        ...initial[1],
-        state: registered ? "ok" : "failed",
-        checkedAt,
-        value: registered ? "runsc-cfc registered" : "runsc-cfc not registered",
-        ...(registered ? {} : {
-          reason: "The running daemon has no runsc-cfc entry.",
-          remedy:
-            "Install the runsc-cfc runtime and reload Docker's runtime registration.",
-        }),
-      }];
-    },
-  };
-};
 
 /**
  * Helper for the sandbox probes, which returns the runtime row's `detail`
@@ -175,8 +101,8 @@ export const readConsolePolicy = (
 };
 
 /**
- * Checks the direct runsc driver without starting a sandbox and without
- * consulting Docker: that its configuration resolves the way a turn resolves
+ * Checks the direct runsc driver without starting a sandbox: that its
+ * configuration resolves the way a turn resolves
  * it, that the `runsc` binary it names is an executable file, that the rootfs
  * it names is a directory, and whether a CFC policy is configured, readable
  * and a JSON object. None of that proves a sandbox can execute a task: on

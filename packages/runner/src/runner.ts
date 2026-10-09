@@ -172,7 +172,10 @@ import {
 } from "./scheduler.ts";
 import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
-import { RetryImmediately } from "./scheduler/retry-immediately.ts";
+import {
+  InSpaceTargetUnresolved,
+  RetryImmediately,
+} from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
@@ -1248,10 +1251,16 @@ export const SEALING_SOURCE_UPDATE_REFUSAL =
 
 /**
  * The cause of the root `PatternFactory.inSpace(..., { root: true })` places
- * in the space it creates. The space's genesis commit reserves the address it
- * derives there, so the root's address is fixed before the run that places it.
+ * in `space`, the space it creates. The space's genesis commit reserves the
+ * address it derives there, so the root's address is fixed before the run that
+ * places it. The cause names `space`, so the roots of two such spaces are two
+ * entities, and a pattern keying a record by the entity a root names, as one
+ * keys a person's record by their profile, keeps one person's record apart
+ * from another's.
  */
-export const IN_SPACE_ROOT_CAUSE = "in-space-root";
+export function inSpaceRootCause(space: MemorySpace): string {
+  return `in-space-root:${space}`;
+}
 
 /**
  * Reports work which failed after storage accepted a pattern setup.
@@ -1668,9 +1677,19 @@ function defersInitialRunUntilSynced(
   return !!options.awaitSyncBeforeInitialRun;
 }
 
-/** One pattern instance the resume pre-sync visits: the pattern and the
- * result cell it runs under. */
-type ResumePatternInstance = { pattern: Pattern; resultCell: Cell<any> };
+/**
+ * One pattern instance the resume pre-sync visits: the pattern and the
+ * result cell it runs under. A nested instance also carries the inputs its
+ * parent's node binds it to, which stand in for its argument document when
+ * the store holds none: the instance then runs fresh, in its parent's start,
+ * and binding its nodes against what that start supplies names the same
+ * documents the fresh run reads.
+ */
+type ResumePatternInstance = {
+  pattern: Pattern;
+  resultCell: Cell<any>;
+  argumentInputs?: FabricExecValue;
+};
 
 const LIST_OP_INPUT_SCHEMAS = {
   map: MAP_INPUT_SCHEMA,
@@ -4143,42 +4162,6 @@ export class Runner {
   }
 
   /**
-   * True when `resultCell` is its space's default/root pattern — the piece the
-   * PieceController's own cold-start repair (startEnsuredDefaultPattern) owns,
-   * including its roll-forward-to-official backstop and clear-error contract.
-   * The runner's initial-start setup repair must DEFER to the controller for
-   * the root and heal only the nested pieces the controller never sees (a
-   * profile mounted via a #wish, say). Profiles are plain `inSpace` pieces and
-   * are never a space's `defaultPattern` (only the controller sets that), so
-   * they are correctly not excluded. Called only on the rare repair path, so
-   * the space-cell read costs nothing on a healthy start. A read failure
-   * returns false: better to attempt the idempotent, fail-closed repair than
-   * to leave a piece bricked because a lookup raced.
-   */
-  #isSpaceDefaultPattern(resultCell: Cell<unknown>): boolean {
-    try {
-      const defaultPatternCell = this.#runtime
-        .getSpaceCell(resultCell.space)
-        .key("defaultPattern")
-        .get() as Cell<unknown> | undefined;
-      if (defaultPatternCell === undefined) return false;
-      const a = resultCell.getAsNormalizedFullLink();
-      const b = defaultPatternCell.getAsNormalizedFullLink();
-      // Full document identity: space + scope + id. `scope` (space/user/session)
-      // is part of the address — a user- or session-scoped nested cell can share
-      // an entity id with the space-scoped root, so omitting scope would
-      // misclassify it as the root and silently suppress its heal. `path` is
-      // intentionally not compared: doStart normalizes a subpath input to its
-      // root before `#startCore()`, so resultCell is always a root cell here.
-      return a.space === b.space &&
-        (a.scope ?? "space") === (b.scope ?? "space") &&
-        a.id === b.id;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Whether the internal-cell manifest stored on `resultCell` names every
    * derived internal cell of `pattern`. `false` says no setup for this pattern
    * ran over this document, which is what the cold-start repair in
@@ -5441,9 +5424,10 @@ export class Runner {
     // setup for it: the internal cells the new version's setup would have
     // materialized — a handler's stream among them — have no manifest entry
     // and no result projection reaching them, and nothing about the stored
-    // doc changes on its own. A fresh run() would materialize them; this is
-    // the same repair the home ROOT gets in startEnsuredDefaultPattern,
-    // reachable here for the nested pieces that never pass through it.
+    // doc changes on its own. A fresh run() would materialize them, and this
+    // repair does the same for every piece, whatever starts it: a space's root
+    // is repaired as a nested piece is, a profile that is its space's root
+    // among them.
     //
     // The trigger is that stored state and nothing else: a setup-completion
     // marker that does not name this version, and a manifest missing one of
@@ -5479,10 +5463,7 @@ export class Runner {
             ref,
             this.#sessionPatternPointer(resultCell),
           ) !== "matches" &&
-        !this.#storedManifestCovers(resultCell, pattern) &&
-        // The root/default pattern is the PieceController's to repair (it has
-        // the richer roll-forward + clear-error path); defer to it there.
-        !this.#isSpaceDefaultPattern(resultCell)
+        !this.#storedManifestCovers(resultCell, pattern)
       ) {
         setupRepair = {
           pattern,
@@ -8904,6 +8885,16 @@ export class Runner {
    * ends the walk: an instance whose result document never arrived is left
    * unplanned rather than holding the resume, and its own start names what
    * it needs.
+   *
+   * An instance whose result document holds no argument link at all — the
+   * store never received its setup — has no start of its own: its parent's
+   * start sets it up fresh, inline, and reads what its nodes read in the
+   * same transaction. Its nodes are planned against the inputs the parent's
+   * node binds it to, the stand-in a fresh run's pre-sync binds against, so
+   * that a document those nodes read which the store already holds — a
+   * builtin's own cells, written by an earlier session whose setup of the
+   * instance was lost — is local before the parent's start reads it rather
+   * than entering that start's commit at sequence zero.
    */
   async #syncResumeInstanceNodes(
     instances: readonly ResumePatternInstance[],
@@ -8923,8 +8914,14 @@ export class Runner {
       const planTx = this.#runtime.edit();
       if (identity !== undefined) planTx.tx.scopeKeyIdentity = identity;
       try {
-        for (const [key, { pattern, resultCell }] of pending) {
-          const argumentLink = getMetaLink(resultCell, "argument");
+        for (const [key, instance] of pending) {
+          const { pattern, resultCell } = instance;
+          const argumentMetaLink = getMetaLink(resultCell, "argument");
+          const argumentLink = argumentMetaLink ??
+            this.#resumeArgumentStandIn(
+              resultCell.getAsNormalizedFullLink().space,
+              instance.argumentInputs,
+            );
           if (argumentLink === undefined) continue;
           pending.delete(key);
           const planned = this.#cellsPatternNodes(
@@ -8935,12 +8932,14 @@ export class Runner {
           );
           for (const cell of planned.cells) cells.push(cell);
           for (const plan of planned.plans) plans.push(plan);
-          cells.push(
-            this.#runtime.getCellFromLink({
-              ...argumentLink,
-              schema: undefined,
-            }),
-          );
+          if (argumentMetaLink !== undefined) {
+            cells.push(
+              this.#runtime.getCellFromLink({
+                ...argumentMetaLink,
+                schema: undefined,
+              }),
+            );
+          }
         }
       } finally {
         planTx.abort("resume instance nodes: read-only planning");
@@ -8960,6 +8959,23 @@ export class Runner {
       logger.time(waveStart, "start", "resumeInstanceNodeSyncWave");
       await this.#syncCrossSpaceReads(plans, identity);
     }
+  }
+
+  /**
+   * The argument link a nested instance with no stored setup is planned
+   * against: an immutable document in `space` holding `argumentInputs`, the
+   * inputs its parent's node binds it to, as a fresh run's pre-sync binds
+   * against the caller's argument. `undefined` without inputs, as for the
+   * root.
+   */
+  #resumeArgumentStandIn(
+    space: MemorySpace,
+    argumentInputs: FabricExecValue | undefined,
+  ): NormalizedFullLink | undefined {
+    if (argumentInputs === undefined) return undefined;
+    return this.#runtime
+      .getImmutableCell(space, argumentInputs, undefined)
+      .getAsNormalizedFullLink();
   }
 
   /**
@@ -9333,13 +9349,25 @@ export class Runner {
     // Every (pattern, result cell) the walk visits, for the pre-sync's
     // second pass over the list coordinators those patterns hold.
     visited?: ResumePatternInstance[],
+    // The inputs the parent's node binds a nested instance to; the root has
+    // none.
+    argumentInputs?: FabricExecValue,
   ): void {
     resultCell = resultCell.withTx(tx);
     const link = resultCell.getAsNormalizedFullLink();
     const key = `${link.space}\0${link.id}\0${link.scope ?? "space"}`;
     if (seen.has(key)) return;
     seen.add(key);
-    visited?.push({ pattern, resultCell });
+    visited?.push({
+      pattern,
+      resultCell,
+      ...(argumentInputs === undefined ? {} : { argumentInputs }),
+    });
+    // An instance with no stored argument link binds its nodes against the
+    // stand-in its inputs make, so its own pattern nodes resolve to their
+    // child result cells and the walk reaches every level below.
+    const argumentLink = getMetaLink(resultCell, "argument") ??
+      this.#resumeArgumentStandIn(link.space, argumentInputs);
 
     for (const descriptor of pattern.derivedInternalCells ?? []) {
       out.push(getDerivedInternalCell(resultCell, descriptor));
@@ -9357,7 +9385,14 @@ export class Runner {
       // setup mints rather than the unresolved head.
       let plan: NodePlan | undefined;
       try {
-        plan = this.#nodePlan(tx, node, resultCell, pattern);
+        plan = this.#nodePlan(
+          tx,
+          node,
+          resultCell,
+          pattern,
+          undefined,
+          argumentLink,
+        );
       } catch (error) {
         // A node whose outputs cannot be bound (e.g. they alias the argument
         // doc while the argument link is unavailable) or resolved contributes
@@ -9407,6 +9442,7 @@ export class Runner {
         seen,
         tx,
         visited,
+        plan.inputs,
       );
     }
   }
@@ -10592,6 +10628,24 @@ export class Runner {
     tx.enableMultiSpaceWrites?.([...childSpaces, parentSpace]);
   }
 
+  /**
+   * Helper for the handler paths, which returns the result cell of the
+   * handling caused by `cause`: its receipt, in the space of the handler's
+   * own result cell `patternResultCell`.
+   */
+  #handlingReceiptCell(
+    patternResultCell: Cell<any>,
+    cause: Record<string, any>,
+    tx: IExtendedStorageTransaction,
+  ): Cell<unknown> {
+    return this.#runtime.getCell(
+      patternResultCell.space,
+      { resultFor: cause },
+      undefined,
+      tx,
+    );
+  }
+
   #handleJavaScriptHandlerResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
@@ -10602,12 +10656,7 @@ export class Runner {
     addCancel: AddCancel,
     cause: Record<string, any>,
   ): any {
-    const receiptCell = this.#runtime.getCell(
-      patternResultCell.space,
-      { resultFor: cause },
-      undefined,
-      tx,
-    );
+    const receiptCell = this.#handlingReceiptCell(patternResultCell, cause, tx);
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
       // Events-down (runtime-mapping.md, row N26): receipt create-only
@@ -10915,7 +10964,9 @@ export class Runner {
    * throws {@link RetryImmediately} so the scheduler re-runs the handler or
    * action. On the re-run each name resolves synchronously (see the pattern
    * builder's resolveInSpaceTargetSpace), and the run records the allocation
-   * in the same commit as the writes that refer to it.
+   * in the same commit as the writes that refer to it. A name the runtime
+   * leaves unresolved throws {@link InSpaceTargetUnresolved} instead (see
+   * `Runtime.resolveInSpaceName()`).
    *
    * Each space created for a name is owned by the owner
    * {@link Runtime.actingPrincipalFor} gives the run's transaction, the one the
@@ -10926,6 +10977,7 @@ export class Runner {
   async #resolvePendingSpaceNamesAndRetry(
     frame: Frame,
     tx?: IExtendedStorageTransaction,
+    receiptCell?: Cell<unknown>,
   ): Promise<never> {
     const pending = [...(frame.pendingSpaceNames ?? [])];
     const space = frame.space;
@@ -10939,11 +10991,24 @@ export class Runner {
           "acting user, and this run has none",
       );
     }
-    await Promise.all(
-      pending.map(([name, request]) =>
-        this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
-      ),
-    );
+    try {
+      await Promise.all(
+        pending.map(([name, request]) =>
+          this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
+        ),
+      );
+    } catch (error) {
+      // A withdrawn run still names the handling's receipt, which the serving
+      // runtime's run of the same event writes: the address derives from the
+      // event, and a caller reads the served outcome through it.
+      if (
+        error instanceof InSpaceTargetUnresolved && tx !== undefined &&
+        receiptCell !== undefined
+      ) {
+        tx.handlingReceiptLink = receiptCell.getAsNormalizedFullLink();
+      }
+      throw error;
+    }
     throw new RetryImmediately(
       `Resolving in-space target spaces: ${
         pending.map(([name]) => name).join(", ")
@@ -11347,7 +11412,11 @@ export class Runner {
           logger.timeStart("stream", "postRun");
           try {
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
-              return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
+              return this.#resolvePendingSpaceNamesAndRetry(
+                frame,
+                tx,
+                this.#handlingReceiptCell(resultCell, cause, tx),
+              );
             }
             const handleResult = () => {
               const normalized = normalizeSandboxResult(result, name);
@@ -11392,8 +11461,11 @@ export class Runner {
           frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
         ) {
           popFrameAfterReturn = false;
-          return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
-            .finally(() => popFrame(frame));
+          return this.#resolvePendingSpaceNamesAndRetry(
+            frame,
+            tx,
+            this.#handlingReceiptCell(resultCell, cause, tx),
+          ).finally(() => popFrame(frame));
         }
         (error as Error & { frame?: Frame }).frame = frame;
         throw error;
@@ -12727,7 +12799,7 @@ export class Runner {
       targetSpace,
       // A space's root sits where its genesis reservation says, which the
       // reservation fixed before this output existed.
-      module.targetSpaceRoot ? IN_SPACE_ROOT_CAUSE : {
+      module.targetSpaceRoot ? inSpaceRootCause(targetSpace) : {
         resultFor: {
           space: outputRedirect.space,
           id: outputRedirect.id,

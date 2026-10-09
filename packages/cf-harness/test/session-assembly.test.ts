@@ -64,13 +64,6 @@ const parityArguments = (
     REGISTRY_URL,
     "--host-mount",
     `name=reference,source=${hostMountSource},target=/reference`,
-    // The console sites the sandbox's two CFC sidecar transports under its own
-    // data directory; the CLI is told where they are. Named on both so the
-    // comparison is of one session rather than of two defaults.
-    "--cfc-result-dir",
-    "/console/.cf-harness-console/cfc/results",
-    "--cfc-invocation-context-dir",
-    "/console/.cf-harness-console/cfc/invocation-context",
     "--space-db",
     "/serving/cache/memory/space.sqlite",
     "--allow-subagent-profile",
@@ -417,7 +410,6 @@ Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine
     },
   });
   expect(engine.sandbox.describe().kind).toBe("runsc-cfc");
-  expect(engine.ownedSandboxConfig).toBeUndefined();
   expect(engine.ownedRunscSandboxConfig).toMatchObject({
     rootfs: "/images/custom-rootfs",
     cfcPolicyPath: "/opt/cfc/policy.json",

@@ -4,7 +4,9 @@
  * different results, each lands in its own session instance behind the one
  * shared redirect, and once both have settled nothing writes again: the
  * shared redirect stays as it is and the space's commit sequence does not
- * move.
+ * move. The remote-echo breaker runs over it as it runs everywhere: with the
+ * two sessions placing their output the same way there is no loop for it to
+ * see.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -57,14 +59,6 @@ describe("scoped-output-convergence", () => {
     server = newSharedServer();
     storageA = EmulatedStorageManager.connectTo(server, { as: signer });
     storageB = EmulatedStorageManager.connectTo(server, { as: signer });
-    a = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: storageA,
-    });
-    b = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: storageB,
-    });
   });
 
   afterEach(async () => {
@@ -75,7 +69,24 @@ describe("scoped-output-convergence", () => {
     await server?.close();
   });
 
-  it("keeps the shared output stable across a session with the instance and one without", async () => {
+  /** Constructs both sessions' runtimes. */
+  function connect(): void {
+    a = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storageA,
+    });
+    b = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storageB,
+    });
+  }
+
+  /**
+   * Runs the piece in both sessions and asserts that each reads its own
+   * result behind the one shared redirect and that, settled, neither writes
+   * again.
+   */
+  async function converge(): Promise<void> {
     // Session A creates the piece and opens its editor, so its own instance
     // of `editing` holds true.
     const txA = a.edit();
@@ -151,5 +162,17 @@ describe("scoped-output-convergence", () => {
     } finally {
       cancel();
     }
+  }
+
+  it("keeps the shared output stable across a session with the instance and one without", async () => {
+    // The breaker counts a run that rewrites the document that re-triggered
+    // it. Placed the same way on both sides, the two sessions' runs never
+    // rewrite each other's output, so it counts no cycle at all.
+
+    connect();
+    await converge();
+    const nothing = { active: 0, trips: 0, cyclesObserved: 0 };
+    expect(a.scheduler.getEchoBreakerStats()).toEqual(nothing);
+    expect(b.scheduler.getEchoBreakerStats()).toEqual(nothing);
   });
 });

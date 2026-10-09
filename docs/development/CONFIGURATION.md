@@ -113,6 +113,22 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 | `PLAID_REDIRECT_URI` | _(unset)_ | Optional. |
 | `PLAID_SYNC_ALL_TRANSACTIONS` | `false` | Sync full history vs. incremental. |
 
+### Ingest registry
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_SERVICE_SPACE` | _(unset: the space named by this deployment's identity)_ | The space this deployment keeps its ingest registry in: channel registrations, their indexes, and Gmail mailbox bindings. A space named here must exist already, with an access list in which this deployment's identity is `OWNER` and nobody else is listed, so that nothing but this deployment reads it. It is also the space a Gmail push is addressed to, so a deployment reached through something that dispatches by space names a space dispatched to it. Pointing it somewhere new on a deployment that already has channels leaves them behind: nothing reads the registry it left, so their tokens stop working and their owners mint again. |
+
+### Gmail push ingest
+
+On only when a service account is set; see
+[`gmail-push-ingest.md`](../features/gmail-push-ingest.md).
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts a push token may be signed for. |
+| `INGEST_GMAIL_PUSH_AUDIENCE` | the ingest registry space's DID | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
+
 ---
 
 ## Identity & auth
@@ -159,6 +175,8 @@ The toolshed-embedded memory service has two modes:
 | `MEMORY_SERVICE_DIDS` | _(empty)_ | Comma-separated DIDs with implicit OWNER on every space. These identities may initialize ACLs but still cannot make an ordinary first write before genesis. |
 | `CF_MEMORY_FRAME_LOG` | _(unset)_ | Read by the memory **client** (`packages/memory/v2/client.ts`), in every Deno process that opens one — `cf` is the usual one — and never in a browser. Path of a file it appends one JSON line per wire frame to, in both directions: the frame's type and uncompressed UTF-8 size; for a watch mutation, its roots and their selectors, each distinct selector written once as a separate `dir: "selector"` line and named by its hash after; for a commit, its operations and the shape of its read set, including how many reads assert a document absent; for a response or pushed sync, every document delivered with its size and its first twelve top-level keys — a key past that limit is not recorded, so its absence from the record says nothing about the document. It answers what a request carried and what came back, which neither the timing statistics nor the server's slow-query buffer record. [`debugging/profiling.md`](./debugging/profiling.md#what-the-client-sent-and-what-came-back) says how to read the file. |
 | `CF_SLOW_QUERY_THRESHOLD_MS` | `100` | Operations slower than this land in `slowQueries` on `/api/health/stats`, with the per-operation root, read and upsert counts described in [`debugging/profiling.md`](./debugging/profiling.md#read-apihealthstats). A local investigation on a fast machine sets it lower — `0` records every operation — since the default leaves a 90 ms watch that delivered ten thousand documents invisible. The buffer holds the last hundred either way. |
+| `CF_COMMIT_STORM_PER_MINUTE` | `120` | Commits to one space in the last sixty seconds, accepted and rejected together, at or over which the space is over the write-storm threshold. `commitRates` on `/api/health/stats` and the `storm` attribute of the `ct.memory.commits` counter report a storm once a space has stayed over it for `CF_COMMIT_STORM_SUSTAINED_SECONDS`; [`debugging/profiling.md`](./debugging/profiling.md#alerting-on-a-write-storm) says how to read and alert on them. |
+| `CF_COMMIT_STORM_SUSTAINED_SECONDS` | `300` | How long a space has to stay over that threshold to be in a storm. A page load's burst of commits settles inside the default, and a loop does not. |
 
 With ACL policy active, a fresh space is read-only until its space identity or a
 configured service DID writes a valid ACL with a concrete OWNER. A populated

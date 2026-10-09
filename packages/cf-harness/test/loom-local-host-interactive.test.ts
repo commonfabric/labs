@@ -13,16 +13,12 @@ import {
 import { runLoomLocalInteractiveFailureStdio } from "../src/loom-local-host.ts";
 import {
   createLoomLocalCfHarnessHost,
-  NAMES_DOCKER,
+  NAMES_RUNSC,
 } from "./support/on-linux.ts";
 import {
   runHarnessInteractiveChatStdio,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
-import {
-  CFC_INVOCATION_CONTEXT_DIR_ENV,
-  CFC_RESULT_DIR_ENV,
-} from "../src/sandbox/docker-runsc.ts";
 
 type InteractiveEnvelope = HarnessChatEventEnvelope | HarnessChatResponse;
 
@@ -109,50 +105,13 @@ const turnRequests = (workspace: string, artifactRoot?: string): string[] => [
   }),
 ];
 
-/**
- * The two sidecar directories a runsc sandbox exchanges CFC invocation
- * contexts and CFC results through. A run that mediates observations refuses
- * to start unless both are named.
- */
-const makeCfcTransportDirs = async (): Promise<{
-  cfcInvocationContextDir: string;
-  cfcResultDir: string;
-}> => {
-  const root = await Deno.makeTempDir();
-  const cfcInvocationContextDir = join(root, "cfc-invocation-context");
-  const cfcResultDir = join(root, "cfc-result");
-  await Deno.mkdir(cfcInvocationContextDir);
-  await Deno.mkdir(cfcResultDir);
-  return { cfcInvocationContextDir, cfcResultDir };
-};
-
-/** Names those directories on the options an interactive stdio run carries. */
-const withCfcTransport = async (
-  options: RunHarnessInteractiveChatStdioOptions,
-): Promise<RunHarnessInteractiveChatStdioOptions> => ({
-  ...options,
-  basePromptLoopOptions: {
-    ...options.basePromptLoopOptions,
-    ...(await makeCfcTransportDirs()),
-  },
-});
-
-/** Names those directories in the environment a batch run reads them from. */
-const cfcTransportEnv = async (): Promise<Record<string, string>> => {
-  const dirs = await makeCfcTransportDirs();
-  return {
-    [CFC_INVOCATION_CONTEXT_DIR_ENV]: dirs.cfcInvocationContextDir,
-    [CFC_RESULT_DIR_ENV]: dirs.cfcResultDir,
-  };
-};
-
 const protocolRunner = (
   lines: readonly string[],
   capture: ReturnType<typeof captureOutput>,
 ) =>
 async (options: RunHarnessInteractiveChatStdioOptions): Promise<void> =>
   await runHarnessInteractiveChatStdio({
-    ...(await withCfcTransport(options)),
+    ...options,
     input: encodeInput(lines),
     output: capture.output,
   });
@@ -280,7 +239,7 @@ Deno.test("local Loom interactive stdio reports credential loss after preflight 
     interactiveStdioRunner: async (options) => {
       await credentials.delete("local", "openai-codex");
       await runHarnessInteractiveChatStdio({
-        ...(await withCfcTransport(options)),
+        ...options,
         input: encodeInput(turnRequests(workspace)),
         output: capture.output,
       });
@@ -338,7 +297,6 @@ Deno.test("local Loom interactive artifacts bind their selected model and resume
       );
     };
     const env = {
-      ...(await cfcTransportEnv()),
       ...(provider === "openai-codex"
         ? {
           CF_HARNESS_GATEWAY_BASE_URL: "https://must-not-be-used.invalid/",
@@ -563,7 +521,7 @@ Deno.test("local Loom interactive entrypoint returns disconnected Codex on stdou
       "interactive",
     ],
     env: {
-      ...NAMES_DOCKER,
+      ...NAMES_RUNSC,
       CF_HARNESS_HOME: home,
       CF_HARNESS_MODEL_PROVIDER: "",
     },
@@ -667,21 +625,18 @@ Deno.test("local Loom interactive host selects the sandbox runtime its environme
   // docker's network vocabulary maps onto runsc's, as it does for a batch run.
   assertEquals(native?.sandboxRunscNetworkMode, "sandbox");
 
-  // Docker named: the docker runtime, with none of the settings of `runsc`.
-  const docker = (await runWith({
-    CF_HARNESS_SANDBOX_RUNTIME: "docker",
-    CF_HARNESS_SANDBOX_ROOTFS: "/images/kitchensink",
-    CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
-  })).basePromptLoopOptions;
-  assertEquals(docker?.sandboxRuntimeKind, "docker");
-  assertEquals(docker?.sandboxRootfs, undefined);
-  assertEquals(docker?.sandboxRunscNetworkMode, undefined);
+  // Docker named: the driver is gone, and the host says so up front.
+  await assertRejects(
+    () => runWith({ CF_HARNESS_SANDBOX_RUNTIME: "docker" }),
+    Error,
+    "names the Docker driver, which this cf-harness no longer has",
+  );
 
-  // A runtime nobody has is refused up front, not read as docker.
+  // A runtime nobody has is refused up front.
   await assertRejects(
     () => runWith({ CF_HARNESS_SANDBOX_RUNTIME: "podman" }),
     Error,
-    "sandbox runtime must be one of docker, runsc",
+    "sandbox runtime must be runsc",
   );
 });
 

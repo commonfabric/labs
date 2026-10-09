@@ -55,10 +55,13 @@ replacing their root under this operation.
 
 `inSpace(name, { root: true })` makes the pattern's result the root of the
 space the call creates. The space's genesis commit carries a reservation naming
-the cause `in-space-root` and no source. The run that instantiates the result
-places it at that cause's address in the new space, rather than at the address
-derived from its parent's output, and links `defaultPattern` to it in the same
-commit, when nothing is linked there yet. A re-run of the same call finds the
+no source and a cause that names the space, `in-space-root:` followed by the
+space's DID. The run that instantiates the result places it at that cause's
+address in the new space, rather than at the address derived from its parent's
+output, and links `defaultPattern` to it in the same commit, when nothing is
+linked there yet. Because the cause names the space, the roots of two such
+spaces are two entities, so a pattern that keys a record by the entity a root
+names, as one keys a person's record by their profile, keeps them apart. A re-run of the same call finds the
 same address, so it neither places a second root nor moves the link.
 
 Between the genesis commit and the creating run's commit the space holds only
@@ -66,10 +69,12 @@ its access-control document and the reservation. If that run never commits,
 the space is named by nothing: its DID reaches no allocation record, and the
 serving loop leaves it rootless. A later run in the same runtime resolving the
 same name with the same request reaches the same space, and places the root
-there. A client opening the
-space by its DID still creates the default root, since the reservation is not
-readable from a client, and the serving loop then reports that root as a
-conflict.
+there. The creator's own client opening the space by its DID in that window
+still creates the default root, since the reservation is not readable from a
+client, and the serving loop then reports that root as a conflict. So does the
+client of any other principal the access list makes an `OWNER`, since opening
+a space creates its root only for an `OWNER`. A client without `OWNER` creates
+nothing there.
 
 Only a space named by a string, or an anonymous one, can be created with
 `root`: a DID or a cell names a space that already exists, and `inSpace()`

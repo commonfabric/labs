@@ -1410,6 +1410,13 @@ export type CustodySealPreview = {
   sources: CfcAtom[];
 
   /**
+   * The people the value was drawn from data shared with, such as a
+   * conversation: one sorted group per distinct set of people a clause names
+   * beside the actor.
+   */
+  heldWith: DID[][];
+
+  /**
    * Whether every release rule of the room's policy requires the seal's input
    * witness and releases only to the seal, which publishes the answer once
    * per instance. When `false`, a member's own code can learn the actor's
@@ -2583,8 +2590,11 @@ export type GetSpaceRootPatternRequest = BaseRequest & {
    * A caller that only reads what the root exported passes false. Starting
    * a root materializes everything its result reaches, which on a space
    * whose root reaches a large piece is the dominant cost of opening
-   * anything; a stored export costs a read. Either way an absent root is
-   * still created, since a space needs one before it can have exports.
+   * anything; a stored export costs a read.
+   *
+   * A space with no root gets one only when this is true and the requesting
+   * identity owns the space. Otherwise the response names no piece, and
+   * nothing is written.
    */
   start?: boolean;
 };
@@ -3602,6 +3612,14 @@ export type PieceResponse = {
   piece: PieceRef;
 };
 
+/** A reference to a space's root, which a space with no root lacks. */
+export type SpaceRootPatternResponse = {
+  /**
+   * The space's root, absent when the space has none.
+   */
+  piece?: PieceRef;
+};
+
 /**
  * Why a slug reference reached nothing. This is an outcome, not a failure:
  * a name nobody has bound, or a member a collection does not hold, is what a
@@ -4090,6 +4108,7 @@ export type RemoteResponse =
   | TriggerTraceResponse
   | WriteStackTraceResponse
   | PieceResponse
+  | SpaceRootPatternResponse
   | SlugReferenceResponse
   | PieceSourceResponse
   | PieceSourceRevisionResponse
@@ -4474,7 +4493,7 @@ export type Commands = {
   };
   [RequestType.GetSpaceRootPattern]: {
     request: GetSpaceRootPatternRequest;
-    response: PieceResponse;
+    response: SpaceRootPatternResponse;
   };
   // Diagnosis requests
   [RequestType.DetectNonIdempotent]: {
