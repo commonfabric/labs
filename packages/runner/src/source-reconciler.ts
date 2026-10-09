@@ -242,6 +242,13 @@ type SuppliedSource = {
    * its serialized graph carries `cid:` references minted from the registry.
    */
   compiled?: { pattern: Pattern; epoch: number };
+
+  /**
+   * The compile into the destination space in flight, and the schema registry
+   * epoch it started in, which opens arriving in that epoch join instead of
+   * compiling again.
+   */
+  compiling?: { promise: Promise<Pattern | undefined>; epoch: number };
 };
 
 /** Maximum retained source text and key size, measured in UTF-16 code units. */
@@ -788,8 +795,9 @@ export class SourceReconciler {
    * destination, target and advertised identity share resolved source, and
    * the first to compile it into that destination verifies that it compiles
    * to the advertised identity, including the source-closure persistence of a
-   * compiler cache hit. Later opens in the same schema registry epoch answer
-   * with that verified pattern, whose closure the destination already holds.
+   * compiler cache hit. Opens arriving while that compile runs share it, and
+   * later opens in the same schema registry epoch answer with the verified
+   * pattern, whose closure the destination already holds.
    */
   async #resolveSupplied(
     space: MemorySpace,
@@ -814,39 +822,72 @@ export class SourceReconciler {
       signal.throwIfAborted();
       const epoch = schemaRegistryEpoch();
       if (resolved.compiled?.epoch === epoch) return resolved.compiled.pattern;
-      // The destination must hold the closure behind its creation revision.
-      // A compiler hit still performs the destination's persistence work.
-      await prepareSourceClosureVerification();
-      try {
-        // Compiling writes to storage; a stopped pass must leave it alone.
-        signal.throwIfAborted();
-        const compiled = await this.#runtime.patternManager.compilePattern(
-          copySourceProgram(resolved.program),
-          { space },
-        );
-        signal.throwIfAborted();
-        const ref = this.#runtime.patternManager.getArtifactEntryRef(compiled);
-        if (ref?.identity !== advertised) {
-          this.#forgetSuppliedSource(key, resolved);
-          logger.warn("advertised-identity-mismatch", () => [
-            "resolved source did not compile to the identity its origin advertises",
+      // Only disposal stops a pass, and it stops every pass, so an open that
+      // joins another's compile is stopped exactly when that compile is. A
+      // compile that fails retires `resolved`, so nothing joins it again.
+      if (resolved.compiling?.epoch !== epoch) {
+        resolved.compiling = {
+          promise: this.#compileSupplied(
+            key,
+            resolved,
             space,
             advertised,
-            ref,
-          ]);
-          return undefined;
-        }
-        // A pattern compiled across a registry clear carries references the
-        // clear retired, so it is answered but not kept.
-        if (schemaRegistryEpoch() === epoch) {
-          resolved.compiled = { pattern: compiled, epoch };
-        }
-        return compiled;
-      } catch (error) {
-        this.#forgetSuppliedSource(key, resolved);
-        throw error;
+            signal,
+            epoch,
+          ),
+          epoch,
+        };
       }
+      return await resolved.compiling.promise;
     });
+  }
+
+  /**
+   * Helper for `#resolveSupplied()`, which compiles `resolved` into the
+   * destination `space`, verifies that it compiles to `advertised`, and keeps
+   * the pattern when the schema registry is still in the `epoch` it started
+   * in.
+   */
+  async #compileSupplied(
+    key: string,
+    resolved: SuppliedSource,
+    space: MemorySpace,
+    advertised: string,
+    signal: AbortSignal,
+    epoch: number,
+  ): Promise<Pattern | undefined> {
+    // The destination must hold the closure behind its creation revision.
+    // A compiler hit still performs the destination's persistence work.
+    await prepareSourceClosureVerification();
+    try {
+      // Compiling writes to storage; a stopped pass must leave it alone.
+      signal.throwIfAborted();
+      const compiled = await this.#runtime.patternManager.compilePattern(
+        copySourceProgram(resolved.program),
+        { space },
+      );
+      signal.throwIfAborted();
+      const ref = this.#runtime.patternManager.getArtifactEntryRef(compiled);
+      if (ref?.identity !== advertised) {
+        this.#forgetSuppliedSource(key, resolved);
+        logger.warn("advertised-identity-mismatch", () => [
+          "resolved source did not compile to the identity its origin advertises",
+          space,
+          advertised,
+          ref,
+        ]);
+        return undefined;
+      }
+      // A pattern compiled across a registry clear carries references the
+      // clear retired, so it is answered but not kept.
+      if (schemaRegistryEpoch() === epoch) {
+        resolved.compiled = { pattern: compiled, epoch };
+      }
+      return compiled;
+    } catch (error) {
+      this.#forgetSuppliedSource(key, resolved);
+      throw error;
+    }
   }
 
   /** Share supplied-source downloads, whose callers share disposal ownership. */

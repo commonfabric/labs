@@ -1391,6 +1391,54 @@ describe("piece source reconciliation", () => {
       }
     });
 
+    it("compiles concurrent opens into one destination once", async () => {
+      // Every open is held at the source download until all of them have
+      // asked for the advertised identity, so they reach the compile
+      // together.
+      const identity = await identityFor(source("v1"));
+      const opens = 3;
+      const allIdentities = defer<void>();
+      let identities = 0;
+      const fetch = servingFetch(() => identity, () => source("v1"), (url) => {
+        if (url.searchParams.has("identity") && ++identities === opens) {
+          allIdentities.resolve();
+        }
+      });
+      createRuntime(async (input, init) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+        );
+        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
+          await allIdentities.promise;
+        }
+        return await fetch(input, init);
+      });
+      const harness = runtime.harness;
+      const compileToRecordGraph = harness.compileToRecordGraph.bind(harness);
+      let compiles = 0;
+      harness.compileToRecordGraph = (...args) => {
+        compiles++;
+        return compileToRecordGraph(...args);
+      };
+      try {
+        const patterns = await Promise.all(
+          Array.from(
+            { length: opens },
+            (_, slot) =>
+              open(runtime.getCell(signer.did(), `concurrent-slot-${slot}`)),
+          ),
+        );
+        expect(new Set(patterns).size).toBe(1);
+        expect(
+          runtime.patternManager.getArtifactEntryRef(patterns[0]!)?.identity,
+        ).toBe(identity);
+        expect(compiles).toBe(1);
+      } finally {
+        allIdentities.resolve();
+        harness.compileToRecordGraph = compileToRecordGraph;
+      }
+    });
+
     it("refuses mismatched source in a destination that keeps a verified pattern", async () => {
       const v1 = await identityFor(source("v1"));
       const v2 = await identityFor(source("v2"));
@@ -1522,52 +1570,64 @@ describe("piece source reconciliation", () => {
       expect(downloads).toBe(4);
     });
 
-    it("retries compilation failure without evicting a newer successful source", async () => {
+    it("shares a concurrent open's failed compile, and compiles again for the next open", async () => {
+      // Both opens are held at the source download until both have asked for
+      // the advertised identity, so they reach the compile together.
       const identity = await identityFor(source("v1"));
+      const bothIdentities = defer<void>();
+      let identities = 0;
       let downloads = 0;
-      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
+      const fetch = servingFetch(() => identity, () => source("v1"), (url) => {
         if (!url.searchParams.has("identity")) downloads++;
-      }));
+        else if (++identities === 2) bothIdentities.resolve();
+      });
+      createRuntime(async (input, init) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+        );
+        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
+          await bothIdentities.promise;
+        }
+        return await fetch(input, init);
+      });
       const compile = runtime.patternManager.compilePattern.bind(
         runtime.patternManager,
       );
-      const entered = [defer<void>(), defer<void>()];
-      const release = [defer<void>(), defer<void>()];
       let calls = 0;
       runtime.patternManager.compilePattern = async (...args) => {
-        const index = calls++;
-        if (index < 2) {
-          entered[index].resolve();
-          await release[index].promise;
-          throw new Error("controlled compile failure");
-        }
+        if (calls++ === 0) throw new Error("controlled compile failure");
         return await compile(...args);
       };
-      const first = open(runtime.getCell(signer.did(), "failure-first"));
-      await entered[0].promise;
-      const second = open(runtime.getCell(signer.did(), "failure-second"));
       try {
-        await entered[1].promise;
-        release[0].resolve();
-        expect(await first).toBeUndefined();
+        expect(
+          await Promise.all([
+            open(runtime.getCell(signer.did(), "failure-first")),
+            open(runtime.getCell(signer.did(), "failure-second")),
+          ]),
+        ).toEqual([undefined, undefined]);
+        expect(calls).toBe(1);
         expect(await open(runtime.getCell(signer.did(), "failure-retry")))
           .toBeDefined();
+        // The supplied closure has two files, downloaded once for the shared
+        // attempt and once again for the retry.
         expect(downloads).toBe(4);
-        release[1].resolve();
-        expect(await second).toBeUndefined();
-        expect(await open(runtime.getCell(signer.did(), "after-late-failure")))
+        expect(await open(runtime.getCell(signer.did(), "after-retry")))
           .toBeDefined();
         expect(downloads).toBe(4);
         // The last open reuses the pattern the retry verified.
-        expect(calls).toBe(3);
+        expect(calls).toBe(2);
       } finally {
-        for (const gate of release) gate.resolve();
-        await Promise.all([first, second]);
+        bothIdentities.resolve();
         runtime.patternManager.compilePattern = compile;
       }
     });
 
     it("isolates retained source containers from compiler-owned inputs", async () => {
+      // The second compile is reached through the end of the registry epoch
+      // that verified the first, which leaves the retained source in place.
+      await storageManager.close();
+      const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
       const dataFiles = ["/attached.txt"];
       const sourceRoots = ["/retained.ts"];
       const attached = [
@@ -1601,16 +1661,9 @@ describe("piece source reconciliation", () => {
       const compile = runtime.patternManager.compilePattern.bind(
         runtime.patternManager,
       );
-      // The second open starts while the first is still compiling, so it
-      // compiles the retained source again rather than answering with a
-      // pattern the first has verified.
-      const firstMutated = defer<void>();
-      const releaseFirst = defer<void>();
-      const secondEntered = defer<void>();
       let calls = 0;
       runtime.patternManager.compilePattern = async (...args) => {
-        const call = ++calls;
-        if (call === 2) secondEntered.resolve();
+        calls++;
         if (typeof args[0] === "string") {
           throw new Error("supplied source must carry its resolved program");
         }
@@ -1624,26 +1677,16 @@ describe("piece source reconciliation", () => {
         args[0].files.pop();
         args[0].dataFiles!.push("owner-data.txt");
         args[0].sourceRoots!.push("owner-root.tsx");
-        if (call === 1) {
-          firstMutated.resolve();
-          await releaseFirst.promise;
-        }
         return pattern;
       };
-      const first = open(runtime.getCell(signer.did(), "containers-first"));
-      let second: Promise<unknown> | undefined;
       try {
-        await Promise.race([
-          firstMutated.promise,
-          first.then(() => {
-            throw new Error("the first open did not finish its compile");
-          }),
-        ]);
-        second = open(runtime.getCell(signer.did(), "containers-next"));
-        await secondEntered.promise;
-        releaseFirst.resolve();
-        expect(await first).toBeDefined();
-        expect(await second).toBeDefined();
+        expect(await open(runtime.getCell(signer.did(), "containers-first")))
+          .toBeDefined();
+        await runtime.patternManager.flushCompileCacheWrites();
+        await storageManager.synced();
+        await storageManager.close();
+        expect(await open(runtime.getCell(signer.did(), "containers-next")))
+          .toBeDefined();
         expect(calls).toBe(2);
         expect(downloads).toBe(2);
         const stored = await runtime.patternManager
@@ -1652,10 +1695,10 @@ describe("piece source reconciliation", () => {
         expect(stored?.sourceRoots).toEqual(sourceRoots);
         expect(stored?.files).toEqual(expect.arrayContaining(attached));
       } finally {
-        releaseFirst.resolve();
-        await Promise.all([first, second]);
         runtime.harness.resolve = resolve;
         runtime.patternManager.compilePattern = compile;
+        await runtime.dispose();
+        await server.close();
       }
     });
 
