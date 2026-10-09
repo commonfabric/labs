@@ -126,8 +126,10 @@ const isStart = (act: ManagerAct): boolean =>
  * An event on one of the manager's streams. Each stream's event carries the
  * fields its act needs. A rendered control sends no request id, which the
  * manager then mints, and either the text it holds, as `target.value`, or, for
- * a control that starts a direct room with one person, that person's principal
- * as `target.dataset.counterpart`.
+ * a control that starts a direct room with one person, that person's profile,
+ * bound as the control's `name`, as `target.name`. A chip a room rendered
+ * before its control named a profile names the person's principal instead, as
+ * `target.dataset.counterpart`.
  */
 export interface ManagerStreamEvent {
   /**
@@ -173,9 +175,17 @@ export interface ManagerStreamEvent {
    */
   revision?: string;
 
-  /** A rendered control's text, or the principal it starts a direct room with. */
+  /** A rendered control's text, or the profile it starts a direct room with. */
   readonly target?: {
     readonly value?: string;
+
+    /** The profile of the person a participant's chip starts a chat with. */
+    // `Cell<…>` is written out rather than reached through an alias: the
+    // event's schema marks a reference position only where the wrapper is
+    // written in the event type.
+    readonly name?: Cell<ChatManagerProfile>;
+
+    /** The principal an older room's chip names the person by. */
     readonly dataset?: { readonly counterpart?: string };
   };
 }
@@ -623,7 +633,20 @@ const performManagerAct = (
   }
 
   if (act === "openDirect") {
-    const counterpart = event?.counterpart ??
+    // A participant's chip names the person by their profile, which says
+    // whose it is with its `represents-principal` label. A `name` attesting
+    // no principal names no one, so it is offered nothing either.
+    const named = event?.target?.name;
+    const namedPrincipal = named === undefined
+      ? undefined
+      : principalOf(named, "represents-principal");
+    // A chip a room rendered before its control named a profile names the
+    // person by principal. Such a start finds or creates the room, but offers
+    // it to no one, since it carries no profile.
+    // TODO(danfuzz): Stop reading `target.dataset.counterpart` once no
+    // deployed room renders a chip that sends it, and record the contract
+    // break that removing the field from the event's type is.
+    const counterpart = event?.counterpart ?? namedPrincipal ??
       event?.target?.dataset?.counterpart ?? typed;
     if (!isPrincipalDID(counterpart)) {
       const reason = "The counterpart is not a principal.";
@@ -649,7 +672,8 @@ const performManagerAct = (
     }
     // The room is offered through the profile's inbox, so the profile has to
     // be the counterpart's own.
-    const profile = event?.profile;
+    const profile = event?.profile ??
+      (namedPrincipal === undefined ? undefined : named);
     if (
       profile !== undefined &&
       principalOf(profile, "represents-principal") !== counterpart

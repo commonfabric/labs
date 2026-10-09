@@ -137,8 +137,14 @@ export interface JoinRoomEvent {
  * click on its chat control, whose target names the person to chat with.
  */
 export interface StartDirectEvent {
-  /** The chat control, naming the other person's principal. */
-  readonly target?: { readonly dataset?: { readonly counterpart?: string } };
+  /** The chat control, naming the other person by their profile. */
+  readonly target?: {
+    /** The other person's profile, bound as the control's `name`. */
+    // `Cell<…>` is written out rather than reached through an alias: the
+    // event's schema marks a reference position only where the wrapper is
+    // written in the event type.
+    readonly name?: Cell<ChatProfile>;
+  };
 }
 
 /** What a participant's chip needs. */
@@ -173,8 +179,11 @@ export interface ParticipantChipOutput {
  * One participant, shown by their profile, with a control that starts a direct
  * chat with them. The control shows only where it can start one: for someone
  * other than the viewer, whose profile attests a principal, to a viewer who
- * has a manager. It names the participant to the manager by the principal
- * their profile's `represents-principal` label attests.
+ * has a manager. It names the participant to the manager by their profile,
+ * bound as the control's `name`, which crosses into the click's event as the
+ * profile's own cell; the manager reads whom it names from the profile's
+ * `represents-principal` label, and offers the room through the share inbox
+ * the profile points at.
  */
 export const ParticipantChip = pattern<
   ParticipantChipInput,
@@ -204,7 +213,7 @@ export const ParticipantChip = pattern<
         >
           <cf-button
             data-ui-action={CHAT_START_ACTION}
-            data-counterpart={counterpart}
+            $name={participant}
             size="sm"
             variant="ghost"
             onClick={startDirect}
