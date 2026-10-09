@@ -12,6 +12,8 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "../src/storage/extended-storage-transaction.ts";
+import { parseLink } from "../src/link-utils.ts";
+import type { MemorySpace, URI } from "../src/storage/interface.ts";
 
 const alice = await Identity.fromPassphrase("runner-list-membership-alice");
 const DANIEL = "did:key:daniel";
@@ -22,10 +24,14 @@ const writer = {
 };
 
 /**
- * A list field whose entries are labelled `[User(daniel) ∨ User(alice)]`,
- * with or without a declared writer.
+ * A list field whose entries are labelled `[User(daniel) ∨ User(alice)]`. The
+ * list position, and each entry, which the runtime stores as a document of
+ * its own, may declare the share handler as their writer.
  */
-const listSchema = (declaresWriter: boolean): JSONSchema => ({
+const listSchema = (
+  declaresWriter: boolean,
+  entriesDeclareWriter = declaresWriter,
+): JSONSchema => ({
   type: "object",
   properties: {
     liveList: {
@@ -37,6 +43,7 @@ const listSchema = (declaresWriter: boolean): JSONSchema => ({
           confidentiality: [{
             anyOf: [cfcAtom.user(DANIEL), cfcAtom.user(alice.did())],
           }],
+          ...(entriesDeclareWriter ? { writeAuthorizedBy: writer } : {}),
         },
       },
       ...(declaresWriter ? { ifc: { writeAuthorizedBy: writer } } : {}),
@@ -110,6 +117,54 @@ describe("createRuntimeListMembershipProvider (spec §4.9.5)", () => {
       ]);
       expect(createRuntimeListMembershipProvider(runtime, DANIEL).listed(list))
         .toBe(false);
+    });
+  });
+
+  it("lists nobody through entries that declare no writer", async () => {
+    // An entry the runtime stored as its own document answers to its own
+    // schema; without a declared writer anyone who can address it could
+    // rewrite who it names.
+    await withRuntime(async (runtime) => {
+      const list = await writeList(
+        runtime,
+        "unguarded-entries",
+        listSchema(true, false),
+        [DANIEL],
+      );
+      expect(createRuntimeListMembershipProvider(runtime, DANIEL).listed(list))
+        .toBe(false);
+    });
+  });
+
+  it("refuses a rewrite of an entry by a writer the entry does not declare", async () => {
+    await withRuntime(async (runtime) => {
+      const list = await writeList(runtime, "rewritten", listSchema(true), [
+        DANIEL,
+      ]);
+      const tx = runtime.edit();
+      tx.setCfcEnforcementMode("enforce-strict");
+      setCfcTrustSnapshot(tx, { id: "trust-alice", actingPrincipal: alice.did() });
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: "other-module",
+        sourceFile: "/other.tsx",
+        bindingPath: ["edit"],
+      });
+      const position = {
+        space: list.space as MemorySpace,
+        id: list.id as URI,
+        path: [...list.path, "0"],
+        scope: "space" as const,
+      };
+      const entry = parseLink(tx.readValueOrThrow(position), position);
+      if (entry === undefined) throw new Error("the entry is not a link");
+      runtime.getCellFromLink<{ principal: string }>(entry, undefined, tx)
+        .key("principal").set(EVE);
+      tx.prepareCfc();
+      const { error } = await tx.commit().settled;
+      expect(error).toBeDefined();
+      expect(createRuntimeListMembershipProvider(runtime, DANIEL).listed(list))
+        .toBe(true);
     });
   });
 

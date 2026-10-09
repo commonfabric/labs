@@ -33,16 +33,17 @@ export type ListEntryView = {
 };
 
 /**
- * Whether `label` admits `principal` on its face: every clause has a
- * `User(principal)` alternative. This decides the label without exchange
- * rules or membership facts, so it can only under-admit, and an entry it
- * does not admit lists nobody.
+ * Whether `label` names `principal` on its face: it has at least one clause,
+ * and every clause has a `User(principal)` alternative. This decides the
+ * label without exchange rules or membership facts, so it can only
+ * under-admit. An unlabelled entry names nobody: the gesture that pins an
+ * entry labels it, and an entry nothing labelled was not pinned that way.
  */
 const labelNamesPrincipal = (
   label: readonly CfcConfClause[],
   principal: string,
 ): boolean =>
-  label.every((clause) =>
+  label.length > 0 && label.every((clause) =>
     clauseAlternatives(clause).some((alternative) =>
       isObjectOrArray(alternative) &&
       alternative.type === CFC_ATOM_TYPE.User &&

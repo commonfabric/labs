@@ -12,6 +12,7 @@ import type { MemorySpace, URI } from "../storage/interface.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import {
+  type ListEntryView,
   listedInEntries,
   type ListMembershipProvider,
 } from "./list-membership.ts";
@@ -41,37 +42,8 @@ const entriesAddress = (
   return isPrimitiveCellLink(tx.readValueOrThrow(target)) ? undefined : target;
 };
 
-/**
- * The principal an entry pins. An object entry of a list is stored as its own
- * document with a link at the entry's index, so a link is followed one hop.
- */
-const entryPrincipal = (
-  tx: IExtendedStorageTransaction,
-  entry: unknown,
-  base: NormalizedFullLink,
-): unknown => {
-  const held = isPrimitiveCellLink(entry)
-    ? readLinkTarget(tx, entry, base)
-    : entry;
-  return isObjectOrArray(held) && !Array.isArray(held)
-    ? held.principal
-    : undefined;
-};
-
-const readLinkTarget = (
-  tx: IExtendedStorageTransaction,
-  link: unknown,
-  base: NormalizedFullLink,
-): unknown => {
-  const target = parseLink(link, base);
-  return target === undefined ? undefined : tx.readValueOrThrow(target);
-};
-
-/**
- * The confidentiality an entry's stored label holds, ancestors included, and
- * the pointer's label where the entry is a link.
- */
-const entryConfidentiality = (
+/** The confidentiality a stored label holds at `path`, ancestors included. */
+const confidentialityAt = (
   metadata: Parameters<typeof cfcLabelViewFromMetadata>[0],
   path: readonly string[],
 ): readonly CfcConfClause[] =>
@@ -79,11 +51,65 @@ const entryConfidentiality = (
     entry.label.confidentiality ?? []
   ) ?? [];
 
+/** Whether the stored schema at `path` declares who may write it. */
+const declaresWriterAt = (
+  schema: Parameters<typeof ContextualFlowControl.getSchemaAtPath>[0],
+  path: readonly string[],
+): boolean => {
+  const atPath = ContextualFlowControl.getSchemaAtPath(schema, [...path]);
+  const ifc = isObjectOrArray(atPath) ? atPath.ifc : undefined;
+  return ifc?.writeAuthorizedBy !== undefined;
+};
+
+/**
+ * One entry of the list held at `address`, as resolution judges it, or
+ * `undefined` for an entry that names nobody.
+ *
+ * A string entry, or an object held inline, is governed by the list
+ * position's writers. An object entry the runtime stored as its own document
+ * is reached through a link at the entry's index; that document answers to
+ * its own schema, not the list's, so it counts only when it sits in the
+ * list's space and declares its writers, and its label is the pointer's
+ * joined with its own.
+ */
+const entryView = (
+  tx: IExtendedStorageTransaction,
+  entry: unknown,
+  pointerLabel: readonly CfcConfClause[],
+  address: NormalizedFullLink,
+): ListEntryView | undefined => {
+  if (typeof entry === "string") return { principal: entry, label: pointerLabel };
+  if (!isPrimitiveCellLink(entry)) {
+    return isObjectOrArray(entry) && !Array.isArray(entry)
+      ? { principal: entry.principal, label: pointerLabel }
+      : undefined;
+  }
+  const target = parseLink(entry, address);
+  if (target === undefined || target.space !== address.space) return undefined;
+  const envelope = loadStoredCfcEnvelope(tx, target);
+  if (
+    envelope.status !== "loaded" ||
+    !declaresWriterAt(envelope.schema, target.path)
+  ) {
+    return undefined;
+  }
+  const held = tx.readValueOrThrow(target);
+  return isObjectOrArray(held) && !Array.isArray(held)
+    ? {
+      principal: held.principal,
+      label: [
+        ...pointerLabel,
+        ...confidentialityAt(envelope.metadata, target.path),
+      ],
+    }
+    : undefined;
+};
+
 /**
  * Whether `principal` is listed at `list` in the local replica (spec
  * §4.9.5): the entries are read at the position or one link from it, their
- * position must declare its writers, and each entry is judged by
- * {@link listedInEntries} against its own stored label. Any read that fails,
+ * position must declare its writers, and each entry (see `entryView`) is
+ * judged by {@link listedInEntries} against its own stored label. Any read that fails,
  * or a document whose stored labels cannot be interpreted, lists nobody.
  */
 export const listedInReplica = (
@@ -95,22 +121,20 @@ export const listedInReplica = (
   if (address === undefined) return false;
   const envelope = loadStoredCfcEnvelope(tx, address);
   if (envelope.status !== "loaded") return false;
-  const schema = ContextualFlowControl.getSchemaAtPath(envelope.schema, [
-    ...address.path,
-  ]);
-  const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
-  if (ifc?.writeAuthorizedBy === undefined) return false;
+  if (!declaresWriterAt(envelope.schema, address.path)) return false;
   const value = tx.readValueOrThrow(address);
   if (!Array.isArray(value)) return false;
   return listedInEntries(
     principal,
-    value.map((entry, index) => ({
-      principal: entryPrincipal(tx, entry, address),
-      label: entryConfidentiality(envelope.metadata, [
-        ...address.path,
-        String(index),
-      ]),
-    })),
+    value.flatMap((entry, index) => {
+      const view = entryView(
+        tx,
+        entry,
+        confidentialityAt(envelope.metadata, [...address.path, String(index)]),
+        address,
+      );
+      return view === undefined ? [] : [view];
+    }),
   );
 };
 
@@ -132,19 +156,28 @@ export const createRuntimeListMembershipProvider = (
     }
   },
   subscribe(list, onChange) {
-    // `Cell.sink` runs once synchronously at subscribe time; that fire is
-    // the snapshot `listed` already gave, so only later fires signal change.
-    // Reading through the cell follows the position's link, so a write to
-    // the linked document fires too.
-    let primed = false;
+    // Each `sink` runs once synchronously at subscribe time; that fire is the
+    // snapshot `listed` already gave, so only later fires signal change.
+    // Reading through the cell follows the position's link, so a write to the
+    // linked document fires too. `listed` also consults the stored labels and
+    // schema, so a change to either alone fires as well.
     const cell: Cell<unknown> = runtime.getCellFromLink<unknown>(linkOf(list));
-    const cancel: Cancel = cell.sink(() => {
-      if (!primed) {
-        primed = true;
-        return;
-      }
-      onChange();
-    });
-    return cancel;
+    const onLaterFires = () => {
+      let primed = false;
+      return () => {
+        if (!primed) {
+          primed = true;
+          return;
+        }
+        onChange();
+      };
+    };
+    const cancels: Cancel[] = [
+      cell.sink(onLaterFires(), { includeCfcLabel: true }),
+      cell.sinkMeta("schema", onLaterFires()),
+    ];
+    return () => {
+      for (const cancel of cancels) cancel();
+    };
   },
 });

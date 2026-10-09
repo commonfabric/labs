@@ -50,9 +50,11 @@ describe("listedInEntries (spec §4.9.5)", () => {
     expect(listedInEntries(DANIEL, [twoClauses])).toBe(false);
   });
 
-  it("lists through an unlabelled entry, which carries nothing", () => {
+  it("does not list through an unlabelled entry", () => {
+    // Nothing pinned it with a label naming its member, so it may have been
+    // written by anyone the label would not have admitted.
     expect(listedInEntries(DANIEL, [{ principal: DANIEL, label: [] }]))
-      .toBe(true);
+      .toBe(false);
   });
 
   it("does not list through an entry of any other shape", () => {
