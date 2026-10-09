@@ -12992,8 +12992,9 @@ export class Runner {
    * this is exact wherever that pattern is loaded in this runtime. Where it is
    * not, an instance carries over the one child, among the positional spots
    * the parent's manifest records, that runs the instance's own pattern
-   * identity, and none when no spot or more than one does. A child is carried
-   * over by one instance at most.
+   * identity, and failing that the child at the positional cause `pattern`
+   * itself gives the instance, which is where the child runs with no instance
+   * names. A child is carried over by one instance at most.
    */
   #planInstanceCarryOver(
     resultCell: Cell<any>,
@@ -13029,6 +13030,11 @@ export class Runner {
     );
     const previous = this.#previouslySetUpPattern(parent, pattern);
     const nodes = subPatternNodes(pattern);
+    const unmatched: {
+      name: string;
+      module: Module;
+      descriptor: DerivedInternalCellDescriptor;
+    }[] = [];
     for (const descriptor of pending) {
       const name = instanceNameOfPartialCause(descriptor.partialCause)!;
       // An instance the previous pattern does not name is new, with nothing
@@ -13044,17 +13050,39 @@ export class Runner {
       const node = nodes.find((candidate) =>
         deepEqual(candidate.partialCause, descriptor.partialCause)
       );
-      const child = node === undefined || node.module.targetSpaceRoot
-        ? undefined
-        : previous !== undefined
-        ? this.#previousInstanceChild(tx, parent, previous, descriptor)
-        : this.#soleRecordedChild(tx, parent, manifest, node.module, claimed);
-      if (child === undefined || claimed.has(child.id)) {
+      if (node === undefined || node.module.targetSpaceRoot) {
         uncarried.push(name);
         continue;
       }
-      claimed.add(child.id);
-      carried.set(name, child);
+      const child = previous !== undefined
+        ? this.#previousInstanceChild(tx, parent, previous, descriptor)
+        : this.#soleRecordedChild(tx, parent, manifest, node.module, claimed);
+      if (child !== undefined && !claimed.has(child.id)) {
+        claimed.add(child.id);
+        carried.set(name, child);
+      } else if (previous === undefined) {
+        unmatched.push({ name, module: node.module, descriptor });
+      } else {
+        uncarried.push(name);
+      }
+    }
+    // What is left takes the child at the positional cause `pattern` itself
+    // gives it, which is where it runs with no instance names, once every
+    // child an identity matched is claimed.
+    for (const { name, module, descriptor } of unmatched) {
+      const child = this.#childAtPartialCause(
+        tx,
+        parent,
+        module,
+        descriptor.legacyPartialCause!,
+      );
+      const link = child.getAsNormalizedFullLink();
+      if (getPatternIdentityRef(child) === undefined || claimed.has(link.id)) {
+        uncarried.push(name);
+        continue;
+      }
+      claimed.add(link.id);
+      carried.set(name, link);
     }
     return { carried, uncarried };
   }

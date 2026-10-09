@@ -34,10 +34,13 @@ const OTHER = COUNTER.replace("Counter", "Other");
  * by destructuring keeps the positional cause every child had before named
  * instances, which is how a deployed parent's stored state is reproduced.
  */
-const parentProgram = (body: string): RuntimeProgram => ({
+const parentProgram = (
+  body: string,
+  counter = COUNTER,
+): RuntimeProgram => ({
   main: "/main.tsx",
   files: [
-    { name: "/counter.tsx", contents: COUNTER },
+    { name: "/counter.tsx", contents: counter },
     { name: "/other.tsx", contents: OTHER },
     {
       name: "/main.tsx",
@@ -66,6 +69,15 @@ const NAMED = parentProgram([
   "  const a = Counter({ label: 'a' });",
   "  return { views: [a], aCount: a.count };",
 ].join("\n"));
+
+// `NAMED` under a newer version of `Counter`'s own source.
+const NAMED_WITH_NEWER_COUNTER = parentProgram(
+  [
+    "  const a = Counter({ label: 'a' });",
+    "  return { views: [a], aCount: a.count };",
+  ].join("\n"),
+  `${COUNTER}// A newer version.\n`,
+);
 
 // An unrelated sibling `s` inserted ahead of `a`.
 const NAMED_WITH_SIBLING = parentProgram([
@@ -193,6 +205,17 @@ describe("instance-carry-over", () => {
         aCount: 7,
         sCount: 0,
       });
+    });
+
+    it("keeps its deployed child's state when the parent carries no setup marker and the child's own source changed", async () => {
+      const cell = await deployedParent(
+        "no-setup-marker-newer-child",
+        "absent",
+      );
+
+      const result = await update(cell, NAMED_WITH_NEWER_COUNTER);
+
+      expect(result.aCount).toBe(7);
     });
 
     it("keeps the child it carried over across a further update", async () => {

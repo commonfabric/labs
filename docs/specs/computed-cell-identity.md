@@ -147,7 +147,11 @@ names it carries the child over (`planInstanceCarryOver`):
   pattern gives the same instance name;
 - otherwise, it is the one child, among the positional spots the parent's
   manifest records, whose `patternIdentity` is the instance's own child
-  pattern identity, and none when no spot or more than one does.
+  pattern identity;
+- failing that, it is the child at the instance's own `legacyPartialCause`,
+  which is where the child runs with no instance names.
+
+A child is carried over by one instance at most.
 
 A start's pre-sync loads that previous pattern by identity first. The carried
 child's link is recorded by instance name in the parent's `instanceChildren`
