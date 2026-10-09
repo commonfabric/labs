@@ -41,14 +41,14 @@ from the pre-compaction archive rather than the live store. The tool is `cf spac
 `packages/memory/v2` beside `dump.ts`, rehearsed on a clone first, and run on
 Estuary against a copy while the instance that owns the space is stopped.
 
-The server-side change that matters most is not a cadence change and goes
-first: the replay chain is already bounded at ten patches, but the engine's
-search for a document's last `set` is not bounded by its newest snapshot, so
-a document with a long patch-only history pays a scan over that whole history
-on every cold read and on every commit that touches it. Bounding that search
-is a code-only change that preserves history and helps the uncompacted store
-on the day it ships, which is why it is [stage 1](#stages) and the compaction
-tool comes after it.
+The server-side change that matters most is not a cadence change, and it
+went first: the replay chain was already bounded at ten patches, but the
+engine's search for a document's last `set` was not bounded by its newest
+snapshot, so a document with a long patch-only history paid a scan over that
+whole history on every cold read and on every commit that touched it.
+Bounding that search is a code-only change that preserves history and helps
+the uncompacted store from the deploy that carries it; it is [stage 1](#stages),
+done, and the compaction tool comes after it.
 
 ## What exists (verified)
 
@@ -57,7 +57,7 @@ tool comes after it.
 | A space is one SQLite file. `commit` is the write log (`seq` primary key; `session_id` + `local_seq` unique; `original` holds the whole client commit, operations and reads; `resolution`; `class`). `revision` holds one row per operation on one document instance, keyed `(branch, id, scope_key, seq, op_index)`, with `op` in `set`, `patch`, `delete` and a foreign key to `commit`. `head` points at each instance's newest revision. `snapshot` holds a materialized document at a seq. `op_submission`, `op_integrated` and `op_checkpoint` hold collaborative operation fields with foreign keys to `commit`; `op_field_epoch` keeps a `commit_seq` column without one. `branch`, `execution_lease`, `scheduler_basis`, `execution_outbox`, `blob_store`, `invocation`, `authorization` complete the schema; patterns add their own tables through the SQLite builtin. | `packages/memory/v2/engine.ts`, the `INIT` statement |
 | A read resolves the head row by joining `head` to `revision`, so a head whose revision row is missing reads as absent. A `set` decodes directly; a `patch` reconstructs from the newer of the last `set`/`delete` and the newest snapshot, replaying the patches after it. | `readStateForScopeKey`, `reconstructPatchedDocument` |
 | The engine writes a snapshot when a document has accumulated `snapshotInterval` (10) patches since its base or newest snapshot, and keeps the newest `snapshotRetention` (2) per instance. So a replay chain is at most ten rows. | `maybeMaterializeSnapshot`, `DEFAULT_SNAPSHOT_INTERVAL` |
-| Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`, no further back than the newest snapshot's seq. The index does not cover `op`, so each row the walk visits costs a table fetch; the bound keeps the walk within one snapshot interval of patches. Both reconstruction and the commit-time snapshot check run it through `latestBaseAndSnapshot`. | `SELECT_LATEST_BASE`, `latestBaseAndSnapshot` |
+| Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`, no further back than the newest snapshot's seq. The index does not cover `op`, so each row the walk visits costs a table fetch; the bound keeps the walk within one snapshot interval of patches. Reconstruction, the commit-time snapshot check and the schema-reference probe run it through `latestBaseAndSnapshot`. | `SELECT_LATEST_BASE`, `latestBaseAndSnapshot` |
 | A confirmed read is validated by scanning for a `set`/`delete` after its basis seq, then for an overlapping patch. A pending read whose basis the engine cannot reconstruct keeps the staleness refusal it arrived with. A pending read names the own-session layers its view included, and the conflict scan excludes rows whose commit carries that session and one of those `local_seq`s. A resubmitted commit is recognized by `(session_id, local_seq)` alone, answered from its stored result when its bytes match the stored `original`, refused as a replay mismatch when they do not, and applied as a fresh commit when no row is found. An `origin-committed` precondition looks up the origin commit by the same key. A revision's `commit_seq` is joined to `commit.seq` everywhere it is used; nothing requires it to equal the revision's own `seq`. | `findConflictSeq`, the pending-read `basisOf`, `selectExistingCommit`, `selectPendingResolution` |
 | A resumed session's catch-up is a full watch evaluation diffed against the holdings the client sent, not a replay of commits since a seq. The serving loop's commit feed reads from the seq its index scan ran against, in-process. | `packages/memory/v2/server.ts` (`forceFullResync`), `selectCommitsSince` |
 | The decoded-document cache keys an entry by the revision's address plus its `op` and data length, on the premise that the engine only appends revisions. The per-space bound is 128 MB and 65,536 entries; the Server bounds the total. | `documentCacheKey`, `DEFAULT_DOCUMENT_CACHE_*` |
@@ -156,9 +156,10 @@ that carried it.
 
 The storm investigation's 180 ms per `transact` with no lock wait was
 consistent with this walk running at commit time for each of the four or five
-confirmed reads, on top of the conflict scans from old bases. The rehearsal in
-[stage 6](#stages) measures the remainder on the real file rather than
-inferring it.
+confirmed reads, on top of the conflict scans from old bases. The remainder
+of [stage 1](#stages) measures what is left of it on a clone of the current
+file rather than inferring it, and [stage 6](#stages) repeats the same
+measurement after compaction.
 
 ## 1. What compaction means
 
@@ -869,11 +870,12 @@ operator took.
 
 ## Stages
 
-Each stage is a pull request; none has started. Two engine changes come
+Each stage is a pull request. Stage 1's change has landed; its measurement
+on the current file and every later stage are open. Two engine changes come
 first: the base search, because it preserves history, helps the uncompacted
-store on the day it ships, and is the measurement the compaction decision
-should be made against; and the basis guard, because no store may be
-compacted until the engine can tell compacted history from absence.
+store from the deploy that carries it, and is the measurement the compaction
+decision should be made against; and the basis guard, because no store may
+be compacted until the engine can tell compacted history from absence.
 
 1. **The snapshot-bounded base search** — done ([labs#8628](https://github.com/commonfabric/labs/pull/8628)), measured on
    the August copy as the table above shows. What remains of this stage is
