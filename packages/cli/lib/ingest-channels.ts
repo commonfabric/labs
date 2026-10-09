@@ -79,15 +79,18 @@ export interface ChannelSummary {
 export interface MintedChannel {
   id: string;
 
-  /** Where a device POSTs, and its bearer secret; absent for a `latest` channel. */
+  /** Where a device POSTs; absent for a `latest` channel, as `token` is. */
   url?: string;
   space: string;
   causePrefix: string;
   installId: string;
   expiresAt?: string;
 
-  /** Shown ONCE. The server keeps only its hash. */
-  token: string;
+  /**
+   * The device's bearer secret, shown ONCE; the server keeps only its hash.
+   * Absent for a `latest` channel, which no device POSTs to.
+   */
+  token?: string;
 }
 
 /**

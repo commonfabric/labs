@@ -209,9 +209,13 @@ Three facts decide the shape.
 
 - **Who signs what.** Mint, bind, and the space calls are signed with the
   user's own identity key, which the share sidecar is launched with, and the
-  toolshed authorizes them against the OWNER grant on the user's space. So
-  they are the user's calls, made from the user's machine, and need only the
-  reach that machine already has to its toolshed: a private network is fine.
+  toolshed authorizes each against an OWNER grant read from a space's access
+  list at the time of the call. Which space differs: mint checks the space
+  the caller names, while bind and unbind look the channel up by id and
+  check the space its stored registration writes into, never one the caller
+  names. So they are the user's calls, made from the user's machine, and
+  need only the reach that machine already has to its toolshed: a private
+  network is fine.
   The push is Google's call, signed by a service account the toolshed was
   configured to accept, so where a deployment faces the internet at all, the
   push route is the one path that needs to. A deployment on a private
