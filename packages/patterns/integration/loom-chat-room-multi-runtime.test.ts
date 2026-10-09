@@ -100,7 +100,9 @@ describe("loom chat room across runtimes", () => {
     for (const id of ids) {
       const address = { id, space: harness.spaceDid };
       // Reading the document through a cell is what loads it into the
-      // reader's replica; the raw read then returns it as stored.
+      // reader's replica; the raw read then returns it as stored. A document
+      // that read refuses is left with nothing for the raw read to return, so
+      // it is not counted; a room's own document is not refused.
       await reader.client().call("readAddress", {
         link: { ...address, path: [], type: "application/json" },
       }).catch(() => undefined);
