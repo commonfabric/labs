@@ -354,6 +354,43 @@ interface SchemaRoot {
       .toThrow("A scope wrapper around a cell cannot hold anything beside");
   });
 
+  for (
+    const [form, declarations] of [
+      ["`null`", "type Maybe = Writable<string> | null;"],
+      ["`undefined`", "type Maybe = Writable<string> | undefined;"],
+      [
+        "`null` through a chain of aliases",
+        "type Inner = Writable<string> | null; type Maybe = Inner;",
+      ],
+    ] as const
+  ) {
+    it(`throws for a scope wrapper around an alias of a cell beside ${form}`, async () => {
+      // The alias's union is hoisted into a definition, which the wrapper's
+      // payload only references.
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${declarations} interface SchemaRoot { handle: PerSpace<Maybe>; }`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("A scope wrapper around a cell cannot hold anything beside");
+    });
+  }
+
+  it("caps the handle of a scope wrapper around an alias of a cell", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "type Handle = Writable<string>; interface SchemaRoot { handle: PerSpace<Handle>; }",
+      "SchemaRoot",
+    );
+
+    expect(
+      asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, typeNode),
+      ).properties?.handle,
+    ).toMatchObject({ asCell: [{ kind: "cell", scope: "space" }] });
+  });
+
   it("throws for a scoped cell a generic alias writes beside `undefined` where its type does not hold it", async () => {
     // The member's node names the alias, whose body writes the union.
     const { type, checker, typeNode } = await getTypeFromCode(
@@ -581,6 +618,11 @@ interface SchemaRoot {
           "an alias of `undefined`",
           `type Undef = undefined; type Aliased<T> = PerUser<${LABELED}> | Undef;`,
           `type Written<T> = PerUser<${LABELED}> | undefined;`,
+        ],
+        [
+          "a `never`",
+          `type Aliased<T> = PerUser<${LABELED}> | never | null;`,
+          `type Written<T> = PerUser<${LABELED}> | null;`,
         ],
         [
           "a union nested in the union",

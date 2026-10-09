@@ -894,6 +894,34 @@ ${source}`,
       }
 
       for (
+        const [position, source] of [
+          [
+            "a pattern input",
+            `export default pattern<{ handle: PerSession<Maybe> }>(({ handle }) => ({
+  handle,
+}));`,
+          ],
+          [
+            "a handler's state",
+            `export const read = handler<void, { handle: PerSession<Maybe> }>(
+  (_, { handle }) => {
+    handle?.get().a;
+  },
+);`,
+          ],
+        ] as const
+      ) {
+        it(`refuses one written in an alias of the union as ${position}`, async () => {
+          await expect(transformed(
+            `import { computed, handler, pattern, Writable, type PerSession } from "commonfabric";
+interface A { a: string }
+type Maybe = Writable<A> | null;
+${source}`,
+          )).rejects.toThrow(REFUSAL);
+        });
+      }
+
+      for (
         const [form, declared, read] of [
           [
             "whose value may be `null`",

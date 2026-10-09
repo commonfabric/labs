@@ -79,7 +79,7 @@ import {
   scopeInsideUnionError,
   scopeUnionUnreadError,
 } from "../scope-placement.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
+import { referenceChain, withIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
   holdsUnreadMetadataLabel,
@@ -304,10 +304,22 @@ const readScopedUnionMember = (
 };
 
 /**
+ * The members `node`, a union, writes (`readUnionMemberNodes()`), but for a
+ * `never`, which adds nothing to the union.
+ */
+const writtenUnionMembers = (
+  node: ts.UnionTypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeNode[] =>
+  readUnionMemberNodes(node, checker).filter((member) =>
+    readAuthoredTypeNode(member, checker).kind !== ts.SyntaxKind.NeverKeyword
+  );
+
+/**
  * The scope of the wrappers `node`, a union, writes beside `null` or
  * `undefined`, as `PerUser<A> | null` does, which is the scope wrapper around
  * the union of their payloads, `PerUser<A | null>`: each member it writes
- * (`readUnionMemberNodes()`), read as `readScopedUnionMember()` reads it, is
+ * (`writtenUnionMembers()`), read as `readScopedUnionMember()` reads it, is
  * `null`, `undefined`, or a wrapper of that one scope naming its payload, and
  * at least one is a wrapper. `undefined` for any other union.
  */
@@ -316,7 +328,7 @@ export const scopeOfWrittenScopedUnion = (
   checker: ts.TypeChecker,
 ): SchemaScope | undefined => {
   let scope: SchemaScope | undefined;
-  for (const member of readUnionMemberNodes(node, checker)) {
+  for (const member of writtenUnionMembers(node, checker)) {
     const read = readScopedUnionMember(member, checker);
     if (read === "nullish") continue;
     if (
@@ -1915,7 +1927,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     const written = brand && this.#writtenUnion(type as ts.UnionType, context);
     if (!written) return undefined;
     const checker = context.typeChecker;
-    const members = readUnionMemberNodes(written.node, checker).map((member) =>
+    const members = writtenUnionMembers(written.node, checker).map((member) =>
       readScopedUnionMember(member, checker)
     );
     const values = members.filter((member) => member !== "nullish");
@@ -1999,7 +2011,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     // Each wrapper stands for the payload written in it, and a union written
     // there has its members written beside the `null` or `undefined` outside.
-    const nodes = readUnionMemberNodes(written.node, checker).flatMap(
+    const nodes = writtenUnionMembers(written.node, checker).flatMap(
       (member) => {
         const read = readScopedUnionMember(member, checker);
         const payload = read === "nullish"
@@ -2168,9 +2180,13 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     // A cell beside anything, `null` and `undefined` included, is an `anyOf`
     // branch, where the cap on following its handle would sit apart from the
-    // slot's scope (`scopeAroundCellUnionError()`).
-    const branches = schema.anyOf;
-    if (Array.isArray(branches) && branches.some(isHandleSchema)) {
+    // slot's scope (`scopeAroundCellUnionError()`). The union may be the
+    // definition the payload references, as an alias of it is hoisted.
+    if (
+      referenceChain(schema, context.definitions).some((link) =>
+        Array.isArray(link.anyOf) && link.anyOf.some(isHandleSchema)
+      )
+    ) {
       throw scopeAroundCellUnionError(scope);
     }
 

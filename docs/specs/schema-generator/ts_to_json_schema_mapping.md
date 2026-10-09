@@ -1015,7 +1015,8 @@ the binding `PolicyOf<typeof rules>` names in
 is kept, for a holder's values read by type too, and the two spellings read
 alike. Each member is read through parentheses, aliases without type
 parameters, and a union written in it, so `PerUser<A> | Nil` with
-`type Nil = null`, and `(PerUser<A> | null) | undefined`, read as written out.
+`type Nil = null`, and `(PerUser<A> | null) | undefined`, read as written out,
+and a `never` member, which adds nothing to the union, is left out.
 A union written for a scope wrapper whose members do not read so, as
 `Maybe<PerUser<A>>` with `type Maybe<T> = T | null` writes one, where the member
 is a parameter bound apart from the union, **throws** (``A scope wrapper
@@ -1046,8 +1047,10 @@ string entry into the object form (`applyScopeToAsCellEntry`) —
 `PerUser<Cell<string>>` → `{ asCell: [{ kind: "cell", scope: "user" }], type:
 "string" }`; otherwise a bare sibling key — `PerUser<string>` →
 `{ type: "string", scope: "user" }`. A wrapper around a cell **throws** beside
-anything, `null` and `undefined` included, written outside it or inside (`A
-scope wrapper around a cell cannot hold anything beside the cell`). Beside
+anything, `null` and `undefined` included, written outside it or inside, or in
+an alias the payload names, whose union is hoisted into a definition the
+payload references (`PerUser<Maybe>` with `type Maybe = Writable<T> | null`)
+(`A scope wrapper around a cell cannot hold anything beside the cell`). Beside
 `null`, `undefined` or a value, the cell would be an `anyOf` branch, where the
 cap on following its handle sits apart from the slot's scope, which the write
 path reads; beside another cell, as in `PerSpace<Cell<T> | Cell<U>>`, a read's
