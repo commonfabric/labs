@@ -139,6 +139,9 @@ const probe = {
   runMs: 0,
   maxRun: 0,
   maxRunId: "",
+  actions: new Map<string, number>(),
+  conflict: undefined as string | undefined,
+  installs: new Map<string, number>(),
   send: undefined as
     | { handler: string; t0: number; events: { t: number; type: string }[] }
     | undefined,
@@ -167,6 +170,32 @@ function startProbe(telemetry: RuntimeTelemetry): void {
     let key: string = marker.type;
     if (marker.type === "storage.push.error") {
       key = `push.error:${marker.error}`;
+      probe.conflict ??= `${marker.message.slice(0, 200)} writes=${
+        marker.writes.slice(0, 4).map((w) => w.slice(-40)).join("|")
+      } reads=${marker.reads.length}`;
+    } else if (marker.type === "scheduler.run") {
+      const info = marker.actionInfo;
+      const name = `${marker.actionId.slice(-40)}[${info?.patternName ?? ""}/${
+        info?.moduleName ?? ""
+      } w=${
+        (info?.writes ?? []).slice(0, 2).map((w) => w.slice(-50)).join("|")
+      }]`;
+      probe.actions.set(name, (probe.actions.get(name) ?? 0) + 1);
+    } else if (marker.type === "runner.piece.install") {
+      const k = String(marker.key).slice(-60);
+      probe.installs.set(k, (probe.installs.get(k) ?? 0) + 1);
+    } else if (marker.type === "scheduler.non-settling") {
+      probeLog(
+        `non-settling busy=${marker.busyTime.toFixed(0)}ms window=${
+          marker.windowDuration.toFixed(0)
+        }ms ratio=${marker.busyRatio.toFixed(2)} deferred=${
+          marker.deferredActionCount ?? "-"
+        } ${
+          (marker.deferredActions ?? []).slice(0, 6).map((a) =>
+            `${a.label.slice(-60)}@${a.pieceId?.slice(-12) ?? "-"}`
+          ).join(",")
+        }`,
+      );
     } else if (marker.type === "scheduler.run.complete") {
       probe.runs++;
       probe.runMs += marker.durationMs;
@@ -213,6 +242,22 @@ function startProbe(telemetry: RuntimeTelemetry): void {
           : "") +
         ` events=${probeCensus(probe.second)}`,
     );
+    if (probe.actions.size > 0) {
+      probeLog(
+        `tick-actions ${
+          [...probe.actions].sort((a, b) => b[1] - a[1]).slice(0, 5).map((
+            [k, v],
+          ) => `${v}x ${k}`).join(" ;; ")
+        }`,
+      );
+    }
+    if (probe.installs.size > 0) {
+      probeLog(`tick-installs ${probeCensus(probe.installs)}`);
+    }
+    if (probe.conflict) probeLog(`tick-conflict ${probe.conflict}`);
+    probe.actions.clear();
+    probe.installs.clear();
+    probe.conflict = undefined;
     probe.second.clear();
     probe.runs = 0;
     probe.runMs = 0;
