@@ -456,7 +456,11 @@ export function verifyIngestSecret(
 // Registrations live in the toolshed's OWN service space (keyed by the operator
 // identity's DID), NOT in the user's space — only the per-day records land in
 // the user's space.
-const registrationCell = (runtime: Runtime, serviceSpace: string, id: string) =>
+export const registrationCell = (
+  runtime: Runtime,
+  serviceSpace: string,
+  id: string,
+) =>
   runtime.getCell<IngestRegistration>(
     serviceSpace as MemorySpace,
     `cf:ingest:${id}`,

@@ -31,6 +31,8 @@ import {
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
 import {
+  BindingConflictError,
+  bindMailbox,
   getMailboxChannels,
   type MailboxLookup,
   MAX_CHANNELS_PER_MAILBOX,
@@ -406,6 +408,22 @@ describe("ingest-channels control plane", () => {
       expect((await gmailMint("req-2", { target: slug })).status).toBe(400);
 
       expect(proofs).toEqual([]);
+    });
+
+    it("leaves a newer mint's binding in place when an earlier mint's binding arrives late", async () => {
+      // Alice's first mint has written its registration, at revision 1, and
+      // not yet its binding; before it does, the channel is minted again for
+      // Bob's mailbox, at revision 2. The late binding, held to revision 1,
+      // is refused, and Bob's binding stands.
+      const first = ok(await gmailMint("req-1"));
+      lookup = { ok: true, emailAddress: "bob@example.com" };
+      ok(await gmailMint("req-2"));
+
+      await expect(bindMailbox(runtime, operator.did(), first.id, MAILBOX, 1))
+        .rejects.toBeInstanceOf(BindingConflictError);
+
+      expect(await bound()).toEqual([]);
+      expect(await bound("bob@example.com")).toEqual([first.id]);
     });
 
     it("refuses to rotate a gmail channel, and says to mint instead", async () => {

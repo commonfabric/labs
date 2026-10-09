@@ -19,6 +19,7 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
+  BindingConflictError,
   bindMailbox,
   fetchGmailMailbox,
   getMailboxChannels,
@@ -520,6 +521,17 @@ describe("gmail-push.utils", () => {
         .toBeInstanceOf(MailboxBindingFullError);
     });
 
+    it("throws `BindingConflictError` when the registration is not at the expected revision", async () => {
+      const a = await channel("a", { revision: 3 });
+
+      await expect(bindMailbox(runtime, space, a.id, MAILBOX, 2)).rejects
+        .toBeInstanceOf(BindingConflictError);
+      expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([]);
+
+      await bindMailbox(runtime, space, a.id, MAILBOX, 3);
+      expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([a.id]);
+    });
+
     it("frees the place of a revoked channel for a new one", async () => {
       const bound: IngestRegistration[] = [];
       for (let i = 0; i < MAX_CHANNELS_PER_MAILBOX; i++) {
@@ -539,10 +551,16 @@ describe("gmail-push.utils", () => {
 
   describe("verifyGmailIdToken()", () => {
     const CLIENT_ID = "123.apps.googleusercontent.com";
+    // A Gmail address, which Google is the authority on without an `hd` claim.
+    const GMAIL_MAILBOX = "alice@gmail.com";
     const idToken = (
       over: { claims?: Record<string, unknown>; audience?: string } = {},
     ): Promise<string> =>
-      new SignJWT({ email: MAILBOX, email_verified: true, ...over.claims })
+      new SignJWT({
+        email: GMAIL_MAILBOX,
+        email_verified: true,
+        ...over.claims,
+      })
         .setProtectedHeader({ alg: "RS256", kid: "google-1" })
         .setIssuer("https://accounts.google.com")
         .setAudience(over.audience ?? CLIENT_ID)
@@ -555,13 +573,40 @@ describe("gmail-push.utils", () => {
     it("returns the mailbox a token Google signed for an accepted client names", async () => {
       expect(await verify(await idToken())).toEqual({
         ok: true,
-        emailAddress: MAILBOX,
+        emailAddress: GMAIL_MAILBOX,
       });
     });
 
     it("returns `rejected` for a token minted for another client", async () => {
       expect(await verify(await idToken({ audience: "other-client" })))
         .toEqual({ ok: false, reason: "rejected" });
+    });
+
+    it("returns the mailbox for a Workspace address whose domain the `hd` claim vouches for", async () => {
+      expect(
+        await verify(
+          await idToken({
+            claims: { email: "alice@example.com", hd: "example.com" },
+          }),
+        ),
+      ).toEqual({ ok: true, emailAddress: "alice@example.com" });
+    });
+
+    it("returns `rejected` for a verified address outside Gmail that no `hd` claim vouches for", async () => {
+      expect(
+        await verify(
+          await idToken({
+            claims: { email: "alice@example.com" },
+          }),
+        ),
+      ).toEqual({ ok: false, reason: "rejected" });
+      expect(
+        await verify(
+          await idToken({
+            claims: { email: "alice@example.com", hd: "other.example" },
+          }),
+        ),
+      ).toEqual({ ok: false, reason: "rejected" });
     });
 
     it("returns `rejected` for a token whose address is not verified", async () => {

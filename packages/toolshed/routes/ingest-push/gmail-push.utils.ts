@@ -25,7 +25,9 @@ import {
   channelRefusal,
   getRegistration,
   type IngestLogger,
+  type IngestRegistration,
   recordLastSeen,
+  registrationCell,
   writeLatest,
 } from "@/routes/ingest/ingest.utils.ts";
 
@@ -223,18 +225,31 @@ export async function getMailboxChannels(
  * gives up its place in the mailbox's list here, so that dead channels do not
  * hold the mailbox at its cap.
  *
+ * With `expectedRevision`, the binding is written only while the channel's
+ * registration is still at that revision. A mint writes its registration and
+ * then its binding, and a mint of the same channel that landed in between
+ * owns the registration now; its binding is the one to keep.
+ *
  * @throws MailboxBindingFullError when the mailbox is already at
  *   `MAX_CHANNELS_PER_MAILBOX` live channels.
  * @throws BindingConflictError when the channel's binding changed while this
- *   ran; the caller may try again.
+ *   ran, or its registration is not at `expectedRevision`; the caller may
+ *   try again, or has been superseded.
  */
 export function bindMailbox(
   runtime: Runtime,
   serviceSpace: string,
   id: string,
   address: string,
+  expectedRevision?: number,
 ): Promise<void> {
-  return bindMailboxKey(runtime, serviceSpace, id, mailboxKey(address));
+  return bindMailboxKey(
+    runtime,
+    serviceSpace,
+    id,
+    mailboxKey(address),
+    expectedRevision,
+  );
 }
 
 /**
@@ -248,13 +263,14 @@ export async function restoreBinding(
   runtime: Runtime,
   serviceSpace: string,
   id: string,
+  expectedRevision?: number,
 ): Promise<boolean> {
   const binding = channelBindingCell(runtime, serviceSpace, id);
   await binding.sync();
   await runtime.storageManager.synced();
   const key = (binding.get() as ChannelBinding | undefined)?.mailbox;
   if (key === undefined) return false;
-  await bindMailboxKey(runtime, serviceSpace, id, key);
+  await bindMailboxKey(runtime, serviceSpace, id, key, expectedRevision);
   return true;
 }
 
@@ -264,11 +280,14 @@ async function bindMailboxKey(
   serviceSpace: string,
   id: string,
   key: string,
+  expectedRevision?: number,
 ): Promise<void> {
   const target = mailboxChannelsCell(runtime, serviceSpace, key);
   const binding = channelBindingCell(runtime, serviceSpace, id);
+  const registration = registrationCell(runtime, serviceSpace, id);
   await target.sync();
   await binding.sync();
+  await registration.sync();
   await runtime.storageManager.synced();
 
   const previousKey = (binding.get() as ChannelBinding | undefined)?.mailbox;
@@ -299,7 +318,18 @@ async function bindMailboxKey(
     moved = false;
 
     // Every check runs before any write, because `editWithRetry` commits
-    // whatever the closure wrote even when it returns early.
+    // whatever the closure wrote even when it returns early. The registration
+    // joins the read set, so a mint committing a new revision between this
+    // read and the commit retries the transaction rather than racing it.
+    if (expectedRevision !== undefined) {
+      const current = registration.withTx(tx).get() as
+        | IngestRegistration
+        | undefined;
+      if ((current?.revision ?? 0) !== expectedRevision) {
+        moved = true;
+        return;
+      }
+    }
     const boundBinding = binding.withTx(tx);
     const currentKey = (boundBinding.get() as ChannelBinding | undefined)
       ?.mailbox;
@@ -370,10 +400,29 @@ export async function fetchGmailMailbox(
 }
 
 /**
+ * Returns whether an address an ID token names is one Google is the
+ * authority on: a Gmail address, or a Workspace address whose domain the
+ * token's `hd` claim vouches for. A Google account can carry a third-party
+ * address, which `email_verified` says was verified once and which may since
+ * have changed hands; Google's own guidance is to trust it only with `hd`.
+ * Such an account has no Gmail mailbox for a push to come from anyway.
+ */
+function isGoogleHostedAddress(
+  email: string,
+  hostedDomain: unknown,
+): boolean {
+  const domain = email.slice(email.indexOf("@") + 1).toLowerCase();
+  if (domain === "gmail.com" || domain === "googlemail.com") return true;
+  return typeof hostedDomain === "string" &&
+    hostedDomain.toLowerCase() === domain;
+}
+
+/**
  * Proves a mailbox with a Google ID token: one signed by Google for one of
- * the `clientIds`, carrying a verified address. An ID token grants no access
- * to anything, so it is the proof to prefer where a consent requested the
- * `openid` scope. With no `clientIds` configured the proof is `unsupported`.
+ * the `clientIds`, carrying a verified address that Google is the authority
+ * on. An ID token grants no access to anything, so it is the proof to prefer
+ * where a consent requested the `openid` scope. With no `clientIds`
+ * configured the proof is `unsupported`.
  */
 export async function verifyGmailIdToken(
   keys: JWTVerifyGetKey,
@@ -398,7 +447,7 @@ export async function verifyGmailIdToken(
   const { email } = payload;
   if (
     payload.email_verified !== true || typeof email !== "string" ||
-    !isPlausibleAddress(email)
+    !isPlausibleAddress(email) || !isGoogleHostedAddress(email, payload.hd)
   ) {
     return { ok: false, reason: "rejected" };
   }

@@ -719,16 +719,19 @@ export async function processMint(
   });
   if (minted.status !== 200) return minted;
 
-  // The binding is a second write, after the registration's. A binding that
+  // The binding is a second write, after the registration's, and it is held
+  // to the revision this mint wrote: a mint of the same channel that landed
+  // in between owns the registration, and its binding stands. A binding that
   // fails leaves a minted channel bound to nothing, and the caller mints
   // again with the same install id and proof to bind it. A re-mint of a gmail
   // channel with no proof keeps the mailbox it has, and puts the channel
   // back in that mailbox's list where a retirement had pruned it.
+  const revision = (existing?.revision ?? 0) + 1;
   try {
     if (mailbox !== undefined) {
-      await bindMailbox(deps.runtime, deps.serviceSpace, id, mailbox);
+      await bindMailbox(deps.runtime, deps.serviceSpace, id, mailbox, revision);
     } else if (existing?.kind === "gmail") {
-      await restoreBinding(deps.runtime, deps.serviceSpace, id);
+      await restoreBinding(deps.runtime, deps.serviceSpace, id, revision);
       return minted;
     } else {
       return minted;
@@ -743,8 +746,8 @@ export async function processMint(
     }
     if (error instanceof BindingConflictError) {
       return conflict(
-        `Channel ${id} is minted but not bound: its binding changed ` +
-          `concurrently. Mint again.`,
+        `Channel ${id} is minted but not bound: its binding or its ` +
+          `registration changed concurrently. Mint again.`,
       );
     }
     deps.logger?.error({ error, id }, "ingest-channels: bind failed");
