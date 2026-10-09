@@ -26,29 +26,27 @@
  * description the batch CLI resolves argv into — and `src/session-assembly.ts`
  * turns that into the run. Where this surface takes a capability the CLI also
  * takes, it takes it by the CLI's name, and the tools a session offers are
- * derived from what it can back rather than listed by this file. Not every
- * CLI capability is taken here: the Docker image and the Docker runtime name
- * are not.
+ * derived from what it can back rather than listed by this file.
  *
  * The sandbox runtime is selected as the interactive entrypoints select it,
  * through the derivation every entrypoint shares. What names a runtime is the
  * environment alone, by the variables the CLI reads
  * (`CF_HARNESS_SANDBOX_RUNTIME` and its companions); the CLI's three
  * selection flags are refused rather than ignored, because `console:launch`
- * reads the same environment to decide whether Docker is involved at all,
- * and a flag it cannot see would leave the launch and the server describing
- * two different sandboxes. Where the environment names none, a console takes
- * its platform's default, the native runtime on macOS (Apple silicon alone:
- * any other Mac is refused) and Linux and Docker elsewhere. On Linux the
- * default network needs `pasta` and `setpriv` (and for root `unshare`), which
- * a `none` or `host` network does not, and a console that is not root needs
- * unprivileged user namespaces whatever the network
+ * reads the same environment to describe the sandbox, and a flag it cannot
+ * see would leave the launch and the server describing two different
+ * sandboxes. Where the environment names none, a console takes its
+ * platform's default, the native runtime on macOS (Apple silicon alone: any
+ * other Mac is refused) and Linux, and is refused on every other platform.
+ * On Linux the default network needs `pasta` and `setpriv` (and for root
+ * `unshare`), which a `none` or `host` network does not, and a console that
+ * is not root needs unprivileged user namespaces whatever the network
  * (`user.max_user_namespaces`, `kernel.unprivileged_userns_clone`,
  * `kernel.apparmor_restrict_unprivileged_userns`; a refusal names the
- * `sysctl -w`),
- * unless `host.sandboxRuntimeNamedBy` says its caller must name one, as
- * `console:launch` says for a console it launches for a Loom instance; that
- * console is refused on every platform instead.
+ * `sysctl -w`). All of that holds unless `host.sandboxRuntimeNamedBy` says
+ * its caller must name one, as `console:launch` says for a console it
+ * launches for a Loom instance, which is then refused on every platform
+ * instead.
  *
  * The one piece of configuration this surface insists on is the fabric
  * session, whose space has to be a name rather than a `did:key`: `assign_slug`
@@ -165,10 +163,6 @@ import {
   recordPatternFeedback,
 } from "../src/tools/record-feedback.ts";
 import {
-  CFC_INVOCATION_CONTEXT_DIR_ENV,
-  CFC_RESULT_DIR_ENV,
-} from "../src/sandbox/docker-runsc.ts";
-import {
   assertRunscCfcPolicyForMode,
   resolveRunscSandboxConfig,
   type RunscSandboxConfig,
@@ -201,7 +195,6 @@ import {
 import {
   consolePatternIndexHealthProbes,
   consoleRunscHealthProbe,
-  consoleSandboxHealthProbe,
   consoleVmHealthProbe,
   consoleVmStore,
 } from "./health-probes.ts";
@@ -552,16 +545,6 @@ interface ConsoleConfig extends HarnessSessionConfig {
   /** A fabric session is required here; see `resolveConsoleConfig`. */
   fabricSession: HarnessFabricSessionConfig;
 
-  /**
-   * The Docker driver's two CFC sidecar transports, sited whenever that
-   * driver is selected: this surface creates them under its own data
-   * directory rather than asking an operator to name a path before their
-   * first run. Absent under the direct runsc driver, which carries its CFC
-   * transport on descriptors it opens for each call.
-   */
-  cfcResultDir?: string;
-  cfcInvocationContextDir?: string;
-
   sessionDbPath?: string;
 
   /**
@@ -792,9 +775,7 @@ export const resolveConsoleConfig = async (
   };
 
   // The one derivation every entrypoint shares, over this server's own
-  // environment. Beyond how the runtime was chosen, nothing is returned unless
-  // the runtime is runsc, so a console on Docker hands the engine no setting
-  // of the sandbox, and the engine builds the Docker driver.
+  // environment.
   const sandbox = await resolveSandboxRuntimeSelection(env, {}, {
     ...(host.sandboxRuntimeNamedBy !== undefined
       ? { namedBy: host.sandboxRuntimeNamedBy }
@@ -803,7 +784,6 @@ export const resolveConsoleConfig = async (
     flags: false,
     cwd,
   });
-  const onDocker = sandbox.sandboxRuntimeKind !== "runsc";
 
   const loomAuthoring = await readLoomAuthoringConfig(
     flag("loom-authoring-config") ??
@@ -832,25 +812,6 @@ export const resolveConsoleConfig = async (
     flag("artifact-root") ?? nonEmpty(env.CF_HARNESS_ARTIFACT_ROOT) ??
       join(dataDir, "runs"),
   );
-
-  // The Docker driver's two CFC sidecar transports. The harness refuses to
-  // start an enforcing run on that driver without them, and they are scratch
-  // directories the host and the sandbox exchange files through, so this
-  // surface sites them itself rather than asking an operator to name a path
-  // before their first run. The direct runsc driver reads neither.
-  const cfcSidecars = onDocker
-    ? {
-      cfcResultDir: resolve(
-        cwd,
-        nonEmpty(env[CFC_RESULT_DIR_ENV]) ?? join(dataDir, "cfc", "results"),
-      ),
-      cfcInvocationContextDir: resolve(
-        cwd,
-        nonEmpty(env[CFC_INVOCATION_CONTEXT_DIR_ENV]) ??
-          join(dataDir, "cfc", "invocation-context"),
-      ),
-    }
-    : {};
 
   const identityKeyPath = flag("fabric-identity") ??
     nonEmpty(env.CF_HARNESS_FABRIC_IDENTITY);
@@ -960,7 +921,6 @@ export const resolveConsoleConfig = async (
     port,
     workspace: workspacePath,
     artifactRoot,
-    ...cfcSidecars,
     ...sandbox,
     harnessHome: resolve(
       nonEmpty(env.CF_HARNESS_HOME) ??
@@ -1461,7 +1421,6 @@ export const consoleVmHealthProbes = (
   env: Record<string, string | undefined>,
   options: { platform?: SandboxPlatform } = {},
 ): ConsoleHealthProbe[] => {
-  if (config.sandboxRuntimeKind !== "runsc") return [];
   let rootfs: string;
   try {
     rootfs = resolveConsoleRunscConfig(config, env, options.platform).rootfs;
@@ -1484,14 +1443,11 @@ const consoleSandboxSelected = (config: ConsoleConfig): string | undefined =>
 
 /**
  * Combines retained decisions with independently cached host probes. The
- * sandbox probe is the selected driver's: a console on the direct runsc
- * driver never asks Docker anything, and is judged at the enforcement mode
+ * sandbox probe is the direct runsc driver's, judged at the enforcement mode
  * its turns resolve from the options each is built with, in `env`. On macOS
  * it also asks the VM that driver runs in, from the store `env` names. `env`
  * is the process's environment unless given, since that is the one runsc
- * runs with.
- * `readDockerRuntimes` replaces the Docker driver's `docker info` reading,
- * and `host.platform` replaces `Deno.build.os`.
+ * runs with. `host.platform` replaces `Deno.build.os`.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
@@ -1499,22 +1455,16 @@ export const createConsoleHealth = (
   modelOptions?: CreateHarnessPromptLoopOptions,
   env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
-  readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
   host: { platform?: SandboxPlatform } = {},
 ): ConsoleHealth =>
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
-    config.sandboxRuntimeKind === "runsc"
-      ? consoleRunscHealthProbe(
-        () => resolveConsoleRunscConfig(config, env, host.platform),
-        consoleTurnEnforcementMode(config),
-        undefined,
-        undefined,
-        consoleSandboxSelected(config),
-      )
-      : consoleSandboxHealthProbe(
-        readDockerRuntimes,
-        consoleSandboxSelected(config),
-      ),
+    consoleRunscHealthProbe(
+      () => resolveConsoleRunscConfig(config, env, host.platform),
+      consoleTurnEnforcementMode(config),
+      undefined,
+      undefined,
+      consoleSandboxSelected(config),
+    ),
     ...consoleVmHealthProbes(config, env, host),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
@@ -2797,38 +2747,26 @@ export const createConsoleInteractiveServiceOptions = (
  * the same reason the posture is. The first names the driver and whether the
  * environment named it or the platform defaulted to it.
  *
- * Under the Docker driver the rest is the two sidecar transports a run's
- * mediation moves over. The engine's guard asks only that they are named, so
- * a console pointed at directories no sandbox sidecar writes starts cleanly
- * and then denies every observation of the run; printing them is what lets an
- * operator read at startup which directories that depends on. Under the
- * direct driver it is the `runsc` binary, the rootfs and the CFC policy the
+ * The rest is the `runsc` binary, the rootfs and the CFC policy the
  * selection settled on; for a named `runsc`, an unnamed binary is looked for
  * on `PATH`, and an unnamed rootfs is the driver's own default, when a turn
  * resolves them.
  */
 export const consoleSandboxBanner = (
   config: ConsoleConfig,
-): readonly string[] =>
-  config.sandboxRuntimeKind === "runsc"
-    ? [
-      `  sandbox:    ${consoleSandboxLine(config)}`,
-      `  runsc:      ${config.sandboxRunscBinary ?? "runsc, on PATH"}`,
-      `  rootfs:     ${config.sandboxRootfs ?? "(the driver's default)"}`,
-      `  policy:     ${
-        config.sandboxCfcPolicy ??
-          (runscWithoutPolicyRefusesTurns(consoleTurnEnforcementMode(config))
-            ? `(none: every turn is refused at ${
-              consoleTurnEnforcementMode(config)
-            })`
-            : "(none: runsc runs without --cfc)")
-      }`,
-    ]
-    : [
-      `  sandbox:    ${consoleSandboxLine(config)}`,
-      `  results:    ${config.cfcResultDir}`,
-      `  contexts:   ${config.cfcInvocationContextDir}`,
-    ];
+): readonly string[] => [
+  `  sandbox:    ${consoleSandboxLine(config)}`,
+  `  runsc:      ${config.sandboxRunscBinary ?? "runsc, on PATH"}`,
+  `  rootfs:     ${config.sandboxRootfs ?? "(the driver's default)"}`,
+  `  policy:     ${
+    config.sandboxCfcPolicy ??
+      (runscWithoutPolicyRefusesTurns(consoleTurnEnforcementMode(config))
+        ? `(none: every turn is refused at ${
+          consoleTurnEnforcementMode(config)
+        })`
+        : "(none: runsc runs without --cfc)")
+  }`,
+];
 
 /**
  * Helper for `consoleSandboxBanner()`, which names the driver a console's
@@ -2837,36 +2775,19 @@ export const consoleSandboxBanner = (
  * driver alone.
  */
 const consoleSandboxLine = (config: ConsoleConfig): string => {
-  const driver = config.sandboxRuntimeKind === "runsc"
-    ? "runsc, the direct driver (no Docker)"
-    : "docker";
+  const driver = "runsc, the direct driver";
   return config.sandboxRuntimeChoice === undefined
     ? driver
     : `${driver}; ${sandboxRuntimeChoiceReason(config.sandboxRuntimeChoice)}`;
 };
 
 /**
- * The directories the server creates before it serves: the workspace, the
- * artifact root, and the Docker driver's two sidecar transports where that
- * driver is selected. A console on the direct runsc driver creates no sidecar
- * directory, because nothing would read one.
+ * The directories the server creates before it serves: the workspace and the
+ * artifact root.
  */
 export const consoleDataDirectories = (
-  config: Pick<
-    ConsoleConfig,
-    | "workspace"
-    | "artifactRoot"
-    | "cfcResultDir"
-    | "cfcInvocationContextDir"
-  >,
-): readonly string[] => [
-  config.workspace,
-  config.artifactRoot,
-  ...(config.cfcResultDir !== undefined ? [config.cfcResultDir] : []),
-  ...(config.cfcInvocationContextDir !== undefined
-    ? [config.cfcInvocationContextDir]
-    : []),
-];
+  config: Pick<ConsoleConfig, "workspace" | "artifactRoot">,
+): readonly string[] => [config.workspace, config.artifactRoot];
 
 /**
  * What the server prints once it is listening: its address, the fabric it
@@ -2949,7 +2870,6 @@ export const startConsoleServer = async (
       modelOptions,
       env,
       indexFactory,
-      undefined,
       host,
     ),
   );

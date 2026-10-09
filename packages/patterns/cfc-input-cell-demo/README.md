@@ -33,11 +33,9 @@ Hand both to a run as input cells. The names are operator-authored prose and are
 the whole of what the model is told each token stands for — the values
 themselves never enter the prompt:
 
-The sandbox is Docker, which the run names because neither a Mac nor Linux runs
-it where no runtime is named: those two default to their native `runsc` runtime,
-and every other platform to Docker. Its two CFC transport directories are named
-explicitly: an enforcing run refuses to start without them rather than degrading
-quietly.
+The sandbox is the platform's native `runsc` runtime, which the run takes where
+no runtime is named. Its CFC policy comes from the native store: an enforcing
+run refuses to start without one rather than degrading quietly.
 
 ```sh
 deno task --cwd packages/cf-harness run \
@@ -45,9 +43,6 @@ deno task --cwd packages/cf-harness run \
   --fabric-identity "$CF_KEY" \
   --fabric-space "$CF_SPACE" \
   --fabric-cfc-posture max-enforcement \
-  --sandbox-runtime docker \
-  --cfc-result-dir .cf-harness-console/cfc/results \
-  --cfc-invocation-context-dir .cf-harness-console/cfc/invocation-context \
   --input-cell secret="$SECRET_LINK" \
   --input-cell city="$CITY_LINK" \
   --artifact-root .cf-harness-console/runs \
@@ -66,10 +61,11 @@ are.
 
 `--artifact-root` points at the console's own run tree, so the console reads the
 run back without being told where it is. Then open the run. The console takes
-its sandbox runtime from the environment, and this names Docker as the run did:
+its sandbox runtime from the environment, and with none named takes the same
+default the run did:
 
 ```sh
-CF_HARNESS_SANDBOX_RUNTIME=docker deno task --cwd packages/cf-harness console
+deno task --cwd packages/cf-harness console
 ```
 
 ## What the console shows

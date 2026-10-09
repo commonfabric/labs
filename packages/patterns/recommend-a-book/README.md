@@ -159,18 +159,15 @@ The conditional live integration exercises ACL genesis, the visitor WRITE grant,
 a real home queue, the agent runner, a scripted model response, and per-reader
 result visibility against a disposable `dev-local` toolshed:
 
-The test's runs use Docker by default: it names Docker for them unless
-`CF_HARNESS_SANDBOX_RUNTIME` already names a runtime, in which case they run on
-that one. Set `CF_HARNESS_SANDBOX_RUNTIME=docker` explicitly, then
-`CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
-`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` to the host directories registered
-for `runsc-cfc` in `docker info`. Strict CFC runs on Docker refuse to start
-without both transports, and the paths must match the runtime registration.
+Where `CF_HARNESS_SANDBOX_RUNTIME` names no runtime, the test's runs take the
+native sandbox runtime on an Apple-silicon Mac or on Linux, which needs its
+store set up as the
+[cf-harness README](../../cf-harness/README.md#sandbox-runtimes) describes;
+every other platform has no default, and needs
+`CF_HARNESS_SANDBOX_RUNTIME=runsc` with the runtime's settings named. Strict CFC
+runs refuse to start without a CFC policy, which the native store holds.
 
 ```bash
-export CF_HARNESS_SANDBOX_RUNTIME=docker
-export CF_HARNESS_RUNSC_CFC_RESULT_DIR=<host-result-directory>
-export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR=<host-invocation-context-directory>
 AGENT_DEMO_API_URL=http://localhost:8432 \
   deno test -A packages/patterns/integration/recommend-a-book-agent.test.ts
 ```

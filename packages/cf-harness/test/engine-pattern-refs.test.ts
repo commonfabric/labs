@@ -12,6 +12,7 @@ import { Identity } from "@commonfabric/identity";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 
 const signer = await Identity.fromPassphrase(
   "cf-harness engine pattern refs",
@@ -66,6 +67,7 @@ describe("engine-pattern-refs", () => {
     it("records the index's record for each attached id in run state", async () => {
       const index = stubIndex();
       const engine = new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         patternRefs: [{ patternId: "pat-expenses" }],
         patternIndexClientFactory: () => Promise.resolve(index.client),
@@ -92,6 +94,7 @@ describe("engine-pattern-refs", () => {
     it("returns the recorded references on a second call without reading the index again", async () => {
       const index = stubIndex();
       const engine = new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         patternRefs: [{ patternId: "pat-expenses" }],
         patternIndexClientFactory: () => Promise.resolve(index.client),
@@ -107,6 +110,7 @@ describe("engine-pattern-refs", () => {
     it("returns no references for a run that attached none, leaving run state without a record", async () => {
       const index = stubIndex();
       const engine = new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         patternIndexClientFactory: () => Promise.resolve(index.client),
       });
@@ -118,6 +122,7 @@ describe("engine-pattern-refs", () => {
 
     it("throws naming the index a run configured with references and none has to have, recording nothing", async () => {
       const engine = new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         patternRefs: [{ patternId: "pat-expenses" }],
       });
@@ -131,6 +136,7 @@ describe("engine-pattern-refs", () => {
     it("throws naming an attached id the index does not hold, recording nothing", async () => {
       const index = stubIndex();
       const engine = new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         patternRefs: [{ patternId: "pat-nothing" }],
         patternIndexClientFactory: () => Promise.resolve(index.client),

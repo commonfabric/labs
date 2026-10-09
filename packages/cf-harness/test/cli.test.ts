@@ -52,6 +52,7 @@ import {
   chatViewOfRequest,
   responsesBodyFromChatFixture,
 } from "./support/responses-fixture.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 
 const ONE_PIXEL_PNG = decodeBase64(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
@@ -138,7 +139,6 @@ Deno.test("parseCfHarnessCliArgs resolves defaults from cwd and positional promp
   assertEquals(parsed.artifactRoot, "/tmp/project/.cf-harness-artifacts");
   assertEquals(parsed.maxModelTurns, 8);
   assertEquals(parsed.printTranscript, false);
-  assertEquals(parsed.sandboxImage, undefined);
   assertEquals(parsed.imageAttachments, []);
 });
 
@@ -1225,57 +1225,6 @@ Deno.test("parseCfHarnessCliArgs refuses an unknown output mode, prompt slot rol
       message,
     );
   }
-});
-
-Deno.test("parseCfHarnessCliArgs resolves sandbox docker runtime from flag and environment", async () => {
-  const fromFlag = await parseCfHarnessCliArgs(
-    ["--prompt", "hi", "--sandbox-docker-runtime", "runc"],
-    {
-      cwd: "/tmp/project",
-      env: {
-        CF_HARNESS_SANDBOX_RUNTIME: "docker",
-        CF_HARNESS_SANDBOX_DOCKER_RUNTIME: "runsc-cfc",
-      },
-    },
-  );
-  if ("help" in fromFlag) {
-    throw new Error("expected config result");
-  }
-  assertEquals(fromFlag.sandboxDockerRuntime, "runc");
-
-  const fromEnv = await parseCfHarnessCliArgs(
-    ["--prompt", "hi"],
-    {
-      cwd: "/tmp/project",
-      env: {
-        CF_HARNESS_SANDBOX_RUNTIME: "docker",
-        CF_HARNESS_SANDBOX_DOCKER_RUNTIME: "runc",
-      },
-    },
-  );
-  if ("help" in fromEnv) {
-    throw new Error("expected config result");
-  }
-  assertEquals(fromEnv.sandboxDockerRuntime, "runc");
-
-  const unset = await parseCfHarnessCliArgs(
-    ["--prompt", "hi"],
-    { cwd: "/tmp/project", env: {} },
-  );
-  if ("help" in unset) {
-    throw new Error("expected config result");
-  }
-  assertEquals(unset.sandboxDockerRuntime, undefined);
-
-  await assertRejects(
-    () =>
-      parseCfHarnessCliArgs(
-        ["--prompt", "hi", "--sandbox-docker-runtime", "  "],
-        { cwd: "/tmp/project", env: {} },
-      ),
-    Error,
-    "--sandbox-docker-runtime requires a non-empty runtime name",
-  );
 });
 
 Deno.test("parseCfHarnessCliArgs resolves gateway config from environment", async () => {
@@ -2640,6 +2589,7 @@ Deno.test("runCfHarnessCli prints machine-readable capabilities", async () => {
 
 Deno.test("installCfHarnessSignalHandlers terminalizes the active run before exiting", async () => {
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/tmp/project",
     runId: "run-signal",
     now: (() => {
@@ -5481,57 +5431,6 @@ Deno.test("parseCfHarnessCliArgs resolves fabric-mount to an absolute path", asy
   assertEquals(parsed.fabricMount, "/tmp/cf-fuse");
 });
 
-Deno.test("parseCfHarnessCliArgs supports sandbox image flag", async () => {
-  const parsed = await parseCfHarnessCliArgs(
-    ["--prompt", "hi", "--sandbox-image", "registry.example/cf:deno2"],
-    { cwd: "/tmp/project", env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" } },
-  );
-  if ("help" in parsed) throw new Error("expected config result");
-  assertEquals(parsed.sandboxImage, "registry.example/cf:deno2");
-});
-
-Deno.test("parseCfHarnessCliArgs supports sandbox image environment default", async () => {
-  const parsed = await parseCfHarnessCliArgs(
-    ["--prompt", "hi"],
-    {
-      cwd: "/tmp/project",
-      env: {
-        CF_HARNESS_SANDBOX_RUNTIME: "docker",
-        CF_HARNESS_SANDBOX_IMAGE: "registry.example/cf:local",
-      },
-    },
-  );
-  if ("help" in parsed) throw new Error("expected config result");
-  assertEquals(parsed.sandboxImage, "registry.example/cf:local");
-});
-
-Deno.test("parseCfHarnessCliArgs prefers sandbox image flag over environment", async () => {
-  const parsed = await parseCfHarnessCliArgs(
-    ["--prompt", "hi", "--sandbox-image", "registry.example/cf:flag"],
-    {
-      cwd: "/tmp/project",
-      env: {
-        CF_HARNESS_SANDBOX_RUNTIME: "docker",
-        CF_HARNESS_SANDBOX_IMAGE: "registry.example/cf:env",
-      },
-    },
-  );
-  if ("help" in parsed) throw new Error("expected config result");
-  assertEquals(parsed.sandboxImage, "registry.example/cf:flag");
-});
-
-Deno.test("parseCfHarnessCliArgs rejects empty sandbox image value", async () => {
-  await assertRejects(
-    () =>
-      parseCfHarnessCliArgs(
-        ["--prompt", "hi", "--sandbox-image", ""],
-        { cwd: "/tmp/project", env: {} },
-      ),
-    Error,
-    "--sandbox-image requires a non-empty image reference",
-  );
-});
-
 Deno.test("parseCfHarnessCliArgs omits fabricMount when flag is absent", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
@@ -5909,66 +5808,6 @@ Deno.test("runCfHarnessCli threads host-mount into engine additionalMounts", asy
       "/file-cabinet: writable (file-cabinet)",
     ),
     true,
-  );
-});
-
-Deno.test("runCfHarnessCli threads sandbox-image into engine sandbox config", async () => {
-  const { io, stderr } = createIoBuffers();
-  let createdOptions: Record<string, unknown> | undefined;
-  const exitCode = await runCfHarnessCli(
-    [
-      "--model-provider",
-      "openai-compatible-gateway",
-      "--workspace",
-      "/tmp/project",
-      "--prompt",
-      "Inspect the workspace",
-      "--sandbox-image",
-      "registry.example/cf:deno2",
-      "--gateway-auth-mode",
-      "none",
-    ],
-    {
-      io,
-      env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
-      createPromptLoop: (options) => {
-        createdOptions = options as Record<string, unknown>;
-        return {
-          runPrompt: () =>
-            Promise.resolve(
-              ({
-                model: "gpt-5.4",
-                finalAssistantText: "Done.",
-                transcript: [
-                  { role: "user", content: "Inspect the workspace" },
-                  { role: "assistant", content: "Done." },
-                ],
-                modelTurns: 1,
-                runState: {
-                  runId: "run-sandbox-image",
-                  status: "completed",
-                  createdAt: "2026-05-01T00:00:00.000Z",
-                  updatedAt: "2026-05-01T00:00:01.000Z",
-                  cfcEnforcementMode: "disabled",
-                  currentDir: "/workspace",
-                  policyEvents: [],
-                  toolOutputs: [],
-                },
-              }) satisfies HarnessPromptLoopResult,
-            ),
-          runTranscript: () =>
-            Promise.reject(new Error("unexpected resume path")),
-        };
-      },
-    },
-  );
-
-  assertEquals(exitCode, 0);
-  assertEquals(stderr, []);
-  const engine = createdOptions?.engine as CfHarnessEngine | undefined;
-  assertEquals(
-    engine?.sandbox.describe().cfc?.image,
-    "registry.example/cf:deno2",
   );
 });
 
@@ -8533,7 +8372,7 @@ Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc
     {
       cwd: "/tmp/project",
       env: {
-        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_SANDBOX_RUNTIME: "podman",
         CF_HARNESS_RUNSC_BINARY: "/opt/runsc",
         CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
       },
@@ -8588,14 +8427,14 @@ Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc
         { cwd: "/tmp/project", env: {} },
       ),
     Error,
-    "sandbox runtime must be one of docker, runsc",
+    "sandbox runtime must be runsc",
   );
 });
 
 Deno.test("cf-harness cli discovers the default CFC policy for the runsc runtime", async () => {
   const defaultPolicy = "/home/u/.local/share/runsc-cfc/cfc-policy.json";
   const parse = (
-    runtime: "runsc" | "docker",
+    runtime: "runsc",
     present: boolean,
   ) =>
     parseCfHarnessCliArgs(
@@ -8620,11 +8459,6 @@ Deno.test("cf-harness cli discovers the default CFC policy for the runsc runtime
   const absent = await parse("runsc", false);
   if ("help" in absent) throw new Error("expected config result");
   assertEquals(absent.sandboxCfcPolicy, undefined);
-  // The docker runtime has its own policy registration; the default is
-  // runsc's alone.
-  const docker = await parse("docker", true);
-  if ("help" in docker) throw new Error("expected config result");
-  assertEquals(docker.sandboxCfcPolicy, undefined);
 });
 
 Deno.test("cf-harness cli rejects an invalid network mode for the runsc runtime", async () => {
