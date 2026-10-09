@@ -36,9 +36,8 @@ and profile, when they're read. Neither is stored.
 `participantPrincipals` is computed from `participants`, reading the
 `represents-principal` label on each profile with `principalOf()`. A profile
 lives in its owner's own space, so a reader that space refuses reads no
-principal from it. The list is derived per session, so that each session reads
-an instance of its own, rather than one instance for every reader that their
-runtimes hold differently.
+principal from it. The list is derived per session, so each session reads an
+instance of its own, derived under its own access.
 
 The `PerSession` values in the contract are `messages.windows`, the session's
 windows, kept as a `PerSession` keyed collection, and `participantPrincipals`.
