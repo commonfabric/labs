@@ -987,8 +987,11 @@ bindings through the checker rather than by scanning the rewritten file. It
 resolves through type aliases and interfaces wherever they are declared (this
 file, an import, or a declaration file; the schema generator resolves a
 reference the same way, so a policy any alias carries must be validated too)
-and type-parameter substitution
-(`findWriteAuthorizedByReferences`). For each reference it emits
+and type-parameter substitution, a parameter the reference leaves out read as
+its default (`findWriteAuthorizedByReferences`). A CFC carrier's tag,
+`CfcTag<T, Meta>` in the body of the `Cfc` alias declared beside it, holds its
+payload again beside the metadata, so only its metadata is walked there, and
+each policy in the payload is reported once. For each reference it emits
 **`cfc-write-authorized-by`** when usage is malformed:
 
 - the second type argument is not a `typeof` binding (`TypeQueryNode`)

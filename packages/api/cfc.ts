@@ -8,9 +8,26 @@
 
 import { deepFreeze } from "@commonfabric/data-model";
 
-export type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: CfcStamp<T, Meta>;
-};
+/**
+ * The carrier `Cfc` intersects `T` with: the policy's stamp, beside the `null`
+ * and `undefined` `T` holds, which an intersection with the stamp alone would
+ * reduce to `never`. It distributes over `T`'s members, so the intersection
+ * keeps them, and while `T` holds a type parameter it stays one deferred type,
+ * which leaves `Cfc<T, Meta>` one intersection rather than a union of them.
+ * The stamp records the whole payload, `T`, on every member.
+ */
+type CfcTag<T, Meta, Stamp = CfcStamp<T, Meta>> = T extends unknown
+  ? { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>
+  : never;
+
+/**
+ * `T` under the policy `Meta`: `T` carrying the policy's stamp, except for
+ * `null` and `undefined`, which it holds as they are. So
+ * `Confidential<string | null, L>` is `(string & carrier) | null`. The type
+ * keeps the alias it is reached by, `Confidential<…>` or an author's own, which
+ * is how a reader of a type finds the declaration it came from.
+ */
+export type Cfc<T, Meta> = T & CfcTag<T, Meta>;
 
 /**
  * What a CFC carrier records: the policy's metadata, and the payload it was

@@ -1284,12 +1284,14 @@ Mechanics:
   payload"), and end-to-end in ts-transformers
   `printed-type-node-schema.test.ts` ("a labeled payload merged into a larger
   value").
-- A policy's type can lose its alias name. A payload member its metadata
-  carrier cannot intersect is reduced away: `Confidential<string | null, L>` is
-  `string & carrier`, and `Confidential<null, L>` is `never`. A rewrite such as
-  `NonNullable<…>`, which intersects with `{}`, drops the name too. A written
-  reference that names the policy still lowers it from its own arguments,
-  `null` and a `typeof` writer binding included. A payload that is itself
+- A policy's type keeps its alias name beside `null` and `undefined`: the
+  carrier holds them beside its stamp (`CfcTag`, `packages/api/cfc.ts`), so
+  `Confidential<string | null, L>` is `(string & carrier) | null` and reads
+  as its reference does, `null` included. A policy around `null` alone,
+  `Confidential<null, L>`, is `null`, with no name or carrier left, and a
+  rewrite such as `NonNullable<…>`, which intersects with `{}`, drops the name
+  too. A written reference that names the policy still lowers it from its own
+  arguments, `null` and a `typeof` writer binding included. A payload that is itself
   `never`, as in `Confidential<never, L>` or `Confidential<string & number, L>`,
   accepts nothing, and lowers to `{ not: true, ifc }` like any payload whose
   schema is `false`, whether written directly or through an alias (`type Sec<T>

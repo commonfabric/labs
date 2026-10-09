@@ -46,9 +46,11 @@ type CfcStamp<T, Meta> = {
   readonly of?: T;
 };
 
-type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: CfcStamp<T, Meta>;
-};
+type CfcTag<T, Meta, Stamp = CfcStamp<T, Meta>> = T extends unknown
+  ? { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>
+  : never;
+
+type Cfc<T, Meta> = T & CfcTag<T, Meta>;
 ```
 
 `Cfc<T, Meta>` must preserve the runtime/schema shape of `T` and only add to
@@ -56,6 +58,14 @@ the emitted `ifc` metadata. The stamp records the payload `T` beside the
 metadata. TypeScript merges the carrier into whatever the value is merged
 into, and the recorded payload is what tells the schema generator which part
 of the merged value the policy names (mapping spec §11).
+
+The tag distributes over `T`'s members and leaves `null` and `undefined` beside
+the stamp, since an intersection with the stamp alone would reduce them to
+`never`. So `Confidential<string | null, L>` is `(string & carrier) | null`,
+holds `null`, and keeps the alias name a reader of its type finds the
+declaration by. While `T` holds a type parameter the tag stays one deferred
+type, so a generic `Cfc<T, Meta>` is one intersection, whose members are read
+through it. Every member's stamp records the whole payload `T`.
 
 ### Path-Bearing Helpers
 
