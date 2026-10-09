@@ -159,14 +159,20 @@ instance that carries nothing over starts fresh, and the setup logs
 `instance-carry-over` naming it, its positional cause and the child left set
 up there, if any.
 
-A child at a positional spot refuses to set up over a stored child of another
-pattern identity when the parent shows the children have moved spots: the
-stored child is one a named instance carried over, a child of the incoming
-identity runs at another positional spot, or another positional spot of the
-pattern sets up the stored identity (`refuseDisplacedChild`). The error names
-both identities. A stored child of a different identity with none of those
-signs is taken for the same child under a newer version of its own source,
-since a child's identity changes whenever its own source does.
+A named instance stamps its name on the child it sets up, in the child's
+`instanceName` meta. A child is refused (`refuseDisplacedChild`), with an
+error naming both pattern identities, where it would set up:
+
+- over a child stamped with another instance's name, or one another instance
+  carries, whether for a named instance or for a positional spot;
+- at a positional spot, over a stored child of another pattern identity when
+  the parent shows the children have moved spots: a child of the incoming
+  identity runs at another positional spot, or another positional spot of the
+  pattern sets up the stored identity.
+
+A stored child of a different identity with none of those signs is taken for
+the same child under a newer version of its own source, since a child's
+identity changes whenever its own source does.
 
 What this leaves open:
 
