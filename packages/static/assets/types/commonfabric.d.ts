@@ -4257,7 +4257,9 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * none, more than one, or a claim in some other form. It also means that
  * `target` is `undefined`, which is what a value that cannot be read yet reads
  * as. It is never a guess, and a caller refuses whatever needs a principal. A
- * label that cannot be read throws instead.
+ * label the caller cannot observe, a refused read among them, returns
+ * `undefined` as well, as missing metadata does; a label stored in a form the
+ * runtime cannot interpret throws.
  *
  * It reads the label, and no contents of the value beyond the link pointers
  * needed to reach it. In a reactive computation
