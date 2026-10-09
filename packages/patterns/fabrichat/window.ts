@@ -4,7 +4,7 @@
  */
 
 import type { FabricEpochNsec } from "commonfabric";
-import type { ChatWindowAnchor } from "./schemas.ts";
+import type { ChatWindowAnchor } from "./schemas.tsx";
 
 /** A selected run and the presence of messages beyond either end. */
 export interface WindowSelection<T> {

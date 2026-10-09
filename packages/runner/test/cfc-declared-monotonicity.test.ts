@@ -96,6 +96,28 @@ const SCHEMA_MINT_XY = {
   required: ["out"],
 } as const satisfies JSONSchema;
 
+const SCHEMA_CLAIM_X = {
+  type: "object",
+  properties: {
+    out: {
+      type: "string",
+      ifc: { confidentiality: [CLAUSE_A], integrity: [ATOM_X] },
+    },
+  },
+  required: ["out"],
+} as const satisfies JSONSchema;
+
+const SCHEMA_CLAIM_XY = {
+  type: "object",
+  properties: {
+    out: {
+      type: "string",
+      ifc: { confidentiality: [CLAUSE_A], integrity: [ATOM_X, ATOM_Y] },
+    },
+  },
+  required: ["out"],
+} as const satisfies JSONSchema;
+
 const SCHEMA_INTEGRITY_X = {
   type: "object",
   properties: {
@@ -164,6 +186,16 @@ const declaredEntryAt = (
     entry.path.every((segment, index) => segment === path[index])
   );
 
+const mintedEntryAt = (
+  entries: PersistedEntry[],
+  path: string[],
+): PersistedEntry | undefined =>
+  entries.find((entry) =>
+    entry.origin === "minted" &&
+    entry.path.length === path.length &&
+    entry.path.every((segment, index) => segment === path[index])
+  );
+
 /** Commit a value write through a schema-bearing cell; returns the result. */
 const commitWrite = async (
   runtime: Runtime,
@@ -178,7 +210,7 @@ const commitWrite = async (
   const docId = cell.getAsNormalizedFullLink().id;
   cell.set(value as never);
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   return {
     ...(result.error !== undefined ? { error: result.error } : {}),
     docId,
@@ -224,7 +256,7 @@ const rewriteStoredEntries = async (
     type: "application/json",
     path: [],
   }, cloned as never);
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   expect(result.error).toBeUndefined();
 };
 
@@ -294,41 +326,25 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       }
     });
 
-    it("(c) a schema adding an integrity atom silently grows the declared integrity claim", async () => {
+    it("(c) a re-mint restoring an atom the stored entry lacks silently grows the declared integrity claim", async () => {
       // THE gap the gate closes: §8.12.1 says the declared integrity claim
-      // may only shrink, but addIntegrity growth is merge-legal and the
-      // re-mint persists the grown claim with no check.
-      const storageManager = StorageManager.emulate({ as: signer });
-      const runtime = makeRuntime({ storageManager });
-      try {
-        const first = await commitWrite(
-          runtime,
-          "dm-char-integ",
-          SCHEMA_MINT_X,
-          { out: "v1" },
-        );
-        expect(first.error).toBeUndefined();
-        const before = declaredEntryAt(
-          persistedEntriesFor(storageManager, first.docId),
-          ["out"],
-        );
-        expect(before?.label.integrity).toEqual([ATOM_X]);
-        const second = await commitWrite(
-          runtime,
-          "dm-char-integ",
-          SCHEMA_MINT_XY,
-          { out: "v2" },
-        );
-        expect(second.error).toBeUndefined();
-        const after = declaredEntryAt(
-          persistedEntriesFor(storageManager, second.docId),
-          ["out"],
-        );
-        expect(after?.label.integrity).toEqual([ATOM_X, ATOM_Y]);
-      } finally {
-        await runtime.dispose({ closeStorage: false });
-        await storageManager.close();
-      }
+      // may only shrink. A schema cannot widen `ifc.integrity` through the
+      // merge, so the growth arrives where the stored entry claims less than
+      // the schema it was minted from, and the re-mint persists the grown
+      // claim with no check.
+      const result = await seededRemintScenario({
+        storageManager: StorageManager.emulate({ as: signer }),
+        name: "dm-char-integ",
+        schema: SCHEMA_CLAIM_XY,
+        flowLabels: "off",
+        mutateEntry: (entry) => ({
+          ...entry,
+          label: { ...entry.label, integrity: [ATOM_X] },
+        }),
+      });
+      expect(result.error).toBeUndefined();
+      expect(declaredEntryAt(result.entries, ["out"])?.label.integrity)
+        .toEqual([ATOM_X, ATOM_Y]);
     });
 
     it("(d) a schema declaring nothing where an entry exists keeps the entry (merge restores stored ifc)", async () => {
@@ -494,7 +510,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         // Re-asserting enforce is fine.
         tx.setCfcDeclaredMonotonicityMode("enforce");
         expect(tx.getCfcState().declaredMonotonicityMode).toBe("enforce");
-        await tx.commit();
+        await tx.commit().settled;
       } finally {
         await runtime.dispose({ closeStorage: false });
         await storageManager.close();
@@ -754,7 +770,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       cell.set({ out: "v2" } as never);
       opts.beforeSecondCommit?.(tx, first.docId);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       return {
         docId: first.docId,
         error: result.error,
@@ -862,7 +878,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         );
         cell.key("out").set("v2");
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeUndefined();
         const entry = declaredEntryAt(
           persistedEntriesFor(storageManager, first.docId),
@@ -935,7 +951,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
           },
         });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeUndefined();
         const entries = persistedEntriesFor(storageManager, first.docId);
         // The stored (stronger) declared entry carried forward; the weakened
@@ -958,43 +974,26 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
     });
 
     it("an added integrity atom rejects (the declared claim may only shrink)", async () => {
-      // The pure schema-evolution route (no seeding, flow labels off): the
-      // schema merge allows addIntegrity growth, so only this gate stands
-      // between the re-mint and a grown declared integrity claim — the
-      // characterization block pins that today this commits silently.
-      const storageManager = StorageManager.emulate({ as: signer });
-      const runtime = makeRuntime({
-        storageManager,
-        cfcDeclaredMonotonicity: "enforce",
+      // The characterization block pins that with the gate off this commits
+      // silently.
+      const result = await seededRemintScenario({
+        storageManager: StorageManager.emulate({ as: signer }),
+        name: "dm-enf-integ",
+        schema: SCHEMA_CLAIM_XY,
+        dial: "enforce",
+        flowLabels: "off",
+        mutateEntry: (entry) => ({
+          ...entry,
+          label: { ...entry.label, integrity: [ATOM_X] },
+        }),
       });
-      try {
-        const first = await commitWrite(
-          runtime,
-          "dm-enf-integ",
-          SCHEMA_MINT_X,
-          { out: "v1" },
-        );
-        expect(first.error).toBeUndefined();
-        const second = await commitWrite(
-          runtime,
-          "dm-enf-integ",
-          SCHEMA_MINT_XY,
-          { out: "v2" },
-        );
-        const message = String((second.error as Error | undefined)?.message);
-        expect(message).toContain("declared-monotonicity integrity");
-        expect(message).toContain(second.docId);
-        expect(message).toContain("at /out");
-        expect(message).toContain(JSON.stringify(ATOM_Y));
-        const entry = declaredEntryAt(
-          persistedEntriesFor(storageManager, second.docId),
-          ["out"],
-        );
-        expect(entry?.label.integrity).toEqual([ATOM_X]);
-      } finally {
-        await runtime.dispose({ closeStorage: false });
-        await storageManager.close();
-      }
+      const message = String((result.error as Error | undefined)?.message);
+      expect(message).toContain("declared-monotonicity integrity");
+      expect(message).toContain(result.docId);
+      expect(message).toContain("at /out");
+      expect(message).toContain(JSON.stringify(ATOM_Y));
+      expect(declaredEntryAt(result.entries, ["out"])?.label.integrity)
+        .toEqual([ATOM_X]);
     });
   });
 
@@ -1058,7 +1057,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       const result = await seededRemintScenario({
         storageManager: StorageManager.emulate({ as: signer }),
         name: "dm-tight-integ",
-        schema: SCHEMA_MINT_X,
+        schema: SCHEMA_CLAIM_X,
         dial: "enforce",
         flowLabels: "off",
         mutateEntry: (entry) => ({
@@ -1132,7 +1131,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         const first = await commitWrite(
           runtime,
           "dm-multi-entry",
-          SCHEMA_MINT_X,
+          SCHEMA_CLAIM_X,
           { out: "v1" },
         );
         expect(first.error).toBeUndefined();
@@ -1147,7 +1146,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         const second = await commitWrite(
           runtime,
           "dm-multi-entry",
-          SCHEMA_MINT_X,
+          SCHEMA_CLAIM_X,
           { out: "v2" },
         );
         expect(second.error).toBeUndefined();
@@ -1166,15 +1165,16 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
     it("an atom outside the joined same-path claim still rejects", async () => {
       // The dual guard on the join fix: aggregating stored entries must not
       // hollow the check out — an atom no same-path declared entry claimed
-      // is still an addition.
-      const schemaMintXZ = {
+      // is still an addition. The stored entries claim [X] and [Y] where the
+      // schema they are re-minted from claims [X, Z].
+      const schemaClaimXZ = {
         type: "object",
         properties: {
           out: {
             type: "string",
             ifc: {
               confidentiality: [CLAUSE_A],
-              addIntegrity: [ATOM_X, "integrity-z"],
+              integrity: [ATOM_X, "integrity-z"],
             },
           },
         },
@@ -1190,12 +1190,16 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         const first = await commitWrite(
           runtime,
           "dm-multi-entry-z",
-          SCHEMA_MINT_X,
+          schemaClaimXZ,
           { out: "v1" },
         );
         expect(first.error).toBeUndefined();
         await rewriteStoredEntries(seeder, first.docId, (entries) => [
-          ...entries,
+          ...entries.map((entry) =>
+            entry.origin === "declared" && entry.path.join("/") === "out"
+              ? { ...entry, label: { ...entry.label, integrity: [ATOM_X] } }
+              : entry
+          ),
           {
             path: ["out"],
             origin: "declared",
@@ -1205,7 +1209,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         const second = await commitWrite(
           runtime,
           "dm-multi-entry-z",
-          schemaMintXZ,
+          schemaClaimXZ,
           { out: "v2" },
         );
         const message = String((second.error as Error | undefined)?.message);
@@ -1229,14 +1233,14 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         const first = await commitWrite(
           runtime,
           "dm-tight-same",
-          SCHEMA_MINT_X,
+          SCHEMA_CLAIM_X,
           { out: "v1" },
         );
         expect(first.error).toBeUndefined();
         const second = await commitWrite(
           runtime,
           "dm-tight-same",
-          SCHEMA_MINT_X,
+          SCHEMA_CLAIM_X,
           { out: "v2" },
         );
         expect(second.error).toBeUndefined();
@@ -1275,6 +1279,46 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         },
       });
       expect(result.error).toBeUndefined();
+    });
+
+    it("a value stamp is not gated, and leaves the declared claim as it was", async () => {
+      // `addIntegrity` stamps the value a write leaves: the second write
+      // stamps its own value with more atoms than the first, and the
+      // declared component, which the gate compares, states no integrity
+      // either time.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({
+        storageManager,
+        cfcDeclaredMonotonicity: "enforce",
+      });
+      try {
+        const first = await commitWrite(
+          runtime,
+          "dm-scope-minted",
+          SCHEMA_MINT_X,
+          { out: "v1" },
+        );
+        expect(first.error).toBeUndefined();
+        const before = persistedEntriesFor(storageManager, first.docId);
+        expect(mintedEntryAt(before, ["out"])?.label.integrity)
+          .toEqual([ATOM_X]);
+        const second = await commitWrite(
+          runtime,
+          "dm-scope-minted",
+          SCHEMA_MINT_XY,
+          { out: "v2" },
+        );
+        expect(second.error).toBeUndefined();
+        const after = persistedEntriesFor(storageManager, second.docId);
+        expect(mintedEntryAt(after, ["out"])?.label.integrity)
+          .toEqual([ATOM_X, ATOM_Y]);
+        expect(declaredEntryAt(after, ["out"])?.label).toEqual({
+          confidentiality: [CLAUSE_A],
+        });
+      } finally {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+      }
     });
 
     it("derived stored entries are not gated (replace-on-overwrite stands)", async () => {
@@ -1342,41 +1386,26 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
     });
 
     it("observe: the integrity-add characterization outcome is unchanged, with a diagnostic", async () => {
-      const storageManager = StorageManager.emulate({ as: signer });
-      const runtime = makeRuntime({
-        storageManager,
-        cfcDeclaredMonotonicity: "observe",
+      const result = await seededRemintScenario({
+        storageManager: StorageManager.emulate({ as: signer }),
+        name: "dm-obs-integ",
+        schema: SCHEMA_CLAIM_XY,
+        dial: "observe",
+        flowLabels: "off",
+        mutateEntry: (entry) => ({
+          ...entry,
+          label: { ...entry.label, integrity: [ATOM_X] },
+        }),
       });
-      try {
-        const first = await commitWrite(
-          runtime,
-          "dm-obs-integ",
-          SCHEMA_MINT_X,
-          { out: "v1" },
-        );
-        expect(first.error).toBeUndefined();
-        const second = await commitWrite(
-          runtime,
-          "dm-obs-integ",
-          SCHEMA_MINT_XY,
-          { out: "v2" },
-        );
-        expect(second.error).toBeUndefined();
-        const entry = declaredEntryAt(
-          persistedEntriesFor(storageManager, second.docId),
-          ["out"],
-        );
-        expect(entry?.label.integrity).toEqual([ATOM_X, ATOM_Y]);
-        expect(
-          second.diagnostics.some((d) =>
-            d.startsWith("declared-monotonicity(observe):") &&
-            d.includes("integrity")
-          ),
-        ).toBe(true);
-      } finally {
-        await runtime.dispose({ closeStorage: false });
-        await storageManager.close();
-      }
+      expect(result.error).toBeUndefined();
+      expect(declaredEntryAt(result.entries, ["out"])?.label.integrity)
+        .toEqual([ATOM_X, ATOM_Y]);
+      expect(
+        result.diagnostics.some((d) =>
+          d.startsWith("declared-monotonicity(observe):") &&
+          d.includes("integrity")
+        ),
+      ).toBe(true);
     });
 
     it("the schema-declares-nothing case matches pinned behavior under every dial value", async () => {
@@ -1553,7 +1582,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
           first.docId,
         );
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         const message = String((result.error as Error | undefined)?.message);
         // /out is exempted; /aux still fails closed.
         expect(message).toContain("at /aux");
@@ -1566,37 +1595,21 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
     });
 
     it("integrity violations are never exemptable", async () => {
-      const storageManager = StorageManager.emulate({ as: signer });
-      const runtime = makeRuntime({
-        storageManager,
-        cfcDeclaredMonotonicity: "enforce",
+      const result = await seededRemintScenario({
+        storageManager: StorageManager.emulate({ as: signer }),
+        name: "dm-ex-integ",
+        schema: SCHEMA_CLAIM_XY,
+        dial: "enforce",
+        flowLabels: "off",
+        mutateEntry: (entry) => ({
+          ...entry,
+          label: { ...entry.label, integrity: [ATOM_X] },
+        }),
+        beforeSecondCommit: withExemption(cfcCanonicalClauseDigest(ATOM_Y)),
       });
-      try {
-        const first = await commitWrite(
-          runtime,
-          "dm-ex-integ",
-          SCHEMA_MINT_X,
-          { out: "v1" },
-        );
-        expect(first.error).toBeUndefined();
-        const tx = runtime.edit();
-        const cell = runtime.getCell(
-          signer.did(),
-          "dm-ex-integ",
-          SCHEMA_MINT_XY,
-          tx,
-        );
-        cell.set({ out: "v2" });
-        withExemption(cfcCanonicalClauseDigest(ATOM_Y))(tx, first.docId);
-        tx.prepareCfc();
-        const result = await tx.commit();
-        expect(
-          String((result.error as Error | undefined)?.message),
-        ).toContain("declared-monotonicity integrity");
-      } finally {
-        await runtime.dispose({ closeStorage: false });
-        await storageManager.close();
-      }
+      expect(
+        String((result.error as Error | undefined)?.message),
+      ).toContain("declared-monotonicity integrity");
     });
   });
 

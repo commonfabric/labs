@@ -23,7 +23,7 @@ import type {
   ChatRoomAbout,
   ChatRoomFacts,
   ChatRoomPolicy,
-} from "./schemas.ts";
+} from "./schemas.tsx";
 
 /** Immutable creation records admitted by the space conversation's start control. */
 type Created<T> = AuthoredByCurrentUser<
@@ -37,12 +37,15 @@ type Created<T> = AuthoredByCurrentUser<
 
 /** Creates the space conversation once, recording its creator and policy together. */
 const initializeRoom = handler<unknown, {
-  space: Writable<SpaceChat | undefined>;
+  space: Cell<SpaceChat | undefined>;
+  available: boolean;
   candidate: Cell<SpaceChatRoom>;
   about: Writable<ChatRoomAbout>;
   policy: Writable<ChatRoomPolicy>;
-}>((_, { space, candidate, about, policy }) => {
-  if (space.get()?.chat || about.get()) return;
+}>((_, { space, available, candidate, about, policy }) => {
+  if (!available) return;
+  const root = space.get();
+  if (!root?.setChatRoom || root.chatRoom || about.get()) return;
   const access = spaceAccess(about);
   if (access !== "WRITE" && access !== "OWNER") return;
   policy.set(CHAT_POLICY);
@@ -51,7 +54,7 @@ const initializeRoom = handler<unknown, {
     createdAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
     policy,
   });
-  space.key("chat").set(candidate);
+  root.setChatRoom.send({ room: candidate });
 });
 
 /** Selects the registered room while retaining its reference identity. */
@@ -59,7 +62,7 @@ const selectRoom = lift(({
   space,
   candidate,
 }: { space: Cell<SpaceChat | undefined>; candidate: Cell<SpaceChatRoom> }) => {
-  return space.get()?.chat ?? candidate;
+  return space.get()?.chatRoom ?? candidate;
 });
 
 /** A space conversation shares its enclosing space's membership. */
@@ -74,13 +77,17 @@ export default pattern(() => {
     expiredThrough: 0,
   });
   const profile = wish<ChatProfile>({ query: "#profile" });
-  const space = wish<Writable<SpaceChat>>({ query: "/" });
+  const space = wish<SpaceChat>({ query: "#default" });
+  // A stream schema supplies a handle even when the underlying field is
+  // absent. The unbranded projection checks that the registry exists.
+  const registry = wish<{ setChatRoom?: unknown }>({ query: "#default" });
   const candidate = FabriChatRoom({ about, memory });
   const room = selectRoom({ space: space.result!, candidate });
-  const ready = computed(() => space.result?.get()?.chat !== undefined);
+  const ready = computed(() => space.result?.chatRoom !== undefined);
   const canCreate = computed(() => {
     const access = spaceAccess(about);
-    return access === "WRITE" || access === "OWNER";
+    return registry.result?.setChatRoom !== undefined &&
+      (access === "WRITE" || access === "OWNER");
   });
   return {
     [NAME]: "FabriChat",
@@ -101,6 +108,7 @@ export default pattern(() => {
                 data-ui-action="ChatStart"
                 onClick={initializeRoom({
                   space: space.result!,
+                  available: canCreate,
                   candidate,
                   about,
                   policy,

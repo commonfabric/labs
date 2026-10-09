@@ -26,7 +26,7 @@ import type {
   ChatProfile,
   ChatRoomAbout,
   ChatRoomPolicy,
-} from "./schemas.ts";
+} from "./schemas.tsx";
 
 export default pattern(() => {
   const profile = new Writable<AddIntegrity<ChatProfile, ["chat-test"]>>({

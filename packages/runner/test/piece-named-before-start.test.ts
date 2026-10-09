@@ -105,7 +105,7 @@ const ITEMS_SCHEMA = {
   items: { type: "object", properties: { seed: { type: "string" } } },
 } as const;
 // One card per case, each cold on the replica that runs it.
-const CARD_COUNT = 11;
+const CARD_COUNT = 12;
 
 type EventCommitMarker = {
   type: "scheduler.event.commit";
@@ -255,14 +255,14 @@ describe("piece-named-before-start", () => {
     // deno-lint-ignore no-explicit-any
     const handleA = a.run(txA, compiledA as any, {}, rcA);
     a.prepareTxForCommit(txA);
-    expect((await txA.commit()).error).toBeUndefined();
+    expect((await txA.commit().settled).error).toBeUndefined();
     await handleA.pull();
     await quiesce(a);
     for (let seed = 1; seed <= CARD_COUNT; seed++) {
       const addA = a.edit();
       const committedA = waitForEventCommit(a);
       handleA.withTx(addA).key("addItem").send({ seed: String(seed) });
-      await addA.commit();
+      await addA.commit().settled;
       await committedA;
     }
     for (let i = 0; i < 8; i++) {
@@ -388,7 +388,7 @@ describe("piece-named-before-start", () => {
       b.runner.run(runTx, cardPattern, { item: itemB }, cardB);
     }
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
   }
 
   /** Names `id` and, to `depth`, every document its value links to. */
@@ -418,7 +418,7 @@ describe("piece-named-before-start", () => {
     const sendTx = b.edit();
     const committedB = waitForEventCommit(b);
     cardB.withTx(sendTx).key(stream).send({});
-    await sendTx.commit();
+    await sendTx.commit().settled;
     await committedB;
     await quiesce(b);
     return cardB.key("count").get();
@@ -619,6 +619,57 @@ describe("piece-named-before-start", () => {
     expect(b.runner.cancels.has(key)).toBe(false);
   });
 
+  it("preserves a named run's new argument after a stale-read refusal", async () => {
+    const { cardB, key } = locateCard(11);
+    const id = cardB.getAsNormalizedFullLink().id;
+    let attempts = 0;
+    b.runner.accessForTestingOnly.deferredStartCommitter = async (
+      _tx,
+      _resultCell,
+      commit,
+    ) => {
+      attempts++;
+      if (attempts !== 1) return commit();
+      // Refuse at the server so storage rolls back the writes and dispatches
+      // commit compensation with the wire verdict, as a concurrent write does.
+      const transact = server.transact.bind(server);
+      server.transact = (message, publishVerdict) => {
+        server.transact = transact;
+        const response: Awaited<ReturnType<typeof transact>> = {
+          type: "response",
+          requestId: message.requestId,
+          error: {
+            name: "ConflictError",
+            message:
+              `stale confirmed read: ${id} at seq 0 conflicted with seq 10`,
+          },
+        };
+        publishVerdict?.(response);
+        return Promise.resolve(response);
+      };
+      try {
+        const result = await commit();
+        expect(result.error?.name).toBe("ConflictError");
+        return result;
+      } finally {
+        server.transact = transact;
+      }
+    };
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, { item: { seed: "replacement" } }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await b.settled();
+    expect(attempts).toBe(2);
+    expect(b.runner.cancels.has(key)).toBe(true);
+    await cardB.pull();
+    await b.settled();
+    expect(cardB.key("item").key("seed").get()).toBe("replacement");
+    expect(cardB.key("label").get()).toBe("card-replacement");
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
   it("runs a piece under a pattern it was upgraded to elsewhere after an earlier landing", async () => {
     const { cardB, itemB, key } = locateCard(7);
     const landedV1 = waitForDeferredStart(
@@ -652,7 +703,7 @@ describe("piece-named-before-start", () => {
     const upgradeTx = c.edit();
     c.runner.run(upgradeTx, cardV2, { item: itemC }, cardC);
     c.prepareTxForCommit(upgradeTx);
-    expect((await upgradeTx.commit()).error).toBeUndefined();
+    expect((await upgradeTx.commit().settled).error).toBeUndefined();
     await quiesce(c);
     await c.storageManager.synced();
     await c.dispose({ closeStorage: false });
@@ -669,7 +720,7 @@ describe("piece-named-before-start", () => {
     const runTx = b.edit();
     b.runner.run(runTx, cardV2B, { item: itemB }, cardB);
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
     await quiesce(b);
     expect(await send(cardB, "poke")).toBe(11);
     expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
@@ -701,7 +752,7 @@ describe("piece-named-before-start", () => {
           identity: v2Ref.identity,
           symbol: v2Ref.symbol,
         }, rawMetaWriteAuthorization);
-        expect((await moveTx.commit()).error).toBeUndefined();
+        expect((await moveTx.commit().settled).error).toBeUndefined();
       }
       return walked;
     };
@@ -715,7 +766,7 @@ describe("piece-named-before-start", () => {
     const runTx = b.edit();
     b.runner.run(runTx, undefined, { item: itemB }, cardB);
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
     expect((await settled).outcome).toBe("installed");
     await quiesce(b);
     expect(named).toEqual([v1Ref.identity, v2Ref.identity]);
@@ -743,7 +794,7 @@ describe("piece-named-before-start", () => {
           identity: v1Ref.identity,
           symbol: "unknown",
         }, rawMetaWriteAuthorization);
-        expect((await moveTx.commit()).error).toBeUndefined();
+        expect((await moveTx.commit().settled).error).toBeUndefined();
       }
       return walked;
     };
@@ -759,7 +810,7 @@ describe("piece-named-before-start", () => {
     const runTx = b.edit();
     b.runner.run(runTx, undefined, { item: itemB }, cardB);
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
     expect((await settled).outcome).toBe("cancelled");
     await quiesce(b);
     expect(b.runner.cancels.has(key)).toBe(false);

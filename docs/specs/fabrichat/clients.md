@@ -24,10 +24,10 @@ a room to anyone its space doesn't admit.
   way. It is what keeps one person's conversation from splitting.
 - **The conversations a container shows** are the adapters the container holds,
   each linking to a placement of one room, plus the container's own chat when it
-  is a shared space that has one.
-- **The people a client offers** when starting a conversation from a shared
+  is a social space that has one.
+- **The people a client offers** when starting a conversation from a social
   space are that space's participants, as claims, until it offers a member set
-  (see [shared spaces](README.md#shared-spaces)).
+  (see [social spaces](README.md#social-spaces)).
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about.record` is labeled
@@ -108,6 +108,13 @@ gesture on the reviewed surface its policy names:
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
+| add a member | room's rendering | `addMember` | `ChatAddMemberSurface` |
+
+A client that draws natively sends `addMember` through
+[the sanctioned issuing path](#the-sanctioned-issuing-path) on
+`ChatAddMemberSurface`, as it sends the acts above. It finds the stream on the
+room's output rather than in `[VIEWS]` (see
+[`ChatRoomOutput`](ChatRoomOutput.md#addmembertarget--value-string-)).
 
 A client sends to the room's own streams, never through a placement or an
 adapter.
@@ -184,15 +191,29 @@ MUST behave as a trustworthy renderer:
 A client that can't meet all six MUST NOT issue trusted gestures. It can still
 read and show conversations, and it can host the room's `[UI]` for writing.
 
-### Sanctioned native issuing path
+### The sanctioned issuing path
 
-`bindNativeUiControl` from `@commonfabric/runner/native-ui` binds a host's
-reviewed surface and action to a room stream. The host calls the returned
-function only from that control's genuine user-input path, with the values the
-person saw. Keep that function inaccessible to patterns, loaded content,
-automation, and generic IPC. The runtime checks the writer identity, surface,
-action, actor, and space access; the trusted mark follows normal event transport.
-A generic `cell:send` cannot issue that mark.
+A native client hands the runtime a gesture it vouches for through the
+sanctioned issuing path that [host
+embedding](../../features/host-embedding.md#10-native-reviewed-controls), §10,
+describes. A host running the runtime in its own process binds each control to
+its stream with `bindNativeUiControl()` from `@commonfabric/runner/native-ui`,
+naming the surface and action from the table above once, when it binds the
+control. The function that returns sends the control's payload with `native`
+provenance for that surface and action, carrying the renderer-trust mark. A
+host whose runtime runs in a worker sends the same act with
+`CellHandle.sendReviewed(event, { surface, action })`, which waits for the
+handler's run, and rejects with the reason when its write is refused. Either
+way, the runtime checks the surface and action against the write's policy as
+it checks a rendered gesture's provenance, and the mark reaches a served
+handler the way a rendered gesture's does. The generic `cell:send` marks
+nothing, and pattern code can reach neither path.
+
+A native reviewed act counts wherever a trusted gesture does ([host
+embedding](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures),
+§11), a change to a space's access list included. So adding a member works the
+same way: `addMember` admits someone with `grantSpaceAccess()`, which admits a
+native reviewed act as it admits a gesture on the room's rendered add control.
 
 ## Delivering notices
 

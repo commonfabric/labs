@@ -226,6 +226,10 @@ import { projectHarnessResearchKitForModel } from "./research/model-projection.t
 import { isBrowserScreenshotOutput } from "./tools/browser.ts";
 import { isEditFileToolSuccessOutput } from "./tools/edit-file.ts";
 import { isStructuredFileToolErrorOutput } from "./tools/file-errors.ts";
+import {
+  loomCommandModelContextObservation,
+  runCommandModelView,
+} from "./tools/loom-commands.ts";
 import { loomRetrievalModelContextObservation } from "./tools/loom-retrieval.ts";
 import { isReadFileToolSuccessOutput } from "./tools/read-file.ts";
 import {
@@ -1824,7 +1828,7 @@ const swapSealedStringsForTokens = async (
   table: HarnessHandleTable,
   sanitized: unknown,
   raw: unknown,
-  child: { source: string; label: IFCLabel; returnReferents: boolean },
+  child: { source: string; referentLabel: IFCLabel | undefined },
 ): Promise<{ table: HarnessHandleTable; value: unknown; replaced: number }> => {
   if (isSealedOpaqueLinkObject(sanitized)) {
     if (typeof raw !== "string") {
@@ -1839,14 +1843,14 @@ const swapSealedStringsForTokens = async (
     // A return referent can go into a page, so only a string the web gave
     // a child becomes one; a string read out of the owner's space stays
     // sealed rather than reaching a page past its destination check.
-    if (!child.returnReferents) {
+    if (child.referentLabel === undefined) {
       return { table, value: sanitized, replaced: 0 };
     }
     const minted = await mintReferentHandle(table, {
       kind: "return",
       source: child.source,
       value: raw,
-      label: child.label,
+      label: child.referentLabel,
       labelSource: "child",
     });
     return { table: minted.table, value: minted.token, replaced: 1 };
@@ -1900,7 +1904,11 @@ const createStructuredSubagentReturn = async (
      */
     handleTable?: HarnessHandleTable;
 
-    /** Whether a sealed string that names no address becomes a referent. */
+    /**
+     * Whether a sealed string that names no address becomes a referent, which
+     * it does only under the child's model-context label: a child with none
+     * returns no referent.
+     */
     returnReferents: boolean;
   },
 ): Promise<{
@@ -1978,9 +1986,9 @@ const createStructuredSubagentReturn = async (
         parsedValue,
         {
           source: `delegate_task:${options.childRunId}`,
-          label: options.childEngine.getRunState().cfcModelContext?.label ??
-            {},
-          returnReferents: options.returnReferents,
+          referentLabel: options.returnReferents
+            ? options.childEngine.getRunState().cfcModelContext?.label
+            : undefined,
         },
       );
       returnValue = swapped.value;
@@ -3239,6 +3247,7 @@ export class CfHarnessPromptLoop {
       docsCorpusAvailable: this.engine.docsCorpusAvailable,
       loomAuthoringAvailable: this.engine.config.loomAuthoring !== undefined,
       loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
+      loomCommandsAvailable: this.engine.config.loomCommands !== undefined,
       structuredResultAvailable: this.engine.structuredResultAvailable,
       clientActionsAvailable: this.engine.clientActionsAvailable,
     };
@@ -4315,10 +4324,10 @@ export class CfHarnessPromptLoop {
    * its user-facing message as text, and `submit_result` its value: a token
    * in a structured result is what the result writer resolves.
    * `weaver_action` is exempt because its input leaves the harness for the
-   * person's client: the strict action reader accepts only a loom id, a
-   * one-line command, or an http(s) url, so a handle token is refused rather
-   * than swapped for the canonical address string a client would then open or
-   * run, and the person approves exactly the text the model wrote. Returns
+   * person's Weaver: a loom id, an http(s) url, and a command's id and typed
+   * args reach it as the model wrote them, so a handle token is never swapped
+   * for a canonical address string the Weaver would then open or pass to a
+   * command, and the person approves exactly what the model asked for. Returns
    * `input` itself
    * when no substitution applies.
    */
@@ -5245,6 +5254,9 @@ export class CfHarnessPromptLoop {
       content: JSON.stringify(modelOutput),
       resultRef: result.resultRef,
     }, modelOutputResult.omissionRules ?? []);
+    const labeled = observations.length > 0
+      ? { cfcModelContextObservations: observations }
+      : {};
     if (toolId === "browser" && isBrowserScreenshotOutput(result.output)) {
       return {
         toolMessage,
@@ -5254,6 +5266,7 @@ export class CfHarnessPromptLoop {
             `Screenshot taken by browser (outputId: ${result.output.outputId}). Its pixels are the coordinates a click at a point takes.`,
           imageAttachments: [result.output.imageAttachment],
         }],
+        ...labeled,
       };
     }
     if (isViewImageToolSuccessOutput(result.output)) {
@@ -5269,6 +5282,7 @@ export class CfHarnessPromptLoop {
           content: followupContent,
           imageAttachments: [result.output.imageAttachment],
         }],
+        ...labeled,
       };
     }
     const taskOutcome = toolId === "finish_task" &&
@@ -5279,9 +5293,7 @@ export class CfHarnessPromptLoop {
     return {
       toolMessage,
       ...(taskOutcome !== undefined ? { taskOutcome } : {}),
-      ...(observations.length > 0
-        ? { cfcModelContextObservations: observations }
-        : {}),
+      ...labeled,
     };
   }
 
@@ -5302,7 +5314,7 @@ export class CfHarnessPromptLoop {
       // unscreened prompt-injection caveat, sourced to the page's origin, so
       // whatever the run derives from it carries the caveat on.
       const label = this.engine.browserHost !== undefined
-        ? browserHostResultLabel(output)
+        ? browserHostResultLabel(this.engine.browserHost, output)
         : undefined;
       const observations = label === undefined ? {} : {
         cfcModelContextObservations: [{
@@ -5589,6 +5601,36 @@ export class CfHarnessPromptLoop {
         ),
       };
     }
+    if (toolId === "run_command" && isObjectNotArray(output)) {
+      // A command's answer is measured like a retrieval row: the model sees
+      // the entry, and the answer's label stays on the artifact as the
+      // observation the run's model context accumulates — for a batch, each
+      // result's entry and one observation joining their labels.
+      const view = runCommandModelView(output);
+      const observation = loomCommandModelContextObservation(
+        output,
+        resultRef,
+        toolCallId,
+      );
+      return {
+        output: stripInternalToolFields(view.output),
+        ...(observation !== undefined
+          ? { cfcModelContextObservations: [observation] }
+          : {}),
+        omissionRules: omissionRules(
+          createHarnessTranscriptOmissionRuleRecord(
+            "artifact-only",
+            resultRef,
+            view.artifactOnlyPointers,
+          ),
+          createHarnessTranscriptOmissionRuleRecord(
+            "model-context-truncation",
+            resultRef,
+            view.truncationPointers,
+          ),
+        ),
+      };
+    }
     if (toolId === "describe_handle") {
       // A disclosed schema's property names are whoever authored the schema's
       // own text, and the shape reduction passes them through deliberately —
@@ -5861,6 +5903,11 @@ export class CfHarnessPromptLoop {
         ownedRunscSandboxConfig: this.engine.ownedRunscSandboxConfig,
         configuredSandbox: this.engine.config.sandbox,
       }, childAcquiredSkill),
+      // Whichever of those it is, the child runs on the runtime this run's
+      // entrypoint selected, and records that it was selected the same way.
+      ...(this.engine.sandboxRuntimeChoice !== undefined
+        ? { sandboxRuntimeChoice: this.engine.sandboxRuntimeChoice }
+        : {}),
       // The parent's own record, narrowed to the one skill. Narrowed rather
       // than rebuilt so the child's record keeps the time the acquisition was
       // written, which is what it is a record of.
@@ -6268,10 +6315,17 @@ export class CfHarnessPromptLoop {
       if (parentHandleTableChanged) {
         await this.engine.recordHandleTable(parentHandleTable);
       }
-      summary = childFinalText +
-        (delegateInput.returnSchema === undefined
-          ? searchSourceSummary(nativeModelToolResults)
-          : "");
+      // Once a hand-off was sent, a page a browser host's child read may show
+      // the owner's account, which no label describes, so the child's words
+      // stay sealed, as its structured return's strings do.
+      summary = delegateInput.profile === BROWSER_SUBAGENT_PROFILE &&
+          this.engine.browserHost !== undefined &&
+          browserHostHandedOff(this.engine.browserHost)
+        ? "The browser child's reply is sealed: a hand-off to the owner was sent, so a page it read may show their account."
+        : childFinalText +
+          (delegateInput.returnSchema === undefined
+            ? searchSourceSummary(nativeModelToolResults)
+            : "");
       childModelTurns = childResult.modelTurns;
       if (childResult.runState.status !== "completed") {
         subagentStatus = "failed";

@@ -1040,17 +1040,21 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   // connection.
 
   /**
-   * The space's root pattern.
+   * The space's root pattern, or `undefined` when the space has none.
    *
    * `start` defaults to true, which is what a view that renders the root
    * needs. Pass false to read what the root exported without running it —
    * far cheaper on a space whose root reaches a large piece, and enough for
    * a caller that only wants an exported sub-page or listing.
+   *
+   * Opening a space with `start` true creates its root when it has none and
+   * this runtime's identity owns the space. Reading with `start` false never
+   * creates one, and neither does any other principal's open.
    */
   async getSpaceRootPattern(
     space: DID,
     options: { start?: boolean } = {},
-  ): Promise<PieceHandle<NameSchema>> {
+  ): Promise<PieceHandle<NameSchema> | undefined> {
     const response = await this.#conn.request<
       RequestType.GetSpaceRootPattern
     >({
@@ -1058,6 +1062,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space,
       ...(options.start === undefined ? {} : { start: options.start }),
     });
+    if (response.piece === undefined) return undefined;
     return new PieceHandle<NameSchema>(this, response.piece);
   }
 
@@ -1073,18 +1078,6 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       ...(label === undefined ? {} : { label }),
     });
     return response.space;
-  }
-
-  async recreateSpaceRootPattern(
-    space: DID,
-  ): Promise<PieceHandle<NameSchema>> {
-    const response = await this.#conn.request<
-      RequestType.RecreateSpaceRootPattern
-    >({
-      type: RequestType.RecreateSpaceRootPattern,
-      space,
-    });
-    return new PieceHandle<NameSchema>(this, response.piece);
   }
 
   async getPiece<T = unknown>(
@@ -1389,10 +1382,13 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * runtime's session there, and resolves once the server has decided. An
    * admission runs again every computation whose `spaceAccess(target)`
    * answer turned on the refusal, and repeats the loads the refusal failed; a
-   * refusal leaves the space refused. It is for a host with word that the
-   * runtime's principal was granted access, such as a notice naming the
-   * space, and does nothing for a space the runtime has not opened. It
-   * rejects on any failure other than a refusal.
+   * refusal leaves the space refused. It is for a host with reason to think
+   * the verdict changed, such as a notice naming the space or a person
+   * returning to a view of it, and does nothing for a space the runtime has
+   * not opened. A call made while a retry of the same space is in flight,
+   * whether this client's or a rendered retry control's, shares that retry
+   * rather than asking again, and a rendered retry control shows it in
+   * flight either way. It rejects on any failure other than a refusal.
    */
   async retrySpaceAccess(space: DID): Promise<void> {
     await this.#conn.request<RequestType.RetrySpaceAccess>({

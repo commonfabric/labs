@@ -2439,9 +2439,9 @@ function toolInputRequiredIntegrityFailure(
       }
     }
   }
-  // Compound schemas: mirror the IFC schema walker — descend into every
-  // branch. For a required-integrity FLOOR, requiring the union across
-  // branches is the fail-safe (over-require) direction, matching walkIfcSchema.
+  // Compound schemas: descend into every branch, as `cfcSchemaEntries` does.
+  // For a required-integrity FLOOR, requiring the union across branches is
+  // the fail-safe (over-require) direction.
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
     const branches = structural[key];
     if (Array.isArray(branches)) {
@@ -3514,7 +3514,7 @@ export function llmDialog(
         turn.internal.withTx(tx).key("requestId").set("");
       }
       runtime.prepareTxForCommit(tx);
-      return tx.commit().then((outcome) => {
+      return tx.commit().settled.then((outcome) => {
         if (outcome.error) {
           logger.warn(
             "dialog-claim-cleanup-failed",

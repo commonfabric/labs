@@ -969,10 +969,6 @@ function onlyOn(
 const ROOT_DIRECTORY_COMMANDS: readonly string[] = [
   "check",
   "piece new",
-  // Both mounts of `set-home`: the superseded one keeps completing its own
-  // flags for a caller who has not migrated, it is only never suggested.
-  "piece set-home",
-  "space set-home",
   "piece setsrc",
   "piece survey",
   "test",
@@ -1056,6 +1052,10 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   "local-api-url": () => Promise.resolve(apiUrlCandidates()),
   "loom-retrieval-config": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  "local-job-profiles": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  "local-jobs-socket": () => Promise.resolve(directive({ kind: "files" })),
+  "local-jobs-store": () => Promise.resolve(directive({ kind: "files" })),
   "work-root": () => Promise.resolve(directive({ kind: "dirs" })),
   // A source directory on the commands that compile one, and an entity on
   // `inspect graph`.
@@ -1186,8 +1186,6 @@ const ARGUMENT_PROVIDERS: Readonly<
   "exec:mountedFile": () => Promise.resolve(directive({ kind: "files" })),
   "id did:keypath": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.key" })),
-  "piece set-home:main": patternFiles,
-  "space set-home:main": patternFiles,
   "piece getsrc:outpath": () => Promise.resolve(directive({ kind: "files" })),
   "deps update:file": () => Promise.resolve(directive({ kind: "files" })),
   "fuse mount:mountpoint": () => Promise.resolve(directive({ kind: "dirs" })),

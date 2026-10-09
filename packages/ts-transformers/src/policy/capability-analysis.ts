@@ -582,6 +582,22 @@ function getLiteralElementText(
   return expr.text;
 }
 
+/**
+ * Path segment an element access's key denotes, when the key is a literal or
+ * an expression whose type fixes it (`const KEY = "k"`, a Common Fabric key).
+ * Returns `undefined` for a key that can name any member, which makes the
+ * access dynamic.
+ */
+function getStaticElementKey(
+  argument: ts.Expression | undefined,
+  checker?: ts.TypeChecker,
+): string | undefined {
+  if (isLiteralElement(argument)) {
+    return getLiteralElementText(argument);
+  }
+  return argument && getKnownComputedKeyPathSegment(argument, checker);
+}
+
 function extractLiteralPathArguments(
   args: readonly ts.Expression[],
   checker?: ts.TypeChecker,
@@ -647,16 +663,11 @@ function extractAccessPath(
 
     if (ts.isElementAccessExpression(current)) {
       optional ||= !!current.questionDotToken;
-      if (isLiteralElement(current.argumentExpression)) {
-        path.unshift(getLiteralElementText(current.argumentExpression));
+      const key = getStaticElementKey(current.argumentExpression, checker);
+      if (key !== undefined) {
+        path.unshift(key);
       } else {
-        const knownKey = current.argumentExpression &&
-          getKnownComputedKeyPathSegment(current.argumentExpression, checker);
-        if (knownKey) {
-          path.unshift(knownKey);
-        } else {
-          dynamic = true;
-        }
+        dynamic = true;
       }
       current = unwrapExpression(current.expression);
       continue;
@@ -2066,6 +2077,16 @@ export function analyzeFunctionCapabilities(
     // READER_METHODS handler encounters these, it skips the blanket [] read.
     const resolvedGetCalls = new Set<ts.Node>();
 
+    // The calls the innermost `resolveBinding()` in progress passed through.
+    // Each call keeps its own list: on success it hands the list to the call
+    // enclosing it, or adds it to `resolvedGetCalls` when it is the outermost,
+    // and on failure it drops the list. So a chain that resolves partway and
+    // then fails, as at an element access by a key no static path can name,
+    // leaves its calls to the READER_METHODS handler's blanket read, even
+    // where an enclosing resolution succeeds by another branch, as
+    // `a.get().p ?? x.get().offers[key].space` does by its left operand.
+    let pendingResolvedGetCalls: ts.Node[] | undefined;
+
     // Track alias names (e.g. "notes") that were resolved with specific
     // property paths through a .get() chain.  When the identifier handler
     // encounters a synthetic identifier with no parent pointer, it can skip
@@ -2237,6 +2258,33 @@ export function analyzeFunctionCapabilities(
     const resolveBinding = (
       expression: ts.Expression,
     ): AliasBinding | undefined => {
+      const enclosing = pendingResolvedGetCalls;
+      const pending: ts.Node[] = [];
+      pendingResolvedGetCalls = pending;
+      let binding: AliasBinding | undefined;
+      try {
+        binding = resolveBindingUncommitted(expression);
+      } finally {
+        pendingResolvedGetCalls = enclosing;
+      }
+      if (binding) {
+        for (const call of pending) {
+          if (enclosing) {
+            enclosing.push(call);
+          } else {
+            resolvedGetCalls.add(call);
+          }
+        }
+      }
+      return binding;
+    };
+
+    // The body of `resolveBinding()`. It pushes each call whose result it
+    // resolves through onto `pendingResolvedGetCalls`, and `resolveBinding()`
+    // decides what becomes of them.
+    const resolveBindingUncommitted = (
+      expression: ts.Expression,
+    ): AliasBinding | undefined => {
       const current = unwrapExpression(expression);
       if (
         ts.isBinaryExpression(current) &&
@@ -2280,24 +2328,14 @@ export function analyzeFunctionCapabilities(
           (ts.isCallExpression(current.expression)
             ? buildAliasBindingFromExpression(current.expression)
             : undefined);
-        if (innerBinding) {
-          if (ts.isPropertyAccessExpression(current)) {
-            if (ts.isCallExpression(current.expression)) {
-              resolvedGetCalls.add(current.expression);
-            }
-            return resolveShapePath(innerBinding, [current.name.text]);
+        const key = ts.isPropertyAccessExpression(current)
+          ? current.name.text
+          : getStaticElementKey(current.argumentExpression, checker);
+        if (innerBinding && key !== undefined) {
+          if (ts.isCallExpression(current.expression)) {
+            pendingResolvedGetCalls?.push(current.expression);
           }
-          if (
-            ts.isElementAccessExpression(current) &&
-            isLiteralElement(current.argumentExpression)
-          ) {
-            if (ts.isCallExpression(current.expression)) {
-              resolvedGetCalls.add(current.expression);
-            }
-            return resolveShapePath(innerBinding, [
-              getLiteralElementText(current.argumentExpression),
-            ]);
-          }
+          return resolveShapePath(innerBinding, [key]);
         }
       }
 

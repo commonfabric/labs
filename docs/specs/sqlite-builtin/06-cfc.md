@@ -458,7 +458,8 @@ construction. Observation ceilings for ordinary cells require concrete clauses.
 Database-owner and current-principal placeholders in a ceiling bind only at the
 SQLite query boundary; they do not admit a concrete label on an unrelated
 persisted cell. This differs from a fresh store's `User(CurrentPrincipal)`
-confidentiality declaration, which binds to its creator during commit.
+confidentiality declaration, which binds during commit to its creator, or to
+the stored readers of a private parent it is created beneath.
 
 Constructing an `asCell` handle may probe the terminal target's shape without
 reading its protected payload. Every intermediate redirect remains a pointer
@@ -886,15 +887,19 @@ key and the result cell's coordinates. The salt is a runtime secret
 (`packages/runner/src/runtime-secret.ts`): one document per space at a
 reserved id, minted with a random value by the first settle that needs it.
 The transaction write chokepoint refuses every unprivileged write to that id,
-and the one writer, `ensureRuntimeSecret()`, returns nothing. A stored salt is
-trusted only when its stored schema carries the writer claim
-`writeAuthorizedBy: ["runtime-secret"]`, which the runtime records under that
-builtin identity when it mints one and which no executed code can satisfy. A
-value planted in the namespace before the chokepoint existed, or through a
-runtime without it, carries no such claim, and the next settle replaces it. The salt is labeled with the
-read-failed atom, which no ceiling admits, so code that reads it cannot
-write, display or send anything derived from it; the builtin reads it as a
-verifier-internal read, which joins nothing to the settle's label. Without
+and the one writer, `ensureRuntimeSecret()`, returns nothing; the read
+chokepoint refuses every read of its value but the runtime's own, so no
+executed code reads the salt. A stored salt is trusted only when its stored
+schema carries the writer claim `writeAuthorizedBy: ["runtime-secret"]`, which
+the runtime records under that builtin identity when it mints one and which no
+executed code can satisfy. A value planted in the namespace before the
+chokepoint existed, or through a runtime without it, carries no such claim,
+and the next settle replaces it. A value whose stored schema resolves neither
+in the replica nor in the schema registry is neither trusted nor untrusted,
+and the settle fails rather than replace it, since replacing a trusted salt
+would re-key every row document. The salt is labeled with the read-failed
+atom, which no ceiling admits; the builtin reads it as a verifier-internal
+read, which joins nothing to the settle's label. Without
 the salt the id would be a value computable from the row, and the reference
 at each slot would have to carry the row's label so that a reader could not
 confirm a guess at a row by recomputing its id (§8.17.6 rule 4). With it the
@@ -906,11 +911,10 @@ Three residuals are recorded against §8.17.6:
   slots holding equal rows hold one id, and a row that stays in a result
   across a change of parameter keeps its id. A reader of the result learns
   both under `S` and the membership labels, without reading a row.
-- **The salt's protection is its label.** Anything that reads the space's
-  documents outside the runtime, or a runtime whose enforcement mode does not
-  refuse writes on labels, can read the salt and recompute ids. The residual
-  a recomputed id opens is the one the salt closes: whether a guessed row is
-  in a result, disclosed without the row's label.
+- **The salt's protection is the runtime's.** Anything that reads the
+  space's documents outside the runtime can read the salt and recompute ids.
+  The residual a recomputed id opens is the one the salt closes: whether a
+  guessed row is in a result, disclosed without the row's label.
 - **A row document is immutable by construction of its writer, and nothing
   refuses another writer.** The builtin never writes a document twice. A
   pattern holding a row reference can write to it. A writer claim naming the

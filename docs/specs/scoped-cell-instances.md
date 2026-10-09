@@ -379,7 +379,9 @@ for each actor instance. The setup that first declares the cell commits its
 manifest and default together. On a later independently owned start, an accepted
 manifest authorizes filling an absent actor instance in a separate transaction
 for that cell, before execution. Reading another private argument or another
-actor's cell during setup must not taint this constant default. The current
+actor's cell during setup must not taint this constant default. The default
+does carry the label on its owning piece's root, which the filling transaction
+reads on its own, and no label of the piece's fields. The current
 pattern pointer, manifest declaration, and absence remain commit dependencies;
 existing values and ordinary CFC label and write-authority checks still apply.
 Dependency synchronization alone never initializes a default. A speculative
@@ -580,9 +582,20 @@ cell's scope is not changed. This is the explicit path by which data can move
 from narrower scopes to wider scopes. The scope system itself permits this
 write; CFC/IFC policy may still record or restrict the flow separately.
 
-Transactions must track the narrowest scoped document read during a
-computation so the runtime can decide whether the output value must be replaced
-with a scoped link.
+Transactions must track the narrowest scope read during a computation so the
+runtime can decide whether the output value must be replaced with a scoped
+link. A read narrows that scope by the address it lands on, and a read that
+follows a link from a position declared narrower than the link's own scope
+narrows it to the declared scope whether or not an instance at that scope
+exists. The declaration is what every reader of the same documents shares: a
+reader holding an instance at the declared scope and one that does not must
+place the computation's output the same way, or each replaces the other's
+output and neither converges.
+
+A broad output location that already holds a link to its own narrower-scoped
+instance keeps that link. A computation whose reads did not narrow that far
+writes behind the link, into its own instance at the stored scope, rather than
+over it.
 
 ## Built-In Default Scope Rules
 
@@ -655,6 +668,22 @@ irrespective of this feature.
 The serialized declared scope (`space`, `user`, `session`, `inherit`, or `any`
 in schema positions) is distinct from `scope_key`. Declared scope is authoring
 and traversal metadata. `scope_key` is the runtime storage address dimension.
+
+Each instance stores its own CFC envelope beside its value. A write that
+narrows a slot's content into a scoped instance records the slot's schema
+policy input at that instance, so its envelope carries the labels the slot's
+schema declares and the write's per-path flow stamps. The flow stamp of a
+whole value a writer set is not recorded there. The broader slot keeps the
+label its own schema declares, beside the redirect.
+
+The cell label views and the runtime read ceiling read a scoped instance's
+labels as its own envelope joined with the confidentiality that a value read
+of each broader instance of the same id consumes: the space instance's for a
+user instance, the user and space instances' for a session instance. Entries
+labeling the pointer the broader slot holds are left out, and integrity comes
+from the instance's own envelope alone. Other readers, among them the flow
+join, the labels a schema read carries across links, dereference traces and
+label introspection, read the instance's own envelope only.
 
 ## Migration And Compatibility
 

@@ -33,6 +33,13 @@ export const PROD_SERVICE = "toolshed-production";
 export const LOOM_REPO = Deno.env.get("DASHBOARD_LOOM_REPO") ?? "commonfabric/loom";
 export const LOOM_CI_WORKFLOW = "test-fast.yml";
 
+// The branch each repository's CI moves to the newest commit of main whose
+// tests passed, by repository. Every view of a run on main marks a commit the
+// branch is or was at (green-branch.ts).
+export const GREEN_BRANCHES: Readonly<Record<string, string>> = {
+  [LOOM_REPO]: "main-green",
+};
+
 // The weaver repo and its CI workflow, for the weaver-repo CI tiles.
 export const WEAVER_REPO = Deno.env.get("DASHBOARD_WEAVER_REPO") ??
   "commonfabric/commonfabric-weaver";

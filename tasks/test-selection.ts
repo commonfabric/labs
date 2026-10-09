@@ -35,7 +35,6 @@ import {
 import { maxOf } from "@commonfabric/utils/math";
 import {
   DIALS,
-  dialValue,
   EXCLUDED_FROM_COVERAGE_GATE,
   LANE_BUDGET_SECONDS,
   LANES,
@@ -48,11 +47,7 @@ import {
   lanePlan,
   resolveManifest,
 } from "./ci-lane.ts";
-import {
-  capabilitiesBySuite,
-  loadTopology,
-  unitProcesses,
-} from "./test-topology.ts";
+import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
 import {
   measuredCostLines,
@@ -62,7 +57,12 @@ import {
 } from "./test-selection/coverage.ts";
 import type { Manifest } from "./test-selection/manifest.ts";
 import { calibrationHealth, healthLines } from "./test-selection/health.ts";
-import { crowdingLine, unholdableSuites } from "./test-selection/plan.ts";
+import { nearestBaseline, nearestOnBranch } from "./coverage-gate.ts";
+import {
+  crowdingLine,
+  placedOnlyMandatory,
+  unholdableSuites,
+} from "./test-selection/plan.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 const USAGE = `usage: test-selection <mode>
@@ -145,7 +145,7 @@ export function dialLines(): string[] {
   const width = maxOf(DIALS.map((dial) => dial.name.length));
   for (const dial of DIALS) {
     lines.push(
-      `${pad(dial.name, width)}  ${dialValue(dial)} ${dial.unit} ` +
+      `${pad(dial.name, width)}  ${dial.value} ${dial.unit} ` +
         `(${dial.setBy})`,
     );
     lines.push(`${" ".repeat(width)}  ${dial.why}`);
@@ -163,13 +163,16 @@ export function dialLines(): string[] {
  * carries no set and the reason it does not.
  *
  * The two halves answer the two questions somebody brings here: what am I
- * being compared against, and why is my package not gated.
+ * being compared against, and why is my package not gated. The baseline
+ * is the one the coverage gate takes, chosen by `nearest` from the
+ * commits the manifest holds one at.
  */
-export function coverageLines(
+export async function coverageLines(
   manifest: Manifest | undefined,
   sets: readonly MeasuredSetRef[],
   members: readonly string[],
-): string[] {
+  nearest: (commits: readonly string[]) => Promise<string | undefined>,
+): Promise<string[]> {
   const names = sets.map(measuredSetName);
   const ungated = members.filter((member) =>
     !sets.some((ref) => ref.set.member === member)
@@ -178,21 +181,23 @@ export function coverageLines(
     1,
     maxOf([...names, ...ungated].map((name) => name.length)),
   );
-  const baselines = new Map(
-    (manifest?.coverageBaselines ?? []).map((
-      base,
-    ) => [`${base.suite}/${base.member}`, base]),
-  );
-  const lines = sets.map((ref, index) => {
-    const name = names[index]!;
-    const baseline = baselines.get(name);
+  const lines: string[] = [];
+  for (const [index, ref] of sets.entries()) {
+    const baseline = await nearestBaseline(
+      manifest?.coverageBaselines ?? [],
+      ref.suite,
+      ref.set.member,
+      nearest,
+    );
     const against = baseline === undefined
       ? "no baseline yet"
       : `${baseline.uncoveredLines} uncovered lines at ${baseline.commit}`;
     const units = ref.set.units.length;
-    return `${pad(name, width)}  ${units} ${units === 1 ? "unit" : "units"}, ` +
-      `against ${against}`;
-  });
+    lines.push(
+      `${pad(names[index]!, width)}  ${units} ` +
+        `${units === 1 ? "unit" : "units"}, against ${against}`,
+    );
+  }
   for (const member of ungated) {
     const excluded = EXCLUDED_FROM_COVERAGE_GATE.get(member);
     lines.push(
@@ -243,8 +248,14 @@ export interface PlanVerdict {
   /** How many times it would run, which a pass may have trimmed. */
   repeats?: number;
 
+  /** Set when its unit runs whole and holds a withheld test. */
+  heldWithUnit?: boolean;
+
   /** Set when no lane can hold it, whatever the budget. */
   unschedulable?: boolean;
+
+  /** Set when the plan places nothing beyond its mandatory tests. */
+  crowded?: boolean;
 
   /**
    * What a lane running nothing else would pay for it: its corrected own
@@ -325,10 +336,19 @@ export function explainLines(
   // packing, and only the packing knows it.
   if (verdict.selected) {
     lines.push("  this commit's manifest selects it");
+  } else if (verdict.heldWithUnit) {
+    lines.push(
+      "  held back with its unit: the unit runs whole and holds a test too " +
+        "flaky to judge a change by, so a pull request runs it only where " +
+        "that unit is one that must run",
+    );
   } else if (!verdict.unschedulable && held === undefined) {
     lines.push(
-      "  this commit's manifest does not reach it: the budget runs out " +
-        "first, on tests worth more per second",
+      verdict.crowded
+        ? "  this commit's manifest does not reach it: the tests that must " +
+          "run leave no room in the lanes for anything else"
+        : "  this commit's manifest does not reach it: the lanes fill what " +
+          "the tests that must run leave of their budget with other tests",
     );
   }
   return lines;
@@ -429,6 +449,10 @@ export function verdictFor(
     corpus,
   };
   if (taken !== undefined) verdict.repeats = taken.repeats;
+  if (placedOnlyMandatory(laid)) verdict.crowded = true;
+  if (laid.heldWithUnit.some((held) => testIdentityKey(held) === key)) {
+    verdict.heldWithUnit = true;
+  }
   const refused = laid.unschedulable.find((entry) =>
     testIdentityKey(entry.test) === key
   );
@@ -525,6 +549,11 @@ export interface Sources {
 
   /** The suites, read from the working tree at `root`. */
   topology(root: string): Promise<readonly Suite[]>;
+
+  /** Which of a set of commits the checkout at `root` holds most recently. */
+  nearest(
+    root: string,
+  ): (commits: readonly string[]) => Promise<string | undefined>;
 }
 
 const LIVE: Sources = {
@@ -532,6 +561,7 @@ const LIVE: Sources = {
   members: gatedMembers,
   aliases: loadAliasResolver,
   topology: loadTopology,
+  nearest: nearestOnBranch,
 };
 
 /**
@@ -619,7 +649,12 @@ export async function dispatch(
       const topology = await sources.topology(root);
       const sets = measuredSets(topology);
       for (
-        const line of coverageLines(manifest, sets, await sources.members())
+        const line of await coverageLines(
+          manifest,
+          sets,
+          await sources.members(),
+          sources.nearest(root),
+        )
       ) {
         console.log(line);
       }
@@ -709,7 +744,6 @@ export async function dispatch(
           manifest,
           previous: before.manifest,
           capabilities: capabilitiesBySuite(topology),
-          processes: unitProcesses(topology),
           observations: { charges: [], lanes: [] },
         });
       }

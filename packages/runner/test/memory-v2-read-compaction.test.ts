@@ -52,7 +52,7 @@ describe("memory-v2-read-compaction", () => {
           section1: { field0: "value2" },
         },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       tx.readValueOrThrow({ ...DOCUMENT_ADDRESS, space, path: [] });
@@ -88,7 +88,7 @@ describe("memory-v2-read-compaction", () => {
           section1: { field0: "value2" },
         },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       tx.readValueOrThrow(
@@ -120,6 +120,278 @@ describe("memory-v2-read-compaction", () => {
       await storage.close();
     });
 
+    it("states a subtree whose every member is read as one recursive read and one shallow read", async () => {
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-read-in-full",
+      );
+      const space = signer.did();
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        {
+          section0: { field0: "value0", field1: ["item0"] },
+          section1: { field0: "value2" },
+        },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      for (
+        const path of [
+          [],
+          ["section0"],
+          ["section0", "field1"],
+          ["section0", "absent"],
+          ["section1"],
+          ["section1", "field0"],
+        ]
+      ) {
+        tx.readValueOrThrow(
+          { ...DOCUMENT_ADDRESS, space, path },
+          { nonRecursive: true },
+        );
+      }
+      tx.readValueOrThrow({
+        ...DOCUMENT_ADDRESS,
+        space,
+        path: ["section0", "field0"],
+      });
+      tx.readValueOrThrow({
+        ...DOCUMENT_ADDRESS,
+        space,
+        path: ["section0", "field1", "0"],
+      });
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+
+      const seq = reads.confirmed[0]?.seq;
+      expect(reads.pending).toEqual([]);
+      expect(reads.confirmed).toEqual([
+        {
+          id: DOCUMENT_ADDRESS.id,
+          scope: "space",
+          path: toDocumentPath(["value"]),
+          seq,
+          nonRecursive: true,
+        },
+        {
+          id: DOCUMENT_ADDRESS.id,
+          scope: "space",
+          path: toDocumentPath(["value"]),
+          seq,
+        },
+      ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("keeps the shape read of a container with a member nobody read", async () => {
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-member-unread",
+      );
+      const space = signer.did();
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        {
+          section0: { field0: "value0", field1: "value1" },
+          section1: { field0: "value2" },
+        },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      for (const path of [[], ["section0"], ["section0", "field0"]]) {
+        tx.readValueOrThrow(
+          { ...DOCUMENT_ADDRESS, space, path },
+          { nonRecursive: true },
+        );
+      }
+      tx.readValueOrThrow({
+        ...DOCUMENT_ADDRESS,
+        space,
+        path: ["section0", "field1"],
+      });
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+
+      expect(
+        reads.confirmed.map(({ path, nonRecursive }) => ({
+          path,
+          nonRecursive,
+        })),
+      ).toEqual([
+        { path: toDocumentPath(["value"]), nonRecursive: true },
+        { path: toDocumentPath(["value", "section0"]), nonRecursive: true },
+        { path: toDocumentPath(["value", "section0"]) },
+      ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("keeps member reads apart when nothing reads their container's shape", async () => {
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-shape-unread",
+      );
+      const space = signer.did();
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        { section0: { field0: "value0", field1: "value1" } },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      for (const path of [["section0", "field0"], ["section0", "field1"]]) {
+        tx.readValueOrThrow(
+          { ...DOCUMENT_ADDRESS, space, path },
+          { nonRecursive: true },
+        );
+      }
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+
+      expect(reads.confirmed.map(({ path }) => path)).toEqual([
+        toDocumentPath(["value", "section0", "field0"]),
+        toDocumentPath(["value", "section0", "field1"]),
+      ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("keeps a shallow read where it merges an array element, so a shift of the array still conflicts", async () => {
+      // An indexed removal before `list/1` shifts a different element into
+      // it. The shallow read conflicts with that removal, and the recursive
+      // read does not.
+
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-array-element",
+      );
+      const space = signer.did();
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        { list: [["value0"], ["value1", "value2"]] },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      tx.readValueOrThrow({ ...DOCUMENT_ADDRESS, space, path: ["list", "1"] });
+      for (const path of [["list", "1", "0"], ["list", "1", "1"]]) {
+        tx.readValueOrThrow(
+          { ...DOCUMENT_ADDRESS, space, path },
+          { nonRecursive: true },
+        );
+      }
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+
+      expect(
+        reads.confirmed.map(({ path, nonRecursive }) => ({
+          path,
+          nonRecursive,
+        })),
+      ).toEqual([
+        { path: toDocumentPath(["value", "list", "1"]), nonRecursive: true },
+        { path: toDocumentPath(["value", "list", "1"]) },
+      ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("keeps both a shallow and a recursive read of one path", async () => {
+      // A removal before `list/1` shifts a different element into it. The
+      // shallow read conflicts with that removal, and the recursive read does
+      // not.
+
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-both-kinds",
+      );
+      const space = signer.did();
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        { list: ["value0", "value1"] },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      tx.readValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space, path: ["list", "1"] },
+        { nonRecursive: true },
+      );
+      tx.readValueOrThrow({ ...DOCUMENT_ADDRESS, space, path: ["list", "1"] });
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+
+      expect(
+        reads.confirmed.map(({ path, nonRecursive }) => ({
+          path,
+          nonRecursive,
+        })),
+      ).toEqual([
+        { path: toDocumentPath(["value", "list", "1"]), nonRecursive: true },
+        { path: toDocumentPath(["value", "list", "1"]) },
+      ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("counts an array's `length` read as none of its elements", async () => {
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-array-length",
+      );
+      const space = signer.did();
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        { list: ["value0", "value1"] },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      tx.readValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space, path: ["list"] },
+        { nonRecursive: true },
+      );
+      for (const path of [["list", "0"], ["list", "length"]]) {
+        tx.readValueOrThrow({ ...DOCUMENT_ADDRESS, space, path });
+      }
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+
+      expect(
+        reads.confirmed.map(({ path, nonRecursive }) => ({
+          path,
+          nonRecursive,
+        })),
+      ).toEqual([
+        { path: toDocumentPath(["value", "list"]), nonRecursive: true },
+        { path: toDocumentPath(["value", "list", "0"]) },
+        { path: toDocumentPath(["value", "list", "length"]) },
+      ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
     it("excludes inline data URI reads from tracked commit dependencies", async () => {
       const { signer, storage, runtime } = await createRuntime(
         "memory-v2-read-compaction-inline-data",
@@ -132,7 +404,7 @@ describe("memory-v2-read-compaction", () => {
         { ...DOCUMENT_ADDRESS, space },
         { live: { nested: "value" } },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       tx.readValueOrThrow({ ...DOCUMENT_ADDRESS, space, path: ["live"] });
@@ -177,7 +449,7 @@ describe("memory-v2-read-compaction", () => {
         { ...DOCUMENT_ADDRESS, space },
         { refShape: { a: 1, b: 2 }, scalar: 5, other: 7 },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       // (1) marked + nonRecursive: an asCell reference-resolution shape read;
@@ -239,7 +511,7 @@ describe("memory-v2-read-compaction", () => {
         { ...DOCUMENT_ADDRESS, space },
         { refShape: { a: 1, b: 2 } },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       // The link read: a marked, nonRecursive reference-resolution shape read.

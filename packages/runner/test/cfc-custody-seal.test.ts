@@ -32,6 +32,7 @@ import {
 } from "../src/cfc/policy.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
+import { hostGestureProvenance } from "../src/cfc/host-review.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -145,7 +146,7 @@ const PROJECT: ImplementationIdentity = {
 const trustedClick = (pattern = "CustodySeal") => {
   const event = {
     type: "click",
-    provenance: { origin: "dom", trusted: true, ui: { pattern } },
+    provenance: hostGestureProvenance(pattern),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -228,7 +229,7 @@ const setup = async (
   terms.set((options.terms ?? TERMS) as never);
   // The room document whose cells receive the seal's links.
   host.getCell(S, "room-cells", undefined, install).set({} as never);
-  expect((await install.commit()).error).toBeUndefined();
+  expect((await install.commit().settled).error).toBeUndefined();
   // The room space's access list: its identity owns it, and the members read
   // and write it.
   const roomAcl = new ACLManager(runtimeFor(roomOwner), S);
@@ -283,7 +284,7 @@ const setup = async (
           },
         },
       } as FabricValue);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell.withTx(undefined);
     },
     /**
@@ -326,7 +327,7 @@ const setup = async (
           },
         },
       } as FabricValue);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell.withTx(undefined);
     },
     /** Replaces the room's terms; a seat given as a cell is stored as a link. */
@@ -335,7 +336,7 @@ const setup = async (
       const tx = runtime.edit();
       runtime.getCellFromLink(terms.getAsNormalizedFullLink(), undefined, tx)
         .set(value as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     },
     /** Prepares and commits one seal with a trusted click. */
     async seal(
@@ -425,7 +426,7 @@ const project = async (
     },
   } as never, tx);
   output.set({ count: Object.keys(entries).length } as never);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   return storedEntries(runtime, output).flatMap((entry) =>
     entry.label.integrity ?? []
   );
@@ -465,7 +466,7 @@ const projectThrough = async (
     },
   } as never, tx);
   output.set({ sushi: choices.filter((c) => c === "sushi").length } as never);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   return storedEntries(runtime, output).flatMap((entry) =>
     entry.label.integrity ?? []
   );
@@ -669,7 +670,7 @@ describe("cfc-custody-seal", () => {
           ifc: { confidentiality: [cfcAtom.space(S)] },
         } as never, tx);
         crafted.set({ choice: "pizza", budget: 1 } as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         const integrity = await project(fixture, carol, box, [crafted]);
         expect(integrity).toContainEqual({
@@ -788,7 +789,7 @@ describe("cfc-custody-seal", () => {
             bindingPath: ["overwrite"],
           });
           write(local.withTx(tx) as Cell<unknown>);
-          outcomes[where] = (await tx.commit()).error !== undefined;
+          outcomes[where] = (await tx.commit().settled).error !== undefined;
         }
         expect(outcomes).toEqual(
           Object.fromEntries(writes.map(([where]) => [where, true])),
@@ -820,7 +821,7 @@ describe("cfc-custody-seal", () => {
           bindingPath: ["replace"],
         });
         local.withTx(tx).set("gone" as never);
-        const { error } = await tx.commit();
+        const { error } = await tx.commit().settled;
         expect(String((error as Error | undefined)?.message)).toContain(
           "writeAuthorizedBy requires a trusted builtin identity at /",
         );
@@ -854,7 +855,7 @@ describe("cfc-custody-seal", () => {
           }, tx).set(
             (squatted === "custodyAnchor" ? { instance } : {}) as never,
           );
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const refusal = fixture.seal(alice);
           await expect(refusal).rejects.toThrow(
             squatted === "custodyBox"
@@ -903,7 +904,7 @@ describe("cfc-custody-seal", () => {
             }],
           },
         } as never, tx).setRaw(target.getAsWriteRedirectLink() as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await expect(fixture.seal(alice)).rejects.toThrow(
           /anchor the seal did not create/,
         );
@@ -946,7 +947,7 @@ describe("cfc-custody-seal", () => {
           tx,
         );
         squat.set({ instance } as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(
           storedEntries(runtime, squat).flatMap((entry) =>
             entry.label.integrity ?? []
@@ -1520,7 +1521,7 @@ describe("cfc-custody-seal", () => {
             cfcAtom.user(rotated.did()),
             context(rotated.did()),
             rotated.did(),
-            { anyOf: [cfcAtom.user(alice.did()), cfcAtom.user(bob.did())] },
+            { anyOf: [cfcAtom.user(rotated.did()), cfcAtom.user(bob.did())] },
           ]
         ) {
           const draft = await fixture.draft(alice, honestStance, [clause]);
@@ -1528,6 +1529,166 @@ describe("cfc-custody-seal", () => {
           await expect(refusal).rejects.toThrow(/identity mismatch/);
           await expect(refusal).rejects.toThrow(alice.did());
         }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("seals a value made the actor's own from data shared with others, and names them", async () => {
+      // A message row is labeled with one clause naming its participants and
+      // the store's owner by bare DID (§13.12). Joined with a clause naming
+      // the actor alone, the row's clause is absorbed (§3.1.8(5)) and only
+      // the actor reads the value (§3.1.4); the actor's `User` and bare DID
+      // are one principal.
+      const fixture = await setup();
+      try {
+        const coHolder = await Identity.fromPassphrase(
+          "custody-seal-co-holder",
+        );
+        const row = {
+          anyOf: [cfcAtom.user(bob.did()), coHolder.did(), owner(alice)],
+        };
+        const draft = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          row,
+        ], "row");
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.sources).toEqual([]);
+        expect(prepared.heldWith).toEqual([
+          [bob.did(), coHolder.did()].sort(),
+        ]);
+        expect(Object.isFrozen(prepared.heldWith)).toBe(true);
+
+        // One clause per conversation: two chats stay two groups, and one
+        // group chat stays one.
+        const twoChats = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          { anyOf: [owner(alice), cfcAtom.user(bob.did())] },
+          { anyOf: [owner(alice), coHolder.did()] },
+        ], "two-chats");
+        expect(
+          (await prepareCustodySeal(twoChats, fixture.room(alice))).heldWith,
+        ).toEqual([[bob.did()], [coHolder.did()]].sort());
+
+        // The actor's own `Context` alternative absorbs a clause holding it,
+        // and is still a source the room must allow.
+        const messages = context(owner(alice), "messages");
+        const drawn = await fixture.draft(alice, honestStance, [
+          messages,
+          { anyOf: [messages, cfcAtom.user(bob.did())] },
+        ], "drawn");
+        const allowed = await prepareCustodySeal(drawn, fixture.room(alice), {
+          allowedSources: [messages],
+        });
+        expect(allowed.sources).toEqual([messages]);
+        expect(allowed.heldWith).toEqual([[bob.did()]]);
+        await expect(
+          prepareCustodySeal(drawn, fixture.room(alice), {
+            allowedSources: [context(owner(alice), "calendar")],
+          }),
+        ).rejects.toThrow(/source this room does not allow/);
+
+        // The receipt, the actor's own, records the people; the box entry,
+        // which every seat's projector reads, does not (Bob holds a seat, so
+        // the terms in the entry name him anyway). One entry per actor per
+        // room: the row's seal commits last.
+        const sealed = await commitCustodySeal(
+          prepared.consent,
+          trustedClick(),
+        );
+        expect((sealed.receipt.get() as { heldWith?: unknown }).heldWith)
+          .toEqual([[bob.did(), coHolder.did()].sort()]);
+        expect(JSON.stringify(sealed.box.get())).not.toContain(coHolder.did());
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a value someone else can also read", async () => {
+      const fixture = await setup();
+      try {
+        const carol = await Identity.fromPassphrase("custody-seal-carol");
+        const shared = {
+          anyOf: [cfcAtom.user(owner(alice)), cfcAtom.user(bob.did())],
+        };
+        // No clause names the actor alone, or none that the shared clause
+        // holds: a home space admits whom its access list admits, and a
+        // source is not the actor's person.
+        for (
+          const [index, label] of [
+            [shared],
+            [cfcAtom.space(alice.did()), shared],
+            [cfcAtom.personalSpace(alice.did()), shared],
+            [context(owner(alice), "messages"), shared],
+          ].entries()
+        ) {
+          const draft = await fixture.draft(
+            alice,
+            honestStance,
+            label,
+            `shared-${index}`,
+          );
+          const refusal = prepareCustodySeal(draft, fixture.room(alice));
+          await expect(refusal).rejects.toThrow(/can also read/);
+          await expect(refusal).rejects.toThrow(bob.did());
+          await expect(refusal).rejects.toThrow(alice.did());
+        }
+        // A clause the actor does not hold is refused whatever the others
+        // say: it names Carol, not Bob.
+        const unheld = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          shared,
+          cfcAtom.user(carol.did()),
+        ], "unheld");
+        const unheldRefusal = prepareCustodySeal(unheld, fixture.room(alice));
+        await expect(unheldRefusal).rejects.toThrow(/identity mismatch/);
+        await expect(unheldRefusal).rejects.toThrow(carol.did());
+        await expect(unheldRefusal).rejects.not.toThrow(bob.did());
+        // Beside the actor, a shared clause names only people, whom the
+        // dialog can name: not an expiry, a policy, another principal's
+        // source or space, a caveat by its short name, or an atom with extra
+        // fields.
+        for (
+          const [index, alternative] of [
+            cfcAtom.expires(Date.now() + 60_000),
+            policyOf(SCRATCH),
+            context(bob.did(), "messages"),
+            cfcAtom.space(S),
+            { ...cfcAtom.user(bob.did()), role: "reader" },
+            "prompt-injection-risk-unscreened",
+            "prompt-influence",
+          ].entries()
+        ) {
+          const draft = await fixture.draft(alice, honestStance, [
+            cfcAtom.user(owner(alice)),
+            { anyOf: [cfcAtom.user(owner(alice)), alternative] },
+          ], `not-a-person-${index}`);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/something other than a person/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses at commit a value relabeled after review to name someone else", async () => {
+      const fixture = await setup();
+      try {
+        const carol = await Identity.fromPassphrase("custody-seal-carol");
+        const draft = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          { anyOf: [owner(alice), cfcAtom.user(bob.did())] },
+        ], "relabeled");
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.heldWith).toEqual([[bob.did()]]);
+        await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          {
+            anyOf: [owner(alice), cfcAtom.user(bob.did()), carol.did()],
+          },
+        ], "relabeled");
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow(/review is stale/);
       } finally {
         await fixture.dispose();
       }
@@ -1820,7 +1981,7 @@ describe("cfc-custody-seal", () => {
             },
           },
         } as FabricValue);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const draft = await fixture.draft(alice, honestStance);
         const prepared = await prepareCustodySeal(draft, {
           ...fixture.room(alice),
@@ -1850,7 +2011,7 @@ describe("cfc-custody-seal", () => {
           },
         } as never, tx);
         twice.set({ open: true } as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const draft = await fixture.draft(alice, honestStance);
         await expect(prepareCustodySeal(draft, {
           ...fixture.room(alice),
@@ -1903,7 +2064,7 @@ describe("cfc-custody-seal", () => {
             ifc: { confidentiality: [clause] },
           } as never, tx);
           terms.set(TERMS as never);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const draft = await fixture.draft(alice, honestStance);
           const prepared = prepareCustodySeal(draft, {
             terms: terms.withTx(undefined),
@@ -2071,7 +2232,7 @@ describe("cfc-custody-seal", () => {
           ...TERMS,
           seats: [alice.did(), bob.did(), seat.getAsLink()],
         } as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const draft = await fixture.draft(alice, honestStance);
         await expect(prepareCustodySeal(draft, fixture.room(alice)))
           .rejects.toThrow(/seat 2 .*the room's readers do not hold/);
@@ -2101,7 +2262,7 @@ describe("cfc-custody-seal", () => {
           ...TERMS,
           seats: [alice.did(), bobSeat.getAsLink(), carolSeat.getAsLink()],
         } as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const draft = await fixture.draft(alice, honestStance);
         const prepared = await prepareCustodySeal(draft, fixture.room(alice));
         expect((prepared.terms as { seats: string[] }).seats).toEqual(
@@ -2156,13 +2317,13 @@ describe("cfc-custody-seal", () => {
               labelMap: { version: 1, entries },
             },
           } as FabricValue);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const write = runtime.edit();
           runtime.getCellFromLink(fixture.terms, undefined, write).setRaw({
             ...TERMS,
             seats: [alice.did(), bob.did(), seat.withTx(undefined).getAsLink()],
           } as never);
-          expect((await write.commit()).error).toBeUndefined();
+          expect((await write.commit().settled).error).toBeUndefined();
           const draft = await fixture.draft(alice, honestStance);
           await expect(prepareCustodySeal(draft, fixture.room(alice)))
             .rejects.toThrow(refusal);
@@ -2206,13 +2367,13 @@ describe("cfc-custody-seal", () => {
             },
           },
         } as FabricValue);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const write = runtime.edit();
         runtime.getCellFromLink(fixture.terms, undefined, write).setRaw({
           ...TERMS,
           seats: [alice.did(), bob.did(), seat.withTx(undefined).getAsLink()],
         } as never);
-        expect((await write.commit()).error).toBeUndefined();
+        expect((await write.commit().settled).error).toBeUndefined();
         const draft = await fixture.draft(alice, honestStance);
         await expect(prepareCustodySeal(draft, fixture.room(alice)))
           .rejects.toThrow(/seat 2 .*the room's readers do not hold/);
@@ -2238,7 +2399,7 @@ describe("cfc-custody-seal", () => {
           const tx = runtime.edit();
           runtime.getCellFromLink(fixture.terms, undefined, tx)
             .setRaw(terms as never);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const draft = await fixture.draft(alice, honestStance);
           await expect(prepareCustodySeal(draft, fixture.room(alice)))
             .rejects.toThrow(refusal);
@@ -2323,7 +2484,7 @@ describe("cfc-custody-seal", () => {
             const tx = runtime.edit();
             runtime.getCell(S, "custody-room-state", undefined, tx)
               .set(policyOf(SCRATCH) as never);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
           };
           if (stage === "review") await redeclare();
           else beforeEntry(runtime, redeclare);
@@ -2555,11 +2716,7 @@ describe("cfc-custody-seal", () => {
           const event of [
             {
               type: "click",
-              provenance: {
-                origin: "dom",
-                trusted: true,
-                ui: { pattern: "CustodySeal" },
-              },
+              provenance: hostGestureProvenance("CustodySeal"),
             },
             trustedClick("ShareSnapshot"),
             undefined,
@@ -2586,7 +2743,7 @@ describe("cfc-custody-seal", () => {
         const runtime = fixture.runtimes.get(alice)!;
         const tx = runtime.edit();
         (draft.withTx(tx) as Cell<{ budget: number }>).key("budget").set(41);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await expect(commitCustodySeal(prepared.consent, trustedClick()))
           .rejects.toThrow(/review is stale/);
       } finally {
@@ -2789,7 +2946,7 @@ describe("cfc-custody-seal", () => {
         ifc: { confidentiality: [cfcAtom.user(alice.did())] },
       } as never, tx);
       cell.set(value as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell.withTx(undefined);
     };
 
@@ -3024,7 +3181,7 @@ describe("cfc-custody-seal", () => {
               }],
             },
           } as never, tx).set({ open: true } as never);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const draft = await fixture.draft(alice, honestStance);
           const prepared = await prepareCustodySeal(
             draft,

@@ -315,7 +315,6 @@ describe("main command", () => {
         ["piece get-label", "cell get-label"],
         ["piece set-label", "cell set-label"],
         ["piece recreate-root", "space recreate-root"],
-        ["piece set-home", "space set-home"],
       ] as const
     ) {
       const old = await cf(`${superseded} --help`);
@@ -414,11 +413,11 @@ describe("main command", () => {
           // asking it again proves nothing: those are driven instead, and
           // must refuse for want of a space when the variable is absent.
           //
-          // Declaring the option is not reading it. `space set-home` takes
+          // Declaring the option is not reading it. A command that takes
           // `--space` through the shared target flags and acts on the
-          // identity's own home space regardless, so it satisfies every
-          // structural check and belongs on no list of what the variable
-          // serves. That is the failure this shape exists to catch.
+          // identity's own home space regardless satisfies every structural
+          // check and belongs on no list of what the variable serves. That is
+          // the failure this shape exists to catch.
           const spaceLine = description.split("\n").find((text: string) =>
             text.includes("CF_SPACE    = ambient")
           );

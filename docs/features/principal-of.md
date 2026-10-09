@@ -41,6 +41,28 @@ link carries from the document it points to (an entry observed as `followRef`).
 `target` is followed through any links it holds first, so a cell holding a
 link to a profile returns the profile's principal.
 
+## The label on a field that holds a link
+
+A field that links another document has a label of its own, on the document
+holding the link: what the runtime stamped there when the link was written,
+such as `represents-principal` for whoever wrote a field typed
+`RepresentsCurrentUser`. That is a different fact from what the linked
+document's label says. A panel's `addedByProfile` in the Loom root links the
+profile its adder acted under, and any participant may link any profile, so
+the profile's label names its owner while the field's names who acted.
+
+`principalOf(target, kind, { label: "written" })` and the same call of
+`principalsOf()` read the field's label, where the default, `"resolved"`,
+reads the label on the document the field's value resolves to. Links on the
+way to `target` are followed, and so is a redirect stored there, which is where
+a write to `target` would land; a link `target` holds as its value is not. The
+claims are read in the same places relative to that field, and the copies of
+the linked document's claims that the link carries are not counted, as in the
+default read. For a field holding no link, the two reads are the same.
+`options` throws when it is not an object, or when its `label` is neither
+`"written"`, `"resolved"` nor absent; an absent `label` means `"resolved"`, and
+other keys are not read.
+
 ## What it returns
 
 | Result | When |
@@ -50,7 +72,8 @@ link to a profile returns the profile's principal.
 | `undefined` | a claim of `kind` there is in any other form: extra keys, a padded subject, a subject that is not a DID |
 | `undefined` | a claim of either kind there is in the string form `<kind>:<subject>` |
 | `undefined` | `target` was passed as `undefined` |
-| throws | the stored label cannot be read: its read fails or is refused, or it is stored in a form this build cannot interpret |
+| `undefined` | the label cannot be observed: the document is missing, or its read is refused, by construction or by the storage manager |
+| throws | the stored label is in a form this build cannot interpret, or the transaction's read of it fails |
 
 `undefined` means that the label names no verified single principal of that
 kind, and a caller refuses whatever needs one. It never guesses. A label that
@@ -59,10 +82,36 @@ have spelled, gives no answer rather than the first or the likeliest one. A
 `target` of `undefined` is one not known yet: a computation taking its target
 by value reads `undefined` while the value cannot be read.
 
-A label that cannot be read is not reported as `undefined`, since that would
-make a labeled document read as an unlabeled one; the read's error propagates.
-A `kind` other than the two above, or a `target` that is neither a cell nor
-`undefined`, throws too.
+A label the caller cannot observe gives `undefined` too, as missing metadata
+does. That covers a read refused by construction, as a serving runtime refuses
+another space's scoped instances, a read the storage manager refuses, as it
+does a space whose access list denies the reader, and any other target whose
+label the caller cannot see. CFC spec §4.6.4.1, Label Metadata Observation
+Profile, has label introspection normalize these hidden cases rather than tell
+them apart from missing metadata, and `principalOf()` follows it, so an
+unobservable label and an absent one read alike. A label that is stored but in a form this build
+cannot interpret is not one of them: that read throws, as does a failure of
+the transaction's read itself. A `kind` other than the two above, or a
+`target` that is neither a cell nor `undefined`, throws too.
+
+## Every principal a label attests
+
+`principalsOf(target, kind)`, exported beside `principalOf()`, reads the same
+claims in the same places and returns all of them: `[]` when the label attests
+none of `kind`, and the DIDs it attests, in the order they first appear, when it
+attests one or more. A label the caller cannot observe gives `[]` as well,
+normalized with missing metadata as it is for `principalOf()`, since neither
+leaves a claim to read. It returns `undefined` where `principalOf()` does for a
+claim in any other form and for a `target` of `undefined`, and it throws where
+`principalOf()` throws. It can be called where `principalOf()` can, and reads
+what `principalOf()` reads.
+
+`principalOf()` returns `undefined` both for a label attesting no principal and
+for one attesting several, which suits a caller that refuses whatever needs a
+verified principal. A caller that must admit a value nobody attests and refuse
+one somebody else does reads `principalsOf()` instead, so that a contested
+label is refused rather than admitted as an unattested one. The Loom root's
+`addPanel` reads its occurrence's `addedBy` field that way.
 
 ## Where it can be called
 
@@ -88,6 +137,19 @@ of the runtime uses for label metadata, in the calling code's own transaction.
 The read is a dependency like any other, so a computation that called
 `principalOf()` runs again when the label changes.
 
+A document whose load is still in flight has no label to read yet, and that is
+not its state. A computation needs nothing for it, since the load's arrival
+runs the computation again. A handler runs once per event, so in a handler the
+call withdraws the run instead, through the transaction's
+`dispatchedHandlerNotRun`, and the scheduler runs the handler again once the
+load lands; this is what lets a served handler read the label of a cell its
+event names, a cell whose document the serving runtime may never have read
+before. The call withdraws only when the replica has no local basis for the
+document, not even a confirmed absence, and a load for it is in flight. A
+withdrawal therefore always has a load to wait on: once the load for a
+document that does not exist has settled, its absence is confirmed, and the
+handler's next run reads it as unlabeled and gives `undefined`.
+
 ## What the result discloses
 
 What a claim names is public by design. The label-metadata classification in
@@ -105,9 +167,11 @@ classed a claim's subject as anything but public, `principalOf()` would throw
 rather than return an unlabeled copy of it, since nothing carries a label for
 an integrity atom's field.
 
-`principalOf()` and `inspectConfLabel()` are the pattern-facing surfaces for
-label metadata. Both read inside the observing transaction and take their
-target as a cell.
+`principalOf()`, `principalsOf()` and `inspectConfLabel()` are the
+pattern-facing surfaces for label metadata. All read inside the observing
+transaction and take the cell whose label they read as their target;
+`principalOf()` and `principalsOf()` also accept a target of `undefined`, for
+which they return `undefined`.
 
 ## What the DID can and cannot do
 
@@ -139,7 +203,12 @@ stored labels of each shape above, claims the runtime minted in a handler
 (`authored-by` against that handler's `currentPrincipal()`, and
 `represents-principal`), the refused pattern-written claim and the refused
 write-back of a returned DID, the reads the call makes, a lift that runs again
-on a label-only change beside one that holds the same cell and does not, and
-the call in a compiled pattern's handler and `computed()`.
+on a label-only change beside one that holds the same cell and does not, the
+withdrawal of a handler that reads a document still loading beside the cases
+that do not withdraw, and the call in a compiled pattern's handler and
+`computed()`. `packages/runner/test/executor-cross-space.test.ts` covers a
+served handler reading the label of a foreign document its event reaches
+through a link chain, and one whose chain reaches a document that does not
+exist.
 `packages/runner/test/cfc/represents-principal.test.ts` covers
 `exactPrincipalAttestations()` for both kinds.

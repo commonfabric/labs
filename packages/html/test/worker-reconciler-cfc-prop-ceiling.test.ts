@@ -89,7 +89,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
         },
       }),
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell<string>(signer.did(), id);
   };
 
@@ -121,7 +121,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     runtime.getCell(signer.did(), id, undefined, tx).setRawUntyped(
       tree as never,
     );
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell(signer.did(), id).asSchema(rendererVDOMSchema);
   };
 
@@ -200,6 +200,47 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
         try {
           expect(page.propsSet("title")).toEqual([SECRET]);
           expect(page.removed("title")).toBe(0);
+        } finally {
+          page.cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "withholds a binding whose untyped field links to a document the ceiling refuses",
+      async () => {
+        // The host reads the whole of what a binding hands it, a field the
+        // binding's schema leaves untyped included, so the read deciding the
+        // binding is the read the host's reads are decided on.
+        const untyped = { type: "object", properties: { entry: {} } } as const;
+        const sealedHolder = await write("prop-ceiling-untyped-sealed", {
+          entry: { inner: link(secret) },
+        });
+        const plainHolder = await write("prop-ceiling-untyped-plain", {
+          entry: { inner: link(plain) },
+        });
+        const page = await mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [{
+            type: "vnode",
+            name: "cf-input",
+            props: { $value: sealedHolder.asSchema(untyped) as never },
+            children: [],
+          }, {
+            type: "vnode",
+            name: "cf-textarea",
+            props: { $value: plainHolder.asSchema(untyped) as never },
+            children: [],
+          }],
+        }, HOST_CEILING);
+        try {
+          const bindings = page.ops.filter((op) => op.op === "set-binding");
+          expect(bindings).toHaveLength(1);
+          expect(page.emitted()).not.toContain(
+            sealedHolder.getAsNormalizedFullLink().id,
+          );
         } finally {
           page.cancel();
         }
@@ -303,7 +344,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
           runtime.getCell(signer.did(), id, undefined, tx).setRawUntyped({
             inner: link(held),
           } as never);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
           return runtime.getCell(signer.did(), id);
         };
         const secretHolder = await holding(
@@ -717,7 +758,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
             props: { $value: link(target) },
             children: [],
           } as never);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
           await t.settle();
         };
         await point(plain);

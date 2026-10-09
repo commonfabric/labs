@@ -258,7 +258,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     await poke.sync();
     const tx = poker.edit();
     poke.withTx(tx).set({ n: pokes });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await poker.storageManager.synced();
     tenure.enqueueCommit({
       space,
@@ -607,7 +607,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
       const tx = writer.edit();
       writerLiveness.withTx(tx).set({ n: 2 });
       expect(
-        (await withStuckNet(tx.commit(), "the writer's liveness commit")).error,
+        (await withStuckNet(
+          tx.commit().settled,
+          "the writer's liveness commit",
+        )).error,
       ).toBeUndefined();
       await withStuckNet(
         writer.storageManager.synced(),
@@ -645,7 +648,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     {
       const tx = reader.edit();
       witness.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await reader.storageManager.synced();
     }
     expect((witness.get() as { n?: number } | undefined)?.n).toBe(1);
@@ -706,6 +709,58 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     const reader = clientRuntime(readerSigner);
     const root = await resolveRootAfterEnsure(reader);
     expect(getPatternSource(root)).toBe(HOME_PATTERN_SOURCE);
+  });
+
+  it("a genesis reservation naming no source leaves the root to the space's creator: the ensure creates nothing, and resolves the root once placed", async () => {
+    // The space key's genesis commit: the ACL, and a reservation that names
+    // the root's address and nothing to create it from.
+    const genesisRoot = { cause: "creator-placed-root" };
+    Engine.applyCommit(engine, {
+      sessionId: "test-genesis",
+      space,
+      principal: space,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        genesisRoot,
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [aliceSigner.did()]: "OWNER" } },
+        }],
+      },
+    });
+    const created = newSpaceServer();
+    expect(await created.activate()).toBe(true);
+    await ensures.matching((outcome) => outcome === "awaiting-creator");
+    expect(stats.rootEnsure.created).toBe(0);
+    expect(stats.rootEnsure.failures).toBe(0);
+    const reader = clientRuntime(readerSigner);
+    await settleACycle(created);
+    expect(await resolveSpaceRootPattern(reader, space)).toBeUndefined();
+
+    // The creator places the root at the reserved address and links it.
+    const creator = clientRuntime(aliceSigner);
+    const { error } = await creator.editWithRetry((tx) => {
+      const placed = creator.getCell<{ placed: boolean }>(
+        space,
+        genesisRoot.cause,
+        undefined,
+        tx,
+      );
+      placed.set({ placed: true });
+      creator.getSpaceCell(space).withTx(tx).key("defaultPattern").set(placed);
+    });
+    expect(error).toBeUndefined();
+    await creator.storageManager.synced();
+    await created.park("test-reactivate");
+    const next = newSpaceServer();
+    expect(await next.activate()).toBe(true);
+    await ensures.matching((outcome) => outcome === "resolved");
+    expect(stats.rootEnsure.created).toBe(0);
+    expect(stats.rootEnsure.failures).toBe(0);
+    const root = await resolveRootAfterEnsure(reader);
+    expect(root.equals(reader.getCell(space, genesisRoot.cause))).toBe(true);
   });
 
   it("skips demand loading after parking during a root source fetch", async () => {

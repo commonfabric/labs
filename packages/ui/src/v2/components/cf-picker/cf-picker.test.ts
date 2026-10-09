@@ -10,12 +10,37 @@ import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
+import { componentReadContracts } from "@commonfabric/runner/component-read-contract";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { $conn, isCellHandle } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  type CellHandle,
+  isCellHandle,
+} from "@commonfabric/runtime-client";
 
+import {
+  createMockCellHandle,
+  holdReads,
+  pushRefusal,
+  writesSent,
+} from "../../test-utils/mock-cell-handle.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
 import { CFPicker } from "./index.ts";
+
+/** The text of a Lit template and every template nested in its values. */
+function templateText(node: unknown): string {
+  const template = node as { strings?: unknown; values?: unknown[] };
+  if (!Array.isArray(template?.strings)) {
+    return node === null || node === undefined ? "" : String(node);
+  }
+  return template.strings.map((part, index) =>
+    part +
+    (index < (template.values?.length ?? 0)
+      ? templateText(template.values?.[index])
+      : "")
+  ).join("");
+}
 
 describe("CFPicker", () => {
   it("should be defined", () => {
@@ -61,6 +86,39 @@ describe("CFPicker", () => {
     const element = new CFPicker();
     element.minHeight = "300px";
     expect(element.minHeight).toBe("300px");
+  });
+
+  it("shows only its children while no items are bound, and its empty state for an empty list", () => {
+    // A view's render policy withholds an `items` binding the viewer may not
+    // see, and then no items arrive. The view puts the access placeholder in
+    // the picker's children while the list's space is out of reach.
+    const element = new CFPicker();
+    expect(templateText(element.render())).toBe("<slot></slot>");
+    element.items = [];
+    element.willUpdate(new Map([["items", undefined]]));
+    expect(templateText(element.render())).toContain("No items");
+    expect(templateText(element.render())).not.toContain("<slot>");
+  });
+
+  it("reads its items as its component read contract says it does", () => {
+    // The reconciler decides the `$items` binding on this read, and on each
+    // item read as the `cf-render` it is handed to reads its cell, so the
+    // contract has to name the read the picker makes.
+    const { cell } = createRenderableCellHandle<unknown[]>([]);
+    const subscribed = spy(cell.runtime()[$conn](), "subscribe");
+    const element = new CFPicker();
+    element.items = cell;
+    try {
+      element.willUpdate(new Map([["items", undefined]]));
+      expect(subscribed.calls).toHaveLength(1);
+      expect(subscribed.calls[0].args[0].ref().schema).toEqual(
+        componentReadContracts["cf-picker"].items.schema,
+      );
+    } finally {
+      element.items = [];
+      element.willUpdate(new Map([["items", cell]]));
+      subscribed.restore();
+    }
   });
 
   it("subscribes to opaque items and keeps the selected item addressable", async () => {
@@ -170,5 +228,79 @@ describe("CFPicker", () => {
       await runtime.storageManager.synced();
       await runtime.dispose();
     }
+  });
+});
+
+describe("CFPicker stepping", () => {
+  // Previous and next move the selection from the index its cell holds,
+  // wrapping at either end, so they compute their write from that read: from
+  // the worker's answer, never from a cell it has not read or may not show.
+
+  /**
+   * The element's own members these tests drive. A Lit element mounts only
+   * in a browser, so without one the tests bind it and step through these,
+   * on an element that was never connected.
+   */
+  type PickerInternals = {
+    items: string[];
+    selectedIndex: CellHandle<number>;
+    willUpdate(changedProperties: Map<string, unknown>): void;
+    _selectNext(): void;
+    _selectPrevious(): void;
+  };
+
+  /** A picker of three items whose selection is `selectedIndex`. */
+  const pickerAt = (selectedIndex: CellHandle<number>): PickerInternals => {
+    const element = new CFPicker() as unknown as PickerInternals;
+    element.items = ["first", "second", "third"];
+    element.selectedIndex = selectedIndex;
+    element.willUpdate(
+      new Map([["items", undefined], ["selectedIndex", undefined]]),
+    );
+    return element;
+  };
+
+  /** The index each step from `held` writes. */
+  const written = (held: number, step: "next" | "previous") => {
+    const selectedIndex = createMockCellHandle(held);
+    const element = pickerAt(selectedIndex);
+    if (step === "next") element._selectNext();
+    else element._selectPrevious();
+    return writesSent(selectedIndex).map((write) => write.value);
+  };
+
+  it("steps from an index in range, wrapping at either end", () => {
+    expect(written(1, "next")).toEqual([2]);
+    expect(written(1, "previous")).toEqual([0]);
+    expect(written(2, "next")).toEqual([0]);
+    expect(written(0, "previous")).toEqual([2]);
+  });
+
+  it("steps from an index past the end as from that index, wrapped", () => {
+    // Three items, index 5: next is (5 + 1) mod 3, previous (5 - 1) mod 3.
+    expect(written(5, "next")).toEqual([0]);
+    expect(written(5, "previous")).toEqual([1]);
+  });
+
+  it("writes nothing while the worker has not answered the selection's read", () => {
+    const selectedIndex = createMockCellHandle<number>();
+    holdReads(selectedIndex);
+    const element = pickerAt(selectedIndex);
+
+    element._selectNext();
+    element._selectPrevious();
+
+    expect(writesSent(selectedIndex)).toEqual([]);
+  });
+
+  it("writes nothing while the worker refuses the selection's read", () => {
+    const selectedIndex = createMockCellHandle(1);
+    const element = pickerAt(selectedIndex);
+    pushRefusal(selectedIndex);
+
+    element._selectNext();
+    element._selectPrevious();
+
+    expect(writesSent(selectedIndex)).toEqual([]);
   });
 });

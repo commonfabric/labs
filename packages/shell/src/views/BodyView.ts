@@ -11,6 +11,7 @@ import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import {
   CellHandle,
+  CellReadRefusedError,
   PieceHandle,
   RuntimeErrorCode,
   VNode,
@@ -176,6 +177,14 @@ export class XBodyView extends BaseView {
   @property({ attribute: false })
   accessor spaceName: string | undefined = undefined;
 
+  /**
+   * Whether the space home was opened and the space has no root to show, which
+   * is the case for a space whose owner has not yet set it up, when someone
+   * else opens it.
+   */
+  @property({ type: Boolean })
+  accessor spaceHasNoRoot = false;
+
   @property({ type: Boolean })
   accessor embedded = false;
 
@@ -265,6 +274,24 @@ export class XBodyView extends BaseView {
     `;
   }
 
+  /**
+   * What stands where a space's root would be when the space has none: a
+   * statement saying so. Only an owner of the space creates its root, by
+   * opening the space or by putting a piece in it.
+   */
+  #renderSpaceHasNoRoot() {
+    return html`
+      <div slot="main" class="load-error">
+        <cf-alert status="info">
+          <h2 slot="title">Nothing is in this space yet</h2>
+          <span slot="description">
+            This space has no content until its owner sets it up.
+          </span>
+        </cf-alert>
+      </div>
+    `;
+  }
+
   override render() {
     const mainContent = this.loadError?.kind === "space" &&
         isSpaceNotFound(this.loadError.error)
@@ -300,6 +327,8 @@ export class XBodyView extends BaseView {
           <cf-render .cell="${this.activeCell}"></cf-render>
         </cf-piece>
       `
+      : this.spaceHasNoRoot
+      ? this.#renderSpaceHasNoRoot()
       : null;
 
     const sidebar = this.embedded
@@ -367,20 +396,32 @@ function loadErrorMessage(error: unknown): string {
 
 globalThis.customElements.define("x-body-view", XBodyView);
 
+/**
+ * The handle a sidebar is rendered from, when the piece `cell` holds shows
+ * one: its `sidebarUI`, read as a render tree. The piece is read for that
+ * field alone, so the read is decided on what it reads, not on what else
+ * the piece holds. `undefined` when it shows none, or when the display
+ * ceiling keeps the sidebar from the shell.
+ */
 async function getSidebarCell(
   cell: CellHandle<SubPages> | undefined,
 ): Promise<CellHandle<VNode> | undefined> {
   if (!cell) return undefined;
   const typedCell = cell.asSchema<SubPages>(SubPagesSchema);
-  let value = typedCell.get();
-  if (!value) {
-    await typedCell.sync();
-    value = typedCell.get();
+  try {
+    let value = typedCell.get();
     if (!value) {
-      return;
+      await typedCell.sync();
+      value = typedCell.get();
+      if (!value) {
+        return;
+      }
     }
-  }
-  if (value.sidebarUI) {
-    return typedCell.key("sidebarUI").asSchema<VNode>(rendererVDOMSchema);
+    if (value.sidebarUI) {
+      return typedCell.key("sidebarUI").asSchema<VNode>(rendererVDOMSchema);
+    }
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
   }
 }

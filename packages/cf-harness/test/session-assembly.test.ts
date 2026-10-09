@@ -12,8 +12,10 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { resolveConsoleConfig } from "../console/server.ts";
-import { parseCfHarnessCliArgs } from "../src/cli.ts";
+import {
+  parseCfHarnessCliArgs,
+  resolveConsoleConfig,
+} from "./support/on-linux.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import {
   harnessSessionChatPolicy,
@@ -62,13 +64,6 @@ const parityArguments = (
     REGISTRY_URL,
     "--host-mount",
     `name=reference,source=${hostMountSource},target=/reference`,
-    // The console sites the sandbox's two CFC sidecar transports under its own
-    // data directory; the CLI is told where they are. Named on both so the
-    // comparison is of one session rather than of two defaults.
-    "--cfc-result-dir",
-    "/console/.cf-harness-console/cfc/results",
-    "--cfc-invocation-context-dir",
-    "/console/.cf-harness-console/cfc/invocation-context",
     "--space-db",
     "/serving/cache/memory/space.sqlite",
     "--allow-subagent-profile",

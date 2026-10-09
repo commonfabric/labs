@@ -26,7 +26,10 @@ import {
 import type { HarnessFabricSessionConfig } from "./config.ts";
 import {
   resolveSandboxRuntimeSelection,
+  type SandboxProcess,
+  sandboxProcessOf,
   type SandboxRuntimeSelection,
+  type UnnamedSandboxRuntime,
 } from "./sandbox/runtime-selection.ts";
 import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
 
@@ -176,8 +179,16 @@ export const parseHostMountSpecs = async (
  * `env` is the environment the entrypoint was launched with. The runtime
  * selection (`CF_HARNESS_SANDBOX_RUNTIME` and its companions) is derived the
  * way the batch CLI derives it, so a chat session and a batch run started
- * from one environment execute in the same sandbox; the parameter is
- * required so a new entrypoint cannot forget it the way this one did.
+ * from one environment execute in the same sandbox. `host` says what applies
+ * where `env` names no runtime, the default of a platform or a refusal for an
+ * entrypoint whose caller must name one; `host.homeDir` is the home an
+ * entrypoint kept aside from `env`, and `host.arch`, `host.uid`,
+ * `host.readSysctl` and `host.which` describe the process a platform's
+ * default is for, each the process's own where absent. Both `env` and `host` are required so
+ * that a new entrypoint cannot leave the selection out. The entrypoints this
+ * serves take no selection flag, so a refusal names the variable alone.
+ *
+ * @throws HarnessControlError as `resolveSandboxRuntimeSelection()` does.
  */
 export const resolveInteractiveProvisioning = async (
   parsed: {
@@ -188,7 +199,7 @@ export const resolveInteractiveProvisioning = async (
   },
   cwd: string,
   env: Record<string, string | undefined>,
-  options: { homeDir?: string } = {},
+  host: UnnamedSandboxRuntime & SandboxProcess,
 ): Promise<
   {
     additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
@@ -203,9 +214,15 @@ export const resolveInteractiveProvisioning = async (
   const mounts = hostMountsToAdditionalMounts(
     await parseHostMountSpecs(parsed.hostMountSpecs, cwd),
   );
+  // A caller that must name the runtime takes no default, whatever else its
+  // value carries.
   const runtime = await resolveSandboxRuntimeSelection(env, {}, {
+    ...(host.namedBy !== undefined
+      ? { namedBy: host.namedBy }
+      : { platform: host.platform }),
+    ...sandboxProcessOf(host),
+    flags: false,
     cwd,
-    ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
   });
   return {
     ...runtime,

@@ -21,24 +21,24 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 import {
-  CLICK_TARGET_ATTR,
+  clickCfButton,
   clickTrustedAction,
   fillCfInput,
-  markTargetsArgs,
-  settleAndMarkTargets,
   waitForRuntimeIdle,
   waitForText,
 } from "./cfc-browser-helpers.ts";
 
-import { clickButtonWithExactText } from "./note-button-helpers.ts";
-
 const { API_URL, FRONTEND_URL } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
-// send and reaction (`fabrichat/room.tsx`).
+// message write and reaction (`fabrichat/schemas.tsx`).
 const PROFILE_CREATE_ACTION = "CreateProfile";
 const SEND_ACTION = "ChatSend";
 const REACT_ACTION = "ChatReact";
+
+// The control on each message that opens its reaction picker. The first one
+// enabled is on the oldest message.
+const ADD_REACTION = 'cf-button[aria-label="Add reaction"]';
 
 /** What one rendered message's authorship element reports. */
 interface AuthorshipReport {
@@ -88,19 +88,20 @@ describe("fabrichat integration test", () => {
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),
       {
-        main: join(import.meta.dirname!, "..", "fabrichat", "main.tsx"),
+        main: join(import.meta.dirname!, "..", "fabrichat", "room.tsx"),
         root: join(import.meta.dirname!, ".."),
       },
     );
     const piece = await cc.create(program, { start: true });
     pieceId = piece.id;
-    const messages = cc.getResult(piece.getCell()).key("room").key("messages")
-      .key("latest").key("messages");
-    pieceSinkCancel = messages.sink(() => {});
+    const result = cc.getResult(piece.getCell());
+    pieceSinkCancel = result.sink(() => {});
     storedBodies = () =>
-      ((messages.get() as { body?: string }[] | undefined) ?? []).map((
-        message,
-      ) => message?.body ?? "");
+      ((result.get() as
+        | { messages?: { latest?: { messages?: { body?: unknown }[] } } }
+        | undefined)?.messages?.latest?.messages ?? []).map((message) =>
+          typeof message?.body === "string" ? message.body : ""
+        );
   });
 
   afterAll(async () => {
@@ -117,7 +118,6 @@ describe("fabrichat integration test", () => {
       identity: firstIdentity,
     });
     await createProfile(page, "Ada Lovelace");
-    await clickTrustedAction(page, "ChatStart");
     await send(page, "Hello from Ada", storedBodies);
     await waitForVerified(page, "Hello from Ada");
 
@@ -134,113 +134,61 @@ describe("fabrichat integration test", () => {
     await waitForVerified(page, "Hi Ada, Grace here");
     await waitForVerified(page, "Hello from Ada");
 
-    // The first reviewed reaction control adds a cat to Ada's message.
+    // With the picker open on Ada's message, and no reactions yet, the first
+    // reaction control on the page is the picker's first quick reaction.
+    await clickCfButton(page, ADD_REACTION);
     await clickTrustedAction(page, REACT_ACTION);
-    await waitForText(page, "#fabrichat-messages", "😺 1");
+    await waitForText(page, "#fabrichat-messages", "👍 1");
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { spaceDid, pieceId },
       identity: thirdIdentity,
     });
-    await waitForText(page, "#fabrichat-messages", "😺 1");
+    await waitForText(page, "#fabrichat-messages", "👍 1");
     await createProfile(page, "Julie Sussman");
     // The count under Ada's message is now the first reaction control, and
     // clicking it adds the viewer's own.
     await clickTrustedAction(page, REACT_ACTION);
-    await waitForText(page, "#fabrichat-messages", "😺 2");
+    await waitForText(page, "#fabrichat-messages", "👍 2");
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { spaceDid, pieceId },
       identity: firstIdentity,
     });
-    await waitForText(page, "#fabrichat-messages", "😺 2");
+    await waitForText(page, "#fabrichat-messages", "👍 2");
     await waitForReactorCard(page, ["Grace Hopper", "Julie Sussman"]);
-
-    await clickButtonWithExactText(page, "Edit");
-    await fillCfInput(
-      page,
-      'cf-submit-input[data-ui-action="ChatEdit"]',
-      "Hello again from Ada",
-    );
-    await clickTrustedAction(page, "ChatEdit");
-    await waitForVerified(page, "Hello again from Ada");
-    await clickButtonWithExactText(page, "Version history");
-    await waitForText(page, "#fabrichat-messages", "Hello from Ada");
-
-    await clickButtonWithExactText(page, "Reply");
-    await clickButtonWithExactText(page, "Conversation only");
-    await send(page, "An inline answer", storedBodies);
-    await waitForText(page, "blockquote", "Hello again from Ada");
-    await waitForVerified(page, "An inline answer");
-
-    await clickButtonWithExactText(page, "Reply");
-    await send(page, "A thread answer", storedBodies);
-    await waitForVerified(page, "A thread answer");
-    await clickButtonWithExactText(page, "Back to conversation");
-    await waitForCondition(
-      page,
-      (probe) =>
-        !probe.collect("#fabrichat-messages").some((element) =>
-          probe.deepText(element).includes("A thread answer")
-        ),
-    );
-    await clickButtonWithExactText(page, "View thread (1)");
-    await waitForText(page, "#fabrichat-messages", "A thread answer");
   });
 });
 
 /**
- * Waits for a rendered reaction card naming each of `names`, then focuses its
- * settled count once and checks that the card opens.
+ * Focuses the first reaction count and waits for its card to show, naming each
+ * of `names`.
  */
 async function waitForReactorCard(
   page: Page,
   names: readonly string[],
 ): Promise<void> {
-  const token = `fabrichat-reactor-focus-${crypto.randomUUID()}`;
-  await waitForCondition(page, settleAndMarkTargets, {
-    args: markTargetsArgs(
-      (probe, expected: readonly string[]) => {
-        const card = probe.collect("cf-hover-card").find((element) =>
-          expected.every((name) => probe.deepText(element).includes(name))
-        );
-        const count = card?.querySelector<HTMLElement>("cf-button");
-        return count ? [count] : undefined;
-      },
-      [names],
-      [token],
-    ),
-  });
-  await page.evaluate((targetToken, attr) => {
-    function find(root: Document | ShadowRoot): HTMLElement | undefined {
-      for (const element of root.querySelectorAll<HTMLElement>("*")) {
-        if (element.getAttribute(attr)?.split(/\s+/).includes(targetToken)) {
-          return element;
+  await waitForRuntimeIdle(page);
+  await page.evaluate(() => {
+    function collect(root: Document | ShadowRoot, found: Element[]) {
+      for (const element of root.querySelectorAll("*")) {
+        if (element.tagName.toLowerCase() === "cf-hover-card") {
+          found.push(element);
         }
-        if (element.shadowRoot) {
-          const found = find(element.shadowRoot);
-          if (found) return found;
-        }
+        if (element.shadowRoot) collect(element.shadowRoot, found);
       }
     }
-    const count = find(document);
-    if (!count) throw new Error("The settled reaction count was replaced.");
-    count.removeAttribute(attr);
-    // Focus is outside the wait predicate so a failed attempt is not retried.
-    count.focus();
-    const root = count.getRootNode() as Document | ShadowRoot;
-    const card = count.closest("cf-hover-card") as
-      | (HTMLElement & { open: boolean })
-      | null;
-    if (root.activeElement !== count || card?.open !== true) {
-      throw new Error(
-        `Reaction count focus failed: connected=${count.isConnected}, ` +
-          `active=${root.activeElement?.tagName}, open=${card?.open}`,
-      );
+    const found: Element[] = [];
+    collect(document, found);
+    // The `cf-button` host is what takes focus from a keyboard.
+    const count = found[0]?.querySelector<HTMLElement>("cf-button");
+    if (!count) {
+      throw new Error("There is no reaction count to focus.");
     }
-  }, { args: [token, CLICK_TARGET_ATTR] });
+    count.focus();
+  });
   await waitForCondition(
     page,
     (probe, expected: readonly string[]) =>

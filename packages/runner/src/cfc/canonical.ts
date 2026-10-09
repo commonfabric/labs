@@ -15,9 +15,11 @@ import type {
   CfcExternalContentObservation,
   CfcLabelMetadataObservation,
   CfcMetadata,
+  CfcRecordAddress,
   ConsultedGrant,
   ConsultedPolicyManifest,
   ConsumedRead,
+  LabelMapEntry,
   OrderedWriteAttempt,
   PreparedDigestInput,
   WritePolicyInput,
@@ -45,20 +47,42 @@ export const canonicalizeLogicalPath = (path: NonDocumentPath): ValuePath => {
 };
 
 /**
- * Returns the canonical logical path for a path rooted at the stored document,
- * as a transaction's read and write addresses are. The document keeps its
- * payload under `value`, so `["value", "x"]` becomes `["x"]`, and `["value"]`
- * becomes `[]`, the whole payload.
+ * Returns the payload path that a path rooted at the stored document names,
+ * as a transaction's read and write addresses are, or `undefined` when the
+ * path names one of the document's own members instead. The document keeps
+ * its payload under `value`, so `["value", "x"]` becomes `["x"]` and
+ * `["value"]` becomes `[]`, the whole payload. The document root `[]` holds
+ * the payload too, and also becomes `[]`.
  *
- * A path that does not start with `"value"` names one of the document's own
- * members, such as `cfc` or `source`, and is returned as it stands. It then
- * shares a logical path with a payload field of the same name, so a caller
- * that must keep the two apart checks the raw path first.
+ * Any other path, such as `["source"]` or `["cfc", "labelMap"]`, is envelope
+ * metadata, which is never matched as a payload path (spec §4.6.5): a member
+ * named `source` and a payload field named `source` are different places. A
+ * record that has to keep a member's address uses {@link cfcRecordPath}.
  */
-export const canonicalizeDocumentPath = (path: DocumentPath): ValuePath =>
+export const canonicalizeDocumentPath = (
+  path: DocumentPath,
+): ValuePath | undefined =>
   path[0] === "value"
     ? Object.freeze(path.slice(1)) as ValuePath
-    : canonicalizeLogicalPath(path as readonly string[]);
+    : path.length === 0
+    ? canonicalizeLogicalPath(path as readonly string[])
+    : undefined;
+
+/**
+ * The path a transaction record binds for `path`, which is rooted at the
+ * stored document: `{ path }` with the payload path
+ * {@link canonicalizeDocumentPath} returns, or, for one of the document's own
+ * members, `{ metaPath }` with `path` itself, frozen as
+ * {@link canonicalizeLogicalPath} freezes a path. See {@link CfcRecordAddress}.
+ */
+export const cfcRecordPath = (
+  path: DocumentPath,
+): { path: ValuePath } | { metaPath: readonly string[] } => {
+  const payload = canonicalizeDocumentPath(path);
+  return payload !== undefined
+    ? { path: payload }
+    : { metaPath: canonicalizeLogicalPath(path as readonly string[]) };
+};
 
 /**
  * WeakMap cache mapping a path-array identity to its JSON-pointer
@@ -92,6 +116,30 @@ const compareAddress = (left: CfcAddress, right: CfcAddress): number => {
   if (left.scope !== right.scope) return left.scope < right.scope ? -1 : 1;
   const leftPointer = logicalPathToPointer(left.path);
   const rightPointer = logicalPathToPointer(right.path);
+  return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
+};
+
+/**
+ * {@link compareAddress} over prepared-digest records: a payload record sorts
+ * before a member record of the same document, since the two name different
+ * places even where their paths are equal.
+ */
+const compareRecordAddress = (
+  left: CfcRecordAddress,
+  right: CfcRecordAddress,
+): number => {
+  if (left.metaPath === undefined && right.metaPath === undefined) {
+    return compareAddress(left, right);
+  }
+  if (left.space !== right.space) {
+    return left.space < right.space ? -1 : 1;
+  }
+  if (left.id !== right.id) return left.id < right.id ? -1 : 1;
+  if (left.scope !== right.scope) return left.scope < right.scope ? -1 : 1;
+  if (left.metaPath === undefined) return -1;
+  if (right.metaPath === undefined) return 1;
+  const leftPointer = encodePointer(left.metaPath);
+  const rightPointer = encodePointer(right.metaPath);
   return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
 };
 
@@ -242,10 +290,17 @@ const compareWritePolicyInput = (
 // itself.
 export const canonicalizeConsumedRead = (
   read: ConsumedRead,
-): ConsumedRead => ({
-  ...read,
-  path: canonicalizeLogicalPath(read.path),
-});
+): ConsumedRead =>
+  read.metaPath === undefined
+    ? { ...read, path: canonicalizeLogicalPath(read.path) }
+    : { ...read, metaPath: canonicalizeLogicalPath(read.metaPath) };
+
+export const canonicalizeRecordAddress = (
+  record: CfcRecordAddress,
+): CfcRecordAddress =>
+  record.metaPath === undefined
+    ? { ...record, path: canonicalizeLogicalPath(record.path) }
+    : { ...record, metaPath: canonicalizeLogicalPath(record.metaPath) };
 
 export const canonicalizeAttemptedWrite = (
   write: AttemptedWrite,
@@ -375,44 +430,57 @@ const withoutUndefinedLabelMembers = (label: IFCLabel): IFCLabel => {
  * canonical, `undefined` label members dropped, and `version` fixed at 1 —
  * the stored spelling is not part of what two envelopes are compared on,
  * so a version-1 and a version-2 envelope holding the same labels are
- * equal here.
+ * equal here. The document-rooted entries take the same form, and an empty
+ * set of them is the same as none.
  */
 export const canonicalizeCfcMetadata = (
   metadata: CfcMetadata,
-): CfcMetadata => ({
-  version: 1,
-  schemaHash: metadata.schemaHash,
-  labelMap: {
+): CfcMetadata => {
+  const documentEntries = metadata.labelMap.documentEntries ?? [];
+  return {
     version: 1,
-    entries: [...metadata.labelMap.entries].map((entry) => ({
-      path: canonicalizeLogicalPath(entry.path),
-      label: withoutUndefinedLabelMembers(canonicalizeCfcLabel(entry.label)),
-      ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
-      ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-    })).sort((left, right) => {
-      const leftKey = logicalPathToPointer(left.path);
-      const rightKey = logicalPathToPointer(right.path);
-      if (leftKey !== rightKey) {
-        return leftKey < rightKey ? -1 : 1;
-      }
-      const leftOrigin = left.origin ?? "";
-      const rightOrigin = right.origin ?? "";
-      if (leftOrigin !== rightOrigin) {
-        return leftOrigin < rightOrigin ? -1 : 1;
-      }
-      // Same (path, origin) can legitimately hold per-class entries (the C2
-      // persist split writes `value` and `shape` siblings) — order by class
-      // so canonicalization stays deterministic.
-      const leftObserves = left.observes ?? "";
-      const rightObserves = right.observes ?? "";
-      return leftObserves < rightObserves
-        ? -1
-        : leftObserves > rightObserves
-        ? 1
-        : 0;
-    }),
-  },
-});
+    schemaHash: metadata.schemaHash,
+    labelMap: {
+      version: 1,
+      entries: canonicalLabelEntries(metadata.labelMap.entries),
+      ...(documentEntries.length > 0
+        ? { documentEntries: canonicalLabelEntries(documentEntries) }
+        : {}),
+    },
+  };
+};
+
+/** Label-map entries in comparison form, sorted by path, origin and class. */
+const canonicalLabelEntries = (
+  entries: readonly LabelMapEntry[],
+): LabelMapEntry[] =>
+  entries.map((entry) => ({
+    path: canonicalizeLogicalPath(entry.path),
+    label: withoutUndefinedLabelMembers(canonicalizeCfcLabel(entry.label)),
+    ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+    ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
+  })).sort((left, right) => {
+    const leftKey = logicalPathToPointer(left.path);
+    const rightKey = logicalPathToPointer(right.path);
+    if (leftKey !== rightKey) {
+      return leftKey < rightKey ? -1 : 1;
+    }
+    const leftOrigin = left.origin ?? "";
+    const rightOrigin = right.origin ?? "";
+    if (leftOrigin !== rightOrigin) {
+      return leftOrigin < rightOrigin ? -1 : 1;
+    }
+    // Same (path, origin) can legitimately hold per-class entries (the C2
+    // persist split writes `value` and `shape` siblings) — order by class
+    // so canonicalization stays deterministic.
+    const leftObserves = left.observes ?? "";
+    const rightObserves = right.observes ?? "";
+    return leftObserves < rightObserves
+      ? -1
+      : leftObserves > rightObserves
+      ? 1
+      : 0;
+  });
 
 /** Canonicalizes policy records and hashes each tied sort key at most once. */
 const canonicalizeWritePolicyInputs = (
@@ -436,12 +504,12 @@ export const canonicalizePreparedDigestInput = (
   input: PreparedDigestInput,
 ): PreparedDigestInput => ({
   consumedReads: [...input.consumedReads].map(canonicalizeConsumedRead).sort(
-    compareAddress,
+    compareRecordAddress,
   ),
-  attemptedWrites: [...input.attemptedWrites].map(canonicalizeAttemptedWrite)
-    .sort(compareAddress),
-  writes: [...input.writes].map(canonicalizeAttemptedWrite).sort(
-    compareAddress,
+  attemptedWrites: [...input.attemptedWrites].map(canonicalizeRecordAddress)
+    .sort(compareRecordAddress),
+  writes: [...input.writes].map(canonicalizeRecordAddress).sort(
+    compareRecordAddress,
   ),
   // ORDER-PRESERVING on purpose (sorted by journalIndex, which is unique
   // per record, so this is a total order): the log exists to bind the

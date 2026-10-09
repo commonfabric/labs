@@ -1826,8 +1826,12 @@ export async function newPiece(
       }\n` +
         `The new piece cannot be registered in the space's piece list ` +
         `without it.\n` +
-        `If this space's root pattern predates a runtime format change, ` +
-        `repair it with: ${cliCommand(["space", "recreate-root"])}`,
+        `If a non-Home space's root pattern predates a runtime format change, ` +
+        `repair it with: ${cliCommand(["space", "recreate-root"])}. ` +
+        `Update an existing Home in place with ${
+          cliCommand(["piece", "setsrc"])
+        } ` +
+        `to preserve its account data.`,
       { cause: error },
     );
   }
@@ -2468,7 +2472,7 @@ async function tryResolveLivePieceToolCallable(
   );
   pieces.runtime.run(tx, pattern, input, liveResult);
   pieces.runtime.prepareTxForCommit?.(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await pieces.runtime.idle();
 
   const callableCell = liveResult.key(callableName).asSchemaFromLinks();
@@ -5401,7 +5405,7 @@ export async function setCellCfcLabel(
     },
   }).applyCfcSchemaToExistingValue();
   pieces.runtime.prepareTxForCommit(tx);
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error !== undefined) {
     throw new Error(
       `Could not set the CFC label at ${
@@ -6044,29 +6048,6 @@ function isVNodeLike(value: unknown): value is VNode {
 }
 
 /**
- * Deploy a custom home pattern from a local file.
- * Automatically targets the home space (user's identity DID).
- */
-export async function setHomePattern(
-  config: Omit<SpaceConfig, "space">,
-  entry: EntryConfig,
-  deps: PieceOperationDependencies = {},
-): Promise<void> {
-  const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
-  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
-  const pieces = await (deps.loadPieces ?? loadPieces)(homeConfig);
-  const program = await (deps.getProgramFromFile ?? getProgramFromFile)(
-    pieces,
-    entry,
-  );
-  await pieces.recreateDefaultPattern({
-    customProgram: program,
-    repository: entry.repository,
-  });
-  noteWroteTo(homeConfig.space);
-}
-
-/**
  * Creates a space owned by the configured identity and returns its DID. The
  * space gets a random DID and is born granting its creator alone; it is
  * recorded in the identity's Home space list under `label`.
@@ -6081,17 +6062,4 @@ export async function createSpace(
   const space = await pieces.createSpace(label);
   noteWroteTo(homeConfig.space);
   return space;
-}
-
-/**
- * Reset the home pattern to the system default.
- */
-export async function resetHomePattern(
-  config: Omit<SpaceConfig, "space">,
-): Promise<void> {
-  const identity = await loadIdentity(config.identity);
-  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
-  const pieces = await loadPieces(homeConfig);
-  await pieces.recreateDefaultPattern();
-  noteWroteTo(homeConfig.space);
 }

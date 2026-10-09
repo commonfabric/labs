@@ -15,6 +15,7 @@ import {
   eventKey,
   FabricEpochNsec,
   getEntityId,
+  grantSpaceAccess,
   handler,
   lift,
   NAME,
@@ -24,9 +25,10 @@ import {
   principalOf,
   SELF,
   spaceAccess,
+  spaceOf,
+  type Stream,
   type TrustedActionWrite,
   UI,
-  viewerPrincipal,
   VIEWS,
   type VNode,
   wish,
@@ -34,6 +36,14 @@ import {
   type WriteAuthorizedBy,
   type WritePolicyAnyOf,
 } from "commonfabric";
+import {
+  addParticipant,
+  participantEntries,
+  type ParticipantRosterCell,
+} from "../loom/participants.tsx";
+import { isSharedSpaceCatalog } from "../system/shared-space-catalog.ts";
+import type { Created } from "./manager.tsx";
+import { ParticipantChip } from "./participant.tsx";
 import {
   CHAT_POLICY,
   conversationView,
@@ -44,22 +54,27 @@ import {
   reserveTime,
   threadRoot,
 } from "./records.ts";
-import type {
-  ChatManagerFacts,
-  ChatMessage,
-  ChatMessageWindow,
-  ChatProfile,
-  ChatReaction,
-  ChatReactionTallies,
-  ChatReply,
-  ChatRoomAbout,
-  ChatRoomActivity,
-  ChatRoomOutput,
-  ChatWindowAnchor,
-  MessageRequest,
-  OpenWindowRequest,
-  SendMessageRequest,
-} from "./schemas.ts";
+import {
+  type ChatManagerFacts,
+  type ChatMessage,
+  type ChatMessageWindow,
+  type ChatProfile,
+  type ChatReaction,
+  type ChatReactionTallies,
+  type ChatReply,
+  type ChatRoomAbout,
+  type ChatRoomActivity,
+  type ChatRoomLink,
+  type ChatRoomOutput,
+  type ChatRoomPolicy,
+  type ChatRoomRecord,
+  type ChatWindowAnchor,
+  isPrincipalDID,
+  type ManagerStreamEvent,
+  type MessageRequest,
+  type OpenWindowRequest,
+  type SendMessageRequest,
+} from "./schemas.tsx";
 import { selectWindow } from "./window.ts";
 
 /** A message version admitted by one of the room's reviewed writers. */
@@ -171,7 +186,7 @@ export type StoredReaction = AuthoredByCurrentUser<
 >;
 
 /** Bookkeeping kept across message obliteration and event redelivery. */
-interface RoomMemory {
+export interface RoomMemory {
   requests: Record<string, boolean>;
   authors: Record<string, string>;
   usedTimes: Record<string, boolean>;
@@ -274,12 +289,12 @@ export type StoredActivity = AuthoredByCurrentUser<
 >;
 
 /** The internal writer bindings; identity is read at execution time. */
-interface RoomWriterState {
+export interface RoomWriterState {
   myProfile?: Cell<ChatProfile>;
   records: Writable<ChatMessage[]>;
   memory: Writable<RoomMemory>;
   activity: Writable<ChatRoomActivity[]>;
-  about: Cell<ChatRoomAbout>;
+  about: Cell<Pick<ChatRoomAbout, "kind">>;
   uiMessage?: Cell<ChatMessage>;
   uiEmoji?: string;
   uiReply?: Writable<ChatReply | null>;
@@ -288,7 +303,7 @@ interface RoomWriterState {
 }
 
 /** The text captured by a reviewed submit control at the gesture. */
-interface TextGesture {
+export interface TextGesture {
   target?: { value?: string };
 }
 
@@ -610,7 +625,7 @@ function removeMessage(
   );
 }
 
-/** Adds an emoji once at its reactor's stable address. */
+/** Adds one reaction per profile and emoji. */
 function writeSendReaction(
   input: (MessageRequest & { emoji: string }) | TextGesture,
   state: RoomWriterState,
@@ -694,10 +709,11 @@ function writeDeleteReaction(
     state.memory.key("requests").key(key).set(true);
     return;
   }
+  const reaction = reactions.key(reactionIndex).resolveAsCell();
+  if (principalOf(reaction, "authored-by") !== currentPrincipal()) return;
   const now = handlerTime();
   const at = reserveTime(state.memory.key("usedTimes"), now, now);
   if (!at) return;
-  const reaction = reactions.key(reactionIndex).resolveAsCell();
   reactions.removeByValue(reaction);
   const removed: Writable<ChatReaction | undefined> = reaction;
   removed.set(undefined);
@@ -776,11 +792,11 @@ const closeWindow = handler<{ requestId: string; windowId: string }, {
 export interface RoomInput {
   myProfile?: Cell<ChatProfile>;
   about: Cell<ChatRoomAbout>;
+  /** Profiles explicitly added through the room's roster writer. */
+  roster?: ParticipantRosterCell;
   records?: PerSpace<Writable<StoredMessage[] | Default<[]>>>;
   memory?: PerSpace<Writable<StoredMemory>>;
-  activity?: PerSpace<
-    Writable<StoredActivity[] | Default<[]>>
-  >;
+  activity?: PerSpace<Writable<StoredActivity[] | Default<[]>>>;
 }
 
 /** A window keeps original documents while its reader sees message values. */
@@ -824,6 +840,7 @@ const MessageCard = pattern<{
 }, { [UI]: VNode }>(({ message, state, reply, thread }) => {
   const editing = new Writable.perSession(false);
   const history = new Writable.perSession(false);
+  const reacting = new Writable.perSession(false);
   const bound = {
     myProfile: state.myProfile,
     records: state.records,
@@ -837,7 +854,7 @@ const MessageCard = pattern<{
     message.key("authorProfile").get() === undefined
   );
   const mine = computed(() => {
-    const viewer = viewerPrincipal();
+    const viewer = principalOf(state.myProfile, "represents-principal");
     const key = entityKey(message);
     return viewer !== undefined && key !== undefined &&
       state.memory.key("authors").key(key).get() === viewer;
@@ -1091,25 +1108,32 @@ const MessageCard = pattern<{
               <cf-button
                 size="sm"
                 variant="ghost"
-                data-ui-action="ChatReact"
-                onClick={sendReactionFromUi({
-                  myProfile: state.myProfile,
-                  records: state.records,
-                  memory: state.memory,
-                  activity: state.activity,
-                  about: state.about,
-                  uiMessage: message,
-                  uiEmoji: "😺",
-                })}
+                aria-label="Add reaction"
+                onClick={action(() => reacting.set(!reacting.get()))}
               >
-                😺
+                Add reaction
               </cf-button>
-              <cf-submit-input
-                placeholder="One emoji"
-                buttonText="React"
-                data-ui-action="ChatReact"
-                onClick={sendReactionFromUi(bound)}
-              />
+              <div
+                hidden
+                style={{ display: reacting.get() ? "block" : "none" }}
+              >
+                {["👍", "😺"].map((emoji) => (
+                  <cf-button
+                    size="sm"
+                    variant="ghost"
+                    data-ui-action="ChatReact"
+                    onClick={sendReactionFromUi({ ...bound, uiEmoji: emoji })}
+                  >
+                    {emoji}
+                  </cf-button>
+                ))}
+                <cf-submit-input
+                  placeholder="One emoji"
+                  buttonText="React"
+                  data-ui-action="ChatReact"
+                  onClick={sendReactionFromUi(bound)}
+                />
+              </div>
             </div>
           )
           : null}
@@ -1126,6 +1150,28 @@ const selectProfile = lift(({
   supplied?.get() === undefined ? resolved : supplied
 );
 
+/** Admits an owner-selected member to a standalone group room. */
+const commitAddMember = handler<TextGesture, {
+  about: Cell<ChatRoomAbout>;
+  outcome: Writable<string>;
+}>((event, { about, outcome }) => {
+  const description = about.get();
+  if (
+    description?.record?.get()?.kind === undefined ||
+    description.kind !== "group"
+  ) {
+    outcome.set("Members of this chat are managed by its space.");
+    return;
+  }
+  const member = event.target?.value?.trim();
+  if (!isPrincipalDID(member)) {
+    outcome.set("That isn't a chat address.");
+    return;
+  }
+  grantSpaceAccess(about, member, "OWNER");
+  outcome.set(`Added ${member}. Send them this chat's link.`);
+});
+
 /** A room's record and its direct protocol surface. */
 export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
   (
@@ -1135,7 +1181,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       records,
       memory,
       activity,
-      [SELF]: self,
+      roster,
     },
   ) => {
     const profile = wish<ChatProfile>({ query: "#profile" });
@@ -1143,6 +1189,9 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       supplied: suppliedProfile,
       resolved: profile.result,
     });
+    const profileSetupDisplay = computed(() =>
+      myProfile?.get() === undefined ? "block" : "none"
+    );
     const state = {
       myProfile,
       about,
@@ -1150,30 +1199,8 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       memory,
       activity,
     } as RoomWriterState;
-    const manager = wish<
-      Pick<ChatManagerFacts, "accept" | "openDirect"> & {
-        rooms: { room: Cell<unknown> }[];
-      }
-    >({
+    const manager = wish<Pick<ChatManagerFacts, "openDirect">>({
       query: "#chatManager",
-    });
-    const creator = computed(() =>
-      principalOf(about.get()?.record, "authored-by")
-    );
-    const canList = computed(() =>
-      manager.result !== undefined &&
-      !manager.result.rooms.some((entry) => equals(entry.room, self)) &&
-      (about.get()?.kind !== "direct" ||
-        (creator !== undefined && creator !== viewerPrincipal()))
-    );
-    const addToChats = action(() => {
-      const counterpart = principalOf(about.get()?.record, "authored-by");
-      if (about.get()?.kind === "direct" && !counterpart) return;
-      manager.result?.accept.send({
-        requestId: eventKey(),
-        room: self,
-        ...(about.get()?.kind === "direct" ? { counterpart } : {}),
-      });
     });
     const reply = new Writable.perSession<ChatReply | null>(null);
     const draft = new Writable.perSession("");
@@ -1285,6 +1312,12 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
     const space = wish<{ participants: Cell<ChatProfile>[] }>({
       query: "#default",
     });
+    const ownSpace = computed(() =>
+      about.get()?.record?.get()?.kind !== undefined
+    );
+    const joined = computed(() =>
+      roster === undefined ? [] : participantEntries(roster)
+    );
     const participants = computed(() =>
       records!.get().reduce<Cell<ChatProfile>[]>(
         (profiles, message) =>
@@ -1292,8 +1325,17 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
             !profiles.some((entry) => equals(entry, message.authorProfile))
             ? [...profiles, message.authorProfile]
             : profiles,
-        [...(space.result?.participants ?? [])],
+        ownSpace
+          ? [...joined]
+          : [...(space.result?.participants ?? []), ...joined],
       )
+    );
+    const join = addParticipant({ roster });
+    const addOutcome = new Writable.perSession("");
+    const addMember = commitAddMember({ about, outcome: addOutcome });
+    const canAdd = computed(() =>
+      ownSpace && about.get()?.kind === "group" &&
+      spaceAccess(about) === "OWNER"
     );
     const canSend = computed(() => {
       const access = spaceAccess(about);
@@ -1350,6 +1392,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
           )
       ),
       participants,
+      addParticipant: join,
       messages,
       canSend,
       reactionTallies,
@@ -1361,7 +1404,10 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       deleteReaction: commitDeleteReaction(state),
     };
     return {
-      [NAME]: "FabriChat",
+      [NAME]: computed(() =>
+        about.get()?.title ||
+        (about.get()?.kind === "direct" ? "Direct chat" : "Chat")
+      ),
       [UI]: (
         <cf-theme
           theme={{
@@ -1379,51 +1425,35 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
             <cf-vstack id="fabrichat-messages" gap="3" padding="4">
               <cf-hstack gap="2" wrap>
                 {participants.map((profile) => {
-                  const counterpart = computed(() => {
-                    const access = spaceAccess(profile);
-                    return access === "READ" || access === "WRITE" ||
-                        access === "OWNER"
-                      ? principalOf(profile, "represents-principal")
-                      : undefined;
+                  const chip = ParticipantChip({
+                    participant: profile,
+                    myProfile,
+                    startDirect: manager.result?.openDirect,
                   });
-                  return (
-                    <cf-hstack gap="1" align="center">
-                      <cf-profile-badge $profile={profile} variant="chip" />
-                      <div
-                        data-ui-pattern="ChatStartSurface"
-                        data-ui-event-integrity="ChatStartSurface"
-                        style={{
-                          display: manager.result !== undefined &&
-                              counterpart !== undefined &&
-                              counterpart !== viewerPrincipal()
-                            ? "block"
-                            : "none",
-                        }}
-                      >
-                        <cf-button
-                          data-ui-action="ChatStart"
-                          data-chat-counterpart={counterpart}
-                          onClick={manager.result?.openDirect}
-                        >
-                          Chat
-                        </cf-button>
-                      </div>
-                    </cf-hstack>
-                  );
+                  return chip[UI];
                 })}
               </cf-hstack>
-              <cf-hstack
-                id="fabrichat-add-to-chats"
-                gap="2"
-                style={{ display: canList ? "flex" : "none" }}
+              <cf-vstack
+                id="fabrichat-add-member"
+                hidden
+                style={{ display: canAdd ? "flex" : "none" }}
               >
-                <cf-text>
-                  {about.get()?.kind === "direct"
-                    ? `Created by ${creator ?? ""}`
-                    : "Add this conversation to your private index."}
+                <div
+                  data-ui-pattern="ChatAddMemberSurface"
+                  data-ui-event-integrity="ChatAddMemberSurface"
+                >
+                  <cf-submit-input
+                    inputId="fabrichat-add-member-address"
+                    placeholder="Their chat address"
+                    buttonText="Add"
+                    data-ui-action="ChatAddMember"
+                    onClick={addMember}
+                  />
+                </div>
+                <cf-text id="fabrichat-add-member-outcome">
+                  {addOutcome}
                 </cf-text>
-                <cf-button onClick={addToChats}>Add to my chats</cf-button>
-              </cf-hstack>
+              </cf-vstack>
               {thread.get().root?.get() !== undefined
                 ? (
                   <cf-hstack gap="2">
@@ -1470,7 +1500,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                   : null}
               </cf-hstack>
               {visibleMessages.length === 0
-                ? <cf-text>Start the conversation.</cf-text>
+                ? <cf-text>No messages yet</cf-text>
                 : null}
               {visibleMessageRefs.map((message) => {
                 const card: PerSession<{ [UI]: VNode }> = MessageCard({
@@ -1567,14 +1597,156 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                   </cf-text>
                 )
                 : null}
+              <div
+                id="fabrichat-profile-setup"
+                hidden
+                style={{ display: profileSetupDisplay, maxWidth: "720px" }}
+              >
+                {profile[UI]}
+              </div>
             </cf-vstack>
           </cf-screen>
         </cf-theme>
       ),
       ...facts,
+      addMember,
       [VIEWS]: { room: facts },
     };
   },
 );
 
-export default FabriChatRoom;
+/** Whether Home keeps this room's space among its saved chats. */
+function listsRoomIn(catalog: unknown, space: string | undefined): boolean {
+  if (!isSharedSpaceCatalog(catalog) || space === undefined) return false;
+  const entry = catalog.entries[space];
+  return entry?.state === "saved" && entry.kind === "fabrichat-room";
+}
+
+/** Forwards the canonical room link to the viewer's manager. */
+const askToList = handler<unknown, {
+  room: Cell<ChatRoomLink>;
+  accept?: Stream<ManagerStreamEvent>;
+}>((_event, { room, accept }) => {
+  accept?.send({ requestId: eventKey(), room });
+});
+
+/** Lets an admitted viewer save this room's canonical root in their manager. */
+const AddToChats = pattern<{
+  room: Cell<ChatRoomLink>;
+  about: Cell<ChatRoomAbout>;
+  myProfile?: Cell<ChatProfile>;
+}, { [UI]: VNode }>(({ room, about, myProfile }) => {
+  const manager = wish<
+    Pick<ChatManagerFacts, "accept" | "sharedSpaceCatalog">
+  >({ query: "#chatManager" });
+  const creator = computed(() =>
+    principalOf(about.get()?.record, "authored-by")
+  );
+  const canList = computed(() =>
+    manager.result !== undefined &&
+    !listsRoomIn(manager.result.sharedSpaceCatalog, spaceOf(room)) &&
+    about.get()?.record?.get()?.kind !== undefined &&
+    (about.get()?.kind !== "direct" ||
+      (creator !== undefined &&
+        creator !== principalOf(myProfile, "represents-principal")))
+  );
+  return {
+    [UI]: (
+      <cf-hstack
+        id="fabrichat-add-to-chats"
+        hidden
+        gap="2"
+        style={{ display: canList ? "flex" : "none", padding: "1rem" }}
+      >
+        <cf-text>
+          {about.get()?.kind === "direct"
+            ? `Created by ${creator ?? ""}`
+            : "Add this conversation to your private index."}
+        </cf-text>
+        <cf-button
+          onClick={askToList({ room, accept: manager.result?.accept })}
+        >
+          Add to my chats
+        </cf-button>
+      </cf-hstack>
+    ),
+  };
+});
+
+/** Storage of a root room, or a chat belonging to an existing social space. */
+export interface FabriChatRoomInput {
+  /** Creation facts labeled by the manager's reviewed start. */
+  about?: Created<ChatRoomRecord>;
+
+  /** Message documents owned by the room's writers. */
+  records?: PerSpace<Writable<StoredMessage[] | Default<[]>>>;
+
+  /** Recent changes with their original authorship labels. */
+  activity?: PerSpace<Writable<StoredActivity[] | Default<[]>>>;
+
+  /** Profiles added through the canonical participant writer. */
+  participants?: ParticipantRosterCell;
+}
+
+/** Resolves the viewer and stores the creation record in the room's own space. */
+export default pattern<FabriChatRoomInput, ChatRoomOutput>(({
+  about: record,
+  records,
+  activity,
+  participants,
+  [SELF]: self,
+}) => {
+  const policy = new Writable<ChatRoomPolicy>(CHAT_POLICY);
+  const roomMemory = new Writable<StoredMemory>({
+    requests: {},
+    authors: {},
+    usedTimes: {},
+    nextSeq: 1,
+    expiredThrough: 0,
+  });
+  const about = {
+    kind: computed(() => record?.kind ?? "group"),
+    title: computed(() => record?.title),
+    createdAt: computed(() => record?.createdAt ?? new FabricEpochNsec(0n)),
+    policy,
+    record,
+  };
+  const room = FabriChatRoom({
+    about,
+    records,
+    memory: roomMemory,
+    activity,
+    roster: participants,
+  });
+  const profile = wish<ChatProfile>({ query: "#profile" });
+  const listing = AddToChats({
+    room: self,
+    about: room.about,
+    myProfile: profile.result,
+  });
+  return {
+    [NAME]: room[NAME],
+    [VIEWS]: room[VIEWS],
+    about: room.about,
+    recentActivity: room.recentActivity,
+    recentActivityExpiredThrough: room.recentActivityExpiredThrough,
+    participants: room.participants,
+    addParticipant: room.addParticipant,
+    messages: room.messages,
+    canSend: room.canSend,
+    reactionTallies: room.reactionTallies,
+    sendMessage: room.sendMessage,
+    editMessage: room.editMessage,
+    deleteMessage: room.deleteMessage,
+    obliterateMessage: room.obliterateMessage,
+    sendReaction: room.sendReaction,
+    deleteReaction: room.deleteReaction,
+    addMember: room.addMember,
+    [UI]: (
+      <cf-vstack>
+        {listing[UI]}
+        {room[UI]}
+      </cf-vstack>
+    ),
+  };
+});

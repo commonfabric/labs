@@ -1,8 +1,9 @@
 # Commit-conflict granularity
 
 This note describes how Memory v2 decides whether a committing transaction's
-**reads** conflict with concurrent **writes**, and the four refinements that
-make distinct, non-interacting operations stop colliding.
+**reads** conflict with concurrent **writes**, the four refinements that make
+distinct, non-interacting operations stop colliding, and how a client states a
+subtree it read in full.
 
 ## The model
 
@@ -209,9 +210,45 @@ Handler-initiated label introspection (`inspectConfLabel`) consumes through an
 explicit observation record rather than through the raw read, so its result
 carries a label independently of this drop.
 
+## 5. A subtree read in full is stated at its root
+
+A reader that walks a whole value, such as validation of a stored argument
+following every link in it, reads each container's shape and each member below
+it. Stated path by path, that read set grows with every member of every
+document the walk reaches, and a large enough value makes the commit too large
+to send.
+
+`SpaceReplica.#buildReads()` therefore states the reads in such a subtree as
+one recursive read at its root, plus one shallow read there when any of them
+was shallow. Under a recursive ancestor, which already covers the subtree, only
+the shallow read is sent. A path is read in full when a recursive read names
+it, or when a read at the same basis names it and every member its value holds
+is read in full, judged against the replica's confirmed document. A read with
+no reads below it is sent as it is, and a shallow and a recursive read of one
+path are both sent. Pending reads are not merged, though a recursive read among
+them still covers the reads below it.
+
+The two reads conflict with every write the reads they replace conflict with.
+The recursive read conflicts with every write at, above, or below the root. A
+shallow read below the root also conflicts, by §2, with a key added or removed
+beside the root or one of its ancestors. Beside an array's element, such a write
+shifts the element, so it matters to what the reads observed. The shallow read
+at the root conflicts with all of those. This holds whatever document the
+replica judges by, so a document that differs from the one the reads observed
+can change only how much is merged.
+
+The recursive read can conflict where the reads it replaces did not. It
+conflicts with a write beneath a member nobody read, when the document it was
+judged by lacks that member. It also conflicts with two writes a shallow read
+misses: a mergeable op that creates missing members more than one level below
+the root, and a `replace`, or a mergeable op without `createsKey`, that
+re-creates a key removed after the writer's base was taken.
+
+Every document the reader observed stays a commit dependency.
+
 ## Composition
 
-The four are orthogonal and compose at one matcher:
+Sections 1 to 4 are orthogonal and compose at one matcher:
 
 | read kind | matched by | touched paths |
 |---|---|---|
@@ -219,6 +256,8 @@ The four are orthogonal and compose at one matcher:
 | nonRecursive shape read | `patchOverlapsNonRecursiveRead` | parent-injected |
 | asCell reference-resolution read | excluded from conflict | — |
 | runtime-internal `["cfc"]` read | excluded from conflict | — |
+
+Section 5 changes how the client states its reads, not how they are matched.
 
 Net effect: disjoint-key writers no longer collide; same-key RMW, whole-container
 reads, keyset readers, and genuine value dependencies all still conflict.

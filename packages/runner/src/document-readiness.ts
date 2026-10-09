@@ -15,6 +15,56 @@ import type {
 /** A runtime read whose backing document is still loading. */
 export class DocumentPending extends Error {}
 
+/** A document synchronization failure, distinct from pending or absent data. */
+export class DocumentLoadError extends Error {}
+
+/**
+ * Loads the root document `root` names, under `identity`'s scope key when one
+ * is given, and settles once the load has. Rejects with a
+ * {@link DocumentLoadError} when the load fails: a provider reports a failed
+ * load in its result, which the sync alone resolves through, so the failure
+ * is read from the storage manager's ledger of loads, captured before the
+ * load settles.
+ */
+function documentLoad(
+  runtime: Runtime,
+  root: Cell<unknown>,
+  identity: ScopeKeyIdentity | undefined,
+): Promise<void> {
+  const { space, id, scope } = root.getAsNormalizedFullLink();
+  const key = entityKey(
+    { space, id, scope },
+    identity ?? runtime.scopeKeyIdentity,
+  );
+  const sync = syncCellForIdentity(root, identity);
+  const settled = runtime.storageManager.loadsSettled?.([key]);
+  return Promise.all([sync, settled]).then(
+    () => undefined,
+    (cause: unknown) => {
+      throw new DocumentLoadError("Could not load document", { cause });
+    },
+  );
+}
+
+/**
+ * Loads the document `cell` names and returns whether it is present: `false`
+ * when it is confirmed absent. Rejects with a {@link DocumentLoadError} when
+ * the load fails, rather than returning `false` as a plain `Cell.sync()`
+ * followed by a read would.
+ */
+export async function loadDocument(
+  runtime: Runtime,
+  cell: Cell<unknown>,
+): Promise<boolean> {
+  const root = runtime.getCellFromLink({
+    ...cell.getAsNormalizedFullLink(),
+    path: [],
+    schema: { type: "unknown" },
+  });
+  await documentLoad(runtime, root, undefined);
+  return root.getRaw() !== undefined;
+}
+
 /**
  * A document confirmation's pending, completed, or failed outcome. A pending
  * one holds the scope identity of each read waiting on it, `undefined` for a
@@ -23,7 +73,7 @@ export class DocumentPending extends Error {}
 type Confirmation =
   | { status: "pending"; waiters: Set<ScopeKeyIdentity | undefined> }
   | { status: "confirmed" }
-  | { status: "failed"; error: Error };
+  | { status: "failed"; error: DocumentLoadError };
 
 /**
  * Holds missing-document reads until synchronization establishes presence or
@@ -67,14 +117,25 @@ export function createDocumentReadiness(
      * Gates loads reached while reading linked fields or schemas. Uses the
      * transaction's read set so unrelated background loads cannot park an
      * action. Completed failures remain visible until their data arrives.
+     * `optionalDocuments` exempts only their completed load failures; pending
+     * loads still park the action.
      */
-    requireLoadedReads(tx: IExtendedStorageTransaction): void {
+    requireLoadedReads(
+      tx: IExtendedStorageTransaction,
+      optionalDocuments: Iterable<Cell<unknown>> = [],
+    ): void {
       const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
       const pending = new Set(
         (runtime.storageManager.pendingLoadAddresses?.() ?? [])
           .map((address) => entityKey(address, identity)),
       );
       if (pending.size === 0 && confirmations.size === 0) return;
+      const optional = new Set(
+        Array.from(
+          optionalDocuments,
+          (cell) => entityKey(cell.getAsNormalizedFullLink(), identity),
+        ),
+      );
       const log = txToReactivityLog(tx);
       const checked = new Set<string>();
       for (const read of [...log.reads, ...log.shallowReads]) {
@@ -82,6 +143,9 @@ export function createDocumentReadiness(
         if (checked.has(key)) continue;
         checked.add(key);
         if (!pending.has(key) && !confirmations.has(key)) continue;
+        if (optional.has(key) && confirmations.get(key)?.status === "failed") {
+          continue;
+        }
         this.requireDocument(
           runtime.getCellFromLink({
             ...read,
@@ -94,7 +158,7 @@ export function createDocumentReadiness(
     },
     /**
      * Returns document presence. Throws `DocumentPending` while loading and
-     * the confirmation's error if loading fails.
+     * `DocumentLoadError` if loading fails.
      */
     requireDocument(
       cell: Cell<unknown>,
@@ -150,20 +214,11 @@ export function createDocumentReadiness(
           }
         };
         // syncCell registers its pending load before yielding, but can fulfill
-        // with a provider error. Captures the ledger's failure-aware wait before
-        // that load settles and its ledger entry is removed.
-        const sync = syncCellForIdentity(root, identity);
-        const settled = runtime.storageManager.loadsSettled?.([key]);
+        // with a provider error, which `documentLoad()` reads from the ledger.
         runtime.storageManager.trackUntilSettled(
-          Promise.all([sync, settled]).then(
+          documentLoad(runtime, root, identity).then(
             () => finish({ status: "confirmed" }),
-            (cause: unknown) =>
-              finish({
-                status: "failed",
-                error: new Error("Could not load document", {
-                  cause,
-                }),
-              }),
+            (error: DocumentLoadError) => finish({ status: "failed", error }),
           ),
         );
       }

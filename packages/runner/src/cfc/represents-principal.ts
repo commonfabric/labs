@@ -12,7 +12,7 @@
  * `@commonfabric/utils`, and `@commonfabric/identity/did`, so that either can
  * import it without the rest of the CFC machinery.
  */
-import type { PrincipalClaimKind } from "@commonfabric/api";
+import type { DID, PrincipalClaimKind } from "@commonfabric/api";
 import { isWellFormedDID } from "@commonfabric/identity/did";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { CfcLabelView } from "./label-view-core.ts";
@@ -169,8 +169,8 @@ export const principalClaimEntries = (
 export const exactPrincipalAttestations = (
   view: CfcLabelView | undefined,
   kind: PrincipalClaimKind,
-): string[] | undefined => {
-  const principals = new Set<string>();
+): DID[] | undefined => {
+  const principals = new Set<DID>();
   for (const entry of principalClaimEntries(view)) {
     for (const atom of entry.label.integrity ?? []) {
       const spelling = principalClaimSpelling(atom);

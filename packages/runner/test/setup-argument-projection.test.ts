@@ -9,14 +9,17 @@ import type {
   JSONSchemaObj,
   Pattern,
 } from "../src/builder/types.ts";
+import {
+  LIST_OP_CAPTURED_ARGUMENT_FIELDS,
+  LIST_OP_REFERENCED_ARGUMENT_FIELDS,
+} from "../src/builtins/list-op-argument-usage.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
-import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
+import { createSigilLinkFromParsedLink, parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
@@ -95,7 +98,7 @@ describe("setup-argument-projection", () => {
     const seed = runtime.edit();
     runtime.getCell(space, board, undefined, seed).set({ note: "saved" });
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const first = runtime.edit();
     first.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
@@ -110,7 +113,7 @@ describe("setup-argument-projection", () => {
     );
     cell.set({ items: [], note: "saved" });
     runtime.prepareTxForCommit(first);
-    expect((await first.commit()).error).toBeUndefined();
+    expect((await first.commit().settled).error).toBeUndefined();
   }
 
   /** A write redirect to the owner's list on `board`, as a binding is passed. */
@@ -150,7 +153,7 @@ describe("setup-argument-projection", () => {
   /** Prepares and commits `tx`, and returns the refusal, if any. */
   async function commit(tx: IExtendedStorageTransaction) {
     runtime.prepareTxForCommit(tx);
-    return (await tx.commit()).error?.message;
+    return (await tx.commit().settled).error?.message;
   }
 
   /** The owner's list on `board`, read outside any transaction under test. */
@@ -159,7 +162,7 @@ describe("setup-argument-projection", () => {
   }
 
   describe("the record", () => {
-    it("records a binding projection of the slot, naming the passed list, and no setup projection", async () => {
+    it("records a binding of the slot, naming the passed list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       const argument = await setUpChild(tx, binding(tx));
@@ -167,26 +170,27 @@ describe("setup-argument-projection", () => {
       const list = runtime.getCell(space, "board", undefined, tx).key("items")
         .getAsNormalizedFullLink();
 
-      const projections = tx.getCfcState().writePolicyInputs.flatMap((
-        input,
-      ) =>
-        input.kind === "structural-provenance" &&
-          (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
-            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) &&
-          input.target.id === slot.id
-          ? [{
-            claim: input.claim,
+      const records = tx.getCfcState().writePolicyInputs.flatMap((input) => {
+        if (input.kind === "initialization" && input.target.id === slot.id) {
+          const named = parseLink(input.value, slot);
+          return [{
+            record: input.mode,
             path: input.target.path,
-            sources: input.sources.map(({ id, path }) => ({ id, path })),
+            names: named && { id: named.id, path: named.path },
             runtime: tx.isRuntimeWritePolicyInput(input),
-          }]
-          : []
-      );
+          }];
+        }
+        return input.kind === "structural-provenance" &&
+            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+            input.target.id === slot.id
+          ? [{ record: input.claim, path: input.target.path }]
+          : [];
+      });
 
-      expect(projections).toEqual([{
-        claim: CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
+      expect(records).toEqual([{
+        record: "binding",
         path: ["list"],
-        sources: [{ id: list.id, path: list.path }],
+        names: { id: list.id, path: list.path },
         runtime: true,
       }]);
       tx.abort();
@@ -216,6 +220,50 @@ describe("setup-argument-projection", () => {
 
         expect(await commit(tx)).toBeUndefined();
       }
+    });
+
+    it("refuses a plain link to the list written over it in the transaction staging it", async () => {
+      // A capture records whether its link is a write redirect, and a plain
+      // link to the same cell is not the link the setup staged.
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      const argument = await setUpChild(tx, binding(tx));
+      const slot = argument.getAsNormalizedFullLink();
+      tx.writeValueOrThrow(
+        { ...slot, path: [...slot.path, "list"] },
+        runtime.getCell(space, "board", undefined, tx).key("items")
+          .getAsLink(),
+      );
+
+      expect(await commit(tx)).toContain(`${refusal} at /list`);
+    });
+
+    it("accepts a later setup staging a redirect to another list over it, as a pattern version naming another cell does", async () => {
+      // A setup stages its bindings again on every run, so it may re-point
+      // the slot; a list builtin's captured binding may not.
+      await initializeOwnersList();
+      await initializeOwnersList("other");
+      const first = runtime.edit();
+      await setUpChild(first, binding(first));
+      expect(await commit(first)).toBeUndefined();
+
+      const later = runtime.edit();
+      await setUpChild(later, binding(later, "other"));
+
+      expect(await commit(later)).toBeUndefined();
+    });
+
+    it("refuses a write at the argument's root that re-points it at another list in the transaction staging it", async () => {
+      // The setup staged the owner's list; the slot has to end holding it.
+      await initializeOwnersList();
+      await initializeOwnersList("other");
+      const tx = runtime.edit();
+      const argument = await setUpChild(tx, binding(tx));
+      tx.writeValueOrThrow(argument.getAsNormalizedFullLink(), {
+        list: binding(tx, "other"),
+      });
+
+      expect(await commit(tx)).toContain(`${refusal} at /list`);
     });
 
     it("refuses a relative write redirect over it in the transaction staging it, which names the child's own argument document rather than the list", async () => {
@@ -398,6 +446,94 @@ describe("setup-argument-projection", () => {
       argument.key("list").set(["forged"]);
 
       expect(await commit(tx)).toContain("ownerPrincipal mismatch at /items");
+      expect(ownersList()).toEqual([]);
+    });
+  });
+  describe("beside a binding a list builtin captures", () => {
+    // A list builtin stages its callback's captured bindings at `params` as a
+    // link to a record holding a write redirect to each captured cell, and
+    // records each link as a capture. The walk recording binding projections
+    // stops at that link, so the slot holds a capture alone.
+
+    // The argument of a row whose callback captures the owner's list.
+    const rowArgumentSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        params: {
+          type: "object",
+          properties: { items: { ...ownedList, asCell: ["readonly"] } },
+        },
+      },
+    };
+
+    /** Sets up a row capturing `list`, as a list builtin stages it. */
+    async function setUpRow(tx: IExtendedStorageTransaction, list: unknown) {
+      const resultCell = runtime.getCell(space, "row", undefined, tx);
+      const pattern = {
+        argumentSchema: rowArgumentSchema,
+        resultSchema: { type: "object", properties: {} },
+        result: {},
+        nodes: [],
+      } satisfies Pattern;
+      const params = runtime.getImmutableCell(
+        space,
+        { params: { items: list } },
+        undefined,
+        tx,
+      ).key("params");
+      await runtime.runner.setup(tx, pattern, { params }, resultCell, {
+        referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
+        capturedArgumentFields: LIST_OP_CAPTURED_ARGUMENT_FIELDS,
+      });
+      return resultCell.getAsNormalizedFullLink();
+    }
+
+    it("records a capture of the slot and no projection of it", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      await setUpRow(tx, binding(tx));
+      const row = runtime.getCell(space, "row", undefined, tx)
+        .getArgumentCell()!.getAsNormalizedFullLink();
+
+      const records = tx.getCfcState().writePolicyInputs.flatMap((input) =>
+        input.kind === "initialization" && input.target.id === row.id
+          ? [{ record: input.mode, path: input.target.path }]
+          : input.kind === "structural-provenance" &&
+              input.target.id === row.id &&
+              input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION
+          ? [{ record: input.claim, path: input.target.path }]
+          : []
+      );
+
+      expect(records).toEqual([{
+        record: "capture",
+        path: ["params", "items"],
+      }]);
+      tx.abort();
+    });
+
+    it("refuses a later setup staging a redirect to another cell over the captured one", async () => {
+      await initializeOwnersList();
+      await initializeOwnersList("other-board");
+      const first = runtime.edit();
+      await setUpRow(first, binding(first));
+      expect(await commit(first)).toBeUndefined();
+
+      const second = runtime.edit();
+      await setUpRow(second, binding(second, "other-board"));
+
+      expect(await commit(second)).toContain(`${refusal} at /params/items`);
+    });
+
+    it("refuses a write through the captured slot without the list's writer in the transaction staging it", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      await setUpRow(tx, binding(tx));
+      runtime.getCell(space, "row", undefined, tx)
+        .getArgumentCell<{ params: { items: string[] } }>(rowArgumentSchema)!
+        .key("params").key("items").set(["forged"]);
+
+      expect(await commit(tx)).toContain(`${refusal} at /items`);
       expect(ownersList()).toEqual([]);
     });
   });

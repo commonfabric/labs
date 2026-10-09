@@ -193,7 +193,7 @@ describe("stage A: instance keying — unit pins", () => {
     );
     const ownTx = runtime.edit();
     ownCell.withTx(ownTx).set({ value: "own" });
-    expect((await ownTx.commit()).error).toBeUndefined();
+    expect((await ownTx.commit().settled).error).toBeUndefined();
     const docId = ownCell.getAsNormalizedFullLink().id;
     const readAs = (identity: ScopeKeyIdentity | undefined) =>
       (replica.getDocument(docId, "user", identity)?.value as
@@ -210,7 +210,7 @@ describe("stage A: instance keying — unit pins", () => {
     const destination: TransactionSealDestination = {
       seal: (tx) => {
         seals.push(tx);
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     };
     runtime.installSealDestination(destination, {
@@ -289,7 +289,7 @@ describe("stage A: instance keying — unit pins", () => {
     );
     const ownTx = runtime.edit();
     ownCell.withTx(ownTx).set({ value: "own" });
-    expect((await ownTx.commit()).error).toBeUndefined();
+    expect((await ownTx.commit().settled).error).toBeUndefined();
     const docId = ownCell.getAsNormalizedFullLink().id;
     const aliceKey = resolveScopeKey("user", alice);
     const readAs = (identity: ScopeKeyIdentity | undefined) =>
@@ -365,7 +365,7 @@ describe("stage A: instance keying — unit pins", () => {
   it("the N-run loop resubscribes ONCE to the union of its instance logs: after two instance runs both instances' reads are registered (mutation: per-run replacement keeps only the last)", async () => {
     const rootId = "of:stagea-union-root";
     runtime.installSealDestination(
-      { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit() },
+      { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled },
       {
         runStamper: (
           tx: IExtendedStorageTransaction,
@@ -437,7 +437,7 @@ describe("stage A: instance keying — unit pins", () => {
   it("the writer index is instance-AGNOSTIC: a user-scoped-DECLARED writer and a reader running as Alice keep their dependent edge (mutation: an instance-keyed writer index loses it)", async () => {
     const rootId = "of:stagea-edge-root";
     runtime.installSealDestination(
-      { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit() },
+      { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled },
       {
         runStamper: (
           tx: IExtendedStorageTransaction,
@@ -529,7 +529,7 @@ describe("stage A: instance keying — unit pins", () => {
     // actor). Absent on client-side events, byte-identical there.
 
     runtime.installSealDestination(
-      { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit() },
+      { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled },
       {
         runStamper: (tx: IExtendedStorageTransaction, info: ServerRunInfo) => {
           stampWaveRunContext(tx, {
@@ -661,7 +661,7 @@ describe("stage A: instance keying — unit pins", () => {
     );
     const seedTx = runtime.edit();
     holder.withTx(seedTx).setRawUntyped({ ref: target.getAsLink() });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     const kicks: Array<ScopeKeyIdentity | undefined> = [];
     const originalKick = runtime.ensureLinkedDocLoaded;
@@ -966,7 +966,7 @@ describe("stage A: OFF-arm serialized forms carry no scopeKey", () => {
     spaceCell.withTx(tx).set({ value: "sp" });
     userCell.withTx(tx).get();
     walk(txToReactivityLog(tx), "log", hits);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await offRuntime.idle();
     await offManager.synced();
     const replica = offManager.open(space).replica;

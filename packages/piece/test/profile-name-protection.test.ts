@@ -26,6 +26,7 @@ import {
   type ProfileNameProtectionInspection,
   repairProfileNameProtection,
 } from "../src/ops/profile-name-protection.ts";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 const owner = await Identity.fromPassphrase("profile name protection owner");
 const profileSpace =
@@ -83,7 +84,7 @@ describe("profile name protection repair", () => {
       sourceOrigin: systemPatternSource("system/profile-home.tsx"),
     });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await profile.pull();
     await runtime.idle();
     // Reproduce the persisted omission made by the dynamic-name runtime: both
@@ -106,7 +107,7 @@ describe("profile name protection repair", () => {
       target = parseLink(value, target);
     }
     runtime.prepareTxForCommit(strip);
-    expect((await strip.commit()).error).toBeUndefined();
+    expect((await strip.commit().settled).error).toBeUndefined();
     served = {
       contents: current,
       identity: await resolveEntryIdentity(
@@ -303,7 +304,7 @@ describe("profile name protection repair", () => {
       sourceOrigin: systemPatternSource("system/profile-home.tsx"),
     });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await renamed.pull();
     await runtime.idle();
     await expect(inspectProfileNameProtection(runtime, renamed)).rejects
@@ -317,13 +318,18 @@ describe("profile name protection repair", () => {
     const commit = tx.commit.bind(tx);
     const edit = runtime.edit.bind(runtime);
     await withInspectionTransaction(tx, async () => {
-      using _commit = stub(tx, "commit", async () => {
-        const concurrent = edit();
-        concurrent.writeValueOrThrow(target, "Concurrent name");
-        runtime.prepareTxForCommit(concurrent);
-        expect((await concurrent.commit()).error).toBeUndefined();
-        return await commit();
-      });
+      using _commit = stub(
+        tx,
+        "commit",
+        () =>
+          createTransactionCommitReceipt((async () => {
+            const concurrent = edit();
+            concurrent.writeValueOrThrow(target, "Concurrent name");
+            runtime.prepareTxForCommit(concurrent);
+            expect((await concurrent.commit().settled).error).toBeUndefined();
+            return await commit().settled;
+          })()),
+      );
       await expect(
         repairProfileNameProtection(runtime, profile, before.inspection),
       ).rejects.toThrow("Transaction consistency violated");
@@ -377,14 +383,14 @@ describe("profile name protection repair", () => {
           "Attacker name",
         );
         cold.prepareTxForCommit(attack);
-        expect((await attack.commit()).error?.message).toMatch(
+        expect((await attack.commit().settled).error?.message).toMatch(
           /writeAuthorizedBy|missing schema write-policy/,
         );
       }
       const retarget = cold.edit();
       retarget.writeValueOrThrow(after.positions[0].target, "Replacement name");
       cold.prepareTxForCommit(retarget);
-      expect((await retarget.commit()).error?.message).toContain(
+      expect((await retarget.commit().settled).error?.message).toContain(
         "missing schema write-policy",
       );
       expect((await inspectProfileNameProtection(cold, coldProfile)).name).toBe(
@@ -397,7 +403,7 @@ describe("profile name protection repair", () => {
     const edit = runtime.edit();
     profile.withTx(edit).key("setName").send({ name: "Owner rename" });
     runtime.prepareTxForCommit(edit);
-    expect((await edit.commit()).error).toBeUndefined();
+    expect((await edit.commit().settled).error).toBeUndefined();
     await profile.pull();
     await runtime.idle();
     expect((await inspectProfileNameProtection(runtime, profile)).name).toBe(
@@ -427,7 +433,7 @@ describe("profile name protection repair", () => {
       "Changed since review",
     );
     runtime.prepareTxForCommit(change);
-    expect((await change.commit()).error).toBeUndefined();
+    expect((await change.commit().settled).error).toBeUndefined();
     await expect(
       repairProfileNameProtection(runtime, profile, before.inspection),
     ).rejects.toThrow("changed after inspection");
@@ -468,7 +474,7 @@ describe("profile name protection repair", () => {
       sourceOrigin: systemPatternSource("system/profile-home.tsx"),
     });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await fresh.pull();
     await runtime.idle();
     const before = await inspectProfileNameProtection(runtime, fresh);
@@ -483,7 +489,7 @@ describe("profile name protection repair", () => {
     const tx = runtime.edit();
     tx.writeValueOrThrow(before.positions.at(-1)!.target, { nested: "name" });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await expect(inspectProfileNameProtection(runtime, profile)).rejects
       .toThrow("unsupported legacy cell layout");
   });

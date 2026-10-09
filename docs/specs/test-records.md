@@ -155,17 +155,6 @@ for. Either way the scope is applied before ambiguity is judged, or a
 name two packages happen to share would cost each of them a file it held
 unambiguously.
 
-The preload writes one more kind of file into the spool, and so does the pattern
-test runner: a mark saying when a process began running its units, named
-`began-<uuid>.json` and holding that moment as a JSON number of milliseconds
-since the epoch. Deno runs the preload before loading each test file, after
-type-checking every file the process was handed, so a `deno test` permitted to
-write to its spool leaves a mark per file and the earliest falls where the
-process's setup ends, and one that is not leaves none; the pattern test runner
-leaves one before it compiles its files' programs. A lane reads the earliest
-mark once the process has ended, to measure that setup. Nothing that reads
-records reads a mark, and a spool shipped as a run ships only its records.
-
 The context line carries `schema` (this document describes version 1, the
 `v1` in object paths), a per-object ULID `reportId`, the canonical `repo`
 name (a constant owned by the repository's tooling, never derived from git
@@ -241,16 +230,14 @@ they carry no variant whatever the batch they measure carried. Nothing
 enumerates them, nothing scores them, and no lane can be asked to run
 one.
 
-Their figures are not all durations. A lane writes seven measurements per
-batch — what the batch spent, what its own tests took between them, how many
-times its passes opened a unit, what the longest unit of each pass took added
-together, how many passes it made, what the processes it started spent before
-their units began, and how many such processes it started — and an eighth, what
-the packer charged the lane for the batch. It writes three more once its
-batches have run, about its work as a whole: what that work took, what it was
-projected to take, and the most it could take inside the lane's bound. The
-record format carries one number and calls it a duration, so which of these a
-record holds is decided by its name. No name starts the way the name of
+Their figures are not all durations. A lane writes four measurements per
+batch — what the batch spent, what the tests of its units took between them,
+how many times its passes opened a unit, and how many passes it made — and a
+fifth, what the packer charged the lane for the batch. It writes three more
+once its batches have run, about its work as a whole: what that work took, what
+it was projected to take, and the most it could take inside the lane's bound.
+The record format carries one number and calls it a duration, so which of these
+a record holds is decided by its name. No name starts the way the name of
 another kind does, so a reader that predates a kind reads a record of that
 kind as no measurement at all rather than as one it knows.
 A batch that ended badly is written as a failure, and a test in it
@@ -316,7 +303,10 @@ deleted.
 
 Every shipper makes exactly one attempt, and object names are
 deterministic, so re-shipping collides on create (which is not overwrite)
-and duplicates never come into being.
+rather than writing a second copy. The CI area nonetheless holds second
+copies of some earlier reports, written before the relay took each
+object's date from the attempt that produced it; [discovery](#the-store)
+says what they are and how a reader recognizes one.
 
 ## The store
 
@@ -363,17 +353,17 @@ re-run, because a re-run resolves the same moment as the attempt it
 repeats and has to find the same manifest. Records carry no retention and
 must not acquire one.
 
-A local object's date partition comes from its run's start. The CI relay
-currently takes the date from the workflow run's `run_started_at`. That
-field is the current attempt's start and GitHub advances it when another
-attempt starts. Re-shipping an earlier artifact after a re-run can therefore
-move it to the new attempt's date and create a second object instead of
-colliding with its first shipment.
-
-The planned relay contract puts the immutable start of the attempt that
-produced an artifact inside that artifact. Its context and object name use
-that value on every relay invocation. Late-shipped objects then land in
-the partition where their report was produced, not where it was uploaded.
+A local object's date partition comes from its run's start. A CI
+object's comes from the start of the attempt that produced it. Each
+attempt's completion triggers a relay of its own, which ships that
+attempt's artifacts and no other's, and the `workflow_run` payload it
+receives carries that attempt's `run_started_at`. GitHub reports a later
+start for the run once another attempt starts, but never changes the
+start an earlier attempt's payload carries. Every relay of one attempt —
+the first, a rerun of it, or a dispatch naming the run and the attempt —
+therefore computes the same name for each of its artifacts, and a re-ship
+collides with the first shipment. A late-shipped object lands in the
+partition where its report was produced, not where it was uploaded.
 A trailing window can make late arrivals likely to be found, but cannot
 make discovery exact; what listing does and does not settle is described
 below. The whole dataset is readable by `allUsers`. Writers hold
@@ -459,13 +449,22 @@ rather than what arrived in it. A reader sees every object that arrives for
 a partition while that partition is still inside its window; an object
 arriving after that is not found until something reads a wider one.
 
-Two limits follow, and both are accepted rather than closed. An object
+One limit follows, and it is accepted rather than closed. An object
 arriving for a source and date already folded from its rollup is never
 counted, which needs the relay to write a partition older than the
-compaction lag. And a re-run crossing a UTC midnight ships its earlier
-attempt's artifacts under the later attempt's date, so the same records
-reach two objects and a reader keying on object name folds both. The relay
-contract above is what settles the second.
+compaction lag.
+
+The CI area also holds second copies that a reader keying on object name
+folds twice. A relay once shipped every attempt's artifacts and dated
+them all by the latest attempt's start, so a run re-run on a later UTC
+day had its earlier attempts' artifacts stored again under the later
+day. Measured on 2026-10-01, 1,334 object names from 26 runs each appear
+under two dates in this way. A second copy carries the same run id,
+artifact name, `ci.runAttempt`, `ci.job` and `ci.shard` as the first, a
+`reportId` of its own, and the later attempt's start as its `startedAt`.
+Among raw objects the two share a name below the date; in a rollup, which
+keeps no object names, they share those context fields. The copy under
+the earlier date is the original.
 
 Recording the exact source object names in a rollup would let a reader
 prove which raw objects overlap it and stop closing the date, at the cost
@@ -486,6 +485,12 @@ ships one artifact, `test-records-tests-<lane>-a<attempt>`, and its shipping
 step names no variant and no JUnit specification. The lane runner
 (`tasks/ci-lane.ts`) gathers each batch's direct records and JUnit reports into
 the lane's spool as the batch finishes, marking each with its suite's variant.
+A lane that opens a test file for some of its tests registers the rest as
+ignored, through the skip list it hands the file's process, and ships no record
+of them: each is another lane's share, or one the plan did not select, and the
+lane's skip says nothing about the test itself. A skip a test registers for
+itself is recorded, and so is one a configuration declares, by the lane the
+plan gave that test to.
 Each suite declares its JUnit outputs in the topology, so the lane knows where
 they are without the workflow saying. A lane that ran default and non-default
 batches therefore ships records the job-wide inputs could not have described.
@@ -495,14 +500,10 @@ artifact holds `records.ndjson` — always written, zero records or not — and
 `job.json`; an artifact without a readable `records.ndjson` is truncated, and
 the relay fails it visibly rather than ship a context-only object that would
 read as a run with no tests. The attempt lives in the artifact name because
-artifacts are scoped to the run. The artifact also needs the immutable start of
-the attempt that produced it. Under the planned relay contract, a re-run
-re-ships earlier attempts' artifacts using their own attempt numbers and start
-times, so those objects collide with their first shipment, while the new
-attempt's artifacts create new objects. The current relay instead uses the
-workflow run's mutable `run_started_at` for all of them. That can move an
-earlier artifact to another date and create a second copy instead of a
-collision.
+artifacts are scoped to the run. A relay ships only the artifacts whose name
+carries the attempt that triggered it, and dates and names them by that
+attempt's start, so a re-run's new jobs create new objects and nothing an
+earlier attempt produced is shipped again.
 
 The shared shipping action's optional `variant` input stamps every spooled
 and JUnit-derived record gathered by that job, and its optional `junit` input

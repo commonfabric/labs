@@ -18,7 +18,11 @@ import {
   TILE_UI,
   UI,
 } from "@commonfabric/runner";
-import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
+import { addCfcDenialListener } from "@commonfabric/runner/cfc";
+import {
+  pieceListSchema,
+  rendererVDOMSchema,
+} from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { CellRef } from "@commonfabric/runtime-client";
 
@@ -39,7 +43,10 @@ import {
 } from "../../runtime-client/src/backends/utils.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
-import type { WorkerReconcilerOptions } from "../src/worker/types.ts";
+import type {
+  SpaceAccessProvider,
+  WorkerReconcilerOptions,
+} from "../src/worker/types.ts";
 
 // `cf-render` shows a piece through renders of its own, each mounted from a
 // reference the way the shell mounts a piece opened by its address. Each step
@@ -50,9 +57,10 @@ import type { WorkerReconcilerOptions } from "../src/worker/types.ts";
 // mounted from the reference its `$cell` binding handed over, as `cf-render`
 // mounts it: the bound cell itself at the full variant, the piece it currently
 // names for a tile, the piece's `[NAME]` for a chip with no view of its own,
-// and an exported `[TILE_UI]` or `[CHIP_UI]`. Every value a viewer may not see
-// carries a string that appears nowhere else, so a search of the operations
-// for it is a search for the value having escaped.
+// and an exported `[TILE_UI]` or `[CHIP_UI]`. A `cf-picker` hands each item of
+// its `$items` list to a `cf-render` of its own. Every value a viewer may not
+// see carries a string that appears nowhere else, so a search of the
+// operations for it is a search for the value having escaped.
 //
 // `Deno.test` rather than `describe`/`it`: this package installs its fake
 // clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
@@ -99,20 +107,21 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
   };
 
   /**
-   * Writes `value` to the document named `id`, with stored labels giving each
-   * path in `labels` its confidentiality.
+   * Writes `value` to the document named `id` in `inSpace`, with stored labels
+   * giving each path in `labels` its confidentiality.
    */
   const write = async (
     id: string,
     value: unknown,
     labels: readonly [path: string[], confidentiality: readonly CfcAtom[]][] =
       [],
+    inSpace = space,
   ): Promise<Cell<unknown>> => {
     const tx = runtime.edit();
-    const cell = runtime.getCell(space, id, undefined, tx);
-    writeSeedEnvelopeDoc(tx, space);
+    const cell = runtime.getCell(inSpace, id, undefined, tx);
+    writeSeedEnvelopeDoc(tx, inSpace);
     seedStoredEnvelope(tx, {
-      space,
+      space: inSpace,
       id: cell.getAsNormalizedFullLink().id!,
       type: "application/json",
       path: [],
@@ -132,8 +141,8 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         },
       }),
     });
-    expect((await tx.commit()).ok).toBeDefined();
-    return runtime.getCell(space, id);
+    expect((await tx.commit().settled).ok).toBeDefined();
+    return runtime.getCell(inSpace, id);
   };
 
   const link = (cell: Cell<unknown>) =>
@@ -220,15 +229,21 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
 
   /**
    * Mounts what `reference` names as the worker mounts it, settles, and
-   * returns what was emitted and the unmount.
+   * returns what was emitted and the unmount. `spaceAccess`, when given,
+   * stands in for the worker's own view of which spaces are in reach.
    */
-  const mount = async (reference: CellRef, viewer: Identity) => {
+  const mount = async (
+    reference: CellRef,
+    viewer: Identity,
+    spaceAccess?: SpaceAccessProvider,
+  ) => {
     const ops: VDomOp[] = [];
     const cancel = new WorkerReconciler({
       onOps: (batch) => {
         for (const op of batch) ops.push(op);
       },
       ...viewedBy(viewer),
+      ...(spaceAccess === undefined ? {} : { spaceAccess }),
     }).mount(getCell(runtime, reference).asSchema(rendererVDOMSchema));
     await t.settle();
     return {
@@ -240,8 +255,8 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
             ? [op.cellRef]
             : []
         ),
-      removed: () =>
-        ops.filter((op) => op.op === "remove-prop" && op.key === "cell")
+      removed: (propName = "cell") =>
+        ops.filter((op) => op.op === "remove-prop" && op.key === propName)
           .length,
       propsSet: (key: string) =>
         ops.flatMap((op) =>
@@ -256,6 +271,27 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
             ? [op.text]
             : []
         ),
+      // How many access placeholders stand as children of an element named
+      // `host`, as the operations leave them.
+      accessPlaceholders: (host: string) => {
+        const tags = new Map<number, string>();
+        const parents = new Map<number, number>();
+        const placeholders = new Set<number>();
+        const removed = new Set<number>();
+        for (const op of ops) {
+          if (op.op === "create-element") tags.set(op.nodeId, op.tagName);
+          if (op.op === "insert-child") parents.set(op.childId, op.parentId);
+          if (op.op === "remove-node") removed.add(op.nodeId);
+          if (op.op === "set-prop" && op.key === "data-space-access-lost") {
+            placeholders.add(op.nodeId);
+          }
+        }
+        return [...placeholders].filter((id) => {
+          const parent = parents.get(id);
+          return !removed.has(id) && parent !== undefined &&
+            !removed.has(parent) && tags.get(parent) === host;
+        }).length;
+      },
     };
   };
 
@@ -291,6 +327,65 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
     } finally {
       mounted.cancel();
     }
+  };
+
+  /**
+   * A stored view holding a `cf-picker` bound to `items`, inside an element
+   * named and propped as `around` when one is given.
+   */
+  const pickerView = (
+    id: string,
+    items: Cell<unknown>,
+    around?: { name: string; props: Record<string, unknown> },
+  ) => view(id, vnode("cf-picker", [], { $items: link(items) }), around);
+
+  /**
+   * Writes `items` as a list in each of the ways a view binds `cf-picker` to
+   * one, and returns the lists by way: `any`, a field read under `any`;
+   * `typed`, a field read under `pieceListSchema`, which a binding link to it
+   * stores, as the JSX factory stores it for a list of pieces; and `linked`, a
+   * field holding a link that stores `pieceListSchema` to an array in a
+   * document of its own, read under `any`. Each is in documents of its own,
+   * in `inSpace`.
+   */
+  const pickerLists = async (
+    id: string,
+    items: readonly unknown[],
+    inSpace = space,
+  ) => {
+    const array = await write(`${id}-linked-array`, [...items], [], inSpace);
+    return {
+      any: (await write(`${id}-any`, { items: [...items] }, [], inSpace))
+        .key("items").asSchema(true),
+      typed: (await write(`${id}-typed`, { items: [...items] }, [], inSpace))
+        .key("items").asSchema(pieceListSchema),
+      linked: (await write(
+        `${id}-linked`,
+        {
+          items: link(array.asSchema(pieceListSchema)),
+        },
+        [],
+        inSpace,
+      )).key("items").asSchema(true),
+    };
+  };
+
+  /** How many bindings a view of `cf-picker` makes, for each of `lists`. */
+  const pickerBoundCounts = async (
+    id: string,
+    lists: Record<string, Cell<unknown>>,
+    viewer: Identity,
+    around?: { name: string; props: Record<string, unknown> },
+  ) => {
+    const counts: Record<string, number> = {};
+    for (const [way, list] of Object.entries(lists)) {
+      counts[way] = await boundCount(
+        await pickerView(`${id}-${way}`, list, around),
+        viewer,
+        "items",
+      );
+    }
+    return counts;
   };
 
   try {
@@ -881,27 +976,1021 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
     );
 
     await t.step(
-      "decides `cf-picker`'s items on everything they reach, as every binding outside the registry is decided",
+      "decides each of `cf-picker`'s items as `cf-render` decides its cell, whatever schema the list's links store",
       async () => {
-        // `cf-picker` is not a nested render root in the registry, so a list
-        // holding a piece with a sealed entry is withheld from its owner.
+        // A list of one item binds exactly where a `cf-render` bound to that
+        // item binds: a piece holding a sealed entry binds, the entry left to
+        // the nested render, and a piece is withheld when its own document, a
+        // field of that document, or a link on the way to it is refused. A
+        // list whose links store `pieceListSchema` reads each item as a
+        // reference, and is decided the same.
 
-        expect(
-          await boundCount(
-            await view(
-              "picker-view",
-              vnode("cf-picker", [], {
-                $items: link(
-                  (await write("picker-items", {
-                    items: [link(await shelf("picker-shelf"))],
-                  })).key("items").asSchema(true),
-                ),
-              }),
+        const publicPiece = await write("items-public-piece", {
+          [NAME]: "Public shelf",
+          [UI]: vnode("div", ["Shelf heading"]),
+        });
+        const sealedPiece = await labeled("items-sealed-piece", {
+          [NAME]: "Sealed shelf",
+          [UI]: vnode("div", [SEALED]),
+        }, sealedAtom);
+        const items: readonly [string, unknown][] = [
+          ["a public piece", link(publicPiece)],
+          ["a piece holding a sealed entry", link(await shelf("items-shelf"))],
+          ["a sealed piece", link(sealedPiece)],
+          [
+            "a piece with a sealed field",
+            link(
+              await write("items-field-piece", {
+                [NAME]: "Shelf",
+                [UI]: vnode("div", ["Shelf heading"]),
+                margin: SEALED,
+              }, [[["margin"], [sealedAtom]]]),
             ),
-            owner,
-            "items",
+          ],
+          [
+            "a sealed link to a public piece",
+            link(
+              await labeled("items-sealed-link", link(publicPiece), sealedAtom),
+            ),
+          ],
+          [
+            "a link to a sealed piece",
+            link(await write("items-link-to-sealed", link(sealedPiece))),
+          ],
+          ["a piece written into the list", {
+            [NAME]: "Written shelf",
+            [UI]: vnode("div", ["Shelf heading"]),
+          }],
+        ];
+        const outcomes: Record<string, unknown> = {};
+        for (const [id, item] of items) {
+          const pins = await write(`items-pins-${id}`, {
+            element: { cell: item },
+          });
+          outcomes[id] = {
+            cfRender: await boundCount(
+              await tileView(
+                `items-render-${id}`,
+                pins.key("element").key("cell").asSchema(true),
+              ),
+              visitor,
+            ),
+            cfPicker: await pickerBoundCounts(
+              `items-picker-${id}`,
+              await pickerLists(`items-${id}`, [item]),
+              visitor,
+            ),
+          };
+        }
+        const decided = (bound: number) => ({
+          cfRender: bound,
+          cfPicker: { any: bound, typed: bound, linked: bound },
+        });
+        expect(outcomes).toEqual({
+          "a public piece": decided(1),
+          "a piece holding a sealed entry": decided(1),
+          "a sealed piece": decided(0),
+          "a piece with a sealed field": decided(0),
+          "a sealed link to a public piece": decided(0),
+          "a link to a sealed piece": decided(0),
+          "a piece written into the list": decided(1),
+        });
+      },
+    );
+
+    await t.step(
+      "withholds `cf-picker`'s whole binding while the ceiling refuses any one item, and binds a list it admits",
+      async () => {
+        // The binding hands `cf-picker` one handle to the whole list, so one
+        // refused item withholds it, wherever that item is in the list, and
+        // no binding is made on the way to that decision.
+
+        const piece = (id: string) =>
+          write(id, {
+            [NAME]: "Shelf",
+            [UI]: vnode("div", ["Shelf heading"]),
+          });
+        const first = await piece("mixed-first-piece");
+        const second = await piece("mixed-second-piece");
+        const sealed = await labeled("mixed-sealed-piece", {
+          [NAME]: "Sealed shelf",
+          [UI]: vnode("div", [SEALED]),
+        }, sealedAtom);
+        const lists: readonly [string, readonly unknown[]][] = [
+          ["two public pieces", [link(first), link(second)]],
+          ["a public piece, then a sealed one", [link(first), link(sealed)]],
+          ["a sealed piece, then a public one", [link(sealed), link(first)]],
+          ["no pieces", []],
+        ];
+        const outcomes: Record<string, unknown> = {};
+        for (const [id, items] of lists) {
+          outcomes[id] = await pickerBoundCounts(
+            `mixed-view-${id}`,
+            await pickerLists(`mixed-${id}`, items),
+            visitor,
+          );
+        }
+        const bound = (count: number) => ({
+          any: count,
+          typed: count,
+          linked: count,
+        });
+        expect(outcomes).toEqual({
+          "two public pieces": bound(1),
+          "a public piece, then a sealed one": bound(0),
+          "a sealed piece, then a public one": bound(0),
+          "no pieces": bound(1),
+        });
+      },
+    );
+
+    await t.step(
+      "removes `cf-picker`'s binding when a write leaves an item refused, as it removes `cf-render`'s, whatever schema the list's links store",
+      async () => {
+        // Each item is a piece reached through a link of its own. A label
+        // written after the binding is made, on the piece's own document, on
+        // a field of that document, or on the link to it, refuses the item.
+
+        const value = {
+          [NAME]: "Relabeled shelf",
+          [UI]: vnode("div", ["Shelf heading"]),
+          margin: "Shelf margin",
+        };
+        const relabels: readonly [
+          string,
+          (piece: string, hop: string) => Promise<unknown>,
+        ][] = [
+          [
+            "the piece's document",
+            (piece) => write(piece, value, [[[], [sealedAtom]]]),
+          ],
+          [
+            "a field of the piece",
+            (piece) => write(piece, value, [[["margin"], [sealedAtom]]]),
+          ],
+          [
+            "the link to the piece",
+            (piece, hop) =>
+              write(hop, link(runtime.getCell(space, piece)), [[[], [
+                sealedAtom,
+              ]]]),
+          ],
+        ];
+        const outcomes: Record<string, unknown> = {};
+        for (const [relabeled, relabel] of relabels) {
+          for (const host of ["cfRender", "any", "typed", "linked"] as const) {
+            const id = `relabel-${relabeled}-${host}`;
+            const piece = await write(`${id}-piece`, value);
+            const hop = await write(`${id}-hop`, link(piece));
+            const [page, propName] = host === "cfRender"
+              ? [
+                await tileView(
+                  `${id}-view`,
+                  await pinned(`${id}-pins`, hop),
+                ),
+                "cell",
+              ]
+              : [
+                await pickerView(
+                  `${id}-view`,
+                  (await pickerLists(`${id}-list`, [link(hop)]))[host],
+                ),
+                "items",
+              ];
+            const mounted = await mount(createCellRef(page), visitor);
+            try {
+              const bound = mounted.bindings(propName).length;
+              await relabel(`${id}-piece`, `${id}-hop`);
+              await t.settle();
+              outcomes[`${relabeled}, ${host}`] = {
+                bound,
+                removed: mounted.removed(propName),
+              };
+            } finally {
+              mounted.cancel();
+            }
+          }
+        }
+        expect(outcomes).toEqual(
+          Object.fromEntries(
+            Object.keys(outcomes).map((id) => [id, { bound: 1, removed: 1 }]),
           ),
-        ).toBe(0);
+        );
+        expect(Object.keys(outcomes)).toHaveLength(12);
+      },
+    );
+
+    await t.step(
+      "follows `cf-picker`'s list as its items change, and binds again once nothing it reaches is refused",
+      async () => {
+        // A public piece added to the list keeps the binding, a sealed one
+        // removes it, and taking the sealed piece out binds the list again.
+        // A field that links to a list is followed to whichever list it names,
+        // a label written afterwards on an item of the list it names removes
+        // the binding, and a list withheld because the document holding that
+        // field is sealed binds once the label is gone.
+
+        const piece = (id: string) =>
+          write(id, {
+            [NAME]: "Shelf",
+            [UI]: vnode("div", ["Shelf heading"]),
+          });
+        const first = link(await piece("changing-first-piece"));
+        const second = link(await piece("changing-second-piece"));
+        const sealed = link(
+          await labeled("changing-sealed-piece", {
+            [NAME]: "Sealed shelf",
+            [UI]: vnode("div", [SEALED]),
+          }, sealedAtom),
+        );
+        const contents = [[first], [first, second], [first, sealed], [first]];
+        const outcomes: Record<string, unknown> = {};
+        for (const way of ["any", "typed", "linked"] as const) {
+          const id = `changing-${way}`;
+          const list = (await pickerLists(id, contents[0]))[way];
+          const mounted = await mount(
+            createCellRef(await pickerView(`${id}-view`, list)),
+            visitor,
+          );
+          try {
+            const seen: { bound: number; removed: number }[] = [];
+            for (const items of contents) {
+              if (items !== contents[0]) {
+                await (way === "linked"
+                  ? write(`${id}-linked-array`, [...items])
+                  : write(`${id}-${way}`, { items: [...items] }));
+                await t.settle();
+              }
+              seen.push({
+                bound: mounted.bindings("items").length,
+                removed: mounted.removed("items"),
+              });
+            }
+            outcomes[way] = seen;
+          } finally {
+            mounted.cancel();
+          }
+        }
+        const repointed = await write("changing-repointed-array", [first]);
+        const laterValue = {
+          [NAME]: "Later shelf",
+          [UI]: vnode("div", ["Shelf heading"]),
+        };
+        const later = await write(
+          "changing-later-array",
+          [link(await write("changing-later-piece", laterValue))],
+        );
+        const pointTo = (array: Cell<unknown>) =>
+          write("changing-repointing", {
+            items: link(array.asSchema(pieceListSchema)),
+          });
+        await pointTo(repointed);
+        const mounted = await mount(
+          createCellRef(
+            await pickerView(
+              "changing-repointing-view",
+              runtime.getCell(space, "changing-repointing").key("items")
+                .asSchema(true),
+            ),
+          ),
+          visitor,
+        );
+        try {
+          const seen: { bound: number; removed: number }[] = [];
+          for (
+            const change of [
+              undefined,
+              () => pointTo(later),
+              () =>
+                write("changing-later-piece", laterValue, [[[], [
+                  sealedAtom,
+                ]]]),
+              () => pointTo(repointed),
+            ]
+          ) {
+            if (change !== undefined) {
+              await change();
+              await t.settle();
+            }
+            seen.push({
+              bound: mounted.bindings("items").length,
+              removed: mounted.removed("items"),
+            });
+          }
+          outcomes.repointed = seen;
+        } finally {
+          mounted.cancel();
+        }
+        const unsealedValue = {
+          items: link(repointed.asSchema(pieceListSchema)),
+        };
+        await write("changing-unsealed", unsealedValue, [[[], [sealedAtom]]]);
+        const unsealed = await mount(
+          createCellRef(
+            await pickerView(
+              "changing-unsealed-view",
+              runtime.getCell(space, "changing-unsealed").key("items")
+                .asSchema(true),
+            ),
+          ),
+          visitor,
+        );
+        try {
+          const before = unsealed.bindings("items").length;
+          await write("changing-unsealed", unsealedValue);
+          await t.settle();
+          outcomes.unsealed = [before, unsealed.bindings("items").length];
+        } finally {
+          unsealed.cancel();
+        }
+        const followed = [
+          { bound: 1, removed: 0 },
+          { bound: 1, removed: 0 },
+          { bound: 1, removed: 1 },
+          { bound: 2, removed: 1 },
+        ];
+        expect(outcomes).toEqual({
+          any: followed,
+          typed: followed,
+          linked: followed,
+          repointed: followed,
+          unsealed: [0, 1],
+        });
+      },
+    );
+
+    await t.step(
+      "withholds a binding while a read deciding it cannot complete, for `cf-render` and `cf-picker` alike, and decides it again once it can",
+      async () => {
+        // Each list, and each piece a `cf-render` is bound to, sits in a space
+        // the view loses access to and regains. A read that cannot complete is
+        // not an empty read: a binding to a public piece, or to a list of one,
+        // is withheld until the read completes again, and one to a sealed
+        // piece is never made.
+
+        const listSpace =
+          (await Identity.fromPassphrase("nested render list space")).did();
+        let revoked = false;
+        const observers = new Set<() => void>();
+        const access: SpaceAccessProvider = {
+          error: (named) =>
+            revoked && named === listSpace
+              ? new Error("Access revoked")
+              : undefined,
+          subscribe: (_named, onChange) => {
+            observers.add(onChange);
+            return () => {
+              observers.delete(onChange);
+            };
+          },
+        };
+        const setRevoked = async (value: boolean) => {
+          revoked = value;
+          for (const observer of [...observers]) observer();
+          await t.settle();
+        };
+        const pieces: [string, unknown, [string[], CfcAtom[]][]][] = [
+          ["public", {
+            [NAME]: "Shelf",
+            [UI]: vnode("div", ["Shelf heading"]),
+          }, []],
+          ["sealed", {
+            [NAME]: "Sealed shelf",
+            [UI]: vnode("div", [SEALED]),
+          }, [[[], [sealedAtom]]]],
+        ];
+        const outcomes: Record<string, unknown> = {};
+        // A read refused because its space is out of reach is not a denial.
+        const deniedWhileOutOfReach: Record<string, number> = {};
+        for (const [held, value, labels] of pieces) {
+          const piece = await write(`unread-${held}-piece`, value, labels);
+          const pins = await write(
+            `unread-${held}-pins`,
+            {
+              element: {
+                cell: link(
+                  await write(
+                    `unread-${held}-pinned-piece`,
+                    value,
+                    labels,
+                    listSpace,
+                  ),
+                ),
+              },
+            },
+            [],
+            listSpace,
+          );
+          const pages: [string, Cell<unknown>, string][] = [[
+            "cfRender",
+            await tileView(
+              `unread-${held}-render-view`,
+              pins.key("element").key("cell").asSchema(true),
+            ),
+            "cell",
+          ]];
+          const lists = await pickerLists(
+            `unread-${held}`,
+            [link(piece)],
+            listSpace,
+          );
+          for (const [way, list] of Object.entries(lists)) {
+            pages.push([
+              way,
+              await pickerView(`unread-${held}-${way}-view`, list),
+              "items",
+            ]);
+          }
+          for (const [way, page, propName] of pages) {
+            const mounted = await mount(createCellRef(page), visitor, access);
+            try {
+              const seen: { bound: number; removed: number }[] = [];
+              const look = () =>
+                seen.push({
+                  bound: mounted.bindings(propName).length,
+                  removed: mounted.removed(propName),
+                });
+              look();
+              let denials = 0;
+              const stopListening = addCfcDenialListener(() => denials++);
+              try {
+                await setRevoked(true);
+              } finally {
+                stopListening();
+              }
+              deniedWhileOutOfReach[`${held}, ${way}`] = denials;
+              look();
+              await setRevoked(false);
+              look();
+              outcomes[`${held}, ${way}`] = seen;
+            } finally {
+              mounted.cancel();
+            }
+          }
+        }
+        const publicSeen = [
+          { bound: 1, removed: 0 },
+          { bound: 1, removed: 1 },
+          { bound: 2, removed: 1 },
+        ];
+        const sealedSeen = [
+          { bound: 0, removed: 0 },
+          { bound: 0, removed: 0 },
+          { bound: 0, removed: 0 },
+        ];
+        expect(outcomes).toEqual({
+          "public, cfRender": publicSeen,
+          "public, any": publicSeen,
+          "public, typed": publicSeen,
+          "public, linked": publicSeen,
+          "sealed, cfRender": sealedSeen,
+          "sealed, any": sealedSeen,
+          "sealed, typed": sealedSeen,
+          "sealed, linked": sealedSeen,
+        });
+        expect(deniedWhileOutOfReach).toEqual(
+          Object.fromEntries(Object.keys(outcomes).map((id) => [id, 0])),
+        );
+      },
+    );
+
+    await t.step(
+      "shows the access placeholder inside a `cf-render` or `cf-picker` whose binding is withheld while its space is out of reach, and only then",
+      async () => {
+        // Each piece, and each list of one, sits in a space the view loses
+        // access to and regains, except the sealed piece the space in reach
+        // holds. A binding withheld while its space is out of reach leaves the
+        // access placeholder in its element; one withheld for its labels leaves
+        // the element empty, whether or not the space is in reach otherwise.
+
+        const listSpace =
+          (await Identity.fromPassphrase("placeholder list space")).did();
+        let revoked = false;
+        const observers = new Set<() => void>();
+        const access: SpaceAccessProvider = {
+          error: (named) =>
+            revoked && named === listSpace
+              ? new Error("Access revoked")
+              : undefined,
+          subscribe: (_named, onChange) => {
+            observers.add(onChange);
+            return () => {
+              observers.delete(onChange);
+            };
+          },
+        };
+        const setRevoked = async (value: boolean) => {
+          revoked = value;
+          for (const observer of [...observers]) observer();
+          await t.settle();
+        };
+        const publicPiece = {
+          [NAME]: "Shelf",
+          [UI]: vnode("div", ["Placeholder shelf heading"]),
+        };
+        const sealedPiece = {
+          [NAME]: "Sealed shelf",
+          [UI]: vnode("div", [SEALED]),
+        };
+        const pieces: [
+          string,
+          unknown,
+          [string[], CfcAtom[]][],
+          typeof space,
+        ][] = [
+          ["public", publicPiece, [], listSpace],
+          ["sealed", sealedPiece, [[[], [sealedAtom]]], listSpace],
+          ["sealed in reach", sealedPiece, [[[], [sealedAtom]]], space],
+        ];
+        const pages: [string, Cell<unknown>, string, string][] = [];
+        for (const [held, value, labels, inSpace] of pieces) {
+          const id = `placeholder-${held.replaceAll(" ", "-")}`;
+          const piece = await write(`${id}-piece`, value, labels, inSpace);
+          const pins = await write(
+            `${id}-pins`,
+            { element: { cell: link(piece) } },
+            [],
+            inSpace,
+          );
+          pages.push([
+            `${held}, cfRender`,
+            await tileView(
+              `${id}-render-view`,
+              pins.key("element").key("cell").asSchema(true),
+            ),
+            "cf-render",
+            "cell",
+          ]);
+          const lists = await pickerLists(id, [link(piece)], inSpace);
+          pages.push([
+            `${held}, cfPicker`,
+            await pickerView(`${id}-picker-view`, lists.any),
+            "cf-picker",
+            "items",
+          ]);
+        }
+        const outcomes: Record<string, unknown> = {};
+        let mountedRender: string[] | undefined;
+        for (const [way, page, host, propName] of pages) {
+          for (const revokedAtMount of [false, true]) {
+            await setRevoked(revokedAtMount);
+            const mounted = await mount(createCellRef(page), visitor, access);
+            try {
+              const seen: { placeholders: number; bound: number }[] = [];
+              const look = () =>
+                seen.push({
+                  placeholders: mounted.accessPlaceholders(host),
+                  bound: mounted.bindings(propName).length,
+                });
+              look();
+              await setRevoked(!revokedAtMount);
+              look();
+              await setRevoked(revokedAtMount);
+              look();
+              await setRevoked(false);
+              look();
+              outcomes[`${way}, ${revokedAtMount ? "out of" : "in"} reach`] =
+                seen;
+              if (way === "public, cfRender" && revokedAtMount) {
+                // The binding made once the space is in reach again mounts
+                // the piece's render.
+                const nested = await openThroughCfRender(
+                  mounted.bindings(propName).at(-1)!,
+                  visitor,
+                );
+                try {
+                  mountedRender = nested.full.shown();
+                } finally {
+                  nested.full.cancel();
+                  nested.tile.cancel();
+                }
+              }
+            } finally {
+              mounted.cancel();
+            }
+          }
+        }
+        const look = (placeholders: number, bound: number) => ({
+          placeholders,
+          bound,
+        });
+        // In reach at mount, then out of reach, in reach, and in reach.
+        const publicFromInReach = [
+          look(0, 1),
+          look(1, 1),
+          look(0, 2),
+          look(0, 2),
+        ];
+        // Out of reach at mount, then in reach, out of reach, and in reach.
+        const publicFromOutOfReach = [
+          look(1, 0),
+          look(0, 1),
+          look(1, 1),
+          look(0, 2),
+        ];
+        const sealedFromInReach = [
+          look(0, 0),
+          look(1, 0),
+          look(0, 0),
+          look(0, 0),
+        ];
+        const sealedFromOutOfReach = [
+          look(1, 0),
+          look(0, 0),
+          look(1, 0),
+          look(0, 0),
+        ];
+        const neverShown = [look(0, 0), look(0, 0), look(0, 0), look(0, 0)];
+        expect(outcomes).toEqual({
+          "public, cfRender, in reach": publicFromInReach,
+          "public, cfRender, out of reach": publicFromOutOfReach,
+          "public, cfPicker, in reach": publicFromInReach,
+          "public, cfPicker, out of reach": publicFromOutOfReach,
+          "sealed, cfRender, in reach": sealedFromInReach,
+          "sealed, cfRender, out of reach": sealedFromOutOfReach,
+          "sealed, cfPicker, in reach": sealedFromInReach,
+          "sealed, cfPicker, out of reach": sealedFromOutOfReach,
+          "sealed in reach, cfRender, in reach": neverShown,
+          "sealed in reach, cfRender, out of reach": neverShown,
+          "sealed in reach, cfPicker, in reach": neverShown,
+          "sealed in reach, cfPicker, out of reach": neverShown,
+        });
+        expect(mountedRender).toContain("Placeholder shelf heading");
+      },
+    );
+
+    await t.step(
+      "takes a `cf-render`'s access placeholder away when a write binds it to a piece in reach, and puts it back when a write binds it out of reach again",
+      async () => {
+        // The view is written again with its `cf-render` bound to another
+        // piece, and the element is updated where it stands, so the binding
+        // replaced is the one whose placeholder the element holds.
+
+        const farSpace =
+          (await Identity.fromPassphrase("swapped placeholder space")).did();
+        const access: SpaceAccessProvider = {
+          error: (named) =>
+            named === farSpace ? new Error("Access revoked") : undefined,
+          subscribe: () => () => {},
+        };
+        const slotOf = async (id: string, inSpace: typeof space) => {
+          const piece = await write(
+            `${id}-piece`,
+            {
+              [NAME]: "Shelf",
+              [UI]: vnode("div", ["Swapped shelf heading"]),
+            },
+            [],
+            inSpace,
+          );
+          const pins = await write(
+            `${id}-pins`,
+            { element: { cell: link(piece) } },
+            [],
+            inSpace,
+          );
+          return pins.key("element").key("cell").asSchema(true);
+        };
+        const far = await slotOf("swapped-far", farSpace);
+        const near = await slotOf("swapped-near", space);
+        const page = await mount(
+          createCellRef(await tileView("swapped-view", far)),
+          visitor,
+          access,
+        );
+        try {
+          const seen: { placeholders: number; bound: number }[] = [];
+          const look = () =>
+            seen.push({
+              placeholders: page.accessPlaceholders("cf-render"),
+              bound: page.bindings().length,
+            });
+          look();
+          await tileView("swapped-view", near);
+          await t.settle();
+          look();
+          await tileView("swapped-view", far);
+          await t.settle();
+          look();
+          expect(seen).toEqual([
+            { placeholders: 1, bound: 0 },
+            { placeholders: 0, bound: 1 },
+            { placeholders: 1, bound: 1 },
+          ]);
+          // The element was updated where it stands, never made again.
+          expect(page.shown().filter((tag) => tag === "<cf-render>"))
+            .toHaveLength(1);
+        } finally {
+          page.cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "decides `cf-picker`'s items inside a boundary that lowers the ceiling on everything they reach, whatever schema the list's links store",
+      async () => {
+        // As for `cf-render`, the nested render of each item starts from the
+        // root ceiling, so it would show the owner-only note that the
+        // boundary around the `cf-picker` refuses.
+
+        const noted = await write("lowered-noted-shelf", {
+          [NAME]: "Shelf",
+          [UI]: vnode("div", [
+            link(await labeled("lowered-note", OWNER_ONLY, ownerOnlyAtom)),
+          ]),
+        });
+        const plain = await write("lowered-plain-shelf", {
+          [NAME]: "Plain shelf",
+          [UI]: vnode("div", ["Shelf heading"]),
+        });
+        const lowering = {
+          name: "cf-cfc-render-boundary",
+          props: { maxConfidentiality: [] },
+        };
+        const outcomes: Record<string, unknown> = {};
+        for (
+          const [id, piece] of [["noted", noted], ["plain", plain]] as const
+        ) {
+          outcomes[id] = {
+            cfRender: await boundCount(
+              await tileView(
+                `lowered-render-${id}`,
+                await pinned(`lowered-pins-${id}`, piece),
+                lowering,
+              ),
+              owner,
+            ),
+            cfPicker: await pickerBoundCounts(
+              `lowered-picker-${id}`,
+              await pickerLists(`lowered-${id}`, [link(piece)]),
+              owner,
+              lowering,
+            ),
+          };
+        }
+        expect(outcomes).toEqual({
+          noted: { cfRender: 0, cfPicker: { any: 0, typed: 0, linked: 0 } },
+          plain: { cfRender: 1, cfPicker: { any: 1, typed: 1, linked: 1 } },
+        });
+      },
+    );
+
+    await t.step(
+      "fits each of `cf-picker`'s items on the fetch ceiling as `cf-render` fits its cell",
+      async () => {
+        // A material-risk caveat on a view a piece shows binds the piece,
+        // whose nested render keeps that view from loading, and on the piece's
+        // own document withholds it.
+
+        const unscreened: CfcAtom = {
+          type: CFC_ATOM_TYPE.Caveat,
+          kind: CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+          source: "of:untrusted-sender",
+        };
+        const risky = [owner.did(), unscreened];
+        const pieces = [
+          [
+            "on a view the piece shows",
+            await write("fetch-holding-shelf", {
+              [NAME]: "Shelf",
+              [UI]: vnode("div", [
+                link(
+                  await write(
+                    "fetch-risky-view",
+                    vnode("img", [], { src: "https://example.test/p.png" }),
+                    [[[], risky]],
+                  ),
+                ),
+              ]),
+            }),
+          ],
+          [
+            "on the piece's own document",
+            await write("fetch-risky-piece", {
+              [NAME]: "Shelf",
+              [UI]: vnode("div", ["Shelf heading"]),
+            }, [[[], risky]]),
+          ],
+        ] as const;
+        const outcomes: Record<string, unknown> = {};
+        for (const [id, piece] of pieces) {
+          outcomes[id] = {
+            cfRender: await boundCount(
+              await tileView(
+                `fetch-render-${id}`,
+                await pinned(`fetch-pins-${id}`, piece),
+              ),
+              owner,
+            ),
+            cfPicker: await pickerBoundCounts(
+              `fetch-picker-${id}`,
+              await pickerLists(`fetch-${id}`, [link(piece)]),
+              owner,
+            ),
+          };
+        }
+        expect(outcomes).toEqual({
+          "on a view the piece shows": {
+            cfRender: 1,
+            cfPicker: { any: 1, typed: 1, linked: 1 },
+          },
+          "on the piece's own document": {
+            cfRender: 0,
+            cfPicker: { any: 0, typed: 0, linked: 0 },
+          },
+        });
+      },
+    );
+
+    await t.step(
+      "decides each of `cf-map`'s popups as `cf-render` decides its cell, where the value's schema reads popups as references",
+      async () => {
+        // `cf-map` hands each marker's and circle's `popup` to a `cf-render`
+        // of its own, and reads its value under the schema its binding link
+        // stores. Where that schema reads each popup as a reference, a popup
+        // binds exactly where a `cf-render` bound to it binds. Read under
+        // `any`, the value is read with everything its popups reach, so a
+        // popup holding a sealed entry withholds it. A value whose schema
+        // holds the markers themselves as a reference is withheld: what its
+        // popups are is not read.
+
+        const positioned = (popup: JSONSchema, at: string): JSONSchema => ({
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              [at]: {
+                type: "object",
+                properties: {
+                  lat: { type: "number" },
+                  lng: { type: "number" },
+                },
+              },
+              title: { type: "string" },
+              popup,
+            },
+          },
+        });
+        const reference = { asCell: ["cell"] } as const;
+        const schemas: readonly [string, JSONSchema][] = [
+          ["any", true],
+          ["popups as references", {
+            type: "object",
+            properties: {
+              markers: positioned(reference, "position"),
+              circles: positioned(reference, "center"),
+            },
+          }],
+          ["markers as a reference", {
+            type: "object",
+            properties: { markers: reference },
+          }],
+        ];
+        const pieces = [
+          [
+            "a public piece",
+            await write("map-public-piece", {
+              [NAME]: "Public shelf",
+              [UI]: vnode("div", ["Shelf heading"]),
+            }),
+          ],
+          ["a piece holding a sealed entry", await shelf("map-shelf")],
+          [
+            "a sealed piece",
+            await labeled("map-sealed-piece", {
+              [NAME]: "Sealed shelf",
+              [UI]: vnode("div", [SEALED]),
+            }, sealedAtom),
+          ],
+        ] as const;
+        const outcomes: Record<string, unknown> = {};
+        for (const [pieceId, piece] of pieces) {
+          const decided: Record<string, unknown> = {
+            cfRender: await boundCount(
+              await tileView(
+                `map-render-${pieceId}`,
+                await pinned(`map-pins-${pieceId}`, piece),
+              ),
+              visitor,
+            ),
+          };
+          for (const [schemaId, schema] of schemas) {
+            const features = schemaId === "markers as a reference"
+              ? ["marker"]
+              : ["marker", "circle"];
+            for (const feature of features) {
+              const id = `map-${pieceId}-${schemaId}-${feature}`;
+              const value = await write(
+                `${id}-value`,
+                feature === "marker"
+                  ? {
+                    markers: [{
+                      position: { lat: 1, lng: 2 },
+                      title: "Pin",
+                      popup: link(piece),
+                    }],
+                  }
+                  : {
+                    circles: [{
+                      center: { lat: 1, lng: 2 },
+                      title: "Area",
+                      popup: link(piece),
+                    }],
+                  },
+              );
+              decided[`${schemaId}, ${feature}`] = await boundCount(
+                await view(
+                  `${id}-view`,
+                  vnode("cf-map", [], { $value: link(value.asSchema(schema)) }),
+                ),
+                visitor,
+                "value",
+              );
+            }
+          }
+          outcomes[pieceId] = decided;
+        }
+        const decided = (asReferences: number, underAny: number) => ({
+          cfRender: asReferences,
+          "any, marker": underAny,
+          "any, circle": underAny,
+          "popups as references, marker": asReferences,
+          "popups as references, circle": asReferences,
+          "markers as a reference, marker": 0,
+        });
+        expect(outcomes).toEqual({
+          "a public piece": decided(1, 1),
+          "a piece holding a sealed entry": decided(1, 0),
+          "a sealed piece": decided(0, 0),
+        });
+      },
+    );
+
+    await t.step(
+      "withholds `cf-map`'s value when links on the way to a popup, or a popup's own, run in a cycle",
+      async () => {
+        // A cycle of links has no document to land on, so a read that
+        // follows one does not complete. The same shapes without the cycle
+        // bind, as the control row shows.
+
+        const looped = runtime.getCell(space, "cycle-loop-a");
+        await write("cycle-loop-b", link(looped));
+        await write(
+          "cycle-loop-a",
+          link(runtime.getCell(space, "cycle-loop-b")),
+        );
+        const loop = link(looped);
+        const piece = link(
+          await write("cycle-piece", {
+            [NAME]: "Shelf",
+            [UI]: vnode("div", ["Shelf heading"]),
+          }),
+        );
+        const marker = (popup: unknown) => ({
+          position: { lat: 1, lng: 2 },
+          title: "Pin",
+          popup,
+        });
+        const popupsAsReferences: JSONSchema = {
+          type: "object",
+          properties: {
+            markers: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { popup: { asCell: ["cell"] } },
+              },
+            },
+          },
+        };
+        const values: readonly [string, unknown, JSONSchema][] = [
+          ["markers in a cycle", { markers: loop }, true],
+          ["a marker in a cycle", { markers: [loop] }, true],
+          [
+            "a popup in a cycle",
+            { markers: [marker(loop)] },
+            popupsAsReferences,
+          ],
+          ["no cycle", { markers: [marker(piece)] }, popupsAsReferences],
+        ];
+        const outcomes: Record<string, number> = {};
+        for (const [id, value, schema] of values) {
+          const held = await write(`cycle-value-${id}`, value);
+          outcomes[id] = await boundCount(
+            await view(
+              `cycle-view-${id}`,
+              vnode("cf-map", [], { $value: link(held.asSchema(schema)) }),
+            ),
+            visitor,
+            "value",
+          );
+        }
+        expect(outcomes).toEqual({
+          "markers in a cycle": 0,
+          "a marker in a cycle": 0,
+          "a popup in a cycle": 0,
+          "no cycle": 1,
+        });
       },
     );
 

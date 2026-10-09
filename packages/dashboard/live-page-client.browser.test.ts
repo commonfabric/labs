@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import {
   LIVE_PAGE_UPDATE,
   reconcileMain,
+  updateIcon,
   updateMain,
 } from "./live-page-client.ts";
 
@@ -96,4 +97,22 @@ Deno.test("an update is announced with the fresh rendering, which the page may a
     document.removeEventListener(LIVE_PAGE_UPDATE, reverse);
     main.remove();
   }
+});
+
+Deno.test("a rendering's favicon image replaces the page's", () => {
+  const rendering = (href: string) =>
+    new DOMParser().parseFromString(
+      `<head><link rel="icon" href="${href}"></head><body><main></main></body>`,
+      "text/html",
+    );
+  const page = rendering("data:,");
+  const icon = page.querySelector('link[rel="icon"]');
+  for (const href of ["/good.png", "/bad.png", "data:,"]) {
+    updateIcon(page, rendering(href));
+    expect(page.querySelector('link[rel="icon"]')).toBe(icon);
+    expect(icon?.getAttribute("href")).toBe(href);
+  }
+  // A rendering with no favicon leaves the page's as it is.
+  updateIcon(page, new DOMParser().parseFromString("<main></main>", "text/html"));
+  expect(icon?.getAttribute("href")).toBe("data:,");
 });

@@ -23,13 +23,20 @@
  *   GH_TOKEN                          GitHub tiles; read access to the
  *                                     organization's members also powers the
  *                                     organization-users tile
+ *   GH_BILLING_TOKEN                  optional dedicated token for GitHub
+ *                                     organization or enterprise billing
+ *   GH_APP_CLIENT_ID, GH_APP_PRIVATE_KEY   a GitHub App the GitHub tiles
+ *                                     authenticate as in place of GH_TOKEN
  */
 
 import { minOf } from "@commonfabric/utils/math";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
-import { TILES } from "./registry.ts";
+import { latestCiJobs, TILES } from "./registry.ts";
 import { makeCtx } from "./ctx.ts";
+import { RunLists } from "./github-runs.ts";
+import { greenBranchOf } from "./green-branch.ts";
+import { dashboardCacheFile } from "./history-files.ts";
 import {
   escapeHtml,
   friendlyError,
@@ -48,6 +55,7 @@ import {
   type TileView,
 } from "./types.ts";
 import { livePages } from "./live-page.ts";
+import { type Board, repoPagesRoute } from "./repo-page.ts";
 import { SERVING_VERSION } from "./version.ts";
 import {
   DASHBOARD_MESSAGE_MAX_LENGTH,
@@ -55,7 +63,10 @@ import {
   DashboardMessageStore,
 } from "./dashboard-message.ts";
 
-const ctx = makeCtx();
+const ctx = makeCtx(
+  greenBranchOf,
+  new RunLists(dashboardCacheFile("fabric-wall-run-lists-tiles.json")),
+);
 const views = new Map<string, TileView>();
 const lastRun = new Map<string, number>();
 const activityBadges = new Map<string, string>();
@@ -643,8 +654,24 @@ export function resetBoardForTest(): void {
   faviconRedSince = null;
 }
 
-// Collect drill-down routes declared by tiles.
-const routes = TILES.flatMap((t) => t.routes ?? []);
+// The drill-down routes the tiles declare, and the repository pages, which
+// read what the board holds now.
+const board: Board = {
+  tiles: TILES,
+  view: (tile) => {
+    const view = views.get(tile.label);
+    return view && activeTileView(tile, view);
+  },
+  runs: (source) => {
+    const key = runSourceKey(source);
+    const runs = runSnapshots.get(key);
+    return {
+      runs: runs ?? [],
+      problem: runSourceErrors.get(key) ?? (runs ? undefined : "pending"),
+    };
+  },
+};
+const routes = [...TILES.flatMap((t) => t.routes ?? []), repoPagesRoute(board, latestCiJobs)];
 const pages = livePages(routes);
 
 // How often the page actually updates, which the client colors the "updated"

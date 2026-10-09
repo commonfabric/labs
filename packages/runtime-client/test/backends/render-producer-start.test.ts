@@ -1,5 +1,3 @@
-/** Embedded renders activate the referenced piece's local producer graph. */
-
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
@@ -63,7 +61,7 @@ async function setup() {
     return piece;
   });
   ownerRuntime.prepareTxForCommit(tx);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   await ownerRuntime.idle();
   await ownerStorage.synced();
   const targets = originals.map((piece) =>
@@ -76,7 +74,7 @@ async function setup() {
   const select = async (value: unknown) => {
     const edit = runtime.edit();
     host.withTx(edit).set({ selected: value });
-    expect((await edit.commit()).error).toBeUndefined();
+    expect((await edit.commit().settled).error).toBeUndefined();
   };
   await select(targets[0]);
   return {
@@ -93,7 +91,7 @@ async function setup() {
       const edit = ownerRuntime.edit();
       const piece = ownerRuntime.getCell(owner.did(), name, undefined, edit);
       piece.setMetaRaw("patternIdentity", value, rawMetaWriteAuthorization);
-      expect((await edit.commit()).error).toBeUndefined();
+      expect((await edit.commit().settled).error).toBeUndefined();
       await ownerStorage.synced();
     },
     publish: async (name: string) => {
@@ -101,7 +99,7 @@ async function setup() {
       const piece = ownerRuntime.getCell(owner.did(), name, undefined, edit);
       ownerRuntime.run(edit, compiled, {}, piece);
       ownerRuntime.prepareTxForCommit(edit);
-      expect((await edit.commit()).error).toBeUndefined();
+      expect((await edit.commit().settled).error).toBeUndefined();
       await ownerRuntime.idle();
       await ownerStorage.synced();
     },

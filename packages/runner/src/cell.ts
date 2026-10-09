@@ -108,7 +108,7 @@ import {
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import {
-  cfcLabelViewForCell,
+  cfcLabelViewForCellFailClosed,
   cfcLabelViewForResolvedCell,
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
@@ -161,6 +161,8 @@ import {
   txToReactivityLog,
 } from "./scheduler.ts";
 import { mintEventId, scopeCallerEventId } from "./scheduler/event-identity.ts";
+import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
+import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   type CellViewRef,
   processDefaultValue,
@@ -237,6 +239,15 @@ type SinkOptions = {
 /** The labels a sink's read consumed; see `SinkOptions.includeConsumedLabel`. */
 export type SinkConsumedLabel = ReturnType<typeof collectConsumedLabel>;
 
+/**
+ * What `readProjected()` returns: what the projection made of the value, and
+ * the labels of everything the read and the projection consumed.
+ */
+export type ProjectedRead<R> = {
+  readonly value: R;
+  readonly consumed: SinkConsumedLabel;
+};
+
 export type RawCellReadOptions = IReadOptions & {
   /**
    * Controls whether `getRaw()` follows a final link at the cell's target.
@@ -305,8 +316,13 @@ const recordSchemaWritePolicyInput = (
   link: NormalizedFullLink,
   schema: JSONSchema | undefined,
   schemaRole?: "output",
+  storedSchema?: boolean,
 ): void => {
-  const resolvedSchema = resolveSchema(schema) ??
+  // A writer that brought no schema answers to the one the document stores,
+  // and the input says so (`storedSchema`): the stored schema's claims bind
+  // the writer, and its value stamps are not the writer's to mint.
+  const ownSchema = resolveSchema(schema);
+  const resolvedSchema = ownSchema ??
     storedSchemaForWritePolicyInput(tx, link);
   if (resolvedSchema === undefined) {
     return;
@@ -323,6 +339,8 @@ const recordSchemaWritePolicyInput = (
     schemaHash: schemaAndHash.taggedHashString,
     schema: schemaAndHash.schema,
     ...(schemaRole !== undefined && { schemaRole }),
+    ...((storedSchema === true || ownSchema === undefined) &&
+      { storedSchema: true as const }),
   });
 };
 
@@ -359,6 +377,7 @@ export const recordRelevantSchemaWritePolicyInput = (
   link: NormalizedFullLink,
   schema: JSONSchema | undefined,
   schemaRole?: "output",
+  storedSchema?: boolean,
 ): void => {
   const resolvedSchema = resolveSchema(schema);
   const cfcRelevant = schemaHasIfc(resolvedSchema) ||
@@ -372,6 +391,7 @@ export const recordRelevantSchemaWritePolicyInput = (
     link,
     schemaHasIfc(resolvedSchema) ? resolvedSchema : undefined,
     schemaRole,
+    storedSchema,
   );
 };
 
@@ -381,6 +401,49 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
   (schema.type === "array" ||
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
+
+/** Keywords that annotate a schema and constrain no value. */
+const SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
+  "title",
+  "description",
+  "$comment",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
+
+/**
+ * Whether `schema` gives a value no shape: it is absent, or admits every value
+ * once its annotations are set aside, so it holds nothing but what the runtime
+ * reads for itself (a label, a cell kind, a scope), a default and definitions
+ * besides them (`ContextualFlowControl.isTrueSchema`).
+ */
+const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
+  schema === undefined ||
+  ContextualFlowControl.isTrueSchema(
+    isObjectOrArray(schema)
+      ? Object.fromEntries(
+        Object.entries(schema).filter(([key]) =>
+          !SCHEMA_ANNOTATION_KEYWORDS.has(key)
+        ),
+      )
+      : schema,
+  );
+
+/**
+ * Whether an item write under a missing parent, which the stored envelope
+ * describes as `schema`, writes an item of an array. The storage write creates
+ * an array for a missing container an index addresses, and that answers where
+ * the envelope gives the parent no shape ({@link schemaGivesNoShape}): no
+ * envelope, no declaration there, or one holding only a label and annotations.
+ * Where the envelope declares an array, it agrees. Any other declaration is
+ * taken as written, whether by type, by the members of an object, by a
+ * combinator or by a reference: the input is then spelled at the index, and
+ * the envelope's checks of the member it declares there apply to the write.
+ */
+const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
+  schemaGivesNoShape(schema) || schemaDeclaresArray(schema);
 
 /**
  * The schema write-policy input for a write landing at an item of an array:
@@ -395,20 +458,28 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
  * envelope's at the item — a writer through a bare link answers to the
  * stored claim as any routed write does. The slot is an item of an array
  * where the parent holds one, or holds nothing yet and the stored envelope
- * declares one there: an absent container's first item write is still an
- * item write. A numeric key of an object stays a property. `undefined`
- * where none of that holds, or where no schema for the item is known; the
- * parent read propagates what `readValueOrThrow` throws, since an absent or
- * mismatched parent reads as `undefined` and anything else is a failure a
- * policy decision must not be built on. The item's own definitions move to
- * the array's root, where the envelope's references to them point. An item
- * of an item lifts through every index to the outermost array.
+ * gives it no other shape ({@link missingParentIsArray}): an absent
+ * container's first item write is still an item write. That includes the
+ * first write into an instance no envelope describes yet, such as the scoped
+ * instance a slot's content is narrowed into. A numeric key of an object
+ * stays a property.
+ * `undefined` where none of that holds, or where no schema for the item is
+ * known; the parent read propagates what `readValueOrThrow` throws, since an
+ * absent or mismatched parent reads as `undefined` and anything else is a
+ * failure a policy decision must not be built on. The item's own definitions
+ * move to the array's root, where the envelope's references to them point. An
+ * item of an item lifts through every index to the outermost array.
  */
 const arrayItemPolicyInput = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
   schema: JSONSchema | undefined,
-): { link: NormalizedFullLink; schema: JSONSchema } | undefined => {
+  storedSchema = false,
+): {
+  link: NormalizedFullLink;
+  schema: JSONSchema;
+  storedSchema: boolean;
+} | undefined => {
   const index = link.path[link.path.length - 1];
   if (index === undefined || !/^(0|[1-9][0-9]*)$/.test(index)) {
     return undefined;
@@ -439,11 +510,12 @@ const arrayItemPolicyInput = (
   if (
     !Array.isArray(held) &&
     (held !== undefined ||
-      !schemaDeclaresArray(storedSchemaForWritePolicyInput(tx, parent)))
+      !missingParentIsArray(storedSchemaForWritePolicyInput(tx, parent)))
   ) {
     return undefined;
   }
-  const itemSchema = resolveSchema(schema) ??
+  const ownItemSchema = resolveSchema(schema);
+  const itemSchema = ownItemSchema ??
     storedSchemaForWritePolicyInput(tx, link);
   if (!isObjectOrArray(itemSchema)) return undefined;
   const { $defs, ...items } = itemSchema;
@@ -454,11 +526,40 @@ const arrayItemPolicyInput = (
       items,
       ...($defs !== undefined ? { $defs } : {}),
     } as JSONSchema,
+    storedSchema: storedSchema || ownItemSchema === undefined,
   };
   // An item of an item lifts again, to the outermost array a run of indexes
   // reaches: each level is spelled as the one below, so a write at
   // `grid/0/0` is recorded at `grid`.
-  return arrayItemPolicyInput(tx, lifted.link, lifted.schema) ?? lifted;
+  return arrayItemPolicyInput(
+    tx,
+    lifted.link,
+    lifted.schema,
+    lifted.storedSchema,
+  ) ?? lifted;
+};
+
+/**
+ * Records the schema write-policy input for a write of `schema`'s value
+ * landing at `destination`, an item of an array spelled as
+ * {@link arrayItemPolicyInput} spells it. The input describes the write, so it
+ * is recorded where the write lands: `Cell.set` records its destination, and
+ * the diff records the scoped instance a slot's content is narrowed into.
+ */
+export const recordWriteDestinationPolicyInput = (
+  tx: IExtendedStorageTransaction,
+  destination: NormalizedFullLink,
+  schema: JSONSchema | undefined,
+  schemaRole?: "output",
+): void => {
+  const policyInput = arrayItemPolicyInput(tx, destination, schema);
+  recordRelevantSchemaWritePolicyInput(
+    tx,
+    policyInput?.link ?? destination,
+    policyInput?.schema ?? schema,
+    schemaRole,
+    policyInput?.storedSchema,
+  );
 };
 
 /**
@@ -520,15 +621,6 @@ export type StreamSendOptions = {
 // import runner internals — can produce an array the send path accepts.
 const mintedRuntimeInjectedKeys = new WeakSet<readonly string[]>();
 
-/**
- * Mint an injection-provenance marker for {@link StreamSendOptions}. The
- * returned (frozen) array is the capability: `Cell.set`'s stream branch
- * forwards `runtimeInjectedEventKeys` to dispatch only when it was minted
- * here, so an unminted array — anything a spoofing caller can construct —
- * is ignored and the closed-world gate judges the key like any other
- * undeclared field.
- */
-
 /** An error-status VIEW of a transaction (the durable-ack coupling;
  * verdict blocker, 2026-08-12): everything passes through except
  * `status()`, which reports the append/consequence failure — so a
@@ -559,6 +651,50 @@ const errorStatusTxView = (
   }) as IExtendedStorageTransaction;
 };
 
+/** A done-status VIEW of a transaction, the success counterpart of
+ * `errorStatusTxView()`: everything passes through except `status()`, which
+ * reports the transaction done. Handed to a caller whose event the server
+ * handled, as the overlay reported, when the speculative echo's own
+ * transaction failed — an echo that withdrew, or one its commit refused — so
+ * the caller reads the authoritative outcome rather than the echo's; and to
+ * the append report of an echo that withdrew, whose abort is no failure of
+ * the handler. */
+const doneStatusTxView = (
+  tx: IExtendedStorageTransaction,
+): IExtendedStorageTransaction => {
+  const status = () => ({
+    status: "done" as const,
+    journal: tx.status().journal,
+  });
+  return new Proxy(tx, {
+    get(target, prop, receiver) {
+      if (prop === "status") return status;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as IExtendedStorageTransaction;
+};
+
+/**
+ * Whether `tx` is a speculative echo that withdrew: its run named an
+ * `inSpace(...)` target this runtime leaves unresolved, so the transaction
+ * aborted without the handler having failed (see `InSpaceTargetUnresolved`).
+ */
+const isWithdrawnEcho = (tx: IExtendedStorageTransaction): boolean => {
+  const status = tx.status();
+  return status.status === "error" &&
+    (status.error as { reason?: unknown }).reason instanceof
+      InSpaceTargetUnresolved;
+};
+
+/**
+ * Mint an injection-provenance marker for {@link StreamSendOptions}. The
+ * returned (frozen) array is the capability: `Cell.set`'s stream branch
+ * forwards `runtimeInjectedEventKeys` to dispatch only when it was minted
+ * here, so an unminted array — anything a spoofing caller can construct —
+ * is ignored and the closed-world gate judges the key like any other
+ * undeclared field.
+ */
 export function markRuntimeInjectedEventKeys(
   keys: readonly string[],
 ): readonly string[] {
@@ -636,7 +772,7 @@ declare module "@commonfabric/api" {
       options?: SinkOptions,
     ): Cancel;
     sync(): Promise<Cell<T>>;
-    pull(): Promise<Readonly<T>>;
+    pull(options?: { awaitDurability?: boolean }): Promise<Readonly<T>>;
     getAsQueryResult<Path extends PropertyKey[]>(
       path?: Readonly<Path>,
       tx?: IExtendedStorageTransaction,
@@ -1170,6 +1306,16 @@ let setOf: (
 let labelViewOf: (cell: CellImpl<FabricValue>) => CfcLabelView | undefined;
 let markSynced: (cell: CellImpl<FabricValue>) => void;
 let isStreamCell: (cell: CellImpl<FabricValue>) => boolean;
+let sinkProjectedOf: <R>(
+  cell: CellImpl<FabricValue>,
+  project: (value: unknown) => R,
+  callback: (
+    value: R,
+    cfcLabel?: CfcLabelView | undefined,
+    consumed?: SinkConsumedLabel,
+  ) => Cancel | undefined | void,
+  options: SinkOptions,
+) => Cancel;
 
 // The cell each `Reactive` proxy over a whole cell stands for, so that the
 // host recognizes the proxy as that cell. A proxy has no private fields of its
@@ -1668,10 +1814,16 @@ export class CellImpl<T extends FabricValue>
    * const value = await cell.pull();
    * ```
    *
-   * @returns A promise that resolves to the cell's current value after all
-   *          dependencies have been computed.
+   * The default waits for installed producers and required loads. A pending
+   * commit can still install a producer later, so an absent result can change
+   * after this pull completes.
+   *
+   * `awaitDurability: true` keeps the read demanded through the runtime-wide
+   * commit-aware barrier, including producers installed by pending commits.
+   *
+   * @returns The cell's reactive value after the selected readiness barrier.
    */
-  pull(): Promise<Readonly<T>> {
+  pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -1698,7 +1850,12 @@ export class CellImpl<T extends FabricValue>
     const needsTraversal = schema === undefined ||
       ContextualFlowControl.isTrueSchema(schema);
 
-    return new Promise((resolve) => {
+    const idle = () =>
+      options.awaitDurability === true
+        ? this.#runtime.scheduler.idleWithPendingCommits()
+        : this.#runtime.scheduler.idle();
+
+    return new Promise((resolve, reject) => {
       const action: Action = (tx) => {
         // Read the value inside the effect - this ensures dependencies are pulled
         const value = validateAndTransform(this.#runtime, tx, this.#viewRef);
@@ -1731,25 +1888,30 @@ export class CellImpl<T extends FabricValue>
       // rounds is bounded by the reachable-doc depth; the fixed cap is only
       // a backstop against a pathological graph. Pulls that kicked nothing
       // take the zero-iteration path and keep their previous timing.
-      this.#runtime.scheduler.idle().then(async () => {
-        const storage = this.#runtime.storageManager;
-        // The pending pool is manager-global (same semantics as `synced()`):
-        // this pull may also wait on loads kicked by concurrent readers.
-        let round = 0;
-        for (; round < 100; round++) {
-          if ((storage.pendingCrossSpacePromiseCount?.() ?? 0) === 0) break;
-          await (storage.crossSpaceSettled?.() ?? Promise.resolve());
-          await this.#runtime.scheduler.idle();
+      const ready = async () => {
+        try {
+          await idle();
+          const storage = this.#runtime.storageManager;
+          // The pending pool is manager-global (same semantics as `synced()`):
+          // this pull may also wait on loads kicked by concurrent readers.
+          let round = 0;
+          for (; round < 100; round++) {
+            if ((storage.pendingCrossSpacePromiseCount?.() ?? 0) === 0) break;
+            await (storage.crossSpaceSettled?.() ?? Promise.resolve());
+            await idle();
+          }
+          if (
+            round === 100 &&
+            (storage.pendingCrossSpacePromiseCount?.() ?? 0) > 0
+          ) {
+            logger.warn("pull", () => [
+              "pull() convergence bound exhausted with link-target loads still",
+              `pending: ${this.sourceURI}`,
+            ]);
+          }
+        } finally {
+          cancel?.();
         }
-        if (
-          round === 100 && (storage.pendingCrossSpacePromiseCount?.() ?? 0) > 0
-        ) {
-          logger.warn("pull", () => [
-            "pull() convergence bound exhausted with link-target loads still",
-            `pending: ${this.sourceURI}`,
-          ]);
-        }
-        cancel?.();
         // The effect above exists to drive the scheduler: it reads inside its
         // own transaction so the dependencies get registered and the
         // computations they gate run. That transaction has committed by the
@@ -1761,8 +1923,9 @@ export class CellImpl<T extends FabricValue>
         // holding a long-lived open transaction has snapshots in it from
         // before the computations this pull just drove, so reading through it
         // would hand back exactly the stale values pull() exists to avoid.
-        resolve(validateAndTransform(this.#runtime, undefined, this.#viewRef));
-      });
+        return validateAndTransform(this.#runtime, undefined, this.#viewRef);
+      };
+      ready().then(resolve, reject);
     });
   }
 
@@ -1826,9 +1989,10 @@ export class CellImpl<T extends FabricValue>
     // CFC write-ceiling (Phase 2): a value bound to a labeled column must fit the
     // column's `ifc.maxConfidentiality`. The label rides the bound value (a Cell
     // or any carried-label value); fail closed when a labeled value's target
-    // column can't be determined. No-op until a column declares `ifc`.
+    // column can't be determined, or when a stored label it reads cannot be
+    // read. No-op until a column declares `ifc`.
     const confidentialityOf = (value: unknown): readonly unknown[] => {
-      const view = cfcLabelViewForCell(value);
+      const view = cfcLabelViewForCellFailClosed(value);
       return view
         ? cfcConfidentialityForObservationNode({ labelView: view })
         : [];
@@ -2114,15 +2278,24 @@ export class CellImpl<T extends FabricValue>
           // acknowledgment. The callback now settles from the APPEND
           // outcome + the intent's authoritative CONSEQUENCE: refusal,
           // a server-side handler error, or the dropped-event notice
-          // present an error-status view of the tx; only a delivered
-          // append whose handling consequenced (or a bare teardown,
-          // reported as such) passes the tx through untouched.
+          // present an error-status view of the tx. A delivered append
+          // whose handling consequenced passes the tx through, as a
+          // done-status view where the echo's own transaction failed; a
+          // bare teardown passes it through untouched.
           const onAppended = sendOptions?.onAppended;
           if (onCommit !== undefined || onAppended !== undefined) {
             const callerOnCommit = onCommit;
             onCommit = (echoTx: IExtendedStorageTransaction) => {
               void outcome.then(async (delivery) => {
-                onAppended?.(delivery, echoTx);
+                // An echo that withdrew aborted without the handler
+                // failing, so its append is reported as a clean one; the
+                // served handling decides the outcome below.
+                onAppended?.(
+                  delivery,
+                  delivery.delivered && isWithdrawnEcho(echoTx)
+                    ? doneStatusTxView(echoTx)
+                    : echoTx,
+                );
                 if (callerOnCommit === undefined) return;
                 if (!delivery.delivered) {
                   callerOnCommit(errorStatusTxView(
@@ -2148,7 +2321,15 @@ export class CellImpl<T extends FabricValue>
                   ));
                   return;
                 }
-                callerOnCommit(echoTx);
+                // Only a consequence the overlay observed is the served
+                // outcome; a runtime with no overlay reports the echo's own.
+                callerOnCommit(
+                  overlay !== undefined &&
+                    consequence.kind === "consequenced" &&
+                    echoTx.status().status === "error"
+                    ? doneStatusTxView(echoTx)
+                    : echoTx,
+                );
               });
             };
           }
@@ -2517,15 +2698,10 @@ export class CellImpl<T extends FabricValue>
       // item's schema as its `items`: a candidate envelope spells a path
       // segment as a named property, and the stored schema spells the array
       // as one, so an input at the index alone could never merge with it.
-      const policyInput = arrayItemPolicyInput(
+      recordWriteDestinationPolicyInput(
         this.#tx,
         writeLink,
         writeLink.schema ?? this.schema,
-      );
-      recordRelevantSchemaWritePolicyInput(
-        this.#tx,
-        policyInput?.link ?? writeLink,
-        policyInput?.schema ?? writeLink.schema ?? this.schema,
       );
 
       // TODO(@ubik2) investigate whether i need to check confidential as i walk down my own obj
@@ -3401,6 +3577,38 @@ export class CellImpl<T extends FabricValue>
   }
 
   /**
+   * Subscribes to what `project` makes of each value, as `sink()` subscribes
+   * to the value, the projection running on the sink's own read. A stream has
+   * no value to project, and is refused.
+   */
+  #sinkProjected<R>(
+    project: (value: unknown) => R,
+    callback: (
+      value: R,
+      cfcLabel?: CfcLabelView | undefined,
+      consumed?: SinkConsumedLabel,
+    ) => Cancel | undefined | void,
+    options: SinkOptions,
+  ): Cancel {
+    if (this.#boundToRun()) throw new Error(runOwnTransactionRefusal("sink"));
+    if (this.isStream()) {
+      throw new TypeError("A stream holds no value to project.");
+    }
+    if (!this.#synced) {
+      this.#runtime.storageManager.trackUntilSettled(
+        this.#startLoad().catch(() => {}),
+      );
+    }
+    return subscribeToReferencedDocs(
+      callback,
+      this.#runtime,
+      this.#viewRef,
+      options,
+      project,
+    );
+  }
+
+  /**
    * Load this cell's backing doc, returning a promise that resolves once the
    * doc is confirmed: either its value has arrived or it is confirmed absent.
    * The return is always a promise (`syncCell` is async), so awaiting it is the
@@ -3517,6 +3725,21 @@ export class CellImpl<T extends FabricValue>
       readTx,
       readTx.getCfcState().dereferenceTraces.slice(tracesBefore),
     );
+    // A resolution that stopped at a document this replica has not received
+    // names that document, not the one the chain reaches past it, and a
+    // handler would keep or pass on the wrong cell. Its run waits for the
+    // document instead.
+    if (link.pendingHopDoc === true) {
+      const run = patternRun(this.#runtime);
+      if (run?.kind === "handler") {
+        withdrawHandlerWhileLoading(
+          this.#runtime,
+          run.tx,
+          link,
+          `a cell was resolved through \`${link.id}\` while its document was still loading`,
+        );
+      }
+    }
     link = maybeConvertArrayPathToDataURILink(readTx, link);
     return createCell(
       this.#runtime,
@@ -4437,6 +4660,8 @@ export class CellImpl<T extends FabricValue>
       cell.#synced = true;
     };
     isStreamCell = (cell) => cell.isStream();
+    sinkProjectedOf = (cell, project, callback, options) =>
+      cell.#sinkProjected(project, callback, options);
   }
 }
 
@@ -4500,12 +4725,26 @@ function requireTransaction(
 function patternRunTx(
   runtime: Runtime,
 ): IExtendedStorageTransaction | undefined {
+  return patternRun(runtime)?.tx;
+}
+
+/**
+ * Returns the kind and the transaction of the handler or lift of `runtime`
+ * that is running, while that transaction is open.
+ */
+function patternRun(
+  runtime: Runtime,
+):
+  | { kind: "handler" | "lift"; tx: IExtendedStorageTransaction }
+  | undefined {
   let frame = getTopFrame();
   while (frame !== undefined && frame.frameKind === undefined) {
     frame = frame.parent;
   }
   const tx = frame?.runtime === runtime ? frame.tx : undefined;
-  return tx?.status().status === "ready" ? tx : undefined;
+  return frame?.frameKind !== undefined && tx?.status().status === "ready"
+    ? { kind: frame.frameKind, tx }
+    : undefined;
 }
 
 /**
@@ -4631,6 +4870,7 @@ function subscribeToReferencedDocs<T>(
   runtime: Runtime,
   ref: CellViewRef,
   options: SinkOptions = {},
+  project?: (value: unknown) => T,
 ): Cancel {
   const link = ref.link;
   const readOnly = options.readOnly === true;
@@ -4672,10 +4912,15 @@ function subscribeToReferencedDocs<T>(
           kickCrossSpaceTargets: false,
         })
         : undefined;
+      // The projection reads on the sink's transaction, before the consumed
+      // labels are joined, so that both they and the sink's dependencies
+      // cover what it reads: a field the schema leaves untyped holds a value
+      // that reads what it holds only once it is looked at.
+      const delivered = project === undefined ? newValue : project(newValue);
       const consumed = options.includeConsumedLabel
         ? collectConsumedLabel(tx)
         : undefined;
-      sink.cleanup = callback(newValue, cfcLabel, consumed);
+      sink.cleanup = callback(delivered, cfcLabel, consumed);
 
       // no async await here, but that also means no retry. TODO(seefeld): Should
       // we add a retry? So far all sinks are read-only, so they get re-triggered
@@ -5142,6 +5387,76 @@ export function convertCellsToLinks(
     options,
     [],
     new IndexTrackingStack<object>(),
+  );
+}
+
+/**
+ * A cell's value in the form the worker hands it to a host: each cell inside
+ * it as the link it names, carrying the display form of that cell's label
+ * view with every caveat's source redacted, and each query result read out
+ * into the data behind it, following its links. A sigil link already in the
+ * value is rebuilt as the container it is, view and all; stored data carries
+ * no view on a link, the persist seam having stripped it, so the minted links
+ * are where a view crosses. What a host is sent is
+ * decided on the read this walk makes, which is why `readProjected()` and
+ * `sinkProjected()` take it as their projection where a host is the reader.
+ */
+export function hostValueOf(value: unknown): FabricValue {
+  return convertCellsToLinks(value as CellLinkInput, {
+    includeSchema: true,
+    keepAsCell: KeepAsCell.All,
+    doNotConvertCellResults: true,
+    includeCfcLabelView: true,
+  });
+}
+
+/**
+ * Reads `cell` once, in a read-only transaction of its own that subscribes to
+ * nothing, and hands the value to `project` inside that transaction. The
+ * labels returned are those of everything the read and the projection
+ * consumed, so a decision made on them is made on what the projection
+ * returns, a part of the value read only once the projection looked at it
+ * included. A stream reads as itself, as `get()` returns it.
+ */
+export function readProjected<R>(
+  cell: Cell<unknown>,
+  project: (value: unknown) => R,
+): ProjectedRead<R> {
+  // A read-only transaction, as `runtime.readTx()` makes one, which nothing
+  // commits: it holds the read's journal for the consumed-label join and is
+  // dropped with it.
+  const tx = cellRuntime(cell).readTx();
+  const value = project(cell.withTx(tx).get());
+  return { value, consumed: collectConsumedLabel(tx) };
+}
+
+/**
+ * Subscribes to what `project` makes of `cell`'s value, as `sink()` subscribes
+ * to the value: `callback` runs with the projection of each value, and the
+ * labels of everything the read and the projection consumed, read on the
+ * sink's own transaction so that a write to anything the projection reached,
+ * labels included, runs it again. A stream holds no value to project, and is
+ * refused.
+ */
+export function sinkProjected<R>(
+  cell: Cell<unknown>,
+  project: (value: unknown) => R,
+  callback: (
+    value: R,
+    consumed: SinkConsumedLabel | undefined,
+    cfcLabel: CfcLabelView | undefined,
+  ) => Cancel | undefined | void,
+  options: { includeCfcLabel?: boolean } = {},
+): Cancel {
+  return sinkProjectedOf(
+    requireCellImpl(cell),
+    project,
+    (value, cfcLabel, consumed) => callback(value, consumed, cfcLabel),
+    {
+      readOnly: true,
+      includeConsumedLabel: true,
+      includeCfcLabel: options.includeCfcLabel,
+    },
   );
 }
 

@@ -118,19 +118,24 @@ session, as a friendly suggestion, that `deno task test-records-key setup` is
 worth running once your user contributes regularly
 (`docs/development/test-records.md`, "Getting a key").
 
-### Avoid timeouts, retry loops, and sleeps
+### Avoid timeouts, retry loops, sleeps, and polling
 
 Timeouts cause flakiness because they put an upper bound on success: anything
 that would have eventually completed cannot complete once it hits the timeout.
 
-Retry loops mask errors: anything that should have succeeded first time now gets
-missed because if it succeeds sometimes.
+Retry loops mask errors: an operation that should succeed the first time fails
+intermittently, and the retry hides the failure.
 
 Sleeps are flaky and expensive: they increase the floor on the amount of time
 operations take, and they rely on unpredictable timings to align for success.
 
-Avoid all three; when you see them in existing code, point them out and suggest
-starting an agent to remove them.
+Polling wastes work while nothing changes and notices a change late when
+something does. When one component needs to learn that another's state has
+changed, the component that changes the state sends a notification, for example
+over a long-lived socket.
+
+Avoid all four. When you work in code that has one, refactor it to remove it,
+unless `docs/development/waiting-in-tests.md` lists it as a wait the repo keeps.
 
 For tests, `docs/development/waiting-in-tests.md` is the canonical guidance. It
 names the event-driven primitives to reach for instead of a poll, and the
@@ -191,6 +196,25 @@ If you are developing runtime code, start with:
 - `docs/development/DEPENDENCIES.md` - Adding and rolling dependencies, required
   version pins, and dependency troubleshooting
 
+Contextual Flow Control (CFC) is specified outside this repository, in
+`commonfabric/specs` under `cfc/`, as prose with pseudocode, a Lean development,
+and a paper that are kept equivalent, and the runtime here is held to that
+specification. A change that alters what CFC decides goes through the
+specification first, proof included; code may land ahead of a ruling only under
+a budgeted `SPEC-PENDING` marker. `docs/development/cfc-spec-correspondence.md`
+is the procedure: how to classify a change as host arrangement, conforming
+implementation, or semantic gap, how a gap is filed as a specs pull request, and
+what to do without access to the private specs repository. It governs
+`packages/runner/src/cfc/` and `packages/runner/src/cfc.ts`, the CFC tests under
+`packages/runner/test/`, the render boundaries in
+`packages/html/src/worker/reconciler.ts` and
+`packages/html/src/worker/display-fit.ts`, the harness's CFC enforcement in
+`packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+`sandbox/runsc-cfc-result.ts`), the harness console's display ceiling in
+`packages/cf-harness/console/display-ceiling.ts`, and every
+`docs/specs/cfc-*.md`; the harness audit's clause derivation is
+`docs/specs/agent-harness/04-cfc-spec-correspondence.md`.
+
 Everything else is indexed rather than listed here. `docs/README.md` maps the
 whole documentation tree. `docs/development/README.md` indexes the rest of the
 development documentation: configuration, benchmarks, deploying, the
@@ -231,6 +255,15 @@ Three obligations that are easy to miss:
 
 Working in `packages/ts-transformers` or `packages/schema-generator`? Start at
 that package's own `AGENTS.md`.
+
+#### Starting Chrome without the launcher
+
+A script that runs the Chrome binary itself, rather than through Astral or the
+integration browser launcher, passes `--use-mock-keychain` and
+`--password-store=basic`. Without `--use-mock-keychain`, Chrome on macOS can
+show the developer a dialog asking for their login keychain password. The
+details are in
+[`docs/development/TESTING.md`](docs/development/TESTING.md#starting-chrome-without-the-launcher).
 
 #### Adding New Packages
 
@@ -375,6 +408,20 @@ Each of these gates fails CI on its own, and none of them run as part of
   string and the reason, so nothing a scanned file says can exempt itself. It
   fails the other way round too, on an entry whose file no longer writes its
   string. `tasks/check-address-examples.ts` states what counts as an example
+- `deno task check-cfc-correspondence` — the runtime's claim about which
+  Contextual Flow Control specification it implements, held to the snapshot
+  committed at `packages/runner/src/cfc/kernel/spec-snapshot.json`: a kernel
+  function whose `@spec` header hash the snapshot no longer carries or that
+  imports past the kernel, a manifest row in
+  `packages/runner/src/cfc/kernel/manifest.ts` naming a function the snapshot
+  lacks or a kernel symbol that does not exist, a `§` citation under
+  `packages/runner/src/cfc/` naming a section the specification has not, or more
+  than three `SPEC-PENDING` markers under `packages/`, or one naming no specs
+  pull request. The specification is private and the snapshot is what crosses:
+  `deno task cfc-spec-snapshot` regenerates it from a specs checkout, and labs
+  CI never reads the specification itself. A citation written on purpose to
+  something else is recorded in `EXEMPTIONS` in the task, and an entry whose
+  file stopped writing its citation fails the same way
 - `deno task check-verb-session-sync` — a `cf` command or act reference in
   `docs/common/verbs/the-verb-session.md` or
   `docs/common/verbs/session-walkthrough.md` that its demo script does not back;

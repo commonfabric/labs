@@ -544,8 +544,8 @@ a sequence number on `inspect diff`.
 
 ### 15. Remaining path-shaped and enumerable values
 
-The mechanical remainder, each one an entry in an existing table: pattern files
-for `piece set-home <main>`; files and directories for `piece getsrc <outpath>`,
+The mechanical remainder, each one an entry in an existing table: files and
+directories for `piece getsrc <outpath>`,
 `deps update <file>`, `fuse mount|unmount <mountpoint>`, `--dir`, `--out`,
 `--output` and `space clone --from`; `--api-url`'s candidates for `--remote`;
 and `piece map --format` and `inspect entities --kind` beside the four already

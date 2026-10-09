@@ -1,0 +1,2 @@
+{"date":"2026-10-06","from":{"k":"unit","s":"dashboard","n":"runs(): pages accumulate in order until a page comes back empty"},"to":{"k":"unit","s":"dashboard","n":"runs(): pages accumulate in order until the list ends"}}
+{"date":"2026-10-06","from":{"k":"unit","s":"dashboard","n":"runs(): a listing that reaches the newest page cannot turn a held run back"},"to":{"k":"unit","s":"dashboard","n":"runs(): a filtered list that shows a run as it stood earlier cannot turn it back"}}

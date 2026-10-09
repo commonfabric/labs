@@ -92,12 +92,6 @@ export {
 } from "./registration.ts";
 export type { NameMap, RegistrationCapture, SkipList } from "./registration.ts";
 export {
-  BEGAN_PREFIX,
-  BEGAN_SUFFIX,
-  markUnitsBegan,
-  unitsBegan,
-} from "./began.ts";
-export {
   preloadArgument,
   preloadModulePath,
   recordingArguments,
@@ -112,7 +106,9 @@ export {
 } from "./junit.ts";
 export type { IngestJUnitOptions, JUnitCase } from "./junit.ts";
 export {
+  importRsaSigningKey,
   METADATA_TOKEN_URL,
+  rs256Jwt,
   saAssertion,
   tokenFromKey,
   tokenFromMetadata,
@@ -165,7 +161,6 @@ export type {
   Manifest,
   ManifestEntry,
   PreviousSuiteHealth,
-  ProcessFit,
   ScoreInputs,
   SuiteFit,
   SuiteHealth,

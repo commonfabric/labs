@@ -10,10 +10,10 @@ import type {
 } from "../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -137,7 +137,7 @@ describe("setup-result-projection", () => {
       const seed = runtime.edit();
       runtime.getCell(space, board, undefined, seed).set({ note: "saved" });
       runtime.prepareTxForCommit(seed);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const first = runtime.edit();
       first.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
@@ -152,7 +152,7 @@ describe("setup-result-projection", () => {
       );
       cell.set({ items: [], note: "saved" });
       runtime.prepareTxForCommit(first);
-      expect((await first.commit()).error).toBeUndefined();
+      expect((await first.commit().settled).error).toBeUndefined();
     }
 
     /** A write redirect to the owner's list on `board`. */
@@ -164,7 +164,7 @@ describe("setup-result-projection", () => {
     /** Prepares and commits `tx`, and returns the refusal, if any. */
     async function commit(tx: IExtendedStorageTransaction) {
       runtime.prepareTxForCommit(tx);
-      return (await tx.commit()).error?.message;
+      return (await tx.commit().settled).error?.message;
     }
 
     /** The owner's list on `board`, read outside any transaction under test. */
@@ -211,7 +211,7 @@ describe("setup-result-projection", () => {
       return resultCell;
     }
 
-    it("records a binding projection of the result field naming the list, and no setup projection", async () => {
+    it("records a binding of the result field naming the list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       await setUpExporter(tx);
@@ -220,25 +220,28 @@ describe("setup-result-projection", () => {
       const list = runtime.getCell(space, "board", undefined, tx).key("items")
         .getAsNormalizedFullLink();
 
-      const projections = tx.getCfcState().writePolicyInputs.flatMap((
-        input,
-      ) =>
-        input.kind === "structural-provenance" &&
-          (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
-            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) &&
-          input.target.id === exporter.id
-          ? [{
-            claim: input.claim,
+      const records = tx.getCfcState().writePolicyInputs.flatMap((input) => {
+        if (
+          input.kind === "initialization" && input.target.id === exporter.id
+        ) {
+          const named = parseLink(input.value, exporter);
+          return [{
+            record: input.mode,
             path: input.target.path,
-            sources: input.sources.map(({ id, path }) => ({ id, path })),
-          }]
-          : []
-      );
+            names: named && { id: named.id, path: named.path },
+          }];
+        }
+        return input.kind === "structural-provenance" &&
+            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+            input.target.id === exporter.id
+          ? [{ record: input.claim, path: input.target.path }]
+          : [];
+      });
 
-      expect(projections).toEqual([{
-        claim: CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
+      expect(records).toEqual([{
+        record: "binding",
         path: ["items"],
-        sources: [{ id: list.id, path: list.path }],
+        names: { id: list.id, path: list.path },
       }]);
       tx.abort();
     });
@@ -356,7 +359,7 @@ describe("setup-result-projection", () => {
       );
       const result = runtime.run(tx, compiled, {}, output);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const cancel = result.sink(() => {});
       await runtime.idle();
       result.key("add").send({ add: "a" });
@@ -478,7 +481,7 @@ describe("setup-result-projection", () => {
           ),
         );
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const cancel = result.sink(() => {});
         await runtime.idle();
         result.key("add").send({ add: "a" });

@@ -52,7 +52,7 @@ describe("collection-index-membership", () => {
     first.set({ title: "First" });
     second = runtime.getCell(space, "second", undefined, tx);
     second.set({ title: "Second" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     state = state.withTx();
     index = index.withTx();
     first = first.withTx();
@@ -85,7 +85,7 @@ describe("collection-index-membership", () => {
     );
     const log = getDirectTransactionReactivityLog(tx)!;
     if (abort) tx.abort("membership rollback test");
-    else expect((await tx.commit()).error).toBeUndefined();
+    else expect((await tx.commit().settled).error).toBeUndefined();
     return log;
   }
 
@@ -123,7 +123,7 @@ describe("collection-index-membership", () => {
     expect(readKeys()).toEqual(["A"]);
     const tx = runtime.edit();
     first.withTx(tx).key("title").set("Changed");
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(readBucket("A")).toEqual([{ title: "Second" }, {
       title: "Changed",
     }]);
@@ -147,7 +147,7 @@ describe("collection-index-membership", () => {
     await update("a", "A", second);
     const tx = runtime.edit();
     state.withTx(tx).key("orders").set(undefined);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await update("m", "A", first, "group", true);
     expect(readBucket("A")).toEqual([{ title: "Second" }, { title: "First" }]);
     expect(state.key("orders").get()).toBeUndefined();
@@ -164,7 +164,7 @@ describe("collection-index-membership", () => {
     await update("a", "A", second);
     const tx = runtime.edit();
     index.withTx(tx).key("buckets").set({});
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await update("z", "A", first);
     expect(readBucket("A")).toEqual([{ title: "Second" }, { title: "First" }]);
   });
@@ -172,7 +172,7 @@ describe("collection-index-membership", () => {
   it("retains duplicate occurrences and exposes the next unique winner on removal", async () => {
     const tx = runtime.edit();
     index.withTx(tx).key("mode").set("key");
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await update("z", "A", first, "key");
     await update("a", "A", second, "key");
     expect(readBucket("A")).toEqual({ title: "Second" });
@@ -209,7 +209,7 @@ describe("collection-index-membership", () => {
     await update("a", "A", second, "key");
     const tx = runtime.edit();
     state.withTx(tx).key("winners").set(undefined);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await update("z", "A", first, "key", true);
     expect(state.key("winners").get()).toBeUndefined();
     expect(readBucket("A")).toEqual({ title: "Second" });
@@ -224,7 +224,7 @@ describe("collection-index-membership", () => {
     await update("a", "A", second, "key");
     const tx = runtime.edit();
     index.withTx(tx).key("buckets").set({});
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await update("z", "A", first, "key");
     expect(readBucket("A")).toEqual({ title: "Second" });
   });
@@ -309,7 +309,7 @@ describe("collection-index-membership", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const bucketA = collectionKeyBucket({ kind: "string", value: "A" });
     const observed: unknown[] = [];
     const cancel = result.key("index").key("buckets").key(bucketA).sink((
@@ -323,7 +323,7 @@ describe("collection-index-membership", () => {
       expect(observed.at(-1)).toBeUndefined();
       tx = runtime.edit();
       selector.withTx(tx).set("A");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toEqual([{ title: "First" }]);
       expect(readBucket("B")).toBeUndefined();
@@ -377,7 +377,7 @@ describe("collection-index-membership", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const bucketA = collectionKeyBucket({ kind: "string", value: "A" });
     const observed: unknown[] = [];
     const cancel = index.key("buckets").key(bucketA).sink((value) => {
@@ -388,19 +388,19 @@ describe("collection-index-membership", () => {
       expect(state.key("assignments").get()).toEqual({});
       tx = runtime.edit();
       extracted.withTx(tx).set({ isCell: false, value: "B" });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(readBucket("B")).toEqual([{ title: "First" }]);
       expect(observed.at(-1)).toBeUndefined();
       tx = runtime.edit();
       extracted.withTx(tx).set({ isCell: false, value: "A" });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toEqual([{ title: "First" }]);
       expect(readBucket("B")).toBeUndefined();
       tx = runtime.edit();
       extracted.withTx(tx).set({ isCell: false, value: undefined });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toBeUndefined();
       expect(readKeys()).toEqual([]);
@@ -470,8 +470,8 @@ describe("collection-index-membership", () => {
         element,
       );
     }
-    expect((await firstTx.commit()).error).toBeUndefined();
-    expect((await secondTx.commit()).error).toBeDefined();
+    expect((await firstTx.commit().settled).error).toBeUndefined();
+    expect((await secondTx.commit().settled).error).toBeDefined();
     await update("b", "A", second);
     expect(readBucket("A")).toEqual([{ title: "First" }, { title: "Second" }]);
   });

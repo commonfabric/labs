@@ -95,9 +95,21 @@ function expectSignedTheBytesItSent(call: RecordedRequest): void {
   );
 }
 
-function expectFirstPartyProof(call: RecordedRequest, verb: string): void {
+/**
+ * Asserts `call` is a signed POST of `verb`, addressed to `space` when one is
+ * given and to the prefix that names no space otherwise.
+ */
+function expectFirstPartyProof(
+  call: RecordedRequest,
+  verb: string,
+  space?: string,
+): void {
   expect(call.method).toBe("POST");
-  expect(call.url.pathname).toBe(`/api/ingest-channels/${verb}`);
+  expect(call.url.pathname).toBe(
+    space === undefined
+      ? `/api/ingest-channels/${verb}`
+      : `/api/spaces/${space}/ingest-channels/${verb}`,
+  );
   expect(call.headers.get("Content-Type")).toBe("application/json");
   expect(call.headers.get(AUTH_HEADER)).toMatch(/^CF1 issued-at=/);
   expect(call.headers.get(PROOF_HEADER)).toMatch(/^[A-Za-z0-9_-]+$/);
@@ -127,9 +139,9 @@ describe("resolveSpaceDid", () => {
 
     it("keeps the configured base path", () => {
       expect(
-        controlPlaneUrl(new URL("https://host.example/fabric"), "mint").href,
+        controlPlaneUrl(new URL("https://host.example/fabric"), "list").href,
       )
-        .toBe("https://host.example/fabric/api/ingest-channels/mint");
+        .toBe("https://host.example/fabric/api/ingest-channels/list");
     });
 
     it("handles a trailing slash, a bare origin, and a nested prefix", () => {
@@ -137,16 +149,28 @@ describe("resolveSpaceDid", () => {
         const [base, expected] of [
           [
             "https://host.example/fabric/",
-            "/fabric/api/ingest-channels/revoke",
+            "/fabric/api/ingest-channels/list",
           ],
-          ["https://host.example", "/api/ingest-channels/revoke"],
-          ["https://host.example/", "/api/ingest-channels/revoke"],
-          ["https://host.example/a/b", "/a/b/api/ingest-channels/revoke"],
+          ["https://host.example", "/api/ingest-channels/list"],
+          ["https://host.example/", "/api/ingest-channels/list"],
+          ["https://host.example/a/b", "/a/b/api/ingest-channels/list"],
         ] as const
       ) {
-        expect(controlPlaneUrl(new URL(base), "revoke").pathname, base)
+        expect(controlPlaneUrl(new URL(base), "list").pathname, base)
           .toBe(expected);
       }
+    });
+
+    it("returns a path naming the space ahead of the verb, under the configured base path", () => {
+      expect(
+        controlPlaneUrl(
+          new URL("https://host.example/fabric/"),
+          "mint",
+          SPACE_DID,
+        ).href,
+      ).toBe(
+        `https://host.example/fabric/api/spaces/${SPACE_DID}/ingest-channels/mint`,
+      );
     });
 
     it("does not mutate the caller's URL", () => {
@@ -229,7 +253,7 @@ describe("ingest-channel verbs", () => {
   it("mint signs the request and returns the one-shot token", async () => {
     const minted = {
       id: "chan-1",
-      url: `${API_URL.origin}/api/ingest/chan-1`,
+      url: `${API_URL.origin}/api/spaces/${SPACE_DID}/ingest/chan-1`,
       space: SPACE_DID,
       causePrefix: "ingest/phone-1",
       installId: "phone-1",
@@ -245,16 +269,18 @@ describe("ingest-channel verbs", () => {
           causePrefix: "ingest/phone-1",
           name: "Phone",
           ttlDays: 30,
+          sink: "latest",
           requestId: "req-1",
         });
         expect(calls.length).toBe(1);
-        expectFirstPartyProof(calls[0], "mint");
+        expectFirstPartyProof(calls[0], "mint", SPACE_DID);
+        // The space is in the path, and so is no part of the body.
         expect(JSON.parse(calls[0].body)).toEqual({
-          space: SPACE_DID,
           installId: "phone-1",
           causePrefix: "ingest/phone-1",
           name: "Phone",
           ttlDays: 30,
+          sink: "latest",
           requestId: "req-1",
         });
         return got;
@@ -279,8 +305,8 @@ describe("ingest-channel verbs", () => {
       { body: { channels } },
       async (calls) => {
         const got = await listChannels(config, { space: SPACE_DID });
-        expectFirstPartyProof(calls[0], "list");
-        expect(JSON.parse(calls[0].body)).toEqual({ space: SPACE_DID });
+        expectFirstPartyProof(calls[0], "list", SPACE_DID);
+        expect(JSON.parse(calls[0].body)).toEqual({});
         return got;
       },
     );
@@ -303,7 +329,7 @@ describe("ingest-channel verbs", () => {
   it("rotate posts the id and the new ttl", async () => {
     const rotated = {
       id: "chan-1",
-      url: `${API_URL.origin}/api/ingest/chan-1`,
+      url: `${API_URL.origin}/api/spaces/${SPACE_DID}/ingest/chan-1`,
       space: SPACE_DID,
       causePrefix: "ingest/phone-1",
       installId: "phone-1",
@@ -313,11 +339,12 @@ describe("ingest-channel verbs", () => {
       { body: rotated },
       async (calls) => {
         const got = await rotateChannel(config, {
+          space: SPACE_DID,
           id: "chan-1",
           ttlDays: 7,
           requestId: "req-2",
         });
-        expectFirstPartyProof(calls[0], "rotate");
+        expectFirstPartyProof(calls[0], "rotate", SPACE_DID);
         expect(JSON.parse(calls[0].body)).toEqual({
           id: "chan-1",
           ttlDays: 7,
@@ -334,11 +361,12 @@ describe("ingest-channel verbs", () => {
       { body: { id: "chan-1", revokedAt: "2026-08-04T12:00:00.000Z" } },
       async (calls) => {
         const got = await revokeChannel(config, {
+          space: SPACE_DID,
           id: "chan-1",
           requestId: "rq-1",
           expectedRevision: 3,
         });
-        expectFirstPartyProof(calls[0], "revoke");
+        expectFirstPartyProof(calls[0], "revoke", SPACE_DID);
         // The idempotency key is part of the SIGNED body: a captured revoke is
         // otherwise replayable for its whole proof window, and the server
         // spends this id in the same transaction as the write.
@@ -366,6 +394,7 @@ describe("ingest-channel error surfacing", () => {
       async () => {
         await expect(
           revokeChannel(config, {
+            space: SPACE_DID,
             id: "chan-1",
             requestId: "rq-1",
             expectedRevision: 3,

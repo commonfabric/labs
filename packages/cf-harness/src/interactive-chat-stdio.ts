@@ -18,10 +18,8 @@ import {
   HARNESS_BROWSER_ACCESS_LEASE_TYPE,
   HARNESS_BROWSER_ACCESS_PROFILE_MODES,
 } from "./contracts/browser-access.ts";
-import {
-  HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH,
-  isHarnessClientActionOutcomeKind,
-} from "./contracts/client-action.ts";
+import { readHarnessClientActionAnswer } from "./client-actions/coordinator.ts";
+import { readHarnessClientProtocolDeclaration } from "./contracts/client-command.ts";
 import { normalizePromptSlotBinding } from "./contracts/prompt-slot.ts";
 import {
   HARNESS_SUBAGENT_PROFILES,
@@ -38,6 +36,11 @@ import {
   resolveHarnessFabricSessionConfig,
 } from "./fabric-session-options.ts";
 import { resolveInteractiveProvisioning } from "./host-mounts.ts";
+import {
+  type SandboxProcess,
+  sandboxProcessOf,
+} from "./sandbox/runtime-selection.ts";
+import type { SandboxPlatform } from "./sandbox/types.ts";
 import { BUILTIN_TOOLS } from "./tools/registry.ts";
 import {
   createHarnessInteractiveChatService,
@@ -147,6 +150,22 @@ Options:
   --help                              Print this help text to stderr
 
 Environment:
+  CF_HARNESS_SANDBOX_RUNTIME           docker | runsc. Unset, macOS (Apple silicon only)
+                                       runs runsc from the native cfc-vm store
+                                       (CFC_VM_HOME, or ~/Library/Application
+                                       Support/cfc-vm), Linux runs it from the store
+                                       under ~/.local/share/runsc-cfc, rootless for a
+                                       process that is not root (the host must allow
+                                       unprivileged user namespaces; a refusal names
+                                       the sysctl -w to run), with pasta (passt)
+                                       giving it egress and the host. That network
+                                       needs pasta and setpriv on PATH, and unshare
+                                       too for root, which
+                                       CF_HARNESS_DOCKER_NETWORK_MODE=none or host
+                                       does not need. Each refuses to start where its
+                                       store is not set up; every other platform runs
+                                       docker. The local Loom
+                                       host refuses to start with it unset
   CF_HARNESS_LOOM_AUTHORING_CONFIG     Default host authoring configuration file
   CF_HARNESS_FABRIC_API_URL            Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY           Default value for --fabric-identity
@@ -515,6 +534,11 @@ const isValidChatPolicyParam = (value: unknown): boolean =>
   (value.promptSlot === undefined ||
     isValidPromptSlotParam(value.promptSlot));
 
+/** An absent declaration, or one the protocol reader accepts. */
+const isValidProtocolParam = (value: unknown): boolean =>
+  value === undefined ||
+  readHarnessClientProtocolDeclaration(value) !== undefined;
+
 const isValidRequestParams = (
   method: HarnessChatRequestMethod,
   params: ReadonlyRecord,
@@ -534,6 +558,7 @@ const isValidRequestParams = (
           isValidBrowserAccessParam(params.browserAccess)) &&
         (params.clientActions === undefined ||
           typeof params.clientActions === "boolean") &&
+        isValidProtocolParam(params.protocol) &&
         (params.metadata === undefined || isObjectNotArray(params.metadata));
     case "start_turn":
       return typeof params.sessionId === "string" &&
@@ -541,6 +566,7 @@ const isValidRequestParams = (
         isValidTurnInputParam(params.input) &&
         (params.clientActions === undefined ||
           typeof params.clientActions === "boolean") &&
+        isValidProtocolParam(params.protocol) &&
         (params.context === undefined || isObjectNotArray(params.context)) &&
         (params.policy === undefined ||
           isValidChatPolicyParam(params.policy)) &&
@@ -555,13 +581,7 @@ const isValidRequestParams = (
       return typeof params.sessionId === "string" &&
         hasOptionalString(params, "reason");
     case "resolve_client_action":
-      return isNonEmptyString(params.sessionId) &&
-        isNonEmptyString(params.actionId) &&
-        isHarnessClientActionOutcomeKind(params.outcome) &&
-        (params.result === undefined ||
-          (typeof params.result === "string" &&
-            params.result.length <=
-              HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH));
+      return readHarnessClientActionAnswer(params) !== undefined;
     case "status":
       return hasOptionalString(params, "sessionId");
     case "list_events":
@@ -826,10 +846,21 @@ export const runHarnessInteractiveChatStdioCli = async (
   run: (
     options: RunHarnessInteractiveChatStdioOptions,
   ) => Promise<void> = runHarnessInteractiveChatStdio,
+  /**
+   * Seam for tests: the environment the entrypoint reads, the platform whose
+   * default sandbox runtime applies where that environment names none, and
+   * the architecture and user that default is for. Each is the process's own
+   * when absent.
+   */
+  host: SandboxProcess & {
+    env?: Record<string, string | undefined>;
+    platform?: SandboxPlatform;
+  } = {},
 ): Promise<void> => {
+  const env = host.env ?? Deno.env.toObject();
   const options = parseHarnessInteractiveChatStdioCliOptions(
     args,
-    Deno.env.toObject(),
+    env,
     cwd ?? Deno.cwd(),
   );
   if (options.help) {
@@ -843,7 +874,8 @@ export const runHarnessInteractiveChatStdioCli = async (
   const provisioning = await resolveInteractiveProvisioning(
     options,
     cwd ?? Deno.cwd(),
-    Deno.env.toObject(),
+    env,
+    { platform: host.platform ?? Deno.build.os, ...sandboxProcessOf(host) },
   );
   await run({
     ...(options.sessionDbPath !== undefined
@@ -852,9 +884,7 @@ export const runHarnessInteractiveChatStdioCli = async (
     ...(options.maxInMemoryEvents !== undefined
       ? { maxInMemoryEvents: options.maxInMemoryEvents }
       : {}),
-    ...(Object.keys(provisioning).length > 0
-      ? { basePromptLoopOptions: provisioning }
-      : {}),
+    basePromptLoopOptions: provisioning,
   });
 };
 

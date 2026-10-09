@@ -40,6 +40,50 @@ branches are evaluated eagerly as arguments — they do not short-circuit. So
 branch needs `computed()` deferral; see
 [Eager Ternary Branch Evaluation](../../development/debugging/gotchas/eager-ternary-branch-evaluation.md).
 
+A ternary's result is a reference to the branch the condition selected, not a
+copy of its value, and the reference carries that branch's schema. So an input
+declared with a `Default` and returned through a ternary, or through `&&` or
+`||`, reads as its default when the input holds no value, exactly as the input
+itself does.
+
+## Showing and Hiding Through a Prop
+
+A ternary in child position renders nothing until its condition has a value,
+so the element it guards stays out of view while the pattern loads. A pattern
+that shows or hides an element through a prop instead, as
+`style={{ display: shown }}`, loses that: the renderer drops a declaration
+whose value is `undefined`, so until `shown` first runs the element is drawn
+with its default display, which is visible. On a cold load that can be
+seconds of controls and rows that should not be there.
+
+Give such an element a static `hidden` as well:
+
+```tsx
+// Shown for illustration only.
+<div hidden style={{ display: editorDisplay }}>
+  {/* … */}
+</div>
+```
+
+`hidden` keeps the element out of view until `editorDisplay` has a value,
+and an inline `display` outranks `hidden` once it has one, so the computed
+alone decides from then on. A `cf-` component honors `hidden` the same way.
+FabriChat (`packages/patterns/fabrichat/`) hides per-viewer and per-session
+controls this way, for the reason its `FabriChatMessageRow` states.
+
+The element stays hidden for as long as the computed has no value for the
+viewer. A computed that reads per-user or per-session state has a value for a
+viewer only once something runs the pattern for that viewer, and a page that
+only renders a piece, through `cf-render` for instance, does not run it. With
+server execution off, nothing runs it for the viewer until an event of theirs
+reaches it. An element every viewer must see takes its
+display from a computed that reads shared state alone, which whichever runtime
+runs the pattern computes for everyone. When the element is shown in one place
+by shared state and in another by per-session state, as a FabriChat message is
+in the conversation and in a thread, give each its own computed and choose
+between them with a ternary on the prop, so that the shared case never reads
+the per-session one.
+
 ## Keep `computed()` for Data, Not UI Gating
 
 Inside a `computed()` body, ternaries and logical operators stay plain

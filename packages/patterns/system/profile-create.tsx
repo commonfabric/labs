@@ -13,7 +13,10 @@ import {
 } from "commonfabric";
 import ProfileHome, {
   type BackwardsCompatibleProfile,
+  type InboxPointable,
+  pointAtInboxIfUnset,
   type ProfileHomeOutput,
+  type ProfileInbox,
   type SetProfileNameEvent,
 } from "./profile-home.tsx";
 
@@ -58,10 +61,11 @@ export type CreateProfileEvent = {
 export type SeedProfileNameEvent = { name?: string; index?: number };
 
 // What the seed step needs of each profile in the list: the stored name (to
-// write only where none is stored yet) and the stream it writes through.
-// `setName` stays optional here so a stored profile of a vintage without it
-// can never keep this handler from running for the profiles created after.
-type SeedProfileTarget = {
+// write only where none is stored yet) and the stream it writes through, and
+// what pointing the profile at Home's private inbox needs. `setName` stays
+// optional here so a stored profile of a vintage without it can never keep
+// this handler from running for the profiles created after.
+export type SeedProfileTarget = InboxPointable & {
   name: string;
   setName?: Stream<SetProfileNameEvent>;
 };
@@ -103,15 +107,23 @@ export const seedProfileName = handler<
   SeedProfileNameEvent,
   {
     profiles: SeedProfileTarget[];
+    privateInbox?: ProfileInbox;
   }
->((event, { profiles }) => {
+>((event, { profiles, privateInbox }) => {
   const name = (event.name ?? "").trim();
   const index = event.index;
   if (!name || typeof index !== "number") return;
   const target = profiles[index];
-  if (target === undefined || target.setName === undefined) return;
-  if ((target.name ?? "") !== "") return;
-  target.setName.send({ name });
+  // The profile at `index` is the one just created only while its name is
+  // unstored; an index taken from a list this replica had not loaded may name
+  // an existing profile, which both steps below leave alone.
+  if (target === undefined || (target.name ?? "") !== "") return;
+  // The profile is pointed at Home's private inbox here, after its create has
+  // committed, for the same reason its name is stored here. Home's own pointing
+  // step runs once per runtime worker, so a profile created later would
+  // otherwise wait for the next worker.
+  pointAtInboxIfUnset(target, privateInbox);
+  target.setName?.send({ name });
 });
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
@@ -128,8 +140,14 @@ export const seedProfileName = handler<
 // by the creating user, so a profile is unique per user AND per creation event,
 // and stable across the cross-space-commit retry. The display name flows ONLY to
 // `initialName` (editable later, independent of the space identity). Other
-// users read a profile — a lunch poll or a chat room shows its name — so the
-// space grants anyone READ. Existing profiles keep their
+// users read a profile — a lunch poll or a chat room shows its name — and a
+// runtime showing one writes into the profile's space, its per-session state
+// at the least, so the space grants anyone WRITE. What keeps a visitor from
+// changing the profile's data is the owner protection on its fields
+// (profile-home.tsx), not the space's access list; its view state is per
+// session. The profile is the space's root (`root: true`), reserved in the
+// space's genesis commit, so a host holding only the space's DID reaches the
+// profile through the space's root. Existing profiles keep their
 // already-baked concrete DID link.
 export const submitProfileCreation = handler<
   CreateProfileEvent,
@@ -166,7 +184,7 @@ export const submitProfileCreation = handler<
     const index = ((profiles as any).asSchema(profileLinkListSchema()).get() ??
       []).length as number;
     profiles.push(
-      ProfileHome.inSpace(undefined, { grants: { "*": "READ" } })({
+      ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" }, root: true })({
         initialName: name,
         // The freshly created profile is current-vintage by construction — it
         // carries every stream and field, so the strict producer type is the
@@ -180,13 +198,22 @@ export const submitProfileCreation = handler<
   }
 });
 
+/**
+ * Home's default profile: a link to the chosen profile, under `profile`, or
+ * no `profile` while none is chosen. The link sits under a key because a
+ * handle to a cell whose root holds a link denotes the cell that link names,
+ * so a link stored at the root would make every later write land in the
+ * profile chosen first rather than re-point the default.
+ */
+export type DefaultProfileSlot = { profile?: BackwardsCompatibleProfile };
+
 // Sets the user's default profile — the one `#profile` resolves to in headless
 // mode and orders first in the picker. The chosen profile is bound per-row via
 // handler state (mirrors how home's removeSpaceHandler binds its item).
 export const setDefaultProfile = handler<
   unknown,
   {
-    defaultProfile: Writable<BackwardsCompatibleProfile | undefined>;
+    defaultProfile: Writable<DefaultProfileSlot>;
     // Take the profile as a LINK cell, not a resolved value: the handler only
     // needs the link to write into defaultProfile, and a link argument doesn't
     // require the profile's cross-space values to be loaded at event time —
@@ -197,7 +224,7 @@ export const setDefaultProfile = handler<
   }
 >((_, { defaultProfile, profile }) => {
   if (profile) {
-    defaultProfile.set(profile as any);
+    defaultProfile.key("profile").set(profile as any);
   }
 });
 
@@ -273,13 +300,14 @@ type PickerProfileLink<Binding, Action extends string> = Cfc<
   }
 >;
 
-// The home `defaultProfile` link: write authorized by `setDefaultProfile`.
-export type TrustedDefaultProfile =
-  | PickerProfileLink<
+// The home `defaultProfile` slot (`DefaultProfileSlot`): its `profile` link is
+// write authorized by `setDefaultProfile`.
+export type TrustedDefaultProfile = {
+  profile?: PickerProfileLink<
     typeof setDefaultProfile,
     typeof TRUSTED_PROFILE_SET_DEFAULT_ACTION
-  >
-  | undefined;
+  >;
+};
 
 // The home `mru` list: elements carry the picker `uiContract`; the array
 // container carries `writeAuthorizedBy: setMruProfile` to gate structural
@@ -309,6 +337,13 @@ export type ProfileCreateInput = {
   // time exactly as before — so a prefilled value is a head start on typing,
   // never a shortcut around the gesture.
   defaultName?: string;
+
+  /**
+   * Home's private inbox, if the embedder has it, held as a profile holds its
+   * pointer. Each profile this creates is pointed at it, unless the profile
+   * points at an inbox already.
+   */
+  privateInbox?: ProfileInbox;
 };
 
 export type ProfileCreateOutput = {
@@ -318,8 +353,11 @@ export type ProfileCreateOutput = {
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
-  ({ profiles, inputId, defaultName }) => {
-    const seedName = seedProfileName({ profiles: profiles as any });
+  ({ profiles, inputId, defaultName, privateInbox }) => {
+    const seedName = seedProfileName({
+      profiles: profiles as any,
+      privateInbox,
+    });
     const createProfile = submitProfileCreation({
       profiles: profiles as any,
       seedName,

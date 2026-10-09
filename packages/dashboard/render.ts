@@ -6,6 +6,7 @@
 
 import type { Status } from "./types.ts";
 export { renderTile } from "./tile-render.ts";
+import { REPOS_PATH } from "./repo-page-href.ts";
 import {
   BOTTOM_CHART_RULES,
   DASHBOARD_GRID_RULE,
@@ -23,6 +24,7 @@ import {
   TEXTURE_WIDTH,
 } from "./palette.ts";
 import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
+import { GREEN_STAR_RULES } from "./green-star.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
@@ -138,6 +140,22 @@ const MAX_TILE_ASPECT = 1.5;
 // whatever angle the texture is turned to.
 const TEXTURE_LAYER_PCT = Math.ceil(Math.hypot(1, MAX_TILE_ASPECT) * 100);
 
+/**
+ * The texture a box of each class in `scopes` wears for its status, drawn in
+ * the `.texture` layer it holds first, as its own first child or as the first
+ * child of its link (linkedBox). The box needs a stacking context of its own
+ * and to clip its overflow, as a tile has.
+ */
+export function textureRules(scopes: readonly string[]): string {
+  const each = (status: Status) =>
+    scopes.map((scope) => `.${scope}.${status} .texture::before`).join(",");
+  return `.texture{position:absolute;inset:0;z-index:-1;overflow:hidden;mask-image:linear-gradient(to bottom,#000 15%,transparent 70%)}
+  .texture::before{content:"";position:absolute;top:50%;left:50%;width:${TEXTURE_LAYER_PCT}%;aspect-ratio:1;transform:translate(-50%,-50%) rotate(var(--turn,30deg))}
+  ${each("unknown")}{${DOT_TEXTURE}}
+  ${each("warn")}{${WAVE_TEXTURE};--turn:120deg}
+  ${each("bad")}{${ZIGZAG_TEXTURE}}`;
+}
+
 const STATUSES: readonly Status[] = ["good", "warn", "bad", "unknown"];
 
 // A tile's own color: the wash behind it and the border around it, both
@@ -229,27 +247,27 @@ ${TILE_RULES}
      width clears for a tile up to ${MAX_TILE_ASPECT} times as tall as it is
      wide. The fade is measured against the tile and the texture is drawn in
      the turned frame, which is why they are two boxes rather than one. */
-  .texture{position:absolute;inset:0;z-index:-1;overflow:hidden;mask-image:linear-gradient(to bottom,#000 15%,transparent 70%)}
-  .texture::before{content:"";position:absolute;top:50%;left:50%;width:${TEXTURE_LAYER_PCT}%;aspect-ratio:1;transform:translate(-50%,-50%) rotate(var(--turn,30deg))}
-  .tile.unknown .texture::before{${DOT_TEXTURE}}
-  .tile.warn .texture::before{${WAVE_TEXTURE};--turn:120deg}
-  .tile.bad .texture::before{${ZIGZAG_TEXTURE}}
+  ${textureRules(["tile"])}
   ${tileContentRules(SPARKLINE_HEIGHT)}
   ${BIG_RULES}
+  ${GREEN_STAR_RULES}
   a.cell{display:block}
   a.cell:hover{outline:1px solid var(--accent);outline-offset:-1px}
-  a.tile.link:hover{border-color:var(--border-hover)}
+  a.tile.link:hover,.tile.link:has(>.tile-head:hover){border-color:var(--border-hover)}
   .evscroll{max-height:340px;overflow:auto}
   .ev{display:flex;align-items:center;gap:11px;padding:6px 0;font-size:13px;border-top:1px solid var(--divider)}.ev:first-child{border-top:0}
   .ev .t{color:var(--text-muted);min-width:54px;flex:none}
-  .evtxt{color:inherit;text-decoration:none;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .1s}
-  .evtxt:hover{color:var(--text-strong)}
+  .evtxt{flex:1;min-width:0;overflow:clip;overflow-clip-margin:3px;text-overflow:ellipsis;white-space:nowrap}
+  .evtxt a{color:inherit;text-decoration:none;transition:color .1s}.evtxt:has(:focus-visible){white-space:normal}.evtxt a:hover{color:var(--text-strong)}.evtxt a.pr{color:var(--accent)}.evtxt a.pr:hover{text-decoration:underline}
   .evdur{color:var(--text-muted);text-decoration:none;text-align:right;min-width:64px;flex:none;font-variant-numeric:tabular-nums}
   a.evdur:hover{color:var(--accent)}
   .evarrow{color:var(--icon-subtle);text-decoration:none;flex:none;font-size:11px;transition:color .1s}
   .evarrow:hover{color:var(--text-subtle)}
   .note{font-size:11px;color:var(--text-faint);margin-top:14px}
   code{background:var(--surface-code);padding:1px 5px;border-radius:4px}
+  /* The way to the repository pages sits at the foot of the page, across from
+     the theme switch. */
+  .foot{display:flex;align-items:flex-end;gap:12px}
   @media(max-width:560px){.top{grid-template-columns:minmax(0,1fr) max-content;gap:8px 12px}.top-actions{gap:8px}.message-form{grid-column:1/-1;grid-row:2;width:100%}.message-input{font-size:14px;padding-inline:5px}}
 </style></head><body>
   <div class="top">
@@ -261,7 +279,7 @@ ${TILE_RULES}
   </div>
   <div class="grid" id="dashboard-grid">${gridHtml}</div>
   <div id="dashboard-wide">${wideHtml}</div>
-${dashboardThemeToggle()}
+  <div class="foot"><a class="pill" href="${REPOS_PATH}">▤ Repositories</a>${dashboardThemeToggle()}</div>
 ${DASHBOARD_THEME_CLIENT}
 <script>
   const REFRESH = ${refreshMs};

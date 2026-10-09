@@ -41,6 +41,7 @@ import {
   TEST_SELECTION_PATH,
   testSelectionResponse,
 } from "../test-selection-page.ts";
+import { REPO } from "../config.ts";
 import { publisherRunning } from "../test-selection-activity.ts";
 import type { Status, Tile, TileView } from "../types.ts";
 
@@ -54,6 +55,7 @@ export function makeTestSelection(
   const source = options.source ?? sharedTestSelection;
   return {
     label: "test selection",
+    repo: REPO,
     intervalMs: MANIFEST_SHARE_MS,
     routes: [{
       path: TEST_SELECTION_PATH,

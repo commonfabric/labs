@@ -16,6 +16,8 @@
     "jsr:@deno/loader@~0.3.10": "0.3.14",
     "jsr:@denosaurs/plug@1": "1.1.0",
     "jsr:@denosaurs/plug@^1.1.0": "1.1.0",
+    "jsr:@panva/jose@6.2.12": "6.2.12",
+    "jsr:@panva/jose@^6.2.12": "6.2.12",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/assert@1.0.19": "1.0.19",
     "jsr:@std/assert@^1.0.19": "1.0.19",
@@ -257,6 +259,9 @@
         "jsr:@std/fs@1",
         "jsr:@std/path@1"
       ]
+    },
+    "@panva/jose@6.2.12": {
+      "integrity": "45dd3888cff0c45dbd91ca5279f7fd4324227042d19df91504aa2c0678b3edcc"
     },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
@@ -2863,6 +2868,11 @@
       "npm:zod@^4.4.3"
     ],
     "members": {
+      "packages/agent-runner": {
+        "dependencies": [
+          "jsr:@db/sqlite@0.13.0"
+        ]
+      },
       "packages/api": {
         "dependencies": [
           "npm:typescript@6.0.3"
@@ -3011,6 +3021,7 @@
         "dependencies": [
           "jsr:@cmd-johnson/oauth2-client@2",
           "jsr:@db/sqlite@0.13.0",
+          "jsr:@panva/jose@^6.2.12",
           "jsr:@std/cli@^1.0.32",
           "npm:@ai-sdk/anthropic@^4.0.16",
           "npm:@ai-sdk/google-vertex@^5.0.22",

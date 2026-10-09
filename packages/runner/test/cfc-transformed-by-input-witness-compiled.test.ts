@@ -177,7 +177,7 @@ const runChain = async (
     const result = runtime.getCell<Chain>(space, cause, undefined, tx);
     runtime.run(tx, pattern, {}, result);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     await runtime.idle();
 
@@ -185,7 +185,7 @@ const runChain = async (
       const sendTx = runtime.edit();
       // deno-lint-ignore no-explicit-any
       (result.withTx(sendTx) as any).key(stream).send(event);
-      expect((await sendTx.commit()).error).toBeUndefined();
+      expect((await sendTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await result.pull();
     };
@@ -282,6 +282,193 @@ describe("input-witnessed TransformedBy through compiled patterns", () => {
       expect((await read()).tally).toBe("2");
       await send("publishPlanted");
       expect((await read()).roomPlanted).toBe("2");
+    });
+  });
+
+  describe("a list a lift writes where nothing stood", () => {
+    // A lift that returns nothing until its inputs are in, and then a list,
+    // writes the list where no value stood. The diff writes it empty and then
+    // each member, and the tally reads it through its schema: the list's own
+    // node, a probe of each member slot, and each member. The rule pins the
+    // tally over the collecting step, so the list has to carry the
+    // collecting step's witness.
+
+    const LIST_POLICY = `/// <cts-enable />
+import {
+  type Confidential,
+  Default,
+  handler,
+  lift,
+  type MaxConfidentiality,
+  pattern,
+  Writable,
+} from "commonfabric";
+import {
+  exchangeRule,
+  exchangeRules,
+  type PolicyOf,
+  THIS_POLICY,
+} from "commonfabric/cfc";
+
+export const releaseCount = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: {
+    integrity: [{
+      type: "https://commonfabric.org/cfc/atom/TransformedBy",
+      identity: {
+        kind: "verified",
+        moduleIdentity: THIS_POLICY.moduleIdentity,
+        symbol: "countApprovals",
+      },
+      inputWitness: {
+        type: "https://commonfabric.org/cfc/atom/TransformedBy",
+        identity: {
+          kind: "verified",
+          moduleIdentity: THIS_POLICY.moduleIdentity,
+          symbol: "collectVotes",
+        },
+      },
+    }],
+  },
+  post: { dropClause: true },
+});
+
+export const listRules = exchangeRules([releaseCount]);
+
+type Sealed<T> = Confidential<T, readonly [PolicyOf<typeof listRules>]>;
+type RoomText = MaxConfidentiality<string, readonly []>;
+
+interface Brief {
+  vote: "approve" | "reject";
+}
+
+const submit = handler<Brief, { briefs: Writable<Sealed<Brief>[]> }>(
+  (brief, { briefs }) => {
+    briefs.push({ vote: brief.vote } as Sealed<Brief>);
+  },
+);
+
+/** Nothing until three briefs are in, then their votes. */
+export const collectVotes = lift(
+  (briefs: Brief[] | undefined): string[] | undefined =>
+    (briefs ?? []).length < 3
+      ? undefined
+      : (briefs ?? []).map((brief) => brief.vote),
+);
+
+/** Not the endorsed step: the same votes, copied. */
+export const copyVotes = lift(
+  (votes: string[] | undefined): string[] | undefined =>
+    votes === undefined ? undefined : [...votes],
+);
+
+export const countApprovals = lift((votes: string[] | undefined): string =>
+  votes === undefined
+    ? ""
+    : String(votes.filter((vote) => vote === "approve").length)
+);
+
+const publish = handler<void, { from: string; to: Writable<RoomText> }>(
+  (_, { from, to }) => {
+    to.set(from);
+  },
+);
+
+interface Input {
+  briefs: Writable<Default<Sealed<Brief>[], []>>;
+  room: Writable<Default<RoomText, "">>;
+  roomCopied: Writable<Default<RoomText, "">>;
+}
+
+export default pattern<Input>(({ briefs, room, roomCopied }) => {
+  const votes = collectVotes(briefs);
+  const count = countApprovals(votes);
+  const copiedCount = countApprovals(copyVotes(votes));
+  return {
+    count,
+    copiedCount,
+    room,
+    roomCopied,
+    submit: submit({ briefs }),
+    publish: publish({ from: count, to: room }),
+    publishCopied: publish({ from: copiedCount, to: roomCopied }),
+  };
+});
+`;
+
+    type Counted = {
+      count: string;
+      copiedCount: string;
+      room: string;
+      roomCopied: string;
+    };
+
+    const runList = async (
+      cause: string,
+      body: (
+        send: (stream: string, event?: unknown) => Promise<void>,
+        read: () => Promise<Counted>,
+      ) => Promise<void>,
+    ): Promise<void> => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      try {
+        const tx = runtime.edit();
+        const pattern = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{ name: "/main.tsx", contents: LIST_POLICY }],
+        }, { space, tx });
+        const result = runtime.getCell<Counted>(space, cause, undefined, tx);
+        runtime.run(tx, pattern, {}, result);
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+
+        const send = async (stream: string, event?: unknown) => {
+          const sendTx = runtime.edit();
+          // deno-lint-ignore no-explicit-any
+          (result.withTx(sendTx) as any).key(stream).send(event);
+          expect((await sendTx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+          await result.pull();
+        };
+        const read = async () => {
+          await runtime.idle();
+          return (await result.pull()) as Counted;
+        };
+        await body(send, read);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    it("releases the tally over the list the collecting step wrote", async () => {
+      await runList("list-collected", async (send, read) => {
+        await send("submit", { vote: "approve" });
+        await send("submit", { vote: "reject" });
+        await send("submit", { vote: "approve" });
+        expect((await read()).count).toBe("2");
+        await send("publish");
+        expect((await read()).room).toBe("2");
+      });
+    });
+
+    it("refuses the tally over a copy of that list another lift wrote", async () => {
+      await runList("list-copied", async (send, read) => {
+        await send("submit", { vote: "approve" });
+        await send("submit", { vote: "reject" });
+        await send("submit", { vote: "approve" });
+        expect((await read()).copiedCount).toBe("2");
+        await send("publishCopied");
+        expect((await read()).roomCopied).toBe("");
+      });
     });
   });
 });

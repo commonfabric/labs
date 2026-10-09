@@ -10,10 +10,17 @@ import { join } from "@std/path";
 import {
   assertRunscCfcPolicyForMode,
   canonicalHostPath,
-  defaultDarwinRootfs,
+  darwinCfcVmRootfs,
+  defaultDarwinCfcVmStore,
+  executableOnPath,
+  PASTA_ARGS,
+  PASTA_HOSTS_FILE,
+  PASTA_ROOT_ARGS,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
   RunscSandboxRuntime,
+  SETPRIV_ARGS,
+  UNSHARE_ARGS,
   verifyPrivateScratchParent,
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
@@ -223,7 +230,10 @@ Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", asy
     else Deno.env.set("PATH", path);
     await Deno.remove(bin, { recursive: true });
   }
-  assertEquals(c.rootfs, defaultDarwinRootfs("/Users/someone"));
+  assertEquals(
+    c.rootfs,
+    darwinCfcVmRootfs(defaultDarwinCfcVmStore("/Users/someone")),
+  );
   // The docker runtime defaults to `bridge`; the runsc runtime's default is
   // the runsc spelling of the same posture, so a run that names no network
   // mode gets the same reach on either runtime. `none` here would leave a
@@ -231,6 +241,183 @@ Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", asy
   assertEquals(c.networkMode, "sandbox");
   assertEquals(c.runscBinary, join(bin, "runsc"));
   assertEquals(c.cfcPolicyPath, undefined);
+});
+
+Deno.test("resolveRunscSandboxConfig keeps the macOS store out of every writable mount", async () => {
+  // The macOS `runsc` runs from the store whatever binary, rootfs and policy
+  // are named: its config, VM image and daemon socket are there. So the store
+  // is refused inside a writable mount, and a writable mount inside the
+  // store, even with all three named elsewhere.
+  const base = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-store-reach-" }),
+  );
+  const outside = {
+    runscBinary: RUNSC,
+    rootfs: "/images/kitchensink",
+    cfcPolicyPath: "/policy.json",
+  };
+  const darwin = (
+    workspaceHostPath: string,
+    cfcVmHome: string,
+    additionalMounts: Parameters<
+      typeof resolveRunscSandboxConfig
+    >[0]["additionalMounts"] = [],
+  ) =>
+    resolveRunscSandboxConfig({
+      ...outside,
+      workspaceHostPath,
+      additionalMounts,
+      platform: "darwin",
+      homeDir: "/Users/someone",
+      cfcVmHome,
+      scratchDir: join(base, "scratch"),
+    });
+  try {
+    const workspace = join(base, "ws");
+    const store = join(base, "ws", "cfc-vm");
+    await Deno.mkdir(store, { recursive: true });
+    assertThrows(
+      () => darwin(workspace, store),
+      Error,
+      `cfc-vm store ${store} lies inside the writable mount ${workspace}`,
+    );
+
+    const elsewhere = join(base, "cfc-vm");
+    await Deno.mkdir(join(elsewhere, "ext4"), { recursive: true });
+    assertThrows(
+      () =>
+        darwin(join(base, "other"), elsewhere, [{
+          kind: "host-bind",
+          name: "images",
+          hostPath: join(elsewhere, "ext4"),
+          sandboxPath: "/images",
+          readOnly: false,
+        }]),
+      Error,
+      `writable mount ${
+        join(elsewhere, "ext4")
+      } lies inside the cfc-vm store ${elsewhere}`,
+    );
+
+    // Read only, the sandbox cannot rewrite it either way.
+    darwin(join(base, "other"), elsewhere, [{
+      kind: "host-bind",
+      name: "store",
+      hostPath: elsewhere,
+      sandboxPath: "/store",
+      readOnly: true,
+    }]);
+  } finally {
+    await Deno.remove(base, { recursive: true });
+  }
+});
+
+Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolute path", () => {
+  // The macOS `runsc` resolves `CFC_VM_HOME` against its own working
+  // directory, so a relative store names one place here and another there.
+  for (const cfcVmHome of ["cfc-vm", "~/cfc-vm", "./cfc-vm"]) {
+    for (const rootfs of [undefined, "/images/kitchensink"]) {
+      assertThrows(
+        () =>
+          resolveRunscSandboxConfig({
+            workspaceHostPath: "/tmp/ws",
+            runscBinary: RUNSC,
+            platform: "darwin",
+            homeDir: "/Users/someone",
+            cfcVmHome,
+            rootfs,
+            scratchDir: "/tmp/scratch",
+          }),
+        Error,
+        `\`${cfcVmHome}\` is not an absolute path`,
+      );
+    }
+  }
+});
+
+Deno.test("resolveRunscSandboxConfig on Linux given a home keeps the runsc-cfc store under it out of every writable mount, and every writable mount out of it", async () => {
+  const home = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-linux-home-" }),
+  );
+  try {
+    const store = join(home, ".local", "share", "runsc-cfc");
+    const sibling = join(store, "images", "other");
+    await Deno.mkdir(sibling, { recursive: true });
+    const elsewhere = await Deno.realPath(
+      await Deno.makeTempDir({ prefix: "runsc-rootfs-" }),
+    );
+    try {
+      // An image this run does not use, in the store a later run defaults
+      // from.
+      const mounting = (hostPath: string, readOnly: boolean) =>
+        config({
+          rootfs: elsewhere,
+          homeDir: home,
+          additionalMounts: [{
+            kind: "host-bind",
+            name: "store-part",
+            hostPath,
+            sandboxPath: "/store-part",
+            readOnly,
+          }],
+        });
+
+      assertThrows(
+        () => mounting(sibling, false),
+        Error,
+        `the writable mount ${sibling} lies inside the runsc-cfc store ${store}: the sandbox could rewrite what Linux's runsc default runs from`,
+      );
+      assertThrows(
+        () => mounting(home, false),
+        Error,
+        `runsc-cfc store ${store} lies inside the writable mount ${home}`,
+      );
+      assertEquals(mounting(sibling, true).rootfs, elsewhere);
+    } finally {
+      await Deno.remove(elsewhere, { recursive: true });
+    }
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("resolveRunscSandboxConfig refuses a writable mount inside the rootfs, and takes a read-only one", async () => {
+  const rootfs = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-rootfs-" }),
+  );
+  try {
+    await Deno.mkdir(join(rootfs, "etc"));
+    const mount = (readOnly: boolean) =>
+      config({
+        rootfs,
+        additionalMounts: [{
+          kind: "host-bind",
+          name: "image-etc",
+          hostPath: join(rootfs, "etc"),
+          sandboxPath: "/image-etc",
+          readOnly,
+        }],
+      });
+
+    assertThrows(
+      () => mount(false),
+      Error,
+      `the writable mount ${
+        join(rootfs, "etc")
+      } lies inside the sandbox rootfs ${rootfs}: the sandbox could rewrite the image later containers start from`,
+    );
+    assertEquals(mount(true).rootfs, rootfs);
+  } finally {
+    await Deno.remove(rootfs, { recursive: true });
+  }
+});
+
+Deno.test("resolveRunscSandboxConfig refuses an empty runsc binary, which names none", () => {
+  assertThrows(
+    () => config({ runscBinary: "" }),
+    Error,
+    "runsc binary must not be empty: give an absolute path",
+  );
 });
 
 Deno.test("resolveRunscSandboxConfig refuses a Linux config with no rootfs", () => {
@@ -1267,7 +1454,7 @@ Deno.test("what decides the sandbox's labels and contents is refused inside a wr
       runscBinary: RUNSC,
       rootfs: "/images/kitchensink",
       scratchDir: scratch(),
-      platform: "linux",
+      platform: "linux" as const,
       additionalMounts: [
         {
           kind: "host-bind" as const,
@@ -1453,6 +1640,414 @@ Deno.test("the spec isolates every namespace and bounds the tmpfs it gives the c
   assert(tmp.options.some((o: string) => /^size=\d+[km]$/.test(o)));
 });
 
+Deno.test("the spec gives a container on the host's network no network namespace of its own", async () => {
+  // With one, runsc makes it empty and the container has its loopback alone,
+  // whatever `--network=host` asked for.
+  const specs: string[] = [];
+  const runner = new FakeRunscRunner();
+  const base = FakeRunscRunner.prototype.run;
+  runner.run = async function (this: FakeRunscRunner, request) {
+    if (request.command === "/bin/sh" && request.args.includes("run")) {
+      const bundle = request.args[request.args.indexOf("--bundle") + 1];
+      specs.push(await Deno.readTextFile(join(bundle, "config.json")));
+    }
+    return await base.call(this, request);
+  };
+  for (const networkMode of ["host", "none", "sandbox"] as const) {
+    await new RunscSandboxRuntime(config({ networkMode }), runner).run({
+      argv: ["/bin/true"],
+    });
+  }
+  assertEquals(
+    specs.map((text) =>
+      JSON.parse(text).linux.namespaces.map((n: { type: string }) => n.type)
+        .includes("network")
+    ),
+    [false, true, true],
+  );
+});
+
+Deno.test("a rootless runtime runs every runsc command, control commands included, with `--rootless`", async () => {
+  for (const rootless of [true, false]) {
+    const runner = new FakeRunscRunner();
+    const runtime = new RunscSandboxRuntime(config({ rootless }), runner);
+    await runtime.runShell({ command: "echo hi" });
+
+    // The call itself, run through the shell that opens its descriptors, and
+    // the control commands that take its container down after it.
+    const runscArgs = runner.requests.map((request) =>
+      request.command === "/bin/sh" ? request.args.slice(6) : request.args
+    );
+    assert(runscArgs.length > 1, "the call and the control commands after it");
+    assertEquals(
+      runscArgs.map((args) => args.includes("--rootless")),
+      runscArgs.map(() => rootless),
+    );
+  }
+});
+
+/** The `pasta` the pasta cases configure. Nothing is there, as for RUNSC. */
+const PASTA = "/opt/passt/bin/pasta";
+
+/** The `unshare` root's pasta runs under in those cases; nothing is there. */
+const UNSHARE = "/opt/util-linux/bin/unshare";
+
+/** The `setpriv` that ties what pasta runs to pasta; nothing is there. */
+const SETPRIV = "/opt/util-linux/bin/setpriv";
+
+/** A configuration with pasta's network, as the Linux default's is. */
+const pastaConfig = (
+  overrides: Partial<Parameters<typeof resolveRunscSandboxConfig>[0]> = {},
+) => config({ networkHelper: PASTA, setpriv: SETPRIV, ...overrides });
+
+/**
+ * A runner that hands the fake what a command run under pasta runs, and
+ * keeps every command it was given as it was given, with the spec of each
+ * container started and the request that started it.
+ */
+class UnderPasta implements ProcessRunner {
+  readonly fake = new FakeRunscRunner();
+  readonly given: { command: string; args: string[] }[] = [];
+  readonly specs: string[] = [];
+  readonly started: ProcessRunRequest[] = [];
+
+  async #unwrap<T extends { command: string; args: string[] }>(
+    request: T,
+  ): Promise<T> {
+    this.given.push({ command: request.command, args: [...request.args] });
+    if (request.command !== PASTA && request.command !== UNSHARE) {
+      return request;
+    }
+    const [command, ...args] = this.#underPasta(request.command, request.args);
+    const bundle = args[args.indexOf("--bundle") + 1];
+    this.specs.push(await Deno.readTextFile(join(bundle, "config.json")));
+    return { ...request, command, args };
+  }
+
+  async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+    this.started.push(request);
+    return await this.fake.run(await this.#unwrap(request));
+  }
+
+  spawn(request: ProcessSpawnRequest): ProcessHandle {
+    this.given.push({ command: request.command, args: [...request.args] });
+    const [command, ...args] = this.#underPasta(request.command, request.args);
+    return this.fake.spawn({ ...request, command, args });
+  }
+
+  /**
+   * Checks what pasta is given, run as `command`, which is pasta itself or
+   * the `unshare` root's pasta runs under, and that pasta runs its command
+   * under `setpriv`, and returns the command `setpriv` runs.
+   */
+  #underPasta(command: string, given: readonly string[]): string[] {
+    const throughUnshare = command === UNSHARE;
+    this.unshared.push(throughUnshare);
+    if (throughUnshare) {
+      assertEquals(given.slice(0, UNSHARE_ARGS.length + 2), [
+        ...UNSHARE_ARGS,
+        "--",
+        PASTA,
+      ]);
+    } else {
+      assertEquals(command, PASTA);
+    }
+    const args = throughUnshare ? given.slice(UNSHARE_ARGS.length + 2) : given;
+    const end = args.indexOf("--");
+    const own = args.slice(0, end);
+    assertEquals(own.slice(0, PASTA_ARGS.length), [...PASTA_ARGS]);
+    const rest = own.slice(PASTA_ARGS.length);
+    const log = rest.indexOf("--log-file");
+    assertMatch(rest[log + 1], /\/pasta\.log$/);
+    this.pastaFlags.push(rest.filter((_, i) => i !== log && i !== log + 1));
+    const run = args.slice(end + 1);
+    assertEquals(run.slice(0, SETPRIV_ARGS.length + 2), [
+      SETPRIV,
+      ...SETPRIV_ARGS,
+      "--",
+    ]);
+    return run.slice(SETPRIV_ARGS.length + 2);
+  }
+
+  /** What pasta was given beyond its own arguments and its log file. */
+  readonly pastaFlags: string[][] = [];
+
+  /** Whether each command pasta ran ran under `unshare`. */
+  readonly unshared: boolean[] = [];
+}
+
+/** The runsc `--root` a command the fake ran was given. */
+const rootOf = (args: readonly string[]): string =>
+  args[args.indexOf("--root") + 1];
+
+Deno.test("under pasta, a call starts its container in pasta's namespace, on that namespace as runsc's host network, with a hosts file naming the host", async () => {
+  const runner = new UnderPasta();
+  const c = pastaConfig({ unshare: UNSHARE });
+  const runtime = new RunscSandboxRuntime(c, runner);
+
+  const result = await runtime.runShell({ command: "echo hi" });
+
+  assertEquals(result.exitCode, 0);
+  const [call, ...control] = runner.given;
+  assertEquals(call.command, UNSHARE);
+  assert(call.args.includes("--network=host"));
+  assert(!call.args.includes("--network=sandbox"));
+  // No control command follows it from out here: the container's state
+  // records pids of pasta's PID namespace, which out here are others'.
+  assertEquals(control, []);
+  const spec = JSON.parse(runner.specs[0]);
+  assertEquals(
+    spec.linux.namespaces.map((n: { type: string }) => n.type).sort(),
+    ["ipc", "mount", "pid", "uts"],
+  );
+  const hosts = spec.mounts.find((m: { destination: string }) =>
+    m.destination === "/etc/hosts"
+  );
+  assertEquals(hosts, {
+    destination: "/etc/hosts",
+    type: "bind",
+    source: join(c.scratchDir, "hosts"),
+    options: ["rbind", "ro"],
+  });
+  assertEquals(await Deno.readTextFile(hosts.source), PASTA_HOSTS_FILE);
+  assertMatch(PASTA_HOSTS_FILE, /^10\.0\.2\.2\thost\.docker\.internal$/m);
+});
+
+Deno.test("under pasta, root keeps root in a network namespace alone and a mount namespace of unshare's, and a user that is not root gets pasta's user namespace", async () => {
+  for (
+    const [unshare, rootless] of [
+      [UNSHARE, false],
+      [undefined, true],
+      // A `runsc` named for a user that is not root runs as it is.
+      [undefined, false],
+    ] as const
+  ) {
+    const runner = new UnderPasta();
+    await new RunscSandboxRuntime(
+      pastaConfig({ ...(unshare !== undefined ? { unshare } : {}), rootless }),
+      runner,
+    ).runShell({ command: "echo hi" });
+
+    assertEquals(runner.pastaFlags, [
+      unshare !== undefined ? [...PASTA_ROOT_ARGS] : [],
+    ]);
+    assertEquals(runner.unshared, [unshare !== undefined]);
+  }
+});
+
+Deno.test("under pasta, a call is refused, starting nothing, where no setpriv was given", async () => {
+  const runner = new UnderPasta();
+  const runtime = new RunscSandboxRuntime(
+    config({ networkHelper: PASTA, unshare: UNSHARE }),
+    runner,
+  );
+
+  await assertRejects(
+    () => runtime.runShell({ command: "echo hi" }),
+    Error,
+    "since no `setpriv` was given to tie it to pasta",
+  );
+  assertEquals(runner.given, []);
+});
+
+Deno.test("under pasta, each call keeps its container's state in a root of its own, which goes when the call does, however it ends", async () => {
+  for (const ending of ["exits", "times out"] as const) {
+    const runner = new UnderPasta();
+    const c = pastaConfig({ rootless: true });
+    const runtime = new RunscSandboxRuntime(c, runner);
+    const base = runner.fake.run.bind(runner.fake);
+    // As a `runsc run` killed with its namespace does, the fake leaves its
+    // container's state behind.
+    runner.fake.run = async (request) => {
+      const root = rootOf(request.args);
+      await Deno.mkdir(root, { recursive: true });
+      await Deno.writeTextFile(join(root, "container.state"), "{}");
+      if (ending === "times out") {
+        throw new ProcessTimeoutError("pasta", 1000);
+      }
+      return await base(request);
+    };
+
+    const calls = await Promise.allSettled([
+      runtime.runShell({ command: "echo one" }),
+      runtime.runShell({ command: "echo two" }),
+    ]);
+    for (const call of calls) {
+      if (ending === "times out") {
+        assert(
+          call.status === "rejected" &&
+            call.reason instanceof ProcessTimeoutError,
+        );
+      } else {
+        assert(call.status === "fulfilled" && call.value.exitCode === 0);
+      }
+    }
+
+    const roots = runner.started.map((request) => rootOf(request.args));
+    assertEquals(new Set(roots).size, 2);
+    for (const root of roots) {
+      assertEquals(join(root, ".."), join(c.scratchDir, "state"));
+      await assertRejects(() => Deno.stat(root), Deno.errors.NotFound);
+    }
+    await runtime.close();
+    await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
+  }
+});
+
+Deno.test("under pasta, closing the runtime stops a call in flight through pasta, and waits for it to end before taking its scratch directory down", async () => {
+  const runner = new UnderPasta();
+  const c = pastaConfig({ rootless: true });
+  const runtime = new RunscSandboxRuntime(c, runner);
+  let running!: () => void;
+  const inFlight = new Promise<void>((resolve) => (running = resolve));
+  // Pasta ending is slow next to all a close does: many reads of the file
+  // system go by before the state its `runsc run` left is there.
+  const ending = async (root: string): Promise<void> => {
+    for (let read = 0; read < 50; read += 1) await Deno.stat(".");
+    await Deno.mkdir(root, { recursive: true });
+    await Deno.writeTextFile(join(root, "container.state"), "{}");
+  };
+  // The fake pasta runs until it is stopped, as a call that never ends would,
+  // and ends as a SIGTERM ends pasta, with what its `runsc run` left in the
+  // call's root, which `close()` must wait to see taken down; the run then
+  // throws why it was stopped, as the process runner's does.
+  runner.fake.run = (request) => {
+    running();
+    return new Promise<ProcessRunResult>((_, reject) => {
+      request.signal?.addEventListener("abort", () => {
+        ending(rootOf(request.args))
+          .then(() => request.signal?.throwIfAborted())
+          .catch(reject);
+      });
+    });
+  };
+
+  // What the call ended with, kept as it ends, since it ends inside close().
+  let ended: unknown = undefined;
+  runtime.runShell({ command: "sleep 600" }).then(
+    (result) => (ended = result),
+    (error: unknown) => (ended = error),
+  );
+  await inFlight;
+  await runtime.close();
+
+  assert(ended instanceof Error, "the call ended before close() returned");
+  assertEquals(
+    ended.message,
+    "the sandbox runtime closed while the call was running",
+  );
+  assertEquals(runner.started.map((request) => request.signal?.aborted), [
+    true,
+  ]);
+  await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
+});
+
+Deno.test("under pasta, closing the runtime takes its scratch directory down, hosts file and pasta's log included", async () => {
+  const runner = new UnderPasta();
+  const c = pastaConfig({ rootless: true });
+  const runtime = new RunscSandboxRuntime(c, runner);
+  await runtime.runShell({ command: "echo hi" });
+  // pasta writes its log beside the hosts file; the fake runs no pasta.
+  await Deno.writeTextFile(join(c.scratchDir, "pasta.log"), "");
+
+  await runtime.close();
+
+  await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
+});
+
+Deno.test("under pasta, no session is offered, and one asked for is refused, starting nothing", async () => {
+  const runner = new UnderPasta();
+  const runtime = new RunscSandboxRuntime(
+    pastaConfig({ rootless: true }),
+    runner,
+  );
+
+  assertEquals(runtime.describe().sessions, false);
+  const refusal = await assertRejects(
+    () => runtime.run({ argv: ["/bin/true"], session: "build" }),
+    SandboxSessionUnavailableError,
+    "not offered under pasta's network",
+  );
+  assertEquals(refusal.reason, "start-failed");
+  assertEquals(runner.given, []);
+  // Every other network mode keeps them.
+  assertEquals(
+    new RunscSandboxRuntime(
+      pastaConfig({ networkMode: "none" }),
+      runner,
+    ).describe().sessions,
+    true,
+  );
+});
+
+Deno.test("a network other than runsc's own takes no pasta, whatever is configured", async () => {
+  for (const networkMode of ["none", "host"] as const) {
+    const runner = new UnderPasta();
+    await new RunscSandboxRuntime(
+      pastaConfig({ networkMode }),
+      runner,
+    ).runShell({ command: "echo hi" });
+
+    assertEquals(runner.given[0].command, "/bin/sh");
+    assert(runner.given[0].args.includes(`--network=${networkMode}`));
+    assertEquals(rootOf(runner.given[0].args).endsWith("/state"), true);
+  }
+});
+
+Deno.test("under pasta, a mount that covers the hosts file, or sits in it, is refused", () => {
+  for (const sandboxPath of ["/etc/hosts", "/etc"]) {
+    assertThrows(
+      () =>
+        pastaConfig({
+          additionalMounts: [{
+            kind: "host-bind",
+            name: "etc",
+            hostPath: "/tmp/elsewhere",
+            sandboxPath,
+            readOnly: true,
+          }],
+        }),
+      Error,
+      "where pasta's network binds the hosts file naming `host.docker.internal`",
+    );
+  }
+  // Without pasta's network the hosts file is the image's, and `/etc/hosts`
+  // is a mount like any other.
+  pastaConfig({
+    networkMode: "none",
+    additionalMounts: [{
+      kind: "host-bind",
+      name: "etc",
+      hostPath: "/tmp/elsewhere",
+      sandboxPath: "/etc/hosts",
+      readOnly: true,
+    }],
+  });
+});
+
+Deno.test("executableOnPath finds an executable file in the first entry holding one, and nothing elsewhere", async () => {
+  const dir = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-path-" }),
+  );
+  try {
+    for (const entry of ["a", "b", "c"]) await Deno.mkdir(join(dir, entry));
+    // Not executable in the first entry, so passed over, as running it would.
+    await Deno.writeTextFile(join(dir, "a", "pasta"), "");
+    await Deno.writeTextFile(join(dir, "b", "pasta"), "#!/bin/sh\n", {
+      mode: 0o755,
+    });
+    await Deno.writeTextFile(join(dir, "c", "pasta"), "#!/bin/sh\n", {
+      mode: 0o755,
+    });
+    const path = ["a", "b", "c"].map((entry) => join(dir, entry)).join(":");
+
+    assertEquals(executableOnPath("pasta", path), join(dir, "b", "pasta"));
+    assertEquals(executableOnPath("slirp4netns", path), undefined);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("a working directory outside the mounts is refused for fresh and session calls", async () => {
   const runner = new FakeRunscRunner();
   const runtime = new RunscSandboxRuntime(config(), runner);
@@ -1483,6 +2078,29 @@ Deno.test("a run that throws still has its container deleted", async () => {
     ),
     "no delete --force after the throw",
   );
+});
+
+Deno.test("a call that close() catches writing its bundle starts no container, with pasta's network or without", async () => {
+  for (const c of [config(), pastaConfig({ rootless: true })]) {
+    const runner = new UnderPasta();
+    const runtime = new RunscSandboxRuntime(c, runner);
+
+    // Nothing of the call is started before its bundle is written, which
+    // takes the file system, so close() begins while it is written.
+    const call = runtime.runShell({ command: "echo hi" });
+    const closing = runtime.close();
+
+    await assertRejects(
+      () => call,
+      Error,
+      "sandbox runtime closed before the call started",
+    );
+    await closing;
+    assertEquals(
+      runner.given.filter((request) => request.args.includes("run")),
+      [],
+    );
+  }
 });
 
 Deno.test("close takes down a fresh call that is still in flight", async () => {

@@ -204,7 +204,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, testCase.name, undefined, write).setRaw(
         testCase.value,
       );
-      await write.commit();
+      await write.commit().settled;
       for (const lazy of [false, true]) {
         const tx = runtime.edit();
         tx.markLazyMaterialize(lazy);
@@ -218,7 +218,7 @@ describe("materialization-parity", () => {
           expect(snapshotQueryResult(value)).toEqual(testCase.expected);
           expect(tx.takeSchemaRefusal()).toBeUndefined();
         } finally {
-          await tx.commit();
+          await tx.commit().settled;
         }
       }
     });
@@ -239,7 +239,7 @@ describe("materialization-parity", () => {
       count: 1,
       choice: "glaze",
     });
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize(true);
     try {
@@ -260,7 +260,7 @@ describe("materialization-parity", () => {
       expect(value.choice).toBe("glaze");
       expect(cell.get().choice).toBe("sprinkles");
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
     }
   });
 
@@ -270,7 +270,7 @@ describe("materialization-parity", () => {
       n: 1,
       absent: undefined,
     });
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize(true);
     try {
@@ -292,7 +292,7 @@ describe("materialization-parity", () => {
       expect(() => value.n).toThrow();
       expect(isSchemaMismatchError(tx.takeSchemaRefusal())).toBe(true);
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
     }
   });
 
@@ -302,7 +302,7 @@ describe("materialization-parity", () => {
       n: "bad",
       xs: ["bad"],
     });
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize(true);
     try {
@@ -324,7 +324,7 @@ describe("materialization-parity", () => {
       expect(value.xs[0]).toBeNull();
       expect(tx.takeSchemaRefusal()).toBe(refusal);
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
     }
   });
 
@@ -334,7 +334,7 @@ describe("materialization-parity", () => {
     runtime.getCell(space, "missing-array", undefined, write).setRaw([
       missing.getAsLink(),
     ]);
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize(true);
     try {
@@ -345,7 +345,7 @@ describe("materialization-parity", () => {
       expect(() => value[0]).toThrow(UnresolvedInputError);
       expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
     }
   });
 
@@ -358,7 +358,7 @@ describe("materialization-parity", () => {
     runtime.getCell(space, "nested-handle", undefined, write).setRaw({
       h: 1,
     });
-    await write.commit();
+    await write.commit().settled;
     for (const lazy of [false, true]) {
       const tx = runtime.edit();
       tx.markLazyMaterialize(lazy);
@@ -380,7 +380,7 @@ describe("materialization-parity", () => {
         expect(isCell(nested.h)).toBe(true);
         expect(nested.h.get()).toBe(1);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     }
   });
@@ -396,7 +396,7 @@ describe("materialization-parity", () => {
     runtime.getCell(space, "missing-in-item", undefined, write).setRaw([
       { n: missing.getAsLink() },
     ]);
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize(true);
     try {
@@ -425,7 +425,7 @@ describe("materialization-parity", () => {
       expect(() => (item as { n: number }).n).toThrow(UnresolvedInputError);
       expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
     }
   });
 
@@ -435,7 +435,7 @@ describe("materialization-parity", () => {
     runtime.getCell(space, "missing-in-box", undefined, write).setRaw({
       box: { n: missing.getAsLink() },
     });
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize(true);
     try {
@@ -458,7 +458,41 @@ describe("materialization-parity", () => {
       expect(() => value.box.n).toThrow(UnresolvedInputError);
       expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
+    }
+  });
+
+  it("reads a link's inherited default for an absent target within an object in both modes", async () => {
+    const write = runtime.edit();
+    const target = runtime.getCell<{ n?: number }>(
+      space,
+      "absent-field-target",
+      {
+        type: "object",
+        properties: { n: { type: "number", default: 7 } },
+      },
+      write,
+    );
+    target.setRaw({});
+    runtime.getCell(space, "absent-field-holder", undefined, write).setRaw({
+      n: target.key("n").getAsLink({ includeSchema: true }),
+    });
+    await write.commit().settled;
+    for (const lazy of [false, true]) {
+      const tx = runtime.edit();
+      tx.markLazyMaterialize(lazy);
+      try {
+        const value = runtime.getCell<{ n: number }>(
+          space,
+          "absent-field-holder",
+          { type: "object", properties: { n: { type: "number" } } },
+          tx,
+        ).get();
+        expect(value.n).toBe(7);
+        expect(tx.takeSchemaRefusal()).toBeUndefined();
+      } finally {
+        await tx.commit().settled;
+      }
     }
   });
 
@@ -492,7 +526,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, cause, undefined, write).setRaw({
         box: [missing.getAsLink()],
       });
-      await write.commit();
+      await write.commit().settled;
     };
 
     it("omits an optional property and retains no refusal", async () => {
@@ -510,7 +544,7 @@ describe("materialization-parity", () => {
         expect("box" in value).toBe(false);
         expect(tx.takeSchemaRefusal()).toBeUndefined();
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -528,7 +562,7 @@ describe("materialization-parity", () => {
         expect(() => value.box).toThrow(UnresolvedInputError);
         expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
   });
@@ -600,7 +634,7 @@ describe("materialization-parity", () => {
     ) => {
       const write = runtime.edit();
       runtime.getCell(space, cause, undefined, write).setRaw({ h });
-      await write.commit();
+      await write.commit().settled;
       for (const lazy of [false, true]) {
         const tx = runtime.edit();
         if (lazy) tx.markLazyMaterialize(true);
@@ -615,7 +649,7 @@ describe("materialization-parity", () => {
           expect(handle.get()).toEqual(expected);
           expect(handle.schema).toEqual(expectedSchema);
         } finally {
-          await tx.commit();
+          await tx.commit().settled;
         }
       }
     };
@@ -841,7 +875,7 @@ describe("materialization-parity", () => {
         write,
       );
       target.set({ x: 1, y: 2 });
-      await write.commit();
+      await write.commit().settled;
       await handleReadsInBothModes(
         "bare-handle-linked",
         bare,
@@ -866,7 +900,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, "typeless-open", undefined, write).setRaw({
         extra: "kept",
       });
-      await write.commit();
+      await write.commit().settled;
       const schema: JSONSchema = {
         items: { type: "object", properties: { title: { type: "string" } } },
       };
@@ -883,7 +917,7 @@ describe("materialization-parity", () => {
           expect(value.extra).toBe("kept");
           expect(tx.takeSchemaRefusal()).toBeUndefined();
         } finally {
-          await tx.commit();
+          await tx.commit().settled;
         }
       }
     });
@@ -893,7 +927,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, "typeless-list", undefined, write).setRaw({
         list: [{ n: 1 }],
       });
-      await write.commit();
+      await write.commit().settled;
       const schema: JSONSchema = {
         type: "object",
         properties: {
@@ -921,7 +955,7 @@ describe("materialization-parity", () => {
           expect((element as Cell<{ n: number }>).get().n).toBe(1);
           expect(tx.takeSchemaRefusal()).toBeUndefined();
         } finally {
-          await tx.commit();
+          await tx.commit().settled;
         }
       }
     });
@@ -944,7 +978,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, "admitted-union", undefined, write).setRaw({
         p: { n: missing.getAsLink() },
       });
-      await write.commit();
+      await write.commit().settled;
       const branch = (extra: Record<string, JSONSchema>): JSONSchema => ({
         type: "object",
         properties: { n: { type: ["number", "undefined"] }, ...extra },
@@ -980,7 +1014,7 @@ describe("materialization-parity", () => {
             ),
           ).toBe(true);
         } finally {
-          await tx.commit();
+          await tx.commit().settled;
         }
       }
     });
@@ -1011,7 +1045,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, "scoped-holder", undefined, write).setRaw({
         p: { a: missingUser.getAsLink(), b: served.key("q").getAsLink() },
       });
-      await write.commit();
+      await write.commit().settled;
       const branch = (extra: Record<string, JSONSchema>): JSONSchema => ({
         type: "object",
         properties: {
@@ -1046,7 +1080,7 @@ describe("materialization-parity", () => {
           expect(value.p.b).toBe(3);
           expect(tx.takeSchemaRefusal()).toBeUndefined();
         } finally {
-          await tx.commit();
+          await tx.commit().settled;
         }
       }
     });
@@ -1081,7 +1115,7 @@ describe("materialization-parity", () => {
             true,
           );
         } finally {
-          await tx.commit();
+          await tx.commit().settled;
         }
       }
     };
@@ -1098,7 +1132,7 @@ describe("materialization-parity", () => {
         p: missing.getAsLink(),
         other: 1,
       });
-      await write.commit();
+      await write.commit().settled;
       await readsAbsentAndRegisters(
         "optional-link",
         missing.getAsNormalizedFullLink().id,
@@ -1125,7 +1159,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, "optional-union", undefined, write).setRaw({
         p: { n: missing.getAsLink() },
       });
-      await write.commit();
+      await write.commit().settled;
       const branch = (extra: Record<string, JSONSchema>): JSONSchema => ({
         type: "object",
         properties: { n: { type: "number" }, ...extra },
@@ -1172,8 +1206,8 @@ describe("materialization-parity", () => {
           value: runtime.getCell(space, name, schema, lazy).get(),
         },
         commit: async () => {
-          await eager.commit();
-          await lazy.commit();
+          await eager.commit().settled;
+          await lazy.commit().settled;
         },
       };
     };
@@ -1183,7 +1217,7 @@ describe("materialization-parity", () => {
       runtime.getCell(space, "nested-default", undefined, write).setRaw({
         box: { n: "bad" },
       });
-      await write.commit();
+      await write.commit().settled;
       const read = readBothWays("nested-default", {
         type: "object",
         properties: {
@@ -1216,7 +1250,7 @@ describe("materialization-parity", () => {
         { n: "bad" },
         { n: 2 },
       ]);
-      await write.commit();
+      await write.commit().settled;
       const read = readBothWays("nested-substitute", {
         type: "array",
         items: {
@@ -1253,7 +1287,7 @@ describe("materialization-parity", () => {
         tags: [1],
         none: [],
       });
-      await write.commit();
+      await write.commit().settled;
       const read = readBothWays("never-items", {
         type: "object",
         properties: {
@@ -1281,7 +1315,7 @@ describe("materialization-parity", () => {
         count: 1,
         box: { n: "bad" },
       });
-      await write.commit();
+      await write.commit().settled;
       const read = readBothWays("untouched", {
         type: "object",
         properties: {
@@ -1307,7 +1341,7 @@ describe("materialization-parity", () => {
   it("gives an inline nested array the same stable identity in both modes", async () => {
     const write = runtime.edit();
     runtime.getCell(space, "nested-array", undefined, write).setRaw([[1, 2]]);
-    await write.commit();
+    await write.commit().settled;
     const links = [];
     for (const lazy of [false, true]) {
       const tx = runtime.edit();
@@ -1326,7 +1360,7 @@ describe("materialization-parity", () => {
         links.push({ id: link.id, path: link.path });
         expect(link.id.startsWith("data:")).toBe(true);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     }
     expect(links[1]).toEqual(links[0]);
@@ -1446,7 +1480,7 @@ describe("materialization-parity", () => {
               ? linked.getAsLink({ includeSchema: true })
               : linked.getAsLink(),
           });
-          await write.commit();
+          await write.commit().settled;
           const reader = {
             type: "object",
             properties: { p: union },
@@ -1468,8 +1502,8 @@ describe("materialization-parity", () => {
             expect(eager.p).toEqual(expectedKeys);
             expect(lazy.p).toEqual(eager.p);
           } finally {
-            await eager.tx.commit();
-            await lazy.tx.commit();
+            await eager.tx.commit().settled;
+            await lazy.tx.commit().settled;
           }
         });
       }
@@ -1490,7 +1524,7 @@ describe("materialization-parity", () => {
         undefined,
         write,
       ).set({ p: { kind: "agent", name: "Sol" } });
-      await write.commit();
+      await write.commit().settled;
       const reader = {
         type: "object",
         properties: {
@@ -1526,8 +1560,8 @@ describe("materialization-parity", () => {
         expect(lazy.kind).toBe("agent");
         expect(lazy.name).toBe(eager.name);
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
   });
@@ -1558,7 +1592,7 @@ describe("materialization-parity", () => {
           `${activity.id}/${activity.path.join("/")}`
         );
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     };
 
@@ -1581,7 +1615,7 @@ describe("materialization-parity", () => {
         undefined,
         write,
       ).setRaw({ rows: links });
-      await write.commit();
+      await write.commit().settled;
 
       const plain = await readsOf({ type: "array", items: row } as JSONSchema);
       const nullable = await readsOf(

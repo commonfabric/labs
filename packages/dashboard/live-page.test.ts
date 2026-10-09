@@ -15,6 +15,7 @@ import {
   livePages,
 } from "./live-page.ts";
 import { LIVE_PAGE_UPDATE } from "./live-page-client.ts";
+import { faviconHref } from "./favicon.ts";
 import type { Route } from "./types.ts";
 import { SERVING_VERSION } from "./version.ts";
 
@@ -292,7 +293,7 @@ describe("LIVE_PAGE_CLIENT", () => {
 });
 
 describe("LIVE_PAGE_CLIENT updates", () => {
-  it("announces a rendering to the page before bringing main up to date", () => {
+  it("announces a rendering to the page before bringing main up to date, and takes its favicon", () => {
     let page: ((event: { data: string }) => void) | undefined;
     class FakeSource {
       readonly readyState = 1;
@@ -316,9 +317,21 @@ describe("LIVE_PAGE_CLIENT updates", () => {
       ...part("<main></main>"),
       dispatchEvent: (event: CustomEvent) => announced.push(event),
     };
+    const link = (href: string) => {
+      const attributes = new Map([["href", href]]);
+      return {
+        getAttribute: (name: string) => attributes.get(name) ?? null,
+        setAttribute: (name: string, value: string) =>
+          attributes.set(name, value),
+      };
+    };
+    const icon = link("data:,");
     class DOMParser {
       parseFromString() {
-        return { querySelector: () => next };
+        return {
+          querySelector: (selector: string) =>
+            selector === "main" ? next : link("/bad.png"),
+        };
       }
     }
     new Function(
@@ -332,7 +345,8 @@ describe("LIVE_PAGE_CLIENT updates", () => {
     )(
       {
         getElementById: () => null,
-        querySelector: () => main,
+        querySelector: (selector: string) =>
+          selector === "main" ? main : icon,
         addEventListener: () => {},
       },
       { pathname: "/counted", search: "", reload: () => {} },
@@ -348,6 +362,7 @@ describe("LIVE_PAGE_CLIENT updates", () => {
     expect(announced.map((event) => event.type)).toEqual([LIVE_PAGE_UPDATE]);
     expect(announced[0].detail).toBe(next);
     expect(announced[0].bubbles).toBe(true);
+    expect(icon.getAttribute("href")).toBe("/bad.png");
   });
 });
 
@@ -372,6 +387,20 @@ describe("livePage()", () => {
       html.indexOf("</main>"),
     );
     expect(html).not.toContain("<script>{}</script>");
+  });
+
+  it("wears the status it is given as the tab's favicon, and an empty one for gray", () => {
+    const head = (html: string) => html.slice(0, html.indexOf("</head>"));
+    for (const status of ["good", "warn", "bad"] as const) {
+      expect(head(livePage({ ...content, status }))).toContain(
+        `<link rel="icon" href="${faviconHref(status)}">`,
+      );
+    }
+    for (const status of ["unknown", undefined] as const) {
+      expect(head(livePage({ ...content, status }))).toContain(
+        `<link rel="icon" href="data:,">`,
+      );
+    }
   });
 
   it("runs the page's own script before the client opens the stream", () => {

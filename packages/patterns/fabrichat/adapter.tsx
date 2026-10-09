@@ -35,15 +35,22 @@ export const FabriChatAdapter = pattern<
     placement,
     [UI]: (
       <cf-screen>
-        {state === "member"
-          ? <cf-render $cell={placement.key("room")} />
-          : (
-            <cf-empty-state
-              message={state === "not-member"
-                ? "You are not a member of this conversation."
-                : "Conversation unavailable."}
-            />
-          )}
+        <div
+          hidden
+          style={{ display: state === "member" ? "block" : "none" }}
+        >
+          <cf-render $cell={placement.key("room")} />
+        </div>
+        <div
+          hidden
+          style={{ display: state === "member" ? "none" : "block" }}
+        >
+          <cf-empty-state
+            message={state === "not-member"
+              ? "You are not a member of this conversation."
+              : "Conversation unavailable."}
+          />
+        </div>
       </cf-screen>
     ),
     [VIEWS]: { chat },

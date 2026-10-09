@@ -1,6 +1,7 @@
 /**
- * Fixture: an unapproved writer changes a protected cell after its default is
- * initialized. CFC refuses the change, and the run fails on that warning.
+ * Fixture: the pattern supplies a value for an argument field of a pattern it
+ * composes, and the field's policy names a handler as its only writer, so CFC
+ * denies the setup commit and the run fails on the warning that denial logs.
  */
 
 import {
@@ -15,14 +16,15 @@ const approve = handler<void, { value: Writable<string> }>((_, { value }) => {
   value.set("approved");
 });
 
-const forge = handler<void, { value: Writable<string> }>((_, { value }) => {
-  value.set("forged");
-});
+interface NoteInput {
+  note: Writable<WriteAuthorizedBy<string, typeof approve>>;
+}
+
+const Note = pattern<NoteInput>(({ note }) => ({
+  runApprove: approve({ value: note }),
+}));
 
 export default pattern(() => {
-  const note = new Writable<WriteAuthorizedBy<string, typeof approve>>("");
-  return {
-    [TESTS]: [{ action: forge({ value: note }) }],
-    runApprove: approve({ value: note }),
-  };
+  const note = Note({ note: "supplied" });
+  return { [TESTS]: [], note };
 });

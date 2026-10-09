@@ -30,7 +30,11 @@ Regression guard: "preserves an outer unlabeled-only boundary through an
 unbounded child boundary" in `test/worker-reconciler-cfc-render-policy.test.ts`.
 
 The ceiling in force at a node gates what reaches the page from that node by
-the same fit (`canRenderLabelUnderPolicy`). Each read that a value reaches the
+the same fit (`canRenderLabelUnderPolicy`). The fit is a set of functions in
+`packages/html/src/worker/display-fit.ts`, taking the policy and the sources a
+decision consults (the exchange-rule resolver, and the membership and
+module-policy providers a decision watches), so that every display sink in
+the worker decides by the same code. Each read that a value reaches the
 page through is decided on the labels of the cell the read starts from and on
 the labels the read consumed, and the ceiling has to admit each. The cell's
 labels are its own, which include a label its handle carries, and, when its
@@ -61,9 +65,18 @@ each slot holding a link the read followed, which a dereference retains
   the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
   the bound cell, under the cell's schema; a nested render root is decided on
-  the read its component makes instead, as the nested-render paragraph below
-  describes. The worker keeps reading the bound cell and removes the binding
-  when a write leaves that read consuming a label the ceiling refuses. The
+  the reads its component makes instead, as the nested-render paragraphs
+  below describe. The worker keeps reading the bound cell and removes the
+  binding when a write leaves that read consuming a label the ceiling
+  refuses, or while the read cannot complete, as when a space it reads is out
+  of reach: a read that cannot complete is never taken for an empty one. While
+  a `cf-render` or `cf-picker` binding is withheld because the space of the
+  read refusing it is out of reach, the element holds the access placeholder
+  (`data-space-access-lost`) as its child, the one a cell child of an out of
+  reach space renders as, and the component shows its children while it holds
+  no value for the binding. The placeholder carries nothing read from the
+  space, and goes once the read completes and decides the binding again. A
+  binding withheld for any other reason leaves the element empty. The
   binding hands the host a live
   handle, and the worker answers the host's reads through it without the
   ceiling: a read that follows a link the worker's read did not, and the
@@ -89,31 +102,68 @@ own, each mounted from the cell's reference under the root ceiling, the way the
 shell mounts a piece opened by its address. What reaches the page through it
 passes the same confidentiality gates as opening the piece, the blocked
 placeholder included, with the exceptions listed below. Such a binding is a
-nested render root: the component read-contract registry lists it in
-`nestedRenderReadContracts` (`packages/runner/src/component-read-contract.ts`),
-with the schema the component reads the binding with, and the reconciler
-decides the binding on that read. For `cf-render` that schema is
-`NestedRenderReferenceSchema` (`{ asCell: ["cell"] }`), which `cf-render` also
-uses to follow its cell. The read follows the reference's links to the document
-it lands on, consuming the label of every document they pass through and of the
-one they land on, and reads none of that document's contents, which are left to
-the nested render; a schema stored on a link along the way does not change it.
-A component qualifies for the registry when its own reads of the binding go no
-further than the document its reference lands on, and everything it shows from
-beyond it comes through a render mounted from the reference. The entry is
-reviewed like the component itself.
+nested render root. The component read contract
+(`packages/runner/src/component-read-contract.ts`) gives each bound property a
+`schema`, the read the component makes of it, and for a nested render root
+`renders`, the paths from the bound value to the references the component
+mounts a render from. A path is a list of steps, each a property name or `"*"`
+for every element of an array, and the empty path names the binding itself:
 
-The exceptions, all of them about `cf-render`:
+| Component and property | `renders` |
+| --- | --- |
+| `cf-render` `cell` | `[[]]` |
+| `cf-picker` `items` | `[["*"]]` |
+| `cf-map` `value` | `[["markers", "*", "popup"], ["circles", "*", "popup"]]` |
+
+The reconciler decides such a binding on the read the component makes of it,
+`schema` as `componentReadSchema()` resolves it against the schema the bound
+handle carries, and on a read of each reference at a path in `renders`, which
+is read as `cf-render` reads its cell, with `NestedRenderReferenceSchema`
+(`{ asCell: ["cell"] }`). That read follows the reference's links to the
+document it lands on, consuming the label of every document they pass through
+and of the one they land on, and reads none of that document's contents, which
+are left to the nested render; a schema stored on a link along the way does not
+change it. `cf-render` reads its own cell that way. `cf-picker` reads its list
+with `pieceListSchema`, each item a reference. `cf-map` reads its value under
+the schema its binding stores, so a value whose schema reads each popup as a
+reference is decided popup by popup, and a value read under `any` is decided on
+everything its popups reach.
+
+Each reference is read at the slot holding it in the document the links on the
+way resolve to, so a schema stored on one of those links, which can declare the
+reference a reference, does not end the read at the reference's own link. One
+refused reference withholds the whole binding, which hands the component one
+handle to the whole value; the reconciler has no binding that hands over part
+of one. A value that cannot be read, a link on the way that does not resolve,
+and a position on the way that the component's read holds as a reference each
+withhold the binding as any read that cannot complete does, rather than
+counting as a value with no references. A label the value's schema declares for
+its references is fitted on the read of the value, and so decides wherever that
+read consumes no stored label, even for a reference whose own document carries
+one.
+
+A component qualifies for `renders` when its own reads of the binding go no
+further than its `schema` and the documents its references land on, and
+everything it shows from beyond them comes through a render mounted from a
+reference. The entry is reviewed like the component itself. The replication
+walk reads a property by its `schema` and does not read the empty path, which
+is the nested render's to read.
+
+The exceptions hold for every reference a nested render root decides:
 
 - The binding is withheld while the ceiling refuses the reference: when the
   viewer may not see the entry holding it, when a document along its chain of
   links is refused, and when the piece's own document is refused, because
   resolving the reference reads that document's label, a conservative
   over-approximation (CFC §8.2.5). A label the slot's schema declares decides
-  only where the read consumed no stored label. A `cf-render` whose binding is
-  withheld shows nothing, where opening a refused piece shows the placeholder.
+  only where the read consumed no stored label. A `cf-render` or `cf-picker`
+  whose binding is withheld shows nothing, and a `cf-map` whose binding is
+  withheld shows no value, where opening a refused piece shows the
+  placeholder. A `cf-render` or `cf-picker` whose binding is withheld because
+  a space its read reaches is out of reach shows the access placeholder
+  instead, as the `$` binding item above says.
 - A nested render applies the root ceiling, and none of the declassification
-  or text-integrity requirement of a boundary around the `cf-render`. A
+  or text-integrity requirement of a boundary around the component. A
   boundary that only declassifies admits more than the root, so there the
   binding keeps the component's read, and what the boundary would release
   shows as the placeholder, as when the piece is opened by its address.
@@ -124,16 +174,14 @@ The exceptions, all of them about `cf-render`:
   the element's ceiling refuses shows nothing. That read fits confidentiality
   only: under an authorship boundary, a piece whose text carries no
   endorsement still binds, and its nested render shows that text.
-- `cf-render`'s `cell` is also a remote load (`REMOTE_LOAD_PROPS`), so the
-  read that decides the binding is fitted on the fetch ceiling as well, and
-  the nested render keeps what a caveated view inside the piece would load
-  from loading, as opening the piece does.
+- `cf-render`'s `cell`, `cf-picker`'s `items` and `cf-map`'s `value` are also
+  remote loads (`REMOTE_LOAD_PROPS`), so the reads that decide the binding are
+  fitted on the fetch ceiling as well, and the nested render keeps what a
+  caveated view inside the piece would load from loading, as opening the piece
+  does.
 - The component's own reads through the bound handle, such as the piece menu's
   Data panel, are answered without the ceiling, as for every binding.
 
-Other components that render through `cf-render`, such as `cf-picker`, are not
-nested render roots in the registry, and their bindings are decided like any
-other.
 Regression guards: `test/worker-reconciler-cfc-nested-render.test.ts`.
 
 ## Text integrity (`requiredTextIntegrity` / `allowLiteralText`)

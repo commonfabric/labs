@@ -1,8 +1,9 @@
 /**
  * FabriChat's rooms under an enforced access list, across runtimes and under
  * either server-execution posture: a manager creates each room in a space of
- * its own, and the room's members, and no one else, can read it, unless it is
- * a group made joinable by its link, which anyone can read.
+ * its own and joins its user to it, and the room's members, and no one else,
+ * can read it, unless it is a group made joinable by its link, which anyone
+ * can read.
  *
  * Three sessions share the harness's space, where the manager lives: the
  * starter, who creates the rooms; a member, named in each; and a stranger,
@@ -33,6 +34,25 @@ const PROGRAM_PATH = join(
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
 
+/** The CFC write gate's refusals in one runtime. */
+function writeRefusals(
+  counts: Record<string, Record<string, { total: number }> | number>,
+): number {
+  const cfc = counts.cfc;
+  return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
+}
+
+// The reviewed action a start is admitted from, as
+// `../fabrichat/schemas.tsx` names it.
+const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
+
+// The reviewed action a member is added from, as `../fabrichat/schemas.tsx`
+// names it.
+const ADD_MEMBER_ACTION = {
+  surface: "ChatAddMemberSurface",
+  action: "ChatAddMember",
+};
+
 describe("fabrichat spaces across runtimes", () => {
   let harness: MultiRuntimeHarness;
   let starter: MultiRuntimeSession;
@@ -59,21 +79,39 @@ describe("fabrichat spaces across runtimes", () => {
   });
 
   /**
-   * Has the starter send `event` on the manager's `stream`, checks that the
-   * request was done, and returns the address of the room it produced.
+   * Has the starter send `event` on the manager's `stream` from its reviewed
+   * start control, checks that the request was done and that the manager
+   * joined the starter to the room it produced, and returns that room's
+   * address.
    */
   async function start(
     stream: "openDirect" | "createGroup",
     event: Record<string, FabricValue> & { requestId: string },
   ): Promise<PieceAddress> {
-    await starter.send(stream, event, {
-      surface: "ChatStartSurface",
-      action: "ChatStart",
-    });
+    await starter.send(stream, event, START_ACTION);
     await harness.settle();
     expect(await starter.read(["requests", event.requestId, "status"]))
       .toBe("done");
-    return await starter.link(["requests", event.requestId, "entry", "room"]);
+    const room = await starter.link([
+      "requests",
+      event.requestId,
+      "entry",
+      "room",
+    ]);
+    // The room starts with no participants, and holds no messages whose
+    // authors it would add, so the one it lists is the starter's join. Under
+    // server execution the join is an event the served start emits, which
+    // commits in a later wave than the start's own, and `settle()` waits only
+    // for the start's; so the wait is for the room to list anyone, and the
+    // assertions then say who.
+    await harness.settleUntil(async () =>
+      (await starter.read(["participants", "length"], { piece: room })) !== 0
+    );
+    expect(await starter.read(["participants", "length"], { piece: room }))
+      .toBe(1);
+    expect(await starter.read(["participants", 0, "name"], { piece: room }))
+      .toBe("Starter");
+    return room;
   }
 
   it("lets a group room's member read it, and refuses a stranger", async () => {
@@ -86,14 +124,47 @@ describe("fabrichat spaces across runtimes", () => {
     expect(room.space).not.toBe(harness.spaceDid);
     expect(await member.read(["about", "title"], { piece: room }))
       .toBe("Team");
-    expect(await member.read(["about", "record", "kind"], { piece: room }))
-      .toBe("group");
-    expect(
-      await member.read(["about", "policy", "keepsHistory"], { piece: room }),
-    )
-      .toBe(true);
     await expect(stranger.read(["about", "title"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
+  });
+
+  it("reads a group room's message count through the manager's link, and starts a room after it", async () => {
+    // The link is part of every manager handler's declared reads, so a room
+    // started with one already listed shows that the link reaches nothing a
+    // served handler may not read.
+    await start("createGroup", {
+      requestId: "g-count",
+      title: "Counted",
+      members: [member.identity.did()],
+    });
+
+    expect(
+      await starter.read([
+        "requests",
+        "g-count",
+        "entry",
+        "room",
+        "messages",
+        "count",
+      ]),
+    ).toBe(0);
+    // The member, who started nothing, reads the same count through the
+    // starter's manager, in either posture.
+    expect(
+      await member.read([
+        "requests",
+        "g-count",
+        "entry",
+        "room",
+        "messages",
+        "count",
+      ]),
+    ).toBe(0);
+    await start("createGroup", {
+      requestId: "g-count-next",
+      title: "Counted next",
+      members: [member.identity.did()],
+    });
   });
 
   it("lets anyone read a group room made joinable by its link", async () => {
@@ -106,8 +177,28 @@ describe("fabrichat spaces across runtimes", () => {
 
     expect(await stranger.read(["about", "title"], { piece: room }))
       .toBe("Open team");
-    expect(await stranger.read(["about", "record", "kind"], { piece: room }))
-      .toBe("group");
+  });
+
+  it("lets a group room's member add a stranger from the room's add control", async () => {
+    const room = await start("createGroup", {
+      requestId: "g-add",
+      title: "Growing team",
+      members: [member.identity.did()],
+    });
+    const adding = { target: { value: stranger.identity.did() } };
+
+    // Sent as anything but the person's gesture, the add admits no one.
+    await member.send("addMember", adding, undefined, { piece: room });
+    await harness.settle();
+    await expect(stranger.read(["about", "title"], { piece: room })).rejects
+      .toThrow(`lacks READ on space ${room.space}`);
+
+    // A member admitted at creation holds OWNER, so their own add, from the
+    // room's control, admits the stranger.
+    await member.send("addMember", adding, ADD_MEMBER_ACTION, { piece: room });
+    await harness.settle();
+    expect(await stranger.read(["about", "title"], { piece: room }))
+      .toBe("Growing team");
   });
 
   it("lets a direct room's counterpart read it, and refuses a stranger", async () => {
@@ -119,75 +210,34 @@ describe("fabrichat spaces across runtimes", () => {
     expect(room.space).not.toBe(harness.spaceDid);
     expect(await member.read(["about", "kind"], { piece: room }))
       .toBe("direct");
-    expect(await member.read(["about", "record", "kind"], { piece: room }))
-      .toBe("direct");
     await expect(stranger.read(["about", "kind"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
   });
 
-  it("accepts an omitted request ID and member list on the public group stream", async () => {
-    await starter.send("createGroup", { title: "Solo conversation" }, {
-      surface: "ChatStartSurface",
-      action: "ChatStart",
+  it("lets an invited member send through the manager-created root room", async () => {
+    const refusalsBefore = await Promise.all(
+      [starter, member].map(async (session) =>
+        writeRefusals(await session.loggerCounts())
+      ),
+    );
+    await member.send("claimProfile", { name: "Invited member" }, {
+      surface: "FabriChatTestProfileSurface",
+      action: "FabriChatTestWriteProfile",
     });
+    await member.client().call("selectProfile", { path: ["memberProfile"] });
     await harness.settle();
-    const room = await starter.link(["rooms", 0, "room"]);
-    expect(await starter.read(["about", "title"], { piece: room }))
-      .toBe("Solo conversation");
-    expect(await starter.read(["about", "record", "kind"], { piece: room }))
-      .toBe("group");
-  });
-
-  it("records a refusal when an accept request omits its room", async () => {
-    await starter.send("accept", { requestId: "missing-room" });
-    await harness.settle();
-    expect(await starter.read(["requests", "missing-room", "status"]))
-      .toBe("refused");
-    expect(await starter.read(["requests", "missing-room", "reason"]))
-      .toBe("Choose a conversation to add.");
-  });
-
-  it("updates the creator's initially empty room after its counterpart sends first", async () => {
-    for (const session of [starter, member]) {
-      const surface = await session.link([
-        "profileWish",
-        "$UI",
-        "props",
-        "$cell",
-      ]);
-      await session.send(
-        "createProfile",
-        {
-          target: { value: session.label },
-        },
-        { surface: "ProfileCreateSurface", action: "CreateProfile" },
-        {
-          piece: surface,
-        },
-      );
-      await harness.settle();
-      expect(await session.read(["profileWish", "result", "name"]))
-        .toBe(session.label);
-    }
-    const room = await start("createGroup", {
-      requestId: "remote-first",
-      title: "Remote first message",
-      members: [member.identity.did()],
+    expect(await member.read(["memberPrincipal"])).toBe(member.identity.did());
+    const room = await start("openDirect", {
+      requestId: "d-member-send",
+      counterpart: member.identity.did(),
     });
-    expect(await starter.read(["messages", "count"], { piece: room })).toBe(0);
-    expect(
-      await starter.client().call("viewText", {
-        path: ["requests", "remote-first", "entry", "room", "$UI"],
-      }),
-    ).toContain("Start the conversation.");
     expect(await member.read(["canSend"], { piece: room })).toBe(true);
-    const body = "The invited member speaks first";
     await member.send(
       "sendMessage",
       {
-        requestId: "remote-first-message",
+        requestId: "invited-message",
         version: {
-          body,
+          body: "A message from the invited member",
           sentAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
         },
       },
@@ -195,27 +245,26 @@ describe("fabrichat spaces across runtimes", () => {
       { piece: room },
     );
     await harness.settle();
-    const author = await member.link([
-      "messages",
-      "latest",
-      "messages",
-      0,
-      "authorProfile",
-    ], { piece: room });
-    const selectedProfile = await member.link(["profileWish", "result"]);
-    expect(author).toEqual(selectedProfile);
-    expect(await starter.read(["name"], { piece: author })).toBe(member.label);
     expect(await member.read(["messages", "count"], { piece: room })).toBe(1);
-    expect(await starter.read(["messages", "count"], { piece: room })).toBe(1);
     expect(
       await starter.read(["messages", "latest", "messages", 0, "body"], {
         piece: room,
       }),
-    ).toBe(body);
+    ).toBe("A message from the invited member");
     expect(
-      await starter.client().call("viewText", {
-        path: ["requests", "remote-first", "entry", "room", "$UI"],
-      }),
-    ).toContain(body);
+      await member.link([
+        "messages",
+        "latest",
+        "messages",
+        0,
+        "authorProfile",
+      ], { piece: room }),
+    ).toEqual(await member.link(["memberProfile"]));
+    const refusalsAfter = await Promise.all(
+      [starter, member].map(async (session) =>
+        writeRefusals(await session.loggerCounts())
+      ),
+    );
+    expect(refusalsAfter).toEqual(refusalsBefore);
   });
 });

@@ -14,11 +14,13 @@ import {
   type IngestRegistration,
   isValidPartition,
   journalCell,
+  latestCell,
   MAX_BATCH,
   peekMintRequest,
   processIngest,
   saveRegistration,
   verifyIngestSecret,
+  writeLatest,
 } from "./ingest.utils.ts";
 
 // Golden cell id for cause "location/2026-07-01" — pins the cross-repo cell
@@ -136,6 +138,44 @@ describe("ingest journal sink", () => {
     const cell = journalCell(runtime, reg(), "1999-01-01");
     await cell.sync();
     expect(cell.get()).toBeUndefined();
+  });
+
+  it("writeLatest: fills an empty cell, replaces a superseded record, and mints the mark", async () => {
+    const r = reg({ causePrefix: "gmail-push", sink: "latest" });
+    const newer = (
+      current: Record<string, unknown>,
+      next: Record<string, unknown>,
+    ) => (next.seq as number) > (current.seq as number);
+
+    expect(await writeLatest(runtime, r, { seq: 1 }, newer)).toBe(true);
+    expect(await writeLatest(runtime, r, { seq: 2 }, newer)).toBe(true);
+
+    const cell = latestCell(runtime, r);
+    await cell.sync();
+    expect(cell.get()).toEqual({ seq: 2 });
+    const marks = ingestMarks(space, cell.getAsNormalizedFullLink().id);
+    expect(marks.length).toBeGreaterThan(0);
+    expect(markType(marks[0])).toBe(CFC_ATOM_TYPE.ExternalIngest);
+    expect(marks[0]).toMatchObject({ channel: space, audience: "install-1" });
+  });
+
+  it("writeLatest: keeps the record already there when the new one does not supersede it", async () => {
+    const r = reg({ causePrefix: "gmail-push", sink: "latest" });
+    const newer = (
+      current: Record<string, unknown>,
+      next: Record<string, unknown>,
+    ) => (next.seq as number) > (current.seq as number);
+    await writeLatest(runtime, r, { seq: 2 }, newer);
+    const cell = latestCell(runtime, r);
+    const marksBefore = ingestMarks(space, cell.getAsNormalizedFullLink().id);
+
+    expect(await writeLatest(runtime, r, { seq: 1 }, newer)).toBe(false);
+
+    await cell.sync();
+    expect(cell.get()).toEqual({ seq: 2 });
+    expect(ingestMarks(space, cell.getAsNormalizedFullLink().id)).toEqual(
+      marksBefore,
+    );
   });
 
   it("distinct partitions land in distinct cells", async () => {
@@ -350,6 +390,48 @@ describe("ingest journal sink", () => {
     const cell = journalCell(runtime, r, "2026-07-05");
     await cell.sync();
     expect(cell.get()).toEqual([{ point_id: "a" }, { point_id: "b" }]);
+  });
+
+  describe("a write addressed through a space", () => {
+    const body = JSON.stringify({
+      partition: "2026-07-06",
+      records: [{ point_id: "a" }],
+    });
+
+    it("returns 200 when the space is the one the channel writes into", async () => {
+      const { r, secret } = await savedReg({ id: "ing_addressed" });
+
+      const res = await processIngest(
+        runtime,
+        space,
+        r.id,
+        secret,
+        body,
+        undefined,
+        r.space,
+      );
+
+      expect(res.status).toBe(200);
+    });
+
+    it("returns the 401 of an unknown channel for any other space, and writes nothing", async () => {
+      const { r, secret } = await savedReg({ id: "ing_elsewhere" });
+
+      const res = await processIngest(
+        runtime,
+        space,
+        r.id,
+        secret,
+        body,
+        undefined,
+        "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+      );
+
+      expect(res).toEqual({ status: 401, body: { error: "Invalid request" } });
+      const cell = journalCell(runtime, r, "2026-07-06");
+      await cell.sync();
+      expect(cell.get()).toBeUndefined();
+    });
   });
 
   it("processIngest: hostile / missing partition -> 400, no write", async () => {

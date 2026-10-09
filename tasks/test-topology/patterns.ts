@@ -21,6 +21,7 @@ import {
   fileSuite,
   type Invocation,
   type Location,
+  reachedByChange,
   type Suite,
   unavailableFrom,
 } from "./suite.ts";
@@ -149,7 +150,23 @@ async function patternIntegrationSuites(
         unavailable: oppositeLane.enabled ? on.unavailable : [],
       }],
     }),
-  ];
+  ].map((suite) => ({
+    ...suite,
+    unitsForChange(changed: ReadonlySet<string>) {
+      // Catalog conflict and receipt behavior is exercised by the compiled
+      // Home integration, including cases the authored test cannot observe.
+      const catalogChanged = reachedByChange([
+        `${packageDir}/system/home.tsx`,
+        `${packageDir}/system/shared-space-catalog.ts`,
+      ], changed);
+      return suite.units.filter((unit) =>
+        changed.has(unit) ||
+        (catalogChanged &&
+          unit ===
+            `${packageDir}/integration/home-shared-space-catalog.test.ts`)
+      );
+    },
+  }));
 }
 
 /**
@@ -245,9 +262,6 @@ async function patternUnitSuite(root: string): Promise<Suite> {
     unavailable: [],
     // Each file is one identity, so a unit holds nothing to leave out.
     whole: units,
-    // Every file runs in one pool, which marks its units as begun before it
-    // compiles their programs.
-    processes: new Map(units.map((unit) => [unit, "pool"])),
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "pattern" || record.test.s !== "patterns") {
@@ -276,7 +290,6 @@ async function patternUnitSuite(root: string): Promise<Suite> {
         ],
         cwd: context.root,
         env: coverageEnv(context, "pattern-unit"),
-        process: "pool",
       }];
     },
   };

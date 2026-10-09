@@ -38,6 +38,7 @@ import {
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  type SessionAdmissibleMessage,
   type SessionEffectMessage,
   type SessionHolding,
   type SessionOpenAuthMetadata,
@@ -104,7 +105,23 @@ export type Transport = {
   /** Whether this transport can exchange negotiated compression envelopes. */
   readonly supportsMessageCompression?: boolean;
 
+  /**
+   * Hands `payload` to the connection, opening one first when there is none.
+   *
+   * Rejects with an error named `ConnectionError` (see `connectionError()`)
+   * when the connection was lost or could not be opened before the write was
+   * confirmed. The payload may still have reached the peer, so the request
+   * has no verdict either way. The client keeps a commit rejected that way
+   * for replay on the next connection, so the transport must report the same
+   * loss to its close receiver, which starts the reconnect that replays it;
+   * `reset()` and `close()` are the exceptions, as the client calls them
+   * itself. A transport whose write of this very payload failed on an open
+   * connection rejects with `writeFailedError()` instead, so that the client
+   * stops replaying a commit whose own write keeps failing. Any other
+   * rejection fails the request with that error.
+   */
   send(payload: string): Promise<void>;
+
   close(): Promise<void>;
 
   /**
@@ -155,6 +172,10 @@ export type ConnectionState =
 export type MountOptions = {
   /** Require the space's complete persisted custom-root intent. */
   genesisRoot?: GenesisRoot;
+
+  /** Require the space's sealed declared kind. */
+  spaceKind?: string;
+
   sessionId?: string;
   seenSeq?: number;
   sessionToken?: string;
@@ -172,6 +193,26 @@ export type MountOptions = {
    * a resumed session is bounded exactly as the first open was. */
   readCeiling?: SessionReadCeiling;
 };
+
+/**
+ * The kind a space's genesis commit declares, as a `session.open` result
+ * reported it: `kind` is absent when the genesis commit declares none, or when
+ * the server does not advertise `spaceKind` and so reports none.
+ */
+export type DeclaredSpaceKind = { readonly kind?: string };
+
+/**
+ * What `result`, a `session.open` result, says of the kind the space's genesis
+ * commit declares, or `undefined` when it says nothing either way: a result
+ * for a space with no history reports no kind, whatever its genesis commit
+ * will declare.
+ */
+function declaredSpaceKindOf(
+  result: SessionOpenResult,
+): DeclaredSpaceKind | undefined {
+  if (result.spaceKind !== undefined) return { kind: result.spaceKind };
+  return result.serverSeq > 0 ? {} : undefined;
+}
 
 export type SessionOpenAuth = {
   invocation: FabricPlainObject;
@@ -278,6 +319,25 @@ type PresenceRoomState = {
 
   /** Settles when the relay has responded to the current join. */
   joined: Promise<void>;
+};
+
+/**
+ * A commit a session has issued and not yet seen answered, kept for replay on
+ * the next connection while its outcome is unknown.
+ */
+type OutstandingCommit = {
+  /** The commit, sent unchanged on every attempt. */
+  commit: ClientCommit;
+
+  /** Settles with the server's verdict on the commit. */
+  pending: PromiseWithResolvers<AppliedCommit>;
+
+  /**
+   * How many attempts failed because the commit's own write failed on an open
+   * connection. The client stops replaying the commit once this reaches
+   * `MAX_COMMIT_WRITE_FAILURES`.
+   */
+  writeFailures?: number;
 };
 
 export type WatchMutationResult = {
@@ -428,6 +488,11 @@ export class Client {
    */
   #stateChanged: PromiseWithResolvers<void> | null = null;
 
+  /** Observers of `session/admissible`, as `subscribeAdmissible()` added. */
+  #admissibleObservers = new Set<
+    (space: string, principal: string) => void
+  >();
+
   readonly #transport: Transport;
 
   private constructor(
@@ -475,6 +540,21 @@ export class Client {
    */
   delivered(): Promise<void> {
     return this.#transport.delivered?.() ?? Promise.resolve();
+  }
+
+  /**
+   * Calls `observer` with each `session/admissible` the server sends: the
+   * space it refused `principal` on this client, which a `session.open`
+   * would now be admitted to. The notice is a hint, and grants nothing until
+   * a session opens. Returns the function that ends the subscription.
+   */
+  subscribeAdmissible(
+    observer: (space: string, principal: string) => void,
+  ): () => void {
+    this.#admissibleObservers.add(observer);
+    return () => {
+      this.#admissibleObservers.delete(observer);
+    };
   }
 
   async close(): Promise<void> {
@@ -542,6 +622,8 @@ export class Client {
       options.actingAs,
       options.readCeiling,
       options.genesisRoot,
+      options.spaceKind,
+      declaredSpaceKindOf(result),
     );
     this.#spaces.add(session);
     return session;
@@ -614,6 +696,7 @@ export class Client {
         (error as Error & { aclRevision?: number }).aclRevision =
           result.error.aclRevision;
       }
+      serverVerdicts.add(error);
       throw error;
     }
     return result.ok as Result;
@@ -679,6 +762,13 @@ export class Client {
     ) {
       throw protocolError(
         "memory server does not support a custom root intent",
+      );
+    }
+    if (
+      session.spaceKind !== undefined && this.serverFlags?.spaceKind !== true
+    ) {
+      throw protocolError(
+        "memory server does not seal a space's declared kind",
       );
     }
     // A drop while an open is being signed leaves it with a challenge of
@@ -1185,6 +1275,16 @@ export class Client {
       }
       return;
     }
+    if (isSessionAdmissible(message)) {
+      for (const observer of [...this.#admissibleObservers]) {
+        try {
+          observer(message.space, message.principal);
+        } catch (cause) {
+          console.error("session-admissible subscriber threw:", cause);
+        }
+      }
+      return;
+    }
     if (isPresencePush(message)) {
       for (const session of this.#spaces) {
         if (
@@ -1362,10 +1462,7 @@ export class Client {
 }
 
 export class SpaceSession {
-  #outstandingCommits = new Map<number, {
-    commit: ClientCommit;
-    pending: PromiseWithResolvers<AppliedCommit>;
-  }>();
+  #outstandingCommits = new Map<number, OutstandingCommit>();
   #watchSpecs: WatchSpec[] = [];
   #viewInterests: ViewInterest[] = [];
   #viewsDirty = false;
@@ -1462,6 +1559,8 @@ export class SpaceSession {
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
   readonly #genesisRoot?: GenesisRoot;
+  readonly #spaceKindIntent?: string;
+  #declaredSpaceKind?: DeclaredSpaceKind;
 
   constructor(
     client: Client,
@@ -1474,6 +1573,8 @@ export class SpaceSession {
     actingAs?: "space-owner",
     readCeiling?: SessionReadCeiling,
     genesisRoot?: GenesisRoot,
+    spaceKindIntent?: string,
+    declaredSpaceKind?: DeclaredSpaceKind,
   ) {
     this.#client = client;
     this.#auth = auth;
@@ -1483,6 +1584,8 @@ export class SpaceSession {
     this.#genesisRoot = genesisRoot === undefined
       ? undefined
       : cloneIfNecessary(genesisRoot, { frozen: false });
+    this.#spaceKindIntent = spaceKindIntent;
+    this.#declaredSpaceKind = declaredSpaceKind;
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
     this.#serverSeq = serverSeq;
@@ -1504,6 +1607,17 @@ export class SpaceSession {
 
   get serverSeq(): number {
     return this.#serverSeq;
+  }
+
+  /**
+   * What this session's latest open told it of the kind the space's genesis
+   * commit declares, or `undefined` when that open told it nothing either
+   * way, having come before the space had any history. A session that opens
+   * on a space with no history stays open as the space's genesis commits, and
+   * learns its kind only by opening again.
+   */
+  get declaredSpaceKind(): DeclaredSpaceKind | undefined {
+    return this.#declaredSpaceKind;
   }
 
   /** The error this session was terminated with, or undefined while it is open.
@@ -2914,6 +3028,9 @@ export class SpaceSession {
       ...(this.#genesisRoot === undefined
         ? {}
         : { genesisRoot: this.#genesisRoot }),
+      ...(this.#spaceKindIntent === undefined
+        ? {}
+        : { spaceKind: this.#spaceKindIntent }),
       sessionId: this.#sessionId,
       seenSeq: this.#serverSeq,
       sessionToken: this.#sessionToken,
@@ -2946,6 +3063,7 @@ export class SpaceSession {
     const sessionReplaced = sessionChanged || restored.resumed !== true;
     this.#sessionId = restored.sessionId;
     this.#sessionToken = restored.sessionToken ?? this.#sessionToken;
+    this.#declaredSpaceKind = declaredSpaceKindOf(restored);
     this.#noteResult(restored.serverSeq);
 
     if (sessionReplaced) {
@@ -2999,10 +3117,7 @@ export class SpaceSession {
 
   #sendOutstandingCommit(
     localSeq: number,
-    pendingCommit: {
-      commit: ClientCommit;
-      pending: PromiseWithResolvers<AppliedCommit>;
-    },
+    pendingCommit: OutstandingCommit,
     options: {
       throwOnConnectionError?: boolean;
     } = {},
@@ -3034,6 +3149,25 @@ export class SpaceSession {
         }
       } catch (error) {
         if (isConnectionError(error) || isSessionRevokedError(error)) {
+          // A commit whose own write fails on one new connection after
+          // another is at fault itself, and replaying it again would only take
+          // the next connection down with it. It is rejected with the write's
+          // error rather than a `ConnectionError`, which a caller would retry.
+          if (isOwnWriteFailure(error)) {
+            pendingCommit.writeFailures = (pendingCommit.writeFailures ?? 0) +
+              1;
+          }
+          if ((pendingCommit.writeFailures ?? 0) >= MAX_COMMIT_WRITE_FAILURES) {
+            if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
+              this.#outstandingCommits.delete(localSeq);
+            }
+            const cause = (error as Error).cause;
+            pendingCommit.pending.reject(
+              cause instanceof Error
+                ? cause
+                : new Error((error as Error).message, { cause }),
+            );
+          }
           if (options.throwOnConnectionError) {
             throw error;
           }
@@ -3381,17 +3515,49 @@ export const loopback = (server: Server): Transport => {
   };
 };
 
-const toConnectionError = (error?: Error): Error => {
-  const connectionError = new Error(
-    error?.message ?? "memory transport closed",
-    error ? { cause: error } : undefined,
-  );
-  connectionError.name = "ConnectionError";
-  return connectionError;
+/**
+ * Returns an error named `ConnectionError`: the name the client reads as a
+ * request that reached no verdict because its connection was lost or could not
+ * be opened. A transport rejects a send with one under the conditions
+ * `Transport.send()` describes.
+ */
+export const connectionError = (message: string, cause?: unknown): Error => {
+  const error = new Error(message, cause === undefined ? undefined : { cause });
+  error.name = "ConnectionError";
+  return error;
 };
 
+/**
+ * Like `connectionError()`, except that it also marks the payload's own write
+ * as what failed, on a connection that was open until then, as opposed to a
+ * payload lost because the connection closed under it. The client counts such
+ * failures against a commit, and stops replaying a commit whose own write has
+ * failed `MAX_COMMIT_WRITE_FAILURES` times.
+ */
+export const writeFailedError = (message: string, cause?: unknown): Error =>
+  Object.assign(connectionError(message, cause), { ownWriteFailed: true });
+
+/**
+ * How many attempts may fail because one commit's own write failed before the
+ * client stops replaying it and rejects it with the write's error.
+ */
+const MAX_COMMIT_WRITE_FAILURES = 5;
+
+const isOwnWriteFailure = (error: unknown): boolean =>
+  (error as { ownWriteFailed?: unknown } | null)?.ownWriteFailed === true;
+
+const toConnectionError = (error?: Error): Error =>
+  connectionError(error?.message ?? "memory transport closed", error);
+
+/**
+ * The errors `Client.request()` built from a server response. Each is the
+ * server's verdict on a request, whatever its message says, so none of them is
+ * a lost connection.
+ */
+const serverVerdicts = new WeakSet<Error>();
+
 const isConnectionError = (error: unknown): boolean =>
-  error instanceof Error &&
+  error instanceof Error && !serverVerdicts.has(error) &&
   (error.name === "ConnectionError" ||
     error.message.includes("transport closed") ||
     error.message.includes("disconnect"));
@@ -3547,6 +3713,12 @@ const isSessionRevoked = (
     typeof sessionId === "string" &&
     (reason === "taken-over" || reason === "unauthorized");
 };
+
+const isSessionAdmissible = (
+  message: unknown,
+): message is SessionAdmissibleMessage =>
+  isPlainObject(message) && message.type === "session/admissible" &&
+  typeof message.space === "string" && typeof message.principal === "string";
 
 const isPresencePush = (
   message: unknown,

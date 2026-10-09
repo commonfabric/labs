@@ -265,11 +265,9 @@ strings — resolve the real viewer and render people with the identity componen
 
 ### Resolve the current viewer
 
-An action or handler reads its authenticated actor with `currentPrincipal()`
-([Handling Events](../concepts/action.md#who-the-action-acts-for)). A computation
-can read the demanding viewer with `viewerPrincipal()`; the result is scoped
-per user and carries `User(viewer)` confidentiality. A pattern body cannot read
-either identity. See [pattern space membership](../../features/pattern-space-membership.md).
+A pattern body and a `computed()` cannot ask "what is my DID". Only an action or
+a handler can, with `currentPrincipal()`, and that returns the user the event
+came from ([Handling Events](../concepts/action.md#who-the-action-acts-for)).
 To show the viewer, resolve their profile with `wish` (it reads the active
 user's home space):
 
@@ -419,7 +417,8 @@ const inviteBaker = handler<
   form only the runtime writes. A pattern cannot write that form for anyone but
   the user it runs for, so a DID it returns is one that user's runtime put
   there. `undefined` means no verified single principal: refuse whatever needs
-  one. A label that cannot be read throws rather than returning `undefined`.
+  one. A label the caller cannot observe, such as one in a space it cannot
+  read, also returns `undefined`, as a missing one does.
 - It reads the label, and no contents of the value beyond the link pointers
   needed to reach it. Call it in a handler, including on a cell the event
   names, or in a `computed()` or `lift()`, where it updates when the label
@@ -429,6 +428,16 @@ const inviteBaker = handler<
   `ownerPrincipal` and it is the user the pattern runs for.
 - A claim binds honest runtimes. The memory server does not check one, so it
   does not hold against a modified client.
+- `principalsOf(target, kind)` returns every principal the label attests: `[]`
+  for none, several for a contested one. Read it where a value nobody attests
+  is fine but one someone else attests is not.
+- A field that links a document has its own label, separate from the linked
+  document's. `principalOf(field, kind, { label: "written" })` reads the
+  field's claim of `kind`, such as who wrote the link, while the default reads
+  the linked document's claim of `kind`.
+- `spaceAccessOf(target, principal)` returns another principal's level, so a
+  handler can tell whether the principal a label names is still a member.
+  It narrows no computation to per-user scope, as `spaceAccess(target)` does.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 
@@ -441,9 +450,9 @@ const inviteBaker = handler<
 
 ### Constraints to design within (today)
 
-- `currentPrincipal()` names the acting user in a handler; `viewerPrincipal()`
-  names the demanding viewer in a computation. Neither is available in a
-  pattern body. Resolve `#profile` for the viewer's presentation.
+- No "who is viewing" read outside an action or handler — `currentPrincipal()`
+  names the acting user there, and elsewhere identity is implicit via scope +
+  `#profile`.
 - No list-all-profiles — build rosters by join (each viewer contributes their own cell).
 - Cross-space profile reads resolve (CT-1667/1687) — badge every participant from
   the profile cell they contributed on join. Snapshot + `cf-avatar` is the
@@ -722,14 +731,15 @@ const addMember = handler<
 ```
 
 Both calls work only in a handler whose event is a trusted gesture, a person's
-action on a rendered surface; anywhere else, or for an event without one, they
-throw. The person who sent the event must hold `OWNER` in the space, which
-may not be their own Home space, and `principal` must be a DID other than
-theirs, the space's own, and `"*"`. A change that would leave the space with
-no concrete `OWNER` is refused. Every refusal throws. A throw the handler lets
-escape drops its whole transaction, so its other writes are dropped too; the
-call throws before staging anything, so a handler that catches the throw has
-changed nothing for that call.
+action on a rendered surface or on a native host's reviewed control
+([host embedding, §11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures));
+anywhere else, or for an event without one, they throw. The person who sent the
+event must hold `OWNER` in the space, which may not be their own Home space,
+and `principal` must be a DID other than theirs, the space's own, and `"*"`. A
+change that would leave the space with no concrete `OWNER` is refused. Every
+refusal throws. A throw the handler lets escape drops its whole transaction, so
+its other writes are dropped too; the call throws before staging anything, so a
+handler that catches the throw has changed nothing for that call.
 
 Granting a level someone already holds, or revoking an entry that is not
 there, does nothing, so a handler that runs again for the same event is safe.
@@ -737,8 +747,45 @@ The change to the access list commits on its own, just before the handler's
 other writes, so if those fail the change still stands; the handler running
 again for the same event repairs that.
 
-Both calls throw on a serving runtime for now.
+Both calls work in a handler the serving loop runs as in one a client runs.
+There the change commits when the serving loop commits the handler's run, still
+ahead of the handler's other writes. A refusal the call itself cannot see fails
+the whole run when the run seals, as a throw the handler lets escape does. A
+run the serving loop withdraws before that commit changes nothing, and its
+event runs again; that is also what a change to the list made after the run
+sealed leads to. A client's speculative echo of a served handler changes
+nothing either: the served run makes the change.
 [`space-access-changes.md`](../../features/space-access-changes.md) has the
+details.
+
+### Naming a space
+
+`spaceOf(target)` returns the DID of the space `target`'s value lives in: the
+pattern's own space for a cell there, or a new one for a child a handler just
+created with `inSpace()`. Write it into data that has to name a space, such as
+an invitation, and have the reader check it with `isWellFormedDID()`.
+
+```tsx
+// Shown at module scope.
+const Bakery = pattern<{ name: string }>(({ name }) => ({ name }));
+
+const openBakery = handler<
+  { baker: DID },
+  { invitations: Writable<{ space: DID; baker: DID }[]> }
+>(({ baker }, { invitations }) => {
+  const bakery = Bakery.inSpace(undefined, {
+    grants: { [baker]: "WRITE" as const },
+  })({ name: "Cruller Corner" });
+  const space = spaceOf(bakery);
+  if (space !== undefined) invitations.push({ space, baker });
+});
+```
+
+Call it where `spaceAccess(target)` can be called. It returns `undefined` for
+a `target` of `undefined`, and throughout a run that names a space `inSpace()`
+has not resolved yet: the runtime creates the space once that run ends,
+discards what it wrote, and runs it again, and that next run gets the DID.
+[`space-access.md`](../../features/space-access.md#the-spaces-own-did) has the
 details.
 
 ## Mapping Shared Lists

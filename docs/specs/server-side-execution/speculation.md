@@ -80,6 +80,19 @@ currency. The existing overlay and retirement rules below still apply.
 - Pure structural nodes: freely.
 - Handlers: run locally on fire, writes go to the overlay (events.md §2);
   the committed artifact is the event only.
+- A handler that names an `inSpace(...)` target whose allocation record
+  does not exist yet does not speculate. The client creates no space for
+  the name, since the serving runtime's run creates the one its record
+  names, and a space the client created would differ from it and be named
+  by nothing (protocol.md §2b). The echo withdraws instead: its
+  transaction aborts, the follow-up events it sent drop, and the event's
+  served consequence renders when it arrives. The cost is that such a
+  handler, a profile's or a room's creation among them, shows no preview
+  of its result before the server's consequence arrives. A caller's
+  settle callback still settles from that consequence (events.md §4), and
+  reads the handling's receipt address off the withdrawn echo's
+  transaction as it would off a completed one. Once the record exists,
+  the handler speculates as any other.
 - Effectful nodes (`fetch*`, `generate*`, `sqlite*`): NEVER execute
   client-side. A speculative read of such a node returns its last
   committed result (read-through). If inputs changed so the memo key
@@ -213,9 +226,27 @@ currency. The existing overlay and retirement rules below still apply.
   `executor-dprime-w0.test.ts` ("OW51 refusal re-trigger"),
   mutation-verified on the clean-bit seam.
 
+  **A handler that resolves a cell through the dead-end waits for the
+  document.** `resolveAsCell()` hands back a cell rather than a value,
+  so nothing refuses it, and the cell it would hand back names the
+  document the walk stopped at, not the one the chain reaches past it:
+  a served handler keeping or sending that cell passes on the wrong
+  link, which a labeled slot then refuses. In a handler the run is
+  withdrawn instead (`dispatchedHandlerNotRun`) while that document's
+  load is in flight, and runs again once it lands, as a handler reading
+  the label of a document still loading is
+  ([`principal-of.md`](../../features/principal-of.md)). A walk that
+  crossed no hop, one starting at a handle minted from a stored link,
+  asks for its dead-end document itself, as a same-space hop's target
+  is asked for, so the withdrawal has a load to wait on. Pinned in
+  `packages/runner/test/executor-cross-space.test.ts` (a served
+  handler resolving a foreign cell through a document the serving
+  runtime has not loaded keeps the document the chain reaches).
+
   Implementation: `link-resolution.ts` (`pendingHopDoc` /
   `viaLinkHop`), `schema.ts`'s lazy branch, `schema-view.ts`
-  (`UnresolvedInputError`); pinned in
+  (`UnresolvedInputError`), `cell.ts`'s `resolveAsCell()` with
+  `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
   `packages/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
   control still flows; its case has no previous result, so it does not

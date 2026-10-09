@@ -64,7 +64,7 @@ describe("modern-cell-rep link wedge", () => {
       expect(isLinkRef(link)).toBe(true);
       expect(linkRefPayload(link).id).toMatch(/^of:/);
 
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 
@@ -84,7 +84,7 @@ describe("modern-cell-rep link wedge", () => {
       expect(isLinkRef(link)).toBe(true);
       expect(linkRefPayload(link).id).toMatch(/^of:/);
 
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 
@@ -106,7 +106,7 @@ describe("modern-cell-rep link wedge", () => {
       );
       // The source cell's value is a link to the target.
       source.set(target);
-      await tx.commit();
+      await tx.commit().settled;
 
       const readTx = runtime.edit();
       const sourceRead = runtime.getCell<string>(

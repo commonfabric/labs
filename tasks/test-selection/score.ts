@@ -26,6 +26,7 @@ import {
   CATCH_WEIGHT_PR,
   CHURN_HALF_LIFE_DAYS,
   CHURN_WINDOW_DAYS,
+  COMMIT_REACH_DAYS,
   COST_WINDOW_DAYS,
   ENVIRONMENTAL_MIN_SOURCES,
   FLAKE_COMMIT_REACH,
@@ -143,13 +144,6 @@ export function emptyState(): IdentityState {
     pendingMain: [],
   };
 }
-
-/**
- * How long a commit stays reachable: how late a re-run of it may arrive
- * and still be recognized as one. Past this a repeated commit is judged
- * as though it were new, which errs toward calling its failure a catch.
- */
-export const COMMIT_REACH_DAYS = 30;
 
 /** Days between two "yyyy-mm-dd" days, `later` minus `earlier`. */
 export function daysBetween(earlier: string, later: string): number {

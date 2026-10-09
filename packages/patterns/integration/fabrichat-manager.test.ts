@@ -1,735 +1,302 @@
-/** Tests FabriChat provisioning and system-owned spaces against enforced memory. */
-import { describe, it } from "@std/testing/bdd";
+/**
+ * The real FabriChat manager, creating rooms in spaces of their own, each its
+ * space's root, in a space that declares itself a `fabrichat-room`. Which
+ * space a room lives in, what that space's root is, and what kind the space
+ * declares are things a pattern can't read, so they are checked here, against
+ * a runtime and storage of the test's own; `../fabrichat/creation.test.tsx`
+ * covers the rest of what the manager does with the rooms it creates.
+ */
+
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl } from "@std/path";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+
 import { Identity } from "@commonfabric/identity";
-import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
-import * as MemoryClient from "@commonfabric/memory/v2/client";
-import * as MemoryServer from "@commonfabric/memory/v2/server";
-import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { aclDocId } from "@commonfabric/memory/acl";
 import {
-  ACLManager,
   type Cell,
+  inSpaceRootCause,
   isCell,
   Runtime,
-  UI,
-  VIEWS,
 } from "@commonfabric/runner";
 import {
-  cfcLabelViewForCell,
   markRendererTrustedEvent,
+  reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
-  type SessionFactory,
-  StorageManager,
-} from "@commonfabric/runner/storage/v2";
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "@commonfabric/runner/storage/cache.deno";
 
-/** Reads index membership without demanding the linked room's reactive views. */
-const ROOM_INDEX_SCHEMA = {
+const signer = await Identity.fromPassphrase("fabrichat-manager");
+const home = signer.did();
+
+// Stand-ins for principals, each a base58btc key as a principal's is.
+const BOB = "did:key:z6MkBob";
+const CAROL = "did:key:z6MkCaro1";
+
+const MANAGER_PATH = fromFileUrl(
+  new URL("../fabrichat/manager.tsx", import.meta.url),
+);
+
+// The patterns package, which the manager's imports reach across.
+const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
+
+const RESULT_CAUSE = "fabrichat manager";
+
+// The reviewed action a start is admitted from, as
+// `../fabrichat/schemas.tsx` names it.
+const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
+
+/**
+ * `event` as a click on the manager's start control delivers it: carrying the
+ * reviewed action, and marked as the renderer marks a click it delivers.
+ */
+const startClick = (
+  event: Record<string, unknown>,
+): Record<string, unknown> => {
+  const click = {
+    type: "click",
+    ...event,
+    provenance: reviewedActionProvenance("dom", START_ACTION),
+  };
+  markRendererTrustedEvent(click);
+  return click;
+};
+
+// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
+// because a room's participants link only a document that carries a label.
+const profileSchema = {
+  type: "object",
+  properties: { name: { type: "string" } },
+  ifc: { addIntegrity: ["fabrichat-test-profile"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
+
+// Reads a room's participants as links, not copies.
+const participantListSchema = {
+  type: "array",
+  items: { type: "unknown", asCell: ["cell"] },
+  // deno-lint-ignore no-explicit-any
+} as any;
+
+// Reads an index entry with its room as a link, not a copy.
+const entryListSchema = {
   type: "array",
   items: {
     type: "object",
     properties: {
       room: { type: "unknown", asCell: ["cell"] },
+      kind: { type: "string" },
+      counterpart: { type: "string" },
     },
   },
-} as const;
+  // deno-lint-ignore no-explicit-any
+} as any;
 
-/** Supplies the explicit principal expected by the in-process loopback server. */
-function testPrincipalSessionOpenAuthFactory(
-  signer?: Signer,
-): MemoryClient.SessionOpenAuthFactory {
-  return (_space, _session, context) => ({
-    invocation: { aud: context.audience, challenge: context.challenge.value },
-    authorization: { principal: signer?.did() },
+describe("fabrichat-manager", () => {
+  let server: ReturnType<typeof newLoopbackServer>;
+  let storageManager: EmulatedStorageManager;
+  let runtime: Runtime;
+
+  beforeEach(() => {
+    server = newLoopbackServer();
+    storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
   });
-}
 
-class PrivateStorageManager extends StorageManager {
-  constructor(server: MemoryServer.Server, identity: Identity = creator) {
-    const factory: SessionFactory = {
-      supportsAclBootstrap: true,
-      async create(
-        space: MemorySpace,
-        signer?: Signer,
-        options: MemoryClient.MountOptions = {},
-      ) {
-        const client = await MemoryClient.connect({
-          transport: MemoryClient.loopback(server),
-        });
-        const session = await client.mount(
-          space,
-          options,
-          testPrincipalSessionOpenAuthFactory(signer),
-        );
-        return { client, session };
-      },
+  afterEach(async () => {
+    // Let the rooms the tests created finish starting before the replicas
+    // close under them.
+    await runtime?.idle();
+    await storageManager?.synced();
+    await runtime?.dispose();
+    await storageManager?.close();
+    await server?.close();
+  });
+
+  // Starts the manager, and returns a way to send it an event and wait for
+  // the event's effect.
+  const startManager = async () => {
+    // The manager's core, given a profile of its own: `#profile` resolves
+    // nothing here, and a manager starts no chat without one.
+    const program = {
+      ...await resolveLocalProgram(
+        (resolver) => runtime.harness.resolve(resolver),
+        { main: MANAGER_PATH, root: PATTERNS },
+      ),
+      mainExport: "FabriChatManagerCore",
     };
-    super({ as: identity, memoryHost: new URL("memory://") }, factory);
-  }
-}
-
-/** Finds the live start control without replacing its handler bindings. */
-function findStartControl(value: unknown): Cell<unknown> | undefined {
-  if (isCell(value)) return findStartControl(value.get());
-  if (Array.isArray(value)) {
-    for (const child of value) {
-      const found = findStartControl(child);
-      if (found) return found;
-    }
-    return undefined;
-  }
-  if (!value || typeof value !== "object") return undefined;
-  const node = value as { name?: string; children?: unknown; props?: unknown };
-  const children = isCell(node.children) ? node.children.get() : node.children;
-  if (
-    node.name === "cf-button" && Array.isArray(children) &&
-    children.includes("Start conversation")
-  ) {
-    const props = isCell(node.props) ? node.props.get() : node.props;
-    return (props as { onClick: Cell<unknown> }).onClick;
-  }
-  return findStartControl(children);
-}
-
-const creator = await Identity.fromPassphrase("private-space-creator");
-
-describe("FabriChat manager", () => {
-  it("resumes a FabriChat creation and publishes its private room only after granting members", async () => {
-    const server = new MemoryServer.Server({
-      authorizeSessionOpen: authorizeLoopbackSessionOpen,
-      sessionOpenAuth: { audience: "did:key:private-manager-test" },
-      acl: { mode: "enforce" },
+    const tx = runtime.edit();
+    const pattern = await runtime.patternManager.compilePattern(program, {
+      space: home,
+      tx,
     });
-    const manager = new PrivateStorageManager(server);
-    const runtime = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager: manager,
+    const profile = runtime.getCell<{ name: string }>(
+      home,
+      "profile",
+      profileSchema,
+      tx,
+    );
+    profile.set({ name: "Tester" });
+    const resultCell = runtime.getCell<Record<string, unknown>>(
+      home,
+      RESULT_CAUSE,
+      undefined,
+      tx,
+    );
+    const manager = runtime.run(
+      tx,
+      // deno-lint-ignore no-explicit-any
+      pattern as any,
+      { myProfile: profile },
+      resultCell,
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await manager.pull();
+    const send = async (stream: string, event: Record<string, unknown>) => {
+      const sendTx = runtime.edit();
+      manager.withTx(sendTx).key(stream).send(
+        stream === "openDirect" || stream === "createGroup"
+          ? startClick(event)
+          : event,
+      );
+      expect((await sendTx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      await manager.pull();
+    };
+    const rooms = () =>
+      // deno-lint-ignore no-explicit-any
+      manager.key("rooms").asSchema(entryListSchema).get() as any[];
+    return { manager, send, rooms, profile };
+  };
+
+  it("creates each room as its space's root, at the address the space's genesis reserves for one", async () => {
+    const { send, rooms } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
     });
-    try {
-      const root = join(import.meta.dirname!, "..");
-      const program = await resolveLocalProgram(
-        (resolver) => runtime.harness.resolve(resolver),
-        { main: join(root, "fabrichat", "manager.tsx"), root },
-      );
-      const tx = runtime.edit();
-      const pattern = await runtime.patternManager.compilePattern(program, {
-        space: creator.did(),
-        tx,
-      });
-      const result = runtime.getCell<Record<string, unknown>>(
-        creator.did(),
-        "chat-manager-test",
-        pattern.resultSchema,
-        tx,
-      );
-      runtime.run(tx, pattern, {}, result);
-      const home = runtime.getCell(
-        creator.did(),
-        "chat-test-home",
-        undefined,
-        tx,
-      );
-      home.set({ chatManager: result });
-      runtime.getHomeSpaceCell(tx).key("defaultPattern").set(home);
-      runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
-      await result.pull();
-      const memberIdentity = await Identity.fromPassphrase(
-        "chat-manager-member",
-      );
-      const member = memberIdentity.did();
-      const send = async (
-        status: string,
-        requestId = "create-1",
-        members: string[] = [member, member],
-        joinableByLink?: boolean,
-      ) => {
-        const event = {
-          requestId,
-          title: "A private group",
-          members,
-          ...(joinableByLink === undefined ? {} : { joinableByLink }),
-          provenance: {
-            origin: "dom",
-            trusted: true,
-            ui: {
-              pattern: "ChatStartSurface",
-              eventIntegrity: ["ChatStartSurface"],
-              uiContractDataset: { uiAction: "ChatStart" },
-            },
-          },
-        };
-        markRendererTrustedEvent(event);
-        await result.key("createGroup").send(event);
-        await waitForCellValue(
-          runtime,
-          result.key("requests").key(requestId).key("status"),
-          (value) => value === status,
-        );
-        await manager.synced();
-        await result.pull();
-      };
-      await send("refused", "without-profile");
-      expect(result.key("rooms").get()).toHaveLength(0);
-      expect(result.key("outgoingNotices").get()).toHaveLength(0);
-      const profileSpace = await manager.createSpace({
-        [creator.did()]: "OWNER",
-      });
-      const profileTx = runtime.edit();
-      const profile = runtime.getCell(
-        profileSpace,
-        "test-profile",
-        {
-          type: "object",
-          properties: { name: { type: "string" } },
-          ifc: { addIntegrity: ["fabrichat-test-profile"] },
-        },
-        profileTx,
-      );
-      profile.set({ name: "Creator" });
-      runtime.prepareTxForCommit(profileTx);
-      expect((await profileTx.commit()).error).toBeUndefined();
-      const homeTx = runtime.edit();
-      home.withTx(homeTx).set({
-        chatManager: result,
-        profiles: [profile],
-        defaultProfile: profile,
-      });
-      expect((await homeTx.commit()).error).toBeUndefined();
-      await runtime.idle();
-      await result.pull();
-      await send("refused", "without-profile");
-      await send("refused", "invalid-member", ["did:"]);
-      expect(result.key("rooms").get()).toHaveLength(0);
-      expect(result.key("outgoingNotices").get()).toHaveLength(0);
-      await send("done");
-      expect(result.key("requests").key("create-1").key("status").get()).toBe(
-        "done",
-      );
-      await result.key("rooms").resolveAsCell().pull();
-      expect(result.key("rooms").get()).toHaveLength(1);
-      expect(result.key("outgoingNotices").get()).toHaveLength(1);
-      const room = result.key("rooms").key(0).key("room").resolveAsCell();
-      const roomSpace = room.getAsNormalizedFullLink().space;
-      expect(roomSpace).not.toBe(creator.did());
-      expect(
-        runtime.getSpaceCell(roomSpace).key("chat").resolveAsCell().equals(
-          room,
-        ),
-      )
+    const listed = rooms();
+    expect(listed.length).toBe(2);
+    for (const entry of listed) {
+      const room = entry.room.resolveAsCell();
+      const space = room.getAsNormalizedFullLink().space;
+      // Read as a host vetting an offer of the room reads it: the space's
+      // root, as its space cell links it.
+      const root = await runtime.getSpaceCell(space).key("defaultPattern")
+        .pull();
+      if (!isCell(root)) throw new Error("The room's space has no root.");
+      expect(root.space).toBe(space);
+      expect(root.getAsNormalizedFullLink().path).toEqual([]);
+      expect(root.equalLinks(runtime.getCell(space, inSpaceRootCause(space))))
         .toBe(true);
-      expect(runtime.getSpaceCell(roomSpace).key("defaultPattern").getRaw())
-        .toBeUndefined();
-      const about = room.key("about").resolveAsCell();
-      const creationRecord = about.key("record").resolveAsCell();
-      const policy = about.key("policy").resolveAsCell();
-      expect(creationRecord.getAsNormalizedFullLink().space).toBe(roomSpace);
-      expect(creationRecord.get()).toEqual({
-        kind: "group",
-        title: "A private group",
-        createdAt: about.key("createdAt").get(),
-      });
-      expect(policy.getAsNormalizedFullLink().space).toBe(roomSpace);
-      expect(policy.getAsNormalizedFullLink().id).not.toBe(
-        creationRecord.getAsNormalizedFullLink().id,
-      );
-      const maxAge = policy.key("proposedTimeMaxAgeNsec").get();
-      expect(maxAge.schemaType).toBe("FabricDurationNsec");
-      expect(maxAge.value).toBe(600_000_000_000n);
-      for (const record of [creationRecord, policy]) {
-        const label = cfcLabelViewForCell(record);
-        expect(label?.entries.flatMap((entry) => entry.label.integrity ?? []))
-          .toContainEqual({ kind: "authored-by", subject: creator.did() });
-      }
-      const observer = await MemoryClient.connect({
-        transport: MemoryClient.loopback(server),
-      });
-      const session = await observer.mount(
-        roomSpace,
-        {},
-        testPrincipalSessionOpenAuthFactory(creator),
-      );
-      const acl = await session.queryGraph({
-        roots: [{
-          id: `of:${roomSpace}`,
-          selector: { path: [], schema: false },
-        }],
-      });
-      expect(acl.entities[0]?.document?.value).toEqual({
-        [creator.did()]: "OWNER",
-        [member]: "WRITE",
-      });
-      await observer.close();
-      await send("done");
-      expect(result.key("rooms").get()).toHaveLength(1);
-      const directEvent = (requestId: string) => {
-        const event = {
-          requestId,
-          counterpart: member,
-          provenance: {
-            origin: "dom",
-            trusted: true,
-            ui: {
-              pattern: "ChatStartSurface",
-              eventIntegrity: ["ChatStartSurface"],
-              uiContractDataset: { uiAction: "ChatStart" },
-            },
-          },
-        };
-        markRendererTrustedEvent(event);
-        return event;
-      };
-      await Promise.all([
-        result.key("openDirect").send(directEvent("direct-1")),
-        result.key("openDirect").send(directEvent("direct-2")),
-      ]);
-      for (const id of ["direct-1", "direct-2"]) {
-        await waitForCellValue(
-          runtime,
-          result.key("requests").key(id).key("status"),
-          (value) => value === "done",
-        );
-      }
-      await manager.synced();
-      await result.pull();
-      expect(result.key("rooms").get()).toHaveLength(2);
-      expect(result.key("outgoingNotices").get()).toHaveLength(2);
-      const direct = result.key("direct").key(member).key("room")
-        .resolveAsCell();
-      const directLink = direct.getAsNormalizedFullLink();
-      expect(await new ACLManager(runtime, directLink.space).get()).toEqual({
-        [creator.did()]: "OWNER",
-        [member]: "WRITE",
-      });
-      for (const id of ["direct-1", "direct-2"]) {
-        expect(
-          result.key("requests").key(id).key("entry").key("room")
-            .resolveAsCell().getAsNormalizedFullLink(),
-        ).toEqual(directLink);
-      }
-      await result.key("accept").send({
-        requestId: "accept-false-creator",
-        room: direct,
-        counterpart: member,
-      });
-      await waitForCellValue(
-        runtime,
-        result.key("requests").key("accept-false-creator").key("status"),
-        (value) => value === "refused",
-      );
-      await result.key("accept").send({
-        requestId: "accept-self-creator",
-        room: direct,
-      });
-      await waitForCellValue(
-        runtime,
-        result.key("requests").key("accept-self-creator").key("status"),
-        (value) => value === "refused",
-      );
-      const fixtureTx = runtime.edit();
-      const unsignedRecord = runtime.getCell(
-        directLink.space,
-        "unsigned-creator-record",
-        undefined,
-        fixtureTx,
-      );
-      const createdAt = direct.key("about").key("createdAt").get();
-      unsignedRecord.set({ kind: "direct", createdAt });
-      const invalidRooms = [
-        ["missing-creator-record", undefined],
-        ["unsigned-creator-record", unsignedRecord],
-      ] as const;
-      const invalidRoomLinks = invalidRooms.map(([id, record]) => {
-        const invalidRoom = runtime.getCell(
-          directLink.space,
-          `room-${id}`,
-          undefined,
-          fixtureTx,
-        );
-        invalidRoom.set({
-          about: {
-            kind: "direct",
-            createdAt,
-            policy: direct.key("about").key("policy").resolveAsCell(),
-            ...(record === undefined ? {} : { record }),
-          },
-        });
-        return { id, link: invalidRoom.getAsNormalizedFullLink() };
-      });
-      runtime.prepareTxForCommit(fixtureTx);
-      expect((await fixtureTx.commit()).error).toBeUndefined();
-      const recipientStorage = new PrivateStorageManager(
-        server,
-        memberIdentity,
-      );
-      const recipientRuntime = new Runtime({
-        apiUrl: new URL("https://example.com"),
-        storageManager: recipientStorage,
-      });
-      try {
-        const recipientPattern = await recipientRuntime.patternManager
-          .compilePattern(program, { space: member });
-        const recipientManager = recipientRuntime.getCell<
-          Record<string, unknown>
-        >(
-          member,
-          "recipient-chat-manager",
-          recipientPattern.resultSchema,
-        );
-        await recipientRuntime.runSynced(
-          recipientManager,
-          recipientPattern,
-          {},
-        );
-        const recipientRoom = recipientRuntime.getCellFromLink(directLink);
-        for (const { id, link } of invalidRoomLinks) {
-          await recipientManager.key("accept").send({
-            requestId: id,
-            room: recipientRuntime.getCellFromLink(link),
-          });
-          await waitForCellValue(
-            recipientRuntime,
-            recipientManager.key("requests").key(id).key("status"),
-            (value) => value === "refused",
-          );
-        }
-        await recipientManager.key("accept").send({
-          requestId: "accept-mismatched-counterpart",
-          room: recipientRoom,
-          counterpart: (await Identity.fromPassphrase("wrong-counterpart"))
-            .did(),
-        });
-        await waitForCellValue(
-          recipientRuntime,
-          recipientManager.key("requests").key("accept-mismatched-counterpart")
-            .key("status"),
-          (value) => value === "refused",
-        );
-        expect(recipientManager.key("rooms").get()).toHaveLength(0);
-        expect(recipientManager.key("direct").get()).toEqual({});
-        await recipientManager.key("accept").send({
-          requestId: "accept-derived-counterpart",
-          room: recipientRoom,
-        });
-        await waitForCellValue(
-          recipientRuntime,
-          recipientManager.key("requests").key("accept-derived-counterpart")
-            .key("status"),
-          (value) => value === "done",
-        );
-        expect(
-          recipientManager.key("requests").key("accept-derived-counterpart")
-            .key("entry").key("counterpart").get(),
-        ).toBe(creator.did());
-        await recipientManager.key("accept").send({
-          requestId: "accept-attested-creator",
-          room: recipientRoom,
-          counterpart: creator.did(),
-        });
-        await waitForCellValue(
-          recipientRuntime,
-          recipientManager.key("requests").key("accept-attested-creator")
-            .key("status"),
-          (value) => value === "done",
-        );
-        expect(
-          recipientManager.key("direct").key(creator.did()).key("room")
-            .resolveAsCell().equals(recipientRoom),
-        ).toBe(true);
-        const recipientRooms = recipientManager.key("rooms").asSchema(
-          ROOM_INDEX_SCHEMA,
-        );
-        expect(await recipientRooms.pull()).toHaveLength(1);
-      } finally {
-        await recipientRuntime.dispose();
-        await recipientStorage.close();
-      }
-      const placementProgram = await resolveLocalProgram(
-        (resolver) => runtime.harness.resolve(resolver),
-        { main: join(root, "fabrichat", "placement.tsx"), root },
-      );
-      const placementPattern = await runtime.patternManager.compilePattern(
-        placementProgram,
-      );
-      const container = await manager.createSpace({ [creator.did()]: "OWNER" });
-      const placement = runtime.getCell<Record<string, unknown>>(
-        container,
-        "placement",
-      );
-      await runtime.runSynced(placement, placementPattern, { room: direct });
-      await waitForCellValue(
-        runtime,
-        placement.key(VIEWS).key("chat").key("state"),
-        (value) => value === "member",
-      );
-      const outsider = (await Identity.fromPassphrase("placement-outsider"))
-        .did();
-      await new ACLManager(runtime, container).set(outsider, "READ");
-      await waitForCellValue(
-        runtime,
-        placement.key(VIEWS).key("chat").key("state"),
-        (value) => value === "unavailable",
-      );
-      expect(placement.key(VIEWS).key("chat").key("messages").get())
-        .toBeUndefined();
-      await new ACLManager(runtime, directLink.space).set(outsider, "READ");
-      await runtime.idle();
-      expect(placement.key(VIEWS).key("chat").key("state").get())
-        .toBe("unavailable");
-      await result.key("forget").send({ requestId: "forget-1", room: direct });
-      await runtime.idle();
-      expect(result.key("rooms").get()).toHaveLength(1);
-      await result.key("openDirect").send(directEvent("direct-3"));
-      await runtime.idle();
-      expect(result.key("rooms").get()).toHaveLength(2);
-      expect(
-        result.key("direct").key(member).key("room").resolveAsCell()
-          .getAsNormalizedFullLink(),
-      ).toEqual(directLink);
-      const noticeId = result.key("outgoingNotices").key(0).key("id").get();
-      await result.key("delivered").send({
-        requestId: "delivered-1",
-        id: noticeId,
-      });
-      await runtime.idle();
-      expect(result.key("outgoingNotices").get()).toHaveLength(1);
-      expect(result.key("requests").key("delivered-1").get()).toBeUndefined();
-      await result.key("delivered").send({
-        requestId: "delivered-1",
-        id: noticeId,
-      });
-      await runtime.idle();
-      expect(result.key("outgoingNotices").get()).toHaveLength(1);
-      await runtime.patternManager.flushCompileCacheWrites();
-      await manager.synced();
-      const reopenedStorage = new PrivateStorageManager(server);
-      const reopenedRuntime = new Runtime({
-        apiUrl: new URL("https://example.com"),
-        storageManager: reopenedStorage,
-      });
-      try {
-        const reopened = reopenedRuntime.getCellFromLink(
-          result.getAsNormalizedFullLink(),
-        );
-        await reopened.sync();
-        expect(await reopenedRuntime.start(reopened)).toBe(true);
-        await reopened.pull();
-        await reopened.key("openDirect").send(
-          directEvent("direct-after-restart"),
-        );
-        await waitForCellValue(
-          reopenedRuntime,
-          reopened.key("requests").key("direct-after-restart").key("status"),
-          (value) => value === "done",
-        );
-        expect(
-          reopened.key("direct").key(member).key("room").resolveAsCell()
-            .getAsNormalizedFullLink(),
-        ).toEqual(directLink);
-        const reopenedRooms = reopened.key("rooms").asSchema(ROOM_INDEX_SCHEMA);
-        await reopenedRooms.pull();
-        expect(reopenedRooms.get()).toHaveLength(2);
-      } finally {
-        await reopenedRuntime.dispose();
-        await reopenedStorage.close();
-      }
-      expect(await room.key("participants").pull()).toEqual([]);
-      for (
-        const key of [
-          "roster",
-          "showProfile",
-          "leave",
-          "add",
-          "remove",
-          "outgoingNotices",
-        ]
-      ) {
-        expect(room.key(key).get()).toBeUndefined();
-      }
-
-      const defaultProgram = await resolveLocalProgram(
-        (resolver) => runtime.harness.resolve(resolver),
-        { main: join(root, "system", "default-app.tsx"), root },
-      );
-      const defaultPattern = await runtime.patternManager.compilePattern(
-        defaultProgram,
-      );
-      const spaceRoot = runtime.getCell<Record<string, unknown>>(
-        roomSpace,
-        "system-space-root",
-        defaultPattern.resultSchema,
-      );
-      await runtime.runSynced(spaceRoot, defaultPattern, {});
-      const rootTx = runtime.edit();
-      runtime.getSpaceCell(roomSpace, undefined, rootTx).key("defaultPattern")
-        .set(spaceRoot);
-      expect((await rootTx.commit()).error).toBeUndefined();
-      const mainProgram = await resolveLocalProgram(
-        (resolver) => runtime.harness.resolve(resolver),
-        { main: join(root, "fabrichat", "main.tsx"), root },
-      );
-      const mainPattern = await runtime.patternManager.compilePattern(
-        mainProgram,
-      );
-      const reopenedChat = runtime.getCell<Record<string, unknown>>(
-        roomSpace,
-        "reopened-space-chat",
-        mainPattern.resultSchema,
-      );
-      await runtime.runSynced(reopenedChat, mainPattern, {});
-      await reopenedChat.key("room").pull();
-      expect(reopenedChat.key("room").resolveAsCell().equals(room)).toBe(true);
-      expect(
-        runtime.getSpaceCell(roomSpace).key("chat").resolveAsCell().equals(
-          room,
-        ),
-      )
-        .toBe(true);
-
-      const existingSpace = await manager.createSpace({
-        [creator.did()]: "OWNER",
-      });
-      const firstChat = runtime.getCell<Record<string, unknown>>(
-        existingSpace,
-        "first-space-chat",
-        mainPattern.resultSchema,
-      );
-      const secondChat = runtime.getCell<Record<string, unknown>>(
-        existingSpace,
-        "second-space-chat",
-        mainPattern.resultSchema,
-      );
-      await runtime.runSynced(firstChat, mainPattern, {});
-      await runtime.runSynced(secondChat, mainPattern, {});
-      await firstChat.key(UI).pull();
-      await secondChat.key(UI).pull();
-      const firstStart = findStartControl(firstChat.key(UI).get());
-      const secondStart = findStartControl(secondChat.key(UI).get());
-      expect(firstStart).toBeDefined();
-      expect(secondStart).toBeDefined();
-      for (const start of [firstStart!, secondStart!]) {
-        const event = {};
-        markRendererTrustedEvent(event);
-        await start.send(event);
-      }
-      await runtime.idle();
-      await firstChat.key("room").pull();
-      await secondChat.key("room").pull();
-      expect(
-        firstChat.key("room").resolveAsCell().equals(
-          secondChat.key("room").resolveAsCell(),
-        ),
-      ).toBe(true);
-      expect(firstChat.key("room").key("about").key("title").get())
-        .toBeUndefined();
-      expect(firstChat.key("room").key("about").key("record").get())
-        .toBeUndefined();
-
-      const unmaterializedSpace = await manager.createSpace({
-        [creator.did()]: "OWNER",
-      });
-      const unmaterializedStart = runtime.getCell<Record<string, unknown>>(
-        unmaterializedSpace,
-        "unmaterialized-start",
-        mainPattern.resultSchema,
-      );
-      await runtime.runSynced(unmaterializedStart, mainPattern, {});
-      await unmaterializedStart.key(UI).pull();
-      const staleStart = findStartControl(unmaterializedStart.key(UI).get());
-      expect(staleStart).toBeDefined();
-      const unmaterializedRoom = runtime.getCell(
-        unmaterializedSpace,
-        "unmaterialized-room",
-      );
-      const claimTx = runtime.edit();
-      runtime.getSpaceCell(unmaterializedSpace, undefined, claimTx).key("chat")
-        .set(unmaterializedRoom);
-      expect((await claimTx.commit()).error).toBeUndefined();
-      const staleEvent = {};
-      markRendererTrustedEvent(staleEvent);
-      await staleStart!.send(staleEvent);
-      await runtime.idle();
-      expect(
-        runtime.getSpaceCell(unmaterializedSpace).key("chat").resolveAsCell()
-          .equals(unmaterializedRoom),
-      ).toBe(true);
-      expect(unmaterializedRoom.getRaw()).toBeUndefined();
-
-      const existingRoom = firstChat.key("room").resolveAsCell();
-      const existingAcl = new ACLManager(runtime, existingSpace);
-      await existingAcl.set(member, "OWNER");
-      await existingAcl.set("*", "READ");
-      await existingAcl.remove(creator.did());
-      await result.key("accept").send({
-        requestId: "accept-wildcard",
-        room: existingRoom,
-      });
-      await waitForCellValue(
-        runtime,
-        result.key("requests").key("accept-wildcard").key("status"),
-        (value) => value === "done",
-      );
-      await result.key("forget").send({
-        requestId: "forget-wildcard",
-        room: existingRoom,
-      });
-      await runtime.idle();
-
-      await spaceRoot.key("addParticipant").send({ profile });
-      await waitForCellValue<Cell<unknown>[]>(
-        runtime,
-        room.key("participants"),
-        (value) => value?.length === 1,
-      );
-      expect(room.key("participants").key(0).resolveAsCell().equals(profile))
-        .toBe(true);
-      await spaceRoot.key("addParticipant").send({ profile });
-      await runtime.idle();
-      expect(room.key("participants").get()).toHaveLength(1);
-
-      // Space administration changes access without rewriting the conversation.
-      const roomAcl = new ACLManager(runtime, roomSpace);
-      await roomAcl.set(member, "OWNER");
-      await roomAcl.remove(creator.did());
-      await result.key("forget").send({ requestId: "forget-revoked", room });
-      await waitForCellValue<unknown[]>(
-        runtime,
-        result.key("rooms"),
-        (value) => value?.length === 1,
-      );
-      for (const joinableByLink of [false, true]) {
-        const requestId = `sharing-${joinableByLink}`;
-        await send("done", requestId, [member], joinableByLink);
-        const sharedRoom = result.key("requests").key(requestId).key("entry")
-          .key("room").resolveAsCell();
-        const sharedSpace = sharedRoom.getAsNormalizedFullLink().space;
-        const expectedAcl = {
-          [creator.did()]: "OWNER",
-          [member]: "WRITE",
-          ...(joinableByLink ? { "*": "WRITE" } : {}),
-        };
-        expect(await new ACLManager(runtime, sharedSpace).get())
-          .toEqual(expectedAcl);
-        const indexedRooms = result.key("rooms").asSchema(ROOM_INDEX_SCHEMA);
-        const roomsBeforeReplay = await indexedRooms.pull();
-        await send("done", requestId, [], !joinableByLink);
-        expect(
-          result.key("requests").key(requestId).key("entry").key("room")
-            .resolveAsCell().equals(sharedRoom),
-        ).toBe(true);
-        expect(await indexedRooms.pull()).toHaveLength(
-          roomsBeforeReplay.length,
-        );
-        expect(await new ACLManager(runtime, sharedSpace).get())
-          .toEqual(expectedAcl);
-      }
-    } finally {
-      await runtime.dispose();
-      await manager.close();
-      await server.close();
+      expect(root.equalLinks(room)).toBe(true);
     }
+  });
+
+  it("lists this user among the participants of each room it creates", async () => {
+    const { send, rooms, profile } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
+    });
+    const listed = rooms();
+    expect(listed.length).toBe(2);
+    for (const entry of listed) {
+      const room = entry.room.resolveAsCell();
+      await room.pull();
+      const participants = room.key("participants")
+        .asSchema(participantListSchema).get() as Cell<unknown>[];
+      expect(participants.length).toBe(1);
+      expect(participants[0].equalLinks(profile)).toBe(true);
+    }
+  });
+
+  it("declares each room's space a `fabrichat-room`", async () => {
+    const { send, rooms } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
+    });
+    const spaces = rooms().map((entry) =>
+      entry.room.getAsNormalizedFullLink().space
+    );
+    expect(spaces.length).toBe(2);
+    for (const space of spaces) {
+      expect(await runtime.spaceKind(space)).toBe("fabrichat-room");
+    }
+  });
+
+  it("creates each room in a space of its own that grants its members alone", async () => {
+    const { send, rooms } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL],
+    });
+    const spaces = rooms().map((entry) =>
+      entry.room.getAsNormalizedFullLink().space
+    );
+    expect(spaces.length).toBe(2);
+    expect(spaces).not.toContain(home);
+    expect(spaces[0]).not.toBe(spaces[1]);
+
+    // This user and each other member hold OWNER, and no one else holds
+    // anything.
+    const aclOf = async (space: string) =>
+      (await server.readDocument(
+        space as Parameters<typeof server.readDocument>[0],
+        aclDocId(space) as Parameters<typeof server.readDocument>[1],
+      ))?.value;
+    const spaceOf = (kind: string) =>
+      rooms().find((entry) => entry.kind === kind).room
+        .getAsNormalizedFullLink().space;
+    expect(await aclOf(spaceOf("direct"))).toEqual({
+      [home]: "OWNER",
+      [BOB]: "OWNER",
+    });
+    expect(await aclOf(spaceOf("group"))).toEqual({
+      [home]: "OWNER",
+      [CAROL]: "OWNER",
+    });
+  });
+
+  it("grants everyone WRITE on a group room made joinable by its link", async () => {
+    const { send, rooms } = await startManager();
+
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Open team",
+      members: [CAROL],
+      joinableByLink: true,
+    });
+    const space = rooms()[0].room.getAsNormalizedFullLink().space;
+    expect(
+      (await server.readDocument(
+        space as Parameters<typeof server.readDocument>[0],
+        aclDocId(space) as Parameters<typeof server.readDocument>[1],
+      ))?.value,
+    ).toEqual({
+      [home]: "OWNER",
+      [CAROL]: "OWNER",
+      "*": "WRITE",
+    });
   });
 });

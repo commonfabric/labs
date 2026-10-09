@@ -113,12 +113,17 @@ The current design direction is:
 What works today:
 
 - shell-centric execution in a gVisor sandbox through one of two drivers: Docker
-  with the Docker-registered `runsc-cfc` runtime, which is the default, or a
-  `runsc` binary the harness invokes directly, selected with
-  `--sandbox-runtime runsc`; see [Sandbox runtimes](#sandbox-runtimes)
+  with the Docker-registered `runsc-cfc` runtime, or a `runsc` binary the
+  harness invokes directly. `--sandbox-runtime` names one. Where nothing does,
+  macOS runs the direct driver from its native cfc-vm store, Linux runs it from
+  the runsc-cfc store under `~/.local/share`, and every other platform runs
+  Docker, except that the Loom local host, and a console launched for a Loom
+  instance, refuse where none is named; see
+  [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions on the direct driver: a long-lived container that later
   calls execute in, offered to the model only where the run's sandbox has
-  sessions and its CFC enforcement mode allows them
+  sessions (not under Linux's default `pasta` network, below) and its CFC
+  enforcement mode allows them
 - under the Docker driver, sandbox containers default to Docker
   `--network bridge` so local Loom/Fabric helper services can be reached through
   Docker Desktop's `host.docker.internal` host alias during early integration
@@ -134,6 +139,8 @@ What works today:
 - read-only Loom retrieval through a separately configured host transport, with
   every row measured against the run's observation ceiling; see
   [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
+- the commands a host admits, listed and run through the host's own scoped
+  broker; see [Host commands](docs/LOOM_COMMANDS.md);
 - built-in tools:
   - `bash`
   - `browser` (structured browser control for the browser subagent profile only,
@@ -153,9 +160,13 @@ What works today:
     reason the task cannot proceed; ends the turn through ordinary policy and
     artifacts)
   - `weaver_action` (parent-only, present only when the host opts the session
-    in: asks the person's client to run up to eight client actions mid-turn and
-    waits for the person to settle each; never a default tool, never offered to
-    a subagent)
+    in: asks the person's Weaver mid-turn to run up to eight actions — a typed
+    command invocation, a catalog request, or opening a loom or web address —
+    and waits for each to settle; a retained JSON body (at most 256 KiB) is held
+    as a `command`-labeled `document` handle when the run supplies a holder and
+    its provenance can be derived. The model gets outcome metadata and a token
+    when available; never a default tool, never offered to a subagent; see
+    [Client actions](console/README.md#client-actions))
   - `submit_result` (present only when the root run configures a structured
     result; validates the submitted value against that schema and writes the
     host-owned result file)
@@ -192,6 +203,13 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
+  - `list_commands` and `run_command` (present only with
+    `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
+    the host's broker admits for this run, run as the agent; the listing shows
+    each command as a one-line signature and is the host's command metadata,
+    unmeasured; `run_command` refuses a name the listing does not show, takes
+    one call or a batch of up to sixteen, and measures each answer like a
+    retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -219,9 +237,15 @@ What works today:
 - targeted exact-string edits plus whole-file replace/create and append writes
 - initial and in-run image attachments for model vision-capable flows
 - bounded public HTTP(S) fetches through `web_fetch`, with redirect validation,
-  local/private target blocking, extracted text/links, and raw bounded response
-  retention in tool-output artifacts; `web_fetch` is intentionally not part of
-  the default parent tool surface
+  extracted text/links, and raw bounded response retention in tool-output
+  artifacts; `web_fetch` is intentionally not part of the default parent tool
+  surface. It fetches only from addresses on the open internet, whether the URL
+  names the address or a host name resolves to it. It refuses local, private and
+  reserved addresses, and any address on a network one of this device's
+  interfaces is on, such as a home network's public IPv6 prefix; an IPv6
+  interface's network counts as at least the /64 that holds its address. The
+  process running it needs `--allow-sys=networkInterfaces` to read those
+  networks
 - provider-neutral bounded prompt/tool loop with OpenAI-compatible gateway and
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
@@ -426,7 +450,8 @@ From [packages/cf-harness](.):
   release-refusal trace, and the persisted label plus `TransformedBy` on derived
   data. It reads the identity keyfile from `CF_HARNESS_FABRIC_IDENTITY` and
   never echoes it; override the toolshed, space, cell, and space-db through the
-  environment variables it documents at the top.
+  environment variables it documents at the top. It runs on the Docker driver,
+  which it names, unless `CF_HARNESS_SANDBOX_RUNTIME` already names another.
 
 ## CLI Example
 
@@ -734,14 +759,17 @@ credential-store and resolver APIs. It never reads or imports the ordinary Codex
 CLI login.
 
 ```bash
-CF_HARNESS_HOME=/canonical/private/home \
+CF_HARNESS_HOME=/canonical/private/home CF_HARNESS_SANDBOX_RUNTIME=docker \
   deno run --no-lock -A src/loom-local-host-main.ts batch -- \
   --workspace ../.. --prompt "Summarize this workspace."
 
-CF_HARNESS_HOME=/canonical/private/home \
+CF_HARNESS_HOME=/canonical/private/home CF_HARNESS_SANDBOX_RUNTIME=docker \
   deno run --no-lock -A src/loom-local-host-main.ts interactive -- \
   --chat-session-db /private/runtime/chat.sqlite
 ```
+
+Both name a sandbox runtime, `docker` here: this host takes no default, and
+refuses a run that names none ([Sandbox runtimes](#sandbox-runtimes)).
 
 The entrypoint serves both execution shapes. It rejects missing or invalid
 provider configuration, and reads only the persisted preference from that
@@ -976,11 +1004,210 @@ deno task run -- \
 ```
 
 `--sandbox-runtime` takes `docker` or `runsc`, with `CF_HARNESS_SANDBOX_RUNTIME`
-as its default. A run that names neither uses Docker. The flags in this section
-are the batch CLI's; the interactive stdio entrypoint and the interactive lane
-of the Loom local host refuse them and read the environment variables alone. The
-console refuses the three selection flags, `--sandbox-runtime`,
-`--sandbox-rootfs`, and `--sandbox-cfc-policy`, and reads their variables alone.
+as its default. The flags in this section are the batch CLI's; the interactive
+stdio entrypoint and the interactive lane of the Loom local host refuse them and
+read the environment variables alone. The console refuses the three selection
+flags, `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy`, and
+reads their variables alone.
+
+Where neither the flag nor the variable names a runtime, the entrypoint's
+platform decides, except for the two entrypoints Loom starts, and the choice is
+never a fallback from one driver to the other:
+
+- **On macOS** the run uses the direct driver with the native runtime: the
+  `runsc` shim, the rootfs image and the VM of the cfc-vm store that gVisor's
+  macOS installer writes. The store is the directory `CFC_VM_HOME` names, or
+  else `~/Library/Application Support/cfc-vm`. The run is refused, before
+  anything executes, where that store cannot provide it. The refusal names the
+  store, each thing that is in the way, and how to select Docker. That VM runs
+  on Apple silicon alone, so a process on any other Mac is refused whatever the
+  store holds, saying so and how to select Docker.
+- **On Linux** the run uses the direct driver with the native runtime: gVisor's
+  own `runsc`, the unpacked kitchen-sink rootfs and the CFC policy of the store
+  gVisor's Linux installer (`tools/cfc-rootfs/install.sh` in the gVisor fork's
+  release) writes under `~/.local/share/runsc-cfc`. For root that `runsc` runs
+  as it is. For any other user it runs rootless (`--rootless`), in a user
+  namespace of its own, which the host has to allow a process that is not root:
+  where `user.max_user_namespaces` is 0, `kernel.unprivileged_userns_clone` is
+  0, or `kernel.apparmor_restrict_unprivileged_userns` is 1 (Ubuntu 23.10 and
+  later ship that), the run is refused before the store is looked at, naming the
+  parameter and the `sysctl -w` that lifts it, or running as root. A `runsc`
+  named by `CF_HARNESS_RUNSC_BINARY` runs as it is, without `--rootless`; a
+  process that is not root still needs the same user namespaces for pasta's
+  network, and is checked and refused the same way, unless it names a `none` or
+  `host` network. The run is refused, before anything executes, where the store
+  cannot provide it, as on macOS.
+- **On every other platform** the run uses Docker. No other platform has a
+  native runtime, so the platform is the whole of the reason; a direct driver
+  there is always one that was named.
+- **The Loom local host** takes no default on any platform. Loom names the
+  runtime of every run it starts, so a `batch` or `interactive` run that names
+  none is refused, saying that Loom must name `docker` or `runsc`.
+- **A console launched for a Loom instance**, which is `console:launch` given
+  `--instance`, takes none either, and is refused the same way: Loom chooses
+  each instance's runtime, and a default could be another. The same launch with
+  no `--instance` takes the platform's default.
+
+A macOS store is set up for the default when it holds each of the following that
+no setting replaces, and the default is refused when any of those is missing.
+Only `config.json` is required whatever is named. The first five are refused as
+symbolic links too, and so is any of them reached through a directory of the
+store that is one, such as `bin`: each has to be the file or directory itself,
+at its path in the store, as gVisor's installer writes it. A piece that is there
+but that this process cannot use is refused for that, and named so rather than
+as missing: a file it cannot open to read, and a binary it cannot execute.
+
+| In the store            | What it is                                        | Required unless                                   |
+| ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
+| `bin/runsc`             | the `runsc` shim, an executable file              | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `bin/cfc-vm`            | the VM daemon the shim starts, an executable file | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `config.json`           | the VM's configuration                            | always required                                   |
+| `images/kitchensink`    | the directory a container names as its rootfs     | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `ext4/kitchensink.ext4` | the block image the shim runs that rootfs from    | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `policy.json`           | the CFC policy; see below                         | a policy is under the home, or a policy is named  |
+
+A Linux store is set up for the default when it holds each of the following that
+no setting replaces. Linux's `runsc` is handed the paths the store's links lead
+to and reads nothing by its path in the store, so a piece reached through a
+symbolic link is taken where it leads. A piece that is there but that this
+process cannot use is refused for that, as on macOS.
+
+| In `~/.local/share/runsc-cfc` | What it is                                                            | Required unless                                   |
+| ----------------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
+| `bin/runsc`                   | gVisor's `runsc`, an executable file                                  | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `images/kitchensink`          | the kitchen-sink image unpacked to a directory                        | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `cfc-policy.json`             | the CFC policy, which is the default one of the home, looked for once | a policy is named                                 |
+
+The direct driver's `sandbox` network is the VM's on macOS. On Linux, under the
+default, it is what Docker's bridge gave: egress, and the host at
+`host.docker.internal`; without a `pasta` (a `runsc` configured by hand, with no
+helper) runsc's own `sandbox` network is loopback alone. `pasta`, from passt,
+gives it: each container starts inside a network namespace of pasta's (and, for
+a user that is not root, a user namespace of pasta's too), which runsc takes as
+its host network, so the container sees one interface of pasta's (10.0.2.15,
+gateway 10.0.2.2) and none of the host's. Pasta translates its traffic to the
+host's sockets, and a connection to the gateway reaches the host's own loopback,
+which a hosts file the driver binds over `/etc/hosts` names
+`host.docker.internal`. For root, pasta makes no user namespace and keeps root,
+and runs in a mount namespace of its own that `unshare` (util-linux) makes,
+since it then mounts its own `/proc` in the mount namespace it runs in. Pasta
+starts what it runs in a PID namespace of its own, so a session's container
+started under it would record pids its later calls could not find: under pasta's
+network no sandbox session is offered, and the `bash` tool takes no `session`.
+Pasta also clears the parent-death signal of what it runs, so the driver runs it
+through `setpriv --pdeathsig KILL` (util-linux): a call that times out, or is in
+flight when the runtime closes, stops its pasta, and its container dies with
+pasta's namespace. No port is forwarded into the container, or from the
+container's loopback to the host's. A user id, or a kernel parameter, that
+cannot be read refuses the default rather than being guessed at. Where no
+`pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the default is
+refused, saying to install passt (`sudo apt install passt`) or util-linux, or to
+name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container
+loopback alone, and `host` the host's own network, interfaces and all. Those two
+need none of `pasta`, `setpriv` or `unshare`; a process that is not root still
+needs user namespaces for the store's rootless `runsc`, as above.
+
+A defaulted macOS run takes its CFC policy from
+`$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
+otherwise from the store's own `policy.json`. gVisor's release installer writes
+that file; a store built from source has one only if someone put it there. The
+default is refused where neither is there, because a run enforces CFC unless
+told otherwise and an enforcing run with no policy cannot start. That refusal
+comes before the enforcement mode is looked at: a non-enforcing mode such as
+`--cfc-enforcement-mode observe` alone does not get past it. A run on the
+default without a policy names the policy as empty, with
+`--sandbox-cfc-policy ""`, and a mode that does not enforce, both. A `runsc`
+setting that is named replaces the store's: a named rootfs stands in for the
+image, `CF_HARNESS_RUNSC_BINARY` for the shim and the daemon beside it, and a
+named policy, by `--sandbox-cfc-policy` or `CF_HARNESS_RUNSC_CFC_POLICY`, for
+both defaults. `--sandbox-cfc-policy ""` names none, and the run then starts
+only in a mode that does not enforce: an enforcing mode is refused as the run
+starts. `--sandbox-rootfs ""` names no rootfs, and the default, which runs only
+from one, is refused for it.
+
+Three more things refuse the default, each before anything executes:
+
+- **A setting of the Docker driver.** `--sandbox-image`,
+  `--sandbox-docker-runtime`, `--cfc-result-dir` and
+  `--cfc-invocation-context-dir`, and the variables that set the same things,
+  `CF_HARNESS_SANDBOX_IMAGE`, `CF_HARNESS_SANDBOX_DOCKER_RUNTIME`,
+  `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+  `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR`, are read by Docker alone. On
+  macOS and Linux, where an unnamed runtime is the native one, whoever gives one
+  with no runtime named means Docker, so the run is refused, naming the setting
+  and never its value, until Docker is named or the setting is removed. On other
+  platforms the unnamed runtime is Docker, which reads these settings as before.
+  The selection does not refuse a named `runsc` for them, and the direct driver
+  reads none of them; `console:launch` still refuses its two sidecar directory
+  flags under any direct driver.
+- **A policy that cannot be read.** A default policy the harness could not look
+  at, or that is there and could not be opened, is not known to be one a run can
+  use, so the next default does not stand in for it. The refusal names the file
+  and the reason. A named `runsc` is refused the same way. A policy that is not
+  there is absent, and so is one whose path runs through a file, such as a home
+  that is not a directory.
+- **A store given by another path than the one it is at.** The driver hands the
+  macOS `runsc` the rootfs by the path the file system has for it, and that
+  `runsc` recognizes one of its store's images by comparing the path as written
+  with the store's as it was given. A `CFC_VM_HOME`, or a home, that reaches the
+  store through a symbolic link would therefore start containers with an empty
+  root, so it is refused, naming the path to set `CFC_VM_HOME` to. `/tmp` on
+  macOS is such a link.
+
+To run on Docker on macOS or Linux, name it: `--sandbox-runtime docker` on the
+batch CLI, or `CF_HARNESS_SANDBOX_RUNTIME=docker` for any entrypoint. A named
+runtime is taken exactly as named on every platform. `docker` never uses the
+store. A named `runsc` takes the settings named with it and the defaults the
+[current-state reference](docs/CURRENT_STATE.md#sandbox-runtimes) lists for
+them: its binary is `CF_HARNESS_RUNSC_BINARY` or a `runsc` on `PATH` rather than
+the store's shim, and it never takes the store's own policy. On macOS a named
+`runsc` given no rootfs runs the kitchen-sink image of the same store the
+default would, the one `CFC_VM_HOME` names, else the one under the home; on
+Linux it runs the kitchen-sink rootfs of the Linux store under the home.
+
+The batch CLI's operator summary has a `sandbox` line saying which runtime the
+run used and whether it was named or defaulted, such as
+`sandbox: runsc (default on macOS: the native store at <store>)` or
+`sandbox: docker (named by --sandbox-runtime)`. The run's recorded runtime
+description carries the same fact as `selection`.
+
+A run stays on the runtime it started on, and so does an interactive session.
+The two runtimes need not keep the CFC labels of a run's files where the other
+reads them, and on macOS they do not, so a file one labelled can read as
+unlabelled under the other. A run's state records its runtime as
+`sandboxRuntime` from the moment its engine is built, and a `--resume-run` that
+selects the other runtime, by name or by default, is refused with
+`provider-mismatch`, naming the runtime the run started on and how to name it. A
+turn of a stored session on a host running the other runtime is refused the same
+way, saying to restart the host on the session's runtime or start a new session.
+A run started on Docker therefore resumes on macOS and Linux only with `docker`
+named. A run recorded before runs recorded their runtime is held to the runtime
+its capability snapshot describes, where it has one; only a run with no such
+description, and a chat session stored before sessions recorded a runtime, is
+bound to the runtime of its next resume or turn, as the
+[current-state reference](docs/CURRENT_STATE.md#selection) sets out.
+
+A run on the native default is a run on the direct driver, with everything the
+rest of this section says of that driver. Its differences stop or change a run
+that works on Docker:
+
+- **On either platform**, a workspace or a writable host mount that holds the
+  `runsc` binary, the rootfs or the policy is refused, since the sandbox could
+  rewrite them, and so is a writable mount inside the rootfs. On Linux, given a
+  home, the whole `runsc-cfc` store under it is held both ways, unused sibling
+  images included: it may not lie inside a writable mount, and no writable mount
+  may lie inside it. On Linux those are the store's own pieces under
+  `~/.local/share/runsc-cfc`, so a run whose workspace is the home directory
+  names Docker or another workspace; the refusal says that the runtime was the
+  default and how Docker is selected.
+- **On macOS**, a writable mount that lies inside the cfc-vm store, or that
+  holds it, is refused too, for any `runsc` run, whatever binary, rootfs and
+  policy it names, because the macOS `runsc` runs from the store. And
+  `host.docker.internal` reaches only the host ports the launch forwards into
+  the VM.
+- **On Linux** there is no VM; the default network is pasta's, above, and the
+  host is reached at `host.docker.internal` on every port its loopback serves.
+
 The two sidecar directory flags are the Docker driver's: the console's launcher,
 `console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on
 the Docker driver and refuses them under `runsc`. The console takes no Docker
@@ -1003,10 +1230,13 @@ The direct driver passes `--cfc` to `runsc` exactly when a CFC policy is
 configured, and an enforcing run without one is refused before anything
 executes. With no policy named, it uses the one the Docker path's installer
 places at `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists,
-so both drivers label the same files the same way.
+so both drivers label the same files the same way. That is the only default of a
+named `runsc`; the store's own `policy.json` is a default of the runtime macOS
+defaults to and of no other.
 
 Under the direct driver `bash` takes an optional `session`, in a run whose CFC
-enforcement mode allows one. A call that names a session executes in a container
+enforcement mode allows one and whose network is not `pasta`'s, which Linux's
+default network is (above). A call that names a session executes in a container
 the harness keeps for the rest of the run, and a call that names none runs in a
 fresh container of its own. Sessions are refused in the enforcing CFC modes, so
 a run in one of them, `enforce-strict` by default, is offered `bash` with no
@@ -1034,9 +1264,11 @@ session's process, and the trust checks.
 On hosts without the `runsc-cfc` Docker runtime (or where the installed CFC
 policy does not label the workspace mount, which makes in-sandbox file reads
 fail with SIGSYS), the Docker driver can run with the plain `runc` runtime and
-observe-mode CFC:
+observe-mode CFC. The first line names the Docker driver, which macOS does not
+default to:
 
 ```bash
+export CF_HARNESS_SANDBOX_RUNTIME=docker
 export CF_HARNESS_SANDBOX_DOCKER_RUNTIME=runc
 export CF_HARNESS_CFC_ENFORCEMENT_MODE=observe
 ```
@@ -1741,8 +1973,13 @@ orientation establishes a supported approach; it does not claim that the
 application has been built. Both purposes can inspect pattern source, describe
 handles, and return examples. Orientation's `leads` are host-observed metadata,
 usable as search references for delegation, and remain separate from inspected
-`patterns`. The current user goal accompanies narrower research questions and
-delegated tasks so they retain the original context.
+`patterns`. Orientation's `refinedTask` restates the request as the intersection
+of what was asked and what research verified is possible, each part bound to the
+grant or confirmed pattern that serves it, with the parts nothing serves left
+under `missing`; the parent works, and writes a delegation's goal, from it. An
+orientation that omits it is still admitted. The current user goal accompanies
+narrower research questions and delegated tasks so they retain the original
+context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
@@ -2570,13 +2807,15 @@ deno task run -- \
   --prompt "Build this pattern."
 ```
 
-Sandbox image override, under the Docker driver:
+Sandbox image override, under the Docker driver, which the example names because
+macOS does not default to it:
 
 ```bash
 deno task run -- \
   --workspace /path/to/common-fabric-2 \
   --cwd pattern-factory \
   --gateway-auth-mode none \
+  --sandbox-runtime docker \
   --sandbox-image registry.example/cf-harness-sandbox:deno2 \
   --prompt "Run deno task cf --help and report whether it works."
 ```
@@ -2626,6 +2865,12 @@ the file directly; both ways end at the same path. With `--allow-tool`, name
 `submit_result` alongside the run's other tools. The schema and host path are
 retained in run state, so a resumed root run keeps the same result contract
 without repeating the command-line flags; a conflicting restatement is refused.
+
+The system prompt includes the complete result schema for both batch and
+operator runs, whether the result is submitted through the tool or written to
+the file. Object schemas are closed by default, including nested objects: a
+result includes only properties the schema declares unless that schema allows
+additional properties explicitly.
 
 The structured result path must stay inside the workspace. The schema may be
 provided inline with `--structured-result-schema` or read from
@@ -2767,32 +3012,53 @@ answers, when the host's stream or the turn ends (settling it as
 `session-ended`), or when the run's abort signal fires. A browser child in such
 a run holds the `browser` tool alone, with no skill scripts and no host
 execution. Every result carries the page: the address the host committed for it,
-and the title the page wrote.
+and the title the page wrote. A page with no web origin, such as `about:blank`
+or a `data:` document, is reported, and labeled, as `null`, the web's spelling
+of an opaque origin, so nothing of its address reaches a label or a result's
+page.
 
 No operation names this device, its network, or an address written as an IP
 literal: `open`, a `urlHandle`'s value, and a `urlPattern` naming a host are
-refused here, and the host refuses such a load whatever starts it. Once the
-owner finishes a hand-off, the page may hold their sign-in, so from then on the
-session can only be read and opened on the origin they finished on: `click`,
-`check`, `press`, `fill`, `type`, and `select` change the page, `back` and
-`forward` leave it for an address nobody checked, and `reload` may send it
-again, so all of them are refused.
+refused here, and the host refuses such a load whatever starts it. A host is
+judged as a URL parser reads it, so `http://0x7f.1/` names 127.0.0.1, and a
+`urlPattern` may put a glob in its host only as the labels leading a name on the
+open web, as in `https://*.shop.example/**`. A pattern that names no host, such
+as `**/checkout`, may match any page, which the host keeps off this device and
+its network. Once a hand-off is sent, the page may hold the owner's sign-in,
+however the hand-off ends: finished, declined, refused, withheld by the run's
+read ceiling, or never answered because the run withdrew it. From then on the
+session can only be read and opened on the web origin of the last page the run
+saw before it first handed the page off: `click`, `check`, `press`, `fill`,
+`type`, and `select` change the page, `back` and `forward` leave it for an
+address nobody checked, and `reload` may send it again, so all of them are
+refused. The origin is checked against the address the host committed for each
+result, not only the one an `open` asked for, so a result the owner, the page,
+or a redirect took to another origin is withheld; a hand-off the owner ends
+elsewhere tells the run only how it ended and where. A page handed off on no web
+origin the run knows leaves no site to open.
 
 A value reaches a page in one of two ways, and the host is told which:
 
 - text the agent wrote is entered as given;
-- a string a browser child found on the web, which its parent holds as a
-  `cfh:v:` return referent and passes on without reading, goes as a
-  `handle-value`, and the host enters it and leaves it out of later snapshots,
-  since no model that saw it chose it. An address one resolves to is opened the
-  same way, and the host reports that document by its origin alone. A referent
-  labeled above the run's read ceiling is refused.
+- a string a browser child returned, which its parent holds as a `cfh:v:` return
+  referent and passes on without reading, goes as a `handle-value`, and the host
+  enters it and leaves it out of later snapshots, since no model that saw it
+  chose it. An address one resolves to is opened the same way, and the host
+  reports that document by its origin alone. A referent labeled above the run's
+  read ceiling is refused.
 
-The host path takes no value from the owner's space: nothing yet holds such a
+The host path resolves no handle to the owner's space: nothing yet holds such a
 value to the page it was meant for, so an address handle (`cfh:a:`) is refused
-there. Only a browser child of a run with a host returns referents, and only
-before the owner finishes a hand-off; after one, a page may hold their account,
-which no label describes, so its strings stay sealed.
+there. No label check applies to text an agent writes, which can carry anything
+in the agent's context, the owner's data included.
+
+Only a browser child of a run with a host returns referents, only under its
+model-context label, which includes what it inherited from its parent, so a
+child with no label returns none, and only before a hand-off is sent; after one,
+a page may hold the owner's account, which no label describes, so its strings
+stay sealed, and a reply in words reaches the parent as a fixed sentence saying
+it is sealed. Nothing checks where a referent's string came from: a child can
+return a string from its own brief as readily as one it found on a page.
 
 Nothing asks the owner whether a value may go to a page, or whether a click may
 commit them to something: a question at every step teaches a person to agree
@@ -2802,23 +3068,26 @@ or clicks.
 
 What a host shows is labeled by where the session stands. Before any hand-off it
 is a fresh browser with no sign-in, so what it shows is the public web: text and
-pixels a page wrote, which may carry instructions. Each result enters the
-model's context under the unscreened prompt-injection caveat
-(`prompt-injection-risk-unscreened`), sourced to the page's origin, under any
-enforcement mode, and a run whose read ceiling does not admit it is told the
-action ran and given none of the page. A child's return brings the child's label
-into its parent's model context, as every child's does, so the caveat reaches
-the parent with whatever crosses — a scalar, a summary, a referent. Once the
-owner finishes a hand-off, a page may show their account, which no label
-describes, so a run under `enforce-explicit` or `enforce-strict` learns only how
-the hand-off ended and on which origin, refuses every action but another
-`handoff`, and observes nothing more of the page.
+pixels a page wrote, which may carry instructions. Each successful result, a
+screenshot's included, enters the model's context under the unscreened
+prompt-injection caveat (`prompt-injection-risk-unscreened`), sourced to the
+page's origin, under any enforcement mode, and a run whose read ceiling does not
+admit it is told the action ran and given none of the page. A child's return
+brings the child's label into its parent's model context, as every child's does,
+so the caveat reaches the parent with whatever crosses — a scalar, a summary, a
+referent. A screenshot is labeled as the page's text is. Once a hand-off is
+sent, a page may show the owner's account, which no label describes, so a run
+under `enforce-explicit` or `enforce-strict` learns at most how the hand-off
+ended and on which origin, and nothing when its read ceiling withholds the page,
+refuses every action but another `handoff`, and observes nothing more of the
+page.
 
 A page can show what it was given back — in its text, its title, its address, or
-a screenshot. Wherever a host's later answer carries a value it was sent, the
-harness puts the value's handle in its place before a model reads the answer,
-and the host paints over every field a value went into before it takes a
-screenshot. What the page shows after changing a value is the page's.
+a screenshot, as given or changed. So the session keeps a label, the join of the
+labels of every value a handle sent it, and every result from then on carries it
+as well as the page's caveat. Text an agent writes is not joined into it. The
+host also paints over every field a value went into before it takes a
+screenshot.
 
 The host decides which fields only the owner may fill. Its refusals come back
 under their own codes — `stale_ref`, `owner_only_field`, `session_ended` —
@@ -3710,9 +3979,12 @@ outputs, run state, and CFC policy traces.
 
 On Docker Desktop for macOS, use the host path for `cf-harness` and the
 `/host_mnt/...` projection for Docker's runtime args. The gVisor
-`docker-desktop-cfc-setup` helper defaults to:
+`docker-desktop-cfc-setup` helper defaults to the two directories below. The
+first line names the Docker driver, which macOS does not default to and whose
+directories its default refuses:
 
 ```bash
+export CF_HARNESS_SANDBOX_RUNTIME=docker
 export CF_HARNESS_RUNSC_CFC_RESULT_DIR="$HOME/.local/share/runsc-cfc/cfc-results"
 export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR="$HOME/.local/share/runsc-cfc/cfc-invocations"
 ```

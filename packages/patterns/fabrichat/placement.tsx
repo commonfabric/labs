@@ -11,7 +11,6 @@ import {
   pattern,
   type PerSpace,
   spaceAccess,
-  spaceMembers,
   VIEWS,
 } from "commonfabric";
 import type {
@@ -20,8 +19,9 @@ import type {
   ChatReactionTallies,
   ChatRoomAbout,
   ChatRoomActivity,
+  ChatRoomFacts,
   ChatRoomOutput,
-} from "./schemas.ts";
+} from "./schemas.tsx";
 
 /** The facts exposed by a placed conversation. */
 export interface ChatPlacementView {
@@ -34,16 +34,33 @@ export interface ChatPlacementView {
   reactionTallies?: Cell<ChatReactionTallies[]>;
 }
 
+/** The room protocol, including optional capabilities a placement never calls. */
+export type PlacedRoom =
+  & Omit<
+    ChatRoomOutput,
+    "addMember" | "addParticipant" | typeof NAME | typeof VIEWS
+  >
+  & {
+    [NAME]?: string;
+    addMember?: ChatRoomOutput["addMember"];
+    addParticipant?: ChatRoomOutput["addParticipant"];
+    [VIEWS]: {
+      room: Omit<ChatRoomFacts, "addParticipant"> & {
+        addParticipant?: ChatRoomFacts["addParticipant"];
+      };
+    };
+  };
+
 /** One immutable room reference in a container. */
 export interface ChatPlacementOutput {
   [NAME]: Default<string, "Chat">;
-  room: PerSpace<Cell<ChatRoomOutput>>;
+  room: PerSpace<Cell<PlacedRoom>>;
   [VIEWS]: { chat: ChatPlacementView };
 }
 
 /** A placement that retains room data behind its original cross-space links. */
 export const FabriChatPlacement = pattern<
-  { room: PerSpace<Cell<ChatRoomOutput>> },
+  { room: PerSpace<Cell<PlacedRoom>> },
   ChatPlacementOutput
 >(({ room }) => {
   const state = computed(() => {
@@ -51,18 +68,7 @@ export const FabriChatPlacement = pattern<
     if (access === undefined) return "unavailable";
     if (access === "none") return "not-member";
     const about = room.key("about").get();
-    if (!about) return "unavailable";
-    if (about.kind === "direct") {
-      const container = spaceMembers();
-      const members = spaceMembers(room);
-      if (!container || !members) return "unavailable";
-      if (
-        Object.keys(members).length !== 2 || members["*"] || container["*"] ||
-        Object.keys(container).some((principal) => !members[principal])
-      ) {
-        return "unavailable";
-      }
-    }
+    if (!about?.kind) return "unavailable";
     return "member";
   });
   return {

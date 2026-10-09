@@ -28,6 +28,7 @@ import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 // Seed stored CFC metadata with a path-[] full-document write, reading the
 // current doc first so the value survives. Every write that reaches a
@@ -199,7 +200,7 @@ describe("scheduler", () => {
       tx,
     );
     source.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const seen: number[] = [];
@@ -240,14 +241,14 @@ describe("scheduler", () => {
     });
 
     source.withTx(tx).send(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await started;
 
     const conflictingTx = runtime.edit();
     source.withTx(conflictingTx).send(2);
-    await conflictingTx.commit();
+    await conflictingTx.commit().settled;
 
     allowResolve();
 
@@ -278,7 +279,7 @@ describe("scheduler", () => {
       tx,
     );
     c.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     function computeIntermediate(tx: IExtendedStorageTransaction) {
@@ -319,7 +320,7 @@ describe("scheduler", () => {
     runtime.scheduler.setTriggerTraceEnabled(true);
 
     a.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await c.pull();
 
@@ -372,7 +373,7 @@ describe("scheduler", () => {
       tx,
     );
     c.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     function computeIntermediate(actionTx: IExtendedStorageTransaction) {
@@ -381,11 +382,13 @@ describe("scheduler", () => {
       if (nextValue === 1) {
         const originalCommit = actionTx.commit.bind(actionTx);
         actionTx.commit = () =>
-          new Promise((resolve, reject) => {
-            setTimeout(() => {
-              originalCommit().then(resolve, reject);
-            }, 25);
-          });
+          createTransactionCommitReceipt(
+            new Promise((resolve, reject) => {
+              setTimeout(() => {
+                originalCommit().settled.then(resolve, reject);
+              }, 25);
+            }),
+          );
       }
     }
 
@@ -415,7 +418,7 @@ describe("scheduler", () => {
     expect(c.get()).toBe(0);
 
     a.withTx(tx).send(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // The intermediate delays its own commit by 25ms (a modeled slow
@@ -450,7 +453,7 @@ describe("scheduler", () => {
       tx,
     );
     c.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     function computeIntermediate(tx: IExtendedStorageTransaction) {
@@ -490,7 +493,7 @@ describe("scheduler", () => {
     runtime.scheduler.setActionRunTraceEnabled(true);
 
     a.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await c.pull();
 
@@ -869,7 +872,7 @@ describe("scheduler", () => {
       tx,
     );
     step.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const increment: Action = (actionTx) => {
@@ -897,7 +900,7 @@ describe("scheduler", () => {
     expect(counter.get()).toBe(1);
 
     counter.withTx(tx).send(10);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await runtime.scheduler.idle();
@@ -1069,7 +1072,7 @@ describe("scheduler", () => {
 
     const verifyTx = runtime.edit();
     expect(storedCfcMetadataAppliesToPath(verifyTx, secretLink)).toBe(true);
-    await verifyTx.commit();
+    await verifyTx.commit().settled;
   });
 
   it("should react to direct reads of stored CFC metadata when the cfc field changes", async () => {
@@ -1203,7 +1206,7 @@ describe("scheduler", () => {
       ),
     ).toBe(false);
 
-    await setTx.commit();
+    await setTx.commit().settled;
   });
 
   it("should include nested path in attemptedWrites when using key().set()", async () => {
@@ -1257,7 +1260,7 @@ describe("scheduler", () => {
       ),
     ).toBe(false);
 
-    await setTx.commit();
+    await setTx.commit().settled;
   });
 
   it("should not have attemptedWrites when using getRaw without metadata", async () => {
@@ -1288,7 +1291,7 @@ describe("scheduler", () => {
     expect(storageLog.attemptedWrites).toBeUndefined();
     expect(schedulerLogWithAttemptedWrites.attemptedWrites).toBeUndefined();
 
-    await readTx.commit();
+    await readTx.commit().settled;
   });
 
   it("should track non-recursive reads separately in reactivity logs", async () => {
@@ -1310,7 +1313,7 @@ describe("scheduler", () => {
     expect(log.shallowReads.some((addr) => addr.path[0] === "value"))
       .toBe(true);
 
-    await readTx.commit();
+    await readTx.commit().settled;
   });
 
   it("should track getMetaRaw reads in the normal scheduler read log", async () => {
@@ -1343,7 +1346,7 @@ describe("scheduler", () => {
       ),
     ).toBe(false);
 
-    await readTx.commit();
+    await readTx.commit().settled;
   });
 
   it("should track read without load for scheduling and still trigger on writes", async () => {

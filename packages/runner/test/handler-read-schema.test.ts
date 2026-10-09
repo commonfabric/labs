@@ -44,7 +44,7 @@ describe("handler-read-schema", () => {
           setup,
         );
         source.set({ title, extra });
-        expect((await setup.commit()).error).toBeUndefined();
+        expect((await setup.commit().settled).error).toBeUndefined();
         const compiled = await runtime.patternManager.compilePattern({
           main: "/main.tsx",
           files: [{
@@ -110,7 +110,7 @@ describe("handler-read-schema", () => {
         }
         const update = runtime.edit();
         title.withTx(update).set("Chocolate");
-        expect((await update.commit()).error).toBeUndefined();
+        expect((await update.commit().settled).error).toBeUndefined();
         result.key("capture").send({});
         await runtime.idle();
         expect(result.key("selected").get()).toBe("Chocolate");

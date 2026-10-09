@@ -61,7 +61,10 @@ not replace the model, tools, or result writer.
 Run these commands from the repository root in a worktree. Docker must have its
 `runsc-cfc` runtime registered. The two sidecar paths must match that
 registration; the values below are the macOS setup defaults described in the
-[cf-harness README](../../cf-harness/README.md). The
+[cf-harness README](../../cf-harness/README.md). `CF_HARNESS_SANDBOX_RUNTIME`
+names Docker, which neither a Mac nor Linux runs where no runtime is named (they
+default to their native `runsc` runtime; every other platform defaults to
+Docker). The
 [local server guide](../../../docs/development/LOCAL_DEV_SERVERS.md) describes
 server startup and the runner's enforcement settings.
 
@@ -71,6 +74,7 @@ export AGENT_DEMO_API_URL=http://localhost:8429
 agent_demo_memory="$agent_demo_root/memory"
 export AGENT_DEMO_STORE="$agent_demo_memory/engine-v3/engine-v3"
 export AGENT_DEMO_EVIDENCE_DIR="$agent_demo_root/evidence"
+export CF_HARNESS_SANDBOX_RUNTIME=docker
 export CF_HARNESS_RUNSC_CFC_RESULT_DIR="$HOME/.local/share/runsc-cfc/cfc-results"
 export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR="$HOME/.local/share/runsc-cfc/cfc-invocations"
 mkdir -p "$agent_demo_memory" "$AGENT_DEMO_EVIDENCE_DIR"

@@ -19,9 +19,9 @@
 import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
 import ports from "@commonfabric/ports" with { type: "json" };
+import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
 import {
   FragmentWriter,
-  markUnitsBegan,
   preloadArgument,
   RECORDS_DIR_VARIABLE,
   recordsDir,
@@ -205,12 +205,7 @@ function getCfCommand(rootDir: string): string[] {
   return [
     "deno",
     "run",
-    "--allow-net",
-    "--allow-ffi",
-    "--allow-read",
-    "--allow-write",
-    "--allow-env",
-    "--allow-run",
+    ...CF_PERMISSION_FLAGS,
     path.join(rootDir, "packages/cli/mod.ts"),
   ];
 }
@@ -436,12 +431,6 @@ async function runPatternTests(
     only?.costs ?? new Map(),
     shuffleSeed(),
   );
-
-  // The files begin here. What this process spent before now is in no
-  // file's record, and a lane charges it as this process's setup. The
-  // precompile below compiles each file's program, so what it takes grows
-  // with the files, and a lane charges it to them.
-  markUnitsBegan();
 
   // With a cache file to fill, every file's program is compiled once, in one
   // process, before any test runs. Each `cf test` child seeds from that file

@@ -11,16 +11,19 @@ import {
   consoleLaunchReport,
   DEPLOYMENT_PATTERN_INDEX_URL,
   DEPLOYMENT_SKILLS_REGISTRY_URL,
-  launchConsole,
   LAUNCHER_OWNED_VARIABLES,
   launchFailureMessage,
-  prepareConsoleLaunch,
   readDockerRuntimes,
   readOptionalFile,
   readToolshedStoreDir,
   resolveConsoleLaunchPlan,
   WEAVER_PAIRING_PORT,
 } from "../../console/launch.ts";
+import {
+  launchConsole,
+  NAMES_DOCKER,
+  prepareConsoleLaunch,
+} from "../support/on-linux.ts";
 import type { ConsoleObservedLaunchHealth } from "../../console/health.ts";
 
 const PIECES_JSON = JSON.stringify({
@@ -883,7 +886,7 @@ describe("launch", () => {
       await expect(
         prepareConsoleLaunch(
           NAMED_ARGS,
-          {},
+          { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
           io({
             readDockerRuntimes: () =>
               Promise.resolve({ unreadable: "daemon is not running" }),
@@ -1024,7 +1027,17 @@ describe("launch", () => {
       expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
         "/store/runsc-cfc/sidecars/results",
       );
-      expect(plan.resolved.map(({ name }) => name)).not.toContain("sandbox");
+      // The runtime is reported with what named it, and none of the direct
+      // driver's settings is.
+      expect(plan.resolved.filter(({ name }) => name === "sandbox")).toEqual([{
+        name: "sandbox",
+        value: "docker",
+        source: "`CF_HARNESS_SANDBOX_RUNTIME`, inherited",
+      }]);
+      const names = plan.resolved.map(({ name }) => name);
+      for (const runscOnly of ["runsc", "rootfs", "cfc policy"]) {
+        expect(names).not.toContain(runscOnly);
+      }
     });
 
     for (const flag of ["--cfc-result-dir", "--cfc-invocation-context-dir"]) {
@@ -1234,7 +1247,8 @@ describe("launch", () => {
           "--fabric-cfc-enforcement-mode",
           "observe",
         ],
-        {},
+        // The two sidecar directories are the Docker driver's.
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
         io(),
       );
 
@@ -1792,6 +1806,7 @@ describe("launch", () => {
       const run = await new Deno.Command(Deno.execPath(), {
         args: ["run", "-A", launcher.pathname],
         env: {
+          ...NAMES_DOCKER,
           CF_IDENTITY: "",
           CF_SPACE: "",
           CF_HARNESS_FABRIC_IDENTITY: "",

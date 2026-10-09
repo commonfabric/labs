@@ -60,9 +60,11 @@ import { parseFabricUrl } from "@commonfabric/runner/fabric-url";
 import { stringSchema } from "@commonfabric/runner/schemas";
 import {
   type CellHandle,
+  CellReadRefusedError,
   cellRefToIdentityKey,
   isCellHandle,
   NAME,
+  type PieceHandle,
   type PresenceEvent,
   type PresenceRecord,
   type PresenceRoomHandle,
@@ -75,6 +77,7 @@ import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   dedupeByDestination,
@@ -91,6 +94,12 @@ import {
   MentionableSchema,
 } from "../../core/mentionable.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
+import {
+  type CFTheme,
+  cfThemeContext,
+  defaultTheme,
+  resolveColorScheme,
+} from "../theme-context.ts";
 import { type StoredFile, uploadFile } from "../../utils/file-cell-storage.ts";
 import { mentionIdFromCellId } from "../../utils/mention-id.ts";
 import {
@@ -229,6 +238,23 @@ const getLangExtFromMimeType = (mime: MimeType) => {
   return langRegistry.get(mime) ?? defaultLang;
 };
 
+/** What the editor needs of a handle it computes writes from. */
+type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
+
+/**
+ * What `cell` holds, or nothing where the worker refuses its read. A piece
+ * found among the mentionable entries is read with `get()`, the one read every
+ * such handle answers, and a refusal reads as nothing rather than rejecting.
+ */
+function readUnlessRefused(cell: { get(): unknown }): unknown {
+  try {
+    return cell.get();
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
+  }
+}
+
 /**
  * CFCodeEditor - Code editor component with syntax highlighting and debounced changes
  *
@@ -257,7 +283,10 @@ const getLangExtFromMimeType = (mime: MimeType) => {
  *   (e.g. "700px", "50rem"). Default: undefined
  * @attr {number} tabSize - Tab size (spaces shown for a tab, default: 2)
  * @attr {boolean} tabIndent - Indent on Tab key (default: true)
- * @attr {"light"|"dark"} theme - Editor theme mode; "dark" enables oneDark.
+ * @attr {"light"|"dark"} theme - "dark" paints the editor with oneDark's own
+ *   palette. "light", the default, paints it with the `--cf-theme-*` tokens and
+ *   follows the nearest `<cf-theme>`'s color scheme, light or dark; wrap the
+ *   editor in its own `<cf-theme>` to give it a different scheme from the page.
  * @attr {"code"|"prose"} mode - Editor mode; "prose" enables markdown prose editing.
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
@@ -382,6 +411,17 @@ export class CFCodeEditor extends BaseElement {
   @property({ attribute: false })
   accessor contextSpace: DID | undefined = undefined;
 
+  /**
+   * The nearest `<cf-theme>`'s theme. Its color scheme tells CodeMirror
+   * whether it sits on a dark page, so the caret, selection, tooltips and
+   * panels CodeMirror draws itself stay legible on the surface the
+   * `--cf-theme-*` tokens paint. With no `<cf-theme>` above, those tokens
+   * fall back to their light values, and so does this.
+   */
+  @consume({ context: cfThemeContext, subscribe: true })
+  @property({ attribute: false })
+  accessor ambientTheme: CFTheme = { ...defaultTheme, colorScheme: "light" };
+
   private _editorView: EditorView | undefined;
   private _lang = new Compartment();
   private _readonly = new Compartment();
@@ -397,6 +437,13 @@ export class CFCodeEditor extends BaseElement {
   private _proseMarkdownComp = new Compartment();
   private _collaborationComp = new Compartment();
   private _presenceComp = new Compartment();
+  /**
+   * Holds the editor read-only while a read it computes its writes from is
+   * refused ({@link _readsWithheld}); empty otherwise.
+   */
+  private _refusedComp = new Compartment();
+  /** Whether {@link _refusedComp} holds the editor read-only now. */
+  private _refusedShown = false;
   private _collaboration: CodeMirrorCollaborationController | undefined;
   private _collaborationSyncUnsub: (() => void) | undefined;
   private _presence: PresenceRoomHandle | undefined;
@@ -514,8 +561,15 @@ export class CFCodeEditor extends BaseElement {
    * input. The update listener checks this annotation and skips `setValue()`
    * for cell-originated changes, preventing the feedback loop: cell → editor
    * → update listener → `setValue()` → cell...
+   *
+   * `"mirror"` marks the change that makes the editor show what the content
+   * cell holds, the one change that lands while a read is refused;
+   * `"rewrite"` marks one the editor computed from another cell, such as a
+   * destination's new name, which it writes back itself.
    */
-  private static _cellSyncAnnotation = Annotation.define<boolean>();
+  private static _cellSyncAnnotation = Annotation.define<
+    "mirror" | "rewrite"
+  >();
 
   private _cellController = createStringCellController(this, {
     timing: {
@@ -565,9 +619,193 @@ export class CFCodeEditor extends BaseElement {
     return !!this.references;
   }
 
-  /** The reference map's current contents. */
+  /**
+   * Whether a read the editor computes its writes from holds no value: the
+   * worker refused it, or has not answered it yet. The reads are the content
+   * (`value`), `$mentionable`, which resolves a wiki-link's id to its piece
+   * and says which pieces exist, `$references`, which resolves a reference's
+   * key and says which keys are taken, and `$mentioned`, which the editor
+   * compares what it would write against. Such a read holds nothing, and
+   * reads as empty: an editor emptied by a refused content cell would write
+   * `$mentioned` with none of the document's mentions, one whose list of
+   * pieces has not loaded would drop every mention it resolves, and one whose
+   * list is refused would create a piece for a query the list might have
+   * answered. The editor asks the worker for each read it has not had
+   * answered ({@link _askUnread}).
+   *
+   * So while any is withheld the editor computes no write at all. One gate
+   * stands at each kind of write: the document takes no change but the one
+   * that mirrors the content cell (`changeFilter`, and the read-only
+   * {@link _refusedComp} for the person at the keyboard); every cell write
+   * goes through {@link _write}, every content write through
+   * {@link setValue}, and every piece is created through
+   * {@link _createPiece}. Each also returns before it records anything that
+   * would make a later write wrong, and runs again once the read is
+   * admitted.
+   */
+  private get _readsWithheld(): boolean {
+    return this._cellController.refusal !== undefined ||
+      this._inputs().some((handle) => !("value" in handle.lastRead()));
+  }
+
+  /** The handles the editor computes its writes from. */
+  private _inputs(): EditorInput[] {
+    const inputs: EditorInput[] = [];
+    const content = this._cellController.getCell();
+    if (content) inputs.push(content);
+    if (this.mentionable) inputs.push(this.mentionable);
+    if (this.references) inputs.push(this.references);
+    if (this.mentioned) inputs.push(this.mentioned);
+    return inputs;
+  }
+
+  /** Inputs whose read the editor has asked the worker for. */
+  private readonly _asked = new WeakSet<EditorInput>();
+
+  /**
+   * Asks the worker to read each input that has read nothing yet. A
+   * subscription delivers nothing for a cell that holds nothing, so without
+   * a read of its own the editor would wait on such a cell for good; a pull
+   * loads the document and answers either way, and the answer reaches the
+   * editor through its subscription, a refusal as much as a value.
+   */
+  private _askUnread(): void {
+    for (const handle of this._inputs()) {
+      if (this._asked.has(handle) || !("unread" in handle.lastRead())) {
+        continue;
+      }
+      this._asked.add(handle);
+      handle.pull({ awaitDurability: false }).catch((error) => {
+        if (error instanceof CellReadRefusedError) return;
+        // Asked again at the next change the editor hears, rather than left
+        // read-only for good.
+        console.error("[cf-code-editor] Reading an input failed:", error);
+        this._asked.delete(handle);
+      });
+    }
+  }
+
+  /**
+   * Writes `value` to `cell`, unless a read the editor computes its writes
+   * from is refused ({@link _readsWithheld}). Every cell write the editor
+   * makes goes through here, so a write a refusal arrived ahead of, such as
+   * the entry for a piece whose create returned after it, writes nothing.
+   * Returns whether it wrote.
+   */
+  private _write<V>(cell: CellHandle<V>, value: V): boolean {
+    if (this._readsWithheld) return false;
+    void cell.set(value);
+    return true;
+  }
+
+  /**
+   * Creates a piece titled `title` from `$pattern`, in the pattern's space,
+   * or none while a read the editor computes its writes from is refused.
+   *
+   * @throws When the pattern holds no program, or the create fails.
+   */
+  private async _createPiece(
+    title: string,
+  ): Promise<PieceHandle<unknown> | undefined> {
+    if (this._readsWithheld) return undefined;
+    const program = this.pattern.get();
+    if (!program) throw new Error("Could not read pattern.");
+    const inputs: Record<string, unknown> = {
+      title,
+      content: "",
+      noteId: generateNoteId(),
+    };
+    const piece = await this.pattern.runtime().createPiece(
+      JSON.parse(program),
+      this.pattern.space(),
+      inputs,
+    );
+    if (!piece) throw new Error("Could not create piece.");
+    return piece;
+  }
+
+  /**
+   * While a read the editor computes its writes from is refused, the
+   * document takes no change but the one that mirrors the content cell, or a
+   * collaborator's, whatever dispatched it: a keystroke, a completion, a
+   * paste, or a rewrite. The filter asks {@link _readsWithheld} for each
+   * change, so it never lags a refusal; {@link _refusedComp} tells the
+   * person at the keyboard.
+   */
+  private _refusalGate(): Extension {
+    return [
+      EditorState.changeFilter.of((transaction) =>
+        !this._readsWithheld ||
+        transaction.annotation(CFCodeEditor._cellSyncAnnotation) ===
+          "mirror" ||
+        transaction.annotation(Transaction.remote) === true
+      ),
+      this._refusedComp.of(this._refusedExtension()),
+    ];
+  }
+
+  /** What {@link _refusedComp} holds while {@link _readsWithheld}. */
+  private _refusedExtension(): Extension {
+    return this._readsWithheld
+      ? Prec.highest([
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+      ])
+      : [];
+  }
+
+  /**
+   * Holds the editor read-only while a read it computes its writes from is
+   * refused, and editable again once it is admitted. Called wherever such a
+   * read is heard; what keeps a change from landing is the change filter,
+   * which asks {@link _readsWithheld} itself.
+   */
+  private _syncRefusalGate(): void {
+    this._askUnread();
+    const refused = this._readsWithheld;
+    if (!this._editorView || refused === this._refusedShown) return;
+    this._refusedShown = refused;
+    this._editorView.dispatch({
+      effects: this._refusedComp.reconfigure(this._refusedExtension()),
+    });
+    // Deferred, as this can run inside an update.
+    if (!refused) queueMicrotask(() => this._catchUp());
+  }
+
+  /**
+   * Reference keys whose token a create or a paste left without an entry
+   * because a read was withheld when it returned.
+   */
+  private readonly _strandedRefKeys = new Set<string>();
+
+  /**
+   * Makes up, once every read the editor writes from is admitted again, for
+   * what it passed over meanwhile: a token left without an entry goes, and a
+   * rename that arrived, of a backlink's piece or a reference's destination,
+   * is applied from the name each holds now.
+   */
+  private _catchUp(): void {
+    if (this._readsWithheld) return;
+    for (const key of this._strandedRefKeys) this._removeRefToken(key);
+    this._strandedRefKeys.clear();
+    for (const [key, name] of this._refNames) {
+      void this._handleExternalRefTitleChange(key, name);
+    }
+    for (const pieceId of this._pieceNameSubscriptions.keys()) {
+      // A title the worker refuses leaves the link text as written.
+      if (this._refusedTitles.has(pieceId)) continue;
+      const pieceCell = this.findPieceById(pieceId);
+      if (pieceCell) void this._handleExternalTitleChange(pieceId, pieceCell);
+    }
+  }
+
+  /** Pieces whose title subscription the worker last refused, by id. */
+  private readonly _refusedTitles = new Set<string>();
+
+  /** The reference map's current contents, for display. */
   private _refMap(): MentionRefMap {
-    return (this.references?.get() ?? {}) as MentionRefMap;
+    return ((this.references ? valueForDisplay(this.references) : undefined) ??
+      {}) as MentionRefMap;
   }
 
   /**
@@ -759,7 +997,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return [];
 
-    const rows = (handle.get() ?? []) as MentionableArray;
+    const rows = (valueForDisplay(handle) ?? []) as MentionableArray;
     const matches: Array<[CellHandle<Mentionable>, number, string]> = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -823,7 +1061,7 @@ export class CFCodeEditor extends BaseElement {
       return [];
     }
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     if (mentionableData.length === 0) {
       return [];
@@ -870,7 +1108,9 @@ export class CFCodeEditor extends BaseElement {
     query: string,
     match: "contains" | "exact" = "contains",
   ): boolean {
-    const mentionableData = (this.mentionable?.get() ?? []) as MentionableArray;
+    const mentionableData =
+      ((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
+        []) as MentionableArray;
     const queryLower = query.toLowerCase();
     return mentionableData.some((mention, index) => {
       if (!this._isIndexRow(index) || this._resolvedPieceIds.has(index)) {
@@ -925,7 +1165,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     const queryLower = query.toLowerCase();
 
@@ -945,6 +1185,10 @@ export class CFCodeEditor extends BaseElement {
 
   /** Completes an exact mention or creates when no exact row is present. */
   private _completeBacklinkQuery(view: EditorView, text: string): void {
+    // A universe the worker refuses says nothing of which pieces exist, so a
+    // query it might have answered is no reason to create one: the query
+    // stays as typed. Nor is anything else written while a read is refused.
+    if (this._readsWithheld) return;
     const exactMatch = this._findExactMentionable(text);
     if (exactMatch) {
       const [matchCell, matchIndex] = exactMatch;
@@ -1063,9 +1307,12 @@ export class CFCodeEditor extends BaseElement {
     if (!map) return null;
 
     const key = mintRefKey(this._takenRefKeys());
-    map.key(key).set(
-      { destination, modifiedTitle: false } as unknown as MentionRef,
-    );
+    if (
+      !this._write(
+        map.key(key),
+        { destination, modifiedTitle: false } as unknown as MentionRef,
+      )
+    ) return null;
     // Ours to collect: a key this editor minted can be swept when its token
     // goes, without waiting for a reload to observe it.
     this._refKeysAtLoad?.add(key);
@@ -1166,21 +1413,15 @@ export class CFCodeEditor extends BaseElement {
 
     const rt = this.pattern.runtime();
     try {
-      const program = this.pattern.get();
-      if (!program) throw new Error("Could not read pattern.");
-
-      // Same input bag the wiki-link path builds, and typed the same way.
-      const inputs: Record<string, unknown> = {
-        title: label,
-        content: "",
-        noteId: generateNoteId(),
-      };
-      const piece = await rt.createPiece(
-        JSON.parse(program),
-        this.pattern.space(),
-        inputs,
-      );
-      if (!piece) throw new Error("Could not create piece.");
+      const piece = await this._createPiece(label);
+      // A refusal that arrived before or during the create stands against
+      // telling the host, which registers the piece by writing it into a
+      // list, and against the entry: the token goes once the read is
+      // admitted.
+      if (!piece || this._readsWithheld) {
+        this._strandedRefKeys.add(key);
+        return;
+      }
 
       // The piece exists whether or not its token survived, so the host hears
       // about it either way and can register it.
@@ -1197,10 +1438,16 @@ export class CFCodeEditor extends BaseElement {
       if (!this._findRefToken(key)) return;
 
       const destination = piece.cell() as unknown as CellHandle<unknown>;
-      this.references?.key(key).set(
-        { destination, modifiedTitle: false } as unknown as MentionRef,
-      );
-      this._refKeysAtLoad?.add(key);
+      const map = this.references;
+      if (
+        map &&
+        this._write(
+          map.key(key),
+          { destination, modifiedTitle: false } as unknown as MentionRef,
+        )
+      ) {
+        this._refKeysAtLoad?.add(key);
+      }
     } catch (error) {
       // A disposal race (logout, runtime swap) cancels the create; that is
       // cancellation, not a failure to surface.
@@ -1422,23 +1669,14 @@ export class CFCodeEditor extends BaseElement {
     // `this.runtime` (which RootView clears to undefined on logout).
     const rt = this.pattern.runtime();
     try {
-      const program = this.pattern.get();
-      if (!program) return;
-      const pattern = JSON.parse(program);
-
-      // Provide mentionable list so the pattern can wire backlinks immediately
-      const inputs: Record<string, unknown> = {
-        title: backlinkText,
-        content: "",
-        noteId: generateNoteId(),
-      };
-
       // The note is created in the same space as the pattern it backlinks
       // from — creation, like every piece op, names its space.
-      const piece = await rt.createPiece(pattern, this.pattern.space(), inputs);
-      if (!piece) {
-        throw new Error("Could not create piece.");
-      }
+      const piece = await this._createPiece(backlinkText);
+      if (!piece) return;
+      // A refusal that arrived during the create stands against linking the
+      // piece and telling the host, which registers it by writing it into a
+      // list.
+      if (this._readsWithheld) return;
       const pieceId = piece.id();
 
       // Insert the ID into the text if we have an editor
@@ -1516,7 +1754,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     if (mentionableData.length === 0) return null;
 
@@ -1552,7 +1790,9 @@ export class CFCodeEditor extends BaseElement {
    * surfaces withhold it rather than mint an id naming the row.
    */
   private _isIndexRow(index: number): boolean {
-    const item = ((this.mentionable?.get() ?? []) as MentionableArray)[index];
+    const item =
+      (((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
+        []) as MentionableArray)[index];
     return item != null && Object.hasOwn(item, "piece");
   }
 
@@ -1593,7 +1833,7 @@ export class CFCodeEditor extends BaseElement {
 
     this._mentionResolutionPending = true;
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     // Keep a reference to the current mentionable to detect a rebind, and a
     // generation to detect a newer pass over the SAME handle: contents can
@@ -1671,7 +1911,12 @@ export class CFCodeEditor extends BaseElement {
     return this._cellController.getValue();
   }
 
+  /**
+   * Writes the content, as every content write the editor makes does, unless
+   * a read it computes its writes from is refused ({@link _readsWithheld}).
+   */
   private setValue(newValue: string): void {
+    if (this._readsWithheld) return;
     this._cellController.setValue(newValue);
   }
 
@@ -1723,7 +1968,14 @@ export class CFCodeEditor extends BaseElement {
         insert: newValue,
       },
       selection: { anchor: anchorPos, head: headPos },
-      annotations: CFCodeEditor._cellSyncAnnotation.of(true),
+      // What the content cell holds is no edit of the user's, so it is kept
+      // out of the undo history, as a collaborator's change is: an undo
+      // after a refusal and its admission would otherwise bring back the
+      // empty document the refusal mirrored, and write it.
+      annotations: [
+        CFCodeEditor._cellSyncAnnotation.of("mirror"),
+        Transaction.addToHistory.of(false),
+      ],
     });
 
     // Content that arrived from outside replaces what "already there" means,
@@ -1783,14 +2035,18 @@ export class CFCodeEditor extends BaseElement {
     if (this._cellController.hasCell()) {
       const cell = this._cellController.getCell();
       if (cell) {
-        this._cellSyncUnsub = cell.subscribe(() => {
+        // A refusal empties the editor, as the controller reads a refused
+        // cell, and holds it read-only: nothing is written back over it.
+        const sync = () => {
+          this._syncRefusalGate();
           // First update the editor content
           this._updateEditorFromCellValue();
           // Then trigger component update if originally enabled
           if (originalTriggerUpdate) {
             this.requestUpdate();
           }
-        });
+        };
+        this._cellSyncUnsub = cell.subscribe(sync, { onRefused: sync });
       }
     }
   }
@@ -2218,16 +2474,21 @@ export class CFCodeEditor extends BaseElement {
     // this.mentionable is already wrapped with asSchema(MentionableArraySchema)
     // in willUpdate, so the runtime resolves @link indirection before
     // delivering values to subscribers.
-    const unsubscribe = this.mentionable
-      .subscribe((_value) => {
-        // Clear stale resolved IDs and re-resolve asynchronously. The
-        // $mentioned reconciliation waits for the resolution pass (which
-        // runs it on publish): against cleared maps an index-row backlink
-        // has no id, and reconciling in that window would transiently drop
-        // its edge only to re-add it moments later.
-        this._forgetResolvedPieces();
-        this._resolvePieceIds();
-      });
+    // A refused list offers nothing to complete or resolve, and nothing is
+    // written while it stands (`_readsWithheld`).
+    const resolve = () => {
+      this._syncRefusalGate();
+      // Clear stale resolved IDs and re-resolve asynchronously. The
+      // $mentioned reconciliation waits for the resolution pass (which
+      // runs it on publish): against cleared maps an index-row backlink
+      // has no id, and reconciling in that window would transiently drop
+      // its edge only to re-add it moments later.
+      this._forgetResolvedPieces();
+      this._resolvePieceIds();
+    };
+    const unsubscribe = this.mentionable.subscribe(resolve, {
+      onRefused: resolve,
+    });
     this._mentionableUnsub = unsubscribe;
   }
 
@@ -2244,11 +2505,24 @@ export class CFCodeEditor extends BaseElement {
     if (!this.mentioned) return;
     // this.mentioned is already wrapped with asSchema(MentionableArraySchema)
     // in willUpdate.
-    const unsubscribe = this.mentioned
-      .subscribe((_value) => {
-        // Re-sync piece name subscriptions when mentioned list changes externally
+    // Re-sync piece name subscriptions when mentioned list changes externally,
+    // or is refused, which subscribes to no piece's name. Reconciliation
+    // passed over while the list was refused runs once it is admitted again.
+    let refused = false;
+    const unsubscribe = this.mentioned.subscribe(() => {
+      this._syncRefusalGate();
+      this._setupPieceNameSubscriptions();
+      if (refused) {
+        refused = false;
+        this._updateMentionedFromContent();
+      }
+    }, {
+      onRefused: () => {
+        refused = true;
+        this._syncRefusalGate();
         this._setupPieceNameSubscriptions();
-      });
+      },
+    });
     this._mentionedUnsub = unsubscribe;
   }
 
@@ -2266,7 +2540,10 @@ export class CFCodeEditor extends BaseElement {
     if (!this.references) return;
     // this.references is already wrapped with asSchema(MentionRefMapSchema)
     // in willUpdate.
-    this._referencesUnsub = this.references.subscribe(() => {
+    // A refused map resolves no key, and nothing is written while it stands
+    // (`_readsWithheld`).
+    const sync = () => {
+      this._syncRefusalGate();
       this._publishKnownRefKeys();
       // A reference the map has just made visible was not there to be tracked
       // when the document loaded. Without this, its first label edit reads as
@@ -2274,6 +2551,9 @@ export class CFCodeEditor extends BaseElement {
       this._seedRefLabelBaseline();
       this._setupRefDestinationSubscriptions();
       this._updateMentionedFromContent();
+    };
+    this._referencesUnsub = this.references.subscribe(sync, {
+      onRefused: sync,
     });
   }
 
@@ -2496,11 +2776,12 @@ export class CFCodeEditor extends BaseElement {
     }
 
     // Update theme plugin
-    if (changedProperties.has("theme") && this._editorView) {
+    if (
+      (changedProperties.has("theme") ||
+        changedProperties.has("ambientTheme")) && this._editorView
+    ) {
       this._editorView.dispatch({
-        effects: this._themeComp.reconfigure(
-          this.theme === "dark" ? oneDark : [],
-        ),
+        effects: this._themeComp.reconfigure(this._themeExtension()),
       });
     }
 
@@ -2524,6 +2805,10 @@ export class CFCodeEditor extends BaseElement {
         this._cancelAutofocus();
       }
     }
+
+    // A handle bound or re-wrapped in this update starts in the refusal it
+    // was made from.
+    this._syncRefusalGate();
   }
 
   protected override firstUpdated(_changedProperties: PropertyValues): void {
@@ -2558,6 +2843,7 @@ export class CFCodeEditor extends BaseElement {
     // Set up subscriptions for bidirectional NAME sync
     this._setupPieceNameSubscriptions();
 
+    this._syncRefusalGate();
     this._queueAutofocus();
   }
 
@@ -2712,6 +2998,17 @@ export class CFCodeEditor extends BaseElement {
     ];
   }
 
+  /**
+   * oneDark when `theme` asks for it; otherwise CodeMirror's own light or
+   * dark base, picked by the ambient color scheme.
+   */
+  private _themeExtension(): Extension {
+    if (this.theme === "dark") return oneDark;
+    return EditorView.darkTheme.of(
+      resolveColorScheme(this.ambientTheme.colorScheme) === "dark",
+    );
+  }
+
   private _getModeExtension(): Extension {
     if (this.mode !== "prose") return [];
 
@@ -2791,8 +3088,8 @@ export class CFCodeEditor extends BaseElement {
             : [] as unknown as Extension;
         })(),
       ),
-      // Theme (dark -> oneDark)
-      this._themeComp.of(this.theme === "dark" ? oneDark : []),
+      // Theme (dark -> oneDark, else the ambient color scheme)
+      this._themeComp.of(this._themeExtension()),
       // Prose/code mode extensions
       this._modeComp.of(this._getModeExtension()),
       this._proseMarkdownComp.of(
@@ -2800,6 +3097,7 @@ export class CFCodeEditor extends BaseElement {
       ),
       this._collaborationComp.of([]),
       this._presenceComp.of([]),
+      this._refusalGate(),
       EditorView.updateListener.of((update) =>
         this._handleEditorUpdate(update)
       ),
@@ -2817,17 +3115,7 @@ export class CFCodeEditor extends BaseElement {
           this._publishPresence();
           return false;
         },
-        paste: (event, view) => {
-          if (this.readonly || this.disabled) return false;
-          const files = Array.from(event.clipboardData?.files ?? [])
-            .filter((file) => file.type.startsWith("image/"));
-          if (files.length > 0) {
-            event.preventDefault();
-            this._handleImagePaste(files, view);
-            return true;
-          }
-          return this._handleUrlPaste(event, view);
-        },
+        paste: (event, view) => this._handlePaste(event, view),
       }),
       // Add backlink click handler for Cmd/Ctrl+Click
       this.createBacklinkClickHandler(),
@@ -2937,6 +3225,7 @@ export class CFCodeEditor extends BaseElement {
       state,
       parent: editorElement,
     });
+    this._refusedShown = this._readsWithheld;
   }
 
   override render() {
@@ -2964,6 +3253,25 @@ export class CFCodeEditor extends BaseElement {
    */
   get editorView(): EditorView | undefined {
     return this._editorView;
+  }
+
+  /**
+   * Takes over a paste of images, which it stores and links, or of a URL
+   * naming a piece, which it mentions; any other paste falls through to the
+   * editor. Nothing is taken over while the editor is read-only, disabled,
+   * or a read it computes its writes from is refused: storing an image or
+   * minting a mention is a write.
+   */
+  private _handlePaste(event: ClipboardEvent, view: EditorView): boolean {
+    if (this.readonly || this.disabled || this._readsWithheld) return false;
+    const files = Array.from(event.clipboardData?.files ?? [])
+      .filter((file) => file.type.startsWith("image/"));
+    if (files.length > 0) {
+      event.preventDefault();
+      this._handleImagePaste(files, view);
+      return true;
+    }
+    return this._handleUrlPaste(event, view);
   }
 
   /**
@@ -3033,13 +3341,23 @@ export class CFCodeEditor extends BaseElement {
       // flight, exactly as for a mention whose piece is being created.
       if (!this._findRefToken(key)) return;
 
-      this.references?.key(key).set(
-        {
-          destination: destination as unknown as CellHandle<unknown>,
-          modifiedTitle: false,
-        } as unknown as MentionRef,
-      );
-      this._refKeysAtLoad?.add(key);
+      const map = this.references;
+      if (
+        map &&
+        this._write(
+          map.key(key),
+          {
+            destination: destination as unknown as CellHandle<unknown>,
+            modifiedTitle: false,
+          } as unknown as MentionRef,
+        )
+      ) {
+        this._refKeysAtLoad?.add(key);
+      } else if (this._readsWithheld) {
+        // Its entry was not written; the token goes once the read is
+        // admitted.
+        this._strandedRefKeys.add(key);
+      }
     } catch (error) {
       if (rt.signal.aborted) return;
       console.error("Error resolving a pasted mention:", error);
@@ -3115,8 +3433,12 @@ export class CFCodeEditor extends BaseElement {
     try {
       const storedFiles: StoredFile[] = [];
       for (const file of files) {
+        // A refusal that arrived during an upload stands against the rest,
+        // and against the insert, which the editor no longer takes.
+        if (this._readsWithheld) return;
         storedFiles.push(await uploadFile({ file, runtime, space }));
       }
+      if (this._readsWithheld) return;
 
       const markdown = storedFiles
         .map((file) =>
@@ -3150,6 +3472,9 @@ export class CFCodeEditor extends BaseElement {
    */
   private _updateMentionedFromContent(content?: string): void {
     if (!this.mentioned) return;
+    // Left as it is while a read the editor computes from is refused, the
+    // content among them. The read's admission runs this again.
+    if (this._readsWithheld) return;
     content ??= this._editorView?.state.doc.toString() ?? this.getValue() ?? "";
     if (this._mentionResolutionPending) {
       this._deferredMentionedContent = content;
@@ -3183,7 +3508,7 @@ export class CFCodeEditor extends BaseElement {
 
     // Resolve IDs to Mentionable values and update the cell
     const newMentioned = this._extractMentionedPieces(content);
-    this.mentioned.set(newMentioned);
+    this._write(this.mentioned, newMentioned);
     this._setupPieceNameSubscriptions();
   }
 
@@ -3213,17 +3538,22 @@ export class CFCodeEditor extends BaseElement {
     const destinations = this._refMentionedPieces(refs);
     const resolvedEverything = destinations.length ===
       new Set(refs.map((ref) => ref.key)).size;
-    this._lastMentionedSignature = resolvedEverything ? signature : null;
 
     // One entry per destination, however many mentions name it. The backlinks
     // index pushes a backlink per entry, so a piece mentioned twice — or once
     // in each form — would otherwise be linked back twice.
-    this.mentioned?.set(
-      dedupeByDestination(
-        [...this._extractMentionedPieces(content), ...destinations],
-        (piece) => isCellHandle(piece) ? piece.id() : undefined,
-      ),
-    );
+    const written = this.mentioned !== undefined &&
+      this._write(
+        this.mentioned,
+        dedupeByDestination(
+          [...this._extractMentionedPieces(content), ...destinations],
+          (piece) => isCellHandle(piece) ? piece.id() : undefined,
+        ),
+      );
+    // Recorded only for a write that went, so one passed over is tried again.
+    this._lastMentionedSignature = written && resolvedEverything
+      ? signature
+      : null;
     this._setupPieceNameSubscriptions();
     this._setupRefDestinationSubscriptions();
   }
@@ -3250,12 +3580,14 @@ export class CFCodeEditor extends BaseElement {
     const mentionedHandle = this.mentioned;
     if (!mentionedHandle) return curIds;
 
-    const currentSource = (mentionedHandle.get() ?? []) as MentionableArray;
+    const currentSource =
+      (valueForDisplay(mentionedHandle) ?? []) as MentionableArray;
 
     const mentionableHandle = this.mentionable;
     if (!mentionableHandle) return curIds;
 
-    const mentionableData = (mentionableHandle.get() ?? []) as MentionableArray;
+    const mentionableData =
+      (valueForDisplay(mentionableHandle) ?? []) as MentionableArray;
 
     // For each current mentioned value, find its ID by matching in mentionable
     for (const mentionedValue of currentSource) {
@@ -3301,7 +3633,14 @@ export class CFCodeEditor extends BaseElement {
 
       // Subscribe with changeGroup so our own edits are filtered out
       const unsub = titleCell.subscribe(() => {
+        this._refusedTitles.delete(pieceId);
         void this._handleExternalTitleChange(pieceId, pieceCell);
+      }, {
+        // A title the worker will not show leaves the link text as written,
+        // now and when the editor catches up.
+        onRefused: () => {
+          this._refusedTitles.add(pieceId);
+        },
       });
 
       this._pieceNameSubscriptions.set(pieceId, unsub);
@@ -3312,6 +3651,7 @@ export class CFCodeEditor extends BaseElement {
       if (!activeIds.has(id)) {
         unsub();
         this._pieceNameSubscriptions.delete(id);
+        this._refusedTitles.delete(id);
       }
     }
   }
@@ -3344,9 +3684,13 @@ export class CFCodeEditor extends BaseElement {
       ) return;
     }
 
-    // Get the piece's title (without emoji prefix)
-    const title = pieceCell.key("title").get() as string;
-    if (!title) return;
+    // Nothing is rewritten while a read is refused.
+    if (this._readsWithheld) return;
+
+    // Get the piece's title (without emoji prefix). A title the worker
+    // refuses, or has not answered, rewrites nothing.
+    const title = readUnlessRefused(pieceCell.key("title"));
+    if (typeof title !== "string" || !title) return;
 
     // Find backlink in document
     const backlinks = this._editorView.state.field(backlinkField);
@@ -3360,8 +3704,8 @@ export class CFCodeEditor extends BaseElement {
     if (docNameStripped === title) return;
 
     // Get the full NAME (with emoji) to insert into document
-    const currentName = pieceCell.key(NAME).get() as string;
-    if (!currentName) return;
+    const currentName = readUnlessRefused(pieceCell.key(NAME));
+    if (typeof currentName !== "string" || !currentName) return;
 
     // Update tracking map BEFORE dispatch so _detectAndSyncNameChanges doesn't
     // try to sync this change back to the piece (it runs synchronously during dispatch)
@@ -3374,7 +3718,7 @@ export class CFCodeEditor extends BaseElement {
     // ordinary path writes through CellController as before.
     this._editorView.dispatch({
       changes: { from: bl.nameFrom, to: bl.nameTo, insert: currentName },
-      annotations: CFCodeEditor._cellSyncAnnotation.of(true),
+      annotations: CFCodeEditor._cellSyncAnnotation.of("rewrite"),
       effects: codeMirrorRewriteDedupeEffect.of(
         JSON.stringify(["backlink-title", pieceId, bl.name, currentName]),
       ),
@@ -3410,6 +3754,7 @@ export class CFCodeEditor extends BaseElement {
       unsub();
     }
     this._pieceNameSubscriptions.clear();
+    this._refusedTitles.clear();
   }
 
   /**
@@ -3446,7 +3791,10 @@ export class CFCodeEditor extends BaseElement {
    */
   private _detectRefLabelChanges(): void {
     const map = this.references;
-    if (!map) return;
+    // A refused map says nothing of which labels the user has claimed. No
+    // label is edited while a read is refused, which holds the editor
+    // read-only.
+    if (!map || this._readsWithheld) return;
 
     const entries = this._refMap();
     const current = new Map<string, string>();
@@ -3474,7 +3822,7 @@ export class CFCodeEditor extends BaseElement {
       // fires on a label change would otherwise stop hearing about a mention
       // after the first time the user renamed it.
       if (!!entry.modifiedTitle !== modifiedTitle) {
-        map.key(ref.key).key("modifiedTitle").set(modifiedTitle);
+        this._write(map.key(ref.key).key("modifiedTitle"), modifiedTitle);
       }
 
       this.emit("mention-ref-label-changed", {
@@ -3498,7 +3846,10 @@ export class CFCodeEditor extends BaseElement {
    */
   private _collectUnreferencedRefEntries(): void {
     const map = this.references;
-    if (!map || this._refKeysAtLoad === null || !this._editorView) return;
+    if (
+      !map || this._readsWithheld || this._refKeysAtLoad === null ||
+      !this._editorView
+    ) return;
 
     const doc = this._editorView.state.doc.toString();
     // A document that has not loaded names nothing, which is not the same as
@@ -3525,8 +3876,9 @@ export class CFCodeEditor extends BaseElement {
       // Per key, rather than writing the whole map back. A blind write of a
       // snapshot would take an entry another client added between the read
       // and the write down with it.
-      map.key(key).set(undefined as unknown as MentionRef);
-      this._refKeysAtLoad.delete(key);
+      if (this._write(map.key(key), undefined as unknown as MentionRef)) {
+        this._refKeysAtLoad.delete(key);
+      }
     }
   }
 
@@ -3581,6 +3933,10 @@ export class CFCodeEditor extends BaseElement {
           queueMicrotask(() =>
             void this._handleExternalRefTitleChange(key, name)
           );
+        }, {
+          // A name the worker will not show leaves the reference's text as
+          // written.
+          onRefused: () => {},
         }),
       });
     }
@@ -3625,7 +3981,9 @@ export class CFCodeEditor extends BaseElement {
     // nothing to name.
     if (!this.references) return {};
 
-    const rows = (this.mentionable?.get() ?? []) as MentionableArray;
+    const rows =
+      ((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
+        []) as MentionableArray;
     const namesByPiece = new Map<string, string>();
     for (let index = 0; index < rows.length; index++) {
       const pieceCell = this._resolvedPieceCells.get(index);
@@ -3707,7 +4065,9 @@ export class CFCodeEditor extends BaseElement {
         !this._editorView
       ) return;
     }
-    if (this._refMap()[key]?.modifiedTitle) return;
+    // Nothing is rewritten while a read is refused: a refused map says
+    // nothing of whether the user claimed this label.
+    if (this._readsWithheld || this._refMap()[key]?.modifiedTitle) return;
 
     const ref = this._documentRefs().find((candidate) => candidate.key === key);
     if (!ref || ref.label === labelForToken(name)) return;
@@ -3720,7 +4080,7 @@ export class CFCodeEditor extends BaseElement {
     const oldDocValue = this._editorView.state.doc.toString();
     this._editorView.dispatch({
       changes: { from: ref.labelFrom, to: ref.labelTo, insert: safe },
-      annotations: CFCodeEditor._cellSyncAnnotation.of(true),
+      annotations: CFCodeEditor._cellSyncAnnotation.of("rewrite"),
       effects: codeMirrorRewriteDedupeEffect.of(
         JSON.stringify(["reference-title", key, ref.label, safe]),
       ),
@@ -3842,7 +4202,7 @@ export class CFCodeEditor extends BaseElement {
 
     // Update 'title' field - for note patterns, NAME is computed from title
     // (NAME = `📝 ${title}`) so setting title will update NAME automatically
-    pieceCell.key("title").set(titleValue);
+    if (!this._write(pieceCell.key("title"), titleValue)) return;
 
     this.emit("backlink-name-changed", {
       pieceId,

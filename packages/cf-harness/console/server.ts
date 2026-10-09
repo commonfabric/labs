@@ -30,13 +30,25 @@
  * CLI capability is taken here: the Docker image and the Docker runtime name
  * are not.
  *
- * The sandbox runtime is selected as the interactive entrypoints select it:
- * from the environment alone, by the variables the CLI reads
- * (`CF_HARNESS_SANDBOX_RUNTIME` and its companions), through the derivation
- * every entrypoint shares. The CLI's three selection flags are refused rather
- * than ignored, because `console:launch` reads the same environment to decide
- * whether Docker is involved at all, and a flag it cannot see would leave the
- * launch and the server describing two different sandboxes.
+ * The sandbox runtime is selected as the interactive entrypoints select it,
+ * through the derivation every entrypoint shares. What names a runtime is the
+ * environment alone, by the variables the CLI reads
+ * (`CF_HARNESS_SANDBOX_RUNTIME` and its companions); the CLI's three
+ * selection flags are refused rather than ignored, because `console:launch`
+ * reads the same environment to decide whether Docker is involved at all,
+ * and a flag it cannot see would leave the launch and the server describing
+ * two different sandboxes. Where the environment names none, a console takes
+ * its platform's default, the native runtime on macOS (Apple silicon alone:
+ * any other Mac is refused) and Linux and Docker elsewhere. On Linux the
+ * default network needs `pasta` and `setpriv` (and for root `unshare`), which
+ * a `none` or `host` network does not, and a console that is not root needs
+ * unprivileged user namespaces whatever the network
+ * (`user.max_user_namespaces`, `kernel.unprivileged_userns_clone`,
+ * `kernel.apparmor_restrict_unprivileged_userns`; a refusal names the
+ * `sysctl -w`),
+ * unless `host.sandboxRuntimeNamedBy` says its caller must name one, as
+ * `console:launch` says for a console it launches for a Loom instance; that
+ * console is refused on every platform instead.
  *
  * The one piece of configuration this surface insists on is the fabric
  * session, whose space has to be a name rather than a `did:key`: `assign_slug`
@@ -90,7 +102,13 @@ import {
 } from "../src/contracts/interactive-chat.ts";
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
-import type { HarnessClientActionOutcomeKind } from "../src/contracts/client-action.ts";
+import {
+  checkHarnessClientProtocol,
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
+  type HarnessClientFeature,
+  harnessClientProtocolEcho,
+  readHarnessClientProtocolDeclaration,
+} from "../src/contracts/client-command.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
@@ -157,10 +175,16 @@ import {
 } from "../src/sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import {
+  describeSandboxRuntimeChoice,
   resolveSandboxRuntimeSelection,
   RUNSC_CFC_POLICY_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
+  type SandboxPlatform,
+  type SandboxProcess,
+  sandboxProcessOf,
+  sandboxRuntimeChoiceReason,
+  unnamedRuntimeMountNote,
 } from "../src/sandbox/runtime-selection.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
@@ -202,6 +226,12 @@ import {
   parseAfterSequence,
   pingFrame,
 } from "./sse.ts";
+import {
+  type ConsoleDisplayFit,
+  ownerConsoleDisplay,
+  publicConsoleDisplay,
+} from "./display-ceiling.ts";
+import { loadHarnessIdentity } from "../src/identity-key.ts";
 import {
   type ConsoleTurnCompletedEvent,
   type ConsoleTurnResult,
@@ -599,7 +629,7 @@ const BATCH_SANDBOX_FLAGS = [
 
 /**
  * Refuses the batch CLI's sandbox selection flags in any spelling, naming the
- * variable to set instead. The console and its launcher select the sandbox
+ * variable to set instead. The console and its launcher take a named runtime
  * from the environment alone: a flag one of them read and the other did not
  * would leave the launch and the console describing two different sandboxes.
  *
@@ -718,15 +748,35 @@ export const parseConsoleArgs = (args: readonly string[]) => {
 };
 
 /**
+ * What a console is told of where it runs. `platform` is the platform whose
+ * default sandbox runtime applies where the environment names none, as
+ * `Deno.build.os` writes it, which it is when absent, and `arch` and `uid`
+ * describe the process that default is for. `sandboxRuntimeNamedBy`
+ * is set for a console that takes no such default, and names whoever started
+ * it and has to name the runtime: a console launched for a Loom instance
+ * serves on the runtime Loom chose for that instance, or not at all.
+ */
+export interface ConsoleHost extends SandboxProcess {
+  platform?: SandboxPlatform;
+  sandboxRuntimeNamedBy?: string;
+}
+
+/**
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
  * and never hand back an address for it, which is the one outcome this surface
- * exists to avoid.
+ * exists to avoid. `host` says what applies where `env` names no sandbox
+ * runtime.
+ *
+ * @throws HarnessControlError where `env` names no sandbox runtime and
+ * `host` says its caller must name one; and where it names none on macOS or
+ * Linux and the native runtime cannot be provided.
  */
 export const resolveConsoleConfig = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   cwd: string,
+  host: ConsoleHost = {},
 ): Promise<ConsoleConfig> => {
   const parsed = parseConsoleArgs(args);
   // A flag written with an empty value is refused rather than read as unset,
@@ -742,10 +792,17 @@ export const resolveConsoleConfig = async (
   };
 
   // The one derivation every entrypoint shares, over this server's own
-  // environment. Nothing beyond the runtime kind is returned unless the
-  // runtime is runsc, so a console that names no runtime hands the engine no
-  // sandbox option at all, and the engine builds the Docker driver.
-  const sandbox = await resolveSandboxRuntimeSelection(env, {}, { cwd });
+  // environment. Beyond how the runtime was chosen, nothing is returned unless
+  // the runtime is runsc, so a console on Docker hands the engine no setting
+  // of the sandbox, and the engine builds the Docker driver.
+  const sandbox = await resolveSandboxRuntimeSelection(env, {}, {
+    ...(host.sandboxRuntimeNamedBy !== undefined
+      ? { namedBy: host.sandboxRuntimeNamedBy }
+      : { platform: host.platform ?? Deno.build.os }),
+    ...sandboxProcessOf(host),
+    flags: false,
+    cwd,
+  });
   const onDocker = sandbox.sandboxRuntimeKind !== "runsc";
 
   const loomAuthoring = await readLoomAuthoringConfig(
@@ -1019,10 +1076,12 @@ export const resolveConsoleConfig = async (
         : "space database discovery at read time",
     }, {
       name: "sandbox",
-      value: sandbox.sandboxRuntimeKind ?? "docker",
-      source: nonEmpty(env[SANDBOX_RUNTIME_ENV]) !== undefined
-        ? SANDBOX_RUNTIME_ENV
-        : "console default",
+      value: sandbox.sandboxRuntimeChoice.runtime,
+      // A default is the platform's, so its source says which platform chose
+      // and, for the native runtime, the store it runs from.
+      source: sandbox.sandboxRuntimeChoice.source === "default"
+        ? `console ${sandboxRuntimeChoiceReason(sandbox.sandboxRuntimeChoice)}`
+        : SANDBOX_RUNTIME_ENV,
     }, {
       name: "skill scripts",
       value: config.allowSkillScripts ? "run in the sandbox" : "not run",
@@ -1328,11 +1387,18 @@ export const consoleHealthRows = (
 
 /**
  * The direct driver's configuration for this console's turns, resolved from
- * the options every turn is built with, as the engine resolves them. Throws
- * where a turn would be refused.
+ * the options every turn is built with, as the engine resolves them, in the
+ * environment `env` on `platform`, `Deno.build.os` where absent: on macOS an
+ * unnamed rootfs is the kitchen-sink image of the store `CFC_VM_HOME` there
+ * names, else of the one under its `HOME`; on Linux it is the unpacked
+ * kitchen-sink image of the store under its `HOME`,
+ * `.local/share/runsc-cfc/images/kitchensink`, which `CFC_VM_HOME` does not
+ * move. Throws where a turn would be refused.
  */
 const resolveConsoleRunscConfig = (
   config: ConsoleConfig,
+  env: Record<string, string | undefined>,
+  platform: SandboxPlatform | undefined,
 ): RunscSandboxConfig => {
   const options = harnessSessionEngineOptions(config);
   return resolveRunscSandboxConfig({
@@ -1341,8 +1407,21 @@ const resolveConsoleRunscConfig = (
     runscBinary: options.sandboxRunscBinary,
     cfcPolicyPath: options.sandboxCfcPolicy,
     networkMode: options.sandboxRunscNetworkMode,
+    ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
+    ...(options.sandboxRunscNetworkHelper !== undefined
+      ? { networkHelper: options.sandboxRunscNetworkHelper }
+      : {}),
+    ...(options.sandboxRunscUnshare !== undefined
+      ? { unshare: options.sandboxRunscUnshare }
+      : {}),
+    ...(options.sandboxRunscSetpriv !== undefined
+      ? { setpriv: options.sandboxRunscSetpriv }
+      : {}),
     additionalMounts: options.additionalMounts,
-    homeDir: Deno.env.get("HOME"),
+    ...(platform !== undefined ? { platform } : {}),
+    homeDir: env.HOME,
+    cfcVmHome: env.CFC_VM_HOME,
+    unnamedRuntimeNote: unnamedRuntimeMountNote(config.sandboxRuntimeChoice),
   });
 };
 
@@ -1380,12 +1459,12 @@ export const runscWithoutPolicyRefusesTurns = (
 export const consoleVmHealthProbes = (
   config: ConsoleConfig,
   env: Record<string, string | undefined>,
-  options: { platform?: string } = {},
+  options: { platform?: SandboxPlatform } = {},
 ): ConsoleHealthProbe[] => {
   if (config.sandboxRuntimeKind !== "runsc") return [];
   let rootfs: string;
   try {
-    rootfs = resolveConsoleRunscConfig(config).rootfs;
+    rootfs = resolveConsoleRunscConfig(config, env, options.platform).rootfs;
   } catch {
     return [];
   }
@@ -1394,13 +1473,25 @@ export const consoleVmHealthProbes = (
 };
 
 /**
+ * Helper for `createConsoleHealth()`, which describes how this console's
+ * sandbox runtime was selected, for the runtime row's detail, or returns
+ * `undefined` for a configuration that carries no selection.
+ */
+const consoleSandboxSelected = (config: ConsoleConfig): string | undefined =>
+  config.sandboxRuntimeChoice === undefined
+    ? undefined
+    : describeSandboxRuntimeChoice(config.sandboxRuntimeChoice);
+
+/**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
- * its turns resolve from the options each is built with. On macOS it also
- * asks the VM that driver runs in, from the store `env` names. `env` is the
- * process's environment unless given, since that is the one runsc runs with.
- * `readDockerRuntimes` replaces the Docker driver's `docker info` reading.
+ * its turns resolve from the options each is built with, in `env`. On macOS
+ * it also asks the VM that driver runs in, from the store `env` names. `env`
+ * is the process's environment unless given, since that is the one runsc
+ * runs with.
+ * `readDockerRuntimes` replaces the Docker driver's `docker info` reading,
+ * and `host.platform` replaces `Deno.build.os`.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
@@ -1409,15 +1500,22 @@ export const createConsoleHealth = (
   env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
   readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
+  host: { platform?: SandboxPlatform } = {},
 ): ConsoleHealth =>
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
     config.sandboxRuntimeKind === "runsc"
       ? consoleRunscHealthProbe(
-        () => resolveConsoleRunscConfig(config),
+        () => resolveConsoleRunscConfig(config, env, host.platform),
         consoleTurnEnforcementMode(config),
+        undefined,
+        undefined,
+        consoleSandboxSelected(config),
       )
-      : consoleSandboxHealthProbe(readDockerRuntimes),
-    ...consoleVmHealthProbes(config, env),
+      : consoleSandboxHealthProbe(
+        readDockerRuntimes,
+        consoleSandboxSelected(config),
+      ),
+    ...consoleVmHealthProbes(config, env, host),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,
@@ -1490,6 +1588,8 @@ export class ConsoleServer {
   /** Each running turn's browser host channel, by turn id. */
   readonly #browserHosts = new Map<string, ConsoleBrowserHost>();
   readonly #config: ConsoleConfig;
+  /** The client features this console serves, as launched. */
+  readonly #clientFeatures: readonly HarnessClientFeature[];
   readonly #service: HarnessInteractiveChatService;
   readonly #health: ConsoleHealth;
   readonly #patternIndexClientFactory:
@@ -1502,6 +1602,12 @@ export class ConsoleServer {
    * envelope reaches the streams on the call that broadcast it.
    */
   #heldFanOut: Promise<void> | undefined;
+
+  /**
+   * What the console may show its owner, once the identity its fabric session
+   * signs as has been read.
+   */
+  #ownerDisplay: Promise<ConsoleDisplayFit> | undefined;
 
   #beats = 0;
 
@@ -1525,6 +1631,9 @@ export class ConsoleServer {
     health?: ConsoleHealth,
   ) {
     this.#config = config;
+    this.#clientFeatures = config.allowBrowserHost
+      ? [...HARNESS_SUPPORTED_CLIENT_FEATURES, "browser_host"]
+      : HARNESS_SUPPORTED_CLIENT_FEATURES;
     this.#service = createService((envelope) => this.broadcast(envelope));
     const factory = patternIndexClientFactory ??
       (config.patternIndex !== undefined
@@ -1653,7 +1762,23 @@ export class ConsoleServer {
       turnId,
       spaceName: this.#config.fabricSession.space,
       timing: turn?.turn,
+      display: await this.#display(),
     });
+  }
+
+  /**
+   * What the console may show its owner: the display ceiling of the identity
+   * its fabric session signs as. A console that cannot read that identity
+   * shows only what names no one.
+   */
+  #display(): Promise<ConsoleDisplayFit> {
+    this.#ownerDisplay ??= loadHarnessIdentity(
+      this.#config.fabricSession.identityKeyPath,
+    ).then(
+      (identity) => ownerConsoleDisplay(identity.did()),
+      () => publicConsoleDisplay,
+    );
+    return this.#ownerDisplay;
   }
 
   #fanOut(envelope: HarnessChatEventEnvelope): void {
@@ -1758,6 +1883,7 @@ export class ConsoleServer {
     if (request.method === "GET" && url.pathname === "/api/status") {
       return Response.json({
         artifactRoot: this.#config.artifactRoot,
+        protocol: harnessClientProtocolEcho(this.#clientFeatures),
         ...this.#service.status(url.searchParams.get("sessionId") ?? undefined),
       });
     }
@@ -1899,7 +2025,7 @@ export class ConsoleServer {
     }
     const root = this.#config.artifactRoot;
     if (kind === undefined || kind === "") {
-      const detail = await readConsoleRun(root, runId);
+      const detail = await readConsoleRun(root, runId, await this.#display());
       return detail === undefined
         ? new Response("not found", { status: 404 })
         : Response.json(detail);
@@ -2035,7 +2161,29 @@ export class ConsoleServer {
       loomId?: unknown;
       browserHost?: unknown;
       clientActions?: unknown;
+      protocol?: unknown;
     } = isObjectOrArray(parsed) ? parsed : {};
+    // The host's protocol is checked before anything else is read, so a host
+    // this console cannot serve learns that, and nothing starts.
+    if (body.protocol !== undefined) {
+      const protocolDeclaration = readHarnessClientProtocolDeclaration(
+        body.protocol,
+      );
+      if (protocolDeclaration === undefined) {
+        return Response.json({
+          error:
+            "protocol must be { protocolVersion: integer, requires: feature names }",
+        }, { status: 400 });
+      }
+      const check = checkHarnessClientProtocol(
+        protocolDeclaration,
+        this.#clientFeatures,
+      );
+      if (!check.ok) {
+        const { message, ...mismatch } = check.mismatch;
+        return Response.json({ error: message, ...mismatch }, { status: 409 });
+      }
+    }
     if (
       body.clientActions !== undefined &&
       typeof body.clientActions !== "boolean"
@@ -2144,6 +2292,7 @@ export class ConsoleServer {
       sessionId,
       turnId: turn.result.turnId,
       ...(browserHostToken !== undefined ? { browserHostToken } : {}),
+      protocol: harnessClientProtocolEcho(this.#clientFeatures),
     });
   }
 
@@ -2295,9 +2444,11 @@ export class ConsoleServer {
 
   /**
    * Takes the person's answer to one action the model asked their client to
-   * perform. The route is the stdio `resolve_client_action` request under
-   * HTTP: the same service method decides, so the two cannot disagree. Its
-   * errors carry the code in an `error` object, as the Weaver reads them.
+   * perform: a final action's outcome, or a typed command's settlement. The
+   * route is the stdio `resolve_client_action` request under HTTP: the body
+   * goes to the same service method, which reads it with the same reader, so
+   * the two cannot disagree. Its errors carry the code in an `error` object,
+   * as the Weaver reads them.
    */
   async #resolveClientAction(request: Request): Promise<Response> {
     let parsed: unknown;
@@ -2308,24 +2459,9 @@ export class ConsoleServer {
         status: 400,
       });
     }
-    const body: Record<string, unknown> = isObjectOrArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-    if (
-      typeof body.sessionId !== "string" || typeof body.actionId !== "string"
-    ) {
-      return Response.json({ error: "sessionId and actionId are required" }, {
-        status: 400,
-      });
-    }
     const response = await this.#service.resolveClientAction(
       crypto.randomUUID(),
-      {
-        sessionId: body.sessionId,
-        actionId: body.actionId,
-        outcome: body.outcome as HarnessClientActionOutcomeKind,
-        ...(body.result !== undefined ? { result: body.result as string } : {}),
-      },
+      parsed,
     );
     if (response.ok) return Response.json({ ok: true });
     const { code, message } = response.error;
@@ -2605,6 +2741,7 @@ const CHAT_ERROR_STATUS: Readonly<Record<HarnessChatError["code"], number>> = {
   invalid_request: 400,
   unknown_action: 404,
   action_resolved: 409,
+  protocol_mismatch: 409,
   session_exists: 409,
   session_not_found: 404,
   turn_exists: 409,
@@ -2657,23 +2794,25 @@ export const createConsoleInteractiveServiceOptions = (
 
 /**
  * The lines naming what a turn's sandbox depends on, printed at startup for
- * the same reason the posture is.
+ * the same reason the posture is. The first names the driver and whether the
+ * environment named it or the platform defaulted to it.
  *
- * Under the Docker driver that is the two sidecar transports a run's
+ * Under the Docker driver the rest is the two sidecar transports a run's
  * mediation moves over. The engine's guard asks only that they are named, so
  * a console pointed at directories no sandbox sidecar writes starts cleanly
  * and then denies every observation of the run; printing them is what lets an
  * operator read at startup which directories that depends on. Under the
  * direct driver it is the `runsc` binary, the rootfs and the CFC policy the
- * environment selected; an unnamed binary is looked for on `PATH`, and an
- * unnamed rootfs is the driver's own default, when a turn resolves them.
+ * selection settled on; for a named `runsc`, an unnamed binary is looked for
+ * on `PATH`, and an unnamed rootfs is the driver's own default, when a turn
+ * resolves them.
  */
 export const consoleSandboxBanner = (
   config: ConsoleConfig,
 ): readonly string[] =>
   config.sandboxRuntimeKind === "runsc"
     ? [
-      "  sandbox:    runsc, the direct driver (no Docker)",
+      `  sandbox:    ${consoleSandboxLine(config)}`,
       `  runsc:      ${config.sandboxRunscBinary ?? "runsc, on PATH"}`,
       `  rootfs:     ${config.sandboxRootfs ?? "(the driver's default)"}`,
       `  policy:     ${
@@ -2686,9 +2825,25 @@ export const consoleSandboxBanner = (
       }`,
     ]
     : [
+      `  sandbox:    ${consoleSandboxLine(config)}`,
       `  results:    ${config.cfcResultDir}`,
       `  contexts:   ${config.cfcInvocationContextDir}`,
     ];
+
+/**
+ * Helper for `consoleSandboxBanner()`, which names the driver a console's
+ * turns run on and how it was selected: named in the environment, or the
+ * platform's default. A configuration that carries no selection names the
+ * driver alone.
+ */
+const consoleSandboxLine = (config: ConsoleConfig): string => {
+  const driver = config.sandboxRuntimeKind === "runsc"
+    ? "runsc, the direct driver (no Docker)"
+    : "docker";
+  return config.sandboxRuntimeChoice === undefined
+    ? driver
+    : `${driver}; ${sandboxRuntimeChoiceReason(config.sandboxRuntimeChoice)}`;
+};
 
 /**
  * The directories the server creates before it serves: the workspace, the
@@ -2741,13 +2896,15 @@ export const consoleStartupBanner = (
  * and the engine builds both lazily-cached client factories from it. A flag
  * that takes a value but was given none is refused first, so `--port --help`
  * throws; only then, where `args` ask for help, it prints the usage instead
- * and serves nothing.
+ * and serves nothing. `host` says what applies where `env` names no sandbox
+ * runtime, as it does for `resolveConsoleConfig()`.
  */
 export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
   env: Record<string, string | undefined> = Deno.env.toObject(),
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
+  host: ConsoleHost = {},
 ): Promise<void> => {
   // A flag with no value first: the `-h` it leaves behind is not a question.
   refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
@@ -2756,7 +2913,7 @@ export const startConsoleServer = async (
     console.log(help);
     return;
   }
-  const config = await resolveConsoleConfig(args, env, cwd);
+  const config = await resolveConsoleConfig(args, env, cwd, host);
   for (const directory of consoleDataDirectories(config)) {
     await Deno.mkdir(directory, { recursive: true });
   }
@@ -2786,7 +2943,15 @@ export const startConsoleServer = async (
         ),
       ),
     indexFactory,
-    createConsoleHealth(config, launchHealth, modelOptions, env, indexFactory),
+    createConsoleHealth(
+      config,
+      launchHealth,
+      modelOptions,
+      env,
+      indexFactory,
+      undefined,
+      host,
+    ),
   );
   await server.service.initializeFromStore();
 

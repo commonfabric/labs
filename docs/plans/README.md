@@ -10,6 +10,15 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [CFC spec correspondence process](cfc-spec-correspondence-process.md)
+  gives agents the procedure for changing Contextual Flow Control here: read
+  the specification first, classify the change as host arrangement, conforming
+  implementation or semantic gap, and route a semantic gap through a specs
+  pull request before code; and stages what enforces it, from the instruction
+  surfaces that name the specs repository, through a hash-pinned spec snapshot
+  and correspondence manifest checked in CI and a §18.6.4 conformance
+  statement, to a kernel of same-named pure functions the pseudocode is the
+  source of.
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.
@@ -122,24 +131,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   resume and a fresh start name exactly what each lift, handler, builtin, and
   nested pattern reads under their declared read schemas, then holds each
   node's first run on the loads it named instead of on a space-wide timer.
-- [Making pattern computation cost declarable and visible](pattern-computation-cost.md)
-  pairs two repairs to the same gap: the collection algebra has incremental
-  `map`, `filter`, and `flatMap` but no `groupBy`, keyed lookup, join, or
-  incremental `reduce`, so a group-by is written as nested scans over a
-  reactive array; and a scheduler node records how often an action ran but not
-  how much it read, so the cost is invisible until somebody profiles. Carries
-  the access counter, the missing operators, the replication failures that
-  currently push authors off the incremental path, and the authoring guidance
-  that steers them into the expensive construct.
-- [Choosing which tests a pull request runs](pull-request-test-selection.md)
-  replaces the sixty-seven pull-request jobs with five, each running a subset
-  chosen from what the record store knows about which tests have caught real
-  regressions, and packed to finish inside five minutes. It carries the
-  repository-side topology that lets a new test surface be registered once
-  and picked up by both the full run and the selection, the scoring, flake
-  and packing rules, and the two things a subset breaks and this replaces:
-  coverage becomes a trend rather than a gate, and a regression that only
-  `main` catches is reported back to the change that introduced it.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future

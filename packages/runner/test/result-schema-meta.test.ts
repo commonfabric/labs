@@ -114,7 +114,7 @@ describe("result-schema-meta", () => {
     expect(typeof stored.$ref).toBe("string");
     const rootHash = parseExternalSchemaRef(stored.$ref!)!.taggedHash;
     expect(lookupSchemaDocument(rootHash)).toBeDefined();
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     // A reader pulls every closure document from storage, where only this
     // commit can have put it.
@@ -141,7 +141,7 @@ describe("result-schema-meta", () => {
       tx,
     );
     writeResultSchemaMeta(cell, resultSchema);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const inline = readResultSchemaMeta(cell) as JSONSchemaObj;
     expect(inline.$ref).toBeUndefined();
@@ -172,12 +172,12 @@ describe("result-schema-meta", () => {
       first,
     );
     writeResultSchemaMeta(cell, resultSchema);
-    expect((await first.commit()).error).toBeUndefined();
+    expect((await first.commit().settled).error).toBeUndefined();
 
     const again = writer.edit();
     expect(writeResultSchemaMeta(cell.withTx(again), resultSchema)).toBe(false);
     expect([...again.getWriteDetails?.(space) ?? []]).toEqual([]);
-    expect((await again.commit()).error).toBeUndefined();
+    expect((await again.commit().settled).error).toBeUndefined();
   });
 
   it("keeps a trivial schema inline", () => {
@@ -207,7 +207,7 @@ describe("result-schema-meta", () => {
     writeResultSchemaMeta(cell, resultSchema);
     const stored = cell.getMetaRaw("schema") as JSONSchemaObj;
     const rootHash = parseExternalSchemaRef(stored.$ref!)!.taggedHash;
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const link = cell.getAsNormalizedFullLink();
 
     // The writer's session ends before the reader's begins, and it held
@@ -351,7 +351,7 @@ describe("result-schema-meta", () => {
         detail.address.path[0] === "schema"
       ),
     ).toBe(false);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   });
 
   it("writes the schema inline with the flag off", async () => {
@@ -367,6 +367,6 @@ describe("result-schema-meta", () => {
     writeResultSchemaMeta(cell, resultSchema);
     expect(cell.getMetaRaw("schema")).toEqual(resultSchema);
     expect(readResultSchemaMeta(cell)).toEqual(resultSchema);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   });
 });

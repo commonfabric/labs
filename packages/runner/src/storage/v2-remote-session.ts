@@ -10,6 +10,7 @@ import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
   decodeCompressedMemoryMessage,
   encodeCompressedMemoryMessage,
+  type EncodedMemoryMessage,
   encodeMemoryCompressionControlMessage,
   isMemoryMessageFrame,
   parseMemoryCompressionControlMessage,
@@ -77,6 +78,26 @@ export interface SessionFactory {
 
   /** Changes compression on live sessions and the default for later ones. */
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * The flags the memory server serving `space` advertises, read from a
+   * handshake alone. No session is opened on `space`, so nothing a server
+   * does when a session opens there, such as starting to serve the space,
+   * happens. `null` when the handshake carries none.
+   */
+  serverFlags?(
+    space: MemorySpace,
+    signal?: AbortSignal,
+  ): Promise<MemoryProtocolFlags | null>;
+
+  /**
+   * Calls `observer` with each `session/admissible` a connection the factory
+   * opened is sent: a space that refused `principal` on that connection and
+   * would now admit it. Returns the function that ends the subscription.
+   */
+  subscribeAdmissible?(
+    observer: (space: MemorySpace, principal: string) => void,
+  ): () => void;
 
   /**
    * Chooses, for the sessions created from here on, between one connection
@@ -268,7 +289,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
   /**
    * Sends in submission order using the compression mode active at submission.
    * Every payload stays on the queue because a later text frame must not
-   * overtake earlier asynchronous compression.
+   * overtake earlier asynchronous compression. A payload lost with its
+   * connection — one queued when the socket closes, one whose write fails, or
+   * one sent on a socket that fails to open — rejects with a `ConnectionError`.
    */
   async send(payload: string): Promise<void> {
     const opening = this.#open();
@@ -282,9 +305,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
           : await encodeCompressedMemoryMessage(payload)
         : payload;
       if (this.#socket !== connection.socket) {
-        throw new Error("Memory websocket changed before send");
+        throw MemoryClient.connectionError(
+          "Memory websocket changed before send",
+        );
       }
-      await connection.send(frame);
+      await this.#write(connection, frame);
     });
     this.#sending = send.catch(() => {});
     await send;
@@ -452,11 +477,18 @@ export class WebSocketTransport implements MemoryClient.Transport {
           this.#closeReceiver();
         }
         if (!opened) {
-          reject(new Error("memory websocket transport closed before opening"));
+          reject(
+            MemoryClient.connectionError(
+              "memory websocket transport closed before opening",
+            ),
+          );
         }
       });
       socket.addEventListener("error", (event) => {
         const isCurrentSocket = this.#socket === socket;
+        const error = event.error instanceof Error
+          ? event.error
+          : new Error("memory websocket transport error");
         if (isCurrentSocket) {
           this.#socket = null;
           this.#connection = null;
@@ -471,13 +503,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
           this.#opening = null;
         }
         if (isCurrentSocket) {
-          this.#closeReceiver(
-            event.error instanceof Error
-              ? event.error
-              : new Error("memory websocket transport error"),
-          );
+          this.#closeReceiver(error);
         }
-        reject(event);
+        reject(MemoryClient.connectionError(error.message, error));
       }, { once: true });
     });
     this.#opening = opening;
@@ -497,9 +525,12 @@ export class WebSocketTransport implements MemoryClient.Transport {
     const send = this.#sending.then(async () => {
       const connection = await opening;
       if (this.#socket !== connection.socket) {
-        throw new Error("Memory websocket changed before compression control");
+        throw MemoryClient.connectionError(
+          "Memory websocket changed before compression control",
+        );
       }
-      await connection.send(
+      await this.#write(
+        connection,
         this.#routedMessages
           ? encodeMemoryBoundary({
             type: "memory.compression",
@@ -516,6 +547,51 @@ export class WebSocketTransport implements MemoryClient.Transport {
     } catch (cause) {
       this.#compressionRequests.delete(requestId);
       throw cause;
+    }
+  }
+
+  /**
+   * Helper for `send()` and `#sendCompressionControl()`, which writes `frame`
+   * to `connection`. A failed write rejects with a `ConnectionError` carrying
+   * the socket's error as its cause. The transport then abandons the socket and
+   * reports the loss to the close receiver itself, without waiting for the
+   * socket's own close or error event, so the reconnect that replays the
+   * payload always starts.
+   *
+   * The failure is the payload's own, made with `writeFailedError()`, only
+   * when the socket was current and open: a write refused because the socket
+   * is closing, or because it was already replaced, says nothing about the
+   * payload.
+   */
+  async #write(
+    connection: MemorySocketConnection,
+    frame: EncodedMemoryMessage,
+  ): Promise<void> {
+    try {
+      await connection.send(frame);
+    } catch (cause) {
+      const { socket } = connection;
+      const ownFailure = this.#socket === socket &&
+        socket.readyState === WebSocket.OPEN;
+      const error = (ownFailure
+        ? MemoryClient.writeFailedError
+        : MemoryClient.connectionError)(
+          cause instanceof Error
+            ? cause.message
+            : "Memory websocket write failed",
+          cause,
+        );
+      if (this.#socket === socket) {
+        this.#detachSocket(error);
+        this.#closeReceiver(error);
+        if (
+          socket.readyState === WebSocket.CONNECTING ||
+          socket.readyState === WebSocket.OPEN
+        ) {
+          socket.close();
+        }
+      }
+      throw error;
     }
   }
 
@@ -691,6 +767,11 @@ export class RemoteSessionFactory implements SessionFactory {
   /** The shared connection per storage address, while sharing is on. */
   #shared = new Map<string, SharedConnection>();
 
+  /** Observers of `session/admissible`, as `subscribeAdmissible()` added. */
+  #admissibleObservers = new Set<
+    (space: MemorySpace, principal: string) => void
+  >();
+
   readonly #resolveAddress: (space: MemorySpace) => URL;
   readonly #defaultSigner: Signer;
   readonly #createSocket: MemorySocketFactory;
@@ -716,6 +797,16 @@ export class RemoteSessionFactory implements SessionFactory {
   }
 
   /** @inheritDoc */
+  subscribeAdmissible(
+    observer: (space: MemorySpace, principal: string) => void,
+  ): () => void {
+    this.#admissibleObservers.add(observer);
+    return () => {
+      this.#admissibleObservers.delete(observer);
+    };
+  }
+
+  /** @inheritDoc */
   setSharedConnections(enabled: boolean): void {
     this.#sharedConnections = enabled;
   }
@@ -732,6 +823,22 @@ export class RemoteSessionFactory implements SessionFactory {
       const connected = await client.catch(() => undefined);
       await connected?.close().catch(() => {});
     }));
+  }
+
+  /**
+   * Helper for the connection paths, which relays the `session/admissible`
+   * notices `client` is sent to this factory's observers.
+   */
+  #relayAdmissible(client: MemoryClient.Client): void {
+    client.subscribeAdmissible((space, principal) => {
+      for (const observer of [...this.#admissibleObservers]) {
+        try {
+          observer(space as MemorySpace, principal);
+        } catch (cause) {
+          console.error("session-admissible subscriber threw:", cause);
+        }
+      }
+    });
   }
 
   #createSessionOpenAuth(
@@ -833,7 +940,10 @@ export class RemoteSessionFactory implements SessionFactory {
     this.#transports.add(transport);
     const dialed: SharedConnection = {
       transport,
-      client: MemoryClient.connect({ transport }),
+      client: MemoryClient.connect({ transport }).then((client) => {
+        this.#relayAdmissible(client);
+        return client;
+      }),
     };
     this.#shared.set(key, dialed);
     // A failed dial takes its entry with it, whoever is waiting on it.
@@ -846,6 +956,47 @@ export class RemoteSessionFactory implements SessionFactory {
     return await abortable(dialed.client, signal);
   }
 
+  /** @inheritDoc */
+  async serverFlags(
+    space: MemorySpace,
+    signal?: AbortSignal,
+  ): Promise<MemoryProtocolFlags | null> {
+    if (this.#sharedConnections) {
+      const client = await this.#sharedClient(
+        this.#resolveAddress(space),
+        signal,
+      );
+      // A shared connection may be reconnecting, and the flags it holds are
+      // then the previous server's until the new handshake is done.
+      await client.restoreConnection();
+      return client.serverFlags;
+    }
+    const transport = this.#dedicatedTransport(space);
+    let client: MemoryClient.Client | undefined;
+    try {
+      client = await MemoryClient.connect({ transport, signal });
+      return client.serverFlags;
+    } finally {
+      await (client?.close() ?? transport.close()).catch(() => {});
+    }
+  }
+
+  /**
+   * Helper for `#createDedicated()` and `serverFlags()`, which makes the
+   * transport of a connection for one space alone, naming the space in its
+   * address.
+   */
+  #dedicatedTransport(space: MemorySpace): WebSocketTransport {
+    const transport = new WebSocketTransport(
+      toSpaceWebSocketAddress(this.#resolveAddress(space), space),
+      this.#compressionEnabled,
+      () => this.#transports.delete(transport),
+      this.#createSocket,
+    );
+    this.#transports.add(transport);
+    return transport;
+  }
+
   /**
    * Helper for `create()`, which dials a connection for this session alone,
    * naming the space in its address.
@@ -856,13 +1007,7 @@ export class RemoteSessionFactory implements SessionFactory {
     mountOptions: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ) {
-    const transport = new WebSocketTransport(
-      toSpaceWebSocketAddress(this.#resolveAddress(space), space),
-      this.#compressionEnabled,
-      () => this.#transports.delete(transport),
-      this.#createSocket,
-    );
-    this.#transports.add(transport);
+    const transport = this.#dedicatedTransport(space);
     let client: MemoryClient.Client | undefined;
     const abortError = (): Error =>
       signal?.reason instanceof Error
@@ -874,6 +1019,7 @@ export class RemoteSessionFactory implements SessionFactory {
       // only window this method has to check for itself is the one after the
       // mount resolves, below.
       client = await MemoryClient.connect({ transport, signal });
+      this.#relayAdmissible(client);
       const closeForAbort = (): void => {
         void client?.close().catch(() => {});
       };

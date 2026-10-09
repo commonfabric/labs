@@ -87,7 +87,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
       );
       stamping.push({ role: "assistant", content: "model bytes" });
       modelTx.prepareCfc();
-      expect((await modelTx.commit()).ok).toBeDefined();
+      expect((await modelTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const messages = runtime.getCell(
@@ -102,6 +102,57 @@ describe("CFC LlmDerived stamping mechanism", () => {
         (entry) => entry.label.integrity ?? [],
       );
       expect(assistantIntegrity).toContainEqual(LLM_DERIVED_ATOM);
+      readTx.commit();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("leaves an element pushed through the plain schema unstamped when the stamped element is pushed after it", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const userTx = runtime.edit();
+      runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        messagesSchema,
+        userTx,
+      ).push({ role: "user", content: "typed by the user" });
+      userTx.prepareCfc();
+      expect((await userTx.commit().settled).ok).toBeDefined();
+
+      const modelTx = runtime.edit();
+      setCfcImplementationIdentity(modelTx, {
+        kind: "builtin",
+        builtinId: "llm-dialog",
+      });
+      runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        stampingMessagesSchema,
+        modelTx,
+      ).push({ role: "assistant", content: "model bytes" });
+      modelTx.prepareCfc();
+      expect((await modelTx.commit().settled).ok).toBeDefined();
+
+      const readTx = runtime.edit();
+      const messages = runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        messagesSchema,
+        readTx,
+      );
+      const integrityAt = (index: number) =>
+        (cfcLabelViewForCell(messages.key(index))?.entries ?? []).flatMap(
+          (entry) => entry.label.integrity ?? [],
+        );
+      expect(integrityAt(0)).not.toContainEqual(LLM_DERIVED_ATOM);
+      expect(integrityAt(1)).toContainEqual(LLM_DERIVED_ATOM);
       readTx.commit();
     } finally {
       await runtime.dispose();
@@ -145,7 +196,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
         popFrame(frame);
       }
       modelTx.prepareCfc();
-      expect((await modelTx.commit()).ok).toBeDefined();
+      expect((await modelTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const messages = runtime.getCell(
@@ -186,7 +237,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
       );
       stamping.push({ role: "assistant", content: "forged provenance" });
       authorTx.prepareCfc();
-      expect((await authorTx.commit()).ok).toBeDefined();
+      expect((await authorTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const messages = runtime.getCell(

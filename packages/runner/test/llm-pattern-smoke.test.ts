@@ -58,7 +58,7 @@ describe("LLM pattern smoke tests", () => {
 
   afterEach(async () => {
     resetMockMode();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -263,7 +263,7 @@ describe("LLM pattern smoke tests", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await waitForLlmSettled(runtime, result);
 
     expect(observedSchema).toEqual({

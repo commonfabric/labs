@@ -65,10 +65,9 @@
  * writer claim naming `propose`, and `propose` writes each only while it reads
  * as unwritten. That refuses a write to the room's argument document by any
  * other code, through any schema, and nothing more. Write authority is keyed
- * by code, not by piece (normative CFC §8.15.8), so a successfully initialized
- * instance of this pattern runs an authorized `propose`, and a source update's
- * successor inherits this one's authority. Setup cannot initialize an existing
- * protected cell through a binding to it.
+ * by code, not by piece (normative CFC §8.15.8), so a member's own instance of
+ * this pattern bound beneath these cells runs an authorized `propose`, and a
+ * source update's successor inherits this one's authority.
  * `docs/specs/cfc-custody-seal.md` says what closing this would take, and
  * what else the room does not cover.
  *

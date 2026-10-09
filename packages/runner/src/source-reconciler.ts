@@ -290,6 +290,17 @@ export class SourceReconciler {
     weigh: suppliedSourceWeight,
   });
   readonly #suppliedSourceFlights = new Map<string, Promise<SuppliedSource>>();
+
+  /**
+   * The compiles of supplied source in flight, by the key their source is
+   * retained under, each with the schema registry epoch it started in. Kept
+   * apart from retention, so an open still finds a compile whose source has
+   * since been retired.
+   */
+  readonly #suppliedCompileFlights = new Map<
+    string,
+    { promise: Promise<Pattern | undefined>; epoch: number }
+  >();
   #disposed = false;
 
   constructor(runtime: Runtime) {
@@ -425,6 +436,7 @@ export class SourceReconciler {
     this.#disposed = true;
     this.#suppliedSources.clear();
     this.#suppliedSourceFlights.clear();
+    this.#suppliedCompileFlights.clear();
     for (const { abort } of this.#pending.values()) abort.abort();
     for (const { abort } of this.#passes) abort.abort();
     for (const { cancel } of this.#fabricFollowers.values()) cancel();
@@ -788,8 +800,9 @@ export class SourceReconciler {
    * destination, target and advertised identity share resolved source, and
    * the first to compile it into that destination verifies that it compiles
    * to the advertised identity, including the source-closure persistence of a
-   * compiler cache hit. Later opens in the same schema registry epoch answer
-   * with that verified pattern, whose closure the destination already holds.
+   * compiler cache hit. Opens arriving while that compile runs share it, and
+   * later opens in the same schema registry epoch answer with the verified
+   * pattern, whose closure the destination already holds.
    */
   async #resolveSupplied(
     space: MemorySpace,
@@ -814,39 +827,81 @@ export class SourceReconciler {
       signal.throwIfAborted();
       const epoch = schemaRegistryEpoch();
       if (resolved.compiled?.epoch === epoch) return resolved.compiled.pattern;
+      let flight = this.#suppliedCompileFlights.get(key);
+      if (flight?.epoch !== epoch) {
+        const started = {
+          promise: this.#compileSupplied(
+            key,
+            resolved,
+            space,
+            advertised,
+            signal,
+            epoch,
+          ),
+          epoch,
+        };
+        flight = started;
+        this.#suppliedCompileFlights.set(key, started);
+        void started.promise.catch(() => {}).finally(() => {
+          if (this.#suppliedCompileFlights.get(key) === started) {
+            this.#suppliedCompileFlights.delete(key);
+          }
+        });
+      }
+      const compiled = await flight.promise;
+      // The compile answers for the pass that started it, and this pass may
+      // have been stopped since.
+      signal.throwIfAborted();
+      return compiled;
+    });
+  }
+
+  /**
+   * Helper for `#resolveSupplied()`, which compiles `resolved` into the
+   * destination `space`, verifies that it compiles to `advertised`, and keeps
+   * the pattern when the schema registry is still in the `epoch` it started
+   * in.
+   */
+  async #compileSupplied(
+    key: string,
+    resolved: SuppliedSource,
+    space: MemorySpace,
+    advertised: string,
+    signal: AbortSignal,
+    epoch: number,
+  ): Promise<Pattern | undefined> {
+    try {
       // The destination must hold the closure behind its creation revision.
       // A compiler hit still performs the destination's persistence work.
       await prepareSourceClosureVerification();
-      try {
-        // Compiling writes to storage; a stopped pass must leave it alone.
-        signal.throwIfAborted();
-        const compiled = await this.#runtime.patternManager.compilePattern(
-          copySourceProgram(resolved.program),
-          { space },
-        );
-        signal.throwIfAborted();
-        const ref = this.#runtime.patternManager.getArtifactEntryRef(compiled);
-        if (ref?.identity !== advertised) {
-          this.#forgetSuppliedSource(key, resolved);
-          logger.warn("advertised-identity-mismatch", () => [
-            "resolved source did not compile to the identity its origin advertises",
-            space,
-            advertised,
-            ref,
-          ]);
-          return undefined;
-        }
-        // A pattern compiled across a registry clear carries references the
-        // clear retired, so it is answered but not kept.
-        if (schemaRegistryEpoch() === epoch) {
-          resolved.compiled = { pattern: compiled, epoch };
-        }
-        return compiled;
-      } catch (error) {
+      // Compiling writes to storage; a stopped pass must leave it alone.
+      signal.throwIfAborted();
+      const compiled = await this.#runtime.patternManager.compilePattern(
+        copySourceProgram(resolved.program),
+        { space },
+      );
+      signal.throwIfAborted();
+      const ref = this.#runtime.patternManager.getArtifactEntryRef(compiled);
+      if (ref?.identity !== advertised) {
         this.#forgetSuppliedSource(key, resolved);
-        throw error;
+        logger.warn("advertised-identity-mismatch", () => [
+          "resolved source did not compile to the identity its origin advertises",
+          space,
+          advertised,
+          ref,
+        ]);
+        return undefined;
       }
-    });
+      // A pattern compiled across a registry clear carries references the
+      // clear retired, so it is answered but not kept.
+      if (schemaRegistryEpoch() === epoch) {
+        resolved.compiled = { pattern: compiled, epoch };
+      }
+      return compiled;
+    } catch (error) {
+      this.#forgetSuppliedSource(key, resolved);
+      throw error;
+    }
   }
 
   /** Share supplied-source downloads, whose callers share disposal ownership. */

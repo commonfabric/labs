@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { ConsoleBrowserHost } from "../../console/browser-host.ts";
+import type { BrowserHostResult } from "../../src/contracts/browser-host.ts";
 
 const PAGE = { url: "https://shop.example/", title: "Shop" };
 
@@ -149,21 +150,59 @@ describe("console/browser-host", () => {
     });
 
     it("settles an operation as failed when the host answers with something that is not a result", async () => {
-      const host = new ConsoleBrowserHost("token");
-      const answer = host.perform({ action: "reload" });
-      host.attach();
+      const malformed: readonly unknown[] = [
+        { status: "ok" },
+        "ok",
+        null,
+        [],
+        { status: "ok", page: { url: "https://shop.example/", title: 7 } },
+        { status: "ok", page: PAGE, text: 7 },
+        { status: "ok", page: PAGE, handoff: "maybe" },
+        { status: "ok", page: PAGE, image: { mediaType: "image/gif" } },
+        { status: "stale-ref" },
+        { status: "gone", message: "the page went away" },
+        { status: "failed", message: "no", page: "https://shop.example/" },
+      ];
+      for (const result of malformed) {
+        const host = new ConsoleBrowserHost("token");
+        const answer = host.perform({ action: "reload" });
+        host.attach();
 
-      const acceptance = host.acceptResult("1", { status: "ok" });
+        const acceptance = host.acceptResult("1", result);
 
-      expect(acceptance).toBe("invalid");
-      expect(await answer).toEqual({
-        status: "failed",
-        message:
-          "the browser host answered with something that is not a result",
-      });
-      expect(host.acceptResult("1", { status: "ok", page: PAGE })).toBe(
-        "unknown",
-      );
+        expect(acceptance).toBe("invalid");
+        expect(await answer).toEqual({
+          status: "failed",
+          message:
+            "the browser host answered with something that is not a result",
+        });
+        expect(host.acceptResult("1", { status: "ok", page: PAGE })).toBe(
+          "unknown",
+        );
+      }
+    });
+
+    it("settles an operation with each well-formed answer as the host gave it", async () => {
+      const results: readonly BrowserHostResult[] = [
+        { status: "ok", page: PAGE },
+        {
+          status: "ok",
+          page: PAGE,
+          text: '- button "Buy" [ref=e1]',
+          image: { mediaType: "image/png", base64: "iVBORw0KGgo=" },
+          handoff: "declined",
+        },
+        { status: "stale-ref", message: "take a new snapshot" },
+        { status: "failed", message: "the click missed", page: PAGE },
+      ];
+      for (const result of results) {
+        const host = new ConsoleBrowserHost("token");
+        const answer = host.perform({ action: "reload" });
+        host.attach();
+
+        expect(host.acceptResult("1", result)).toBe("accepted");
+        expect(await answer).toEqual(result);
+      }
     });
 
     it("writes a comment frame to an attached stream on each ping", async () => {

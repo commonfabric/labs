@@ -52,7 +52,7 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
     const tx = runtime.edit();
     write(tx as never);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   it("reaches a label two docs away, behind a link the path CROSSES", async () => {

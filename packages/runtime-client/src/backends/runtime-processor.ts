@@ -53,6 +53,7 @@ import {
   readPieceSourceMetadata,
   readPieceSourceRevision,
   readPieceSourceState,
+  type ShareIntake,
 } from "@commonfabric/piece/ops";
 import type { RuntimeOptions } from "@commonfabric/runner";
 import {
@@ -61,7 +62,6 @@ import {
   type Cancel,
   type Cell,
   ContextualFlowControl,
-  convertCellsToLinks,
   encodeSqliteParams,
   ensurePieceRunningVerdict,
   entityIdFrom,
@@ -71,12 +71,12 @@ import {
   getPatternIdentityRef,
   hasOperationStorageCapability,
   hasPresenceStorageCapability,
+  hostValueOf,
   type IExtendedStorageTransaction,
   type IOperationStorageCapability,
   isCell,
   isCellResult,
   isLoopbackHostname,
-  KeepAsCell,
   markDurableReadTx,
   type NormalizedFullLink,
   normalizeSpaceHost,
@@ -91,10 +91,13 @@ import {
   runtimePresets,
   RuntimeTelemetry,
   RuntimeTelemetryEvent,
+  sendEvent,
   setPatternEnvironment,
   type SigilLink,
   SlugResolutionError,
   SpaceHostValidationError,
+  SpaceNotFoundError,
+  transactionFailureMessage,
 } from "@commonfabric/runner";
 import { NestedRenderReferenceSchema } from "@commonfabric/runner/component-read-contract";
 import {
@@ -103,10 +106,12 @@ import {
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
+  hostGestureProvenance,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
+  spaceReaderRole,
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import {
@@ -124,6 +129,7 @@ import {
 } from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import { asPatternIdentityRef } from "@commonfabric/runner/meta-seam";
+import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   NameSchema,
   rendererVDOMSchema,
@@ -147,12 +153,14 @@ import {
   isPlainObject,
 } from "@commonfabric/utils/types";
 
+import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
 import {
   postContextualRuntimeError,
   runtimeErrorPost,
 } from "./runtime-error.ts";
+import { SpaceAccessRetries } from "./space-access-retries.ts";
 import {
   assertFabricLoggerFlags,
   createCellRef,
@@ -170,6 +178,8 @@ import {
 import {
   type ActionRunTraceResponse,
   BooleanResponse,
+  type CellFieldsRequest,
+  type CellFieldsResponse,
   type CellGetCfcLabelRequest,
   type CellGetRequest,
   type CellGetResponse,
@@ -180,9 +190,11 @@ import {
   type CellResolveAsCellRequest,
   CellResponse,
   type CellSendRequest,
+  type CellSendReviewedRequest,
   type CellSetRequest,
   type CellSubscribeRequest,
   type CellUnsubscribeRequest,
+  type CellValueResponse,
   type CfcLabelViewResponse,
   ClientNotificationType,
   type CreateSpaceRequest,
@@ -257,7 +269,6 @@ import {
   type PresenceLeaveRequest,
   type PresencePublishRequest,
   type PresenceWireEvent,
-  type RecreateSpaceRootPatternRequest,
   type RegisterSpaceHostDetailedRequest,
   type RegisterSpaceHostRequest,
   RequestType,
@@ -288,6 +299,7 @@ import {
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
+  type SpaceRootPatternResponse,
   type SpaceSetAclEntryRequest,
   type SqliteExecRequest,
   type SqliteParams,
@@ -439,37 +451,6 @@ function sqliteParamForRuntime(
     );
   }
   return value;
-}
-
-/**
- * Converts a runtime cell value into the client wire domain. Each link it
- * mints for a cell carries the display form of that cell's CFC label view,
- * with every caveat's source redacted. A sigil link already in the value is
- * rebuilt as the container it is, view and all; stored data carries no view
- * on a link, the persist seam having stripped it, so the minted links are
- * where a view crosses.
- */
-function cellValueForClient(value: unknown): FabricValue {
-  return convertCellsToLinks(
-    value as Parameters<typeof convertCellsToLinks>[0],
-    {
-      includeSchema: true,
-      keepAsCell: KeepAsCell.All,
-      doNotConvertCellResults: true,
-      includeCfcLabelView: true,
-    },
-  );
-}
-
-/**
- * Whether `cell` holds no value: nothing at all, or an empty plain object. A
- * pull can find a scoped target in either state while the write that creates
- * its value is still committing, which the commit-aware barrier waits for.
- */
-function holdsNoValue(cell: Cell<unknown>): boolean {
-  const raw = cell.getRaw({ lastNode: "value" });
-  return raw === undefined ||
-    (isPlainObject(raw) && Object.keys(raw).length === 0);
 }
 
 function sqliteParamsForRuntime(
@@ -774,9 +755,15 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
 
-/** Connects render boundaries to authoritative access verdict changes. */
+/**
+ * Connects render boundaries to authoritative access verdict changes. Given
+ * `retries`, the provider retries a refused space through it, and reports
+ * where its retries stand: a subscriber hears each retry of a refused space
+ * start and settle.
+ */
 export function renderSpaceAccessProviderFor(
   runtime: Pick<Runtime, "storageManager">,
+  retries?: SpaceAccessRetries,
 ): SpaceAccessProvider {
   const storage = runtime.storageManager;
   return {
@@ -785,9 +772,32 @@ export function renderSpaceAccessProviderFor(
       const changed = (changedSpace: MemorySpace) => {
         if (changedSpace === space) onChange();
       };
-      return storage.subscribeSpaceAccessChange?.(changed) ??
+      const cancelAccess = storage.subscribeSpaceAccessChange?.(changed) ??
         storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
+      // A retry changes what a refused space's placeholder shows, and
+      // nothing a space that stands renders.
+      const cancelRetries = retries?.subscribe((retried) => {
+        if (storage.spaceAccessError?.(retried) !== undefined) {
+          changed(retried);
+        }
+      });
+      return () => {
+        cancelAccess();
+        cancelRetries?.();
+      };
     },
+    ...(retries !== undefined && {
+      retries: {
+        retry: (space: string) => {
+          // A render boundary has nowhere to report a failure, and the person
+          // can ask again.
+          retries.retry(space as MemorySpace).catch((error) => {
+            console.warn(`Retrying access to space ${space} failed:`, error);
+          });
+        },
+        state: (space: string) => retries.state(space as MemorySpace),
+      },
+    }),
   };
 }
 
@@ -939,6 +949,11 @@ export class RuntimeProcessor {
   #awaitedHealth = false;
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
+  #privateInboxEnsured: Promise<void> | undefined;
+  #shareIntake: Promise<ShareIntake | undefined> | undefined;
+  // Aborted as disposal begins, so an inbox ensure still in flight sends
+  // nothing after it, and the share intake stops.
+  #disposal = new AbortController();
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -1029,7 +1044,21 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderModulePolicySource?: CfcModulePolicySource;
+
+  /**
+   * What builds every answer to a host's read of a cell. It is built with no
+   * ceiling, so it returns every read as read.
+   */
+  #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
+
+  /**
+   * The retries of refused spaces in flight, which the render boundaries'
+   * retry controls and `handleRetrySpaceAccess()` share.
+   */
+  readonly #spaceAccessRetries = new SpaceAccessRetries((space) =>
+    this.#runtime.retrySpaceAccess(space)
+  );
 
   private constructor(
     runtime: Runtime,
@@ -1059,8 +1088,8 @@ export class RuntimeProcessor {
    * The runtime and home context this processor was built over, the tables
    * it keeps by space, by client, and by session, the disposed flag, the
    * render policy and ceiling a mount inherits, the boot-time health check's
-   * verdict and whether `initialize()` waited for it, and the per-space
-   * context step, which a test drives directly.
+   * verdict and whether `initialize()` waited for it, the private inbox ensure
+   * in flight, and the per-space context step, which a test drives directly.
    */
   get accessForTestingOnly(): {
     runtime: Runtime;
@@ -1090,6 +1119,8 @@ export class RuntimeProcessor {
     readonly renderDeclassificationPolicy: RenderDeclassificationPolicy;
     readonly health: Promise<boolean>;
     readonly awaitedHealth: boolean;
+    readonly privateInboxEnsured: Promise<void> | undefined;
+    readonly shareIntake: Promise<ShareIntake | undefined> | undefined;
     getSpaceCtx(space: DID): PiecesController;
   } {
     // deno-lint-ignore no-this-alias
@@ -1106,6 +1137,12 @@ export class RuntimeProcessor {
       },
       get awaitedHealth() {
         return outerThis.#awaitedHealth;
+      },
+      get privateInboxEnsured() {
+        return outerThis.#privateInboxEnsured;
+      },
+      get shareIntake() {
+        return outerThis.#shareIntake;
       },
       cc: this.#cc,
       spaces: this.#spaces,
@@ -1306,12 +1343,14 @@ export class RuntimeProcessor {
   dispose(): Promise<void> {
     if (this.#disposingPromise) return this.#disposingPromise;
     this.#isDisposed = true;
+    this.#disposal.abort();
     this.#disposingPromise = (async () => {
       this.#telemetry.removeEventListener("telemetry", this.#onTelemetry);
       try {
         this.#intentOutcomeCancel?.();
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
+        this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
         this.#profilePreloadCancel = undefined;
@@ -1341,6 +1380,11 @@ export class RuntimeProcessor {
         }
         this.#vdomMounts.clear();
 
+        // A private inbox ensure still in flight is not waited for: a remote
+        // read it has stalled on must not hold disposal. Disposal aborted its
+        // signal above, so it sends nothing once its reads return; a read that
+        // fails against the disposed runtime is dropped unreported; and the
+        // next worker's first bring-up of Home starts the ensure again.
         await this.#runtime.storageManager.synced();
         await this.#runtime.dispose();
       } catch (e) {
@@ -1520,86 +1564,117 @@ export class RuntimeProcessor {
           "use `CellHandle.getCfcLabel()` for the redacted display view",
       );
     }
+    const gate = this.#hostReadGate;
     let cell = getCell(this.#runtime, request.cell);
     if (request.meta !== undefined) {
       const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
-      if (request.meta === "argument" || request.meta === "result") {
-        // For the meta link fields, use the meta linked cell instead
-        const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
-        const link = getMetaLink(rootCell, request.meta);
-        if (link === undefined) return { value: undefined };
-        cell = this.#runtime.getCellFromLink({
-          ...link,
-          path: [...link.path, ...request.cell.path],
-        });
-      } else {
-        // For meta cells that aren't link cells, return the raw data
-        return {
-          value: rootCell.getMetaRaw(request.meta) as FabricValue,
-        };
+      if (request.meta !== "argument" && request.meta !== "result") {
+        // A metadata field that is not a link returns the raw data.
+        return gate.readMetadata(rootCell, request.meta);
       }
+      // A metadata link field reads the cell it links to, once its document
+      // admits the read.
+      const refusal = gate.metadataRefusal(rootCell);
+      if (refusal !== undefined) return refusal;
+      const link = getMetaLink(rootCell, request.meta);
+      if (link === undefined) return gate.nothing();
+      cell = this.#runtime.getCellFromLink({
+        ...link,
+        path: [...link.path, ...request.cell.path],
+      });
     }
-    const value = cell.get();
-    // The sigil links inside the response carry each cell's `cfcLabelView`
-    // in its display form, the same redaction the top-level `cfcLabel` below
-    // gets. Display-only: the worker neither persists nor re-imports inbound
-    // views, so a redacted copy cannot round-trip into under-labeled state.
-    //
-    // `convertCellsToLinks()` preserves a `FabricPrimitive` by identity, and
-    // the envelope's encoding carries one to the main thread with its class,
-    // so what the response holds is what the cell held.
-    const converted = cellValueForClient(value);
-    // The resolved cell's own schema-bearing ref, when asked for — for a meta
-    // link read this addresses the linked cell itself, so the caller can
-    // subscribe to it or consult its schema's declarations.
-    const refField = request.includeRef ? { cell: createCellRef(cell) } : {};
-    if (!request.includeCfcLabel) {
-      return { value: converted, ...refField };
-    }
-    // This reads the display label with `cfcLabelViewForResolvedCell()` and
-    // redacts `Caveat.source` from it, as `handleCellGetCfcLabel()` does.
-    // Returning the label with the value saves the caller a second round trip.
-    // The value read above resolved the same links and kicked any cross-space
-    // targets already, so the label read kicks none of its own.
-    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
-      kickCrossSpaceTargets: false,
+    // The sigil links inside the answer carry each cell's `cfcLabelView` in
+    // its display form, the same redaction the top-level `cfcLabel` gets.
+    // Display-only: the worker neither persists nor re-imports inbound views,
+    // so a redacted copy cannot round-trip into under-labeled state. The
+    // conversion preserves a `FabricPrimitive` by identity, and the
+    // envelope's encoding carries one to the main thread with its class. The
+    // read cell's own ref, when asked for, addresses for a metadata link read
+    // the linked cell itself, so the caller can subscribe to it or consult
+    // its schema's declarations.
+    return gate.read(cell, {
+      includeRef: request.includeRef,
+      includeCfcLabel: request.includeCfcLabel,
     });
-    return {
-      value: converted,
-      ...refField,
-      cfcLabel: cfcLabel === undefined
-        ? undefined
-        : redactCaveatSourcesForDisplay(cfcLabel),
-    };
   }
 
   async handleCellPull(
     request: CellPullRequest,
   ): Promise<CellGetResponse> {
     const cell = getCell(this.#runtime, request.cell);
-    await cell.pull();
-    // The durable pull crosses the commit-aware fixpoint so subsequent
-    // operations observe all work causally demanded here. Rendering can read
-    // reactive state while the host continues to report unconfirmed writes,
-    // once there is a value to read. A cell holding none may be waiting on the
-    // very write that creates it, so that pull crosses the barrier too.
-    if (request.awaitDurability !== false || holdsNoValue(cell)) {
-      await this.#runtime.scheduler.idleWithPendingCommits();
-    }
+    await cell.pull({ awaitDurability: request.awaitDurability });
     return this.handleCellGet({
       type: RequestType.CellGet,
       cell: request.cell,
     });
   }
 
+  /**
+   * Classifies whether recorded reads depend on pending local writes.
+   * Missing read observations retain the full initialization barrier.
+   */
+  #initializationReadState(
+    tx: IExtendedStorageTransaction,
+  ): "confirmed" | "pending" | "unknown" {
+    const reads = tx.tx.getReadActivities?.();
+    if (reads === undefined) return "unknown";
+    for (const read of reads) {
+      if (
+        this.#runtime.storageManager.open(read.space).replica.hasPendingWrite(
+          read.id,
+          read.scope,
+          tx.tx.scopeKeyIdentity,
+        )
+      ) return "pending";
+    }
+    return "confirmed";
+  }
+
   /** Atomically stores a default only while the target has no backing value. */
   async handleCellInitialize(
     request: CellInitializeRequest,
-  ): Promise<{ value: FabricValue }> {
+  ): Promise<CellValueResponse> {
     if (request.value === undefined) {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
+    const target = getCell(this.#runtime, request.cell);
+    const readinessFailure = await target.pull().then(
+      () => undefined,
+      (error: unknown) => ({ error }),
+    );
+    // Projection can discover reads beyond the initial pull. editWithRetry
+    // reconciles documents read as absent and re-runs this probe when those
+    // documents turn out to exist.
+    const existing = await this.#runtime.editWithRetry((tx) => {
+      const cell = target.withTx(tx);
+      try {
+        const value = (
+            cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
+            cell.get() === undefined
+          )
+          ? undefined
+          : this.#hostReadGate.read(cell);
+        const state = this.#initializationReadState(tx);
+        if (readinessFailure !== undefined && state !== "pending") {
+          throw readinessFailure.error;
+        }
+        return state === "confirmed" ? value : undefined;
+      } catch (error) {
+        // Only a recorded pending write justifies retrying a failed read
+        // after repair. Other readiness and projection failures propagate.
+        if (this.#initializationReadState(tx) !== "pending") throw error;
+        return undefined;
+      }
+    });
+    if (existing.error) throw new Error(existing.error.message);
+    if (existing.ok !== undefined) return existing.ok;
+
+    // A pending commit or its retry can install a producer for an absent
+    // value. Keep demand active through the full barrier before storing a
+    // default, including after an optimistic backing value is withdrawn.
+    await target.pull({ awaitDurability: true });
+    let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);
       // Initialization materializes the same backing value a whole-cell write
@@ -1609,25 +1684,29 @@ export class RuntimeProcessor {
       // child write with no durable parent and can replace the visible default.
       // Follow a final write redirect only for this existence check, while
       // retaining the view schema because its scope cap controls whether that
-      // redirect is reachable. Then return the normal projected value when
-      // storage already won.
-      const stored = cell.getRaw({
+      // redirect is reachable. When storage already won, the host is sent
+      // the value this transaction found, read as every host read is, and
+      // read here, before the transaction ends, so that a write landing after
+      // it commits is not mistaken for what it selected. The transaction
+      // wrote nothing, so a read of the runtime's state sees what it saw.
+      const backing = cell.getRaw({
         lastNode: "writeRedirect",
       });
-      if (stored !== undefined) {
-        const projected = cell.get();
-        if (projected === undefined) {
+      if (backing !== undefined) {
+        if (cell.get() === undefined) {
           throw new TypeError(
             "Cell backing value is incompatible with its schema.",
           );
         }
-        return cellValueForClient(projected);
+        stored = this.#hostReadGate.read(getCell(this.#runtime, request.cell));
+        return undefined;
       }
+      stored = undefined;
       cell.set(initial);
-      return cellValueForClient(initial);
+      return hostValueOf(initial);
     });
     if (result.error) throw new Error(result.error.message);
-    return { value: result.ok };
+    return stored ?? this.#hostReadGate.sentByHost(result.ok);
   }
 
   /**
@@ -1666,7 +1745,7 @@ export class RuntimeProcessor {
       popFrame(frame);
     }
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.commit();
+    const commit = tx.commit().settled;
     if (request.awaitCommit) return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "push");
   }
@@ -2049,17 +2128,89 @@ export class RuntimeProcessor {
   }
 
   handleCellSend(request: CellSendRequest): void | Promise<void> {
+    const event = mapCellRefsToSigilLinks(request.event);
+    return this.#sendCellEvent(
+      request.cell,
+      (send) => send(event),
+      request.awaitHandling
+        ? "handling"
+        : request.awaitCommit
+        ? "commit"
+        : undefined,
+    );
+  }
+
+  /**
+   * Applies a `CellSendReviewedRequest`: sends the request's payload through
+   * a native control bound to the request's surface and action, which stamps
+   * the event with `native` provenance for them, replacing any `provenance`
+   * the payload carries, and marks it renderer-trusted, and waits for the
+   * event's handling. Reached only through a client of this worker, which a
+   * pattern the worker runs is not.
+   *
+   * @throws If the payload is not a record, or the surface or action is
+   *   blank, and when the event, or the run of the stream's handler, is
+   *   refused.
+   */
+  async handleCellSendReviewed(
+    request: CellSendReviewedRequest,
+  ): Promise<void> {
+    const payload = mapCellRefsToSigilLinks(request.event);
+    if (!isPlainObject(payload)) {
+      throw new Error("A reviewed action's event must be a record.");
+    }
+    if (
+      typeof request.surface !== "string" || typeof request.action !== "string"
+    ) {
+      throw new Error("A reviewed action requires a surface and an action.");
+    }
+    const control = { surface: request.surface, action: request.action };
+    await this.#sendCellEvent(
+      request.cell,
+      (send) => bindNativeUiControl({ send }, control)(payload),
+      "handling",
+    );
+  }
+
+  /**
+   * Helper for `handleCellSend()` and `handleCellSendReviewed()`, which sends
+   * an event to `ref` in a transaction of its own. `deliver` sends the event
+   * through the function it is given. With `wait` undefined the outcome is
+   * logged; `commit` waits for the transaction's commit, and `handling` for
+   * the commit of the handler's run as well, and either rejects with the
+   * refusal.
+   */
+  #sendCellEvent(
+    ref: CellRef,
+    deliver: (send: (event: unknown) => void) => void,
+    wait: "commit" | "handling" | undefined,
+  ): void | Promise<void> {
     const tx = this.#runtime.edit();
-    const cell = getCell(this.#runtime, request.cell);
-    cell.withTx(tx).send(mapCellRefsToSigilLinks(request.event));
+    const cell = getCell(this.#runtime, ref).withTx(tx);
+    const handled = wait === "handling"
+      ? Promise.withResolvers<IExtendedStorageTransaction>()
+      : undefined;
+    deliver(
+      handled === undefined
+        ? (event) => cell.send(event)
+        : (event) => sendEvent(cell, event, handled.resolve),
+    );
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.commit();
-    if (request.awaitCommit) return this.#requireCellCommit(commit);
+    const commit = tx.commit().settled;
+    if (handled !== undefined) {
+      return this.#requireCellCommit(commit).then(async () => {
+        const handling = (await handled.promise).status();
+        if (handling.status === "error") {
+          throw new Error(transactionFailureMessage(handling.error));
+        }
+      });
+    }
+    if (wait === "commit") return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "send");
   }
 
   #observeCellCommit(
-    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>,
+    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>["settled"],
     operation: "set" | "push" | "send",
   ): void {
     void commit.then(
@@ -2081,7 +2232,7 @@ export class RuntimeProcessor {
   }
 
   async #requireCellCommit(
-    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>,
+    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>["settled"],
   ): Promise<void> {
     const result = await commit;
     if (result.error) throw new Error(result.error.message);
@@ -2099,7 +2250,9 @@ export class RuntimeProcessor {
 
     const cell = getCell(this.#runtime, request.cell);
 
-    const cancel = cell.sink((value, cfcLabel) => {
+    const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
+      includeCfcLabel: request.includeCfcLabel,
+    }, (value) => {
       // Log empty-schema subscriptions that produce CellResult proxies.
       // These are the call sites that need real schemas added.
       const hasSchema = hasExplicitSubscriptionSchema(request.cell.schema);
@@ -2113,27 +2266,10 @@ export class RuntimeProcessor {
             `  schema: ${JSON.stringify(request.cell.schema)}`,
         );
       }
-      const converted = cellValueForClient(value);
-      // The sink read the raw label on its tracked tx (so cfc writes re-fire
-      // it); redact Caveat.source here before it crosses to the main thread.
-      const redactedLabel = request.includeCfcLabel
-        ? (cfcLabel === undefined
-          ? undefined
-          : redactCaveatSourcesForDisplay(cfcLabel))
-        : undefined;
-
-      // `.sink` fires synchronously on invocation. Trigger the notification
-      // in a microtask so that the subscription response returns
-      // before a notification fires.
-      queueMicrotask(() =>
-        client.post({
-          type: NotificationType.CellUpdate,
-          cell: request.cell,
-          value: converted,
-          ...(request.includeCfcLabel ? { cfcLabel: redactedLabel } : {}),
-        })
-      );
-    }, { includeCfcLabel: request.includeCfcLabel === true });
+    }, (update) =>
+      // `.sink` fires synchronously on invocation. Each notification leaves
+      // in a microtask so that the subscription response returns before it.
+      queueMicrotask(() => client.post(update)));
 
     this.#subscriptions.set(key, cancel);
     return { value: true };
@@ -2233,11 +2369,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: "ShareSnapshot" },
-      },
+      provenance: hostGestureProvenance("ShareSnapshot"),
     };
     markRendererTrustedEvent(event);
     const shared = await commitSnapshotShare(consent, event);
@@ -2285,6 +2417,7 @@ export class RuntimeProcessor {
       instance: prepared.instance,
       policy: prepared.policy,
       sources: [...prepared.sources],
+      heldWith: prepared.heldWith.map((group) => [...group]),
       witnessedRelease: prepared.witnessedRelease,
       stance: prepared.stance,
     };
@@ -2313,11 +2446,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: CUSTODY_SEAL_GESTURE },
-      },
+      provenance: hostGestureProvenance(CUSTODY_SEAL_GESTURE),
     };
     markRendererTrustedEvent(event);
     // A client that detaches at any point before the entry's transaction is
@@ -2370,6 +2499,24 @@ export class RuntimeProcessor {
       policy: this.#hostSelectedCell(request.policy),
     });
     return answer === undefined ? {} : { answer };
+  }
+
+  /**
+   * The fields a record holds, each as a link to its own cell, as the
+   * host-read gate decides them. Synced first, so that the labels the list
+   * is decided on are the record's.
+   *
+   * @throws When the record's space refused the worker access: a load it
+   *   refused resolves as one that found nothing, and a record the worker
+   *   could not read is not one that holds no record.
+   */
+  async handleCellFields(
+    request: CellFieldsRequest,
+  ): Promise<CellFieldsResponse> {
+    const cell = getCell(this.#runtime, request.cell);
+    await cell.sync();
+    this.#throwIfAccessRefused(request.cell.space);
+    return this.#hostReadGate.fields(cell);
   }
 
   handleCellGetCfcLabel(
@@ -2471,7 +2618,11 @@ export class RuntimeProcessor {
 
   async #pullSqliteDbRef(cell: Cell<unknown>): Promise<SqliteDbRef> {
     await cell.pull();
-    if (holdsNoValue(cell)) {
+    const raw = cell.getRaw({ lastNode: "value" });
+    if (
+      raw === undefined ||
+      (isPlainObject(raw) && Object.keys(raw).length === 0)
+    ) {
       // A resolved scoped target can be demanded while its lazy factory write
       // is still committing. Its object schema presents that missing value as
       // an empty object rather than `undefined`. Pull waits for reactive work,
@@ -2570,7 +2721,11 @@ export class RuntimeProcessor {
   /**
    * Ensures the user's Home pattern is running and returns its result cell.
    * The first time in this worker, it also adopts the Home space list's
-   * name-only entries (see `PiecesController.adoptLegacySpaces`).
+   * name-only entries (see `PiecesController.adoptLegacySpaces`), and starts
+   * Home's ensure of the user's private inbox (see
+   * `PiecesController.ensurePrivateInbox`) and the share intake over Home's
+   * inboxes (see `PiecesController.startShareIntake`) without waiting for
+   * either.
    */
   async #ensureHomePattern(): Promise<Cell<unknown>> {
     const homeCC = this.#homeController();
@@ -2584,6 +2739,31 @@ export class RuntimeProcessor {
       console.warn("[RuntimeProcessor] Adopting legacy Home spaces:", error);
     });
     await this.#legacySpacesAdopted;
+    // The ensure reads every profile's pointer and loads inbox documents in
+    // other spaces, so Home opens without waiting for it. A failure is
+    // reported unless the processor has been disposed, as `dispose()` says,
+    // and the next ensure of Home in this worker starts it again.
+    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox(
+      this.#disposal.signal,
+    ).catch(
+      (error) => {
+        this.#privateInboxEnsured = undefined;
+        if (this.#isDisposed) return;
+        console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
+      },
+    );
+    // The intake follows Home's inboxes until disposal aborts its signal. A
+    // failure to start it is reported unless the processor has been disposed,
+    // and the next ensure of Home in this worker starts it again.
+    this.#shareIntake ??= homeCC.startShareIntake(this.#disposal.signal).catch(
+      (error) => {
+        this.#shareIntake = undefined;
+        if (!this.#isDisposed) {
+          console.warn("[RuntimeProcessor] Starting the share intake:", error);
+        }
+        return undefined;
+      },
+    );
     return home;
   }
 
@@ -2747,21 +2927,44 @@ export class RuntimeProcessor {
     };
   }
 
+  /**
+   * Handles a `GetSpaceRootPatternRequest`. Returns no piece for a space with
+   * no root unless the request opens it (`start` true) and this runtime's
+   * identity owns the space, in which case the root is created. A read never
+   * writes, and a principal other than the owner never puts a root in
+   * someone else's space.
+   *
+   * @throws The server's refusal when this runtime's identity may not read
+   *   the space, whether or not a root is still held from before.
+   * @throws {SpaceNotFoundError} When the request opens a DID that no space
+   *   answers to, other than this runtime's identity's own Home.
+   */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
-  ): Promise<PieceResponse> {
+  ): Promise<SpaceRootPatternResponse> {
     const cc = this.#getSpaceCtx(request.space);
     if (request.start === false) {
       // The caller reads the root's exports rather than rendering it, so
       // resolving what is stored answers it — reconciled, so what it reads
-      // is still healed against the root's origin. Only a space with no root
-      // yet falls through: a root has to exist before it can have exported
-      // anything, and creating one is not the cost this avoids.
+      // is still healed against the root's origin.
       const stored = await cc.getDefaultPattern({
         reconcile: true,
         start: false,
       });
-      if (stored) return { piece: createPieceRef(stored) };
+      // Checked whatever the lookup found, since a root this runtime read
+      // before losing the space is still in its replica.
+      this.#throwIfAccessRefused(request.space);
+      return stored ? { piece: createPieceRef(stored) } : {};
+    }
+    const existing = await cc.getDefaultPattern(false);
+    this.#throwIfAccessRefused(request.space);
+    if (existing === undefined && !(await this.#ownsSpace(request.space))) {
+      // No owner means either a space someone else owns, which has nothing in
+      // it yet, or no space at all, which opening does not create.
+      if (!(await this.#runtime.spaceExists(request.space))) {
+        throw new SpaceNotFoundError(request.space);
+      }
+      return {};
     }
     const piece = await cc.ensureDefaultPattern();
     return {
@@ -2769,14 +2972,32 @@ export class RuntimeProcessor {
     };
   }
 
-  async handleRecreateSpaceRootPattern(
-    request: RecreateSpaceRootPatternRequest,
-  ): Promise<PieceResponse> {
-    const cc = this.#getSpaceCtx(request.space);
-    const piece = await cc.recreateDefaultPattern();
-    return {
-      piece: createPieceRef(piece.getCell()),
-    };
+  /**
+   * Whether this runtime's identity owns `space`: the space is its Home, or
+   * the space's access list makes it an `OWNER`. A Home is its user's
+   * whatever its access list holds, since the Home's DID is the identity
+   * itself: its list is written when the Home is first mounted, and a Home
+   * populated before access lists existed has none. Only the identity's own
+   * runtime asks with that DID, so the shortcut creates a root in no one
+   * else's space.
+   */
+  async #ownsSpace(space: DID): Promise<boolean> {
+    const principal = this.#runtime.userIdentityDID;
+    if (space === principal) return true;
+    const acl = await new ACLManager(this.#runtime, space).get();
+    return acl !== null && spaceReaderRole(acl, principal) === "owner";
+  }
+
+  /**
+   * Throws the server's refusal of `space`, or of this runtime's session
+   * there, if it refused either. A refused read finds nothing, so a caller
+   * that would report what it found asks this first.
+   */
+  #throwIfAccessRefused(space: MemorySpace): void {
+    const storage = this.#runtime.storageManager;
+    const denied = storage.spaceAccessError?.(space) ??
+      storage.authorizationError?.(space);
+    if (denied !== undefined) throw denied;
   }
 
   /**
@@ -3219,11 +3440,13 @@ export class RuntimeProcessor {
     };
   }
 
-  /** Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. */
-  async handleRetrySpaceAccess(
-    request: RetrySpaceAccessRequest,
-  ): Promise<void> {
-    await this.#runtime.retrySpaceAccess(request.space);
+  /**
+   * Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. A
+   * request for a space whose retry is still in flight shares that retry
+   * rather than asking again.
+   */
+  handleRetrySpaceAccess(request: RetrySpaceAccessRequest): Promise<void> {
+    return this.#spaceAccessRetries.retry(request.space);
   }
 
   async handleCreateSpace(
@@ -3509,6 +3732,8 @@ export class RuntimeProcessor {
         return this.handleCellPush(request);
       case RequestType.CellSend:
         return this.handleCellSend(request);
+      case RequestType.CellSendReviewed:
+        return await this.handleCellSendReviewed(request);
       case RequestType.CellSubscribe:
         return this.handleCellSubscribe(request, client);
       case RequestType.CellUnsubscribe:
@@ -3517,6 +3742,8 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.CellFields:
+        return await this.handleCellFields(request);
       case RequestType.SnapshotSharePrepare:
         return await this.handleSnapshotSharePrepare(request, client);
       case RequestType.SnapshotShareCommit:
@@ -3579,10 +3806,6 @@ export class RuntimeProcessor {
         );
       case RequestType.GetSpaceRootPattern:
         return await this.handleGetSpaceRootPattern(
-          request,
-        );
-      case RequestType.RecreateSpaceRootPattern:
-        return await this.handleRecreateSpaceRootPattern(
           request,
         );
       case RequestType.PieceGet:
@@ -3771,7 +3994,10 @@ export class RuntimeProcessor {
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
       modulePolicySource: this.#renderModulePolicySource,
-      spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
+      spaceAccess: renderSpaceAccessProviderFor(
+        this.#runtime,
+        this.#spaceAccessRetries,
+      ),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
         // `mountId` as the client sent it: the scoping is this worker's

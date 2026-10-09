@@ -4,10 +4,13 @@ import {
   type AddIntegrity,
   assert,
   FabricEpochNsec,
+  handler,
   multiUserTest,
   pattern,
+  type RepresentsCurrentUser,
   type Stream,
   TESTS,
+  type TrustedActionWrite,
   UI,
   Writable,
 } from "commonfabric";
@@ -18,7 +21,7 @@ import type {
   ChatRoomAbout,
   ChatRoomOutput,
   ChatRoomPolicy,
-} from "./schemas.ts";
+} from "./schemas.tsx";
 import { clickButton, hasText } from "../test/vnode-helpers.ts";
 
 interface Setup {
@@ -27,10 +30,35 @@ interface Setup {
   initializeProfile: Stream<void>;
 }
 
+/** A profile attested by the authenticated participant's own gesture. */
+type OwnProfile = RepresentsCurrentUser<
+  TrustedActionWrite<
+    ChatProfile,
+    typeof writeProfile,
+    "FabriChatTestWriteProfile",
+    "FabriChatTestProfileSurface"
+  >
+>;
+
+/** The independently scoped profile the writer initializes. */
+interface ProfileState {
+  profile: Writable<OwnProfile>;
+}
+
+/** Gives each participant a profile whose label names their own principal. */
+const writeProfile = handler<void, ProfileState>(
+  (_, { profile }) => {
+    profile.set({ name: "Reader" } as OwnProfile);
+  },
+);
+
+const profileGesture = {
+  surface: "FabriChatTestProfileSurface",
+  action: "FabriChatTestWriteProfile",
+};
+
 export const setup = pattern<Record<string, never>, Setup>(() => {
-  const profile = new Writable.perUser<
-    AddIntegrity<ChatProfile, ["chat-test"]>
-  >({ name: "Reader" });
+  const profile = new Writable.perUser<OwnProfile>();
   const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
     CHAT_POLICY,
   );
@@ -46,7 +74,7 @@ export const setup = pattern<Record<string, never>, Setup>(() => {
   const memory = new Writable<StoredMemory>();
   return {
     initialize,
-    initializeProfile: action(() => profile.set({ name: "Reader" })),
+    initializeProfile: writeProfile({ profile }),
     room: FabriChatRoom({ about, memory, myProfile: profile }),
   };
 });
@@ -58,6 +86,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   });
   return {
     [TESTS]: [
+      { action: setup.initializeProfile, trustedUi: profileGesture },
       { action: setup.initialize },
       {
         action: action(() =>
@@ -65,6 +94,9 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
             new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
           )
         ),
+      },
+      {
+        render: setup.room[UI],
       },
       {
         action: setup.room.sendMessage,
@@ -90,7 +122,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 
 export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
   [TESTS]: [
-    { action: setup.initializeProfile },
+    { action: setup.initializeProfile, trustedUi: profileGesture },
     { await: "alice-sent" },
     { assertion: assert(() => setup.room.messages.count === 1) },
     { render: setup.room[UI] },
@@ -108,7 +140,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
 
 export const reader = pattern<{ setup: Setup }>(({ setup }) => ({
   [TESTS]: [
-    { action: setup.initializeProfile },
+    { action: setup.initializeProfile, trustedUi: profileGesture },
     { await: "alice-sent" },
     { render: setup.room[UI] },
     { assertion: assert(() => hasText(setup.room[UI], "Hello from Alice")) },

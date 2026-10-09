@@ -22,9 +22,9 @@ the product needs server-side. Its route groups (`app.ts`) tell the story:
   (`GET /api/patterns/:filename`).
 - `integrations/*` — OAuth flows (Google, Discord, ...) so pieces can hold
   third-party credentials server-side; `webhooks` for inbound events.
-- `ingest` — `POST /api/ingest/:id`: a bearer-token channel for external,
-  DID-less sources (a phone beacon, a webhook emitter) to durably append
-  records to a channel's cell; everything arriving here carries the
+- `ingest` — `POST /api/spaces/:space/ingest/:id`: a bearer-token channel for
+  external, DID-less sources (a phone beacon, a webhook emitter) to durably
+  append records to a channel's cell; everything arriving here carries the
   runtime-minted `ExternalIngest` provenance mark (Chapter 10).
 - `agent-tools/*` (web-search, web-read), `link-preview`, `sandbox/exec` —
   server-mediated capabilities for patterns and agents.

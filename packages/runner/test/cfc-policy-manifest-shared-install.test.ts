@@ -21,6 +21,7 @@ import { isRetryableCommitRejection } from "../src/storage/rejection.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("shared manifest install");
 const space = signer.did();
@@ -139,7 +140,8 @@ describe("cfc-policy-manifest-shared-install", () => {
     const tx = rtB.edit();
     rtB.getCell(space, "b-brief", policyOfSchema, tx).set("b-brief secret");
     rtB.prepareTxForCommit(tx);
-    const committed = await tx.commit({ resolveAt: "verdict" });
+    const committed = await tx.commit({ holdSyncedUntilCovered: false })
+      .verdict;
 
     // The guard is the transaction's confirmed read of the absent manifest:
     // the rejection names that document, which is what the retry catches up.
@@ -232,7 +234,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       await piece.sync();
       runtime.run(tx, compiled, { brief }, piece);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return piece.withTx();
     };
 
@@ -265,10 +267,10 @@ describe("cfc-policy-manifest-shared-install", () => {
     // Reports the start commits the second runtime makes as refused with what
     // `refusal` returns for each attempt, counting from 1, and passes the
     // commit's own verdict through where it returns nothing. A refused commit
-    // still goes through, so what the start installed stands as it would
-    // behind a real stale-read refusal, which leaves the install in place for
-    // the re-run: what these cases measure is how the start answers the
-    // verdict.
+    // still goes through: these cases measure how the start answers a verdict,
+    // including its catch-up, retry budget, and cancellation ownership. They
+    // do not exercise a storage rejection or prove that recovery retains the
+    // caller's arguments after one.
     const refuseStarts = (
       refusal: (
         attempt: number,
@@ -322,55 +324,22 @@ describe("cfc-policy-manifest-shared-install", () => {
       expect(failures).toEqual([]);
     });
 
-    it("preserves new arguments after a stale read of the piece's own documents", async () => {
-      const pieceA = await setUpByFirstParticipant();
+    it("reports a start still refused over the piece's own documents once its retries are spent", async () => {
+      const piece = await setUpByFirstParticipant();
       const failures = observeStartFailures();
-      let attempts = 0;
-      const starts = new WeakSet<object>();
-      rtB.runner.accessForTestingOnly.deferredStartCommitter = (
-        tx,
-        _cell,
-        commit,
-      ) => {
-        attempts++;
-        starts.add(tx.tx);
-        return commit();
-      };
-      const replica = storageB.open(space).replica as unknown as {
-        commitNative: (...args: unknown[]) => unknown;
-      };
-      const original = replica.commitNative;
-      let refused = false;
-      replica.commitNative = function (...args: unknown[]) {
-        const candidate = args[1] as { tx?: object };
-        if (
-          !refused &&
-          (starts.has(candidate) || starts.has(candidate.tx ?? candidate))
-        ) {
-          refused = true;
-          return Promise.resolve({
-            error: staleReadOf(
-              pieceA.getAsNormalizedFullLink().id,
-              () => Promise.resolve(),
-            ),
-          });
-        }
-        return Reflect.apply(original, this, args);
-      };
-      try {
-        await runShared(rtB, "b-piece secret");
-        await rtB.idle();
-        expect(attempts).toBeGreaterThanOrEqual(2);
-        expect(
-          await serverValue(pieceA.getAsNormalizedFullLink().id, {
-            type: "object",
-            properties: { brief: { type: "string" } },
-          }),
-        ).toEqual({ brief: "b-piece secret" });
-        expect(failures).toEqual([]);
-      } finally {
-        replica.commitNative = original;
-      }
+      let catchUps = 0;
+      const refusal = staleReadOf(piece.getAsNormalizedFullLink().id, () => {
+        catchUps++;
+        return Promise.resolve();
+      });
+      const attempts = refuseStarts(() => refusal);
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(6);
+      expect(catchUps).toBe(5);
+      expect(failures).toEqual([refusal]);
     });
 
     it("reports a start still refused over the manifest once its retries are spent", async () => {
@@ -455,6 +424,31 @@ describe("cfc-policy-manifest-shared-install", () => {
 
       expect(attempts.count).toBe(1);
       expect(failures).toHaveLength(1);
+    });
+
+    it("reports a terminal CFC refusal without waiting for catch-up or running it again", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      let catchUps = 0;
+      const refusal = {
+        name: "CfcCommitRefusalError",
+        message:
+          "CFC enforcement rejected commit: writePolicyAnyOf failed at /brief",
+        reasons: ["writePolicyAnyOf failed at /brief"],
+        readyToRetry: () => {
+          catchUps++;
+          return Promise.resolve();
+        },
+      } as unknown as CommitError;
+      expect(isRetryableCommitRejection(refusal)).toBe(false);
+      const attempts = refuseStarts(() => refusal);
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(catchUps).toBe(0);
+      expect(failures).toEqual([refusal]);
     });
 
     it("reports a manifest refusal whose start was stopped before its verdict", async () => {
@@ -604,7 +598,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       await piece.sync();
       rtA.run(tx, compiled, {}, piece);
       rtA.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await rtA.idle();
       await storageA.synced();
       return cfcPolicyManifestDocId(digest);
@@ -645,18 +639,25 @@ describe("cfc-policy-manifest-shared-install", () => {
       const edits = stub(rtV, "edit", (options) => {
         const tx = edit(options);
         const commit = tx.commit.bind(tx);
-        stub(tx, "commit", async (commitOptions) => {
-          if (!instantiations.has(tx)) return await commit(commitOptions);
-          const refusal = refuse(verdicts.length + 1);
-          if (refusal !== undefined) {
-            verdicts.push(refusal);
-            tx.abort(refusal.message);
-            return { error: refusal };
-          }
-          const result = await commit(commitOptions);
-          verdicts.push(result.error);
-          return result;
-        });
+        stub(
+          tx,
+          "commit",
+          (commitOptions) =>
+            createTransactionCommitReceipt((async () => {
+              if (!instantiations.has(tx)) {
+                return await commit(commitOptions).settled;
+              }
+              const refusal = refuse(verdicts.length + 1);
+              if (refusal !== undefined) {
+                verdicts.push(refusal);
+                tx.abort(refusal.message);
+                return { error: refusal };
+              }
+              const result = await commit(commitOptions).settled;
+              verdicts.push(result.error);
+              return result;
+            })()),
+        );
         return tx;
       });
       return {
@@ -912,7 +913,7 @@ describe("cfc-policy-manifest-shared-install", () => {
         type: "application/json",
         path: ["value"],
       }, collidingArtifact);
-      expect((await forge.commit()).ok).toBeDefined();
+      expect((await forge.commit().settled).ok).toBeDefined();
       const forged = await stored(installedId);
       expect(forged.value).toEqual(collidingArtifact);
 
@@ -935,7 +936,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       type: "application/json",
       path: ["value"],
     }, collidingArtifact as never);
-    expect((await forge.commit()).ok).toBeDefined();
+    expect((await forge.commit().settled).ok).toBeDefined();
 
     const committed = await writeLabeled(rtB, "b-brief");
 

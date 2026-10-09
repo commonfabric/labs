@@ -84,13 +84,13 @@ another test created are all things a test has to arrange for itself.
 [Test selection](test-selection.md) describes the machinery that picks them.
 
 Such a test fails by waiting. The waits an integration test uses resolve on an
-event, and the event never comes, so the wait runs to its stuck-condition
-safety net and the test costs five minutes. Selection then charges the test
-what it cost, and five minutes is more than a lane can hold. A lane may fill
-to `LANE_BUDGET_SECONDS`, and a lane running one test and nothing else may go
-up to `LANE_BOUND_SECONDS`, which is 300 — so a test charged more than that
-fits nowhere at all, and one charged between the two runs only while a change
-makes it mandatory. [Test selection](test-selection.md) has the packing rules;
+event, and the event never comes, so the wait runs to its stuck-condition safety
+net and the test fails when the net runs out, which for `waitForCondition` is
+after five minutes. A pull request's lane is packed to finish inside
+`LANE_BOUND_SECONDS`, which is 300, so the lane holding the test runs past its
+bound as well as failing. Selection measures what a test costs only from runs
+that passed, so the failure leaves the test's charge where it was. [Test
+selection](test-selection.md) has the packing rules;
 `tasks/test-selection/policy.ts` has the numbers.
 
 A page and a value are not equally easy to find missing. A page a test never
@@ -344,6 +344,25 @@ do not add it as a workaround.
 If a browser command did run inside the agent sandbox, disregard its
 browser-startup failure and rerun it outside the sandbox before interpreting
 the test result.
+
+### Starting Chrome without the launcher
+
+Astral's `launch()` and the integration browser launcher in
+`packages/integration/browser-process.ts` both build Chrome's arguments with
+Astral's `generateBinArgs`. Those arguments include `--use-mock-keychain`, which
+makes Chrome on macOS use an in-memory keychain in place of the login keychain,
+and `--password-store=basic`, which makes Chrome on Linux keep its secrets in
+the profile in place of the desktop keyring.
+
+Code that runs the Chrome binary itself, such as a script that spawns it with
+`Deno.Command`, builds its arguments with `generateBinArgs` or passes both
+flags. Without `--use-mock-keychain`, Chrome on macOS reads its "Chromium Safe
+Storage" item from the developer's login keychain when it starts. The item's
+access list names each browser binary it trusts by a hash of that binary's
+signed code, and each Chrome build has a different hash. When the binary being
+run is not on that list, as with a Chrome for Testing build other than the one
+that created the item, macOS shows a dialog asking the developer for their login
+keychain password.
 
 ### Browser process cleanup
 

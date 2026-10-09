@@ -45,9 +45,9 @@ export type BrowserHostLoadState = typeof BROWSER_HOST_LOAD_STATES[number];
 
 /**
  * A value a handle resolved to, which no model that saw it chose for the
- * page: a string a browser child found on the web and returned, which the
- * agent passes on by its handle. `description` says where it came from. The
- * host enters it and keeps it out of every later observation of the page.
+ * page: a string a browser child returned, which the agent passes on by its
+ * handle. `description` says where it came from. The host enters it and keeps
+ * it out of every later observation of the page.
  */
 export interface BrowserHostHandleValue {
   kind: "handle-value";
@@ -212,6 +212,11 @@ export type BrowserHostResult =
  * run has one. `perform` settles when the host answers or `signal` aborts,
  * and never on a clock of its own, since an operation that needs the owner
  * waits for the owner.
+ *
+ * An implementation is where a host's answer enters the harness: it resolves
+ * only with a {@link BrowserHostResult}, having checked whatever crossed its
+ * channel with {@link isBrowserHostResult}, so a caller reads the result as
+ * its type says.
  */
 export interface HarnessBrowserHost {
   /** Executes `operation` in the host's session for this run. */

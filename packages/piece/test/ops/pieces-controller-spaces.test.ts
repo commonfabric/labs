@@ -25,9 +25,10 @@ const current = (await Identity.fromPassphrase("current space")).did();
 
 type SpaceEntry = { name: string; did?: string };
 
-// A Home pattern reduced to its space list and the two streams the controller
-// sends to it. The handlers are the ones `packages/patterns/system/home.tsx`
-// defines, so the list a case reads back is the one a real Home would hold.
+// A Home pattern reduced to its space list and the streams the controller
+// sends to it. The space handlers are the ones
+// `packages/patterns/system/home.tsx` defines, so the list a case reads back is
+// the one a real Home would hold; `ensurePrivateInbox` only counts its events.
 const HOME_SOURCE = `
 import { handler, pattern, Writable } from "commonfabric";
 
@@ -54,14 +55,32 @@ const adoptSpace = handler<
   spaces.removeByValue(spaces.elementById(name));
 });
 
+const ensurePrivateInbox = handler<void, { ensured: Writable<number> }>(
+  (_event, { ensured }) => {
+    ensured.set(ensured.get() + 1);
+  },
+);
+
 export default pattern<void>(() => {
   const spaces = new Writable<SpaceEntry[]>([]).for("spaces");
+  const ensured = new Writable(0).for("ensured");
   return {
     spaces,
+    ensured,
     addSpace: addSpace({ spaces }),
     adoptSpace: adoptSpace({ spaces }),
+    ensurePrivateInbox: ensurePrivateInbox({ ensured }),
   };
 });
+`;
+
+// A Home of a vintage that holds no `ensurePrivateInbox` stream.
+const HOME_WITHOUT_INBOX_SOURCE = `
+import { pattern, Writable } from "commonfabric";
+
+export default pattern<void>(() => ({
+  spaces: new Writable<{ name: string }[]>([]).for("spaces"),
+}));
 `;
 
 const DEFAULT_APP_SOURCE = `
@@ -72,11 +91,11 @@ export default pattern<{ items: string[] }>(({ items }) => ({ items }));
 /**
  * Serves the two system patterns from memory, and nothing else, answering an
  * `identity` query with the identity the source compiles to, as a toolshed
- * does.
+ * does. Home is `homeSource`.
  */
-function installFetchStub(): () => void {
+function installFetchStub(homeSource = HOME_SOURCE): () => void {
   const sources: Record<string, string> = {
-    "/api/patterns/system/home.tsx": HOME_SOURCE,
+    "/api/patterns/system/home.tsx": homeSource,
     "/api/patterns/system/default-app.tsx": DEFAULT_APP_SOURCE,
   };
   const original = globalThis.fetch;
@@ -358,6 +377,40 @@ describe("pieces-controller", () => {
 
           await expect(pieces.adoptLegacySpaces()).rejects.toThrow(
             "Only a controller over the identity's Home space can adopt legacy spaces",
+          );
+        });
+      });
+
+      describe("ensurePrivateInbox()", () => {
+        it("sends Home's `ensurePrivateInbox`", async () => {
+          const home = await open(signer.did());
+          const ensured = (await home.ensureDefaultPattern()).getCell().key(
+            "ensured",
+          );
+
+          await home.ensurePrivateInbox();
+          await runtime.idle();
+
+          expect(await ensured.pull()).toBe(1);
+        });
+
+        it("leaves a Home with no `ensurePrivateInbox` as it is", async () => {
+          restoreFetch();
+          restoreFetch = installFetchStub(HOME_WITHOUT_INBOX_SOURCE);
+          const home = await open(signer.did());
+          const root = (await home.ensureDefaultPattern()).getCell();
+
+          await home.ensurePrivateInbox();
+          await runtime.idle();
+
+          expect(await root.key("ensurePrivateInbox").pull()).toBeUndefined();
+        });
+
+        it("throws on a controller over a space other than the identity's Home", async () => {
+          const pieces = await open(await runtime.createSpace());
+
+          await expect(pieces.ensurePrivateInbox()).rejects.toThrow(
+            "Only a controller over the identity's Home space can ensure a private inbox",
           );
         });
       });

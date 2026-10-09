@@ -21,8 +21,6 @@ import {
 } from "../loom/participants.tsx";
 import { default as Note, type NotePiece } from "../notes/note.tsx";
 
-import SpaceConversation from "../fabrichat/main.tsx";
-
 import BacklinksIndex, { type MentionablePiece } from "./backlinks-index.tsx";
 import SummaryIndex from "./summary-index.tsx";
 import Notebook from "../notes/notebook.tsx";
@@ -213,7 +211,6 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   const summaryIdx = SummaryIndex({});
 
   const gridView = PieceGrid({ pieces: visiblePieces });
-  const conversation = SpaceConversation({});
 
   return {
     backlinksIndex: index,
@@ -226,7 +223,6 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
           <div slot="start">
             <h2 style={{ margin: 0, fontSize: "20px" }}>Patterns</h2>
           </div>
-          <cf-cell-link $cell={conversation} slot="end">Chat</cf-cell-link>
           <cf-cell-link
             $cell={index}
             slot="end"

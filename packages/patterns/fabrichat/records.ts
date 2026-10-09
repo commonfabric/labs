@@ -10,7 +10,7 @@ import {
   FabricEpochNsec,
   type Writable,
 } from "commonfabric";
-import type { ChatMessage, ChatRoomPolicy } from "./schemas.ts";
+import type { ChatMessage, ChatRoomPolicy } from "./schemas.tsx";
 
 /** The policy used by writers and the published policy cell. */
 export const CHAT_POLICY: ChatRoomPolicy = {

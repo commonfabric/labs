@@ -329,7 +329,12 @@ server](#clients-that-are-not-built-alongside-their-server).
   feature, but the per-class commit admission rows are enforced by the memory
   server under the flag, so the value lives beside the memory protocol flags.
   It is not a handshake capability — admission enforcement is server-local and
-  nothing about it is negotiated per connection.
+  nothing about it is negotiated per connection. A memory server does report,
+  in every `hello.ok`, whether server execution is attached to it
+  (`serverExecution`), as a fact a client reads before opening any session
+  rather than a capability the two agree on. A server that predates the flag
+  sends no `serverExecution` at all, and a client receiving none does not know
+  whether server execution is on.
 - **Added by.** Bernhard Seefeld, in server-execution v2 Phase 1 stage A
   (#5339;
   [`docs/plans/server-execution-v2.md`](../plans/server-execution-v2.md);
@@ -1357,7 +1362,7 @@ the per-epic implementation notes).
   WebSocket frames, then delete the config trio and advertise the capability
   unconditionally.
 
-> Two neighbors in the same handshake are related but are not
+> These neighbors in the same handshake are related but are not
 > runtime-toggleable experimental flags:
 >
 > - **`sqliteCommitRowLabelEval`** is a build-inherent capability, hardwired to
@@ -1418,6 +1423,22 @@ the per-epic implementation notes).
 >   it, which parses as `false`, and a client then reports presence as
 >   unavailable rather than sending a message the server would refuse. It is
 >   permanent.
+> - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
+>   on both peers. It advertises the `session/admissible` push of the memory
+>   protocol chapter's section 4.2.2: a server tells a connection it refused a
+>   space once an access-list change admits the refused principal, and the
+>   runner's storage manager retries that space on being told. Either peer
+>   omitting it, which parses as `false`, leaves the connection without the
+>   notice, and a refused client then learns of a grant only by asking again.
+>   It is permanent.
+> - **`spaceKind`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server seals the kind a space's genesis commit
+>   declares, and reports it in every `session.open` result
+>   ([`space-kinds.md`](../features/space-kinds.md)). Older servers omit it,
+>   which parses as `false`. A client then refuses to declare a kind there,
+>   since such a server would neither validate nor seal it, and
+>   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
+>   is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 
@@ -1566,13 +1587,16 @@ the per-epic implementation notes).
   ([`packages/toolshed/env.ts`](../../packages/toolshed/env.ts)). Not a
   `RuntimeOptions` flag: it gates an HTTP router, not runtime behavior.
 - **Added by.** Alex Komoroske, in the self-serve ingest channels change.
-- **Purpose.** Gates the `/api/ingest-channels` control plane, through which a
+- **Purpose.** Gates the ingest-channel control plane
+  (`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
+  through which a
   user holding their own identity key mints, lists, rotates, and revokes ingest
   channels for spaces they own — without an operator. When off, the router
   [404s every verb](../../packages/toolshed/routes/ingest-channels/gate.ts)
   before the body limit, the rate limiter, or signature verification runs, so a
   deployment that has not opted in does not advertise the endpoint. The data
-  plane (`/api/ingest/:id`) and the operator provisioning scripts are
+  plane (`/api/spaces/:space/ingest/:id` and `/api/ingest/:id`) and the
+  operator provisioning scripts are
   unaffected by the flag.
 - **Current default and planned end state.** Off by default. The gate exists
   because minting issues a durable bearer capability that outlives the trust

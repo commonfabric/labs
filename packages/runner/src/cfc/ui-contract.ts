@@ -124,6 +124,11 @@ type AddressLike = {
   path: readonly unknown[];
 };
 
+/**
+ * The provenance a trusted UI surface puts on an event: `dom` from the
+ * renderer's dispatch of a browser event, `native` from a native host's
+ * control bound by `bindNativeUiControl()`.
+ */
 type TrustedUiProvenance = {
   origin: "dom" | "native";
   trusted: true;
@@ -448,8 +453,8 @@ const uiContractsFromSchemaInternal = (
     for (const entry of branchEntries) entries.push(entry);
   }
 
-  // `items` keeps its `*` entry even beside prefixItems, mirroring
-  // walkIfcSchema (PR #4969 review): the `*` over-enforces the rest
+  // `items` keeps its `*` entry even beside prefixItems, as
+  // `cfcSchemaEntries` does: the `*` over-enforces the rest
   // contract on tuple slots, but minting nothing would silently drop the
   // tail elements' declared contract — fail-open, strictly worse. A
   // precise "past the slots" representation needs a path grammar beyond
@@ -589,6 +594,48 @@ export const trustedEventMatchesUiContract = (
   );
 };
 
+/** The provenance an event carries for a reviewed action on a trusted surface. */
+export type ReviewedActionProvenance = {
+  /** `dom` for a browser event, `native` for a native host's own control. */
+  origin: TrustedUiProvenance["origin"];
+
+  /** Always `true`: the event came from a trusted surface. */
+  trusted: true;
+
+  /** The surface the action was taken on, and the action. */
+  ui: {
+    /** The surface, matched against a contract's `trustedPattern`. */
+    pattern: string;
+
+    /** The surface, matched against a contract's `requiredEventIntegrity`. */
+    eventIntegrity: string[];
+
+    /** The action, matched against a `UiAction` contract's `action`. */
+    uiContractDataset: { uiAction: string };
+  };
+};
+
+/**
+ * Builds the provenance of `action` taken on the trusted surface `surface`,
+ * which `trustedEventMatchesUiContract()` matches against a `UiAction`
+ * contract naming that action, whose `trustedPattern` and
+ * `requiredEventIntegrity` name that surface. It returns a fresh object on
+ * each call. The event it goes on matches only once it also carries the
+ * renderer-trust mark, which `markRendererTrustedEvent()` applies.
+ */
+export const reviewedActionProvenance = (
+  origin: ReviewedActionProvenance["origin"],
+  { surface, action }: { readonly surface: string; readonly action: string },
+): ReviewedActionProvenance => ({
+  origin,
+  trusted: true,
+  ui: {
+    pattern: surface,
+    eventIntegrity: [surface],
+    uiContractDataset: { uiAction: action },
+  },
+});
+
 const trustedEventMatchCandidates = (event: unknown): unknown[] => {
   const candidates: unknown[] = [];
   const sourceIsRendererTrusted = isRendererTrustedEvent(event);
@@ -625,16 +672,16 @@ const trustedEventMatchCandidates = (event: unknown): unknown[] => {
 };
 
 /**
- * Whether `event` is a trusted gesture: an event the renderer marked, whose
- * provenance says the browser trusted a DOM event on a UI surface. This is
- * the test `commitSnapshotShare()` and `commitCustodySeal()` apply, without
- * their match on which surface it was, so it shows that a person acted and
- * not on what.
+ * Whether `event` is a trusted gesture: an event carrying the renderer-trust
+ * mark, whose provenance names a UI surface a person acted on, either a DOM
+ * event the browser trusted on a rendered surface or a native host's reviewed
+ * control. This is the test `commitSnapshotShare()` and `commitCustodySeal()`
+ * apply, without their match on which surface it was, so it shows that a
+ * person acted and not on what.
  */
 export const isTrustedGesture = (event: unknown): boolean =>
   isRendererTrustedEvent(event) && isObjectNotArray(event) &&
   isTrustedUiProvenance(event.provenance) &&
-  event.provenance.origin === "dom" &&
   isObjectNotArray(event.provenance.ui);
 
 const pathsEqual = (

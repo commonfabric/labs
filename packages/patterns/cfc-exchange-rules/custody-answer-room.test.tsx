@@ -17,8 +17,9 @@ const entry = (seats: number, ratings: Rating[]): BoxEntry => ({
 });
 
 export default pattern(() => {
-  // The room's terms are absent until `propose` writes them, so a room over a
-  // box given directly omits them.
+  // The room's terms and policy are absent until `propose` writes them, and
+  // each carries a writer claim that refuses a value supplied here, so a room
+  // over a box given directly omits both.
   type Input = Parameters<typeof CustodyAnswerRoom>[0];
   // Pizza draws a `no`; tacos draws more `yes` than sushi, though sushi is
   // listed first.

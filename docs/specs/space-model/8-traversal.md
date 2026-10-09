@@ -177,6 +177,9 @@ Defaults:
 - Property defaults are applied from schema during object traversal
 - Top-level defaults are applied when current value is `undefined`
 - Defaults behind resolved `$ref` are honored
+- A link's stored `default`, combined into the selector at the hop, is applied
+  when the link's target is absent, whether the link is read within its
+  container or by its own path
 
 ---
 

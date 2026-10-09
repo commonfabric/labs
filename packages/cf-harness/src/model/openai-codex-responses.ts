@@ -548,7 +548,8 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       text: { verbosity: "low" },
       include: ["reasoning.encrypted_content"],
       prompt_cache_key: affinityKey,
-      // Every model Codex serves reasons, so every turn asks for a summary.
+      // Codex's model list marks its models as accepting a reasoning summary
+      // (`supports_reasoning_summary_parameter`), so every turn asks for one.
       reasoning: {
         ...(request.reasoningEffort !== undefined
           ? { effort: request.reasoningEffort }

@@ -184,9 +184,12 @@ export const DASHBOARD_THEME_STYLES = `
   :root{color-scheme:dark;${DARK_VARIABLES}}
   :root[data-theme="dark"]{color-scheme:dark;${DARK_VARIABLES}}
   :root[data-theme="light"]{color-scheme:light;${LIGHT_VARIABLES}}
-  .theme-toggle{display:flex;width:88px;box-sizing:border-box;margin:16px 0 0 auto;align-items:center;justify-content:center;gap:6px;background:var(--surface);color:var(--text-secondary);border:1px solid var(--border-strong);border-radius:999px;padding:6px 11px;font:inherit;font-size:11px;line-height:1.2;cursor:pointer;white-space:nowrap}
-  .theme-toggle:hover{border-color:var(--border-hover);color:var(--text-strong)}
-  .theme-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  /* The pill the theme switch is drawn as, which a link at the foot of a page
+     takes too. */
+  .theme-toggle,.pill{display:flex;box-sizing:border-box;margin-top:16px;align-items:center;justify-content:center;gap:6px;background:var(--surface);color:var(--text-secondary);border:1px solid var(--border-strong);border-radius:999px;padding:6px 11px;font:inherit;font-size:11px;line-height:1.2;cursor:pointer;white-space:nowrap;text-decoration:none}
+  .theme-toggle{width:88px;margin-left:auto}
+  .theme-toggle:hover,.pill:hover{border-color:var(--border-hover);color:var(--text-strong)}
+  .theme-toggle:focus-visible,.pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .theme-toggle [data-theme-icon]{font-size:13px;line-height:1}`;
 
 export const dashboardThemeToggle = (): string =>

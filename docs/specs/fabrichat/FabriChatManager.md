@@ -22,34 +22,64 @@ each, and a row in the built-in targets table of
 
 ## State
 
-The manager keeps `rooms`, `direct`, `requests`, and `outgoingNotices` in the
-home space. `direct` is maintained alongside `rooms` by the same handlers, which
-keep the two consistent: `direct` holds one entry per counterpart, including
-forgotten rooms, and `rooms` can also hold a second direct room with the same
-counterpart after crossing creations.
+The manager keeps `direct`, `requests`, and `outgoingNotices` in the home space.
+`rooms` it keeps nowhere: it is drawn from the user's shared-space catalog,
+Home's, which Home hands the manager
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md)). The
+manager lists the entries of kind `fabrichat-room` the catalog keeps as saved,
+each the space of a room that is its space's root, found with `wish({ query:
+"#default", scope: [space] })`. A room's `kind` is the one its `about` gives,
+and its `since` and `revision` are its entry's. A direct room's `counterpart` is
+the one `direct` holds the room under, for a room this manager created or
+accepted, or else the room's creator, as its `about.record` is labeled; a room
+whose label can't be read is listed with no counterpart. A room appears in
+`rooms` once its root resolves and its `about` reads. `direct` holds one entry
+per counterpart, for the direct rooms this manager created or accepted,
+including forgotten ones, and `rooms` can also hold a second direct room with
+the same counterpart after crossing creations, or one offered to the user, which
+`openDirect` doesn't find.
+
+The handlers write the catalog. Creating a room, or accepting one a manager
+created, registers the room's space (`registerSharedSpaceIn()`), forgetting a
+room archives its entry, at the revision the request names, and finding a direct
+room again, or accepting a room, restores its entry if it was archived
+(`changeSharedSpaceMembershipIn()`). A room offered to the user is registered by
+the host that vets the offer (see [first contact](#first-contact)). Accepting a
+space's own chat, which no manager created, is refused, since its space is the
+social space it belongs to. A manager given no catalog keeps one of its own.
+
+Creating or accepting a room also adds this user's profile to the room's
+participants, through the room's `addParticipant`, from an event of its own
+that follows; accepting a room is refused while the user has no profile.
 
 ## Creating a room
 
 `openDirect` (when there is no entry for the counterpart) and `createGroup`
-create a space for the conversation, with the room as its chat, in four steps:
+create a space for the conversation, with the room as its root, in four steps:
 
-1. Create the conversation's space, granting this user OWNER, and instantiate
-   `FabriChatRoom` there with its `about`. The space's root, its default pattern,
-   comes from its host the first time someone opens it.
-2. Grant each other member WRITE on the room's space, by principal. A group
-   explicitly made joinable by its link also grants `"*"` WRITE. These grants
-   may be included in the space's genesis, before any room link is published.
+1. Create the conversation's space, with only this user granted (OWNER), and
+   instantiate `FabriChatRoom` there with its `about`, as the space's root, in
+   a space that declares itself a `fabrichat-room`
+   (`inSpace(undefined, { grants, root: true, spaceKind: "fabrichat-room" })`).
+   The room is then a social space in its own right: opening the space shows
+   it, and it keeps the space's participants itself.
+2. Grant each other member OWNER on the room's space, by principal, so any
+   member may add others.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
-   deliver.
-4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
-   request `done`.
+   deliver, and offer the room to each member whose profile the request names,
+   through the share inbox the profile points at.
+4. Record the entry in `rooms`, and in `direct` for a direct room, register the
+   room's space in the user's catalog, and mark the request `done`. The
+   registration waits for the space's name to resolve, and adding this user to
+   the room's participants follows then: the run that sees the name pending is
+   discarded and run again, and its sends could still be delivered.
 
 Each step is recorded under the request's `requestId` as it completes, which is
 how a repeated request resumes where the last attempt stopped instead of
 creating another room. A pending `openDirect` is also recorded under its
 `counterpart`, which is how a second `openDirect` for the same person finds it
-and resumes it. Step 1 writes the room's `about.record` from this user's
-handler, which is what labels it `authored-by` this user.
+and resumes it. Step 1 writes the room's `about` from this user's handler, which
+is what labels it `authored-by` this user.
 
 ## Prerequisites
 
@@ -61,24 +91,33 @@ handler, which is what labels it `authored-by` this user.
   `represents-principal` label, which
   `principalOf(profile, "represents-principal")` reads
   ([reading the principal a label attests](../../features/principal-of.md)).
-  A shared space's member set pairs each principal with a profile (see [shared
-  spaces](README.md#shared-spaces)), so starting a conversation with someone
+  A social space's member set pairs each principal with a profile (see [social
+  spaces](README.md#social-spaces)), so starting a conversation with someone
   found in one needs nothing more.
 
 ### First contact
 
 A notice has to reach a principal who may share no space with the sender. Its
 route is the recipient's profile share inbox: a profile's `inbox` field
-(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at a piece
-in a space of its own that any writer may post to and only its owner reads. The
-sender offers the room there, and the recipient's manager reads its offers, is
-readmitted to the room's space, and accepts the room. Nothing delivers one end
-to end today: no offer names a room yet, the manager reads none, and an inbox
-exists only where a host outside this repository creates one. A space's access
-list can admit any writer, but that is the `"*"` grant a room has only when its
-creator makes a group joinable by its link, and then its address, sent some
-other way, is the notice.
+(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
+piece in a space of its own. That is either the private inbox the recipient's
+Home creates ([the private inbox](../../features/private-inbox.md)) or another
+share inbox the profile points at, and both take the same offer envelope. Any
+principal may write to the inbox's space, and its offers are labeled readable
+by the owner alone, a label that binds only an honest runtime. When a request
+names a member's profile, as `openDirect` does with its `profile`, step 3
+offers the room there, in that envelope, from an event of its own that follows
+the room's creation, since the offer names the room's space (see
+[`ChatManagerOutput`](ChatManagerOutput.md#offers)). The recipient's host reads
+the offer and vets it before it registers the room's space in the recipient's
+Home catalog ([the share intake](../../features/private-inbox.md#the-share-intake)).
+A member the request names only by principal is offered nothing, since the
+manager has no profile to reach their inbox through. A space's access list can
+admit any writer, but that is the `"*"` grant a room has only when its creator
+makes a group joinable by its link, and then its address, sent some other way,
+is the notice.
 
-That is why step 3 hands notices to a client through `outgoingNotices` (see
+That is why step 3 also hands a notice for every other member to a client
+through `outgoingNotices` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers
 deliver end to end, the manager can deliver notices itself.

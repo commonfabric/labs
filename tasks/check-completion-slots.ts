@@ -73,6 +73,8 @@ export const NO_CANDIDATES = new Map<string, string>([
   ["id from-mnemonic:mnemonic", "the same"],
   ["ingest revoke:id", "an ingest key id, held by whoever minted it"],
   ["ingest rotate:id", "the same"],
+  ["ingest gmail-bind:id", "the same"],
+  ["ingest gmail-unbind:id", "the same"],
   // Words the caller is coining or composing.
   ["acl set:capability", "a capability string, composed rather than chosen"],
   ["piece search:query", "a search query"],
@@ -108,6 +110,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "the receipt from the owner-reviewed inspection",
   ],
   ["piece new:request-key", "an opaque caller retry key"],
+  [
+    "ingest gmail-bind:gmail-access-token",
+    "a secret; a candidate list is the wrong place",
+  ],
   ["space invite create:ttl", "an admission lifetime in seconds"],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],
@@ -137,6 +143,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["history-limit", "an operation history row count"],
   ["max-concurrent", "how many agent runs one runner holds; a count"],
   ["lease-seconds", "a lease length in seconds"],
+  [
+    "max-concurrent-local",
+    "how many local jobs one runner runs at once; a count",
+  ],
   ["submission-after-seq", "a revision sequence number"],
   // Identifiers the caller brings from outside, or coins.
   ["did", "a DID, pasted from elsewhere"],

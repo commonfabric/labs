@@ -35,7 +35,7 @@ describe("Per-path reads - schema-selective sinks", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

@@ -956,6 +956,27 @@ Deno.test("Pattern Context Validation - Statement Boundaries", async (t) => {
     },
   );
 
+  for (const keyword of ["let", "var"]) {
+    await t.step(
+      `errors on a ${keyword}-bound lift() call in top-level pattern body`,
+      async () => {
+        const source = `      import { lift, pattern } from "commonfabric";
+
+      export default pattern<{ count: number }>(({ count }) => {
+        ${keyword} double = lift((n: number) => n * 2);
+        return { doubled: double(count) };
+      });
+    `;
+        const { diagnostics } = await validateSource(source, {
+          types: COMMONFABRIC_TYPES,
+        });
+        const errors = getErrors(diagnostics);
+        assertHasErrorType(errors, `pattern-context:${keyword}-declaration`);
+        assertHasErrorType(errors, "pattern-context:builder-placement");
+      },
+    );
+  }
+
   await t.step(
     "errors on loop in top-level pattern body",
     async () => {

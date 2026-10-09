@@ -1,8 +1,10 @@
 /// <cts-enable />
 
 /**
- * Fixture: an unapproved writer changes a protected cell after its default is
- * initialized. CFC refuses the change, and the run fails on that warning.
+ * Fixture: a multi-user run in which one participant's own pattern supplies a
+ * value for an argument field of a pattern it composes, and the field's policy
+ * names a handler as its only writer, so CFC denies that participant's setup
+ * commit and the run fails on the warning it logs.
  */
 
 import {
@@ -18,18 +20,19 @@ const approve = handler<void, { value: Writable<string> }>((_, { value }) => {
   value.set("approved");
 });
 
-const forge = handler<void, { value: Writable<string> }>((_, { value }) => {
-  value.set("forged");
-});
+interface NoteInput {
+  note: Writable<WriteAuthorizedBy<string, typeof approve>>;
+}
+
+const Note = pattern<NoteInput>(({ note }) => ({
+  runApprove: approve({ value: note }),
+}));
 
 export const setup = pattern<Record<string, never>>(() => ({}));
 
 export const alice = pattern(() => {
-  const note = new Writable<WriteAuthorizedBy<string, typeof approve>>("");
-  return {
-    [TESTS]: [{ action: forge({ value: note }) }],
-    runApprove: approve({ value: note }),
-  };
+  const note = Note({ note: "supplied" });
+  return { [TESTS]: [], note };
 });
 
 export default multiUserTest({ setup, participants: { alice } });
