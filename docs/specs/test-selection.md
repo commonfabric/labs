@@ -491,12 +491,15 @@ What the tree holds is what the unit's own test processes registered. A
 manifest holds every identity any run recorded in a file the tree still
 holds, so it names tests renamed since it was published and tests only a
 branch ever ran, and no run of this tree can record one of those. Where a
-unit's processes registered their file's tests and none by an identity's
-name, nor any inside it, that identity is absent, and its missing record
-says nothing about whether the invocation stopped. Only a registration
-shows a test absent. A process that died before it could say what it
-registered shows nothing, and an identity it left unrecorded withdraws the
-excusal like any other.
+unit's processes registered no test by an identity's name and none inside
+it, that identity is absent, so long as the registrations reach its depth:
+they name tests inside its outermost group, or do not name that group at
+all. Registrations naming a group and nothing inside it say nothing about
+what the group holds. An absent identity's missing record says nothing
+about whether the invocation stopped. Only a registration shows a test
+absent. A process that died before it could say what it registered shows
+nothing, and an identity it left unrecorded withdraws the excusal like any
+other.
 
 The rule is per invocation and not per set of them. A consumer that runs
 an identity several times, or that reaches one unit through several

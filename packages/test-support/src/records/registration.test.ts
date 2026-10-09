@@ -398,6 +398,22 @@ describe("registration", () => {
       }
     });
 
+    it("leaves out a mapped file that is not a path", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        await writeNameMap(dir, "01", {
+          good: "packages/a/one.test.ts",
+          number: 7,
+          empty: "",
+        });
+        expect([...await readRegistrations(dir)]).toEqual([
+          ["packages/a/one.test.ts", new Set(["good"])],
+        ]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
     it("returns no file for a spool holding no readable map", async () => {
       // A process that never unloaded wrote nothing, and nothing then
       // says what its file holds.

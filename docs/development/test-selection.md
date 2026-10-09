@@ -1440,12 +1440,15 @@ for, and a runner that exited zero having run none of its unit has. So a
 unit that recorded nothing fails the lane, and an excusal holds only for
 an invocation that accounted for every identity it was asked to run that
 the tree holds. The lane reads what the tree holds from the name maps the
-registration preload leaves in the spool: an identity a unit's processes
-did not register, nor any test inside it, is one the manifest carries
-from a rename or from a branch, and the lane's job summary lists it
-apart from the identities that withdraw an excusal. A unit whose
-processes left no name map shows nothing, so an identity it left
-unrecorded withdraws the excusal.
+registration preload leaves in the spool. An identity a unit's processes
+did not register, nor any test inside it, is absent where the map holds
+bdd leaves under its outermost `describe`, or does not hold that
+`describe` at all. Such an identity is one the manifest carries from a
+rename or from a branch, and the lane's job summary lists it apart from
+the identities that withdraw an excusal. A map holding an outermost
+`describe` and no leaf beneath it shows nothing about a leaf, and a unit
+whose processes left no name map shows nothing at all, so an identity
+either one leaves unrecorded withdraws the excusal.
 
 ## What the dashboard shows
 
