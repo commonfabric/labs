@@ -158,10 +158,13 @@ The whole conversation, from a weaver connecting a Gmail account to loom
 being woken by mail. The calls that cross between the user's machine and
 toolshed are of two kinds, the signed control-plane calls over the private
 network and the cell subscription over the memory connection the sidecar
-already holds, and one call crosses from Google to toolshed over the public
-internet: the push. The rest are either local to the user's machine or
-ordinary calls to Google: the broker consent, the profile lookup, the watch,
-and the history fetch. The diagram shows one deployment; a second one is the
+already holds, and one call crosses from Google to toolshed: the push, over
+the public internet for a deployment Google can reach, or from a relay on the
+private network that pulls each message for one Google cannot, as
+[the setup document](gmail-push-setup.md#a-deployment-on-a-private-network)
+describes. The rest are either local to the user's machine or ordinary calls
+to Google: the broker consent, the profile lookup, the watch, and the
+history fetch. The diagram shows one deployment; a second one is the
 same picture again with its own subscription and its own bindings, as
 [Setting up](#setting-up) says.
 
@@ -210,7 +213,10 @@ Three facts decide the shape.
   they are the user's calls, made from the user's machine, and need only the
   reach that machine already has to its toolshed: a private network is fine.
   The push is Google's call, signed by a service account the toolshed was
-  configured to accept, so the push route alone has to face the internet.
+  configured to accept, so where a deployment faces the internet at all, the
+  push route is the one path that needs to. A deployment on a private
+  network faces it nowhere, and a relay inside the network makes the same
+  call with the same token instead.
 - **Where the binding lives.** It lives in the registry of the toolshed that
   handled the bind, and a push is delivered against the bindings of the
   toolshed that received it. A mailbox that should wake two deployments has a
