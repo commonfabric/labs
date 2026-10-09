@@ -156,6 +156,10 @@ HEADLESS=1 CF_TEST_SKIP_LIST=/tmp/skip.json \
   deno task integration --junit-dir=/tmp/junit patterns cf-render
 ```
 
+A name in the list that is the title of a file's outermost `describe()`,
+or `global` in a file declaring a hook outside every `describe()`,
+ignores every test inside it.
+
 Check the output says `ignored (0ms)` beside each test the list names. Where
 nothing reads the list every test runs, and a file that still depends on a
 sibling passes.

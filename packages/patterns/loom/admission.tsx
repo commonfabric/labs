@@ -102,8 +102,8 @@ function isAdderDid(value: string): boolean {
   return value.length <= 195 && DID_SYNTAX.test(value);
 }
 
-/** Validate a panel before admitting its occurrence to the shared composition. */
-function validatePanel(panel: Panel): void {
+/** Validate a panel before admitting its occurrence to the Loom. */
+export function validatePanel(panel: Panel): void {
   if (panel.kind === "url" && externalUrl(panel.url) === undefined) {
     throw new Error("A URL panel requires an HTTP(S) URL without credentials");
   }

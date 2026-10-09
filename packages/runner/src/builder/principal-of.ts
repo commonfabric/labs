@@ -6,12 +6,14 @@ import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import { resolveLink } from "../link-resolution.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
 import {
   exactPrincipalAttestations,
   PRINCIPAL_CLAIM_KINDS,
   type PrincipalClaimKind,
 } from "../cfc/represents-principal.ts";
 import { withdrawHandlerWhileLoading } from "../scheduler/handler-load-wait.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
 import { cellOfTarget } from "./space-access.ts";
 
@@ -177,11 +179,7 @@ function attestedPrincipals(
     : cell.resolveAsCell().getAsNormalizedFullLink();
   // The default read policy journals the read as a dependency, so a label
   // change runs the calling computation again.
-  const metadata = readStoredCfcMetadata(tx, {
-    space: link.space,
-    id: link.id,
-    scope: link.scope,
-  });
+  const principals = attestedPrincipalsAt(tx, link, claimKind);
   if (frame.frameKind === "handler") {
     withdrawHandlerWhileLoading(
       runtime,
@@ -190,8 +188,33 @@ function attestedPrincipals(
       `the label of \`${link.id}\` was read while its document was still loading`,
     );
   }
+  return principals;
+}
+
+/**
+ * Returns every principal the stored label at `link` attests with a claim of
+ * `kind`, read through `tx` as `principalsOf()` reads a cell's: `[]` when it
+ * attests none and for a label the caller cannot observe, and `undefined` when
+ * a claim there is in any form but the one a runtime mints. `link` names the
+ * document whose label is read; nothing is followed from it. This is the read
+ * a host makes of a document it holds no frame for, so a label still loading
+ * withdraws no handler here.
+ *
+ * @throws If the label is stored in a form this build cannot interpret
+ *   (`StoredCfcMetadataError`), or the transaction's read of it fails.
+ */
+export function attestedPrincipalsAt(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  kind: PrincipalClaimKind,
+): DID[] | undefined {
+  const metadata = readStoredCfcMetadata(tx, {
+    space: link.space,
+    id: link.id,
+    scope: link.scope,
+  });
   return exactPrincipalAttestations(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
-    claimKind,
+    kind,
   );
 }

@@ -389,6 +389,31 @@ describe("score", () => {
         FLAKE_EXCLUSION_RATE,
       );
     });
+    it("reads a full run's rerun of its own failure as a flake", () => {
+      // A lane of the full run that saw a test fail runs it again, and
+      // ships the rerun in the run's own records: the same commit, the
+      // same start, the same seed. Commits that alternate between failing
+      // and passing are otherwise a run of catches.
+      const history = (rerun: boolean) =>
+        ["c1", "c2", "c3", "c4"].flatMap((commit, at) => {
+          const run = {
+            commit,
+            seed: 7,
+            startedAt: `2026-08-20T0${at}:00:00.000Z`,
+          };
+          return at % 2 === 1
+            ? [saw("pass", run)]
+            : [saw("fail", run), ...rerun ? [saw("pass", run)] : []];
+        });
+      expect(stateFrom(history(false)).mainCatches).toBe(2);
+      const state = stateFrom(history(true));
+      expect(state.mainCatches).toBe(0);
+      expect(state.pendingMain).toEqual([]);
+      expect(state.flakesByDay["2026-08-20"]).toBe(2);
+      expect(flakeRate(state, "2026-08-20")).toBeGreaterThan(
+        FLAKE_EXCLUSION_RATE,
+      );
+    });
   });
 
   describe("the order a run's tests were shuffled into", () => {

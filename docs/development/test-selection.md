@@ -553,6 +553,8 @@ measurement to look at rather than a setting to fix.
 | `FLAKE_ANCHOR_RATE` | 0.01 | share of runs | chosen | With `FLAKE_ANCHOR_EXECUTIONS`, the point the count's line passes through. Down to make the count climb faster with the rate; up to make it climb slower. |
 | `FLAKE_ANCHOR_EXECUTIONS` | 5 | runs of one item | chosen | What an item at `FLAKE_ANCHOR_RATE` runs. Up when intermittent regressions still get through; down when executions crowd a lane. |
 | `MAX_EXECUTIONS` | 10 | runs of one item | chosen | Where the line stops. Up when the flakiest items a change forces in still are not proven by what runs; down when they crowd a lane. |
+| `RERUN_EXECUTIONS` | 3 | runs of one unit | chosen | The most times the full run runs a unit again where a test in it failed every time. Up when flaky tests on `main` fail every rerun and go on being counted as catches; down when a real break's reruns take time that tells nobody anything. |
+| `RERUN_BUDGET_SECONDS` | 300 | seconds | chosen | What one lane of the full run may spend rerunning its failures. Up when failures go without reruns for want of it; down when a broken `main` holds every lane this much longer than it needs. |
 | `COVERAGE_COMMENT_LINES` | 25 | lines | chosen | Up when coverage comments are too noisy; down when debt is climbing unnoticed. |
 | `LOCAL_COVERAGE_MAX_SECONDS` | 30 | seconds | chosen | Up when too many sets are reported as expensive for the report to be worth reading; down when one is quietly eating a lane. Nothing is excluded either way; it only decides what the summary mentions. |
 | `LOCAL_COVERAGE_MAX_SETS` | 2 | measured sets | chosen | Up when broader changes should still be gated and the run can afford those sets' whole unit lists; down when sweeping changes are crowding lanes. |
@@ -858,7 +860,10 @@ projected lane`, what the packer projected that to be; and `ci-lane bound
 lane`, the bound the lane was packed to finish inside less
 `LANE_PROLOGUE_SECONDS`. The packer charges nothing for converting coverage,
 so a lane whose conversion is slow is one the model under-charges, and it
-counts as such. Only a lane that passed is read, since one that went red
+counts as such. The packer charges nothing for [running a failure
+again](#running-a-failure-again) either, but that is not the model's error, so
+`ci-lane lane` leaves the time out and a lane of the full run records it apart
+as `ci-lane reruns`. Only a lane that passed is read, since one that went red
 stopped early.
 
 Four things count as broken. Their dials are in [Every dial](#every-dial).
@@ -1363,6 +1368,57 @@ Two things go with that rule.
   coverage gate](#the-coverage-gate) says what that leaves for a later
   pull request.
 
+### Running a failure again
+
+The publisher reads a test as flaky only where it both passed and failed at
+one commit, in one order. The run on the default branch runs most tests once
+per commit, so a flaky test there never does that on its own. Each of its
+failures is instead followed by a pass at a later commit, and the publisher
+credits the change between them with a catch. The test's score rises, and
+selection picks it more often for doing what made it look valuable.
+
+So a lane of the full run runs a test again when the test failed every time
+the lane ran it. After its last batch, the lane runs the unit holding that
+test again, up to `RERUN_EXECUTIONS` times, and stops once each such test in
+it has passed. Every rerun is shipped as ordinary records of the lane's run:
+the same commit, the same seed, and the same start. A flaky test therefore
+leaves a pass beside its failure, and the publisher counts a flake rather
+than a catch. A test that is really broken fails every rerun, and its failure
+waits for a later commit to judge it, as before.
+
+The reruns collect evidence and decide nothing. Whether the lane fails is
+settled from its batches' own records, with the excusal rules above, before
+any rerun starts. A failure that passes when run again still fails the run,
+and an excused failure stays excused whatever its reruns record.
+
+Every rerun is a run of the test like any other. A test that passed on a
+rerun is read everywhere as having disagreed with itself at the commit,
+including by [the comment a run on the default branch
+leaves](#the-comment-a-run-on-the-default-branch-leaves), which does not name
+it as a first failure. A test that failed every rerun counts each of those
+failures in its churn.
+
+A unit runs again as its batch ran it, with the same skip list, so that the
+rerun asks the same tests the same thing. A [unit that runs
+whole](#units-that-run-whole) runs whole again, and the records of every test
+in it ship. Coverage is off for a rerun, since nothing scores what a rerun
+would measure. A test that has already passed beside its failure in the lane,
+because its unit was repeated, has the evidence already and is no reason to
+run its unit again. It still runs again where another test in its unit is.
+
+What a lane spends on reruns is bounded by `RERUN_BUDGET_SECONDS`. Each rerun
+goes to the unit that has run again least across all of the lane's suites, so
+the budget is spread over the lane's failures rather than spent on the first. A
+unit starts only where what the packer charges for it fits in what is left of
+the budget, and the time the reruns take is what comes off it. A rerun takes
+along any other waiting units of the same suite that fit beside it. The charge
+is read from passing runs, so a rerun that hangs runs for as long as the hang,
+and the lane's step timeout is what bounds that. The lane's job summary says
+what the reruns took, which tests passed on a rerun, which never did, which no
+rerun recorded, and which tests' units did not fit. A pull request's lanes
+rerun nothing, unless the pull request is labelled `ci: full`, which runs its
+lanes as the full run.
+
 A lane decides all of this from the records its batches gathered rather
 than from what a command exited with. A runner that failed only on
 identities a flake rate excuses has told the run nothing it should stop
@@ -1578,6 +1634,20 @@ An invocation unit is usually one test file. A lane that wants part of
 one registers the rest of the file's tests as ignored, and ships no
 record of them.
 
+A `describe()` that fails as a whole, for example in its `beforeAll`, is
+recorded under its own title. The outermost `describe()` of a file
+registers a single `Deno.test` under its title, so ignoring that title
+ignores every test inside it. Where a file declares a hook outside every
+`describe()`, that outermost one is the `global` suite the runner
+invents. A lane therefore never lists the title of a `describe()`
+holding a test the lane runs. A `describe()` a lane chose runs its hooks
+with the tests inside it ignored. Ingestion drops the case a
+`describe()` reports for itself wherever a test inside it reports,
+ignored or not, so a record of any test inside a `describe()` accounts
+for it, including one the lane's own skip list named and does not ship.
+A `describe()` whose `beforeAll` fails reports no test inside it, so its
+own failing case is the record that stands.
+
 Some units hold more than one test and cannot be split. These are a
 workspace member whose test task takes no file list, a member's browser
 half, the reload suite's directory, and a section of the FUSE
@@ -1585,11 +1655,12 @@ integration script. A lane that asks for one test of such a unit runs
 every test in it.
 
 Each suite lists these units in `whole`, and a lane writes no skip list
-for one. Most units in `whole` hold a single identity, such as a gate, a
-type-check group, a binary build, one pattern's check, or one vintage
-fixture's replay. Only the four kinds above hold several. A unit's shape
-does not tell you which kind it is, because two of the four kinds are
-paths.
+for one. A lane of the full run that [runs a failure
+again](#running-a-failure-again) inside one runs the whole unit again. Most
+units in `whole` hold a single identity, such as a gate, a type-check group,
+a binary build, one pattern's check, or one vintage fixture's replay. Only the
+four kinds above hold several. A unit's shape does not tell you which kind it
+is, because two of the four kinds are paths.
 
 `tasks/test-topology.test.ts` checks `whole` in both directions. Every unit
 outside it has to be a test file in the tree, because the preload looks a

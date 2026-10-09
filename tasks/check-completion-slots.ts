@@ -109,6 +109,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "profile repair-name-protection:expect",
     "the receipt from the owner-reviewed inspection",
   ],
+  [
+    "profile repair-root:expect",
+    "the receipt from the operator-reviewed inspection",
+  ],
   ["piece new:request-key", "an opaque caller retry key"],
   [
     "ingest gmail-bind:gmail-access-token",

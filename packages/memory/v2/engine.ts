@@ -3724,8 +3724,8 @@ const transformEffectsDocOperation = <
  * Helper for the commit entry points, which takes down what the observer
  * will be told about a commit at the moment it is applied, so a caller that
  * reuses or edits its options afterwards changes nothing already recorded.
- * A commit refused before validation may carry anything as its operations,
- * which counts as none.
+ * The operation count is the submitted array length, including for rejected
+ * commits; malformed non-array operations count as zero.
  */
 const decisionOf = (
   options: ApplyCommitOptions,

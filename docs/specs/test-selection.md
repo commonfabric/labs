@@ -65,10 +65,15 @@ branch for a continuous-integration run and the reporting person's login
 for a local one.
 
 A failure on the default branch cannot be judged when it happens. Every
-push there is a distinct commit with one run, so a test that is flaky
-there never contradicts itself, and counting each such failure as a catch
-would make the least valuable test in the repository look like the most
-valuable. Such a failure waits for the next run on that branch. Still
+push there is a distinct commit with one run. When a test fails in that
+run, the run runs the test again, up to `RERUN_EXECUTIONS` times
+([the guide](../development/test-selection.md#running-a-failure-again)), and
+a pass on one of those reruns is the test disagreeing with itself at that
+point, which counts as a flake observation. A failure every rerun repeats
+says nothing yet. Counting each such failure as a catch would make a test
+that is flaky enough to fail several times in a row look like the most
+valuable test in the repository. Such a failure waits for the next run on
+that branch. Still
 failing is the same breakage continuing, and nothing new is learned.
 Passing at the same point is the test disagreeing with itself, and counts
 as a flake observation. Passing at a later commit with the same seed counts
@@ -275,7 +280,9 @@ The share is a lower bound on how often a test fails on its own. The only
 spurious failure it can count is one with a pass beside it at the same
 commit, and a test run once per commit produces none. What raises the
 bound is repeats, and a rising share is what buys those, so the measure
-sharpens itself on exactly the tests it is least sure of.
+sharpens itself on exactly the tests it is least sure of. A test that has
+never disagreed with itself gets no repeats, so its first disagreement
+comes from the default branch running it again after it fails.
 
 Nothing is charged against the count, and no belief about how tests
 usually behave survives into it. **A disagreement is a proof rather than a
