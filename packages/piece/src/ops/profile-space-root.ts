@@ -4,7 +4,8 @@
  * the space cell's `defaultPattern` links it, a host holding only the space's
  * DID reaches it too. An operator runs this over a whole store, as an
  * identity of its own with no special privilege: a profile space grants every
- * principal `WRITE`, so the link is an ordinary commit.
+ * principal `WRITE`, so the link is an ordinary commit. A person runs it over
+ * the profiles their own Home lists, as the identity that owns them.
  *
  * What it replaces is a root that only a space-root ensure created: at the
  * address the ensure derives, running the default app by the evidence of its
@@ -25,7 +26,9 @@ import {
   entityIdFrom,
   getPatternIdentityRef,
   getPatternSource,
+  type JSONSchema,
   type NormalizedFullLink,
+  resolveSpaceRootPattern,
   spaceRootPatternConfig,
 } from "@commonfabric/runner";
 
@@ -285,4 +288,36 @@ export async function repairProfileSpaceRoot(
   });
   await controller.runtime.storageManager.synced();
   return await inspectProfileSpaceRoot(controller, id);
+}
+
+/** A Home's `profiles` list, each entry read as the cell it links. */
+const PROFILE_LIST_SCHEMA = {
+  type: "array",
+  items: { asCell: ["cell"] },
+} as const satisfies JSONSchema;
+
+/**
+ * Returns the address of every profile the Home at the controller's space
+ * lists in another space, each as the list stores it: the slot the profile was
+ * appended through, which links on to the profile. The reads are of the live
+ * store, through the controller's runtime, and write nothing.
+ *
+ * @throws Error when the space's root is not a Home, one with a `profiles`
+ *   list.
+ */
+export async function listedProfiles(
+  controller: PiecesController,
+): Promise<{ space: string; id: string }[]> {
+  const space = controller.getSpace();
+  const root = await resolveSpaceRootPattern(controller.runtime, space);
+  const list = root?.key("profiles").asSchema(PROFILE_LIST_SCHEMA);
+  await list?.sync();
+  const entries = list?.get();
+  if (!Array.isArray(entries)) {
+    throw new Error(`The root of ${space} is not a Home with a profiles list`);
+  }
+  return entries.flatMap((entry) => {
+    const link = (entry as Cell<unknown>).getAsNormalizedFullLink();
+    return link.space === space ? [] : [{ space: link.space, id: link.id }];
+  });
 }

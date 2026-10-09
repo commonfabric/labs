@@ -165,8 +165,8 @@ neither. `root: true` makes the profile the space's root: the space's genesis
 commit reserves the root's address, and the commit placing the profile links it
 there as the space cell's `defaultPattern`, so a host holding only the space's
 DID reaches the profile. A profile space whose genesis reserved no root has no
-profile as its root until an operator's repair, `cf profile repair-root`,
-links its profile there, and is reached only through a link to its profile
+profile as its root until `cf profile repair-root`, run by an operator or the
+person, links its profile there, and is reached only via a link to its profile
 until then. The display name is independent of the space identity: it flows to
 `initialName`, which the profile shows until a name is stored in the profile's
 `name` cell, and into that cell itself at creation. The cell is initialized

@@ -19,6 +19,7 @@ import {
   profileRepairRootAction,
   profileShowAction,
 } from "../commands/profile.ts";
+import { getDidFromFile } from "../lib/identity.ts";
 import type { CreatedProfile, ProfileCreateConfig } from "../lib/profile.ts";
 import {
   profileNameProtection,
@@ -237,6 +238,7 @@ describe("cf profile command actions", () => {
       const key = await makeTempKeyFile();
       const requests: ProfileSpaceRootConfig[] = [];
       const report: ProfileSpaceRootReport = {
+        repairVersion: 1,
         applied: false,
         inspection: "receipt",
         rows: [],
@@ -280,6 +282,43 @@ describe("cf profile command actions", () => {
       } finally {
         await Deno.remove(key.path);
       }
+    });
+
+    it("reads the identity's own Home when given no snapshot", async () => {
+      const key = await makeTempKeyFile();
+      const requests: ProfileSpaceRootConfig[] = [];
+      const run = (config: ProfileSpaceRootConfig) => {
+        requests.push(config);
+        return Promise.resolve({
+          repairVersion: 1,
+          applied: false,
+          inspection: "receipt",
+          rows: [],
+          summary: {},
+        });
+      };
+      try {
+        await captureStdout(() =>
+          profileRepairRootAction({
+            apiUrl: "http://127.0.0.1:8000",
+            identity: key.path,
+          }, run)
+        );
+        expect(requests).toHaveLength(1);
+        expect(requests[0].home).toBe(await getDidFromFile(key.path));
+        expect("snapshot" in requests[0]).toBe(false);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("takes --cell only with --from-snapshot, before opening an identity", async () => {
+      await expect(
+        profileRepairRootAction({
+          identity: "/unread.key",
+          cell: ["//did:key:zProfileSpace/of:profile"],
+        }),
+      ).rejects.toThrow("--cell only with --from-snapshot");
     });
 
     it("requires apply and the inspection receipt together before opening an identity", async () => {

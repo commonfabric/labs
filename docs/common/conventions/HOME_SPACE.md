@@ -124,7 +124,8 @@ reaches the profile as it reaches any space's root.
 
 A profile space whose genesis reserved no root, which is every profile space
 created before the create passed `root: true`, can get its profile as its root
-from an operator's repair, `cf profile repair-root` (the
+from `cf profile repair-root`, run by an operator across a store or by the
+person over their own Home's profiles (the
 [CLI README](../../../packages/cli/README.md) describes running it). The repair
 links the existing profile as the space cell's `defaultPattern` where the space
 has no root, and where its root is one a space-root ensure created and nothing

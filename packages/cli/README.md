@@ -32,7 +32,9 @@ is an operator's command. It makes each existing profile whose space has no
 profile as its root into that root, across a whole store, so that a host holding
 only a profile space's DID reaches the profile. What a repaired profile is, and
 what it is not, is under "Profile" in
-[`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md).
+[`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md). A person can
+repair their own profiles without a snapshot, as "A person's own profiles" below
+describes.
 
 Which profiles exist comes from `<dir>`, a snapshot of the store's space
 databases, read offline and never written: every link in each Home's profile
@@ -117,6 +119,40 @@ Then compare the clone's pristine and working fingerprints entity by entity, as
 nothing. A repair writes the space cell, whose `defaultPattern` now links the
 profile, adding it where the space had none, and one empty content-addressed
 document beside it; any other changed entity means stop.
+
+### A person's own profiles
+
+Without `--from-snapshot`, the command repairs the profiles the identity's own
+Home lists, read live as that identity, which owns them:
+
+```bash
+deno task cf profile repair-root -i <keyfile> -a <url>
+```
+
+It inspects and applies exactly as above, with the same rows, receipt and
+`--apply --expect <inspection>`, and refuses a server that runs server execution
+or does not say, checking the Home's space before it opens the Home. It reports
+no `unlisted` or `unreadable` rows, since no snapshot is read, and `--cell`
+needs `--from-snapshot`.
+
+The report carries `repairVersion`, which says which repair this is. An
+install's update step can run the repair once per identity and server:
+
+1. Run it, and read the JSON.
+2. If a row is `unrooted` or `junk-root`, run it again with `--apply` and
+   `--expect <inspection>`, passing the first run's receipt.
+3. Record a clean finish, under the identity's DID and the server's URL, with
+   the `repairVersion` the last run reported, only when that run's rows are all
+   `root`, `occupied` or `not-a-profile`. A run that exits with an error,
+   including a refusal, records nothing, and neither does one leaving a row
+   `unrooted`, `junk-root` or `failed`; the next update runs it again.
+4. Run it again whenever the command reports a `repairVersion` higher than the
+   one recorded.
+
+Running it more often than that is harmless: a repaired profile is reported as
+`root`, and a run writes only what it links. On a store served with server
+execution on, the step is refused until the store is served with it off, which
+is for the store's operator to arrange.
 
 ## Following a piece source
 

@@ -157,7 +157,9 @@ function createEvent(name: string): { name: string } {
  * the default, through the real create pattern; `root`, as its space's root,
  * reserved in the space's genesis; `not-root`, in a space whose genesis
  * reserves no root.
- * The host's root lives at `hostCause` in the home space.
+ * The host's root lives at `hostCause` in the home space, and with
+ * `hostIsRoot` the home space cell links it as the space's root, as a real
+ * Home is.
  *
  * @throws Error when a commit fails or the list does not end up holding
  *   exactly one profile in a space other than the home space.
@@ -165,7 +167,11 @@ function createEvent(name: string): { name: string } {
 export async function createProfileThroughHome(
   runtime: Runtime,
   name: string,
-  options: { shape?: ProfileShape; hostCause?: string } = {},
+  options: {
+    shape?: ProfileShape;
+    hostCause?: string;
+    hostIsRoot?: boolean;
+  } = {},
 ): Promise<NormalizedFullLink> {
   const space = runtime.userIdentityDID as MemorySpace;
   const setupTx = runtime.edit();
@@ -185,6 +191,11 @@ export async function createProfileThroughHome(
       setupTx,
     ),
   );
+  if (options.hostIsRoot) {
+    runtime.getSpaceCell(space).withTx(setupTx).key("defaultPattern").set(
+      result,
+    );
+  }
   runtime.prepareTxForCommit(setupTx);
   const setup = await setupTx.commit().settled;
   if (setup.error) throw new Error(setup.error.message);

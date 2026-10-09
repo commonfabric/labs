@@ -154,7 +154,7 @@ export async function profileRepairNameProtectionAction(
  */
 export async function profileRepairRootAction(
   options: ProfileCommandOptions & {
-    fromSnapshot: string;
+    fromSnapshot?: string;
     cell?: string[];
     apply?: boolean;
     expect?: string;
@@ -167,12 +167,20 @@ export async function profileRepairRootAction(
       { exitCode: 1 },
     );
   }
+  if (options.fromSnapshot === undefined && options.cell !== undefined) {
+    throw new ValidationError(
+      "Use --cell only with --from-snapshot.",
+      { exitCode: 1 },
+    );
+  }
   setQuietMode(!!options.quiet);
-  const { space: _home, ...connectionConfig } = await connection(options);
+  const { space: home, ...connectionConfig } = await connection(options);
   render(
     await run({
       ...connectionConfig,
-      snapshot: absPath(options.fromSnapshot),
+      ...(options.fromSnapshot === undefined
+        ? { home }
+        : { snapshot: absPath(options.fromSnapshot) }),
       ...(options.cell === undefined ? {} : { cells: options.cell }),
       expectedInspection: options.expect,
       jsonOutput: true,
@@ -184,8 +192,9 @@ export async function profileRepairRootAction(
 /**
  * Connection flags shared by `cf profile` verbs. Create and show use the
  * identity's home space. `repair-name-protection` takes one profile's explicit
- * full address; `repair-root` takes its profiles from a store snapshot, or
- * only the full addresses repeated `--cell` flags name.
+ * full address; `repair-root` takes its profiles from the identity's home
+ * space, or from a store snapshot, or only the full addresses repeated
+ * `--cell` flags name.
  */
 // Typed as the other subcommand builders are: cliffy's `.command()` overloads
 // take a `Command<any>`, and a builder returning the narrowed option type is
@@ -284,13 +293,15 @@ its display name.`,
     "repair-root",
     connected(
       cliText(
-        `Make each existing profile its space's root, across a whole store.
+        `Make each existing profile its space's root.
 
-An operator's command. The profiles come from a snapshot of the store's space
-databases, read offline: each Home's profile list, with profiles no Home lists
-reported and skipped unless named with --cell. Each profile is inspected live,
-as your own identity, and the plan prints as JSON with an inspection receipt.
-Repeat with --apply --expect <inspection> to apply it. Always prints JSON.
+Without --from-snapshot, the profiles are the ones your own Home lists, read
+live. With it, this is an operator's command across a whole store: the
+profiles come from a snapshot of the store's space databases, read offline:
+each Home's profile list, with profiles no Home lists reported and skipped
+unless named with --cell. Each profile is inspected live, as your own identity,
+and the plan prints as JSON with an inspection receipt. Repeat with --apply
+--expect <inspection> to apply it. Always prints JSON.
 It refuses a server that runs server execution, or does not say whether it
 does: serve the store with server execution off.`,
       ),
@@ -298,11 +309,10 @@ does: serve the store with server execution off.`,
       .option(
         "--from-snapshot <dir:string>",
         "Directory holding a snapshot of the store's space databases.",
-        { required: true },
       )
       .option(
         "--cell <address:string>",
-        "Repair only this full profile address. Repeatable.",
+        "Repair only this full profile address, with --from-snapshot. Repeatable.",
         { collect: true },
       )
       .option("--apply", "Apply the inspected plan.")
@@ -316,10 +326,14 @@ does: serve the store with server execution off.`,
         ),
         "Inspect every profile the snapshot's Homes list.",
       )
+      .example(
+        cliText(`cf profile repair-root -i ./me.key -a <url>`),
+        "Inspect every profile your own Home lists.",
+      )
       .action(
         async (
           options: ProfileCommandOptions & {
-            fromSnapshot: string;
+            fromSnapshot?: string;
             cell?: string[];
             apply?: boolean;
             expect?: string;

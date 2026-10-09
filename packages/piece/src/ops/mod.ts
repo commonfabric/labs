@@ -153,6 +153,7 @@ export {
 
 export {
   inspectProfileSpaceRoot,
+  listedProfiles,
   type ProfileSpaceRootInspection,
   type ProfileSpaceRootStatus,
   repairProfileSpaceRoot,

@@ -41,6 +41,7 @@ import {
 } from "../../runner/test/support/profile-create-host.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
 import {
+  PROFILE_ROOT_REPAIR_VERSION,
   profileSpaceRoot,
   type ProfileSpaceRootConfig,
 } from "../lib/profile-space-root.ts";
@@ -95,16 +96,19 @@ describe("profileSpaceRoot()", () => {
     server = undefined;
   };
 
-  /** The connections the command opens, each as the admin. */
-  const load = (config: SpaceConfig) => {
+  /** The connections the command opens, each as `as`. */
+  const loadAs = (as: Identity) => (config: SpaceConfig) => {
     const pieces = new PiecesController(
-      { as: admin, space: config.space as MemorySpace },
-      runtimeAs(admin),
+      { as, space: config.space as MemorySpace },
+      runtimeAs(as),
       { deferSpaceCellSync: true },
     );
     pieces.dispose = () => Promise.resolve();
     return Promise.resolve(pieces);
   };
+
+  /** The connections the command opens, each as the admin. */
+  const load = loadAs(admin);
 
   /** The flags the test server reports in its handshake, read as the admin. */
   const serverFlags = async (spaceConfig: SpaceConfig) => {
@@ -144,15 +148,19 @@ describe("profileSpaceRoot()", () => {
     serve();
     unrooted = await createProfileThroughHome(runtimeAs(unrootedOwner), "U", {
       shape: "not-root",
+      hostIsRoot: true,
     });
     planted = await createProfileThroughHome(runtimeAs(plantedOwner), "P", {
       shape: "not-root",
+      hostIsRoot: true,
     });
     rooted = await createProfileThroughHome(runtimeAs(rootedOwner), "R", {
       shape: "root",
+      hostIsRoot: true,
     });
     unlisted = await createProfileThroughHome(runtimeAs(unlistedOwner), "N", {
       shape: "not-root",
+      hostIsRoot: true,
     });
 
     // The planted profile's space gets the root an open of it would have
@@ -214,6 +222,7 @@ describe("profileSpaceRoot()", () => {
 
   it("inspects each listed profile, and reports an unlisted one as skipped", async () => {
     const report = await profileSpaceRoot(config(), { load, serverFlags });
+    expect(report.repairVersion).toBe(PROFILE_ROOT_REPAIR_VERSION);
     expect(report.applied).toBe(false);
     const statusBySpace = Object.fromEntries(
       report.rows.map((row) => [row.named.space, row.status]),
@@ -520,6 +529,127 @@ describe("profileSpaceRoot()", () => {
           [unrooted.space, planted.space, rooted.space].toSorted(),
         );
       });
+    });
+  });
+
+  describe("over the running identity's own Home", () => {
+    /** A run as `owner` over `owner`'s own Home, with no snapshot. */
+    const ownRun = (
+      owner: Identity,
+      extra: Partial<ProfileSpaceRootConfig> = {},
+    ) =>
+      profileSpaceRoot(
+        { ...config({ snapshot: undefined }), home: owner.did(), ...extra },
+        { load: loadAs(owner), serverFlags },
+      );
+
+    it("inspects each profile the Home lists, attributing it to that Home", async () => {
+      const report = await ownRun(unrootedOwner);
+      expect(report.repairVersion).toBe(PROFILE_ROOT_REPAIR_VERSION);
+      expect(report.applied).toBe(false);
+      expect(
+        report.rows.map((row) => [row.named, row.home, row.status]),
+      ).toEqual([[
+        { space: unrooted.space, id: unrooted.id },
+        unrootedOwner.did(),
+        "unrooted",
+      ]]);
+      expect((await ownRun(unrootedOwner)).inspection).toBe(
+        report.inspection,
+      );
+    });
+
+    it("applies the inspected plan, linking an unrooted profile and replacing a junk root", async () => {
+      for (
+        const [owner, listed] of [[unrootedOwner, unrooted], [
+          plantedOwner,
+          planted,
+        ]] as const
+      ) {
+        const plan = await ownRun(owner);
+        const applied = await ownRun(owner, {
+          expectedInspection: plan.inspection,
+        });
+        expect(applied.summary).toEqual({ root: 1 });
+        expect(await rootIdOf(listed.space)).toBe(await profileIdOf(listed));
+        expect((await ownRun(owner)).summary).toEqual({ root: 1 });
+      }
+    });
+
+    it("writes nothing when it only inspects, though the identity owns every space it reads", async () => {
+      await ownRun(unrootedOwner);
+      await ownRun(plantedOwner);
+      await stop();
+      for (
+        const space of [
+          unrooted.space,
+          planted.space,
+          unrootedOwner.did(),
+          plantedOwner.did(),
+        ]
+      ) {
+        const live = discoverSpaceDbs({ dirs: [storeDir], defaultRoots: false })
+          .find((d) => d.did === space)!;
+        const before = openSpace(`${snapshotDir}/${space}.sqlite`);
+        const after = openSpace(live.path);
+        try {
+          expect(
+            diffFingerprints(
+              contentFingerprint(before),
+              contentFingerprint(after),
+            ),
+          ).toMatchObject({ added: [], changed: [], removed: [] });
+        } finally {
+          before.close();
+          after.close();
+        }
+      }
+    });
+
+    it("refuses, opening no session on the Home or any profile, when the server runs server execution", async () => {
+      server!.setServerExecutionObserver({});
+      const opened: string[] = [];
+      await expect(
+        profileSpaceRoot(
+          { ...config({ snapshot: undefined }), home: unrootedOwner.did() },
+          {
+            load: (spaceConfig) => {
+              opened.push(spaceConfig.space);
+              return Promise.reject(new Error("a session was opened"));
+            },
+            serverFlags,
+          },
+        ),
+      ).rejects.toThrow("runs server execution");
+      expect(opened).toEqual([]);
+      expect(
+        [unrootedOwner.did(), unrooted.space].flatMap((space) =>
+          server!.accessForTestingOnly.sessionsForSpace(space)
+        ),
+      ).toEqual([]);
+    });
+
+    it("refuses a run given both a snapshot and a Home, or neither, or addresses with a Home", async () => {
+      for (
+        const given of [
+          { home: unrootedOwner.did() },
+          { snapshot: undefined },
+          {
+            snapshot: undefined,
+            home: unrootedOwner.did(),
+            cells: [`//${unrooted.space}/${unrooted.id}`],
+          },
+        ]
+      ) {
+        await expect(
+          profileSpaceRoot(config(given), {
+            load: () => Promise.reject(new Error("a session was opened")),
+            serverFlags,
+          }),
+        ).rejects.toThrow(
+          /not both and not neither|only in a repair that reads/,
+        );
+      }
     });
   });
 });
