@@ -1494,10 +1494,13 @@ function principalRouter(
   let hellos = 0;
   const authenticated = new Set<string>();
   const down = new Set<string>();
+  let challenges = 0;
   const log: {
     connection: number;
     type: string;
     principal?: string;
+    /** The challenge a statement signs, or the one a request was given. */
+    challenge?: string;
     answer?: string;
     spaceKind?: unknown;
   }[] = [];
@@ -1518,11 +1521,22 @@ function principalRouter(
             ...(retriable ? { retriable: true } : {}),
           },
         });
-      if (body.type === "connection.auth") {
-        // The statement names its key; see `namedSigner`.
-        const principal = String(body.statement).split("|")[0];
+      if (body.type === "connection.challenge") {
+        const value = (++challenges).toString(16).padStart(64, "0");
+        log.push({ connection: hellos, type: "challenge", challenge: value });
+        respond({
+          ok: {
+            challenge: {
+              value,
+              expiresAt: Math.floor(Date.now() / 1000) + 60,
+            },
+          },
+        });
+      } else if (body.type === "connection.auth") {
+        // The statement names its key and its challenge; see `namedSigner`.
+        const [principal, challenge] = String(body.statement).split("|");
         authenticated.add(principal);
-        log.push({ connection: hellos, type: "auth", principal });
+        log.push({ connection: hellos, type: "auth", principal, challenge });
         respond({
           ok: {
             principal,
@@ -1558,11 +1572,14 @@ function principalRouter(
     },
   );
   const hello_ = (selected: ReturnType<typeof flags>) =>
-    hello(metadata(), selected);
+    selected.routedAuthV1
+      ? hello(metadata(), selected)
+      // A direct server's hello names no deployment.
+      : hello({ audience: identity.did(), challenge: challenge() }, selected);
   return { p, down, log };
 }
 
-/** A signer whose statement names its key, for `principalRouter`. */
+/** A signer whose statement names its key and challenge, for `principalRouter`. */
 function namedSigner(did: string): SessionPrincipal {
   let signed = 0;
   return {
@@ -1663,6 +1680,129 @@ Deno.test("a held mount that wakes between a drop and the next hello signs for t
         Math.random = random;
       }
     });
+  }
+});
+
+/** The DIDs of `count` keys no other test uses. */
+const manyKeys = (count: number) =>
+  Promise.all(
+    Array.from({ length: count }, async (_, i) => {
+      const seed = new Uint8Array(32).fill(7);
+      seed[0] = i;
+      return (await Identity.fromRaw(seed)).did();
+    }),
+  );
+
+Deno.test("new keys on a routed connection sign a challenge one of them asked for", async (t) => {
+  setModernCellRepConfig(true);
+  const keys = await manyKeys(40);
+  const helloChallenge = "11".repeat(32);
+  for (
+    const [name, wait, together, challenges] of [
+      // The hello's challenge has expired, so the first key asks for one,
+      // 31 more sign it, and the 33rd asks for the next.
+      [
+        "one after another, once the hello's challenge has expired",
+        61,
+        false,
+        2,
+      ],
+      ["all at once, once the hello's challenge has expired", 61, true, 2],
+      // The hello's own challenge takes 32 signers too.
+      ["one after another, on the hello's challenge", 0, false, 1],
+    ] as const
+  ) {
+    await t.step(name, async () => {
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      const { p, log } = principalRouter();
+      const client = await connect({ transport: p.transport });
+      try {
+        await time.tickAsync(wait * 1000);
+        const mount = (did: string) => client.mount(did, {}, namedSigner(did));
+        if (together) await Promise.all(keys.map(mount));
+        else for (const did of keys) await mount(did);
+        const asked = log.filter((e) => e.type === "challenge");
+        assertEquals(asked.length, challenges);
+        const signed = log.filter((e) => e.type === "auth");
+        assertEquals(signed.length, 40);
+        // Each challenge was signed by at most 32 keys, in the order the
+        // challenges came, and no key signed one challenge twice.
+        const order = wait === 0
+          ? [helloChallenge, asked[0].challenge]
+          : asked.map((e) => e.challenge);
+        assertEquals(
+          order.map((value) =>
+            signed.filter((e) => e.challenge === value).length
+          ),
+          [32, 8],
+        );
+        assertEquals(
+          new Set(signed.map((e) => `${e.principal} ${e.challenge}`)).size,
+          40,
+        );
+      } finally {
+        await client.close();
+        time.restore();
+      }
+    });
+  }
+});
+
+Deno.test("a direct connection's keys do not share a challenge one of them asked for", async () => {
+  setModernCellRepConfig(true);
+  const keys = await manyKeys(40);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log } = principalRouter(() => ({
+    ...flags(),
+    routedAuthV1: false,
+  }));
+  const client = await connect({ transport: p.transport });
+  try {
+    const mount = (did: string) => client.mount(did, {}, namedSigner(did));
+    // The hello's challenge takes every key, with no bound on its signers.
+    for (const did of keys.slice(0, 36)) await mount(did);
+    assertEquals(log.filter((e) => e.type === "challenge").length, 0);
+    // Once it has expired, each key asks for its own.
+    await time.tickAsync(61_000);
+    for (const did of keys.slice(36)) await mount(did);
+    assertEquals(log.filter((e) => e.type === "challenge").length, 4);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
+Deno.test("a challenge a renewal asked for is signed by the next new key", async () => {
+  setModernCellRepConfig(true);
+  const [first, second] = await manyKeys(2);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, log } = principalRouter();
+  const client = await connect({ transport: p.transport });
+  try {
+    await client.mount(first, {}, namedSigner(first));
+    const challenges = () => log.filter((e) => e.type === "challenge");
+    // The lease's renewal, eight minutes in, asks for a challenge of its
+    // own: the hello's is one its key has signed.
+    await time.tickAsync(479_000);
+    await tickUntil(time, () => challenges().length >= 1);
+    await tickUntil(time, () => false, 0, 5);
+    await client.mount(second, {}, namedSigner(second));
+    // The new key signs that challenge and asks for none.
+    assertEquals(challenges().length, 1);
+    assertEquals(
+      log.filter((e) => e.type === "auth").map((e) => [
+        e.principal,
+        e.challenge,
+      ]),
+      [
+        [first, "11".repeat(32)],
+        [first, challenges()[0].challenge],
+        [second, challenges()[0].challenge],
+      ],
+    );
+  } finally {
+    await client.close();
+    time.restore();
   }
 });
 

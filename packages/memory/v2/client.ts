@@ -366,6 +366,13 @@ const ROUTED_RETRY_FLOOR_MS = 1_000;
 const ROUTED_RESEND_MARGIN_S = 5;
 /** How often one refused statement is sent again before a new challenge. */
 const ROUTED_RESENDS = 3;
+/**
+ * How many keys sign one challenge on a routed connection before the next
+ * key asks for another. A router closes the connection on a challenge's
+ * 65th signer by default (its `max_principals_per_challenge`), so this
+ * stays well under that.
+ */
+const ROUTED_SIGNERS_PER_CHALLENGE = 32;
 /** Marks an error a router's refusal of a routed authentication. */
 const ROUTED_AUTH_REFUSAL: unique symbol = Symbol("routed auth refusal");
 const RECONNECT_JITTER_RATIO = 0.2;
@@ -528,6 +535,12 @@ export class Client {
    * challenge it asks for.
    */
   #challengeSigners = new Set<string>();
+  /**
+   * On a routed connection, the latest request for a challenge that is
+   * still unanswered. Its challenge becomes the held one, so another key
+   * that needs a challenge waits for it before asking for its own.
+   */
+  #challengeAsked: Promise<ConnectionChallengeResult> | undefined;
   /** Statements a router refused for now, by principal; see `#authenticate`. */
   #refusedStatements = new Map<string, RefusedStatement>();
   /**
@@ -1188,12 +1201,21 @@ export class Client {
       ? this.#refusedStatements.get(principal.did)
       : undefined;
     let resend = refused !== undefined && resendable(refused);
-    const needsChallenge = !resend && (routedChallenge !== undefined ||
-      freshChallenge || this.#challengeSigners.has(principal.did) ||
-      held.challenge.expiresAt <= Math.floor(Date.now() / 1000));
-    if (!needsChallenge && !resend) {
+    // Whether this key may sign the challenge `context` holds: it has not
+    // signed it, the challenge has not expired, and on a routed connection
+    // it has signers to spare. A key that takes it is added to its signers.
+    const takes = (context: SessionOpenAuthContext): boolean => {
+      if (
+        this.#challengeSigners.has(principal.did) ||
+        context.challenge.expiresAt <= Math.floor(Date.now() / 1000) ||
+        (context.deployment !== undefined &&
+          this.#challengeSigners.size >= ROUTED_SIGNERS_PER_CHALLENGE)
+      ) return false;
       this.#challengeSigners.add(principal.did);
-    }
+      return true;
+    };
+    const needsChallenge = !resend &&
+      (routedChallenge !== undefined || freshChallenge || !takes(held));
     const authenticated = (async () => {
       let context: SessionOpenAuthContext;
       let signed: ConnectionAuth;
@@ -1219,22 +1241,72 @@ export class Client {
         // checked again before the statement goes.
         resend = resendable(refused!);
       }
+      /** `held` with `challenge` in place of its own. */
+      const over = (
+        challenge: SessionOpenAuthContext["challenge"],
+      ): SessionOpenAuthContext => ({
+        audience: held.audience,
+        ...(held.deployment === undefined
+          ? {}
+          : { deployment: held.deployment }),
+        challenge,
+      });
+      const ask = () =>
+        this.request<ConnectionChallengeResult>({
+          type: "connection.challenge",
+          requestId: this.#nextRequestId(),
+        }, { whileConnected });
+      // On a routed connection a challenge asked for outright becomes the
+      // held one, with this key its first signer, so the keys that follow
+      // sign it too. A router allows a connection 16 unexpired challenges,
+      // and a client that opens spaces as many new keys would otherwise
+      // ask for one each. A key that needs a challenge while another key's
+      // request for one is unanswered waits for that one and signs it if
+      // it may. A renewal still asks for its own, without waiting.
+      const shared = async (): Promise<SessionOpenAuthContext> => {
+        for (;;) {
+          const asking = freshChallenge ? undefined : this.#challengeAsked;
+          if (asking !== undefined) {
+            try {
+              await asking;
+            } catch (error) {
+              // Lost with its connection, which is not a refusal of this
+              // key: the caller waits for the next connection.
+              requireCurrentConnection();
+              throw error;
+            }
+            requireCurrentConnection();
+            const current = this.sessionOpenAuthContext();
+            if (takes(current)) return current;
+            continue;
+          }
+          const asked = ask();
+          this.#challengeAsked = asked;
+          let challenge: SessionOpenAuthContext["challenge"];
+          try {
+            ({ challenge } = await asked);
+          } finally {
+            if (this.#challengeAsked === asked) {
+              this.#challengeAsked = undefined;
+            }
+          }
+          requireCurrentConnection();
+          const context = over(challenge);
+          this.#sessionOpenAuthContext = context;
+          this.#challengeSigners = new Set([principal.did]);
+          return context;
+        }
+      };
       if (resend) {
         ({ context, signed } = refused!);
       } else {
-        context = needsChallenge || refused !== undefined
-          ? {
-            audience: held.audience,
-            ...(held.deployment === undefined
-              ? {}
-              : { deployment: held.deployment }),
-            challenge: routedChallenge ??
-              (await this.request<ConnectionChallengeResult>({
-                type: "connection.challenge",
-                requestId: this.#nextRequestId(),
-              }, { whileConnected })).challenge,
-          }
-          : held;
+        context = routedChallenge !== undefined
+          ? over(routedChallenge)
+          : !needsChallenge && refused === undefined
+          ? held
+          : held.deployment !== undefined
+          ? await shared()
+          : over((await ask()).challenge);
         signed = await principal.authorizeConnection(context);
       }
       requireCurrentConnection();
@@ -1455,6 +1527,7 @@ export class Client {
     this.#transport.setRoutedMessagesEnabled?.(false);
     this.#cancelRenewals();
     this.#challengeSigners.clear();
+    this.#challengeAsked = undefined;
     this.#refusedStatements.clear();
     // Signed opens waiting on the old connection's chain settle on their
     // own, as stale, and the restores that follow this handshake must not
