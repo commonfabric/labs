@@ -168,6 +168,12 @@ export interface ManagerStreamEvent {
   /** A room to accept or forget. */
   room?: Cell<ChatRoomLink>;
 
+  /**
+   * Whether accepting a room leaves its entry archived, when it is; absent,
+   * accepting the room restores it.
+   */
+  keepArchived?: boolean;
+
   /** The id of a notice delivered. */
   id?: string;
 
@@ -224,12 +230,6 @@ export interface ManagerActState {
 
   /** The direct room shared with each counterpart. */
   direct: DirectCell;
-
-  /**
-   * The rooms this user belongs to and hasn't forgotten, newest first, as
-   * this session lists them.
-   */
-  rooms: Cell<ChatIndexEntry[]>;
 
   /** Each request's outcome. */
   requests: RequestsCell;
@@ -307,14 +307,18 @@ const hostOrigin = (): string => new URL(getPatternEnvironment().apiUrl).origin;
 
 /**
  * Lists the room in `space` in the user's catalog: registers the space, or
- * restores its entry when the entry is archived. An entry in any other state
- * stays as it is. A group room's title, cut to the length an offer's may run
- * to, is registered with it.
+ * restores its entry when the entry is archived, unless `restore` is false.
+ * An entry in any other state stays as it is. A group room's title, cut to the
+ * length an offer's may run to, is registered with it.
  */
 const listRoom = (
   catalog: CatalogCell,
   space: DID,
-  { title, since }: { title?: string; since?: number } = {},
+  { title, since, restore = true }: {
+    title?: string;
+    since?: number;
+    restore?: boolean;
+  } = {},
 ): void => {
   const entry = readSharedSpaceCatalog(catalog).entries[space];
   if (entry === undefined) {
@@ -333,7 +337,7 @@ const listRoom = (
         : { title: title.slice(0, OFFER_TITLE_MAX_LENGTH) }),
       ...(since === undefined ? {} : { since }),
     });
-  } else if (entry.state === "archived") {
+  } else if (entry.state === "archived" && restore) {
     // The restore names the revision this run just read, since no list was
     // shown to observe one: the request, to start a chat or to accept a room,
     // is the person's choice to have the room listed whatever its archive
@@ -608,27 +612,6 @@ const createRoom = (
 };
 
 /**
- * The direct room with `counterpart` that `rooms` lists, the newest if there
- * are several, as an entry `direct` holds: a room another manager created and
- * offered this user is listed without being in `direct`. The entry names the
- * room itself, rather than the link the session's listing found it by.
- */
-const listedDirectWith = (
-  rooms: Cell<ChatIndexEntry[]>,
-  counterpart: string,
-): ChatIndexEntry | undefined => {
-  const listed = (rooms.get() ?? []).find((entry) =>
-    entry.kind === "direct" && entry.counterpart === counterpart
-  );
-  return listed === undefined ? undefined : {
-    room: listed.room.resolveAsCell(),
-    kind: "direct",
-    counterpart,
-    since: listed.since,
-  };
-};
-
-/**
  * Performs one manager act: finding or creating a direct room, creating a
  * group room, accepting a room, forgetting one, or reporting a notice
  * delivered. Each act's outcome is recorded under its `requestId`, and a
@@ -758,15 +741,6 @@ const performManagerAct = (
       const knownSpace = spaceOf(known.room);
       if (isWellFormedDID(knownSpace)) listRoom(catalog, knownSpace);
       recordOutcome(state, requestId, { status: "done", entry: known });
-      return;
-    }
-    // A room listed with the counterpart is theirs, created by them, since
-    // one this manager created would be in `direct`. It is kept there from
-    // now on, as an accepted room is, so a forget doesn't lose it.
-    const listed = listedDirectWith(state.rooms, counterpart);
-    if (listed !== undefined) {
-      direct.key(counterpart).set(listed);
-      recordOutcome(state, requestId, { status: "done", entry: listed });
       return;
     }
     const entry = createRoom(state, requestId, "direct", [counterpart], {
@@ -943,9 +917,11 @@ const performManagerAct = (
   };
   // Registers the room, or restores an archived entry at the revision just
   // read, as `listRoom` says: accepting the room is the choice to have it
-  // listed.
+  // listed. An acceptance made on the person's behalf, which `keepArchived`
+  // marks, is no such choice, and leaves an archived entry as it is.
   listRoom(catalog, space, {
     title: kind === "group" ? room.key("about").get()?.title : undefined,
+    restore: event?.keepArchived !== true,
   });
   if (state.myProfile !== undefined) {
     state.joinRooms.send({ room, profile: state.myProfile });
@@ -1176,7 +1152,6 @@ export const FabriChatManagerCore = pattern<
       myProfile,
       catalog: sharedSpaceCatalog,
       direct,
-      rooms: newestFirst,
       requests,
       outgoingNotices,
       offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),

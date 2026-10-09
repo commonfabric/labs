@@ -9,8 +9,9 @@
  * not where the space's genesis reserves it, and a forged row a third identity
  * appends directly. It registers an offer of a room the real FabriChat manager
  * created, whose space declares its kind and is rooted at the room, and of a
- * direct room that manager offers through the owner's inbox itself, which a
- * start of the owner's with its sender then finds.
+ * direct room that manager offers through the owner's inbox itself, which the
+ * intake has the owner's manager accept, and which a start of the owner's with
+ * its sender then finds.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -230,7 +231,7 @@ describe("share intake across runtimes", () => {
     expect((await catalog())?.entries[room.space]?.state).toBe("saved");
   });
 
-  it("registers a direct room the FabriChat manager offers, which joins the owner to it and which the owner's start with its sender finds", async () => {
+  it("registers a direct room the FabriChat manager offers, which the owner's manager accepts, the owner joined to it once, and which the owner's start with its sender finds", async () => {
     const profile = await owner.link(["profiles", 0]);
     await sender.send("openChatDirect", {
       requestId: "direct",
@@ -252,32 +253,52 @@ describe("share intake across runtimes", () => {
     );
     const room = await sender.link(["chatRequests", "direct", "entry", "room"]);
 
-    // The owner was offered the room, so the manager joined them to it beside
-    // its creator, and queued no notice for them.
-    await harness.settleUntil(async () =>
-      (await sender.read(["participants", "length"], { piece: room })) === 2
-    );
-    const joined = [
-      await sender.link(["participants", 0], { piece: room }),
-      await sender.link(["participants", 1], { piece: room }),
-    ];
-    expect(joined.map(({ id, space }) => ({ id, space }))).toContainEqual({
-      id: profile.id,
-      space: profile.space,
-    });
-    expect(await sender.read(["participants", 0, "name"], { piece: room }))
-      .toBe("Sender");
+    // The owner was offered the room, so the manager queued no notice for
+    // them.
     const notices = (await sender.read(["chatNotices"])) as { id: string }[];
     expect(notices.map(({ id }) => id)).not.toContain(
       JSON.stringify([owner.identity.did(), "direct"]),
     );
 
-    // The intake registers the room in the owner's catalog, and the owner's
-    // start with the room's creator finds it there rather than creating
-    // another.
+    // The intake registers the room in the owner's catalog, and has the
+    // owner's manager accept it, which records it in `direct` under its
+    // creator.
     await harness.settleUntil(async () =>
       (await catalog())?.entries[room.space]?.state === "saved"
     );
+    await harness.settleUntil(async () =>
+      (await owner.read([
+        "chatManager",
+        "direct",
+        sender.identity.did(),
+        "kind",
+      ])) === "direct"
+    );
+    expect(
+      (await owner.link([
+        "chatManager",
+        "direct",
+        sender.identity.did(),
+        "room",
+      ])).space,
+    ).toBe(room.space);
+
+    // The sender's manager joined the owner to the room beside its creator
+    // when it offered it, and the acceptance joined the owner's profile
+    // again, which the roster holds once.
+    await harness.settle();
+    expect(await sender.read(["participants", "length"], { piece: room }))
+      .toBe(2);
+    expect(await sender.read(["participants", 0, "name"], { piece: room }))
+      .toBe("Sender");
+    const joined = await sender.link(["participants", 1], { piece: room });
+    expect({ id: joined.id, space: joined.space }).toEqual({
+      id: profile.id,
+      space: profile.space,
+    });
+
+    // The owner's start with the room's creator finds it in `direct` rather
+    // than creating another.
     const listed = Object.keys((await catalog())?.entries ?? {}).length;
     await owner.send("openOwnerChat", {
       requestId: "owner direct",

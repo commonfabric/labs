@@ -2,9 +2,10 @@
  * The host's share intake: it follows the offers in the private inboxes Home
  * holds and retains, vets each one as the owner, and registers each offer that
  * passes in Home's shared-space catalog through Home's `registerSharedSpace`
- * stream. Vetting reads the offered space's access list, the kind it declares,
- * and its root, which a Home handler cannot do;
- * `docs/features/private-inbox.md` describes the whole arrangement.
+ * stream, then has Home's chat manager accept each room it newly registers.
+ * Vetting reads the offered space's access list, the kind it declares, and its
+ * root, which a Home handler cannot do; `docs/features/private-inbox.md`
+ * describes the whole arrangement.
  */
 
 import type { DID } from "@commonfabric/identity";
@@ -164,6 +165,12 @@ export function startShareIntakeOf(
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
  * a receipt for this offer.
+ *
+ * Once Home's handler returns `registered`, a new entry, the intake sends the
+ * space's root to Home's `chatManager.accept`, when Home has one, with
+ * `keepArchived` set, so that the manager records the room as an acceptance
+ * from the room itself would, and an entry archived since it was registered
+ * stays archived. An entry already there gets no acceptance.
  */
 export class ShareIntake {
   #runtime: Runtime;
@@ -426,10 +433,13 @@ export class ShareIntake {
     }
     const offer = wellFormedOffer(raw);
     let refusal: OfferRefusal | undefined;
+    let root: Cell<unknown> | undefined;
     try {
-      refusal = offer === undefined
+      const vetted = offer === undefined
         ? "offer-malformed"
         : await this.#refusalOf(offer);
+      if (isCell(vetted)) root = vetted;
+      else refusal = vetted;
     } catch (error) {
       if (this.#halted) return;
       logger.warn("vetting-failed", () => [
@@ -455,7 +465,9 @@ export class ShareIntake {
     // for it however soon the send settles.
     const handled = Promise.withResolvers<NormalizedFullLink | undefined>();
     const pending = handled.promise.then((link) =>
-      link === undefined ? undefined : this.#reportConflict(row, receipt, link)
+      link === undefined
+        ? undefined
+        : this.#afterRegistration(row, receipt, link, root)
     );
     try {
       sendEvent(
@@ -504,14 +516,18 @@ export class ShareIntake {
   }
 
   /**
-   * Logs, once for the row keyed `row`, a `conflict` that Home's handler
-   * returned in the receipt at `link`. A receipt that cannot be read is left
-   * unreported, since the handling it describes has committed either way.
+   * Acts on the result of Home's handling of the row keyed `row`, in the
+   * receipt at `link`: has Home's chat manager accept `root`, the vetted root
+   * of the row's space, when the handler registered a new entry, and logs,
+   * once for the row, a `conflict` the handler returned. A receipt that cannot
+   * be read is left unreported, since the handling it describes has committed
+   * either way.
    */
-  async #reportConflict(
+  async #afterRegistration(
     row: string,
     receipt: string,
     link: NormalizedFullLink,
+    root: Cell<unknown> | undefined,
   ): Promise<void> {
     let result: unknown;
     try {
@@ -519,10 +535,21 @@ export class ShareIntake {
     } catch {
       return;
     }
-    if (
-      this.#halted || !isObjectNotArray(result) ||
-      result.status !== "conflict"
-    ) return;
+    if (this.#halted || !isObjectNotArray(result)) return;
+    if (result.status === "registered" && root !== undefined) {
+      const accept = this.#home.key("chatManager").key("accept");
+      if (accept.getRaw() !== undefined) {
+        try {
+          sendEvent(accept, { room: root, keepArchived: true });
+        } catch (error) {
+          logger.warn("accept-failed", () => [
+            `Sending the chat manager the offer ${receipt}:`,
+            error,
+          ]);
+        }
+      }
+    }
+    if (result.status !== "conflict") return;
     const reason = result.reason;
     this.#logOnce(`conflict:${row}`, () => {
       logger.warn("registration-conflict", () => [
@@ -532,13 +559,15 @@ export class ShareIntake {
   }
 
   /**
-   * Why `offer` is not registered, or `undefined` when it is, as
+   * Why `offer` is not registered, or, when it is, its space's root, as
    * {@link ShareIntake} lists the checks.
    *
    * @throws When reading the space's access list or root fails other than by
    *   a refusal of access, or when the host cannot tell the space's kind.
    */
-  async #refusalOf(offer: VettableOffer): Promise<OfferRefusal | undefined> {
+  async #refusalOf(
+    offer: VettableOffer,
+  ): Promise<OfferRefusal | Cell<unknown>> {
     if (!ADMITTED_SPACE_KINDS.has(offer.kind)) return "offer-kind-unknown";
     if (offer.host !== this.#host) return "offer-foreign-host";
     const runtime = this.#runtime;
@@ -583,7 +612,7 @@ export class ShareIntake {
     ) {
       return "space-root-misplaced";
     }
-    return undefined;
+    return root;
   }
 }
 

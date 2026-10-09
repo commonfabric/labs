@@ -5,10 +5,11 @@
  * refuses an event naming someone else, and with no counterpart named, records
  * the creator. The room offers its other member the control that asks their
  * manager to list it, until the manager does, and accepting the room lists
- * them among its participants. A start with the creator finds a room listed
- * as theirs, preferring the one `direct` holds and otherwise the newest,
- * rather than creating another, and keeps it in `direct`, so a start finds it
- * again once it is forgotten.
+ * them among its participants. A room a host registered and accepted on the
+ * user's behalf, as its share intake does, is found by a start with its
+ * creator, again once it is forgotten, and an acceptance that keeps an
+ * archived entry archived leaves it so. A later room accepted with the same
+ * creator leaves the one `direct` holds in place.
  */
 import {
   action,
@@ -23,6 +24,7 @@ import {
   pattern,
   principalOf,
   spaceOf,
+  type Stream,
   TESTS,
   UI,
   Writable,
@@ -38,7 +40,7 @@ import {
   propValue,
   readValue,
 } from "../test/vnode-helpers.ts";
-import { FabriChatManagerCore } from "./manager.tsx";
+import { FabriChatManagerCore, type ManagerStreamEvent } from "./manager.tsx";
 import { AddToChats } from "./room.tsx";
 import {
   CHAT_ROOM_OFFER_KIND,
@@ -131,6 +133,72 @@ const reasonOf = (
     ? outcome.reason
     : outcome?.status ?? "none";
 };
+
+/** What `acceptAsHost` is bound to. */
+interface AcceptAsHostState {
+  /** The manager's `accept`. */
+  accept: Stream<ManagerStreamEvent>;
+
+  /** The room to accept. */
+  held: Writable<{ room?: Cell<HeldRoom> }>;
+
+  /** The request's id. */
+  requestId: string;
+
+  /** Whether the acceptance leaves an archived entry archived. */
+  keepArchived: boolean;
+}
+
+/**
+ * Has a manager accept the held room on the user's behalf, as a host's share
+ * intake does when it sets `keepArchived`.
+ */
+const acceptAsHost = handler<unknown, AcceptAsHostState>((
+  _event,
+  { accept, held, requestId, keepArchived },
+) => {
+  accept.send({
+    requestId,
+    room: held.key("room").resolveAsCell(),
+    ...(keepArchived ? { keepArchived } : {}),
+  });
+});
+
+/** What `forgetListed` is bound to. */
+interface ForgetListedState {
+  /** The manager's `forget`. */
+  forget: Stream<ManagerStreamEvent>;
+
+  /** The room to forget. */
+  held: Writable<{ room?: Cell<HeldRoom> }>;
+
+  /** The manager's catalog, whose entry for the room names its revision. */
+  catalog: Writable<SharedSpaceCatalogStorage>;
+
+  /** The request's id. */
+  requestId: string;
+}
+
+/** Forgets the held room, at the revision its catalog entry holds. */
+const forgetListed = handler<unknown, ForgetListedState>((
+  _event,
+  { forget, held, catalog, requestId },
+) => {
+  const space = spaceOf(held.key("room")) ?? "";
+  forget.send({
+    requestId,
+    room: held.key("room").resolveAsCell(),
+    revision: readSharedSpaceCatalog(catalog).entries[space]?.revision,
+  });
+});
+
+/** The state of `catalog`'s entry for the held room. */
+const stateOf = (
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  held: Writable<{ room?: Cell<HeldRoom> }>,
+): string | undefined =>
+  readSharedSpaceCatalog(catalog).entries[spaceOf(held.key("room")) ?? ""]
+    ?.state;
 
 // Creates a direct room with Bob, and hands it to him through the setup, and
 // then a second one, from another manager.
@@ -237,25 +305,45 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       offer: { from: setup.aliceDid.get(), id: "d-1" },
     })
   );
-  // Alice's second room, registered in the same catalog as her first, as
-  // admitted later.
+  const action_accept_offered = acceptAsHost({
+    accept: offered.accept,
+    held: setup.held,
+    requestId: "intake-1",
+    keepArchived: true,
+  });
+  const action_forget_offered = forgetListed({
+    forget: offered.forget,
+    held: setup.held,
+    catalog: offeredCatalog,
+    requestId: "forget-1",
+  });
+  // Alice's second room, registered in the same catalog as her first, and
+  // archived before the host accepts it.
   const action_register_offered_again = action(() =>
     register.send({
       space: spaceOf(setup.heldAgain.key("room")) ?? "",
       host: "http://localhost",
       kind: CHAT_ROOM_OFFER_KIND,
       offer: { from: setup.aliceDid.get(), id: "d-2" },
-      since: Date.now() + 3_600_000,
     })
   );
-  const action_forget_reused = action(() => {
-    const space = spaceOf(setup.heldAgain.key("room")) ?? "";
-    offered.forget.send({
-      requestId: "forget-reused",
-      room: setup.heldAgain.key("room").resolveAsCell(),
-      revision: readSharedSpaceCatalog(offeredCatalog).entries[space]
-        ?.revision,
-    });
+  const action_forget_offered_again = forgetListed({
+    forget: offered.forget,
+    held: setup.heldAgain,
+    catalog: offeredCatalog,
+    requestId: "forget-2",
+  });
+  const action_accept_offered_again = acceptAsHost({
+    accept: offered.accept,
+    held: setup.heldAgain,
+    requestId: "intake-2",
+    keepArchived: true,
+  });
+  const action_accept_offered_again_restoring = acceptAsHost({
+    accept: offered.accept,
+    held: setup.heldAgain,
+    requestId: "intake-2-restoring",
+    keepArchived: false,
   });
   // Alice's second room, registered as a host registers an offered one, in
   // the catalog of the manager that accepted her first, as admitted later.
@@ -269,6 +357,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       since: Date.now() + 3_600_000,
     })
   );
+  const action_accept_again = acceptAsHost({
+    accept: manager.accept,
+    held: setup.heldAgain,
+    requestId: "intake-3",
+    keepArchived: true,
+  });
 
   return {
     [TESTS]: [
@@ -335,66 +429,92 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           offered.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
       },
-      // With a second room of Alice's listed, newer, a start with her finds
-      // the newer, creates none, and keeps it in `direct` from then on.
-      { action: action_register_offered_again },
+      // The host accepts the room on Bob's behalf, which records it in
+      // `direct`, and a start with Alice finds it there, creating none.
+      { action: action_accept_offered },
       {
         assertion: assert(() =>
-          offered.rooms.length === 2 &&
-          spaceOf(offered.rooms[0]?.room) ===
-            spaceOf(setup.heldAgain.key("room"))
+          offeredRequests.get()["intake-1"]?.status === "done" &&
+          spaceOf(offeredDirect.get()[setup.aliceDid.get()]?.room) ===
+            spaceOf(setup.held.key("room"))
         ),
       },
       {
         action: offered.openDirect,
-        event: { requestId: "reuse", counterpart: setup.aliceDid },
+        event: { requestId: "found", counterpart: setup.aliceDid },
         trustedUi: startGesture,
       },
       {
         assertion: assert(() => {
-          const outcome = offeredRequests.get()["reuse"];
-          const space = spaceOf(setup.heldAgain.key("room"));
+          const outcome = offeredRequests.get()["found"];
+          const space = spaceOf(setup.held.key("room"));
           return space !== undefined && outcome?.status === "done" &&
             spaceOf(outcome.entry?.room) === space &&
-            offered.rooms.length === 2 &&
+            offered.rooms.length === 1 &&
             Object.keys(readSharedSpaceCatalog(offeredCatalog).entries)
-                .length === 2 &&
-            spaceOf(offeredDirect.get()[setup.aliceDid.get()]?.room) === space;
+                .length === 1;
         }),
       },
-      // Once that room is forgotten, a start with Alice finds it again
-      // through `direct`, rather than the room still listed, and lists it
+      // Once it is forgotten, a start with Alice finds it again, and lists it
       // again.
-      { action: action_forget_reused },
+      { action: action_forget_offered },
       {
         assertion: assert(() =>
-          offeredRequests.get()["forget-reused"]?.status === "done" &&
-          offered.rooms.length === 1 &&
-          spaceOf(offered.rooms[0]?.room) === spaceOf(setup.held.key("room"))
+          offeredRequests.get()["forget-1"]?.status === "done" &&
+          offered.rooms.length === 0
         ),
       },
       {
         action: offered.openDirect,
-        event: { requestId: "reuse-again", counterpart: setup.aliceDid },
+        event: { requestId: "found-again", counterpart: setup.aliceDid },
         trustedUi: startGesture,
       },
       {
         assertion: assert(() => {
-          const outcome = offeredRequests.get()["reuse-again"];
-          const space = spaceOf(setup.heldAgain.key("room"));
+          const outcome = offeredRequests.get()["found-again"];
+          const space = spaceOf(setup.held.key("room"));
           return space !== undefined && outcome?.status === "done" &&
             spaceOf(outcome.entry?.room) === space &&
-            offered.rooms.length === 2 &&
+            offered.rooms.length === 1 &&
             Object.keys(readSharedSpaceCatalog(offeredCatalog).entries)
-                .length === 2;
+                .length === 1;
         }),
       },
-      // With a second room of Alice's listed, newest, beside the one `direct`
-      // holds, a start with her finds the one `direct` holds.
+      // A room archived between its registration and the host's acceptance
+      // stays archived; an acceptance of the person's own restores it.
+      { action: action_register_offered_again },
+      { action: action_forget_offered_again },
+      {
+        assertion: assert(() =>
+          offeredRequests.get()["forget-2"]?.status === "done" &&
+          stateOf(offeredCatalog, setup.heldAgain) === "archived"
+        ),
+      },
+      { action: action_accept_offered_again },
+      {
+        assertion: assert(() =>
+          offeredRequests.get()["intake-2"]?.status === "done" &&
+          stateOf(offeredCatalog, setup.heldAgain) === "archived" &&
+          offered.rooms.length === 1
+        ),
+      },
+      { action: action_accept_offered_again_restoring },
+      {
+        assertion: assert(() =>
+          offeredRequests.get()["intake-2-restoring"]?.status === "done" &&
+          stateOf(offeredCatalog, setup.heldAgain) === "saved" &&
+          offered.rooms.length === 2
+        ),
+      },
+      // A second room of Alice's, registered and accepted on Bob's behalf,
+      // leaves the one `direct` holds in place, and a start with her finds
+      // that one.
       { action: action_register_again },
+      { action: action_accept_again },
       {
         assertion: assert(() =>
           manager.rooms.length === 2 &&
+          requests.get()["intake-3"]?.status === "done" &&
           spaceOf(manager.rooms[0]?.room) ===
             spaceOf(setup.heldAgain.key("room")) &&
           manager.rooms.every((entry) =>
