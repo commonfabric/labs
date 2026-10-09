@@ -31,6 +31,8 @@ import { cellOfTarget } from "./space-access.ts";
  * there is in any form but the one a runtime mints, and for a `target` passed
  * as `undefined`. It never guesses. A label it cannot read is not one of
  * those: that read throws, so a labeled document never reads as unlabeled.
+ * Nor is a label still loading, in a handler: the handler is withdrawn and
+ * runs again once its document arrives.
  *
  * The read is of `target`'s label: the value's cell is followed through any
  * links it holds, which reads the pointers along the way and no other value
