@@ -172,7 +172,7 @@ are refused. No field accepts a Fabric tagged-value interpretation.
 | `mls1`                    | sequence time, status byte (`0` success), payload blob                                                                                       |
 | `mat1`, operation 1       | context ID, actual client flags blob, space DID text, ownership epoch time; returns ticket                                                   |
 | `map1`, operation 2       | ticket, proof blob                                                                                                                           |
-| operation 3               | context ID; revokes context/sessions and prevents reopening that ID                                                                          |
+| operation 3               | context ID; closes the context and its sessions and drops the statements it accepted; a later open may use that ID again                     |
 | `mrl1`, operation 4       | context ID, principal text; releases new-open authority                                                                                      |
 | `mas1`, operation 5       | context ID, space DID text, ownership epoch time                                                                                             |
 | `mvp1`, operation 6       | context ID, actual client flags blob, proof blob; verifies initial auth without space admission                                              |
