@@ -93,11 +93,13 @@ the commit's read set. On the September copy the split is:
 | `invocation`, `authorization` | empty; every commit's refs are null in this store |
 
 Of the revision rows, 1,550,949 of 2,223,022 sit behind a head and carry
-770 MB; of the commits, 1,307,316 of 1,494,536 own no head row, and their
-payloads are what hollowing gives up. The history's weight is the commit log,
-not the revision table, and dropping revision rows while leaving every commit
-payload in place would reclaim under a tenth of the file. That is why the
-design hollows unreferenced commits, and why the dry-run report prices them.
+770 MB; of the commits, 1,307,316 of 1,494,536 own no head row. The
+history's weight is the commit log, not the revision table, and dropping
+revision rows while leaving every commit payload in place would reclaim
+under a tenth of the file. That is why the design hollows every commit's
+payload outside the retained window — seq 1 and `op_*`-referenced commits
+excepted, a surviving revision exempting nothing — and why the dry-run
+report prices them.
 
 **The storm's shape is not new, and it is concentrated.** The August copy
 already holds 43 instances with over 100 revisions carrying 299,165 of its
@@ -473,7 +475,7 @@ cf space compact <store.sqlite> [selection] [cut] [--dry-run] [--json]
 | `--before-seq <n>` | Rows with `seq < n` are candidates; the first row at or above `n` becomes the base. | the head: everything behind it |
 | `--before <timestamp>` | The same, with `n` taken as the newest commit created before the timestamp (`commit.created_at`, UTC). | — |
 | `--keep-last <n>` | Keep the newest `n` revisions per instance, the oldest of them rewritten as the base. | 0 |
-| `--keep-payloads <duration>` | Commit rows created within this window of the newest commit keep their `original` even when nothing references them; older unreferenced rows are hollowed (I6). The window bounds how far back a resubmission is answered faithfully rather than refused; it bounds no safety property. | `24h` |
+| `--keep-payloads <duration>` | Commit rows created within this window of the newest commit keep their `original`; every older row's payload is hollowed except seq 1's and those an `op_*` row references, whether or not a surviving revision points at the commit (I6). The window bounds how far back a resubmission is answered faithfully rather than refused; it bounds no safety property. | `24h` |
 | `--dry-run` | Compute and report; write nothing. | off |
 | `--json` | The report as JSON, per the `cf` JSON contract. | off |
 
