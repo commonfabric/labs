@@ -872,6 +872,13 @@ export class Client {
    * connection until it is admitted or refused for good, the client closes
    * or fails for good, or `options.signal` aborts. A connection that drops
    * under a request the mount has sent still fails the mount.
+   *
+   * Nothing else ends that wait. Some refusals for now clear only when
+   * this client gives something up: a connection at its session limit, or
+   * at its limit of authenticated keys, stays there while the client keeps
+   * its sessions open and its keys renewed. A mount made without a signal
+   * then waits until the client closes, as the runner's `createSpace` and
+   * `spaceKind` do.
    */
   async openSession(
     space: string,
