@@ -170,6 +170,9 @@ export interface MultiRuntimeHarnessOptions {
    * first and not the second.
    */
   recordRejections?: boolean;
+
+  /** PROBE (CI lane-1 stall, not for merge): log each worker's samples. */
+  probe?: boolean;
   sessions: (string | MultiRuntimeSessionSpec)[];
 
   /**
@@ -834,6 +837,7 @@ export class MultiRuntimeHarness {
           apiUrl: spec.apiUrl?.href ?? apiUrl,
           diagnostics: options.diagnostics === true,
           recordRejections: options.recordRejections === true,
+          probe: options.probe === true,
           cfc: cfcFor(spec),
           watchPaths: options.watchPaths as FabricValue,
           ...(spec.wsDelayMs !== undefined
@@ -858,6 +862,7 @@ export class MultiRuntimeHarness {
         spaceDid,
         apiUrl,
         diagnostics: options.diagnostics === true,
+        probe: options.probe === true,
         watchPaths: options.watchPaths as FabricValue,
         cfc: cfcFor(specs[0]),
         ...(options.cfcWriteFloor !== undefined

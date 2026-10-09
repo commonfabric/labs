@@ -124,6 +124,142 @@ function recordRejectionsInto(telemetry: RuntimeTelemetry): void {
   });
 }
 
+// PROBE (CI lane-1 stall, not for merge): once a second, this isolate's
+// event-loop lag, heap, and the telemetry it saw that second; each send's
+// storage timeline; and any storage silence over two seconds, as it ends.
+const probe = {
+  enabled: false,
+  label: (self as unknown as { name?: string }).name ?? "worker",
+  timer: undefined as ReturnType<typeof setInterval> | undefined,
+  lastTick: 0,
+  lastStorage: 0,
+  maxStorageGap: 0,
+  second: new Map<string, number>(),
+  runs: 0,
+  runMs: 0,
+  maxRun: 0,
+  maxRunId: "",
+  send: undefined as
+    | { handler: string; t0: number; events: { t: number; type: string }[] }
+    | undefined,
+};
+
+function probeLog(text: string): void {
+  console.log(
+    `L1PROBE at=${Date.now()} w=${
+      probe.label.replace("multi-runtime:", "")
+    } ${text}`,
+  );
+}
+
+function probeCensus(map: Map<string, number>): string {
+  return [...map].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`)
+    .join(",") || "-";
+}
+
+function startProbe(telemetry: RuntimeTelemetry): void {
+  probe.enabled = true;
+  probe.lastTick = performance.now();
+  probe.lastStorage = probe.lastTick;
+  telemetry.addEventListener("telemetry", (event) => {
+    const marker = (event as RuntimeTelemetryEvent).marker;
+    const now = performance.now();
+    let key: string = marker.type;
+    if (marker.type === "storage.push.error") {
+      key = `push.error:${marker.error}`;
+    } else if (marker.type === "scheduler.run.complete") {
+      probe.runs++;
+      probe.runMs += marker.durationMs;
+      if (marker.durationMs > probe.maxRun) {
+        probe.maxRun = marker.durationMs;
+        probe.maxRunId = marker.actionId.slice(-48);
+      }
+    }
+    probe.second.set(key, (probe.second.get(key) ?? 0) + 1);
+    probe.send?.events.push({ t: now, type: key });
+    if (marker.type.startsWith("storage.")) {
+      const gap = now - probe.lastStorage;
+      if (gap > probe.maxStorageGap) probe.maxStorageGap = gap;
+      if (gap > 2000) {
+        probeLog(
+          `storage-silence ${gap.toFixed(0)}ms ended by ${key}` +
+            (probe.send
+              ? ` in-send=${probe.send.handler}+${
+                (now - probe.send.t0).toFixed(0)
+              }ms`
+              : ""),
+        );
+      }
+      probe.lastStorage = now;
+    }
+  });
+  probe.timer = setInterval(() => {
+    const now = performance.now();
+    const lag = now - probe.lastTick - 1000;
+    probe.lastTick = now;
+    const m = Deno.memoryUsage();
+    const mb = (n: number) => (n / 1048576).toFixed(0);
+    probeLog(
+      `tick lag=${lag.toFixed(0)}ms heap=${mb(m.heapUsed)}/${
+        mb(m.heapTotal)
+      }MB ext=${mb(m.external)}MB rss=${mb(m.rss)}MB runs=${probe.runs}/${
+        probe.runMs.toFixed(0)
+      }ms maxRun=${probe.maxRun.toFixed(0)}ms(${probe.maxRunId}) ` +
+        `maxStorageGap=${probe.maxStorageGap.toFixed(0)}ms` +
+        (probe.send
+          ? ` in-send=${probe.send.handler}+${
+            (now - probe.send.t0).toFixed(0)
+          }ms`
+          : "") +
+        ` events=${probeCensus(probe.second)}`,
+    );
+    probe.second.clear();
+    probe.runs = 0;
+    probe.runMs = 0;
+    probe.maxRun = 0;
+    probe.maxRunId = "";
+    probe.maxStorageGap = 0;
+  }, 1000);
+}
+
+/** Logs the storage timeline of the send that began at `send.t0`. */
+function probeSendDone(phases: string): void {
+  const send = probe.send;
+  probe.send = undefined;
+  if (!send) return;
+  const census = new Map<string, number>();
+  for (const e of send.events) {
+    census.set(e.type, (census.get(e.type) ?? 0) + 1);
+  }
+  probeLog(
+    `send-done ${send.handler} total=${
+      (performance.now() - send.t0).toFixed(0)
+    }ms ${phases} census=${probeCensus(census)}`,
+  );
+  let prev = send.t0;
+  for (const e of send.events) {
+    if (!e.type.startsWith("storage.") && !e.type.startsWith("push.error")) {
+      continue;
+    }
+    if (e.t - prev > 100) {
+      const inside = new Map<string, number>();
+      for (const o of send.events) {
+        if (o.t > prev && o.t < e.t) {
+          inside.set(o.type, (inside.get(o.type) ?? 0) + 1);
+        }
+      }
+      probeLog(
+        `send-gap ${send.handler} +${(prev - send.t0).toFixed(0)}..+${
+          (e.t - send.t0).toFixed(0)
+        }ms (${(e.t - prev).toFixed(0)}ms) ended-by=${e.type} filled=${
+          probeCensus(inside)
+        }`,
+      );
+    }
+    prev = e.t;
+  }
+}
+
 /** The recorded refusals, or a loud failure when nothing is recording them. */
 function recorded(): CommitRejection[] {
   if (!rejections) {
@@ -438,6 +574,7 @@ const handlers: Record<
       cfcWriteFloor,
       cfc,
       watchPaths: requestedWatchPaths,
+      probe: probeRequested,
     },
   ) {
     const identity = await Identity.fromKeyPair(
@@ -461,6 +598,7 @@ const handlers: Record<
     if (recordRejections === true) {
       recordRejectionsInto(controller().runtime.telemetry);
     }
+    if (probeRequested === true) startProbe(controller().runtime.telemetry);
     if (diagnostics === true) {
       const scheduler = controller().runtime.scheduler;
       scheduler.enableSettleStats();
@@ -535,12 +673,20 @@ const handlers: Record<
       };
       markRendererTrustedEvent(eventValue);
     }
+    const probeT0 = performance.now();
+    if (probe.enabled) {
+      probe.send = { handler: handler as string, t0: probeT0, events: [] };
+    }
     const target = await resultAt(piece);
+    const probeT1 = performance.now();
+    let probeCalls = 0;
     const { error } = await controller().runtime.editWithRetry(
       (tx) => {
+        probeCalls++;
         target.key(handler as never).withTx(tx).send(eventValue as never);
       },
     );
+    const probeT2 = performance.now();
     if (error) {
       throw new Error(`send "${handler}" failed: ${error.message}`);
     }
@@ -549,6 +695,15 @@ const handlers: Record<
     // optimistic pipeline (the multiplayer-contention shape) instead of
     // serializing one settled commit per event.
     if (doIdle !== false) await idle();
+    if (probe.enabled) {
+      probeSendDone(
+        `resultAt=${(probeT1 - probeT0).toFixed(0)}ms edit=${
+          (probeT2 - probeT1).toFixed(0)
+        }ms calls=${probeCalls} idle=${
+          (performance.now() - probeT2).toFixed(0)
+        }ms`,
+      );
+    }
     // Held from the turn the event's run here settles: every consequence the
     // server has yet to send back, the event's own among them, stays out of
     // this runtime until `releaseInbound`. The event cannot run here with
@@ -1252,6 +1407,7 @@ const handlers: Record<
   },
 
   async dispose() {
+    if (probe.timer !== undefined) clearInterval(probe.timer);
     for (const intake of shareIntakes.splice(0)) intake.stop();
     resultSinkCancel?.();
     resultSinkCancel = undefined;
