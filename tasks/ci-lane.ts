@@ -858,6 +858,16 @@ export async function runBatch(
     await Deno.mkdir(batchSpool, { recursive: true });
     const asked = unitsForRun(batch, run);
     opened += asked.length;
+    // The tests a unit's skip list named, by unit and name. Each is a test
+    // the plan gave another lane, or none, so the skip its process
+    // registers is a fact about this lane's share rather than about the
+    // test, and it ships no record. A skip the test registers itself is
+    // not on this list and ships.
+    const skipped = new Set(
+      asked.flatMap((request) =>
+        request.skip.map((name) => `${request.unit}\t${name}`)
+      ),
+    );
     // The units this execution recorded anything at all for, gathered
     // across whatever invocations the suite splits it into.
     const heard = new Set<string>();
@@ -925,14 +935,19 @@ export async function runBatch(
       }
       for (const record of collected.records) {
         const location = batch.suite.locate(record);
-        if (location?.level !== "unit") continue;
-        heard.add(location.unit);
-        unitSeconds.set(
-          location.unit,
-          (unitSeconds.get(location.unit) ?? 0) + record.durationMs / 1000,
-        );
+        if (location?.level === "unit") {
+          heard.add(location.unit);
+          unitSeconds.set(
+            location.unit,
+            (unitSeconds.get(location.unit) ?? 0) + record.durationMs / 1000,
+          );
+          if (
+            record.outcome === "skip" &&
+            skipped.has(`${location.unit}\t${record.test.n}`)
+          ) continue;
+        }
+        records.push(record);
       }
-      for (const record of collected.records) records.push(record);
       for (const conflict of collected.conflicts) conflicts.push(conflict);
       await Deno.remove(batchSpool, { recursive: true }).catch(() => {});
       await Deno.mkdir(batchSpool, { recursive: true });

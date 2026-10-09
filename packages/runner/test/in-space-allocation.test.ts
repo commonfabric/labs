@@ -9,6 +9,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { type Cell } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { InSpaceTargetUnresolved } from "../src/scheduler/retry-immediately.ts";
 import type { ACL, MemorySpace, URI } from "../src/storage/interface.ts";
 import {
   EmulatedStorageManager,
@@ -29,11 +30,16 @@ describe("in-space allocation", () => {
   let runtime: Runtime;
   const opened: Runtime[] = [];
 
-  /** A runtime of its own over this test's server, as another process. */
-  const openRuntime = (): Runtime => {
+  /**
+   * A runtime of its own over this test's server, as another process, with
+   * server execution on when `serverExecution` says so. Such a runtime is a
+   * client: none here takes the serving posture.
+   */
+  const openRuntime = (serverExecution = false): Runtime => {
     const next = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+      ...(serverExecution ? { experimental: { serverExecution: true } } : {}),
     });
     opened.push(next);
     return next;
@@ -299,6 +305,52 @@ describe("in-space allocation", () => {
       tx.abort();
     }
     expect(await recorded(runtime, home, "kept")).toBe(existing);
+  });
+
+  describe("under server execution", () => {
+    /** Counts the spaces `reader`'s storage manager creates. */
+    const countCreatedSpaces = (reader: Runtime): () => number => {
+      const manager = reader.storageManager as {
+        createSpace: (...args: never[]) => Promise<MemorySpace>;
+      };
+      const original = manager.createSpace.bind(manager);
+      let created = 0;
+      manager.createSpace = (...args) => {
+        created++;
+        return original(...args);
+      };
+      return () => created;
+    };
+
+    it("leaves a name with no record unresolved on a client, and creates no space for it", async () => {
+      const client = openRuntime(true);
+      const created = countCreatedSpaces(client);
+
+      await expect(client.resolveInSpaceName(home, "client-unrecorded"))
+        .rejects.toThrow(InSpaceTargetUnresolved);
+      expect(created()).toBe(0);
+      expect(await recorded(client, home, "client-unrecorded"))
+        .toBeUndefined();
+    });
+
+    it("returns a recorded space to a client", async () => {
+      const existing = await runtime.createSpace();
+      await writeRecord(home, "client-recorded", existing);
+      const client = openRuntime(true);
+      const created = countCreatedSpaces(client);
+
+      expect(await client.resolveInSpaceName(home, "client-recorded"))
+        .toBe(existing);
+      expect(created()).toBe(0);
+    });
+
+    it("creates a space for a name with no record when server execution is off", async () => {
+      const created = countCreatedSpaces(runtime);
+
+      expect(await runtime.resolveInSpaceName(home, "off-unrecorded"))
+        .toBeDefined();
+      expect(created()).toBe(1);
+    });
   });
 
   it("throws for a record that names a DID no space answers to", async () => {

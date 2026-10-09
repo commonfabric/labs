@@ -80,6 +80,19 @@ currency. The existing overlay and retirement rules below still apply.
 - Pure structural nodes: freely.
 - Handlers: run locally on fire, writes go to the overlay (events.md §2);
   the committed artifact is the event only.
+- A handler that names an `inSpace(...)` target whose allocation record
+  does not exist yet does not speculate. The client creates no space for
+  the name, since the serving runtime's run creates the one its record
+  names, and a space the client created would differ from it and be named
+  by nothing (protocol.md §2b). The echo withdraws instead: its
+  transaction aborts, the follow-up events it sent drop, and the event's
+  served consequence renders when it arrives. The cost is that such a
+  handler, a profile's or a room's creation among them, shows no preview
+  of its result before the server's consequence arrives. A caller's
+  settle callback still settles from that consequence (events.md §4), and
+  reads the handling's receipt address off the withdrawn echo's
+  transaction as it would off a completed one. Once the record exists,
+  the handler speculates as any other.
 - Effectful nodes (`fetch*`, `generate*`, `sqlite*`): NEVER execute
   client-side. A speculative read of such a node returns its last
   committed result (read-through). If inputs changed so the memo key

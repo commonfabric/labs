@@ -24,6 +24,10 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  readSharedSpaceCatalog,
+  type SharedSpaceCatalogStorage,
+} from "../system/shared-space-catalog.ts";
+import {
   clickButton,
   findNodeById,
   propValue,
@@ -32,6 +36,7 @@ import {
 import { FabriChatManagerCore } from "./manager.tsx";
 import { AddToChats } from "./room.tsx";
 import {
+  CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
@@ -43,6 +48,10 @@ import {
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+/** An empty shared-space catalog, as a manager registers its rooms in. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 
 // A stand-in for a person's `#profile`, labeled, as a Fabric profile is,
 // because a room's participants link only a document that carries a label.
@@ -117,6 +126,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const manager = FabriChatManagerCore({
     myProfile: Writable.of<TestProfile>({ name: "Alice" }),
     rooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -147,9 +157,11 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const rooms = Writable.of<ChatIndexEntry[]>([]);
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
+  const catalog = emptyCatalog();
   const manager = FabriChatManagerCore({
     myProfile: bobProfile,
     rooms,
+    sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -191,6 +203,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           reasonOf(requests, "a-1") ===
             "The counterpart is not the room's creator." &&
           rooms.get().length === 0 &&
+          Object.keys(readSharedSpaceCatalog(catalog).entries).length === 0 &&
           addDisplay(adder[UI]) === "flex"
         ),
       },
@@ -201,6 +214,18 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
           addDisplay(adder[UI]) === "none"
         ),
+      },
+      // Accepting it registers its space in Bob's catalog, as a saved
+      // FabriChat room.
+      {
+        assertion: assert(() => {
+          const entries = Object.values(
+            readSharedSpaceCatalog(catalog).entries,
+          );
+          return entries.length === 1 &&
+            entries[0]?.kind === CHAT_ROOM_OFFER_KIND &&
+            entries[0]?.state === "saved";
+        }),
       },
       // Accepting the room lists Bob among its participants, without a step
       // of his own.

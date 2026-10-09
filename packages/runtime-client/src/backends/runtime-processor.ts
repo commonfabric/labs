@@ -95,6 +95,7 @@ import {
   type SigilLink,
   SlugResolutionError,
   SpaceHostValidationError,
+  SpaceNotFoundError,
   transactionFailureMessage,
 } from "@commonfabric/runner";
 import {
@@ -2413,6 +2414,7 @@ export class RuntimeProcessor {
       instance: prepared.instance,
       policy: prepared.policy,
       sources: [...prepared.sources],
+      heldWith: prepared.heldWith.map((group) => [...group]),
       witnessedRelease: prepared.witnessedRelease,
       stance: prepared.stance,
     };
@@ -2931,6 +2933,8 @@ export class RuntimeProcessor {
    *
    * @throws The server's refusal when this runtime's identity may not read
    *   the space, whether or not a root is still held from before.
+   * @throws {SpaceNotFoundError} When the request opens a DID that no space
+   *   answers to, other than this runtime's identity's own Home.
    */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
@@ -2952,6 +2956,11 @@ export class RuntimeProcessor {
     const existing = await cc.getDefaultPattern(false);
     this.#throwIfAccessRefused(request.space);
     if (existing === undefined && !(await this.#ownsSpace(request.space))) {
+      // No owner means either a space someone else owns, which has nothing in
+      // it yet, or no space at all, which opening does not create.
+      if (!(await this.#runtime.spaceExists(request.space))) {
+        throw new SpaceNotFoundError(request.space);
+      }
       return {};
     }
     const piece = await cc.ensureDefaultPattern();

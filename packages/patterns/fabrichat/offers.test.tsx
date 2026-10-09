@@ -21,6 +21,7 @@ import {
   type TrustedActionWrite,
   Writable,
 } from "commonfabric";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import PrivateInbox, {
   type Offer,
   type OfferEvent,
@@ -50,6 +51,10 @@ import {
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+/** An empty shared-space catalog, as a manager registers its rooms in. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 
 /** The reviewed surface and action a person writes their own profile from. */
 const PROFILE_SURFACE = "FabriChatTestProfileSurface";
@@ -261,6 +266,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const manager = FabriChatManagerCore({
     myProfile: profile,
     rooms: Writable.of<ChatIndexEntry[]>([]),
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: notices,
@@ -313,14 +319,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       { label: "bob-done" },
     ],
-    // TODO(danfuzz): The first run of the event offering the room reads the
-    // inbox's `receive` before Bob's replica holds the inbox, so its commit
-    // is refused as a stale read and the event is retried. The runner drops
-    // the offer that run sent with a warning, though the retry sends it
-    // again. Expect no warnings once the runner drops a retried run's
-    // follow-ups quietly, as it does a run aborted to run again, or the first
-    // run reads the inbox as stored.
-    allowConsoleWarnings: true,
   };
 });
 

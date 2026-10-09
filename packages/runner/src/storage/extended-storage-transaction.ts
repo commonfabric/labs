@@ -116,7 +116,9 @@ import {
 } from "../reserved-sibling-seam.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import {
+  isRuntimeSecretOwnRead,
   readRuntimeSecret,
+  readsRuntimeSecretValue,
   RUNTIME_SECRET_SCHEMA,
   RUNTIME_SECRET_WRITER,
   runtimeSecretLink,
@@ -359,6 +361,27 @@ export type CfcInstrumentationHooks = {
 // mutating method like Array.prototype.push [[Set]]s through the view and
 // lands in the throwing trap.
 const readOnlyCfcViews = new WeakMap<object, object>();
+
+/**
+ * The errors a transaction's commit callbacks receive when its commit promise
+ * rejects, each standing for the rejection held in its `reason`.
+ */
+const commitPromiseRejections = new WeakSet<object>();
+
+/**
+ * The rejection a commit promise rejected with, when `error` is the error a
+ * transaction's commit callbacks receive for that rejection, or `undefined`
+ * for any other error. The commit's own settlement rejects with that same
+ * rejection, so a callback reading it here sees what the committer's
+ * settlement handler sees.
+ */
+export function commitPromiseRejectionOf(
+  error: unknown,
+): { readonly reason: unknown } | undefined {
+  return isObjectOrArray(error) && commitPromiseRejections.has(error)
+    ? { reason: (error as { reason?: unknown }).reason }
+    : undefined;
+}
 
 const throwCfcReadOnly = (): never => {
   throw new Error(
@@ -1684,6 +1707,30 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (scopeRank(scope) > scopeRank(this.#narrowestReadScope)) {
       this.#narrowestReadScope = scope;
     }
+  }
+
+  /**
+   * The read chokepoint of the runtime-secret namespace: no executed code
+   * reads a runtime secret's value, whatever link or id names it. The reads
+   * that pass are `runtime-secret.ts`'s own, whose marker is private to that
+   * module, and reads inside a privileged system write; a read of a document
+   * field other than the value, such as its label envelope, holds nothing
+   * secret and passes too.
+   */
+  #assertRuntimeSecretUnread(
+    address: Pick<IMemorySpaceAddress, "id" | "path">,
+    options: IReadOptions | undefined,
+  ): void {
+    if (
+      !readsRuntimeSecretValue(address) ||
+      this.#privilegedSystemWriteDepth > 0 ||
+      isRuntimeSecretOwnRead(options?.meta)
+    ) {
+      return;
+    }
+    throw new Error(
+      `${address.id} is a runtime secret: only the runtime reads it.`,
+    );
   }
 
   #prepareRead(address: Pick<IMemorySpaceAddress, "scope">): void {
@@ -3259,6 +3306,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): Result<IAttestation, ReadError> {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     return this.tx.read(address, options);
@@ -3271,6 +3319,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
+    for (const path of paths) {
+      this.#assertRuntimeSecretUnread({ id: address.id, path }, readOptions);
+    }
     this.#prepareRead(address);
     if (this.tx.trackReadPaths) {
       return this.tx.trackReadPaths(address, paths, readOptions);
@@ -3291,6 +3342,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): FabricValue {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     const readResult = this.tx.read(address, options);
@@ -3906,6 +3958,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           message: "Transaction commit promise rejected",
           reason,
         };
+        commitPromiseRejections.add(error);
         this.#statusOverride = {
           status: "error",
           journal: this.tx.journal,
