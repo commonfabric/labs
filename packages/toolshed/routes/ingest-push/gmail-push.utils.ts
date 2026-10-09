@@ -406,6 +406,9 @@ export async function fetchGmailMailbox(
  * address, which `email_verified` says was verified once and which may since
  * have changed hands; Google's own guidance is to trust it only with `hd`.
  * Such an account has no Gmail mailbox for a push to come from anyway.
+ *
+ * The claims and what each one establishes are set out in
+ * https://developers.google.com/identity/sign-in/web/backend-auth#verify-the-integrity-of-the-id-token
  */
 function isGoogleHostedAddress(
   email: string,
