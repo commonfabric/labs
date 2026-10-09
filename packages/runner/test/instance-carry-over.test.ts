@@ -384,6 +384,33 @@ describe("instance-carry-over", () => {
     });
   });
 
+  describe("a named instance's name", () => {
+    it("binds an instance named for an inherited member to a child of its own", async () => {
+      const program = parentProgram([
+        "  const toString = Counter({ label: 'a' });",
+        "  return { views: [toString], aCount: toString.count };",
+      ].join("\n"));
+      const pattern = await compile(program);
+      const tx = rt.edit();
+      const cell = rt.getCell<Record<string, unknown>>(
+        space,
+        "inherited-member-name",
+        undefined,
+        tx,
+      );
+      const running = rt.run(tx, pattern, {}, cell);
+      await tx.commit().settled;
+      await running.pull();
+      const write = rt.edit();
+      cell.withTx(write).key("aCount").set(5);
+      expect((await write.commit().settled).error).toBeUndefined();
+      await rt.idle();
+      await cell.pull();
+
+      expect((cell.get() as Record<string, unknown>).aCount).toBe(5);
+    });
+  });
+
   describe("a named instance's child", () => {
     it("refuses to set up for one instance over the child another instance set up", async () => {
       // A parent's `instanceChildren` pointing instance `a` at `b`'s child is

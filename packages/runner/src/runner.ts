@@ -959,7 +959,9 @@ function readInstanceChildren(
   const raw = convertibleJsFromFabricValue(
     parent.getMetaRaw("instanceChildren", { meta: ignoreReadForScheduling }),
   );
-  const children: Record<string, NormalizedFullLink> = {};
+  // Prototype-free, so an instance named for an inherited member, such as
+  // `toString`, finds nothing it was not given.
+  const children: Record<string, NormalizedFullLink> = Object.create(null);
   if (!isObjectNotArray(raw)) return children;
   for (const [name, entry] of Object.entries(raw)) {
     if (
@@ -1000,6 +1002,11 @@ function instanceChildRecord(
   link: NormalizedFullLink,
 ): Record<string, string> {
   return { space: link.space, id: link.id, scope: link.scope };
+}
+
+/** A key naming the document `link` addresses: its space, id and scope. */
+function documentKey(link: NormalizedFullLink): string {
+  return `${link.space}\0${link.id}\0${link.scope}`;
 }
 
 /** Whether two `{ identity, symbol }` pattern references name one pattern. */
@@ -13051,7 +13058,7 @@ export class Runner {
     if (pending.length === 0) return { carried, uncarried };
 
     const claimed = new Set<string>(
-      Object.values(recordedChildren).map((link) => link.id),
+      Object.values(recordedChildren).map(documentKey),
     );
     const previous = this.#previouslySetUpPattern(parent, pattern);
     const nodes = subPatternNodes(pattern);
@@ -13089,11 +13096,11 @@ export class Runner {
         previous,
         descriptor,
       );
-      if (child === undefined || claimed.has(child.id)) {
+      if (child === undefined || claimed.has(documentKey(child))) {
         uncarried.push({ name });
         continue;
       }
-      claimed.add(child.id);
+      claimed.add(documentKey(child));
       carried.set(name, child);
     }
     // Without the previous pattern, an instance carries over the one child,
@@ -13114,11 +13121,14 @@ export class Runner {
       const { child } = pick;
       if (
         child === undefined ||
-        picks.some((other) => other !== pick && other.child?.id === child.id)
+        picks.some((other) =>
+          other !== pick && other.child !== undefined &&
+          documentKey(other.child) === documentKey(child)
+        )
       ) {
         continue;
       }
-      claimed.add(child.id);
+      claimed.add(documentKey(child));
       carried.set(pick.entry.name, child);
       unmatched.splice(unmatched.indexOf(pick.entry), 1);
     }
@@ -13134,7 +13144,8 @@ export class Runner {
       );
       const link = left.getAsNormalizedFullLink();
       if (
-        getPatternIdentityRef(left) !== undefined && !claimed.has(link.id) &&
+        getPatternIdentityRef(left) !== undefined &&
+        !claimed.has(documentKey(link)) &&
         !this.#positionalChildMoved(
           tx,
           parent,
@@ -13145,7 +13156,7 @@ export class Runner {
           left,
         )
       ) {
-        claimed.add(link.id);
+        claimed.add(documentKey(link));
         carried.set(name, link);
         continue;
       }
@@ -13239,7 +13250,7 @@ export class Runner {
       const ref = getPatternIdentityRef(child);
       if (ref === undefined || !samePatternRef(ref, wanted)) continue;
       const link = child.getAsNormalizedFullLink();
-      if (claimed.has(link.id)) continue;
+      if (claimed.has(documentKey(link))) continue;
       if (found !== undefined) return undefined;
       found = link;
     }
@@ -13306,6 +13317,7 @@ export class Runner {
         descriptor.legacyPartialCause !== undefined
       )
     ) {
+      this.#preparedCarryOvers.delete(this.#getDocKey(resultCell));
       return;
     }
     const setupRef = getPatternSetupIdentityRef(resultCell);
@@ -13366,8 +13378,11 @@ export class Runner {
       await Promise.all(children.map((child) => child.sync()));
     }
     const { carried } = this.#planInstanceCarryOver(resultCell, pattern);
+    const key = this.#getDocKey(resultCell);
     if (carried.size > 0) {
-      this.#preparedCarryOvers.set(this.#getDocKey(resultCell), carried);
+      this.#preparedCarryOvers.set(key, carried);
+    } else {
+      this.#preparedCarryOvers.delete(key);
     }
   }
 
@@ -13417,7 +13432,11 @@ export class Runner {
     for (
       const [name, link] of Object.entries(readInstanceChildren(parent))
     ) {
-      if (name === instanceName || link.id !== storedLink.id) continue;
+      if (
+        name === instanceName || documentKey(link) !== documentKey(storedLink)
+      ) {
+        continue;
+      }
       throw new Error(
         `refusing to set up ${describe(incoming)} for ${holder} over ` +
           `the child of ${describe(stored)} that instance "${name}" carries`,
@@ -13432,7 +13451,11 @@ export class Runner {
         module,
         partialCause,
       );
-      if (other.getAsNormalizedFullLink().id === storedLink.id) continue;
+      if (
+        documentKey(other.getAsNormalizedFullLink()) === documentKey(storedLink)
+      ) {
+        continue;
+      }
       const otherRef = getPatternSetupIdentityRef(other) ??
         getPatternIdentityRef(other);
       const wanted = this.#runtime.patternManager.getArtifactEntryRef(
