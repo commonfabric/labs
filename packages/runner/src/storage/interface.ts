@@ -34,6 +34,7 @@ import type {
   EntityIdListResult,
   EventAttentionResolveResult,
   GenesisRoot,
+  MemoryProtocolFlags,
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
@@ -410,6 +411,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    *   advertise `spaceKind`, which leaves the kind unknown rather than absent.
    */
   spaceKind?(space: MemorySpace): Promise<string | undefined>;
+
+  /**
+   * The flags the memory server serving `space` advertises, read from a
+   * handshake alone, so that no session is opened on `space`: whatever a
+   * server does when a session opens there, such as serving the space and
+   * ensuring its root, has not happened when this returns. `undefined` when
+   * this manager cannot connect without opening a session, and `null` when
+   * the handshake carries no flags. Optional: emulated/test managers may omit
+   * it.
+   */
+  serverFlags?(
+    space: MemorySpace,
+  ): Promise<MemoryProtocolFlags | null | undefined>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
