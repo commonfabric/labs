@@ -109,11 +109,15 @@ certificate private key, compromise exposes that key too.
    at most one live backend context for it. Re-presentation for recovery
    atomically replaces the old context; presentation for another client-context
    ID is rejected. A new router-link epoch requires a new client signature.
-   These hold while the context that accepted the statement lives: once it
+   A conforming router asks for one: for a statement signed before a
+   toolshed's current link it pushes `connection/challenge` and holds the open
+   until the client has signed again. The toolshed enforces these bindings
+   only while the context that accepted the statement lives. Once that context
    closes, or its link closes, or the toolshed restarts, its statements are
-   dropped, and the router may present one in another context or on a new link
-   epoch until it expires; see the trust boundary. (Amended 2026-10-08; was:
-   they held until the statement expired.) Both
+   dropped, and no toolshed check then stops a router from presenting one in
+   another context or on a new link epoch until it expires. The trust boundary
+   accepts that dependency on the router. (Amended 2026-10-08; was: they held
+   until the statement expired.) Both
    peers reject expired or malformed proofs, an `iat` beyond the bounded
    positive clock skew from attested receipt, and a client-chosen `exp` beyond
    ten minutes from either the signed `iat` or the attested receipt. (Amended
