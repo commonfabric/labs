@@ -718,6 +718,24 @@ export class MultiRuntimeSession {
   }
 }
 
+/**
+ * `spec` as a full session spec, with the identity it names or else one derived
+ * from its label.
+ */
+async function withIdentity(
+  spec: string | MultiRuntimeSessionSpec,
+): Promise<MultiRuntimeSessionSpec & { identity: Identity }> {
+  const normalized: MultiRuntimeSessionSpec = typeof spec === "string"
+    ? { label: spec }
+    : spec;
+  const identity = normalized.identity ??
+    await Identity.fromPassphrase(
+      `multi-runtime-harness ${normalized.label}`,
+      { implementation: "noble" },
+    );
+  return { ...normalized, identity };
+}
+
 /** The in-process server a harness hosts, when it hosts one. */
 type HostedServer = {
   /** The memory server, whose admitted commits include the serving loop's. */
@@ -737,6 +755,11 @@ export class MultiRuntimeHarness {
   #server?: HostedServer;
   #awaitsServedConsequences: boolean;
   #releasePatternEnvironment: () => void;
+  #startSession: (
+    spec: string | MultiRuntimeSessionSpec,
+  ) => Promise<MultiRuntimeSession>;
+  /** The labels of the sessions `addSession()` is still starting. */
+  readonly #startingLabels = new Set<string>();
 
   private constructor(
     sessions: MultiRuntimeSession[],
@@ -745,6 +768,9 @@ export class MultiRuntimeHarness {
     server: HostedServer | undefined,
     awaitsServedConsequences: boolean,
     releasePatternEnvironment: () => void,
+    startSession: (
+      spec: string | MultiRuntimeSessionSpec,
+    ) => Promise<MultiRuntimeSession>,
   ) {
     this.sessions = sessions;
     this.spaceDid = spaceDid;
@@ -752,6 +778,7 @@ export class MultiRuntimeHarness {
     this.#server = server;
     this.#awaitsServedConsequences = awaitsServedConsequences;
     this.#releasePatternEnvironment = releasePatternEnvironment;
+    this.#startSession = startSession;
   }
 
   static async create(
@@ -798,19 +825,7 @@ export class MultiRuntimeHarness {
     const sessions: MultiRuntimeSession[] = [];
     let bootstrap: WorkerClient | undefined;
     try {
-      const specs = await Promise.all(
-        options.sessions.map(async (spec) => {
-          const normalized: MultiRuntimeSessionSpec = typeof spec === "string"
-            ? { label: spec }
-            : spec;
-          const identity = normalized.identity ??
-            await Identity.fromPassphrase(
-              `multi-runtime-harness ${normalized.label}`,
-              { implementation: "noble" },
-            );
-          return { ...normalized, identity };
-        }),
-      );
+      const specs = await Promise.all(options.sessions.map(withIdentity));
       const owner = specs[0].identity;
       const grants: ACL = {};
       for (const { identity } of specs.slice(1)) {
@@ -826,27 +841,34 @@ export class MultiRuntimeHarness {
             : {}),
         }) as FabricValue;
 
-      for (const spec of specs) {
-        const cfcWriteFloor = spec.cfcWriteFloor ?? options.cfcWriteFloor;
-        const client = new WorkerClient(spec.label);
+      const startSession = async (
+        spec: string | MultiRuntimeSessionSpec,
+      ): Promise<MultiRuntimeSession> => {
+        const started = await withIdentity(spec);
+        const cfcWriteFloor = started.cfcWriteFloor ?? options.cfcWriteFloor;
+        const client = new WorkerClient(started.label);
+        // A worker whose runtime cannot start, as one the access list refuses
+        // cannot, is stopped here, since no session holds it.
         await client.call("init", {
-          identity: spec.identity.keyPair,
+          identity: started.identity.keyPair,
           spaceDid,
-          apiUrl: spec.apiUrl?.href ?? apiUrl,
+          apiUrl: started.apiUrl?.href ?? apiUrl,
           diagnostics: options.diagnostics === true,
           recordRejections: options.recordRejections === true,
-          cfc: cfcFor(spec),
+          cfc: cfcFor(started),
           watchPaths: options.watchPaths as FabricValue,
-          ...(spec.wsDelayMs !== undefined
-            ? { wsDelayMs: spec.wsDelayMs }
+          ...(started.wsDelayMs !== undefined
+            ? { wsDelayMs: started.wsDelayMs }
             : {}),
-          ...(spec.inboundHold === true ? { inboundHold: true } : {}),
+          ...(started.inboundHold === true ? { inboundHold: true } : {}),
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
+        }).catch(async (error) => {
+          await client.terminate();
+          throw error;
         });
-        sessions.push(
-          new MultiRuntimeSession(spec.label, spec.identity, client),
-        );
-      }
+        return new MultiRuntimeSession(started.label, started.identity, client);
+      };
+      for (const spec of specs) sessions.push(await startSession(spec));
 
       // A throwaway bootstrap worker creates the piece, then every test
       // session opens it BY ID from storage. This mirrors production: each
@@ -888,6 +910,7 @@ export class MultiRuntimeHarness {
         server,
         server === undefined || serverExecutionOn,
         releasePatternEnvironment,
+        startSession,
       );
     } catch (error) {
       await bootstrap?.terminate();
@@ -906,6 +929,50 @@ export class MultiRuntimeHarness {
       throw new Error(`No session labeled "${label}"`);
     }
     return session;
+  }
+
+  /**
+   * Starts a session in a runtime of its own and opens the piece in it, as a
+   * client starting after the others does: it holds nothing of the piece and
+   * reads all of it from storage. Its label must be one no session holds or
+   * is starting under. Throws, and starts nothing, when the space's access list
+   * does not admit its identity, as it did when the harness was made or as a
+   * grant since has.
+   */
+  async addSession(
+    spec: string | MultiRuntimeSessionSpec,
+  ): Promise<MultiRuntimeSession> {
+    const label = typeof spec === "string" ? spec : spec.label;
+    if (
+      this.#startingLabels.has(label) ||
+      this.sessions.some((session) => session.label === label)
+    ) {
+      throw new Error(`A session labeled "${label}" already exists`);
+    }
+    this.#startingLabels.add(label);
+    try {
+      const session = await this.#startSession(spec);
+      try {
+        await session.client().call("openPiece", { pieceId: this.pieceId });
+      } catch (error) {
+        await session.disposeSession().catch(() => {});
+        throw error;
+      }
+      this.sessions.push(session);
+      return session;
+    } finally {
+      this.#startingLabels.delete(label);
+    }
+  }
+
+  /**
+   * Disposes the session labeled `label`, as a client that closes, and drops
+   * it from the sessions `settle()` drives.
+   */
+  async closeSession(label: string): Promise<void> {
+    const session = this.session(label);
+    this.sessions.splice(this.sessions.indexOf(session), 1);
+    await session.disposeSession();
   }
 
   /**

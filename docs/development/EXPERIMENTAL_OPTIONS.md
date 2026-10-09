@@ -808,9 +808,14 @@ holds the measurements and the conditions for revisiting.
   re-runs with capped exponential backoff renewed on every further echo, so a
   continuing loop re-runs at most once per backoff. It logs one counted line
   per trip and exposes `scheduler.getEchoBreakerStats()`. A run that leaves the
-  document unchanged clears the pair. It is trigger-independent: it
-  bounds the loop whatever made the two sides disagree, the guardrail Topic 911
-  waits for and the first of Topic 913's three.
+  document unchanged clears the pair. Each trip and each clear is also
+  reported, best-effort, on the space's memory session (`session.report`,
+  memory protocol §4.14): a server that advertises `sessionReportV1` and
+  receives the report counts it and lists it on `/api/health/stats` under
+  `sessionReports`, beside the same sessions' commit rates. It is
+  trigger-independent: it bounds the loop whatever made the two sides
+  disagree, the guardrail Topic 911 waits for and the first of Topic 913's
+  three.
 - **Behavior and design.**
   [`../plans/scheduler-remote-echo-breaker.md`](../plans/scheduler-remote-echo-breaker.md)
   — the detection conditions, the thresholds, the backoff, how it is told from
@@ -1479,6 +1484,13 @@ the per-epic implementation notes).
 >   it, which parses as `false`, and a client then reports presence as
 >   unavailable rather than sending a message the server would refuse. It is
 >   permanent.
+> - **`sessionReportV1`** is a build-inherent capability, hardwired to `true`.
+>   It advertises that the server records the diagnostics a client reports
+>   about its own session — the `session.report` command of the memory
+>   protocol chapter's section 4.14 — and shows them on the health route.
+>   Older servers omit it, which parses as `false`, and a client then keeps its
+>   reports to itself rather than sending a message the server would refuse.
+>   It is permanent.
 > - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
 >   on both peers. It advertises the `session/admissible` push of the memory
 >   protocol chapter's section 4.2.2: a server tells a connection it refused a

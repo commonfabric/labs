@@ -191,9 +191,11 @@ export interface HarnessRunState {
    * before anything runs in a sandbox, so that a resume can be held to it
    * whatever became of the run afterwards. Absent from a record written
    * before runs recorded it; such a run's runtime is the kind its capability
-   * snapshot describes, where it has one.
+   * snapshot describes, where it has one. Stored records may hold `docker`,
+   * written by an older cf-harness that had the Docker driver; this build
+   * reads them and refuses to resume them.
    */
-  sandboxRuntime?: SandboxRuntimeKind;
+  sandboxRuntime?: SandboxRuntimeKind | "docker";
 
   /**
    * How an entrypoint chose that runtime when the run started: named, and by

@@ -21,7 +21,6 @@ import {
   resolveGatewayAuthMode,
   resolveHarnessConfig,
 } from "../src/config.ts";
-import { resolveDockerRunscSandboxConfig } from "../src/sandbox/docker-runsc.ts";
 
 Deno.test("HarnessConfig preserves legacy gateway object literals", () => {
   const legacy: HarnessConfig = {
@@ -403,16 +402,6 @@ Deno.test("resolveHarnessConfig accepts an explicit mode override string", () =>
   });
   assertEquals(config.cfcEnforcementMode, "enforce-strict");
   assertEquals(config.cfcEnforcementModeSource, "override");
-});
-
-Deno.test("resolveHarnessConfig preserves explicit sandbox config", () => {
-  const sandbox = resolveDockerRunscSandboxConfig({
-    workspaceHostPath: "/host/workspace",
-  });
-  const config = resolveHarnessConfig({
-    sandbox,
-  });
-  assertEquals(config.sandbox, sandbox);
 });
 
 Deno.test("resolveHarnessConfig preserves explicit artifact root config", () => {

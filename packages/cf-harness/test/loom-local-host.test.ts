@@ -12,7 +12,7 @@ import {
 } from "../src/loom-local-host.ts";
 import {
   createLoomLocalCfHarnessHost,
-  NAMES_DOCKER,
+  NAMES_RUNSC,
 } from "./support/on-linux.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import type {
@@ -1361,7 +1361,7 @@ Deno.test("local Loom interactive entrypoint returns missing config on stdout pr
       "interactive",
     ],
     env: {
-      ...NAMES_DOCKER,
+      ...NAMES_RUNSC,
       CF_HARNESS_HOME: home,
       CF_HARNESS_MODEL_PROVIDER: "",
     },

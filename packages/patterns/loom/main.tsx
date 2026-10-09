@@ -2,6 +2,7 @@
 import {
   computed,
   handler,
+  ifElse,
   NAME,
   pattern,
   spaceOf,
@@ -16,6 +17,7 @@ import {
   assertRemovable,
   externalUrl,
   insertionIndex,
+  validatePanel,
 } from "./admission.tsx";
 import type {
   ChatRoomCell,
@@ -25,8 +27,11 @@ import type {
   Panel,
   PanelAdmission,
   PanelPosition,
+  PanelRetarget,
+  PanelTitle,
   ParticipantProfile,
   Presentation,
+  PrivatePanel,
   ViewerState,
 } from "./schemas.tsx";
 import { addParticipant, participantEntries } from "./participants.tsx";
@@ -45,6 +50,84 @@ function withoutPiece(
     const value = panel.get();
     return value.kind !== "piece" || !value.piece.equalLinks(piece);
   });
+}
+
+/** Throws unless `panel` is one of the occurrences in `list`. */
+function assertInLoom(
+  list: readonly Writable<Panel>[],
+  panel: Writable<Panel>,
+): void {
+  if (!list.some((existing) => existing.equals(panel))) {
+    throw new Error("The panel is no longer in this Loom");
+  }
+}
+
+/**
+ * Whether `hidden`, the occurrences a viewer has hidden, holds `panel`. A
+ * viewer who has never hidden a panel may read no list at all, which hides
+ * nothing.
+ */
+function isHidden(
+  hidden: readonly Writable<Panel>[] | undefined,
+  panel: Writable<Panel>,
+): boolean {
+  return (hidden ?? []).some((entry) => entry.equals(panel));
+}
+
+/** The shared panels one viewer has not hidden, in the shared order. */
+function shownPanels(
+  shared: readonly Writable<Panel>[],
+  hidden: readonly Writable<Panel>[] | undefined,
+): Writable<Panel>[] {
+  return shared.filter((panel) => !isHidden(hidden, panel));
+}
+
+/**
+ * The private panels anchored to `panel`, which a viewer is shown just ahead
+ * of it while it is shown, in the order of the private list.
+ */
+function privatePanelsBefore(
+  privates: readonly PrivatePanel[] | undefined,
+  panel: Writable<Panel>,
+): Writable<Panel>[] {
+  return (privates ?? [])
+    .filter((entry) => entry.before?.equals(panel) === true)
+    .map((entry) => entry.panel);
+}
+
+/**
+ * The private panels a viewer is shown after every shared one: those anchored
+ * to none of the panels in `shown`, in the order of the private list.
+ */
+function trailingPrivatePanels(
+  shown: readonly Writable<Panel>[],
+  privates: readonly PrivatePanel[] | undefined,
+): Writable<Panel>[] {
+  return (privates ?? [])
+    .filter((entry) =>
+      !shown.some((panel) => entry.before?.equals(panel) === true)
+    )
+    .map((entry) => entry.panel);
+}
+
+/**
+ * The panels one viewer is shown: the shared ones they have not hidden, in the
+ * shared order, with each of their private panels just ahead of the shared one
+ * it is anchored to, or after all of them while that one is not shown. Private
+ * panels anchored alike keep the order of the private list.
+ */
+function viewerList(
+  shared: readonly Writable<Panel>[],
+  hidden: readonly Writable<Panel>[] | undefined,
+  privates: readonly PrivatePanel[] | undefined,
+): Writable<Panel>[] {
+  const shown = shownPanels(shared, hidden);
+  return [
+    ...shown.flatMap((
+      panel,
+    ) => [...privatePanelsBefore(privates, panel), panel]),
+    ...trailingPrivatePanels(shown, privates),
+  ];
 }
 
 const removePiece = handler<{ piece: Writable<unknown> }, State>(
@@ -94,9 +177,7 @@ const removePanel = handler<{ panel: Writable<Panel> }, State>(
 const movePanel = handler<PanelPosition, State>(
   ({ panel, before }, { panels }) => {
     const list = panels.get();
-    if (!list.some((existing) => existing.equals(panel))) {
-      throw new Error("The panel is no longer in this Loom");
-    }
+    assertInLoom(list, panel);
     insertionIndex(list, before);
     if (before?.equals(panel)) return;
     const next = list.filter((existing) => !existing.equals(panel));
@@ -150,6 +231,175 @@ const setChatRoom = handler<ChatRoomChoice, { chatRoom: ChatRoomCell }>(
     chatRoom.set(room === undefined ? {} : { room });
   },
 );
+
+/** Sets the Loom's title, which is also its name. */
+const retitleLoom = handler<{ title: string }, { title: Writable<string> }>(
+  (event, { title }) => {
+    title.set(event.title);
+  },
+);
+
+/**
+ * Sets the title `panel` shows in place of its target's; an empty title
+ * clears it, leaving no override for a copy of the panel to carry. Only
+ * `titleOverride` is written, so the panel's target and its adder, with the
+ * label the root stamped there, stay as they were. Any member may retitle any
+ * panel: only removal turns on who added it.
+ *
+ * @throws When `panel` is not in this Loom.
+ */
+const retitlePanel = handler<
+  PanelTitle,
+  { panels: Writable<Writable<Panel>[]> }
+>(({ panel, titleOverride }, { panels }) => {
+  assertInLoom(panels.get(), panel);
+  panel.key("titleOverride").set(
+    titleOverride === "" ? undefined : titleOverride,
+  );
+});
+
+/**
+ * Points a URL or piece panel at `target` in place, so the occurrence keeps
+ * its place in the list, its staging and focus, its title and its adder. Only
+ * `kind` and the target's key are written, and a change of kind removes the
+ * other kind's key: a write of the whole panel would carry the adder's fields,
+ * which only `admitPanel` may write. The target the panel leaves is untouched.
+ *
+ * @throws When `panel` is not in this Loom, when it is a document, whose
+ * content is its producer's, or when `target` names a URL a panel may not hold.
+ */
+const retargetPanel = handler<
+  PanelRetarget,
+  { panels: Writable<Writable<Panel>[]> }
+>(({ panel, target }, { panels }) => {
+  assertInLoom(panels.get(), panel);
+  const kind = panel.get().kind;
+  if (kind === "document") {
+    throw new Error("A document panel shows its producer's content");
+  }
+  if (target.kind === "url" && externalUrl(target.url) === undefined) {
+    throw new Error("A URL panel requires an HTTP(S) URL without credentials");
+  }
+  if (kind !== target.kind) {
+    panel.update(kind === "url" ? { url: undefined } : { piece: undefined });
+  }
+  if (target.kind === "url") panel.update({ kind: "url", url: target.url });
+  else panel.update({ kind: "piece", piece: target.piece });
+});
+
+/**
+ * Hides `panel` from the acting principal's own view of the Loom, in every
+ * session of theirs, and from nobody else's; the shared list keeps it.
+ * Hiding a panel already hidden changes nothing.
+ *
+ * @throws When `panel` is not in this Loom.
+ */
+const hidePanel = handler<
+  { panel: Writable<Panel> },
+  {
+    panels: Writable<Writable<Panel>[]>;
+    hiddenPanels: Writable<Writable<Panel>[]>;
+  }
+>(({ panel }, { panels, hiddenPanels }) => {
+  assertInLoom(panels.get(), panel);
+  hiddenPanels.addUnique(panel);
+});
+
+/**
+ * Adds `panel` to the acting principal's private panels, which nobody else is
+ * shown, just ahead of `before` among the shared ones, or after all of them.
+ * The occurrence must live in a space other than the Loom's: every member may
+ * read what the Loom's space holds, so a private panel is private by the access
+ * list of the space it lives in. Adding one already among them changes
+ * nothing.
+ *
+ * @throws When `panel` lives in the Loom's space, when it is a URL panel whose
+ * URL a panel may not hold, or when `before` is not in this Loom.
+ */
+const addPrivatePanel = handler<
+  PanelPosition,
+  {
+    panels: Writable<Writable<Panel>[]>;
+    privatePanels: Writable<PrivatePanel[]>;
+  }
+>(({ panel, before }, { panels, privatePanels }) => {
+  if (spaceOf(panel) === spaceOf(panels)) {
+    throw new Error("A private panel must live outside the Loom's space");
+  }
+  validatePanel(panel.get());
+  insertionIndex(panels.get(), before);
+  const list = privatePanels.get() ?? [];
+  if (list.some((entry) => entry.panel.equals(panel))) return;
+  privatePanels.set([
+    ...list,
+    before === undefined ? { panel } : { panel, before },
+  ]);
+});
+
+/**
+ * Takes `panel` off the acting principal's private panels. The occurrence
+ * itself, in its own space, is left as it is.
+ */
+const removePrivatePanel = handler<
+  { panel: Writable<Panel> },
+  { privatePanels: Writable<PrivatePanel[]> }
+>(({ panel }, { privatePanels }) => {
+  const list = privatePanels.get() ?? [];
+  const next = list.filter((entry) => !entry.panel.equals(panel));
+  if (next.length !== list.length) privatePanels.set(next);
+});
+
+/**
+ * Moves one of the acting principal's private panels to show just ahead of
+ * `before`: a shared occurrence, or another of their private panels, whose
+ * anchor it then takes. Without `before`, it shows after every shared panel,
+ * last among the private panels shown there.
+ *
+ * @throws When `panel` is not one of the acting principal's private panels, or
+ * when `before` is neither in this Loom nor one of them.
+ */
+const movePrivatePanel = handler<
+  PanelPosition,
+  {
+    panels: Writable<Writable<Panel>[]>;
+    privatePanels: Writable<PrivatePanel[]>;
+  }
+>(({ panel, before }, { panels, privatePanels }) => {
+  const list = privatePanels.get() ?? [];
+  if (!list.some((entry) => entry.panel.equals(panel))) {
+    throw new Error("The panel is not one of your private panels");
+  }
+  const rest = list.filter((entry) => !entry.panel.equals(panel));
+  if (before === undefined) {
+    privatePanels.set([...rest, { panel }]);
+    return;
+  }
+  if (panels.get().some((shared) => shared.equals(before))) {
+    privatePanels.set([...rest, { panel, before }]);
+    return;
+  }
+  const index = rest.findIndex((entry) => entry.panel.equals(before));
+  if (index < 0) {
+    throw new Error("The insertion anchor is no longer in this Loom");
+  }
+  const anchor = rest[index].before;
+  privatePanels.set([
+    ...rest.slice(0, index),
+    anchor === undefined ? { panel } : { panel, before: anchor },
+    ...rest.slice(index),
+  ]);
+});
+
+/**
+ * Shows `panel` again in the acting principal's own view. A panel that is not
+ * hidden, including one no longer in the Loom, is left alone.
+ */
+const unhidePanel = handler<
+  { panel: Writable<Panel> },
+  { hiddenPanels: Writable<Writable<Panel>[]> }
+>(({ panel }, { hiddenPanels }) => {
+  hiddenPanels.removeByValue(panel);
+});
 
 /** Present one linked occurrence without reading a piece's protected fields. */
 function renderPanel(panel: Writable<Panel>) {
@@ -218,6 +468,17 @@ function renderPanel(panel: Writable<Panel>) {
   );
 }
 
+/**
+ * A short name for a hidden panel, without reading a piece's protected fields:
+ * its title, else its URL, else its kind.
+ */
+function panelLabel(panel: Writable<Panel>): string {
+  const value = panel.get();
+  if (value === undefined) return "A panel no longer in this Loom";
+  if (value.titleOverride) return `Hidden: ${value.titleOverride}`;
+  return value.kind === "url" ? `Hidden: ${value.url}` : `Hidden ${value.kind}`;
+}
+
 /** Standalone view of one linked panel occurrence. */
 export const PanelView = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
   { panel },
@@ -265,7 +526,17 @@ const selectPanel = handler<
 });
 
 export default pattern<LoomInput, LoomOutput>(
-  ({ title, panels, presentation, participants, chatRoom }) => {
+  (
+    {
+      title,
+      panels,
+      presentation,
+      participants,
+      chatRoom,
+      hiddenPanels,
+      privatePanels,
+    },
+  ) => {
     const pieceRegistry = computed(() =>
       panels.get().flatMap((panel) => {
         const value = panel.get();
@@ -274,6 +545,15 @@ export default pattern<LoomInput, LoomOutput>(
     );
     const roster = computed(() => participantEntries(participants));
     const room = computed(() => chatRoom.get().room);
+    const viewerPanels = computed(() =>
+      viewerList(panels.get(), hiddenPanels.get(), privatePanels.get())
+    );
+    const trailingPrivates = computed(() =>
+      trailingPrivatePanels(
+        shownPanels(panels.get(), hiddenPanels.get()),
+        privatePanels.get(),
+      )
+    );
     const state = { panels, presentation };
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
@@ -281,6 +561,9 @@ export default pattern<LoomInput, LoomOutput>(
     const duplicate = admitPanel({ panels, mode: "duplicate" });
     const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
     const present = setPresentation(state);
+    const hide = hidePanel({ panels, hiddenPanels });
+    const unhide = unhidePanel({ hiddenPanels });
+    const removePrivate = removePrivatePanel({ privatePanels });
     return {
       [NAME]: title,
       [UI]: (
@@ -310,61 +593,111 @@ export default pattern<LoomInput, LoomOutput>(
             </cf-toolbar>
             <cf-vscroll>
               <cf-vstack gap="4" padding="4">
-                {panels.map((panel) => (
+                {panels.map((panel) =>
+                  ifElse(
+                    computed(() => !isHidden(hiddenPanels.get(), panel)),
+                    <cf-vstack gap="4">
+                      {computed(() =>
+                        privatePanelsBefore(privatePanels.get(), panel)
+                      ).map((mine) => (
+                        <cf-card>
+                          <cf-hstack gap="2" wrap>
+                            <span>Only you see this panel</span>
+                            <cf-button
+                              onClick={() =>
+                                removePrivate.send({ panel: mine })}
+                            >
+                              Remove from my view
+                            </cf-button>
+                          </cf-hstack>
+                          {computed(() => renderPanel(mine))}
+                        </cf-card>
+                      ))}
+                      <cf-card>
+                        <cf-hstack gap="2" wrap>
+                          <cf-button
+                            onClick={selectPanel({ panel, viewerState })}
+                          >
+                            {viewerState.key("selectedPanel").equals(panel)
+                              ? "Selected in this session"
+                              : "Select"}
+                          </cf-button>
+                          <cf-button
+                            onClick={duplicateAsViewer({
+                              panel,
+                              duplicate,
+                              claimed: viewerState.key("actingProfile"),
+                              wished: viewerProfile.result,
+                            })}
+                          >
+                            Duplicate
+                          </cf-button>
+                          <cf-button onClick={() => remove.send({ panel })}>
+                            Remove
+                          </cf-button>
+                          <cf-button onClick={() => hide.send({ panel })}>
+                            Hide for me
+                          </cf-button>
+                          <cf-button
+                            onClick={() =>
+                              move.send({ panel, before: panels.get()[0] })}
+                          >
+                            Move first
+                          </cf-button>
+                          <cf-button onClick={() => move.send({ panel })}>
+                            Move last
+                          </cf-button>
+                          <cf-button
+                            disabled={!presentation.get().stagedPanels.some((
+                              member,
+                            ) => member.equals(panel))}
+                            onClick={() =>
+                              present.send({
+                                stagedPanels: [
+                                  ...presentation.get().stagedPanels,
+                                ],
+                                focusedPanel: panel,
+                              })}
+                          >
+                            {presentation.get().focusedPanel?.equals(panel)
+                              ? "Focused for everyone"
+                              : "Focus"}
+                          </cf-button>
+                          <span>
+                            {presentation.get().stagedPanels.some((member) =>
+                                member.equals(panel)
+                              )
+                              ? "Staged for everyone"
+                              : "Not staged"}
+                          </span>
+                        </cf-hstack>
+                        {/* Stateless panel views need no durable child setup by READ viewers. */}
+                        {computed(() => renderPanel(panel))}
+                      </cf-card>
+                    </cf-vstack>,
+                    null,
+                  )
+                )}
+                {trailingPrivates.map((panel) => (
                   <cf-card>
                     <cf-hstack gap="2" wrap>
-                      <cf-button onClick={selectPanel({ panel, viewerState })}>
-                        {viewerState.key("selectedPanel").equals(panel)
-                          ? "Selected in this session"
-                          : "Select"}
-                      </cf-button>
+                      <span>Only you see this panel</span>
                       <cf-button
-                        onClick={duplicateAsViewer({
-                          panel,
-                          duplicate,
-                          claimed: viewerState.key("actingProfile"),
-                          wished: viewerProfile.result,
-                        })}
+                        onClick={() => removePrivate.send({ panel })}
                       >
-                        Duplicate
+                        Remove from my view
                       </cf-button>
-                      <cf-button onClick={() => remove.send({ panel })}>
-                        Remove
-                      </cf-button>
-                      <cf-button
-                        onClick={() =>
-                          move.send({ panel, before: panels.get()[0] })}
-                      >
-                        Move first
-                      </cf-button>
-                      <cf-button onClick={() => move.send({ panel })}>
-                        Move last
-                      </cf-button>
-                      <cf-button
-                        disabled={!presentation.get().stagedPanels.some((
-                          member,
-                        ) => member.equals(panel))}
-                        onClick={() =>
-                          present.send({
-                            stagedPanels: [...presentation.get().stagedPanels],
-                            focusedPanel: panel,
-                          })}
-                      >
-                        {presentation.get().focusedPanel?.equals(panel)
-                          ? "Focused for everyone"
-                          : "Focus"}
-                      </cf-button>
-                      <span>
-                        {presentation.get().stagedPanels.some((member) =>
-                            member.equals(panel)
-                          )
-                          ? "Staged for everyone"
-                          : "Not staged"}
-                      </span>
                     </cf-hstack>
-                    {/* Stateless panel views need no durable child setup by READ viewers. */}
                     {computed(() => renderPanel(panel))}
                   </cf-card>
+                ))}
+                {hiddenPanels.map((panel) => (
+                  <cf-hstack gap="2">
+                    <span>{computed(() => panelLabel(panel))}</span>
+                    <cf-button onClick={() => unhide.send({ panel })}>
+                      Show
+                    </cf-button>
+                  </cf-hstack>
                 ))}
               </cf-vstack>
             </cf-vscroll>
@@ -387,6 +720,17 @@ export default pattern<LoomInput, LoomOutput>(
       addParticipant: addParticipant({ roster: participants }),
       chatRoom: room,
       setChatRoom: setChatRoom({ chatRoom }),
+      retitleLoom: retitleLoom({ title }),
+      retitlePanel: retitlePanel({ panels }),
+      retargetPanel: retargetPanel({ panels }),
+      hiddenPanels,
+      viewerPanels,
+      hidePanel: hide,
+      unhidePanel: unhide,
+      privatePanels,
+      addPrivatePanel: addPrivatePanel({ panels, privatePanels }),
+      removePrivatePanel: removePrivate,
+      movePrivatePanel: movePrivatePanel({ panels, privatePanels }),
     };
   },
 );

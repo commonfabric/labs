@@ -31,7 +31,7 @@ import {
   type SandboxRuntimeSelection,
   type UnnamedSandboxRuntime,
 } from "./sandbox/runtime-selection.ts";
-import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
+import type { SandboxAdditionalMountConfig } from "./sandbox/types.ts";
 
 export type CfHarnessHostMountMode = "readonly" | "writable";
 
@@ -202,7 +202,7 @@ export const resolveInteractiveProvisioning = async (
   host: UnnamedSandboxRuntime & SandboxProcess,
 ): Promise<
   {
-    additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
+    additionalMounts?: readonly SandboxAdditionalMountConfig[];
     fabricSession?: HarnessFabricSessionConfig;
     loomAuthoring?: HarnessLoomAuthoringConfig;
     maxModelTurns?: number;
@@ -240,7 +240,7 @@ export const resolveInteractiveProvisioning = async (
 /** Engine-shaped mounts. The only supported way to get bind mounts into a run. */
 export const hostMountsToAdditionalMounts = (
   mounts: readonly CfHarnessHostMountConfig[],
-): readonly DockerRunscAdditionalMountConfig[] =>
+): readonly SandboxAdditionalMountConfig[] =>
   mounts.map((mount) => ({
     kind: "host-bind" as const,
     name: mount.name,

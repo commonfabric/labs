@@ -24,7 +24,7 @@ import {
 } from "../src/handle-table.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
 import { RESERVED_ARTIFACT_PATH_DETAIL } from "../src/tools/reserved-artifacts.ts";
-import { resolveDockerRunscSandboxConfig } from "../src/sandbox/docker-runsc.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 import type {
   ProcessRunner,
   ProcessRunRequest,
@@ -54,7 +54,7 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -317,23 +317,23 @@ Deno.test("CfHarnessEngine lands the newest run state last when two writes overl
   );
 });
 
-Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a workspace path", () => {
+Deno.test("CfHarnessEngine builds the direct runsc sandbox when given a workspace path", () => {
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",
+    ...INERT_RUNSC,
     now: () => "2026-04-15T19:00:00.000Z",
     // The rung the run-state comparison below reads back.
     cfcEnforcementMode: "enforce-explicit",
   });
 
-  assertEquals(engine.config.sandbox, undefined);
-  assertEquals(engine.sandbox.describe().kind, "docker-runsc-cfc");
+  assertEquals(engine.sandbox.describe().kind, "runsc-cfc");
   assertEquals(engine.getRunState(), {
     runId: engine.getRunState().runId,
     status: "pending",
     createdAt: "2026-04-15T19:00:00.000Z",
     updatedAt: "2026-04-15T19:00:00.000Z",
     cfcEnforcementMode: "enforce-explicit",
-    sandboxRuntime: "docker",
+    sandboxRuntime: "runsc",
     currentDir: "/workspace",
     docsCorpus: {
       type: "cf-harness.docs-corpus-record",
@@ -349,24 +349,13 @@ Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a wo
   });
 });
 
-Deno.test("CfHarnessEngine accepts a default sandbox image override", () => {
-  const engine = new CfHarnessEngine({
-    workspaceHostPath: "/host/project",
-    sandboxImage: "registry.example/cf:deno2",
-  });
-
-  assertEquals(
-    engine.sandbox.describe().cfc?.image,
-    "registry.example/cf:deno2",
-  );
-});
-
-Deno.test("CfHarnessEngine constructs in enforce mode without CFC transports", () => {
-  // Construction must stay cheap and inspectable; the transport floor is only
+Deno.test("CfHarnessEngine constructs in enforce mode without a CFC policy", () => {
+  // Construction must stay cheap and inspectable; the policy floor is only
   // enforced once the run starts — at diagnostics init (capability probes) or
   // the first tool call, whichever comes first (see the run-start tests below).
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",
+    ...INERT_RUNSC,
     cfcEnforcementMode: "enforce-strict",
   });
   assertEquals(engine.getRunState().cfcEnforcementMode, "enforce-strict");
@@ -386,6 +375,7 @@ Deno.test("CfHarnessEngine records the fabric session's resolved CFC posture in 
   // The assertion below reads both session dials back off the run state,
   // each marked as configured.
   const configured = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -420,6 +410,7 @@ Deno.test("CfHarnessEngine records the fabric session's resolved CFC posture in 
   };
   const unstatedRecord = recordFor(unstatedSession);
   const pinnedCfc = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: unstatedSession,
   }).getRunState().fabricSessionCfc;
@@ -438,6 +429,7 @@ Deno.test("CfHarnessEngine records the fabric session's resolved CFC posture in 
   } as const;
   const posturedRecord = recordFor(posturedSession);
   const posturedCfc = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: posturedSession,
   }).getRunState().fabricSessionCfc;
@@ -454,6 +446,7 @@ Deno.test("CfHarnessEngine records the fabric session's resolved CFC posture in 
   assertEquals(posturedCfc?.record, posturedRecord);
 
   const sessionless = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
   });
   assertEquals(sessionless.getRunState().fabricSessionCfc, undefined);
@@ -465,6 +458,7 @@ Deno.test("CfHarnessEngine publishes no posture record when a session factory ov
   // posture nothing honors. The two itemized dials stand alone: they still
   // truthfully say what was asked for.
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -500,6 +494,7 @@ Deno.test("CfHarnessEngine records an inherited posture record when the injected
   } as const;
   const parentRecord = recordFor(posturedSession);
   const child = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: posturedSession,
     fabricSessionFactory: () =>
@@ -528,6 +523,7 @@ Deno.test("CfHarnessEngine refuses to resume a recorded record under an overridi
     cfcPosture: "max-enforcement",
   } as const;
   const runState = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: posturedSession,
   }).getRunState();
@@ -535,6 +531,7 @@ Deno.test("CfHarnessEngine refuses to resume a recorded record under an overridi
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: posturedSession,
         fabricSessionFactory: () =>
@@ -558,6 +555,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
     cfcEnforcementMode: "enforce-strict",
   } as const;
   const runState = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: posturedSession,
   }).getRunState();
@@ -567,6 +565,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: {
           apiUrl: posturedSession.apiUrl,
@@ -582,6 +581,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
 
   // The same session configuration resumes cleanly, record unchanged.
   const resumed = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: posturedSession,
     runState,
@@ -607,6 +607,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: posturedSession,
         runState: drifted,
@@ -622,6 +623,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
   delete legacy.fabricSessionCfc!.record;
   assertEquals(
     new CfHarnessEngine({
+      ...INERT_RUNSC,
       workspaceHostPath: "/host/project",
       fabricSession: posturedSession,
       runState: legacy,
@@ -632,6 +634,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
   // A resume with no session at all keeps the record as history: no runtime
   // exists for it to contradict.
   const detached = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     runState,
   });
@@ -652,6 +655,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
     fabricSessionCfc: undefined,
   } as typeof runState;
   const legacyWithDials = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: {
       apiUrl: posturedSession.apiUrl,
@@ -665,6 +669,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: posturedSession,
         runState: legacyState,
@@ -681,6 +686,7 @@ Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dia
   // the recorded mode while the policy snapshot credited the operator's dial
   // for it.
   const runState = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     cfcEnforcementModeOverride: "observe",
   }).getRunState();
@@ -689,6 +695,7 @@ Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dia
   const stated = assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         runState,
         cfcEnforcementModeOverride: "disabled",
@@ -703,6 +710,7 @@ Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dia
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         runState,
         cfcEnforcementMode: "enforce-strict",
@@ -714,6 +722,7 @@ Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dia
   // Restating the recorded mode asks for nothing the run is not already
   // doing, so it resumes, and the snapshot names the operator's dial.
   const restated = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     runState,
     cfcEnforcementModeOverride: "observe",
@@ -725,6 +734,7 @@ Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dia
   // falling to this invocation's default, which would resolve
   // enforce-explicit and label it a default the run never took.
   const quiet = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     runState,
   });
@@ -734,6 +744,7 @@ Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dia
   // A run manifest is outranked by the record, so a manifest whose mode
   // moved under the run cannot move the resumed run either.
   const manifested = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     runState,
     runManifest: {
@@ -753,6 +764,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric session raised above
   // does not reach this pair: the run recorded no fabric session, and the new
   // session names no posture bundle.
   const runState = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     cfcEnforcementModeOverride: "observe",
   }).getRunState();
@@ -770,6 +782,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric session raised above
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         runState,
         fabricSession: strictSession,
@@ -784,11 +797,13 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric session raised above
   // nothing, so the recorded mode stands and the resume is credited to the
   // record rather than to the session.
   const strictRunState = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     cfcEnforcementModeOverride: "enforce-strict",
   }).getRunState();
   assertEquals(strictRunState.cfcEnforcementMode, "enforce-strict");
   const resumed = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     runState: strictRunState,
     fabricSession: strictSession,
@@ -840,6 +855,7 @@ Deno.test("a refused resume names the dials without publishing the posture recor
     cfcPosture: "max-enforcement",
   } as const;
   const runState = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: posturedSession,
   }).getRunState();
@@ -847,6 +863,7 @@ Deno.test("a refused resume names the dials without publishing the posture recor
   const dials = assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: {
           apiUrl: posturedSession.apiUrl,
@@ -868,6 +885,7 @@ Deno.test("a refused resume names the dials without publishing the posture recor
   const record = assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: posturedSession,
         runState: drifted,
@@ -879,6 +897,7 @@ Deno.test("a refused resume names the dials without publishing the posture recor
   assertEquals(record.message.includes("writeFloor"), false);
 
   const ceilinged = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: {
       ...posturedSession,
@@ -888,6 +907,7 @@ Deno.test("a refused resume names the dials without publishing the posture recor
   const ceiling = assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: {
           ...posturedSession,
@@ -906,8 +926,10 @@ Deno.test("a run recorded without a working directory is refused, not reported a
   // The refusal is deliberate — such a run predates what a resume needs — so
   // the operator is told that, rather than that the harness broke.
 
-  const runState = new CfHarnessEngine({ workspaceHostPath: "/host/project" })
-    .getRunState();
+  const runState = new CfHarnessEngine({
+    ...INERT_RUNSC,
+    workspaceHostPath: "/host/project",
+  }).getRunState();
   const legacy = structuredClone(runState) as
     & Omit<HarnessRunState, "currentDir">
     & { currentDir?: string };
@@ -916,6 +938,7 @@ Deno.test("a run recorded without a working directory is refused, not reported a
   const refusal = assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         runState: legacy as HarnessRunState,
       }),
@@ -927,6 +950,7 @@ Deno.test("a run recorded without a working directory is refused, not reported a
 
 Deno.test("CfHarnessEngine grants no well-known handles without a fabric session", async () => {
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
   });
   assertEquals(await engine.establishWellKnownGrants(), []);
@@ -940,6 +964,7 @@ Deno.test("CfHarnessEngine seeds the piece-registry grant once and replays the r
   const registryId = `of:fid1:${"C".repeat(43)}`;
   let registryReads = 0;
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSessionFactory: () =>
       Promise.resolve(
@@ -982,6 +1007,7 @@ Deno.test("CfHarnessEngine mints operator input cells once and replays the recor
   const cellRef = `/of:fid1:${"D".repeat(43)}/travellerName`;
   let spaceReads = 0;
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     inputCells: [{
       name: "travellerName",
@@ -1022,6 +1048,7 @@ Deno.test("CfHarnessEngine mints operator input cells once and replays the recor
 
 Deno.test("CfHarnessEngine refuses operator input cells without a fabric session", async () => {
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     inputCells: [{
       name: "travellerName",
@@ -1038,6 +1065,7 @@ Deno.test("CfHarnessEngine refuses operator input cells without a fabric session
 
 Deno.test("CfHarnessEngine refuses an operator input cell into another space, recording nothing", async () => {
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     inputCells: [{
       name: "foreign",
@@ -1073,6 +1101,7 @@ Deno.test("CfHarnessEngine resolves a named piece address through the session's 
   // is the one whose space the name was checked against.
   const asked: string[] = [];
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     inputCells: [{ name: "pattern_1", ref: "pattern:demo-space/reading-list" }],
     fabricSessionFactory: () =>
@@ -1108,6 +1137,7 @@ Deno.test("CfHarnessEngine resolves a named piece address through the session's 
 
 Deno.test("CfHarnessEngine refuses a piece address naming a space that is not the session's", async () => {
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     inputCells: [{
       name: "pattern_1",
@@ -1260,82 +1290,39 @@ Deno.test("CfHarnessEngine rejects direct subagent resume but permits new child 
   assertEquals(newChild.getRunState().lineage, lineage);
 });
 
-Deno.test("CfHarnessEngine refuses to run a tool in enforce mode without CFC transports", async () => {
-  const engine = new CfHarnessEngine({
-    runId: "run-1",
-    workspaceHostPath: "/host/project",
-    cfcEnforcementMode: "enforce-explicit",
-  });
-  await assertRejects(
-    () => engine.invokeBuiltinTool("bash", { command: "echo hi" }),
-    Error,
-    "requires the runsc sandbox to wire",
-  );
-});
-
-Deno.test("CfHarnessEngine refuses to run capability probes in enforce mode without CFC transports", async () => {
+Deno.test("CfHarnessEngine refuses to run capability probes in enforce mode without a CFC policy", async () => {
   // The prompt loop initializes diagnostics before the first model turn, and
-  // the capability probes execute scripts inside the sandbox — so the
-  // transport floor must fire before any sandbox execution, not only at the
-  // first builtin tool call. The probe error swallowing inside diagnostics
-  // init must not absorb the floor violation into a failure record.
+  // the capability probes execute scripts inside the sandbox — so the policy
+  // floor must fire before any sandbox execution, not only at the first
+  // builtin tool call. The probe error swallowing inside diagnostics init
+  // must not absorb the floor violation into a failure record.
   const runner = new FakeProcessRunner();
   const engine = new CfHarnessEngine({
     runId: "run-1",
     workspaceHostPath: "/host/project",
+    ...INERT_RUNSC,
     cfcEnforcementMode: "enforce-explicit",
     processRunner: runner,
   });
   await assertRejects(
     () => engine.ensureDiagnosticsInitialized(),
     Error,
-    "requires the runsc sandbox to wire",
+    "requires the runsc sandbox to run with a CFC policy",
   );
-  // Nothing reached the docker lifecycle: the run failed closed before any
-  // sandbox execution.
+  // Nothing reached runsc: the run failed closed before any sandbox
+  // execution.
   assertEquals(runner.calls.length, 0);
 });
 
-Deno.test("CfHarnessEngine runs a tool in enforce mode when CFC transports are wired", async () => {
-  const cfcResultDir = await Deno.makeTempDir({ prefix: "cf-harness-result-" });
-  const cfcInvocationContextDir = await Deno.makeTempDir({
-    prefix: "cf-harness-ctx-",
-  });
-  const runner = new FakeProcessRunner([
-    { stdout: "container-1\n", stderr: "", exitCode: 0 },
-    { stdout: "hi\n", stderr: "", exitCode: 0 },
-    { stdout: "0\n", stderr: "", exitCode: 0 },
-    { stdout: "", stderr: "", exitCode: 0 },
-  ]);
-  const engine = new CfHarnessEngine({
-    runId: "run-1",
-    workspaceHostPath: "/host/project",
-    cfcEnforcementMode: "enforce-explicit",
-    cfcResultDir,
-    cfcInvocationContextDir,
-    processRunner: runner,
-  });
-  // The guard does not fire; execution reaches the (faked) docker lifecycle
-  // (the exact mediated output is covered elsewhere — here we only assert the
-  // transport floor lets the run proceed and an outputId is produced).
-  const result = await engine.invokeBuiltinTool("bash", { command: "echo hi" });
-  assertEquals(typeof result.output.outputId, "string");
-});
-
-Deno.test("CfHarnessEngine does not apply the CFC transport floor to an injected sandbox runtime", async () => {
+Deno.test("CfHarnessEngine does not apply the CFC policy floor to an injected sandbox runtime", async () => {
   // An injected sandboxRuntime is the thing that actually executes and carries
-  // its own enforcement guarantees. The engine must not validate the *resolved
-  // config's* transports against it: that config is unused here and may describe
-  // a different sandbox, so doing so would falsely reject an otherwise valid
-  // enforce-mode run. (Regression for the run-start transport floor.)
+  // its own enforcement guarantees. The engine has no configuration of its own
+  // to hold to a policy, so it must not refuse an otherwise valid enforce-mode
+  // run for one. (Regression for the run-start floor.)
   const engine = new CfHarnessEngine({
     runId: "run-1",
     workspaceHostPath: "/host/project",
     cfcEnforcementMode: "enforce-strict",
-    // A docker-runsc-cfc config with no CFC sidecar transports wired.
-    sandbox: resolveDockerRunscSandboxConfig({
-      workspaceHostPath: "/host/project",
-    }),
     sandboxRuntime: new FakeSandboxRuntime(),
   });
   const result = await engine.invokeBuiltinTool("bash", { command: "echo hi" });
@@ -2050,7 +2037,7 @@ Deno.test("CfHarnessEngine getRunState returns a deep clone", () => {
     terminalReason: "assistant_completed",
     cfcEnforcementMode: "observe",
     // The engine wrote it: the state it was handed names no runtime.
-    sandboxRuntime: "docker",
+    sandboxRuntime: "runsc",
     currentDir: "/workspace",
     policyEvents: [createHarnessPolicyEvent({
       severity: "warning",
@@ -2265,6 +2252,7 @@ Deno.test("CfHarnessEngine records the fabric session's read ceiling in run stat
     cfcEnforcementMode: "enforce-strict",
   } as const;
   const runState = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: boundedSession,
   }).getRunState();
@@ -2286,6 +2274,7 @@ Deno.test("CfHarnessEngine records the fabric session's read ceiling in run stat
 
   // The same bounded session resumes cleanly.
   const resumed = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: boundedSession,
     runState,
@@ -2300,6 +2289,7 @@ Deno.test("CfHarnessEngine records the fabric session's read ceiling in run stat
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: {
           apiUrl: boundedSession.apiUrl,
@@ -2315,6 +2305,7 @@ Deno.test("CfHarnessEngine records the fabric session's read ceiling in run stat
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: {
           ...boundedSession,
@@ -2328,6 +2319,7 @@ Deno.test("CfHarnessEngine records the fabric session's read ceiling in run stat
   assertThrows(
     () =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: { ...boundedSession, cfcReadOnExceed: "fail" },
         runState,
@@ -2351,6 +2343,7 @@ Deno.test("CfHarnessEngine records the same read ceiling in a delegated child as
     },
   };
   const parent = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -2364,6 +2357,7 @@ Deno.test("CfHarnessEngine records the same read ceiling in a delegated child as
   // resolved session config beside the shared session factory, and the
   // same manifest.
   const child = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: parent.config.fabricSession,
     fabricSessionFactory: () =>
@@ -2373,6 +2367,7 @@ Deno.test("CfHarnessEngine records the same read ceiling in a delegated child as
     runManifest,
   });
   const grandchild = new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: child.config.fabricSession,
     fabricSessionFactory: () =>

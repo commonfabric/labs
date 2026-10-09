@@ -251,12 +251,23 @@ rising order of plumbing:
    counts deadlines rather than tripped pairs, so a loop that ended without a
    convergence step stops counting once its last backoff runs out. The
    prototype ships this.
-3. **The health route** — a per-space field on `/api/health/stats` so a tripped
-   breaker on a serving instance is a dashboard fact. This composes with the
-   per-space commit-rate signal Topic 913 scopes, and is best built alongside
-   it rather than in this prototype; the design records the field
-   (`servingLoop.echoBreaker: { active, trips }`, OFF-arm-absent like the rest
-   of the `servingLoop` block) and defers its wiring.
+3. **The memory server's health route** — every trip, and every clear of a
+   tripped pair, is reported on the space's own memory session
+   (`session.report`, memory protocol §4.14) to the server holding the space,
+   which lists it on `/api/health/stats` under `sessionReports`, beside the same
+   sessions' `commitRates`, and counts it as `ct.memory.echo_breaker`. A
+   browser, the `cf` CLI, and a serving runtime all report this way, since each
+   already holds an authenticated session routed to that server. A report names
+   the document's scope instance, so a serving runtime's reports for different
+   demanding sessions stay apart, and a clear says how the loop ended
+   (`convergence`, `quiet`, `retired`, or `evicted`) with its renewals and how
+   long it was held. The reports are what judge the breaker in production: a
+   trip followed by the session's commit rate falling to one per backoff is a
+   loop held, a long hold ending in convergence is a loop that settled, and a
+   short one is a candidate false trip. Reporting is best-effort: a server
+   without `sessionReportV1` gets none, and a report lost to a dropped
+   connection is not resent, so a missing report is not evidence that no loop
+   formed.
 
 ## 4. Interaction with the existing bounds and with server execution
 
@@ -368,7 +379,9 @@ breaker's arm it counts no cycle.
 2. [x] **The two-session tests** manufacturing the loop and proving the trip,
    the sustained rate bound, the convergence reset, and the no-trip on
    legitimate re-derivation.
-3. [ ] **The health-route field**, built with Topic 913's per-space rate signal.
+3. [x] **The health-route reports.** Trips and clears reported over the
+   memory session and listed beside the per-session commit rates on
+   `/api/health/stats`.
 4. [ ] **Tuning and graduation:** set the thresholds from live rate data, soak,
    then fold in and delete the flag. Revisiting the sticky placement (Topic
    911) unblocks once stage 1 is on.

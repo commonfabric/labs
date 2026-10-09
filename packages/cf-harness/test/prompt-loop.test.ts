@@ -127,7 +127,7 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -3133,8 +3133,8 @@ describe("CfHarnessPromptLoop opening research", () => {
 class CwdEscapeSandboxRuntime extends FakeSandboxRuntime {
   override resolvePath(path: string, cwd?: string): string {
     if (!this.isPathWithinWorkspace(path)) {
-      // Mirrors docker-runsc.ts: the typed escape whose message carries a host
-      // root label that must NOT reach the model.
+      // Mirrors the sandbox driver: the typed escape whose message carries a
+      // host root label that must NOT reach the model.
       throw new SandboxPathEscapeError(
         path,
         `path escapes allowed sandbox roots: ${path}`,
