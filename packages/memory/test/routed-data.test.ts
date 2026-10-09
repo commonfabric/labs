@@ -747,6 +747,50 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
   }
 });
 
+Deno.test("watch IDs added past a session's bound are refused, and the socket goes on", async () => {
+  const f = await fixture("watch-add-bound");
+  const watches = (prefix: string, length: number) =>
+    Array.from(
+      { length },
+      (_, i) => ({ id: `${prefix}${i}`, kind: "graph", query: { roots: [] } }),
+    );
+  try {
+    const session = await f.open();
+    const mutate = (type: string, list: unknown[]) =>
+      f.request({
+        type,
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        watches: list,
+      });
+    // One request carries at most 1,024 watch IDs, which the session holds.
+    assert((await mutate("session.watch.set", watches("a", 1024))).ok);
+    // One more, added by a later request, is within that request's bound
+    // and takes the session past its own.
+    const reasons = await refusalReasons(async () => {
+      const added = await mutate("session.watch.add", watches("b", 1));
+      assertEquals(
+        (added.error as { message?: string }).message,
+        "Routed memory request denied",
+      );
+      // A fixed bound: refused for good, the socket open.
+      assertEquals(
+        (added.error as { retriable?: boolean }).retriable,
+        undefined,
+      );
+    });
+    assertEquals(reasons, ["frame-limit"]);
+    assertEquals(f.socket.readyState, 1);
+    // The refusal changed nothing the session holds: an ID it already has
+    // is still added, and a replacement set at the bound is still taken.
+    assert((await mutate("session.watch.add", watches("a", 1))).ok);
+    assert((await mutate("session.watch.set", watches("c", 1024))).ok);
+    assertEquals(f.socket.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
 Deno.test("holdings and views sent as plain objects are counted by their keys", async () => {
   const f = await fixture("keyed-collections", {
     limits: { holdingsPerContext: 4 },

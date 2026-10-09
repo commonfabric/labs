@@ -167,8 +167,13 @@ export const DEFAULT_ROUTED_HOST_LIMITS: Readonly<RoutedHostLimits> = {
   frameSlots: ROUTED_DEFAULT_SLOT_LIMIT,
 };
 
-/** Watches one request may set; bounds one frame, so it stays fixed. */
-const WATCHES_PER_REQUEST = 1024;
+/**
+ * Watch IDs one session may hold. The parser admits at most this many in one
+ * request, and a client sends a session's whole set in one
+ * `session.watch.set` when it restores the session, so a session may not
+ * hold more than one request can carry; it stays fixed.
+ */
+const WATCHES_PER_SESSION = 1024;
 /** Views one session may hold; bounds one frame, so it stays fixed. */
 const VIEWS_PER_SESSION = 64;
 
@@ -260,8 +265,8 @@ const RETRIABLE_REFUSALS: ReadonlySet<RefusalReason> = new Set([
 /**
  * A request refused on its own: answered, not a closed socket. A capacity
  * refusal, or one for a grant that expired in flight, is marked retriable;
- * one past a fixed per-request bound (`frame-limit`), or for a session or
- * principal the context no longer holds, is final.
+ * one past a fixed bound on what a session holds (`frame-limit`), or for a
+ * session or principal the context no longer holds, is final.
  */
 class RoutedRequestRefusal extends Error {
   constructor(readonly reason: RefusalReason) {
@@ -1343,7 +1348,6 @@ export class RoutedMemoryHost {
               routedIdentifier(id);
               watches.add(id);
             }
-            requireRouted(watches.size <= WATCHES_PER_REQUEST);
             const key = `${parsed.space} ${body.sessionId}`;
             const holdings = body.holdings === undefined
               ? session.holdings
@@ -1353,10 +1357,16 @@ export class RoutedMemoryHost {
             const views = body.views === undefined
               ? session.views
               : routedCollectionSize(body.views);
-            // A fixed bound on one request, refused for good; the router
-            // refuses it before forwarding and counts views as watches, as
-            // this does.
-            if (views > VIEWS_PER_SESSION) {
+            // Fixed bounds on what one session holds, refused for good and
+            // answered. The parser bounds the watch IDs of one request, so
+            // only a `session.watch.add` can exceed the session's bound, by
+            // adding to the IDs it already holds; that breaks no rule of
+            // the protocol, so it does not close the socket. The router
+            // refuses either before forwarding and counts views as watches,
+            // as this does.
+            if (
+              watches.size > WATCHES_PER_SESSION || views > VIEWS_PER_SESSION
+            ) {
               throw new RoutedRequestRefusal("frame-limit");
             }
             // Registered first, so a refusal's answer undoes the reservation.
