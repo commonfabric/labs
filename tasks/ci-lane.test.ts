@@ -3682,8 +3682,14 @@ describe("glaze", () => {
                 ],
                 cwd: dir,
                 // A lane running this file hands it a skip list of its
-                // own, which this run must not read.
-                env: { CF_TEST_SKIP_LIST: "" },
+                // own, which this run must not read, and a coverage
+                // directory. Deno keys its emit cache on the config it
+                // resolves, so a profile written under this tree's config
+                // is one the lane's report cannot read back.
+                env: {
+                  CF_TEST_SKIP_LIST: "",
+                  DENO_COVERAGE_DIR: `${dir}/coverage`,
+                },
                 junit: [{ path: junit, kind: "unit", scope: "bakery" }],
               }]);
             },
