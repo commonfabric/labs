@@ -7,7 +7,11 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import { findNodeByProp, hasText } from "../test/vnode-helpers.ts";
+import {
+  findElementByExactText,
+  findNodeByProp,
+  hasText,
+} from "../test/vnode-helpers.ts";
 import Home from "./home.tsx";
 
 type SpaceEntry = { name: string; did?: string };
@@ -45,11 +49,12 @@ export default pattern(() => {
     hasText(findNodeByProp(home[UI], "value", "self"), "Self")
   );
   // The chat manager is held in a field of its own, starts with no rooms, and
-  // has no tab of its own.
+  // is shown in a tab of its own, whose panel renders the manager's heading.
   const assert_chat_manager_starts_empty = assert(() =>
     home.chatManager.rooms.length === 0 &&
     home.chatManager.outgoingNotices.length === 0 &&
-    findNodeByProp(home[UI], "value", "chats") === undefined
+    findElementByExactText(home[UI], "cf-tab", "Chats") !== undefined &&
+    hasText(findNodeByProp(home[UI], "id", "home-chats"), "Chats")
   );
   const action_register_runner = action(() => {
     home.agentQueue.setAgentRunner.send({

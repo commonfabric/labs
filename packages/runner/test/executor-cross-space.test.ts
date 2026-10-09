@@ -2543,6 +2543,63 @@ export default pattern<
     expect(stored()?.owners).toEqual(["none"]);
   });
 
+  /**
+   * A pattern whose `point` handler keeps the cell its holder's `piece`
+   * resolves to, as a profile's inbox pointer is set from an inbox holder.
+   * The holder names the piece by a stored link, so the handle the handler
+   * reads is minted at that link's target and resolving it walks on from
+   * there.
+   */
+  const RESOLVING_HANDLER_PATTERN = `
+import { type Cell, handler, pattern, type Writable, type Stream } from "commonfabric";
+type Piece = { name?: string };
+type Holder = { piece?: Cell<Piece> };
+const point = handler<void, { holder: Holder; kept: Writable<Holder> }>(
+  (_event, { holder, kept }) => {
+    kept.set({ piece: holder.piece?.resolveAsCell() });
+  },
+);
+export default pattern<
+  { holder: Holder; kept: Writable<Holder> },
+  { point: Stream<void> }
+>(({ holder, kept }) => ({ point: point({ holder, kept }) }));`;
+
+  it("keeps the document a served handler resolves a foreign cell to, through a document the serving runtime has not loaded", async () => {
+    let piece: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "resolve-unloaded-hop",
+      RESOLVING_HANDLER_PATTERN,
+      async (client) => {
+        piece = await foreignDocument(
+          client,
+          "resolve-unloaded-hop-piece",
+          "space",
+          { name: "inbox" },
+        );
+        // A document whose whole value is a link to the piece, which is what
+        // the holder names.
+        const alias = await foreignDocument(
+          client,
+          "resolve-unloaded-hop-alias",
+          "space",
+          piece,
+        );
+        return { holder: { piece: alias }, kept: {} };
+      },
+    );
+
+    result.key("point").send(undefined);
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    const kept = stored()?.kept as { piece?: unknown } | undefined;
+    expect(parseLink(kept?.piece)).toMatchObject({
+      space: foreignSpace,
+      id: piece!.getAsNormalizedFullLink().id,
+    });
+  });
+
   it("runs a served event whose declared value is a foreign space-scope document", async () => {
     let target: Cell<unknown> | undefined;
     const { result, entries, stored } = await standUpServed(

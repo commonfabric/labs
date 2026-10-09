@@ -77,11 +77,13 @@ revision and names that one gives the check up, which is right only where the
 person's request is the choice whatever the entry's state. A new revision names
 the calling handler's event, so only a handler can call it.
 
-FabriChat's manager calls both from its own handlers. Creating a room, or
-accepting one a manager created, registers the room's space, and finding a
-direct room again, or accepting a room, restores its entry if it was archived.
-Asking to open or accept the room is the person's choice to have it listed, so
-that restore names the revision the handler reads.
+FabriChat's manager calls both from its own handlers, and lists the rooms the
+catalog keeps as saved. Creating a room, or accepting one a manager created,
+registers the room's space. Forgetting a room archives its entry, naming the
+revision the person's list showed. Finding a direct room again, or accepting a
+room, restores its entry if it was archived. Asking to open or accept the room
+is the person's choice to have it listed, so that restore names the revision the
+handler reads.
 
 New entries record `since`, the recipient's admission time in epoch
 milliseconds. Registration records it when admitting the entry; a migration may

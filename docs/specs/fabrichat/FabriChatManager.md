@@ -22,20 +22,31 @@ each, and a row in the built-in targets table of
 
 ## State
 
-The manager keeps `rooms`, `direct`, `requests`, and `outgoingNotices` in the
-home space. `direct` is maintained alongside `rooms` by the same handlers, which
-keep the two consistent: `direct` holds one entry per counterpart, including
-forgotten rooms, and `rooms` can also hold a second direct room with the same
-counterpart after crossing creations.
+The manager keeps `direct`, `requests`, and `outgoingNotices` in the home space.
+`rooms` it keeps nowhere: it is drawn from the user's shared-space catalog,
+Home's, which Home hands the manager
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md)). The
+manager lists the entries of kind `fabrichat-room` the catalog keeps as saved,
+each the space of a room that is its space's root, found with `wish({ query:
+"#default", scope: [space] })`. A room's `kind` is the one its `about` gives,
+and its `since` and `revision` are its entry's. A direct room's `counterpart` is
+the one `direct` holds the room under, for a room this manager created or
+accepted, or else the room's creator, as its `about.record` is labeled; a room
+whose label can't be read is listed with no counterpart. A room appears in
+`rooms` once its root resolves and its `about` reads. `direct` holds one entry
+per counterpart, for the direct rooms this manager created or accepted,
+including forgotten ones, and `rooms` can also hold a second direct room with
+the same counterpart after crossing creations, or one offered to the user, which
+`openDirect` doesn't find.
 
-Creating a room, or accepting one a manager created, also registers the room's
-space in the user's shared-space catalog, Home's, which Home hands the manager
-([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), and
-finding a direct room again, or accepting a room, restores its entry there if it
-was archived. A space's own chat, which no manager created, is accepted into
-`rooms`, and nothing is registered, since its space is the social space it
-belongs to. A manager given no catalog keeps one of its own. `rooms` is the
-manager's own list all the same.
+The handlers write the catalog. Creating a room, or accepting one a manager
+created, registers the room's space (`registerSharedSpaceIn()`), forgetting a
+room archives its entry, at the revision the request names, and finding a direct
+room again, or accepting a room, restores its entry if it was archived
+(`changeSharedSpaceMembershipIn()`). A room offered to the user is registered by
+the host that vets the offer (see [first contact](#first-contact)). Accepting a
+space's own chat, which no manager created, is refused, since its space is the
+social space it belongs to. A manager given no catalog keeps one of its own.
 
 Creating or accepting a room also adds this user's profile to the room's
 participants, through the room's `addParticipant`, from an event of its own

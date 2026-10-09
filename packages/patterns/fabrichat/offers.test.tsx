@@ -1,9 +1,9 @@
 /**
  * Offering a new FabriChat room through a member's share inbox. Bob starts a
- * direct chat with Alice naming her profile, which points at her private
- * inbox; the room is offered there, in the envelope a share inbox takes, and
- * a notice is queued for her all the same. A request naming a profile
- * other than the counterpart's is refused. Each person writes their own
+ * direct chat with Alice from her participant chip, whose click names her
+ * profile, which points at her private inbox; the room is offered there, in
+ * the envelope a share inbox takes, and a notice is queued for her all the
+ * same. A request naming a profile other than the counterpart's is refused. Each person writes their own
  * profile here, so its label names them, as a Fabric profile's does.
  */
 import {
@@ -52,7 +52,7 @@ import {
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
-/** An empty shared-space catalog, as a manager registers its rooms in. */
+/** An empty shared-space catalog, as a manager lists its rooms from. */
 const emptyCatalog = () =>
   Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
 
@@ -253,8 +253,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   };
 });
 
-// Starts a direct chat with Alice naming her profile, after a request naming
-// a profile other than hers is refused.
+// Starts a direct chat with Alice from her chip, after a request naming a
+// profile other than hers is refused.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<OwnProfile>();
   const writeProfile = writeOwnProfile({ profile, name: "Bob" });
@@ -265,7 +265,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const notices = Writable.of<ChatManagerNotice[]>([]);
   const manager = FabriChatManagerCore({
     myProfile: profile,
-    rooms: Writable.of<ChatIndexEntry[]>([]),
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -299,12 +298,15 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             manager.rooms.length === 0;
         }),
       },
+      // Her chip's click names her profile as its target's `name`, and names
+      // no principal: the manager reads hers off the profile. The request id
+      // is the test's own, so the offer's can be checked.
       {
         action: manager.openDirect,
         event: {
           requestId: "d-alice",
-          counterpart: setup.aliceDid,
-          profile: aliceProfile,
+          type: "click",
+          target: { name: aliceProfile },
         },
         trustedUi: startGesture,
       },

@@ -12,8 +12,7 @@ import {
   PRINCIPAL_CLAIM_KINDS,
   type PrincipalClaimKind,
 } from "../cfc/represents-principal.ts";
-import type { Runtime } from "../runtime.ts";
-import { entityKey } from "../scheduler/keys.ts";
+import { withdrawHandlerWhileLoading } from "../scheduler/handler-load-wait.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
 import { cellOfTarget } from "./space-access.ts";
@@ -182,7 +181,12 @@ function attestedPrincipals(
   // change runs the calling computation again.
   const principals = attestedPrincipalsAt(tx, link, claimKind);
   if (frame.frameKind === "handler") {
-    withdrawWhileLabelLoads(runtime, tx, link);
+    withdrawHandlerWhileLoading(
+      runtime,
+      tx,
+      link,
+      `the label of \`${link.id}\` was read while its document was still loading`,
+    );
   }
   return principals;
 }
@@ -213,40 +217,4 @@ export function attestedPrincipalsAt(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
     kind,
   );
-}
-
-/**
- * Helper for `attestedPrincipals()`, which withdraws the running handler when
- * the replica has no local basis for the document whose label it read, not
- * even a confirmed absence, and that document's load is in flight. The read
- * then found no label because the label has not arrived, which is not the
- * document's state, and a handler runs once per event: the scheduler runs a
- * withdrawn one again once the load lands (`dispatchedHandlerNotRun`). A
- * withdrawal therefore always has a load to wait on, and a document that does
- * not exist withdraws the handler at most until its absence is confirmed. A
- * reactive computation needs none of this, since the load's arrival runs it
- * again.
- */
-function withdrawWhileLabelLoads(
-  runtime: Runtime,
-  tx: IExtendedStorageTransaction,
-  link: NormalizedFullLink,
-): void {
-  const { storageManager } = runtime;
-  // The instance a scoped read reaches is the one the transaction demands,
-  // as a served run's is its actor's, so the load and the local basis are
-  // looked up for that instance.
-  const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
-  const key = entityKey(link, identity);
-  if (storageManager.pendingLoadGeneration?.(key) === undefined) return;
-  const { replica } = storageManager.open(link.space);
-  if (
-    replica.hasLocalDocumentCoverage?.(link.id, link.scope, identity) === true
-  ) {
-    return;
-  }
-  tx.dispatchedHandlerNotRun ??= {
-    reason:
-      `the label of \`${link.id}\` was read while its document was still loading`,
-  };
 }
