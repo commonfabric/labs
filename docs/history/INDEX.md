@@ -291,6 +291,8 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Investigations, journals, and working notes
 
+- [Iframe initialization after a pending edit](development/performance/2026-10-06-iframe-initialize-confirmation.md) — Real wrapper eligibility, a standalone confirmed-value recheck, native confirmation and withdrawal controls, and matched latency measurements.
+
 - [Staged-reference derivation cache](development/performance/2026-09-25-staged-reference-cache/README.md) — Alternating main/cache measurements, warmed chain controls, exact metadata equivalence, and the remaining flat-map growth; probe and raw records accompany the report (2026-09-25).
 
 - [Scoped conflict recovery review](packages/runner/scoped-conflict-recovery-review-2026-09-16.md) — 2026-09-16: review of merged scoped conflict pulls, the reactive scheduler integration gap, and the regression and lifetime requirements retained from the inactive transaction-owned repair proposal.

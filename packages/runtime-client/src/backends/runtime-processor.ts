@@ -1607,14 +1607,15 @@ export class RuntimeProcessor {
   }
 
   /**
-   * Classifies whether recorded reads depend on pending local writes.
+   * Lists the spaces whose recorded reads depend on pending local writes.
    * Missing read observations retain the full initialization barrier.
    */
-  #initializationReadState(
+  #initializationPendingReadSpaces(
     tx: IExtendedStorageTransaction,
-  ): "confirmed" | "pending" | "unknown" {
+  ): MemorySpace[] | undefined {
     const reads = tx.tx.getReadActivities?.();
-    if (reads === undefined) return "unknown";
+    if (reads === undefined) return undefined;
+    const pending = new Set<MemorySpace>();
     for (const read of reads) {
       if (
         this.#runtime.storageManager.open(read.space).replica.hasPendingWrite(
@@ -1622,9 +1623,9 @@ export class RuntimeProcessor {
           read.scope,
           tx.tx.scopeKeyIdentity,
         )
-      ) return "pending";
+      ) pending.add(read.space);
     }
-    return "confirmed";
+    return [...pending];
   }
 
   /** Atomically stores a default only while the target has no backing value. */
@@ -1636,36 +1637,74 @@ export class RuntimeProcessor {
     }
     const initial = mapCellRefsToSigilLinks(request.value);
     const target = getCell(this.#runtime, request.cell);
-    const readinessFailure = await target.pull().then(
+    let readinessFailure = await target.pull().then(
       () => undefined,
       (error: unknown) => ({ error }),
     );
     // Projection can discover reads beyond the initial pull. editWithRetry
     // reconciles documents read as absent and re-runs this probe when those
     // documents turn out to exist.
-    const existing = await this.#runtime.editWithRetry((tx) => {
-      const cell = target.withTx(tx);
-      try {
-        const value = (
-            cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
-            cell.get() === undefined
-          )
-          ? undefined
-          : this.#hostReadGate.read(cell);
-        const state = this.#initializationReadState(tx);
-        if (readinessFailure !== undefined && state !== "pending") {
-          throw readinessFailure.error;
+    const readExisting = async () => {
+      const existing = await this.#runtime.editWithRetry((tx) => {
+        const cell = target.withTx(tx);
+        try {
+          const value = (
+              cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
+              cell.get() === undefined
+            )
+            ? undefined
+            : this.#hostReadGate.read(cell);
+          const pendingSpaces = this.#initializationPendingReadSpaces(tx);
+          if (readinessFailure !== undefined && !pendingSpaces?.length) {
+            throw readinessFailure.error;
+          }
+          return {
+            value: pendingSpaces?.length === 0 ? value : undefined,
+            pendingSpaces: value === undefined ? undefined : pendingSpaces,
+          };
+        } catch (error) {
+          // Only a recorded pending write justifies retrying a failed read
+          // after repair. Other readiness and projection failures propagate.
+          const pendingSpaces = this.#initializationPendingReadSpaces(tx);
+          if (!pendingSpaces?.length) throw error;
+          return { value: undefined, pendingSpaces: undefined };
         }
-        return state === "confirmed" ? value : undefined;
-      } catch (error) {
-        // Only a recorded pending write justifies retrying a failed read
-        // after repair. Other readiness and projection failures propagate.
-        if (this.#initializationReadState(tx) !== "pending") throw error;
-        return undefined;
+      });
+      if (existing.error) throw new Error(existing.error.message);
+      return existing.ok;
+    };
+    let existing = await readExisting();
+    if (existing.value !== undefined) return existing.value;
+    // Speculative overlays retire on authoritative derivation, independently
+    // of provider.synced(). Keep their initialization on the full barrier.
+    while (
+      existing.pendingSpaces?.length &&
+      this.#runtime.experimental.serverExecution !== true &&
+      !this.#runtime.servingPosture && !this.#runtime.sealDestinationInstalled
+    ) {
+      const providers = existing.pendingSpaces.map((space) =>
+        this.#runtime.storageManager.open(space)
+      );
+      // Verdict-only writes can retain their optimistic layer after synced()
+      // has no remaining work. Await a real confirmation phase or fall back;
+      // repeatedly probing an unchanged layer would poll for its coverage.
+      if (!providers.every((provider) => provider.hasPendingSyncWork?.())) {
+        break;
       }
-    });
-    if (existing.error) throw new Error(existing.error.message);
-    if (existing.ok !== undefined) return existing.ok;
+      // A confirmation can make this read eligible while unrelated producers
+      // remain pending. Recompute readiness and the complete read set; this
+      // phase can return only an existing confirmed value.
+      const confirmations = await Promise.allSettled(
+        providers.map((provider) => provider.synced()),
+      );
+      if (confirmations.some((result) => result.status === "rejected")) break;
+      readinessFailure = await target.pull().then(
+        () => undefined,
+        (error: unknown) => ({ error }),
+      );
+      existing = await readExisting();
+      if (existing.value !== undefined) return existing.value;
+    }
 
     // A pending commit or its retry can install a producer for an absent
     // value. Keep demand active through the full barrier before storing a
