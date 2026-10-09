@@ -225,6 +225,45 @@ describe("capability-analysis-dynamic-keys", () => {
       expect(read.readPaths).toContain("key");
     });
 
+    it("records the key reads of a fallback below an element access on a for..of iterable's spine", () => {
+      const read = usage(
+        `const read = ({ state }: {
+  state: {
+    lists: number[][][];
+    first: Cell<number>;
+    second: Cell<number>;
+    third: Cell<number>;
+  };
+}) => {
+  let total = 0;
+  for (
+    const value of (state.lists[state.first.get()] ??
+      state.lists[state.second.get()])?.[state.third.get()] ?? []
+  ) total += value;
+  return total;
+};`,
+      );
+
+      expect(read.readPaths).toContain("state.first");
+      expect(read.readPaths).toContain("state.second");
+      expect(read.readPaths).toContain("state.third");
+    });
+
+    it("records the reads inside a call at the top of a for..of iterable", () => {
+      const read = usage(
+        `const read = ({ table, self }: { table: Row[]; self: string }) => {
+  let total = 0;
+  for (const row of table.filter((row) => row.topic === self)) {
+    total += row.groups.x.length;
+  }
+  return total;
+};`,
+      );
+
+      expect(read.readPaths).toContain("self");
+      expect(read.readPaths).toContain("table.0.topic");
+    });
+
     it("records a captured key cell read inside a fallback", () => {
       const read = usage(
         `const read = ({ catalog, key }: { catalog: Cell<Catalog>; key: Cell<string> }) =>
@@ -264,6 +303,34 @@ export default pattern<{ lists: number[][] }>(({ lists }) => {
       );
 
       expect(input.required).toEqual(["lists", "selected"]);
+    });
+
+    it("keeps the key cells of a fallback below an element access on the iterable's spine", async () => {
+      const input = await liftInput(
+        `import { computed, pattern, Writable } from "commonfabric";
+
+export default pattern<{ lists: number[][][] }>(({ lists }) => {
+  const first = new Writable(0);
+  const second = new Writable(0);
+  const third = new Writable(0);
+  const total = computed(() => {
+    let sum = 0;
+    for (
+      const value of (lists[first.get()] ?? lists[second.get()])?.[third.get()] ?? []
+    ) sum += value;
+    return sum;
+  });
+  return { total };
+});
+`,
+      );
+
+      expect((input.required as string[]).toSorted()).toEqual([
+        "first",
+        "lists",
+        "second",
+        "third",
+      ]);
     });
 
     it("keeps a capture a callback on the iterable's spine reads in the input", async () => {

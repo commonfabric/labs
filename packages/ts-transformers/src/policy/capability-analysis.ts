@@ -917,28 +917,6 @@ function memberSpineContainsCall(expression: ts.Expression): boolean {
   return ts.isCallExpression(current);
 }
 
-/**
- * The keys of the element accesses on the member spine `resolveSourceRef`
- * walks to reach a root, as far as a call: `table[pick(row)].first` has
- * `pick(row)`. Ref resolution consumes those keys without descending into
- * them, though each is evaluated, so a key that reads a capture is a read a
- * caller resolving the ref in place of visiting the expression has to visit.
- */
-function memberSpineElementKeys(expression: ts.Expression): ts.Expression[] {
-  const keys: ts.Expression[] = [];
-  let current = unwrapExpression(expression);
-  while (
-    ts.isPropertyAccessExpression(current) ||
-    ts.isElementAccessExpression(current)
-  ) {
-    if (ts.isElementAccessExpression(current)) {
-      keys.push(current.argumentExpression);
-    }
-    current = unwrapExpression(current.expression);
-  }
-  return keys;
-}
-
 function isDeclarationIdentifier(node: ts.Identifier): boolean {
   const parent = node.parent;
   if (!parent) return false;
@@ -3398,12 +3376,13 @@ export function analyzeFunctionCapabilities(
     };
 
     // Visits what resolving `expression` to a ref, in place of visiting it,
-    // leaves unvisited though it is evaluated: each operand of a fallback, the
-    // keys of the element accesses on a member spine, and a call on that spine
-    // with its arguments and callbacks. An operand whose spine passes through
-    // a call is walked whole, `table.find((row) => equals(self, row.topic))`
-    // in `table.find(…)?.mentionedBy ?? []` among them; a read the walk
-    // repeats is a set entry, so recording it twice costs nothing.
+    // leaves unvisited though it is evaluated: each operand of a fallback,
+    // wherever on the member spine it sits, the keys of the element accesses
+    // on the spine, and a call on the spine with its arguments and callbacks.
+    // An operand whose spine passes through a call is walked whole,
+    // `table.find((row) => equals(self, row.topic))` in
+    // `table.find(…)?.mentionedBy ?? []` among them; a read the walk repeats
+    // is a set entry, so recording it twice costs nothing.
     const visitOperandsOfResolvedRef = (expression: ts.Expression): void => {
       const current = unwrapExpression(expression);
       if (
@@ -3423,8 +3402,14 @@ export function analyzeFunctionCapabilities(
         visit(current);
         return;
       }
-      for (const key of memberSpineElementKeys(current)) {
-        visit(key);
+      if (
+        ts.isPropertyAccessExpression(current) ||
+        ts.isElementAccessExpression(current)
+      ) {
+        if (ts.isElementAccessExpression(current)) {
+          visit(current.argumentExpression);
+        }
+        visitOperandsOfResolvedRef(current.expression);
       }
     };
 
