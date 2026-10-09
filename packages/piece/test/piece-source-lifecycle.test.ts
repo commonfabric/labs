@@ -557,6 +557,36 @@ describe("piece source lifecycle", () => {
     });
   });
 
+  it("records the identity an unreachable origin advertised", async () => {
+    const origin = "system:undownloadable.tsx";
+    webSources["/api/patterns/undownloadable.tsx"] = versionProgram(
+      "origin-v1",
+    );
+    webAdvertised["/api/patterns/undownloadable.tsx"] = "advertised-identity";
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    await stampOrigin(piece, origin);
+    // The identity route answers, and the source it names cannot be had.
+    const serving = globalThis.fetch;
+    globalThis.fetch = (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      return url.searchParams.has("identity")
+        ? serving(input, init)
+        : Promise.resolve(new Response("unavailable", { status: 503 }));
+    };
+    try {
+      await expect(piece.changeSource({ kind: "adopt" })).rejects.toThrow();
+    } finally {
+      globalThis.fetch = serving;
+    }
+
+    expect(await piece.result.get(["version"])).toBe("v1");
+    expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+      outcome: "unreachable",
+      origin,
+      offered: { identity: "advertised-identity", symbol: "default" },
+    });
+  });
+
   it("records an update whose source does not compile to the identity its origin advertises", async () => {
     const origin = "system:mismatched.tsx";
     webSources["/api/patterns/mismatched.tsx"] = versionProgram("origin-v1");

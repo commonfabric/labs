@@ -236,6 +236,7 @@ export {
   SourceReconciler,
   type SourceRefusal,
   type SystemSourceCandidate,
+  type UnreachableSource,
 } from "./source-reconciler.ts";
 export {
   applyPieceSourceTransition,

@@ -32,6 +32,7 @@ import {
   type SourceRefusal,
   spaceHostFromFabricAuthority,
   type SystemPieceOrigin,
+  type UnreachableSource,
 } from "@commonfabric/runner";
 import {
   entityKindOfIdString,
@@ -147,7 +148,9 @@ export function reconcilePieceSource(
   return runtime.sourceReconciler.reconcile(piece);
 }
 
+/** An error saying an origin could not be resolved, and why. */
 export class PieceOriginError extends Error {
+  /** Constructs an instance which says `message`. */
   constructor(message: string) {
     super(message);
     this.name = "PieceOriginError";
@@ -155,14 +158,47 @@ export class PieceOriginError extends Error {
 }
 
 /**
- * The source an origin offers, refused as following that origin refuses it:
- * it did not compile to the identity its origin advertises, or did not compile
- * at all. `refusal` is what a reconciliation records for it.
+ * An error saying the source an origin offers was refused, as following that
+ * origin refuses it: it is not the source the origin advertises, or it is and
+ * does not compile to a pattern. `.refusal` says which, as a reconciliation
+ * records it.
  */
 export class PieceOriginRefusedError extends PieceOriginError {
-  constructor(readonly refusal: SourceRefusal) {
+  #refusal: SourceRefusal;
+
+  /** Constructs an instance which reports `refusal`. */
+  constructor(refusal: SourceRefusal) {
     super(refusal.detail);
+    this.#refusal = refusal;
     this.name = "PieceOriginRefusedError";
+  }
+
+  /** The refusal, as a reconciliation records it. */
+  get refusal(): SourceRefusal {
+    return this.#refusal;
+  }
+}
+
+/**
+ * An error saying the source an origin offers could not be had this time: the
+ * origin could not be reached, or its source could not be downloaded or
+ * compiled for a reason that may not recur. `.unreachable` is what a
+ * reconciliation records for it, which names the export the origin offered
+ * once it has advertised an identity.
+ */
+export class PieceOriginUnreachableError extends PieceOriginError {
+  #unreachable: UnreachableSource;
+
+  /** Constructs an instance which reports `unreachable`. */
+  constructor(unreachable: UnreachableSource) {
+    super(unreachable.detail);
+    this.#unreachable = unreachable;
+    this.name = "PieceOriginUnreachableError";
+  }
+
+  /** Why the source could not be had, as a reconciliation records it. */
+  get unreachable(): UnreachableSource {
+    return this.#unreachable;
   }
 }
 
@@ -210,9 +246,9 @@ export function qualifyFabricOrigin(
  * repoint transition should apply.
  *
  * A `system:` origin's source is compiled here, as following that origin
- * compiles it, and is held to the same check: one that does not compile to
- * the identity its host advertises, or does not compile, throws
- * {@link PieceOriginRefusedError}.
+ * compiles it, and is held to the same check: source that following would
+ * refuse throws {@link PieceOriginRefusedError}, and source that cannot be had
+ * this time throws {@link PieceOriginUnreachableError}.
  *
  * `self` names the piece the origin is being resolved for. A mutable fabric
  * origin naming that piece is rejected: a piece that follows itself supplies
@@ -241,7 +277,7 @@ export async function resolvePieceOriginSource(
       throw new PieceOriginRefusedError(candidate);
     }
     if (candidate.outcome === "unreachable") {
-      throw new PieceOriginError(candidate.detail);
+      throw new PieceOriginUnreachableError(candidate);
     }
     return { compiled: candidate.pattern, pattern: candidate.ref };
   }

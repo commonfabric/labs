@@ -90,6 +90,7 @@ import { assertPieceInputPath } from "./piece-input-path.ts";
 import {
   acceptEnteredOrigin,
   PieceOriginRefusedError,
+  PieceOriginUnreachableError,
   qualifyFabricOrigin,
   readPieceOrigin,
   type ResolvedPieceOriginSource,
@@ -4523,10 +4524,14 @@ export class PieceController<T = unknown> {
             await this.#recordReconciliation(
               expected,
               origin,
-              error instanceof PieceOriginRefusedError ? error.refusal : {
-                outcome: "unreachable",
-                detail: pieceSourceErrorMessage(error),
-              },
+              error instanceof PieceOriginRefusedError
+                ? error.refusal
+                : error instanceof PieceOriginUnreachableError
+                ? error.unreachable
+                : {
+                  outcome: "unreachable",
+                  detail: pieceSourceErrorMessage(error),
+                },
             );
           }
           throw error;

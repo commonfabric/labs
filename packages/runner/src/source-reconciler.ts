@@ -240,16 +240,22 @@ export type SystemSourceCandidate =
    * The origin could not be reached, or the source could not be downloaded
    * or compiled for a reason that may not recur.
    */
-  | {
-    /** Always `unreachable`, which tells this from the other candidates. */
-    readonly outcome: "unreachable";
+  | UnreachableSource;
 
-    /** What went wrong, in its own words. */
-    readonly detail: string;
+/**
+ * Why the source an origin offers could not be had this time, in the terms the
+ * record a reconciliation leaves keeps.
+ */
+export type UnreachableSource = {
+  /** Always `unreachable`, which tells this from the results beside it. */
+  readonly outcome: "unreachable";
 
-    /** The export the origin offered, once it has advertised an identity. */
-    readonly offered?: PatternRef;
-  };
+  /** What went wrong, in its own words. */
+  readonly detail: string;
+
+  /** The export the origin offered, once it has advertised an identity. */
+  readonly offered?: PatternRef;
+};
 
 /**
  * What each reconciliation result but a refusal becomes on the piece, and which
