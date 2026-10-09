@@ -3040,7 +3040,9 @@ export class SpaceSession {
     // and `restore()` cancels it as it starts. `restore()` also does nothing
     // for a closed session and fails while disconnected, so the retry
     // checks neither. A router's refusal of the key's authentication passes
-    // over seconds, so a retry after one waits a second or more.
+    // over seconds, so a retry after one waits a second with the backoff on
+    // top of it, which keeps the backoff's jitter: sessions held together
+    // do not all retry in the same millisecond.
     const timer = setTimeout(() => {
       void this.restore().catch((error) => {
         // A closed session needs no connection, and a cancelled route is
@@ -3054,7 +3056,7 @@ export class SpaceSession {
           );
         }
       });
-    }, Math.max(floorMs, reconnectDelayMs(this.#heldRestores++)));
+    }, floorMs + reconnectDelayMs(this.#heldRestores++));
     // A route cancelled while the session waits ends the wait.
     const abort = () => this.#endHold();
     signal?.addEventListener("abort", abort, { once: true });

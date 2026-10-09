@@ -1195,6 +1195,36 @@ Deno.test("a key released while its authentication is unanswered is not renewed 
   }
 });
 
+Deno.test("a held session's retry after its key is refused for now waits a second and the backoff", async () => {
+  setModernCellRepConfig(true);
+  const random = Math.random;
+  // No jitter, so the first step of the backoff is 25 ms.
+  Math.random = () => 0;
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // The statement the reconnect signs is refused for now.
+  const { p, auths } = routedPeer((n) => n === 2);
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(
+      identity.did(),
+      {},
+      namedSigner(identity.did()),
+    );
+    p.drop();
+    await tickUntil(time, () => session.held, 0, 40);
+    assertEquals(auths().length, 2);
+    await tickUntil(time, () => !session.held);
+    assertEquals(auths().length, 3);
+    // The backoff is on top of the second, as for a renewal and a mount,
+    // so sessions held together do not all retry in the same millisecond.
+    assertEquals(auths()[2].at - auths()[1].at, 1025);
+  } finally {
+    await client.close();
+    time.restore();
+    Math.random = random;
+  }
+});
+
 Deno.test("a lease's renewal signs a challenge of its own while a refused statement's resend is unanswered", async () => {
   setModernCellRepConfig(true);
   const random = Math.random;
