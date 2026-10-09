@@ -75,9 +75,13 @@ needs one topic for each client's project.
 
 ## Setting up
 
-Minting and binding happen once for each channel, and a mailbox can have up
-to eight channels bound to it, one for each install of a syncer. A mailbox
-that should wake more than one deployment has a channel bound on each, and
+A gmail channel is minted once, in one call that names the cell the
+notifications go to and binds the mailbox. The cell is in the user's space,
+and the syncer chooses it and watches it; the mint is addressed to that
+space, which is the one the user has to own and the toolshed's identity has
+to be able to write. A mailbox can have up to eight channels bound to it,
+one for each install of a syncer. A mailbox that should wake more than one
+deployment has a channel bound on each, and
 each deployment has a subscription of its own on the topic;
 [the setup document](gmail-push-setup.md#several-deployments) has the
 commands. The watch is
@@ -221,7 +225,7 @@ Three facts decide the shape.
   network faces it nowhere, and a relay inside the network makes the same
   call with the same token instead.
 - **Where the binding lives.** It lives in the registry of the toolshed that
-  handled the bind, and a push is delivered against the bindings of the
+  handled the mint, and a push is delivered against the bindings of the
   toolshed that received it. A mailbox that should wake two deployments has a
   channel bound on each, and each deployment has its own subscription on the
   topic. Nothing forwards a push between deployments.
