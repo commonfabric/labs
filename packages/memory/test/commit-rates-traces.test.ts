@@ -9,8 +9,8 @@
  * - one `loop-under-threshold` stretch, ten minutes of the 2026-07-22 storm
  *   running at about a hundred commits a minute. It is the same loop, two
  *   sessions alternating a result slot, at the cadence a saturated server
- *   gave it, and it sits under the default threshold for the whole ten
- *   minutes. The space-wide alarm is not what catches that; the scheduler's
+ *   gave it, and its minute touches the default threshold for a few seconds
+ *   without holding it. The space-wide alarm is not what catches that; the scheduler's
  *   remote-echo breaker, which counts one session's rewrites of one document,
  *   is (`docs/plans/scheduler-remote-echo-breaker.md`);
  * - three `quiet` stretches, the busiest ten minutes of the three weeks after

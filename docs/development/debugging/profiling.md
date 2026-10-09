@@ -743,9 +743,9 @@ minute and are reported within the sustained window. The busiest stretches of
 the three quiet weeks after them are cold board loads, which put up to 346
 commits into one minute and nothing into the next, and in those weeks the
 space never stayed over the threshold for a second minute. One stretch of the
-July 22 storm ran at about a hundred commits a minute, under the threshold for
-all ten minutes: two sessions alternating one result slot at the cadence a
-saturated server gave them. The alarm is for the rate at which a space
+July 22 storm ran at about a hundred commits a minute, touching the threshold
+for a few seconds and never holding it: two sessions alternating one result
+slot at the cadence a saturated server gave them. The alarm is for the rate at which a space
 saturates its server, and a loop under that rate is what the scheduler's
 remote-echo breaker, which counts one session's rewrites of one document,
 exists for
