@@ -41,8 +41,10 @@ import {
   entityNameRight,
   holdsFreeTypeParameter,
   holdsTypeParameter,
+  readAuthoredTypeNode,
   readMemberAnnotation,
   readThroughIdentityAliases,
+  readUnionMemberNodes,
   typeParameterOfReference,
   typeParameterOfType,
   unwrapTypeParentheses,
@@ -276,13 +278,6 @@ const isHandleSchema = (schema: unknown): boolean =>
   Array.isArray((schema as MutableJSONSchemaObj).asCell) &&
   ((schema as MutableJSONSchemaObj).asCell as unknown[]).length > 0;
 
-/** Whether `schema` is `{ type: "null" }` or `{ type: "undefined" }` alone. */
-const isNullishSchema = (schema: unknown): boolean =>
-  isObjectNotArray(schema) &&
-  Object.keys(schema).length === 1 &&
-  ((schema as { type?: unknown }).type === "null" ||
-    (schema as { type?: unknown }).type === "undefined");
-
 /** Whether `node`, through parentheses, is `null` or `undefined`. */
 const isNullishTypeNode = (node: ts.TypeNode): boolean => {
   const unwrapped = unwrapTypeParentheses(node);
@@ -314,6 +309,22 @@ export const scopeOfWrittenScopedUnion = (
     scope = wrapper.scope;
   }
   return scope;
+};
+
+/**
+ * Whether `node`, read through parentheses and aliases, writes `null` or
+ * `undefined` beside a scope wrapper, as `PerUser<Writable<T>> | null` does.
+ */
+const writesNullishBesideScopeWrapper = (
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): boolean => {
+  const members = readUnionMemberNodes(node, checker);
+  return members.some(isNullishTypeNode) &&
+    members.some((member) =>
+      resolveScopeWrapperNode(readAuthoredTypeNode(member, checker)) !==
+        undefined
+    );
 };
 
 /** The error for a scope wrapper nested in another with no cell between. */
@@ -2093,6 +2104,15 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (Array.isArray(schema.asCell) && schema.asCell.length > 0) {
+      // A cell written beside `null` or `undefined` is refused as written,
+      // though the type it is read at may hold the cell alone: a member's `?`,
+      // or `Required`, takes that `undefined` out of the type.
+      if (
+        context.typeNode &&
+        writesNullishBesideScopeWrapper(context.typeNode, context.typeChecker)
+      ) {
+        throw scopeAroundCellUnionError(scope);
+      }
       const [first, ...rest] = schema.asCell;
       return {
         ...schema,
@@ -2100,29 +2120,12 @@ export class CommonFabricFormatter implements TypeFormatter {
       };
     }
 
-    // Beside `null` or `undefined`, a cell is an `anyOf` branch, and the scope
-    // is declared twice: at the top, the slot's own scope, which the write
-    // path reads, and in the cell's `asCell` entry, the cap on following its
-    // handle, which a read applies however it reaches the handle. One cell
-    // beside those is all a scope wrapper around a cell may hold.
+    // A cell beside anything, `null` and `undefined` included, is an `anyOf`
+    // branch, where the cap on following its handle would sit apart from the
+    // slot's scope (`scopeAroundCellUnionError()`).
     const branches = schema.anyOf;
     if (Array.isArray(branches) && branches.some(isHandleSchema)) {
-      if (
-        branches.filter(isHandleSchema).length !== 1 ||
-        !branches.every((b) => isHandleSchema(b) || isNullishSchema(b))
-      ) {
-        throw scopeAroundCellUnionError(scope);
-      }
-      if (schema.scope !== undefined) throw nestedScopeError();
-      return {
-        ...schema,
-        anyOf: branches.map((branch) =>
-          isHandleSchema(branch)
-            ? this.#applyScopeWrapperSemantics(branch, scope, context)
-            : branch
-        ),
-        scope,
-      };
+      throw scopeAroundCellUnionError(scope);
     }
 
     if (schema.scope !== undefined) throw nestedScopeError();

@@ -1033,26 +1033,21 @@ non-empty `asCell`, the scope merges into the **first** entry, turning a
 string entry into the object form (`applyScopeToAsCellEntry`) —
 `PerUser<Cell<string>>` → `{ asCell: [{ kind: "cell", scope: "user" }], type:
 "string" }`; otherwise a bare sibling key — `PerUser<string>` →
-`{ type: "string", scope: "user" }`. A wrapper around a cell beside `null` or
-`undefined`, written outside it or inside, puts the cell in an `anyOf` branch
-and declares the scope twice: at the top, the slot's own scope, which the
-write path reads, and in the cell's `asCell` entry, the cap on following its
-handle, which a read applies however it reaches the handle
-(`ContextualFlowControl.getAsCellFollowScopeCap`).
-`PerSpace<Cell<T>> | null` and `PerSpace<Cell<T> | null>` →
-`{ anyOf: [{ type: "null" }, { …, asCell: [{ kind: "cell", scope: "space" }]
-}], scope: "space" }`; the scope-placement walk accepts that one declaration
-in a branch, a cell's cap naming the slot's own scope. Inside a cell, the
-value is a slot of its own, whose scope is declared beside the cell's entry, so
-a nullable scoped cell nested in another is checked against its own scope:
-`PerUser<Cell<PerSession<Cell<T>> | null>> | null` keeps both. Beside anything else a
-wrapper around a cell **throws** (`A scope wrapper around a cell cannot hold
-anything beside the cell`): beside a value, one scope cannot be the value's
-slot scope and the cell's cap both, and beside another cell, as in
-`PerSpace<Cell<T> | Cell<U>>`, a read's value projection resolves no handle
-out of the union, so no read can show the cap holding. An optional property keeps the
-cell alone (`handle?: PerSpace<Cell<T>>` → `{ …, asCell: [{ kind: "cell",
-scope: "space" }] }`). Tested end to end in the runtime:
+`{ type: "string", scope: "user" }`. A wrapper around a cell **throws** beside
+anything, `null` and `undefined` included, written outside it or inside (`A
+scope wrapper around a cell cannot hold anything beside the cell`). Beside
+`null`, `undefined` or a value, the cell would be an `anyOf` branch, where the
+cap on following its handle sits apart from the slot's scope, which the write
+path reads; beside another cell, as in `PerSpace<Cell<T> | Cell<U>>`, a read's
+value projection resolves no handle out of the union, so no read can show the
+cap holding. A cell whose value may be `null` holds it inside
+(`PerSpace<Cell<T | null>>` → `{ anyOf: [{ … }, { type: "null" }], asCell:
+[{ kind: "cell", scope: "space" }] }`), and a handle that may be missing is an
+optional property, which keeps the cell alone (`handle?: PerSpace<Cell<T>>` →
+`{ …, asCell: [{ kind: "cell", scope: "space" }] }`). The union is read as
+written, so `handle?: PerSpace<Cell<T>> | undefined` throws as well, including
+where the type it is read at has lost that `undefined`, as `Required` takes it
+out. Tested end to end in the runtime:
 `packages/runner/test/ascell-scope-cap.test.ts`. A nested scope **without an intervening
 cell boundary throws** (`Nested scope wrappers require a cell boundary between
 scopes.`; tested, scope-wrappers.test.ts), and so does a type carrying two
@@ -1824,7 +1819,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
-| Scope wrapper around a cell beside anything but `null` or `undefined` | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
+| Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

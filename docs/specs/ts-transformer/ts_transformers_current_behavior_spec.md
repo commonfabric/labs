@@ -2233,7 +2233,8 @@ adjustments:
   members, as `PerSpace<Cell<A> & Extra>` does, beside which the cell is
   rebuilt alone, as schema generation reads it. A scoped cell beside `null` or
   `undefined` is rebuilt with them inside the wrapper,
-  `PerSession<ReadonlyCell<boolean> | null>`
+  `PerSession<ReadonlyCell<boolean> | null>`, which schema generation refuses,
+  as it refuses the union its author wrote
   (`test/scope-wrapper-alias-schema.test.ts`). A cell in a scope that the
   narrowing of cells cannot take it apart from keeps the type it was declared
   with: rebuilt from its value, it would lose the scope, and the cap on its

@@ -507,36 +507,6 @@ export default pattern(() => {
       });
     });
 
-    it("keeps the scope, the cap, the labels, and `null` of a labelled nullable scoped cell's capture", async () => {
-      // The cell's alternative holds its CFC carrier beside it.
-      const module = await transformed(
-        `import { computed, pattern, Writable, type Confidential, type PerSpace } from "commonfabric";
-interface A { a: string; b: number }
-type Maybe = PerSpace<Confidential<Writable<A>, readonly ["owner"]>> | null;
-export default pattern<{ enabled: boolean }>(({ enabled }) => {
-  const handle: Maybe = enabled ? Writable.perSpace.of<A>({ a: "x", b: 1 }) : null;
-  return { out: computed(() => handle?.get().a) };
-});`,
-      );
-      const captures = callsNamed(module, "lift").at(-1)!.typeArguments![0]!;
-      const [input] = callSchemas(module, "lift");
-
-      expect(captures.getText(module).replace(/\s+/g, " ")).toBe(
-        "{ handle: __cfHelpers.PerSpace<__cfHelpers.ReadonlyCell<A> | null>; }",
-      );
-      expect((input!.properties as Record<string, unknown>).handle).toEqual({
-        anyOf: [
-          {
-            $ref: "#/$defs/A",
-            asCell: [{ kind: "readonly", scope: "space" }],
-          },
-          { type: "null" },
-        ],
-        scope: "space",
-        ifc: { confidentiality: ["owner"] },
-      });
-    });
-
     it("keeps the cell, the scope, the cap, and the labels of a labelled scoped cell intersected with another type in its capture", async () => {
       // `Cell<A> & Extra` is the cell, as schema generation reads it.
       const module = await transformed(
@@ -755,158 +725,119 @@ export default pattern<{ draft: PerSession<Draft> }>(({ draft }) => ${body});`,
       });
     }
 
-    for (const nullish of ["null", "undefined"]) {
-      it(`declares a scoped cell's scope for the slot and as its handle's cap beside \`${nullish}\``, async () => {
-        const [schema] = emittedSchemas(
-          await transformed(
-            `import { toSchema, type Cell, type PerSpace } from "commonfabric";
-export const schema = toSchema<{
-  handle: PerSpace<Cell<{ field: string }>> | ${nullish};
-}>();`,
-          ),
-        );
+    describe("a scoped cell beside `null` or `undefined`", () => {
+      // Beside either, the cell is an `anyOf` branch, where its handle's cap
+      // would sit apart from the slot's scope, so it is refused wherever it is
+      // read. A cell whose value may be `null` holds it inside, and a cell that
+      // may be absent is an optional property.
 
-        expect((schema!.properties as Record<string, unknown>).handle).toEqual({
-          anyOf: [
-            { type: nullish },
-            {
-              type: "object",
-              properties: { field: { type: "string" } },
-              required: ["field"],
-              asCell: [{ kind: "cell", scope: "space" }],
-            },
-          ],
-          scope: "space",
-        });
-      });
+      const REFUSAL =
+        "A scope wrapper around a cell cannot hold anything beside the cell";
+
+      for (const nullish of ["null", "undefined"]) {
+        for (
+          const [spelling, declared] of [
+            ["outside", `PerSession<Writable<A>> | ${nullish}`],
+            ["inside", `PerSession<Writable<A> | ${nullish}>`],
+          ] as const
+        ) {
+          for (
+            const [position, source] of [
+              [
+                "a pattern input",
+                `export default pattern<{ handle: ${declared} }>(({ handle }) => ({
+  out: computed(() => handle?.get().a),
+}));`,
+              ],
+              [
+                "a local's capture",
+                `export default pattern<{ enabled: boolean }>(({ enabled }) => {
+  const handle: ${declared} = enabled
+    ? Writable.perSession.of<A>({ a: "x" })
+    : ${nullish};
+  return { out: computed(() => handle?.get().a) };
+});`,
+              ],
+              [
+                "a handler's state",
+                `export const read = handler<void, { handle: ${declared} }>(
+  (_, { handle }) => {
+    handle?.get().a;
+  },
+);`,
+              ],
+            ] as const
+          ) {
+            it(`refuses one with \`${nullish}\` written ${spelling} the wrapper as ${position}`, async () => {
+              await expect(transformed(
+                `import { computed, handler, pattern, Writable, type PerSession } from "commonfabric";
+interface A { a: string }
+${source}`,
+              )).rejects.toThrow(REFUSAL);
+            });
+          }
+        }
+      }
 
       for (
-        const [spelling, declared] of [
-          ["outside", `PerSession<Writable<boolean>> | ${nullish}`],
-          ["inside", `PerSession<Writable<boolean> | ${nullish}>`],
+        const [position, source] of [
+          [
+            "a pattern input",
+            `export default pattern<{ handle?: PerSession<Writable<A>> | undefined }>(({ handle }) => ({
+  out: computed(() => handle?.get().a),
+}));`,
+          ],
+          [
+            "a handler's state",
+            `export const read = handler<void, { handle?: PerSession<Writable<A>> | undefined }>(
+  (_, { handle }) => {
+    handle?.get().a;
+  },
+);`,
+          ],
         ] as const
       ) {
-        it(`keeps the scope, the cap, and \`${nullish}\` of a nullable scoped cell's capture, \`${nullish}\` written ${spelling} the wrapper`, async () => {
-          const module = await transformed(
-            `import { computed, pattern, UI, Writable, type PerSession } from "commonfabric";
-export default pattern<{ enabled: boolean }>(({ enabled }) => {
-  const confirming: ${declared} = enabled
-    ? Writable.perSession.of<boolean>(false)
-    : ${nullish};
-  const isConfirming = computed(() => confirming?.get());
-  return { [UI]: <div>{isConfirming ? "yes" : "no"}</div> };
-});`,
-          );
-          const capture = callsNamed(module, "lift")
-            .flatMap((lift) =>
-              (lift.typeArguments![0]! as ts.TypeLiteralNode).members
-            )
-            .find((member) =>
-              member.name?.getText(module) === "confirming"
-            ) as ts.PropertySignature;
-          const [input] = callSchemas(module, "lift");
-
-          expect(capture.type!.getText(module)).toBe(
-            `__cfHelpers.PerSession<__cfHelpers.ReadonlyCell<boolean> | ${nullish}>`,
-          );
-          expect((input!.properties as Record<string, unknown>).confirming)
-            .toEqual({
-              anyOf: [
-                {
-                  type: "boolean",
-                  asCell: [{ kind: "readonly", scope: "session" }],
-                },
-                { type: nullish },
-              ],
-              scope: "session",
-            });
+        it(`refuses an optional one with \`undefined\` written beside it as ${position}`, async () => {
+          await expect(transformed(
+            `import { computed, handler, pattern, Writable, type PerSession } from "commonfabric";
+interface A { a: string }
+${source}`,
+          )).rejects.toThrow(REFUSAL);
         });
       }
 
-      it(`keeps the scope, the cap, and \`${nullish}\` of an input scoped cell holding \`${nullish}\` in its capture`, async () => {
-        // The input is narrowed to the capability its capture uses, which
-        // takes the cell out of the wrapper beside the \`${nullish}\`.
-        const module = await transformed(
-          `import { computed, pattern, type Cell, type PerSpace } from "commonfabric";
-interface A { a: string }
-export default pattern<{ handle: PerSpace<Cell<A> | ${nullish}> }>(({ handle }) => ({
-  out: computed(() => handle?.get().a),
-}));`,
-        );
-        const [input] = callSchemas(module, "lift");
-
-        expect((input!.properties as Record<string, unknown>).handle).toEqual({
-          anyOf: [
-            {
-              $ref: "#/$defs/A",
-              asCell: [{ kind: "readonly", scope: "space" }],
-            },
-            { type: nullish },
+      for (
+        const [form, declared, read] of [
+          [
+            "whose value may be `null`",
+            "handle: PerSession<Writable<A | null>>",
+            "handle.get()?.a",
           ],
-          scope: "space",
-        });
-      });
-
-      it(`keeps the scope, the cap, the labels, and \`${nullish}\` of a nullable scoped cell intersected with another type's capture`, async () => {
-        const module = await transformed(
-          `import { computed, pattern, type Cell, type Confidential, type PerSpace } from "commonfabric";
-interface A { a: string }
-declare const EXTRA: unique symbol;
-type Extra = { readonly [EXTRA]: true };
-type Handle = PerSpace<Confidential<Cell<A> & Extra, readonly ["owner"]>> | ${nullish};
-export default pattern<{ handle: Handle }>(({ handle }) => ({
-  handle,
-  out: computed(() => handle?.get().a),
-}));`,
-        );
-        const capture = callsNamed(module, "lift")
-          .flatMap((lift) =>
-            (lift.typeArguments![0]! as ts.TypeLiteralNode).members
-          )
-          .find((member) =>
-            member.name?.getText(module) === "handle"
-          ) as ts.PropertySignature;
-        const [input] = callSchemas(module, "lift");
-
-        expect(capture.type!.getText(module)).toBe(
-          `__cfHelpers.PerSpace<__cfHelpers.ReadonlyCell<A> | ${nullish}>`,
-        );
-        expect((input!.properties as Record<string, unknown>).handle).toEqual({
-          anyOf: [
-            {
-              $ref: "#/$defs/A",
-              asCell: [{ kind: "readonly", scope: "space" }],
-            },
-            { type: nullish },
+          [
+            "that is optional",
+            "handle?: PerSession<Writable<A>>",
+            "handle?.get().a",
           ],
-          scope: "space",
-          ifc: { confidentiality: ["owner"] },
-        });
-      });
-    }
-
-    it("keeps the scope and the cap of a nullable scoped capture of two cells' intersection", async () => {
-      // Narrowing reads the intersection as its first cell, as schema
-      // generation reads it.
-      const module = await transformed(
-        `import { computed, pattern, type Cell, type PerSpace } from "commonfabric";
+        ] as const
+      ) {
+        it(`keeps the cap of a scoped cell ${form} in its capture`, async () => {
+          const [input] = callSchemas(
+            await transformed(
+              `import { computed, pattern, Writable, type PerSession } from "commonfabric";
 interface A { a: string }
-interface B { b: number }
-type Handle = PerSpace<Cell<A> & Cell<B>> | null;
-export default pattern<{ handle: Handle }>(({ handle }) => ({
-  handle,
-  out: computed(() => handle?.get().a),
+export default pattern<{ ${declared} }>(({ handle }) => ({
+  out: computed(() => ${read}),
 }));`,
-      );
-      const [input] = callSchemas(module, "lift");
+            ),
+            "lift",
+          );
 
-      expect((input!.properties as Record<string, unknown>).handle).toEqual({
-        anyOf: [
-          { $ref: "#/$defs/A", asCell: [{ kind: "readonly", scope: "space" }] },
-          { type: "null" },
-        ],
-        scope: "space",
-      });
+          expect((input!.properties as Record<string, unknown>).handle)
+            .toMatchObject({
+              asCell: [{ kind: "readonly", scope: "session" }],
+            });
+        });
+      }
     });
 
     for (
@@ -1001,12 +932,6 @@ export default pattern<Input>(({ handle }) => ({
             "x",
           ],
           ["a value with a default", 'Default<string, "d">', "x"],
-          ["a cell", "Writable<A>", "x?.get()"],
-          [
-            "a labelled cell",
-            'Confidential<Writable<A>, readonly ["owner"]>',
-            "x?.get()",
-          ],
         ] as const
       ) {
         it(`reads \`PerUser<T> | ${nullish}\` as \`PerUser<T | ${nullish}>\` for ${shape}`, async () => {
