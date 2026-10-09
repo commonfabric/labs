@@ -137,6 +137,54 @@ present; no stage handles a missing one.
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
+   - `definesDocument` — a presence flag on a `toSchema` call that describes
+     a document: an authored pattern's argument (not one lowered from an
+     array method's callback, whose argument is captures and an element), its
+     result where the author wrote the result type (`pattern<In, Out>`, or the
+     callback's return annotation; for a pattern lowered from an array
+     method's callback, whose type arguments the lowering writes, the
+     annotation alone), or a cell `new Writable(…)`,
+     `Writable.of(…)`, `cell(…)` and the other cell factories create.
+     SchemaInjection sets it on the call it creates, and on the `toSchema`
+     calls that generate a schema the author passes in that call's place:
+     written there, or reached through `const` bindings, imports of them, and
+     member accesses on the object literals they lead to (nested, aliased, or
+     held in a spread, and the whole literal where a key computed at run time
+     may be the one read), including `toSchema` calls inside a schema written
+     out as a literal. A call is read through its arguments, a function passed
+     as one of them through what it returns, and a function the program
+     writes also through what it returns, its parameters and their defaults
+     standing for those arguments. A function only declared writes no
+     `toSchema` call when it is imported from the library or returns a
+     primitive; any other cannot be read. A `const` binding is read through
+     what it is bound to, and a member access through the object it reads,
+     whatever their types; any other value of a primitive type holds no
+     schema. A `toSchema` call in another module is generated there as a
+     view; passed where a document is defined, it is reported
+     (`cfc-write-authorized-by:unread`) when its type holds a writer policy. So
+     is a schema that cannot be read back to its `toSchema` calls and
+     literals, such as a `let` binding, a call whose function cannot be
+     read, or a binding the program writes to or into: a parameter it
+     reassigns, or a `const` whose object an assignment, a `delete`, or a
+     standard call that writes into its argument (`Object.assign`, an array's
+     `push`) changes, directly or through a `const` bound to it, in the module
+     that declares it or the one that reads it. SchemaGeneration passes the flag to the
+     schema generator as its `definesDocument` option, under which a writer it
+     cannot read is an error. Like `patternResultAnchor`, a plain identity
+     lookup with **no** `getOriginalNode` fallback. A result inferred from the
+     callback is a view where it returns a reactive reference: the pattern's
+     argument, a cell, a reactive call's result or another pattern's
+     instance, or a member of one. Any other
+     data it returns under a writer policy is data its result document holds:
+     a literal, an object or array literal (spreads and computed keys
+     included, a member its type does not name read against the type's index
+     signature), a constant, a plain call's result, at any depth. That result
+     is rebuilt from the returned object, and each such member's type node
+     carries the `definesDocument` schema hint, which the generator reads the
+     same way for that member alone. A returned value the rebuild cannot read
+     member by member, such as one holding a spread, marks the whole result.
+     A pattern lowered from an array method's callback has a result document
+     of its own, read the same way.
    - `printedFrom` — for a type node printed from a type, that type. Both
      printers record it: `typeToTypeNodeWithRegistry()`, including the
      `unknown` it puts in place of a type the checker will not print, and the
@@ -1176,13 +1224,32 @@ report these through the same collector (deduplicated via §2.2's
   it. A binding node that is not a direct `typeof` of an identifier is reported
   even when the policy is written directly. A direct path
   (`toSchema<WriteAuthorizedBy<…>>()`, a cell constructor's
-  type argument) that mints its own claim gives the generator no binding node
-  and is not reported here; the validator above checks its spelling. A schema
-  read from a type alone has no reference and is not reported either, including
-  a declaration parameter bound to an argument with no syntax. See §11 of the
+  type argument) that mints its own claim gives the generator the payload's
+  node with the `rootWriterSupplied` option, under which the generator counts
+  that writer as read: it reports no root writer, nullable payloads included,
+  whose policy the checker reduces to a type with no alias name, and still
+  reports a second writer policy the root's type carries; the validator above
+  checks its spelling. A schema that defines a document (§2.2's
+  `definesDocument`: an authored pattern's input, its authored result type, a
+  created cell's schema, data an inferred result returns under a writer
+  policy that is not a reactive reference) also reports every writer it
+  reaches where no
+  syntax names it: through a parameter bound to an argument with no syntax, a
+  generic member's indexed access or conditional type, a number index
+  signature beside a string one, a carrier's metadata read from a type alone,
+  or a cell value whose type is inferred. Any other schema read from a type alone,
+  such as a computed's capture, a handler's state, a pattern result inferred
+  from its callback, or the argument of a pattern lowered from an array
+  method's callback, is not reported; it reads the policy whole or not at all,
+  leaving out with an unread writer the `ownerPrincipal` and current-principal
+  integrity that the runtime enforces only beside one. SchemaInjection reports
+  it too, where a document is defined by a `toSchema` call another module
+  generates, holding a writer policy, or by a schema it cannot read back to
+  its sources (§2.2). See §11 of the
   schema-generator mapping spec,
-  rule 8 of `cfc_authoring_contract.md`, and
-  `test/protected-cell-policy.test.ts`.
+  rules 8 and 9 of `cfc_authoring_contract.md`,
+  `test/protected-cell-policy.test.ts`, and
+  `test/document-writer-policy.test.ts`.
 - **Warning** `cfc-label:unread` (`common-fabric-formatter.ts`,
   `unread-label-diagnostics.ts`) — a CFC label list (`confidentiality`,
   `integrity`, `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, or a
@@ -2758,8 +2825,8 @@ Special path:
   bindings remain fatal; secondary type-only reads retain the exemption
   described in §6.8. An indexed access or conditional generic member whose
   instantiated carrier retains a writer policy but loses its binding syntax
-  also reports `cfc-write-authorized-by:unread`, including on stored-source
-  compilation. Pinned by `test/generic-writer-policy.test.ts` and
+  also reports `cfc-write-authorized-by:unread` in a schema that defines a
+  document, including on stored-source compilation. Pinned by `test/generic-writer-policy.test.ts` and
   `packages/runner/test/generic-writer-policy.test.ts`; the schema-generator
   mapping spec §§4.1 and 11 describe the binding rules. The library syntax
   branch follows named aliases to reachable writer queries, so

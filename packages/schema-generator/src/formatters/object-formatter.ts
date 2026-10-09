@@ -29,6 +29,8 @@ import {
   safeGetPropertyType,
 } from "../type-utils.ts";
 import { getCellWrapperInfo } from "../typescript/cell-brand.ts";
+import { holdsWriterPolicy } from "../typescript/writer-policy.ts";
+import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
 import { isInternalMemberName } from "../typescript/property-name.ts";
 import {
   isDefaultNodeWithUndefined,
@@ -40,7 +42,7 @@ import {
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
-import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
+import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -467,6 +469,23 @@ export class ObjectFormatter implements TypeFormatter {
       }
       (schema as Record<string, unknown>).additionalProperties =
         apSchema as MutableJSONSchemaObj;
+      // A number index signature beside a string one is lowered as the string
+      // one alone, so a writer policy only its values hold is lost. A document
+      // stored that way would admit any writer to them.
+      if (
+        context.definesDocument && stringIndex && numberIndex &&
+        holdsWriterPolicy(numberIndex, checker) &&
+        !holdsWriterPolicy(stringIndex, checker)
+      ) {
+        reportUnreadWriterBinding(
+          context,
+          "WriteAuthorizedBy",
+          "This schema defines a document, which would admit any writer, and " +
+            "a number index signature beside a string one is lowered as the " +
+            "string one alone, so the writer policy its values hold is lost. " +
+            "Declare the policy on the string index signature too.",
+        );
+      }
     }
     if (required.length > 0) schema.required = required;
 

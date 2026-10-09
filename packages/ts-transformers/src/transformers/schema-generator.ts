@@ -135,6 +135,14 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
             context.isSourceFileDefaultLibrary(file),
           // A node the pipeline printed from a type is read as that type.
           printedFrom: (typeNode) => context.state.printedFrom(typeNode),
+          // A schema a document's stored envelope is made from fails on a
+          // writer it cannot read (`SchemaGenerationOptions.definesDocument`).
+          ...(context.state.isDocumentSchemaCall(node) &&
+            { definesDocument: true }),
+          // This stage mints the root policy's claim itself, below, and hands
+          // the generator only the payload's node, where that writer cannot be
+          // read (`SchemaGenerationOptions.rootWriterSupplied`).
+          ...(writeAuthorizedByIdentity && { rootWriterSupplied: true }),
           // The schema-generator owns the general/nested CFC alias path. Give
           // it the same spelling and stamp source used by the direct
           // WriteAuthorizedBy special case below, including for bindings

@@ -47,6 +47,14 @@ import {
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { resolveWriterBinding } from "../typescript/writer-binding.ts";
+import { writerPolicyHeldBy } from "../typescript/writer-policy.ts";
+import {
+  type CarrierStamp,
+  carrierStamps,
+  CFC_CARRIER_PROPERTY,
+  cfcCarrierProperty,
+  memberValueType,
+} from "../typescript/cfc-carrier.ts";
 import {
   type CellWrapperKind,
   getCellBrand,
@@ -64,7 +72,7 @@ import {
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
+import { POLICY_READ_IN_PART, withIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
   holdsUnreadMetadataLabel,
@@ -105,24 +113,6 @@ const UNREAD: unique symbol = Symbol("unread syntax");
  * the type the checker resolves it to, as it does the direct spelling.
  */
 const lowersFromSyntax = (name: string): boolean => name !== "Projection";
-
-/**
- * The type of the value `member` holds, given `type`, its type: `type` less
- * the `undefined` that an optional member's `?` adds.
- */
-function memberValueType(
-  member: ts.Symbol,
-  type: ts.Type,
-  checker: ts.TypeChecker,
-): ts.Type {
-  if ((member.flags & ts.SymbolFlags.Optional) === 0 || !type.isUnion()) {
-    return type;
-  }
-  // `getNonNullableType` also removes a `null`, which `?` does not add.
-  return type.types.some((part) => (part.flags & ts.TypeFlags.Null) !== 0)
-    ? type
-    : checker.getNonNullableType(type);
-}
 
 const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set(
   Object.values(SCOPE_WRAPPER_FOR_SCOPE),
@@ -408,12 +398,6 @@ const soleConditionalBranch = (
 };
 
 /**
- * The member a CFC metadata carrier holds (`Cfc` in `packages/api/cfc.ts`).
- * It is a phantom: no value holds it.
- */
-export const CFC_CARRIER_PROPERTY = "__ct_cfc__";
-
-/**
  * The default-library aliases that map an object's members, which fold a
  * labelled operand's carrier into the object they build as one more member.
  */
@@ -434,18 +418,6 @@ const PRIMITIVE_KEEPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
   "Partial",
   "Required",
 ]);
-
-/**
- * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
- * metadata carrier, which a CFC alias intersects its payload with.
- */
-const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
-  const properties = member.getProperties();
-  return properties.length === 1 &&
-      properties[0]!.name === CFC_CARRIER_PROPERTY
-    ? properties[0]
-    : undefined;
-};
 
 /**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
@@ -469,65 +441,6 @@ const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
  */
 export const isCfcCarrier = (member: ts.Type): boolean =>
   cfcCarrierProperty(member) !== undefined;
-
-/**
- * One policy a CFC carrier records: its metadata, and the payload it was
- * written around, where the carrier records one (`CfcStamp` in
- * `packages/api/cfc.ts`). A carrier that holds its metadata alone records
- * none.
- */
-type CarrierStamp = {
-  readonly meta: ts.Type;
-  readonly of: ts.Type | undefined;
-};
-
-/** The members a `CfcStamp` holds. */
-const STAMP_MEMBER_NAMES: ReadonlySet<string> = new Set(["meta", "of"]);
-
-/** Whether `type` is a `CfcStamp`: an object holding `meta`, and `of` at most besides. */
-const isCarrierStamp = (type: ts.Type): boolean => {
-  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
-  const names = type.getProperties().map((property) => property.name);
-  return names.includes("meta") &&
-    names.every((name) => STAMP_MEMBER_NAMES.has(name));
-};
-
-/**
- * The policies `value`, the type a carrier's `__ct_cfc__` holds, records. An
- * intersection or a mapped type folds several carriers into one, whose value
- * is then the intersection of what each held, and two spreads that may each
- * supply it make it their union; each member is a policy of its own.
- */
-const carrierStamps = (
-  value: ts.Type,
-  checker: ts.TypeChecker,
-): CarrierStamp[] => {
-  const parts = value.isIntersection() ||
-      (value.isUnion() && value.types.every(isCarrierStamp))
-    ? value.types
-    : [value];
-  return parts.map((part) => {
-    if (!isCarrierStamp(part)) return { meta: part, of: undefined };
-    const member = (name: string) => {
-      const symbol = part.getProperty(name);
-      return symbol &&
-        memberValueType(symbol, checker.getTypeOfSymbol(symbol), checker);
-    };
-    // The payload is what the policy was written around, as written: only
-    // the `undefined` its optional `?` adds is taken off, since the checker's
-    // non-nullable form of a parameter `T` is `T & {}`, which no binding
-    // names.
-    const ofSymbol = part.getProperty("of");
-    const of = ofSymbol && checker.getTypeOfSymbol(ofSymbol);
-    const definedOf = of?.isUnion()
-      ? of.types.filter((type) => (type.flags & ts.TypeFlags.Undefined) === 0)
-      : undefined;
-    return {
-      meta: member("meta")!,
-      of: definedOf?.length === 1 ? definedOf[0] : of,
-    };
-  });
-};
 
 /**
  * The payload `stamp`'s policy was written around, where `payload` holds the
@@ -860,6 +773,28 @@ const cfcCarriedParts = (
   }
   return metadata.length > 0 ? { payload: rest, metadata } : undefined;
 };
+
+/**
+ * The remedy `cfc-write-authorized-by:unread` gives for a writer policy read
+ * where no syntax names its writer, in a schema that defines a document.
+ */
+const UNREAD_DOCUMENT_WRITER_REMEDY =
+  "This schema defines a document, which would admit any writer, and no " +
+  "syntax names the writer where the policy is read, as none does where it " +
+  "is reached through another type's parameter, an index signature, a " +
+  "tuple, or a type inferred from a value. Write the policy in the declared " +
+  "type of the field, or of the cell, as in `new Writable<Policy>(…)`.";
+
+/**
+ * The remedy `cfc-write-authorized-by:unread` gives, in a schema that defines
+ * a document, for a writer policy a generic member's operator syntax reads
+ * where no syntax names its writer.
+ */
+const OPERATOR_ERASED_WRITER_REMEDY =
+  "This schema defines a document, which would admit any writer, and the " +
+  "generic member's operator syntax cannot preserve its authored writer " +
+  "binding. Write the protected member directly or pass the policy " +
+  "unchanged through a parameter.";
 
 /**
  * Whether `symbol` is one of the default library's aliases that map an
@@ -1307,7 +1242,12 @@ export class CommonFabricFormatter implements TypeFormatter {
         context,
         resolvedCfcAlias,
         "cfc",
-        () => this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
+        () =>
+          this.#withPolicyReadWhole(
+            type,
+            this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
+            context,
+          ),
       );
     }
 
@@ -1321,6 +1261,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     // are the operand's, read from its carriers in full or not at all.
     const view = this.#libraryView(type, context);
     if (view) {
+      this.#reportCarriedWriter(
+        view.metadata.map((metadata) => metadata.type),
+        context,
+      );
       const shape = view.primitive
         ? this.#schemaGenerator.formatChildType(
           view.payload[0]!,
@@ -1342,13 +1286,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     const carried = context.carriersRead !== type &&
       cfcCarriedParts(type, context.typeChecker);
     if (carried) {
-      if (
-        carried.metadata.some((stamp) =>
-          context.typeChecker.getNonNullableType(stamp.meta).getProperty(
-            "writeAuthorizedBy",
-          )
-        )
-      ) this.#reportUnreadOperatorWriter(context);
+      this.#reportCarriedWriter(
+        carried.metadata.map((stamp) => stamp.meta),
+        context,
+      );
       const payload = carried.payload.length === 1
         ? this.#schemaGenerator.formatChildType(
           carried.payload[0]!,
@@ -2266,10 +2207,12 @@ export class CommonFabricFormatter implements TypeFormatter {
       checker.getTypeOfSymbol(carrier),
       checker,
     );
+    const stamps = carrierStamps(value, checker);
+    this.#reportCarriedWriter(stamps.map((stamp) => stamp.meta), context);
     return this.#withPlacedLabels(
       schema,
       type,
-      carrierStamps(value, checker).map((stamp) => ({
+      stamps.map((stamp) => ({
         type: stamp.meta,
         bound: context.boundTypeParameters,
         of: stamp.of,
@@ -3502,9 +3445,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * an error here as well as in `WriteAuthorizedByValidationTransformer`,
    * which cannot see bindings passed through another alias's parameters. A
    * policy written through another alias whose binding has no node to read
-   * is also an error: its schema would carry no write restriction. A generic
-   * member whose operator syntax erases its bound writer reports an error
-   * with a specific authoring remedy.
+   * is also an error: its schema would carry no write restriction. A
+   * binding no syntax names, read from a type alone or erased by a generic
+   * member's operator syntax, is an error only in a schema that defines a
+   * document (`#reportWriterWithoutSyntax()`); a view reports nothing.
    */
   #buildWriteAuthorizedByMetadataForArg(
     context: GenerationContext,
@@ -3514,10 +3458,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     const bindingNode = aliasArgNodes?.[1];
     if (!bindingNode) {
       if (
-        !this.#reportUnreadOperatorWriter(context) &&
+        !this.#erasesWriterThroughOperator(context) &&
         this.#writesPolicyThroughAlias(aliasName, context)
       ) {
         reportUnreadWriterBinding(context, aliasName);
+      } else if (!this.#suppliesRootWriter(context)) {
+        this.#reportWriterWithoutSyntax(aliasName, context);
       }
       return undefined;
     }
@@ -3526,9 +3472,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     ) {
       // A declaration read from an instantiated type can name a parameter
       // whose argument has no syntax. It is a type-only read, not an authored
-      // indirect binding for this check to reject.
+      // indirect binding for this check to reject; it is reported only where
+      // the schema defines a document.
       const bound = this.#boundArgumentAt(bindingNode, context);
-      if (bound && !bound.argument.node) return undefined;
+      if (bound && !bound.argument.node) {
+        this.#reportWriterWithoutSyntax(aliasName, context);
+        return undefined;
+      }
       reportUnreadWriterBinding(context, aliasName);
       return undefined;
     }
@@ -3543,26 +3493,20 @@ export class CommonFabricFormatter implements TypeFormatter {
     };
   }
 
-  /** Reports a policy whose authored operator erased its writer syntax. */
-  #reportUnreadOperatorWriter(context: GenerationContext): boolean {
+  /**
+   * Whether `context` reads a generic member whose operator syntax, such as an
+   * indexed access or a conditional type over a bound parameter, erases the
+   * writer binding the parameter's argument wrote.
+   */
+  #erasesWriterThroughOperator(context: GenerationContext): boolean {
     const node = context.typeNode;
-    if (
-      !node || !context.boundTypeParameters ||
-      !holdsTypeParameter(
+    return !!node && !!context.boundTypeParameters &&
+      holdsTypeParameter(
         node,
         context.typeChecker,
         context.boundTypeParameters.arguments,
-      ) ||
-      !usesParameterUnreachably(node, context.typeChecker)
-    ) return false;
-    reportUnreadWriterBinding(
-      context,
-      "WriteAuthorizedBy",
-      "The generic member's operator syntax cannot preserve its authored " +
-        "writer binding. Write the protected member directly or pass the " +
-        "policy unchanged through a parameter.",
-    );
-    return true;
+      ) &&
+      usesParameterUnreachably(node, context.typeChecker);
   }
 
   /**
@@ -3592,6 +3536,104 @@ export class CommonFabricFormatter implements TypeFormatter {
       context,
     ) as TypeWithInternals;
     return denoted.aliasSymbol?.name === aliasName;
+  }
+
+  /**
+   * Reports `aliasName`, a writer policy read where no syntax names its
+   * writer, as unread where the schema defines a document
+   * (`GenerationContext.definesDocument`), whose stored envelope would hold no
+   * write restriction. Any other schema views a document that stores its own,
+   * so a type-only read there, such as a computed's capture, is not reported.
+   */
+  #reportWriterWithoutSyntax(
+    aliasName: string,
+    context: GenerationContext,
+  ): void {
+    if (context.definesDocument) {
+      reportUnreadWriterBinding(
+        context,
+        aliasName,
+        this.#erasesWriterThroughOperator(context)
+          ? OPERATOR_ERASED_WRITER_REMEDY
+          : UNREAD_DOCUMENT_WRITER_REMEDY,
+      );
+    }
+  }
+
+  /**
+   * `schema`, the lowering of `type`, a CFC alias chain's instantiation, with
+   * the writer policy `type` holds marked as read in part
+   * (`POLICY_READ_IN_PART`) where the schema views a document and the writer
+   * went unread here. The view reads the policy whole or not at all: once the
+   * schema is generated, a policy whose writer arrived since, as a label the
+   * value's declaration states, is whole, and one whose writer did not has
+   * the principal claims the runtime enforces only beside a writer left out
+   * with it (`settlePoliciesReadInPart()`). Without its writer, such a claim
+   * refuses every write against it, its own writer's included, and stops no
+   * other, while the document the view reads stores the whole policy. A
+   * claim whose type holds no writer is the author's, and stays as written.
+   * A schema that defines a document keeps its claims, and has the unread
+   * writer reported instead; a root whose writer the caller supplies keeps
+   * them too (`GenerationContext.rootWriterSuppliedAt`).
+   */
+  #withPolicyReadWhole(
+    type: ts.Type,
+    schema: MutableJSONSchema,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    if (
+      context.definesDocument || this.#suppliesRootWriter(context) ||
+      !isObjectOrArray(schema) || !isObjectOrArray(schema.ifc) ||
+      schema.ifc.writeAuthorizedBy !== undefined ||
+      schema.ifc.writePolicyAnyOf !== undefined
+    ) {
+      return schema;
+    }
+    const checker = context.typeChecker;
+    const carried = cfcCarriedParts(type, checker);
+    if (
+      !carried?.metadata.some((stamp) =>
+        writerPolicyHeldBy(stamp.meta, checker)
+      )
+    ) {
+      return schema;
+    }
+    return {
+      ...schema,
+      ifc: { ...schema.ifc, [POLICY_READ_IN_PART]: true } as NonNullable<
+        MutableJSONSchemaObj["ifc"]
+      >,
+    };
+  }
+
+  /**
+   * Like {@link #reportWriterWithoutSyntax}, except for the writer policy any
+   * of `metadata` holds, the metadata of carriers read from a type alone.
+   */
+  #reportCarriedWriter(
+    metadata: readonly ts.Type[],
+    context: GenerationContext,
+  ): void {
+    const policies = metadata.flatMap((type) =>
+      (type.isIntersection() ? type.types : [type]).flatMap((part) =>
+        writerPolicyHeldBy(part, context.typeChecker) ?? []
+      )
+    );
+    // A root whose writer the caller supplies has one writer read; any other
+    // is still unread.
+    const unread = this.#suppliesRootWriter(context)
+      ? policies.slice(1)
+      : policies;
+    if (unread[0]) this.#reportWriterWithoutSyntax(unread[0], context);
+  }
+
+  /**
+   * Whether `context` reads the root of a schema whose root policy's writer
+   * the caller supplies (`GenerationContext.rootWriterSuppliedAt`).
+   */
+  #suppliesRootWriter(context: GenerationContext): boolean {
+    return context.rootWriterSuppliedAt !== undefined &&
+      context.typeNode === context.rootWriterSuppliedAt;
   }
 
   #writeAuthorizedByIdentityForBinding(
