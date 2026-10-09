@@ -18,6 +18,11 @@
  */
 
 import {
+  type PatternIndexClient,
+  PatternIndexError,
+  type PatternIndexProgram,
+} from "@commonfabric/pattern-index/client";
+import {
   compileAndSavePattern,
   type MemorySpace,
   type Runtime,
@@ -25,12 +30,7 @@ import {
   sourceDocKey,
 } from "@commonfabric/runner";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import {
-  type HarnessPatternIndexClientFactory,
-  type PatternIndexClient,
-  PatternIndexError,
-  type PatternIndexProgram,
-} from "./client.ts";
+import { type HarnessPatternIndexClientFactory } from "./factory.ts";
 
 /**
  * The `RuntimeProgram` a published program compiles as. Every field the index

@@ -6,11 +6,10 @@ import {
   verifyFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import {
-  createHarnessPatternIndexClientFactory,
   PatternIndexClient,
   PatternIndexError,
-} from "../../src/pattern-index/client.ts";
-import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
+} from "@commonfabric/pattern-index/client";
+import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 
 const signer = await Identity.fromPassphrase("cf-harness pattern-index client");
 
@@ -28,10 +27,10 @@ interface RecordedRequest {
  */
 const recordingFetch = (
   responses: readonly Response[],
-): { fetchFn: HarnessFetch; requests: RecordedRequest[] } => {
+): { fetchFn: PatternIndexFetch; requests: RecordedRequest[] } => {
   const requests: RecordedRequest[] = [];
   let index = 0;
-  const fetchFn: HarnessFetch = (input, init) => {
+  const fetchFn: PatternIndexFetch = (input, init) => {
     requests.push({
       url: String(input),
       method: init?.method ?? "GET",
@@ -63,44 +62,6 @@ const createClient = (
 };
 
 describe("PatternIndexClient", () => {
-  it("constructs clients that sign as the identity read from the configured keyfile", async () => {
-    const root = await Deno.makeTempDir();
-    try {
-      const key = await Identity.generatePkcs8();
-      const identity = await Identity.fromPkcs8(key);
-      const keyPath = `${root}/identity.key`;
-      await Deno.writeFile(keyPath, key);
-      const { fetchFn, requests } = recordingFetch([
-        jsonResponse({ results: [] }),
-      ]);
-      const config = { baseUrl: "https://index.test/api" };
-      const client = await createHarnessPatternIndexClientFactory(
-        config,
-        keyPath,
-        fetchFn,
-      )();
-      await client.searchPatterns({ text: "reusable components" });
-      const request = requests[0];
-      const verified = await verifyFirstPartyHttpRequest({
-        request: new Request(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-        }),
-      });
-      expect(verified.userDid).toBe(identity.did());
-      expect(request.url).toBe("https://index.test/api/searchPatterns");
-      const defaultTransportClient =
-        await createHarnessPatternIndexClientFactory(
-          config,
-          keyPath,
-        )();
-      expect(defaultTransportClient.did).toBe(identity.did());
-    } finally {
-      await Deno.remove(root, { recursive: true });
-    }
-  });
-
   it("refuses a base URL carrying a query or fragment", () => {
     for (
       const baseUrl of [

@@ -159,6 +159,10 @@ export function deriveModuleRecordFields(code: string): {
  *   swapping out the write-once object behind our back.
  * - We snapshot from the write-once object directly (never `module.exports`), so
  *   the namespace can only reflect values that passed through write-once.
+ * - The write-once object is sealed once the body returns, so a function the
+ *   module exported cannot assign an export later, not even one still
+ *   `undefined`. Without that, an export left unassigned at load would carry
+ *   the first caller's value to every caller after it.
  *
  * Each exported value is `harden()`ed (transitive freeze) so a consumer cannot
  * mutate the internals of an exported object/array/pattern graph either. This is
@@ -184,9 +188,10 @@ export function populateModuleExports(
   // not register (e.g. tests, runtime modules).
   register: (entries: Record<string, unknown>) => void = () => {},
 ): void {
-  const writeOnceExports = createWriteOnceExports();
+  const { exports: writeOnceExports, seal } = createWriteOnceExports();
   const moduleObject = Object.freeze({ exports: writeOnceExports });
   factory(writeOnceExports, requireShim, moduleObject, register);
+  seal();
   for (const name of exportNames) {
     moduleExports[name] = hardenExportedValue(writeOnceExports[name]);
   }
@@ -352,23 +357,39 @@ function hardenExportedValue<T>(value: T): T {
  * is permitted, and the real assignment then locks it. This blocks export
  * corruption smuggled into the evaluation of an otherwise-accepted expression,
  * which the (deliberately AST-free) verifier cannot detect.
+ *
+ * `seal()` ends the body's turn: from then on every write, definition, or
+ * deletion throws, an `undefined` placeholder's included.
  */
-export function createWriteOnceExports(): Record<string, unknown> {
+export function createWriteOnceExports(): {
+  exports: Record<string, unknown>;
+  seal: () => void;
+} {
   const target: Record<string, unknown> = {};
   const locked = new Set<string | symbol>();
+  let sealed = false;
   const denyRelock = (key: string | symbol): never => {
     throw new TypeError(
       `Module export '${String(key)}' is write-once and was already assigned`,
     );
   };
-  return new Proxy(target, {
+  const denySealed = (key: string | symbol): never => {
+    throw new TypeError(
+      `Module export '${
+        String(key)
+      }' cannot be written after the module finished evaluating`,
+    );
+  };
+  const exports = new Proxy(target, {
     set(t, key, value) {
+      if (sealed) denySealed(key);
       if (locked.has(key)) denyRelock(key);
       (t as Record<string | symbol, unknown>)[key] = value;
       if (value !== undefined) locked.add(key);
       return true;
     },
     defineProperty(t, key, descriptor) {
+      if (sealed) denySealed(key);
       if (locked.has(key)) denyRelock(key);
       Reflect.defineProperty(t, key, descriptor);
       const isUndefinedPlaceholder = "value" in descriptor &&
@@ -382,6 +403,12 @@ export function createWriteOnceExports(): Record<string, unknown> {
       );
     },
   });
+  return {
+    exports,
+    seal: () => {
+      sealed = true;
+    },
+  };
 }
 
 export interface CompileSourcesOptions {

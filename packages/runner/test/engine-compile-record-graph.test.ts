@@ -251,6 +251,85 @@ describe("Engine.compileToRecordGraph()", () => {
     await expect(engine.compileToRecordGraph(program)).rejects.toThrow();
   });
 
+  describe("a compile error's location", () => {
+    // The engine adds a helper import ahead of each authored file before
+    // compiling it, so the compiler sees every authored line one line lower.
+
+    /**
+     * The message `compileToRecordGraph()` rejects with for a `/main.tsx`
+     * holding `body`, beside `otherFiles`.
+     */
+    async function compileErrorMessage(
+      body: string,
+      otherFiles: Record<string, string> = {},
+    ): Promise<string> {
+      const program: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [
+          { name: "/main.tsx", contents: body },
+          ...Object.entries(otherFiles).map(([name, contents]) => ({
+            name,
+            contents,
+          })),
+        ],
+      };
+      try {
+        await engine.compileToRecordGraph(program);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error("Expected the compile to fail");
+    }
+
+    it("names the authored line of a type error and quotes it", async () => {
+      const message = await compileErrorMessage(
+        "export default 1;\nconst wrong: number = 'text';\n",
+      );
+
+      expect(message).toContain("2 | const wrong: number = 'text';");
+      expect(message).not.toContain("3 | const wrong");
+    });
+
+    it("names the authored line of a transformer error and quotes it", async () => {
+      const message = await compileErrorMessage(
+        "export default 1;\nlet counter = 0;\n",
+      );
+
+      expect(message).toContain("/main.tsx:2:1 - error:");
+      expect(message).toContain("2 | let counter = 0;");
+    });
+
+    it("names the line of an error in a declaration file, which gets no helper import", async () => {
+      const message = await compileErrorMessage(
+        "import type { Model } from './types.d.ts';\n" +
+          "export const m: Model | undefined = undefined;\n",
+        { "/types.d.ts": "export interface Model {\n  broken: ;\n}\n" },
+      );
+      const lines = message.split("\n");
+      const quoted = lines.indexOf("2 |   broken: ;");
+
+      expect(quoted).toBeGreaterThanOrEqual(0);
+      expect(lines[quoted + 1]).toMatch(/^\s*\|\s*\^$/);
+    });
+
+    it("puts the caret on its token for an error inside a rewritten mixed import", async () => {
+      // The engine splits a default-plus-named import into two statements
+      // before compiling, moving the named bindings within the lines the
+      // import spans. Those lines keep the compiler's text and numbering.
+
+      const message = await compileErrorMessage(
+        'import main, {\n  missing,\n} from "./dep.ts";\nexport default main;\n',
+        { "/dep.ts": "export default 1;\n" },
+      );
+      const lines = message.split("\n");
+      const quoted = lines.findIndex((line) => line.includes("{ missing }"));
+      const caretColumn = lines[quoted + 1]?.indexOf("^");
+
+      expect(quoted).toBeGreaterThanOrEqual(0);
+      expect(caretColumn).toBe(lines[quoted]!.indexOf("missing"));
+    });
+  });
+
   it("emits __cf_data for CTS top-level data and evaluates it at runtime", async () => {
     const program: RuntimeProgram = {
       main: "/main.tsx",
