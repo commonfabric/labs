@@ -99,16 +99,22 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
-An integrity floor at a path below a staged link is checked against the value
-the link brings there, which is the source's value at the matching path. Where
-the source holds nothing at that path, nothing lands at the floor, and the
-floor does not apply. Where the source reaches that value through references
-staged in the same transaction, the floor uses the labels derived through them,
-as described below. Where it reaches the value through a link stored before the
-transaction, the floor uses the label of the document holding the value, at the
-value's own position, and only that label. A stored link's label describes
-whatever its target held when the link was written, so it is no evidence about
-the value there now.
+An integrity floor at a staged link's slot, or at a path below it, is checked
+against the value the link brings there, which is the source's value at the
+matching path. Where the source holds nothing at that path, nothing lands at
+the floor, and the floor does not apply. Where the source reaches that value
+through references staged in the same transaction, the floor uses the labels
+derived through them, as described below. Where it reaches the value through a
+link stored before the transaction, the floor uses the label of the document
+holding the value, at the value's own position, and only that label. A stored
+link's label describes whatever its target held when the link was written, so
+it is no evidence about the value there now. Where the walk to the value
+cannot finish, as a chain whose path grows on every hop cannot, or a stored
+link leads into a space-scoped document the replica does not hold, nothing
+credits the floor: what is there is unknown, not absent. The walk records a
+scheduling dependency on such a document, so a refused run runs again when it
+arrives. It reads each position it passes for its shape alone, so a write
+within a value the floor does not read is no conflict for the commit.
 
 When deriving a pending reference source, schema labels are minted at their
 declaration paths, with wildcard segments bound to the projected source path.

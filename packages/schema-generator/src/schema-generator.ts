@@ -75,6 +75,7 @@ import {
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
+  combineIfcLabels,
   declaredIfcLabels,
   holdsIfcLabels,
   joinMemberIfcLabels,
@@ -2947,20 +2948,33 @@ export class SchemaGenerator {
     reading: Map<ts.Type, Set<ts.TypeNode | undefined>>,
   ): Record<string, unknown> | undefined {
     const checker = context.typeChecker;
-    // A cell's labels are its value's, read at the value's own node.
+    // A cell's labels are those declared on the cell itself, as an outer
+    // `Confidential<Cell<T>, …>` declares them, combined with its value's,
+    // read at the value's own node. The cell is recognized by its type, so one
+    // an alias makes of its own parameter (`type MaybeCell<T> = Cell<T |
+    // null>`) is read too, from its type alone where no authored node spells
+    // its value. A union of cells is read member by member below, which joins
+    // every member's labels.
     const cell = resolveWrapperNode(typeNode, checker);
-    const wrapper = cell && cell.kind !== "Default" &&
+    const wrapper = !type.isUnion() && cell?.kind !== "Default" &&
       getCellWrapperInfo(type, checker);
     const valueType = wrapper &&
       (wrapper.typeRef.typeArguments ??
         checker.getTypeArguments(wrapper.typeRef))[0];
-    if (cell && valueType) {
-      return this.#labelsOf(
+    if (valueType) {
+      const own = declaredIfcLabels(
+        this.formatChildType(type, context, typeNode),
+        context.definitions,
+      );
+      const value = this.#labelsOf(
         valueType,
-        cell.node.typeArguments?.[0],
+        cell?.node.typeArguments?.[0],
         context,
         reading,
       );
+      return own === undefined && value === undefined
+        ? undefined
+        : combineIfcLabels(value ?? {}, own ?? {});
     }
     const written = typeNode && readAuthoredTypeNode(typeNode, checker);
     const paired = written && ts.isUnionTypeNode(written)

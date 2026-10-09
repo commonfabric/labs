@@ -292,46 +292,27 @@ export function detectNewExpressionKind(
 /**
  * The cell kind `call` constructs, where it calls a cell constructor's static
  * factory (`Writable.of<T>(…)`) or the plain cell constructor's `of` that
- * `commonfabric` exports as `cell<T>(…)`, named directly or through a
- * namespace import, or `undefined` for any other call.
+ * `commonfabric` exports as `cell<T>(…)`, under whatever name or namespace
+ * reaches it (`detectCommonFabricExportName()`), or `undefined` for any other
+ * call.
  */
 export function detectCellFactoryCallKind(
   call: ts.CallExpression,
   checker: ts.TypeChecker,
 ): Extract<CallKind, { kind: "cell-factory" }> | undefined {
   const callee = stripWrappers(call.expression);
-  const factoryName = isCellFunction(callee, checker)
-    ? "Cell"
-    : ts.isPropertyAccessExpression(callee) &&
-        CELL_FACTORY_NAMES.has(callee.name.text)
+  const factoryName = ts.isPropertyAccessExpression(callee) &&
+      CELL_FACTORY_NAMES.has(callee.name.text)
     ? detectCellConstructorExpressionName(callee.expression, checker, new Set())
-    : undefined;
+    : detectCommonFabricExportName(
+        callee,
+        checker,
+        new Set(),
+        CELL_FUNCTION_NAMES,
+      ) === undefined
+    ? undefined
+    : "Cell";
   return factoryName ? { kind: "cell-factory", factoryName } : undefined;
-}
-
-/**
- * Whether `callee` names the `cell` function `commonfabric` exports: imported
- * by name, or read as a member of the module's namespace.
- */
-function isCellFunction(
-  callee: ts.Expression,
-  checker: ts.TypeChecker,
-): boolean {
-  if (ts.isIdentifier(callee)) {
-    const symbol = checker.getSymbolAtLocation(callee);
-    return symbol !== undefined &&
-      getImportedCommonFabricNamedExport(symbol, CELL_FUNCTION_NAMES) !==
-        undefined;
-  }
-  if (
-    !ts.isPropertyAccessExpression(callee) ||
-    !CELL_FUNCTION_NAMES.has(callee.name.text)
-  ) return false;
-  const symbol = checker.getSymbolAtLocation(callee.name);
-  const resolved = symbol && resolveAlias(symbol, checker, new Set());
-  return resolved !== undefined &&
-    CELL_FUNCTION_NAMES.has(resolved.getName()) &&
-    (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved));
 }
 
 export function detectDirectBuilderCall(
@@ -2326,6 +2307,34 @@ function detectCellConstructorExpressionName(
     );
   }
 
+  return detectCommonFabricExportName(
+    target,
+    checker,
+    seen,
+    CELL_LIKE_CLASSES,
+    detectCellConstructorExpressionName,
+  );
+}
+
+/**
+ * The name of the `commonfabric` export among `names` that `expression`
+ * refers to: directly or through a namespace import, an import alias or
+ * re-export, or a `const` initialized with such a reference, which `follow`
+ * reads (this function by default).
+ */
+function detectCommonFabricExportName(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Symbol>,
+  names: ReadonlySet<string>,
+  follow: (
+    expression: ts.Expression,
+    checker: ts.TypeChecker,
+    seen: Set<ts.Symbol>,
+  ) => string | undefined = (initializer, checker, seen) =>
+    detectCommonFabricExportName(initializer, checker, seen, names),
+): string | undefined {
+  const target = stripWrappers(expression);
   if (!ts.isIdentifier(target) && !ts.isPropertyAccessExpression(target)) {
     return undefined;
   }
@@ -2337,10 +2346,7 @@ function detectCellConstructorExpressionName(
   if (seen.has(symbol)) return undefined;
   seen.add(symbol);
 
-  const importedName = getImportedCommonFabricNamedExport(
-    symbol,
-    CELL_LIKE_CLASSES,
-  );
+  const importedName = getImportedCommonFabricNamedExport(symbol, names);
   if (importedName) return importedName;
 
   const resolved = resolveAlias(symbol, checker, new Set());
@@ -2348,7 +2354,7 @@ function detectCellConstructorExpressionName(
 
   const name = resolved.getName();
   if (
-    CELL_LIKE_CLASSES.has(name) &&
+    names.has(name) &&
     (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved))
   ) {
     return name;
@@ -2361,11 +2367,7 @@ function detectCellConstructorExpressionName(
       declaration.initializer &&
       shouldFollowConstructorInitializer(declaration.initializer)
     ) {
-      const nested = detectCellConstructorExpressionName(
-        declaration.initializer,
-        checker,
-        seen,
-      );
+      const nested = follow(declaration.initializer, checker, seen);
       if (nested) return nested;
     }
   }
