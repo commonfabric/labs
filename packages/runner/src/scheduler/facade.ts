@@ -148,10 +148,11 @@ import {
 } from "./registration.ts";
 import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
 import {
+  captureEchoRun,
   computeEchoSteps,
   type EchoBreakerEvent,
   type EchoBreakerStats,
-  type EchoStep,
+  type EchoRun,
   RemoteEchoBreaker,
 } from "./echo-breaker.ts";
 import {
@@ -3447,30 +3448,31 @@ export class Scheduler {
         this.#executingAction = null;
         this.#currentActionId = undefined;
       },
-      classifyRemoteEcho: (actionId, tx, log, invalidCauses) =>
-        computeEchoSteps(
+      captureRemoteEcho: (tx, log, invalidCauses) =>
+        captureEchoRun(
           tx,
           log,
           invalidCauses,
           tx.tx.scopeKeyIdentity ?? this.runtime.scopeKeyIdentity,
-          { tracked: this.#echoBreaker.tracks(actionId) },
         ),
-      observeRemoteEcho: (action, actionId, steps) =>
-        this.#observeRemoteEcho(action, actionId, steps),
+      observeRemoteEcho: (action, actionId, run) =>
+        this.#observeRemoteEcho(action, actionId, run),
     };
   }
 
   /**
-   * Feed a successful reactive commit's echo steps to the remote-echo breaker
-   * and apply its verdict to the action's gate: a positive deadline defers the
-   * action's re-runs (a tripped loop), `0` lifts the deferral (a convergence
-   * that ended the loop), and `undefined` leaves the gate untouched.
+   * Classify a successful reactive commit's run, captured at kickoff, against
+   * the pairs the remote-echo breaker holds as the commit lands, feed its echo
+   * steps to the breaker, and apply its verdict to the action's gate: a
+   * positive deadline defers the action's re-runs (a tripped loop), `0` lifts
+   * the deferral (a convergence that ended the loop), and `undefined` leaves
+   * the gate untouched.
    */
-  #observeRemoteEcho(
-    action: Action,
-    actionId: string,
-    steps: readonly EchoStep[],
-  ): void {
+  #observeRemoteEcho(action: Action, actionId: string, run: EchoRun): void {
+    const steps = computeEchoSteps(run, {
+      tracked: this.#echoBreaker.tracks(actionId),
+    });
+    if (steps.length === 0) return;
     const deadline = this.#echoBreaker.observe(
       actionId,
       steps,

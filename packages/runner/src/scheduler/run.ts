@@ -35,7 +35,7 @@ import type {
   SchedulerActionInfo,
 } from "../telemetry.ts";
 import { reportDroppedCfcRejectedWrite } from "./cfc-rejection-report.ts";
-import type { EchoStep } from "./echo-breaker.ts";
+import type { EchoRun } from "./echo-breaker.ts";
 import {
   MAX_ACTION_RUN_TRACE_HISTORY,
   MAX_RETRIES_FOR_REACTIVE,
@@ -538,27 +538,27 @@ export interface SchedulerActionRunState {
   readonly clearExecutingAction: () => void;
 
   /**
-   * Classifies a reactive run for the remote-echo breaker
-   * (docs/plans/scheduler-remote-echo-breaker.md §1). Called at commit
-   * kickoff, while the transaction's write details are still staged; a
-   * committed transaction no longer exposes them.
+   * Captures a reactive run for the remote-echo breaker
+   * (docs/plans/scheduler-remote-echo-breaker.md §1), or returns `undefined`
+   * for a run nothing triggered. Called at commit kickoff, while the
+   * transaction's write details are still staged; a committed transaction no
+   * longer exposes them.
    */
-  readonly classifyRemoteEcho: (
-    actionId: string,
+  readonly captureRemoteEcho: (
     tx: IExtendedStorageTransaction,
     log: ReactivityLog,
     invalidCauses: readonly IMemorySpaceAddress[] | undefined,
-  ) => readonly EchoStep[];
+  ) => EchoRun | undefined;
 
   /**
-   * Feeds a successful reactive commit's echo steps, classified at kickoff,
-   * to the remote-echo breaker, which applies its verdict to the action's
-   * gate.
+   * Classifies a successful reactive commit's run, captured at kickoff, and
+   * feeds it to the remote-echo breaker, which applies its verdict to the
+   * action's gate.
    */
   readonly observeRemoteEcho: (
     action: Action,
     actionId: string,
-    steps: readonly EchoStep[],
+    run: EchoRun,
   ) => void;
 }
 
@@ -1200,11 +1200,10 @@ function finalizeReactiveActionCommit(
   // outbox, before the async flush clears it): does this commit have
   // asynchronous post-commit work that `settled()` must wait on?
   let hasPostCommitEffects = false;
-  // The remote-echo breaker's view of this run, classified at kickoff while
-  // the transaction's write details are still staged — a committed
-  // transaction no longer exposes them — and fed to the breaker once the
-  // commit has succeeded.
-  let echoSteps: readonly EchoStep[] = [];
+  // The remote-echo breaker's view of this run, captured at kickoff while the
+  // transaction's write details are still staged — a committed transaction
+  // no longer exposes them — and classified once the commit has succeeded.
+  let echoRun: EchoRun | undefined;
   const commitPromise = startReactiveActionCommit({
     runtime: state.runtime,
     tx: args.tx,
@@ -1213,12 +1212,7 @@ function finalizeReactiveActionCommit(
       log = txToReactivityLog(args.tx);
       if (validateLocalReadBasis(args.tx) !== undefined) return;
       warnOnWriteSurfaceViolations(state, args, log);
-      echoSteps = state.classifyRemoteEcho(
-        args.actionId,
-        args.tx,
-        log,
-        args.invalidCauses,
-      );
+      echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
       hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
       if (args.fanOutRun !== undefined) {
         // The DISCOVERY half of stage B's ratchet (design §B3): the run's
@@ -1295,8 +1289,8 @@ function finalizeReactiveActionCommit(
       if (args.succeeded && owner !== undefined) {
         owner.hasCommittedResult = true;
       }
-      if (echoSteps.length > 0) {
-        state.observeRemoteEcho(args.action, args.actionId, echoSteps);
+      if (echoRun !== undefined) {
+        state.observeRemoteEcho(args.action, args.actionId, echoRun);
       }
       state.runtime.scheduler.noteViewActionCurrent(args.action);
     },

@@ -12,6 +12,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import {
+  captureEchoRun,
   computeEchoSteps,
   echoBackoffDelayMs,
   type EchoBreakerEvent,
@@ -74,6 +75,21 @@ function feedEchoes(
     verdicts.push(breaker.observe(ACTION, [echo(docKey)], start + i * stepMs));
   }
   return verdicts;
+}
+
+/**
+ * Captures a run and classifies it, as the scheduler does across a commit:
+ * captured at kickoff, classified as the commit lands.
+ */
+function classify(
+  tx: Pick<IExtendedStorageTransaction, "getWriteDetails">,
+  log: ReactivityLog,
+  invalidCauses: readonly IMemorySpaceAddress[] | undefined,
+  identity: ScopeKeyIdentity,
+  options: { tracked: boolean },
+): EchoStep[] {
+  const run = captureEchoRun(tx, log, invalidCauses, identity);
+  return run === undefined ? [] : computeEchoSteps(run, options);
 }
 
 /** Trips the pair for `docKey` at instants 0 through threshold - 1. */
@@ -173,7 +189,7 @@ describe("scheduler-remote-echo-breaker", () => {
 
     it("returns an echo step for a document the run read, was triggered by, and changed", () => {
       const doc = address(alpha, "of:d");
-      const steps = computeEchoSteps(
+      const steps = classify(
         tx([written(doc, "B", "A")]),
         log([doc], [doc]),
         [doc],
@@ -191,7 +207,7 @@ describe("scheduler-remote-echo-breaker", () => {
       // Storage drops a write of an equal value before it reaches the write
       // details, so an agreeing run leaves no write behind at all.
       const doc = address(alpha, "of:d");
-      const steps = computeEchoSteps(tx([]), log([doc], []), [doc], session1, {
+      const steps = classify(tx([]), log([doc], []), [doc], session1, {
         tracked: true,
       });
       expect(steps).toEqual([{
@@ -207,7 +223,7 @@ describe("scheduler-remote-echo-breaker", () => {
 
       const input = address(alpha, "of:input");
       const output = address(alpha, "of:output");
-      const steps = computeEchoSteps(
+      const steps = classify(
         tx([written(output, "x!", "y!")]),
         log([input], [output]),
         [input],
@@ -224,7 +240,7 @@ describe("scheduler-remote-echo-breaker", () => {
     it("does not match a trigger in another space that has the same id", () => {
       const inAlpha = address(alpha, "of:d");
       const inBeta = address(beta, "of:d");
-      const steps = computeEchoSteps(
+      const steps = classify(
         tx([written(inBeta, "B", "A")]),
         log([inBeta], [inBeta]),
         [inAlpha],
@@ -239,14 +255,14 @@ describe("scheduler-remote-echo-breaker", () => {
       // so the step's document names the instance itself.
 
       const doc = address(alpha, "of:d", "session");
-      const [first] = computeEchoSteps(
+      const [first] = classify(
         tx([written(doc, "B", "A")]),
         log([doc], [doc]),
         [doc],
         session1,
         { tracked: true },
       );
-      const [second] = computeEchoSteps(
+      const [second] = classify(
         tx([written(doc, "B", "A")]),
         log([doc], [doc]),
         [doc],
@@ -307,7 +323,7 @@ describe("scheduler-remote-echo-breaker", () => {
     });
 
     it("returns the echo step for a run that changed its trigger", () => {
-      const steps = computeEchoSteps(
+      const steps = classify(
         transaction([detail("B", "A")]),
         { reads: [doc], shallowReads: [], writes: [doc] },
         [doc],
@@ -318,7 +334,7 @@ describe("scheduler-remote-echo-breaker", () => {
     });
 
     it("returns no step for a run that left its trigger unchanged", () => {
-      const steps = computeEchoSteps(
+      const steps = classify(
         transaction([]),
         { reads: [doc], shallowReads: [], writes: [] },
         [doc],
@@ -329,7 +345,7 @@ describe("scheduler-remote-echo-breaker", () => {
     });
 
     it("returns no step for a changed trigger the run did not read", () => {
-      const steps = computeEchoSteps(
+      const steps = classify(
         transaction([detail("B", "A")]),
         { reads: [], shallowReads: [], writes: [doc] },
         [doc],
@@ -337,6 +353,105 @@ describe("scheduler-remote-echo-breaker", () => {
         { tracked: false },
       );
       expect(steps).toEqual([]);
+    });
+  });
+
+  describe("captureEchoRun()", () => {
+    const alpha = "did:key:alpha" as IMemorySpaceAddress["space"];
+    const session: ScopeKeyIdentity = {
+      principal: "did:key:p",
+      sessionId: "s1",
+    };
+    const FORM = "of:form" as IMemorySpaceAddress["id"];
+
+    function at(path: readonly string[]): IMemorySpaceAddress {
+      return { space: alpha, id: FORM, scope: "space", path: [...path] };
+    }
+
+    function write(
+      path: readonly string[],
+      previousValue: FabricValue,
+      value: FabricValue,
+    ): TransactionWriteDetail {
+      return {
+        address: {
+          space: alpha,
+          id: FORM,
+          scope: "space",
+          path: toDocumentPath([...path]),
+        },
+        previousValue,
+        value,
+      };
+    }
+
+    /** Captures a run triggered at, and reading, `cause` that wrote `details`. */
+    function capture(
+      cause: readonly string[],
+      details: readonly TransactionWriteDetail[],
+    ) {
+      return captureEchoRun(
+        { getWriteDetails: () => details },
+        { reads: [at(cause)], shallowReads: [], writes: [at([])] },
+        [at(cause)],
+        session,
+      );
+    }
+
+    it("returns `undefined` for a run nothing triggered", () => {
+      const run = captureEchoRun(
+        { getWriteDetails: () => [] },
+        { reads: [], shallowReads: [], writes: [] },
+        [],
+        session,
+      );
+      expect(run).toBeUndefined();
+    });
+
+    it("counts no change for a write beside the field that triggered the run", () => {
+      // A derivation that reads one field of a document and writes another
+      // has not overwritten what re-triggered it, however often that changes.
+
+      const run = capture(["value", "input"], [
+        write(["value", "doubled"], 2, 4),
+      ]);
+      expect(run?.changed.size).toBe(0);
+    });
+
+    it("counts a change for a write at or below the path that triggered the run", () => {
+      expect(
+        capture(["value", "input"], [write(["value", "input"], 1, 2)])
+          ?.changed.size,
+      ).toBe(1);
+      expect(
+        capture(["value"], [write(["value", "doubled"], 2, 4)])?.changed.size,
+      ).toBe(1);
+    });
+
+    it("counts a change for a write above the field that differs at it", () => {
+      const run = capture(["value", "input"], [
+        write(["value"], { input: 1, doubled: 2 }, { input: 2, doubled: 4 }),
+      ]);
+      expect(run?.changed.size).toBe(1);
+    });
+
+    it("counts no change for a write above the field that leaves it as it was", () => {
+      const run = capture(["value", "input"], [
+        write(["value"], { input: 1, doubled: 2 }, { input: 1, doubled: 4 }),
+      ]);
+      expect(run?.changed.size).toBe(0);
+    });
+
+    it("returns a run whose convergence step follows the tracking it is classified under", () => {
+      // The scheduler classifies a run as its commit lands, so a pair another
+      // run of the action opened while this one committed still gets this
+      // run's convergence.
+
+      const run = capture(["value", "input"], [])!;
+      expect(computeEchoSteps(run, { tracked: false })).toEqual([]);
+      expect(
+        computeEchoSteps(run, { tracked: true }).map((step) => step.changed),
+      ).toEqual([false]);
     });
   });
 
@@ -984,6 +1099,54 @@ describe("scheduler-remote-echo-breaker", () => {
         expect(runCount(deriver.runtime, derive))
           .toBeGreaterThan(ECHO_TRIP_THRESHOLD);
         expect(deriver.runtime.scheduler.getEchoBreakerStats().trips).toBe(0);
+      } finally {
+        await dispose(editor, deriver);
+      }
+    });
+
+    it("does not trip a derivation that reads one field of a document and writes another", async () => {
+      // One session edits a field of a document over and over, and the other
+      // runs a derivation that reads that field and writes a different field
+      // of the same document. Each edit re-triggers the derivation through the
+      // document, but the derivation never overwrites the field that changed,
+      // so no run is an echo step and every edit's result lands.
+
+      const FORM = "collab-form";
+      type Form = { input: number; doubled: number };
+      const editor = connect();
+      const deriver = connect();
+      try {
+        await seed(editor, deriver.runtime, FORM, { input: 0, doubled: 0 });
+        const form = deriver.runtime.getCell<Form>(space, FORM, anySchema);
+        const derive: Action = (tx) => {
+          const current = form.withTx(tx);
+          current.key("doubled").set((current.key("input").get() ?? 0) * 2);
+        };
+        deriver.runtime.scheduler.subscribe(
+          derive,
+          { reads: [], shallowReads: [], writes: [] },
+          { isEffect: true },
+        );
+        deriver.runtime.scheduler.queueExecution();
+        await clock.settle();
+
+        const edits = ECHO_TRIP_THRESHOLD + 1;
+        for (let edit = 1; edit <= edits; edit++) {
+          const tx = editor.runtime.edit();
+          editor.runtime.getCell<Form>(space, FORM, anySchema, tx)
+            .key("input").set(edit);
+          await tx.commit({ holdSyncedUntilCovered: false }).verdict;
+          server.flushSessions([space]);
+          await clock.settle();
+        }
+
+        expect(deriver.runtime.scheduler.getEchoBreakerStats()).toEqual({
+          active: 0,
+          trips: 0,
+          cyclesObserved: 0,
+        });
+        await form.pull();
+        expect(form.get()).toEqual({ input: edits, doubled: edits * 2 });
       } finally {
         await dispose(editor, deriver);
       }

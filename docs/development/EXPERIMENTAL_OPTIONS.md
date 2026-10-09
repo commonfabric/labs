@@ -2103,9 +2103,9 @@ by another writer's change to that same document
 time and had no define for it, so the flag could not reach the browser tabs
 where the loops it bounds run. It was deleted on 2026-10-09 to keep the
 runtime's configuration small: the breaker runs unconditionally, and its
-trips and clears are reported over each space's memory session to the
-health route (`sessionReports`, memory protocol §4.14), which is where its
-behavior is judged.
+trips and clears are reported, best-effort, over each space's memory session
+to the health route (`sessionReports`, memory protocol §4.14), which is where
+its behavior is judged.
 
 ### `persistentSchedulerState` / `EXPERIMENTAL_PERSISTENT_SCHEDULER_STATE` (removed)
 
