@@ -10,6 +10,8 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
   computeEchoSteps,
   echoBackoffDelayMs,
+  type EchoBreakerEvent,
+  type EchoDocument,
   type EchoStep,
   RemoteEchoBreaker,
 } from "../src/scheduler/echo-breaker.ts";
@@ -33,14 +35,22 @@ import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const ACTION = "action-1";
 
+/** The space the breaker's synthetic steps name. */
+const STEP_SPACE = "did:key:steps" as IMemorySpaceAddress["space"];
+
+/** The document a synthetic step for `docKey` names. */
+function stepDocument(docKey: string): EchoDocument {
+  return { space: STEP_SPACE, id: docKey, scope: "space" };
+}
+
 /** An echo step (a run that changed the document) for `docKey`. */
 function echo(docKey: string): EchoStep {
-  return { docKey, changed: true };
+  return { docKey, document: stepDocument(docKey), changed: true };
 }
 
 /** A convergence step (a run that left the document as it was) for `docKey`. */
 function converge(docKey: string): EchoStep {
-  return { docKey, changed: false };
+  return { docKey, document: stepDocument(docKey), changed: false };
 }
 
 /**
@@ -165,7 +175,11 @@ describe("scheduler-remote-echo-breaker", () => {
         [doc],
         session1,
       );
-      expect(steps).toEqual([{ docKey: `${alpha}/space/of:d`, changed: true }]);
+      expect(steps).toEqual([{
+        docKey: `${alpha}/space/of:d`,
+        document: { space: alpha, id: "of:d", scope: "space" },
+        changed: true,
+      }]);
     });
 
     it("returns a convergence step when the run wrote nothing to the document", () => {
@@ -175,6 +189,7 @@ describe("scheduler-remote-echo-breaker", () => {
       const steps = computeEchoSteps(tx([]), log([doc], []), [doc], session1);
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:d`,
+        document: { space: alpha, id: "of:d", scope: "space" },
         changed: false,
       }]);
     });
@@ -193,6 +208,7 @@ describe("scheduler-remote-echo-breaker", () => {
       );
       expect(steps).toEqual([{
         docKey: `${alpha}/space/of:input`,
+        document: { space: alpha, id: "of:input", scope: "space" },
         changed: false,
       }]);
     });
@@ -362,6 +378,88 @@ describe("scheduler-remote-echo-breaker", () => {
         });
       });
 
+      describe("the events it reports", () => {
+        /** A breaker that records every event it reports. */
+        function recording(): {
+          breaker: RemoteEchoBreaker;
+          events: EchoBreakerEvent[];
+        } {
+          const events: EchoBreakerEvent[] = [];
+          const breaker = new RemoteEchoBreaker({
+            onEvent: (event) => events.push(event),
+          });
+          return { breaker, events };
+        }
+
+        it("reports one trip when a pair reaches the threshold, and none for its renewals", () => {
+          const { breaker, events } = recording();
+          trip(breaker, "d");
+          breaker.observe(ACTION, [echo("d")], 1000);
+          breaker.observe(ACTION, [echo("d")], 2000);
+          expect(events).toEqual([{
+            event: "trip",
+            actionId: ACTION,
+            document: stepDocument("d"),
+          }]);
+        });
+
+        it("reports a convergence clear with the renewals and the time since the trip", () => {
+          const { breaker, events } = recording();
+          trip(breaker, "d");
+          const tripTime = ECHO_TRIP_THRESHOLD - 1;
+          breaker.observe(ACTION, [echo("d")], 1000);
+          breaker.observe(ACTION, [echo("d")], 2000);
+          breaker.observe(ACTION, [converge("d")], 5000);
+          expect(events.at(-1)).toEqual({
+            event: "clear",
+            actionId: ACTION,
+            document: stepDocument("d"),
+            reason: "convergence",
+            renewals: 2,
+            trippedMs: 5000 - tripTime,
+          });
+        });
+
+        it("reports a quiet clear when a tripped pair echoes after the quiet reset", () => {
+          const { breaker, events } = recording();
+          trip(breaker, "d");
+          const tripTime = ECHO_TRIP_THRESHOLD - 1;
+          const later = tripTime + ECHO_QUIET_RESET_MS + 1;
+          breaker.observe(ACTION, [echo("d")], later);
+          expect(events.at(-1)).toEqual({
+            event: "clear",
+            actionId: ACTION,
+            document: stepDocument("d"),
+            reason: "quiet",
+            renewals: 0,
+            trippedMs: later - tripTime,
+          });
+        });
+
+        it("reports a retired clear for each tripped pair of a forgotten action", () => {
+          const { breaker, events } = recording();
+          trip(breaker, "a");
+          trip(breaker, "b");
+          feedEchoes(breaker, "c", 3, 0, 1);
+          breaker.forget(ACTION, 500);
+          const clears = events.filter((event) => event.event === "clear");
+          expect(clears.map((event) => event.document.id).sort()).toEqual([
+            "a",
+            "b",
+          ]);
+          expect(clears.every((event) => event.reason === "retired")).toBe(
+            true,
+          );
+        });
+
+        it("reports nothing for a pair that converges before it trips", () => {
+          const { breaker, events } = recording();
+          feedEchoes(breaker, "d", 3, 0, 1);
+          breaker.observe(ACTION, [converge("d")], 10);
+          expect(events).toEqual([]);
+        });
+      });
+
       describe("stats()", () => {
         it("stops counting a pair as active once its deadline has passed", () => {
           const breaker = new RemoteEchoBreaker();
@@ -377,7 +475,7 @@ describe("scheduler-remote-echo-breaker", () => {
           const breaker = new RemoteEchoBreaker();
           trip(breaker, "a");
           trip(breaker, "b");
-          breaker.forget(ACTION);
+          breaker.forget(ACTION, 100);
           expect(breaker.accessForTestingOnly.pairCount).toBe(0);
         });
 
@@ -387,7 +485,7 @@ describe("scheduler-remote-echo-breaker", () => {
           for (let i = 0; i < ECHO_TRIP_THRESHOLD; i++) {
             breaker.observe("action-2", [echo("d")], i);
           }
-          breaker.forget(ACTION);
+          breaker.forget(ACTION, 100);
           expect(breaker.accessForTestingOnly.pairState("action-2", "d"))
             .toBeDefined();
           expect(breaker.stats(ECHO_TRIP_THRESHOLD).active).toBe(1);
@@ -645,6 +743,57 @@ describe("scheduler-remote-echo-breaker", () => {
         expect(pairCount(a.runtime) + pairCount(b.runtime)).toBeLessThan(2);
         expect(a.runtime.scheduler.getEchoBreakerStats().active).toBe(0);
         expect(b.runtime.scheduler.getEchoBreakerStats().active).toBe(0);
+      } finally {
+        await dispose(a, b);
+      }
+    });
+
+    it("reports each session's trip, and the convergence that clears one, to the memory server", async () => {
+      // The reports ride each session's own connection, so the server that
+      // holds the space ends up with a trip from each session against the
+      // one shared document, and a convergence clear from the session that
+      // observed the agreed value.
+
+      const a = connect(true);
+      const b = connect(true);
+      try {
+        await seed(a, b.runtime, DOC, "seed");
+        const tagA = { value: "A" };
+        const tagB = { value: "B" };
+        subscribeTagWriter(a.runtime, tagA, "explicit");
+        subscribeTagWriter(b.runtime, tagB, "explicit");
+        await clock.settle();
+        await drive(ECHO_TRIP_THRESHOLD * 3);
+
+        const tripped = server.sessionReports();
+        expect(tripped.echoBreaker.trips).toBe(2);
+        const trips = tripped.recent.filter((report) =>
+          report.event === "trip"
+        );
+        expect(trips.length).toBe(2);
+        expect(new Set(trips.map((report) => report.session)).size).toBe(2);
+        expect(new Set(trips.map((report) => report.document.id)).size).toBe(
+          1,
+        );
+        expect(trips.every((report) => report.space === space)).toBe(true);
+        expect(trips.every((report) => report.document.scope === "space"))
+          .toBe(true);
+
+        tagB.value = "A";
+        for (let cycle = 0; cycle < 3; cycle++) {
+          await clock.tick(ECHO_BACKOFF_MAX_MS);
+          await clock.settle();
+          await drive(ECHO_TRIP_THRESHOLD);
+        }
+
+        const settled = server.sessionReports();
+        expect(settled.echoBreaker.clears.convergence).toBeGreaterThanOrEqual(
+          1,
+        );
+        const clear = settled.recent.find((report) =>
+          report.event === "clear" && report.reason === "convergence"
+        );
+        expect(clear?.document.id).toBe(trips[0].document.id);
       } finally {
         await dispose(a, b);
       }

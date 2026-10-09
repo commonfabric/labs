@@ -30,7 +30,10 @@ import type {
   MemorySpace,
   StorageNotification,
 } from "../storage/interface.ts";
-import { ReplicaLoadFailureError } from "../storage/interface.ts";
+import {
+  hasSessionReportStorageCapability,
+  ReplicaLoadFailureError,
+} from "../storage/interface.ts";
 import {
   recordLocalReadWake,
   requireLocalReadCondition,
@@ -145,6 +148,7 @@ import {
 } from "./registration.ts";
 import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
 import {
+  type EchoBreakerEvent,
   type EchoBreakerStats,
   type EchoStep,
   RemoteEchoBreaker,
@@ -473,7 +477,9 @@ export class Scheduler {
    * its re-runs sustain against a remote writer. Inert unless the
    * `remoteEchoBreaker` flag wires `observeRemoteEcho` into the run state.
    */
-  readonly #echoBreaker = new RemoteEchoBreaker();
+  readonly #echoBreaker = new RemoteEchoBreaker({
+    onEvent: (event) => this.#reportEchoBreakerEvent(event),
+  });
 
   #currentActionId?: string;
   #dependencyGraphState!: DependencyGraphState;
@@ -962,7 +968,7 @@ export class Scheduler {
     this.#materializers.clearAction(action);
     // The node record outlives the registration, so its echo gate would
     // otherwise defer a later registration of the same action.
-    this.#echoBreaker.forget(this.#getActionId(action));
+    this.#echoBreaker.forget(this.#getActionId(action), performance.now());
     this.#gates.clearEchoBackoff(action);
     for (const observer of [...this.#unsubscribeObservers]) observer(action);
   }
@@ -3457,6 +3463,40 @@ export class Scheduler {
    * action's re-runs (a tripped loop), `0` lifts the deferral (a convergence
    * that ended the loop), and `undefined` leaves the gate untouched.
    */
+  /**
+   * Reports a breaker trip or clear to the memory server serving the
+   * document's space, on that space's session (memory-v2 `04-protocol.md`
+   * §4.14), where it lands beside the session's commit rates. Best-effort and
+   * fire-and-forget: a disposed scheduler, a runtime tearing its writes down,
+   * and a provider or server without the capability all report nothing.
+   */
+  #reportEchoBreakerEvent(event: EchoBreakerEvent): void {
+    if (this.#disposed || this.runtime.writeTeardownSignal.aborted) return;
+    try {
+      const provider = this.runtime.storageManager.open(event.document.space);
+      if (!hasSessionReportStorageCapability(provider)) return;
+      const named = {
+        kind: "echo-breaker" as const,
+        document: { id: event.document.id, scope: event.document.scope },
+        action: event.actionId,
+      };
+      provider.sendReport(
+        event.event === "trip" ? { ...named, event: "trip" } : {
+          ...named,
+          event: "clear",
+          reason: event.reason,
+          renewals: event.renewals,
+          trippedMs: event.trippedMs,
+        },
+      );
+    } catch (error) {
+      logger.debug("echo-breaker-report-failed", () => [
+        "could not report a remote-echo breaker event",
+        error,
+      ]);
+    }
+  }
+
   #observeRemoteEcho(
     action: Action,
     actionId: string,

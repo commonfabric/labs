@@ -88,6 +88,39 @@ export const stats = createRoute({
             }),
           ),
         }).optional(),
+        // The diagnostics clients reported about their sessions
+        // (packages/memory/v2/session-reports.ts `SessionReportsReport`):
+        // the remote-echo breaker's trips and clears since the server
+        // started, and the most recent reports in full — present whenever a
+        // memory server is co-hosted in this process.
+        sessionReports: z.object({
+          echoBreaker: z.object({
+            trips: z.number().int().nonnegative(),
+            clears: z.object({
+              convergence: z.number().int().nonnegative(),
+              quiet: z.number().int().nonnegative(),
+              retired: z.number().int().nonnegative(),
+            }),
+          }),
+          recent: z.array(
+            z.object({
+              kind: z.literal("echo-breaker"),
+              event: z.enum(["trip", "clear"]),
+              document: z.object({
+                id: z.string(),
+                scope: z.enum(["space", "user", "session"]),
+              }),
+              action: z.string(),
+              reason: z.enum(["convergence", "quiet", "retired"]).optional(),
+              renewals: z.number().int().nonnegative().optional(),
+              trippedMs: z.number().int().nonnegative().optional(),
+              at: z.number(),
+              space: z.string(),
+              session: z.string(),
+              principal: z.string().optional(),
+            }),
+          ),
+        }).optional(),
         // The serving loop's counters (server-execution v2,
         // serving-loop.md §7) — present only while an ExecutorHost runs
         // in this process (the ON arm).

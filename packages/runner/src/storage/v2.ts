@@ -58,6 +58,7 @@ import {
   type ScopeKeyIdentity,
   type SessionHolding,
   type SessionReadCeiling,
+  type SessionReport,
   type SessionSync,
   type SessionSyncUpsert,
   type SqliteDbRef,
@@ -3396,6 +3397,15 @@ class Provider
     );
   }
 
+  /**
+   * Sends `report` on the current replica's session, best-effort (memory-v2
+   * `04-protocol.md` §4.14); a closed provider sends nothing.
+   */
+  sendReport(report: SessionReport): void {
+    if (this.#destroyed) return;
+    void this.replica.sendReport(report);
+  }
+
   async joinPresenceRoom(
     room: string,
     observer: (event: MemoryV2Client.PresenceEvent) => void,
@@ -5014,6 +5024,16 @@ export class SpaceReplica
   ): Promise<MemoryV2Client.PresenceMembership> {
     const { session } = await this.#activeSessionHandle();
     return session.joinPresenceRoom(room, observer);
+  }
+
+  /** Sends `report` on the replica's active session, best-effort. */
+  async sendReport(report: SessionReport): Promise<void> {
+    try {
+      const { session } = await this.#activeSessionHandle();
+      await session.sendReport(report);
+    } catch {
+      // A session that cannot be reached loses only the diagnostic.
+    }
   }
 
   async #removeOperationWatch(watchId: string): Promise<void> {

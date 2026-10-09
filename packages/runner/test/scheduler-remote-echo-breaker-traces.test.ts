@@ -61,6 +61,9 @@ interface Traces {
 
 const ACTION = "topics-derivation";
 
+/** The space every replayed step names; the replay keys pairs by label. */
+const SPACE = "did:key:topics-export" as const;
+
 const traces: Traces = JSON.parse(
   new TextDecoder().decode(
     await gunzip(
@@ -95,7 +98,11 @@ function replay(trace: Trace): number[] {
     previous = value;
     breakers[session].observe(
       ACTION,
-      [{ docKey: trace.label, changed }],
+      [{
+        docKey: trace.label,
+        document: { space: SPACE, id: trace.label, scope: "space" },
+        changed,
+      }],
       seconds * 1000,
     );
   }

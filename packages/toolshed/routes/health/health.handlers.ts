@@ -6,6 +6,7 @@ import {
   getCommitRates,
   getDocumentCachesDiagnostics,
   getPushPriorityStats,
+  getSessionReports,
   getSlowQueries,
 } from "@commonfabric/memory/v2/server";
 import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
@@ -62,6 +63,10 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
   // which spaces are being written to, by which sessions, and whether one
   // is in a write storm. Present whenever a memory server is co-hosted.
   const commitRates = getCommitRates();
+  // The diagnostics clients reported about their sessions: the remote-echo
+  // breaker's trips and clears, beside the commit rates of the same
+  // sessions. Present whenever a memory server is co-hosted.
+  const sessionReports = getSessionReports();
   return c.json({
     timestamp: Date.now(),
     serverStart: serverStartTimestamp,
@@ -70,6 +75,7 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
     slowQueries: [...getSlowQueries()],
     ...(documentCaches === undefined ? {} : { documentCaches }),
     ...(commitRates === undefined ? {} : { commitRates }),
+    ...(sessionReports === undefined ? {} : { sessionReports }),
     ...(servingLoop === undefined ? {} : {
       servingLoop: { ...servingLoop, ...(push === undefined ? {} : { push }) },
     }),

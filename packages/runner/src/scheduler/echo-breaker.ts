@@ -1,4 +1,9 @@
-import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type {
+  CellScope,
+  EchoBreakerClearReport,
+  ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import { getLogger } from "@commonfabric/utils/logger";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
@@ -7,6 +12,7 @@ import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
+import { normalizeCellScope } from "../scope.ts";
 import { entityKey } from "./keys.ts";
 import type { ReactivityLog } from "./types.ts";
 import {
@@ -36,9 +42,43 @@ export interface EchoStep {
    */
   readonly docKey: string;
 
+  /** The document's space, id, and declared scope, for a report of it. */
+  readonly document: EchoDocument;
+
   /** True when the run overwrote a differing value; false on convergence. */
   readonly changed: boolean;
 }
+
+/** A document as the breaker reports it: where it lives and which it is. */
+export interface EchoDocument {
+  readonly space: MemorySpace;
+  readonly id: string;
+  readonly scope: CellScope;
+}
+
+/**
+ * What the breaker tells its owner as it happens: a pair tripped, or a
+ * tripped pair cleared — by a convergence step, by its quiet reset, or by
+ * its action being retired.
+ */
+export type EchoBreakerEvent =
+  | {
+    readonly event: "trip";
+    readonly actionId: string;
+    readonly document: EchoDocument;
+  }
+  | {
+    readonly event: "clear";
+    readonly actionId: string;
+    readonly document: EchoDocument;
+    readonly reason: EchoBreakerClearReport["reason"];
+
+    /** Echoes after the trip, each of which renewed the backoff. */
+    readonly renewals: number;
+
+    /** Milliseconds from the trip to the clear. */
+    readonly trippedMs: number;
+  };
 
 /** A tripped breaker's visible counts (the health route / client summary). */
 export interface EchoBreakerStats {
@@ -98,10 +138,16 @@ export function computeEchoSteps(
     causeKeys.add(entityKey(cause, identity));
   }
 
-  const candidates = new Set<string>();
+  const candidates = new Map<string, EchoDocument>();
   for (const read of [...log.reads, ...log.shallowReads]) {
     const key = entityKey(read, identity);
-    if (causeKeys.has(key)) candidates.add(key);
+    if (causeKeys.has(key) && !candidates.has(key)) {
+      candidates.set(key, {
+        space: read.space,
+        id: read.id,
+        scope: normalizeCellScope(read.scope),
+      });
+    }
   }
   if (candidates.size === 0) return [];
 
@@ -121,8 +167,9 @@ export function computeEchoSteps(
     }
   }
 
-  return [...candidates].map((docKey) => ({
+  return [...candidates].map(([docKey, document]) => ({
     docKey,
+    document,
     changed: changed.has(docKey),
   }));
 }
@@ -142,6 +189,12 @@ interface EchoPairState {
 
   /** When the pair's backoff ends; 0 when none was set. */
   deadline: number;
+
+  /** When the pair tripped; 0 while untripped. */
+  trippedAt: number;
+
+  /** The document, for the event a clear of the pair reports. */
+  document: EchoDocument;
 }
 
 /** Separates the action id from the document key in a pair key. */
@@ -168,6 +221,17 @@ export class RemoteEchoBreaker {
   #cyclesObserved = 0;
 
   readonly #pairs = new BoundedKeyMap<string, EchoPairState>(MAX_ECHO_PAIRS);
+  readonly #onEvent: ((event: EchoBreakerEvent) => void) | undefined;
+
+  /**
+   * Constructs a breaker that tells `onEvent`, when given, each trip and each
+   * clear of a tripped pair, as it happens.
+   */
+  constructor(
+    options: { onEvent?: (event: EchoBreakerEvent) => void } = {},
+  ) {
+    this.#onEvent = options.onEvent;
+  }
 
   //
   // Instance members
@@ -209,7 +273,10 @@ export class RemoteEchoBreaker {
       const existing = this.#pairs.get(key);
       if (!step.changed) {
         if (existing === undefined) continue;
-        if (existing.backoffStreak > 0) clearedTripped = true;
+        if (existing.backoffStreak > 0) {
+          clearedTripped = true;
+          this.#cleared(actionId, existing, "convergence", now);
+        }
         this.#pairs.delete(key);
         continue;
       }
@@ -219,13 +286,18 @@ export class RemoteEchoBreaker {
       // that ended without a convergence step reaching it; start it afresh.
       const stale = existing !== undefined && existing.backoffStreak > 0 &&
         now - existing.lastEchoAt > ECHO_QUIET_RESET_MS;
-      const state = existing !== undefined && !stale ? existing : {
-        windowStart: now,
-        cycles: 0,
-        backoffStreak: 0,
-        lastEchoAt: now,
-        deadline: 0,
-      };
+      if (stale) this.#cleared(actionId, existing, "quiet", now);
+      const state: EchoPairState = existing !== undefined && !stale
+        ? existing
+        : {
+          windowStart: now,
+          cycles: 0,
+          backoffStreak: 0,
+          lastEchoAt: now,
+          deadline: 0,
+          trippedAt: 0,
+          document: step.document,
+        };
       state.lastEchoAt = now;
 
       if (state.backoffStreak > 0) {
@@ -239,9 +311,15 @@ export class RemoteEchoBreaker {
         state.cycles++;
         if (state.cycles >= ECHO_TRIP_THRESHOLD) {
           state.backoffStreak = 1;
+          state.trippedAt = now;
           const delay = echoBackoffDelayMs(1);
           state.deadline = now + delay;
           this.#trips++;
+          this.#onEvent?.({
+            event: "trip",
+            actionId,
+            document: step.document,
+          });
           logger.error("remote-echo-breaker-tripped", () => [
             `action ${actionId} rewrote document ${step.docKey} ` +
             `${ECHO_TRIP_THRESHOLD} times within ${ECHO_WINDOW_MS}ms against ` +
@@ -260,13 +338,21 @@ export class RemoteEchoBreaker {
     return undefined;
   }
 
-  /** Drops every pair for a removed or retired action. */
-  forget(actionId: string): void {
+  /**
+   * Drops every pair for a removed or retired action, reporting each tripped
+   * one as cleared at `now`.
+   */
+  forget(actionId: string, now: number): void {
     const prefix = `${actionId}${PAIR_SEPARATOR}`;
-    const stale = [...this.#pairs.keys()].filter((key) =>
+    const retired = [...this.#pairs.entries()].filter(([key]) =>
       key.startsWith(prefix)
     );
-    for (const key of stale) this.#pairs.delete(key);
+    for (const [key, state] of retired) {
+      if (state.backoffStreak > 0) {
+        this.#cleared(actionId, state, "retired", now);
+      }
+      this.#pairs.delete(key);
+    }
   }
 
   /**
@@ -284,6 +370,23 @@ export class RemoteEchoBreaker {
       trips: this.#trips,
       cyclesObserved: this.#cyclesObserved,
     };
+  }
+
+  /** Tells the owner a tripped pair cleared at `now`, and how. */
+  #cleared(
+    actionId: string,
+    state: EchoPairState,
+    reason: EchoBreakerClearReport["reason"],
+    now: number,
+  ): void {
+    this.#onEvent?.({
+      event: "clear",
+      actionId,
+      document: state.document,
+      reason,
+      renewals: state.backoffStreak - 1,
+      trippedMs: Math.max(0, Math.round(now - state.trippedAt)),
+    });
   }
 
   #hasPairInBackoff(actionId: string, now: number): boolean {

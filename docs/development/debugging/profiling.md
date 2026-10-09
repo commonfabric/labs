@@ -627,6 +627,24 @@ process:
   cap. A count is exact to the second a commit landed in.
   [Alerting on a write storm](#alerting-on-a-write-storm) says what to do
   with it.
+- `sessionReports` — the diagnostics clients reported about their own
+  sessions over the memory protocol's `session.report`
+  ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), kept by
+  `SessionReportLog` in `packages/memory/v2/session-reports.ts`. The one
+  reporter is the scheduler's remote-echo breaker
+  ([plan](../../plans/scheduler-remote-echo-breaker.md)): `echoBreaker.trips`
+  counts the times a client began deferring an action that kept rewriting a
+  document another writer kept rewriting back, and `echoBreaker.clears` counts
+  how tripped actions ended — `convergence` when the action wrote the
+  document without changing it, `quiet` when it saw no echo for the
+  breaker's quiet reset, `retired` when the action was unregistered. Both are
+  lifetime counts. `recent` lists the newest 64 reports in full, oldest first,
+  each with the `space`, the reporting `session` and its `principal`, the
+  `document` (`id` and `scope`), the `action`'s scheduler id, and for a clear
+  its `reason`, its `renewals` — echoes after the trip, each renewing the
+  backoff — and `trippedMs`. A trip with many renewals and a long
+  `trippedMs` is a loop the breaker held; a clear by `convergence` after a
+  renewal or two is a disagreement that settled.
 - `servingLoop` — the serving loop's counters
   ([`serving-loop.md` §7](../../specs/server-side-execution/serving-loop.md)),
   present only when this process serves. `settle.series` is a ready-made
@@ -693,6 +711,17 @@ the sessions and principals to look at, with `operations` close to the commit
 count where the loop writes one document per commit. Reading it again after a
 deploy is what verifies the fix: the space's `minute` falls to its steady rate
 while `tenMinutes` still carries the storm, and ten minutes later both do.
+
+`sessionReports` says whether the clients' remote-echo breakers caught the
+loop. A breaker that tripped on a storming space reports it on its own
+session, so the same server lists a `trip` naming the session `commitRates`
+blames and the document it kept rewriting, and that session's `minute` falls
+to about one commit per backoff while the breaker holds it. A storm with no
+trip from its writers is a loop the breaker does not see, such as a client on
+a build without it or a loop between two documents rather than one. The
+reports also leave the process as the `ct.memory.echo_breaker` counter on the
+same `memory-server` meter, with `space.did`, the `event` (`trip` or `clear`),
+and for a clear its `reason`.
 
 The server judges a storm itself, so an alert needs no window arithmetic of
 its own: a space whose commits in the last sixty seconds have stayed at or

@@ -38,6 +38,7 @@ import {
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  SESSION_REPORT_TEXT_MAX,
   type SessionAdmissibleMessage,
   type SessionEffectMessage,
   type SessionHolding,
@@ -45,6 +46,7 @@ import {
   type SessionOpenChallenge,
   type SessionOpenResult,
   type SessionReadCeiling,
+  type SessionReport,
   type SessionRevokedMessage,
   type SessionSync,
   type SqliteDbRef,
@@ -1725,6 +1727,39 @@ export class SpaceSession {
     });
     this.#noteResult(result.serverSeq);
     return result;
+  }
+
+  /**
+   * Sends `report` about this session to the server (04-protocol.md §4.14).
+   * Best-effort by design: nothing is sent to a server that does not
+   * advertise `sessionReportV1`, or while the connection is down, and a
+   * refusal is swallowed, since a diagnostic that fails to arrive costs only
+   * the diagnostic. Strings longer than the protocol allows are cut to fit,
+   * so the server never refuses a report for its length.
+   */
+  async sendReport(report: SessionReport): Promise<void> {
+    if (this.#closed || this.#client.serverFlags?.sessionReportV1 !== true) {
+      return;
+    }
+    const fitted: SessionReport = {
+      ...report,
+      action: report.action.slice(0, SESSION_REPORT_TEXT_MAX),
+      document: {
+        ...report.document,
+        id: report.document.id.slice(0, SESSION_REPORT_TEXT_MAX),
+      },
+    };
+    try {
+      await this.#client.request({
+        type: "session.report",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        report: fitted,
+      }, { whileConnected: true });
+    } catch {
+      // A lost report is a lost diagnostic, never an error of the session's.
+    }
   }
 
   /**
