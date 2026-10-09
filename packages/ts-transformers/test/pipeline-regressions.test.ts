@@ -153,6 +153,25 @@ function isInsideExtractedComputeCallback(node: ts.Node): boolean {
  * `name` — e.g. it is nested inside a `derive(...)` / `__cfHelpers.derive(...)`
  * call.
  */
+/**
+ * Whether `call` is the sub-pattern instance `const <name>` binds, which the
+ * pipeline names for its binding:
+ * `const <name> = __cfHelpers.nameInstance(call, "<name>")`.
+ */
+function isNamedInstance(call: ts.CallExpression, name: string): boolean {
+  const wrapper = call.parent;
+  if (!wrapper || !ts.isCallExpression(wrapper)) return false;
+  const [instance, instanceName] = wrapper.arguments;
+  return ts.isPropertyAccessExpression(wrapper.expression) &&
+    wrapper.expression.name.text === "nameInstance" &&
+    instance === call &&
+    instanceName !== undefined && ts.isStringLiteral(instanceName) &&
+    instanceName.text === name &&
+    wrapper.parent !== undefined &&
+    ts.isVariableDeclaration(wrapper.parent) &&
+    ts.isIdentifier(wrapper.parent.name) && wrapper.parent.name.text === name;
+}
+
 function isInsideCallNamed(node: ts.Node, name: string): boolean {
   let current: ts.Node | undefined = node.parent;
   while (current) {
@@ -866,12 +885,15 @@ export default pattern(() => {
     });
 
     const root = parseModule(output);
-    // `const child = Child({ value })` stays a plain structural call.
+    // `const child = Child({ value })` stays a structural call, named for
+    // its binding.
     const childCall = callsNamed(root, "Child").find((call) =>
-      call.parent && ts.isVariableDeclaration(call.parent) &&
-      ts.isIdentifier(call.parent.name) && call.parent.name.text === "child"
+      isNamedInstance(call, "child")
     );
-    assert(childCall, "expected `const child = Child(...)`");
+    assert(
+      childCall,
+      'expected `const child = __cfHelpers.nameInstance(Child(...), "child")`',
+    );
     // `childValue: child.key("value")` — a `.key("value")` read on `child`.
     assert(
       hasKeyPathRead(root, "value", "child"),
@@ -923,13 +945,10 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
     });
 
     const root = parseModule(output);
-    // `const row = EntryRow({...})` stays structural.
+    // `const row = EntryRow({...})` stays structural, named for its binding.
     assert(
-      callsNamed(root, "EntryRow").some((call) =>
-        call.parent && ts.isVariableDeclaration(call.parent) &&
-        ts.isIdentifier(call.parent.name) && call.parent.name.text === "row"
-      ),
-      "expected `const row = EntryRow(...)`",
+      callsNamed(root, "EntryRow").some((call) => isNamedInstance(call, "row")),
+      'expected `const row = __cfHelpers.nameInstance(EntryRow(...), "row")`',
     );
     // Element fields lower to `entry.key("<field>")` reactive reads.
     assert(hasKeyPathRead(root, "piece", "entry"));
@@ -1070,11 +1089,8 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
     const root = parseModule(output);
     // The pattern-factory call itself still stays structural.
     assert(
-      callsNamed(root, "EntryRow").some((call) =>
-        call.parent && ts.isVariableDeclaration(call.parent) &&
-        ts.isIdentifier(call.parent.name) && call.parent.name.text === "row"
-      ),
-      "expected `const row = EntryRow(...)`",
+      callsNamed(root, "EntryRow").some((call) => isNamedInstance(call, "row")),
+      'expected `const row = __cfHelpers.nameInstance(EntryRow(...), "row")`',
     );
     // The dynamic access should NOT have lowered to `.key()` — `.key()` is
     // only valid for known-static path segments. The dynamic-wrap path
@@ -1125,11 +1141,8 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
 
     const root = parseModule(output);
     assert(
-      callsNamed(root, "EntryRow").some((call) =>
-        call.parent && ts.isVariableDeclaration(call.parent) &&
-        ts.isIdentifier(call.parent.name) && call.parent.name.text === "row"
-      ),
-      "expected `const row = EntryRow(...)`",
+      callsNamed(root, "EntryRow").some((call) => isNamedInstance(call, "row")),
+      'expected `const row = __cfHelpers.nameInstance(EntryRow(...), "row")`',
     );
     // No `EntryRow: EntryRow` capture property — the module-scope factory must
     // stay in lexical scope, not be threaded through derive data.

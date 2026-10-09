@@ -2891,10 +2891,20 @@ A qualifying call, per `detectCallKind` (§5) — as of this writing:
   array methods in lift callbacks" / "…in lowered handler callbacks").
 - Calls whose callee is a **pattern factory** (`Child({...})` where `Child` is
   a `pattern(...)` result; `isPatternFactoryCalleeExpression`) are excluded
-  before all of the above — the sub-pattern instance is not re-caused, though
+  before all of the above — the sub-pattern instance takes no cause, though
   reactive values in its argument object still get property causes (test:
   "does not add root causes to pattern factory outputs" pins the absence of
-  `.for("child", true)` alongside `.for(["child", "value"], true)`).
+  `.for("child", true)` alongside `.for(["child", "value"], true)`). At
+  variable position, with no authored `.for()` in its chain, the instance is
+  instead wrapped in `__cfHelpers.nameInstance(<call>, "<name>")`
+  (`isNameableInstance` / `createNameInstanceCall`): `const child = Child({
+  value })` becomes `const child = __cfHelpers.nameInstance(Child({ value }),
+  "child")` (test: "wraps a pattern factory output a `const` binds in
+  `nameInstance` with the binding's name"). An instance name is not a cause.
+  The pattern builder takes it as the instance's partial cause only where a
+  result key or a node input gives the instance no name, so a name either of
+  those gives outranks it; the runtime half is in
+  `docs/specs/computed-cell-identity.md` § "Internal cell identity".
 - Variable position only, as a last resort: a call whose resolved type is a
   cell in every arm a value can take (`isCellByType`: `isCellLikeType` of the
   type, or of each member of a union apart from `undefined`, `null`, and

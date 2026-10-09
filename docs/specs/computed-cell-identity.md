@@ -86,10 +86,14 @@ changes, and only for entities whose ids carry the computed scheme.
 ### Internal cell identity
 
 The pattern builder assigns each internal root cell a `partialCause` —
-the cell's declared name, or an anonymous `{ $generated: N }` counter, with
-`$kind: "stream"` mixed in for stream cells
-(`packages/runner/src/builder/pattern.ts`). At instantiation the runner
-mints the entity id from the piece's result cell and that partial cause:
+the cell's declared name, the instance name of a named sub-pattern instance,
+or an anonymous `{ $generated: N }` counter, with `$kind: "stream"` mixed in
+for stream cells (`packages/runner/src/builder/pattern.ts`). The counter
+numbers anonymous roots in the order the builder's walk reaches them, which
+is the pattern's inputs and then its result, `[UI]` tree included, so a
+`{ $generated: N }` cause moves when a cell is added ahead of it anywhere in
+that walk. At instantiation the runner mints the entity id from the piece's
+result cell and that partial cause:
 
 ```ts
 // Shown for illustration only.
@@ -109,6 +113,56 @@ scheme onto the tagged hash — historically always `of:`.
 The manifest of materialized internal cells is stored in result-cell
 metadata and matched by partial cause plus kind
 (`packages/runner/src/runner.ts`, `materializeDerivedInternalCells`).
+
+### Sub-pattern instance identity
+
+A sub-pattern instance runs under a child result cell minted from the
+instance's output spot, `{ resultFor: <spot> }`, and the spot is the
+parent's internal cell for the instance's partial cause. Everything the child
+holds hangs off that result cell, so the partial cause is the child's
+identity.
+
+An instance bound to a `const` is a **named instance**. The transformer wraps
+it in `__cfHelpers.nameInstance(Child(...), "child")`
+(`docs/specs/ts-transformer/ts_transformers_current_behavior_spec.md` §13.2),
+and the builder takes that name as the instance's partial cause,
+`{ $generated: "instance", name: "child" }`, wherever no result key, node
+input or authored `.for()` names it already. The name sits under the
+reserved `$generated` key, so no authored cause can equal it. An instance
+name given to more than one root in a pattern names none of them, and each
+keeps a positional cause. A named instance's child stays where it is however
+its siblings are rearranged, and moves only when the instance is renamed.
+
+A named instance also records, as its descriptor's `legacyPartialCause`, the
+`{ $generated: N }` it would take without its name. It still consumes that
+number, so every other anonymous root keeps the number it would have without
+instance names.
+
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup under a pattern that
+names it carries the child over (`planInstanceCarryOver`):
+
+- where the pattern the parent last set up, which `patternSetupIdentity`
+  names, is loaded, the child is the one at the `legacyPartialCause` that
+  pattern gives the same instance name;
+- otherwise, it is the one child, among the positional spots the parent's
+  manifest records, whose `patternIdentity` is the instance's own child
+  pattern identity, and none when no spot or more than one does.
+
+A start's pre-sync loads that previous pattern by identity first. The carried
+child's link is recorded by instance name in the parent's `instanceChildren`
+meta, and binding the instance reads it there on every later start. An
+instance that finds no child to carry over starts fresh, and the setup logs
+`instance-carry-over` naming it.
+
+A child at a positional spot refuses to set up over a stored child of another
+pattern identity when the parent shows the children have moved spots: the
+stored child is one a named instance carried over, a child of the incoming
+identity runs at another positional spot, or another positional spot of the
+pattern sets up the stored identity (`refuseDisplacedChild`). The error names
+both identities. A stored child of a different identity with none of those
+signs is taken for the same child under a newer version of its own source,
+since a child's identity changes whenever its own source does.
 
 ### Transaction provenance
 
@@ -423,7 +477,8 @@ partial-cause matching materializes the new cell and drops the stale entry
 naturally.
 
 Internal-cell identity is already refactor-fragile — anonymous cells re-mint
-on reorder via the `$generated` counter, named cells on rename — so kind
+when a cell is added ahead of them in the builder's walk, named cells and
+named sub-pattern instances on rename — so kind
 flips add a trigger to an existing hazard class (durable cross-piece links
 pointing at an orphaned entity), not a new class. The flipped classifier
 polarity widens the set of cells that flip when a pattern edit adds or
