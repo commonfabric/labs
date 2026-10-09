@@ -13100,12 +13100,11 @@ export class Runner {
     // children hold, from the surest sign down, each pass claiming before the
     // next: the instance's own child pattern identity, then the most `.for()`
     // names in common with the instance's child pattern, and last, for a
-    // child pattern that names nothing, the instance's own positional spot.
-    const matchers: ((
-      candidate: Cell<any>,
-      module: Module,
-      descriptor: DerivedInternalCellDescriptor,
-    ) => number)[] = [
+    // child pattern that names nothing, a child that names nothing either.
+    // Candidates a pass scores alike for one instance are told apart by the
+    // instance's own positional spot, where its child runs with no instance
+    // names, and a pass takes nothing it cannot tell apart.
+    const passes: ((candidate: Cell<any>, module: Module) => number)[] = [
       (candidate, module) => {
         const ref = getPatternIdentityRef(candidate);
         const wanted = this.#runtime.patternManager.getArtifactEntryRef(
@@ -13123,47 +13122,53 @@ export class Runner {
         const held = namedPartialCauses(storedManifestOf(candidate));
         return [...held].filter((key) => wanted.has(key)).length;
       },
-      (candidate, module, descriptor) =>
+      (candidate, module) =>
         namedPartialCauses(
               (module.implementation as Pattern).derivedInternalCells,
             ).size === 0 &&
-          namedPartialCauses(storedManifestOf(candidate)).size === 0 &&
-          candidate.getAsNormalizedFullLink().id ===
-            this.#childAtPartialCause(
-              tx,
-              parent,
-              module,
-              descriptor.legacyPartialCause!,
-            ).getAsNormalizedFullLink().id
+          namedPartialCauses(storedManifestOf(candidate)).size === 0
           ? 1
           : 0,
     ];
-    for (const matcher of matchers) {
-      const scored = unmatched.map((entry) => ({
-        entry,
-        best: this.#bestRecordedChild(
+    for (const score of passes) {
+      const picks = unmatched.map((entry) => {
+        const ownSpot = this.#childAtPartialCause(
+          tx,
+          parent,
+          entry.module,
+          entry.descriptor.legacyPartialCause!,
+        ).getAsNormalizedFullLink().id;
+        const top = this.#topRecordedChildren(
           tx,
           parent,
           manifest,
           claimed,
-          (candidate) => matcher(candidate, entry.module, entry.descriptor),
+          (candidate) => score(candidate, entry.module),
           entry.module,
-        ),
-      }));
-      for (const { entry, best } of scored) {
-        // A child two instances would each take goes to neither.
+        );
+        const choice = top === undefined
+          ? undefined
+          : top.links.length === 1
+          ? top.links[0]
+          : top.links.find((link) => link.id === ownSpot);
+        return { entry, score: top?.score ?? 0, choice };
+      });
+      for (const pick of picks) {
+        const { choice } = pick;
+        if (choice === undefined) continue;
+        // A child two instances would each take goes to neither: one of them
+        // may sit where the other's child sat before its siblings moved.
         if (
-          best === undefined ||
-          scored.some((other) =>
-            other.entry !== entry && other.best?.link.id === best.link.id &&
-            other.best.score >= best.score
+          picks.some((other) =>
+            other !== pick && other.choice?.id === choice.id &&
+            other.score >= pick.score
           )
         ) {
           continue;
         }
-        claimed.add(best.link.id);
-        carried.set(entry.name, best.link);
-        unmatched.splice(unmatched.indexOf(entry), 1);
+        claimed.add(choice.id);
+        carried.set(pick.entry.name, choice);
+        unmatched.splice(unmatched.indexOf(pick.entry), 1);
       }
     }
     for (const { name } of unmatched) uncarried.push(name);
@@ -13222,22 +13227,20 @@ export class Runner {
   }
 
   /**
-   * The unclaimed set-up child, among the positional spots the parent
+   * The unclaimed set-up children, among the positional spots the parent
    * `resultCell`'s manifest records for a node with module `module`, that
-   * `score` scores highest, with its score, when one scores above zero and no
-   * other ties it.
+   * `score` scores highest, with that score, when it is above zero.
    */
-  #bestRecordedChild(
+  #topRecordedChildren(
     tx: IExtendedStorageTransaction | undefined,
     resultCell: Cell<any>,
     manifest: readonly InternalCellDescriptor[],
     claimed: ReadonlySet<string>,
     score: (candidate: Cell<any>) => number,
     module: Module,
-  ): { link: NormalizedFullLink; score: number } | undefined {
-    let best: NormalizedFullLink | undefined;
-    let bestScore = 0;
-    let tied = false;
+  ): { links: NormalizedFullLink[]; score: number } | undefined {
+    let links: NormalizedFullLink[] = [];
+    let topScore = 0;
     for (const entry of manifest) {
       if (!isPositionalPartialCause(entry.partialCause)) continue;
       const candidate = this.#childAtPartialCause(
@@ -13250,17 +13253,14 @@ export class Runner {
       if (claimed.has(link.id)) continue;
       if (getPatternIdentityRef(candidate) === undefined) continue;
       const value = score(candidate);
-      if (value > bestScore) {
-        best = link;
-        bestScore = value;
-        tied = false;
-      } else if (value === bestScore && value > 0) {
-        tied = true;
+      if (value > topScore) {
+        links = [link];
+        topScore = value;
+      } else if (value === topScore && value > 0) {
+        links.push(link);
       }
     }
-    return tied || best === undefined
-      ? undefined
-      : { link: best, score: bestScore };
+    return topScore > 0 ? { links, score: topScore } : undefined;
   }
 
   /**

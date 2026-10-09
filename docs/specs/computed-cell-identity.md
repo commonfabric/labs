@@ -151,10 +151,11 @@ names it carries the child over (`planInstanceCarryOver`):
   `patternIdentity` that is the instance's own child pattern identity; then
   the most named partial causes in the child's own manifest that the
   instance's child pattern also names; and last, for a child pattern that
-  names none, the child at the instance's own `legacyPartialCause`, which is
-  where it runs with no instance names. A pass takes a child only where one
-  candidate scores highest for the instance, and gives none to two instances
-  that would each take the same child.
+  names none, a child that names none either. Children a pass scores alike
+  for an instance are told apart by the instance's own `legacyPartialCause`,
+  which is where its child runs with no instance names. A pass takes nothing
+  it cannot tell apart that way, and gives no child to two instances that
+  would each take it.
 
 A child is carried over by one instance at most.
 
