@@ -2061,8 +2061,11 @@ adjustments:
   variable the key names, or further back (`const key = asserted`, or
   `holder.key` with `holder = { key: raw as "k" }`); `as const` is. A property counts
   only when its receiver does, so a property of a value cast to a type that
-  declares it does not, and only when it holds the literal its declaration
-  writes, so a generic property declared `T` that a cast instantiates does not.
+  declares it does not. It is the property the receiver's declared type has,
+  not the one a narrowing of the receiver picks, so a property of a union,
+  which holds every member's literal, does not fix the path. And it counts
+  only when it holds the literal its declaration writes, so a generic property
+  declared `T` that a cast instantiates does not.
   A key reached through anything else, such as an element access, an
   operator, a getter, a parameter typed by its context, a generic call or a
   property no declaration writes, does not fix the path. The same rule decides a `.key()` argument and a computed

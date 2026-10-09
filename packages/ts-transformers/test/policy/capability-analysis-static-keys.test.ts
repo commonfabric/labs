@@ -458,6 +458,65 @@ const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
       expect(usage.readPaths).not.toEqual([]);
     });
 
+    it("reads past a key read from a union receiver a test narrowed", () => {
+      const usage = catalogUsage(`type Choice = { key: "a" } | { key: "b" };
+const read = (catalog: Cell<Catalog>, initial: Choice) => {
+  let choice: Choice = initial;
+  const reset = () => {
+    choice = { key: "b" };
+  };
+  if (choice.key === "a") {
+    reset();
+    return catalog.get().offers[choice.key].space;
+  }
+  return "";
+};`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key copied from a union receiver a test narrowed", () => {
+      const usage = catalogUsage(`type Choice = { key: "a" } | { key: "b" };
+const read = (catalog: Cell<Catalog>, initial: Choice) => {
+  let choice: Choice = initial;
+  const reset = () => {
+    choice = { key: "b" };
+  };
+  if (choice.key === "a") {
+    reset();
+    const key = choice.key;
+    return catalog.get().offers[key].space;
+  }
+  return "";
+};`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
+    it("reads past a key destructured from a union receiver a test narrowed", () => {
+      const usage = catalogUsage(`type Choice = { key: "a" } | { key: "b" };
+const read = (catalog: Cell<Catalog>, initial: Choice) => {
+  let choice: Choice = initial;
+  const reset = () => {
+    choice = { key: "b" };
+  };
+  if (choice.key === "a") {
+    reset();
+    const { key } = choice;
+    return catalog.get().offers[key].space;
+  }
+  return "";
+};`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
     it("reads past a key cast to a literal type inside parentheses and `satisfies`", () => {
       const usage = catalogUsage(
         `const read = (catalog: Cell<Catalog>) =>
@@ -590,6 +649,75 @@ export default pattern<{ catalog: Catalog; raw: string }>(
           `const wrap = <T,>(value: T): { key: T } => ({ key: value });
       const key = wrap(raw as "a").key;`,
         ),
+      ).toEqual(["a", "b"]);
+    });
+  });
+
+  describe("a lift reading a key from a union receiver a test narrowed", () => {
+    /**
+     * The members of `offers` a typed lift's input requires, for a lift that
+     * narrows `choice`, a `{ key: "a" } | { key: "b" }`, to its first member,
+     * calls a closure that assigns it the second, and then runs `read`.
+     */
+    async function offersRequired(read: string): Promise<unknown> {
+      const output = await transformSource(
+        `import { type Cell, lift } from "commonfabric";
+
+type Entry = { space: string; size: number };
+type Catalog = { offers: { a: Entry; b: Entry } };
+type Choice = { key: "a" } | { key: "b" };
+
+export const pick = lift(
+  ({ initial, catalog }: { initial: Choice; catalog: Cell<Catalog> }) => {
+    let choice: Choice = initial;
+    const reset = () => {
+      choice = { key: "b" };
+    };
+    if (choice.key === "a") {
+      reset();
+      ${read}
+    }
+    return "";
+  },
+);
+`,
+        { types: COMMONFABRIC_TYPES },
+      );
+      type Schema = {
+        $ref?: string;
+        properties?: Record<string, Schema>;
+        required?: unknown;
+      };
+      const [input] = callSchemas(parseModule(output), "lift") as [
+        Schema & { $defs?: Record<string, Schema> },
+      ];
+      const resolve = (schema: Schema | undefined): Schema | undefined =>
+        schema?.$ref
+          ? input.$defs?.[schema.$ref.slice("#/$defs/".length)]
+          : schema;
+      return resolve(resolve(input.properties?.catalog)?.properties?.offers)
+        ?.required;
+    }
+
+    it("keeps every offer for a key read from the receiver", async () => {
+      expect(
+        await offersRequired(
+          "return catalog.get().offers[choice.key].space;",
+        ),
+      ).toEqual(["a", "b"]);
+    });
+
+    it("keeps every offer for a key copied from the receiver", async () => {
+      expect(
+        await offersRequired(`const key = choice.key;
+      return catalog.get().offers[key].space;`),
+      ).toEqual(["a", "b"]);
+    });
+
+    it("keeps every offer for a key destructured from the receiver", async () => {
+      expect(
+        await offersRequired(`const { key } = choice;
+      return catalog.get().offers[key].space;`),
       ).toEqual(["a", "b"]);
     });
   });

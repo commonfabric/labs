@@ -665,7 +665,9 @@ function skipKeyWrappers(expression: ts.Expression): ts.Expression {
  * the type it is declared with (`getDeclaredSymbolType()`), not the type flow
  * narrowing gives it at this use, since a narrowing can go stale: a call
  * between the test and the use can assign the variable again; a property
- * counts only when its receiver does. A non-null assertion is judged by its
+ * counts only when its receiver does, and is the one the receiver's declared
+ * type has, not the one a narrowing of the receiver picks: a union's property
+ * holds every member's type. A non-null assertion is judged by its
  * operand, less `null` and `undefined`, and a call by the return type its
  * signature writes. Anything else, a type assertion for a value, an element
  * access or an operator among them, is judged by nothing, and so is an
@@ -696,13 +698,13 @@ function getDeclaredType(
     const declared = getDeclaredType(node.expression, checker, seen);
     return declared && checker.getNonNullableType(declared);
   }
-  if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node)) {
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      !getDeclaredType(node.expression, checker, seen)
-    ) {
-      return undefined;
-    }
+  if (ts.isPropertyAccessExpression(node)) {
+    const receiver = getDeclaredType(node.expression, checker, seen);
+    const property = receiver &&
+      checker.getPropertyOfType(receiver, node.name.text);
+    return property && getDeclaredSymbolType(property, checker, seen);
+  }
+  if (ts.isIdentifier(node)) {
     const symbol = checker.getSymbolAtLocation(node);
     return symbol && getDeclaredSymbolType(symbol, checker, seen);
   }
@@ -795,7 +797,9 @@ function getDeclaredSymbolType(
 
 /**
  * The property `element` binds from the value an object pattern destructures,
- * or `undefined` for an element of an array pattern, a rest element, one keyed
+ * as that value's declared type has it, which a narrowing of the value does
+ * not change; or `undefined` for an element of an array pattern, a rest
+ * element, one keyed
  * by a computed name, one nested in another pattern, and one whose
  * destructured value is judged by nothing (`getDeclaredType()`):
  * `source as { key: "a" }` states a type the value need not have.
@@ -820,14 +824,13 @@ function getBoundPropertySymbol(
   if (!ts.isVariableDeclaration(source) && !ts.isParameter(source)) {
     return undefined;
   }
-  if (
-    source.initializer
-      ? !getDeclaredType(source.initializer, checker, seen)
-      : !source.type
-  ) {
-    return undefined;
-  }
-  return checker.getTypeAtLocation(pattern).getProperty(name.text);
+  const judged = source.initializer &&
+    getDeclaredType(source.initializer, checker, seen);
+  if (source.initializer && !judged) return undefined;
+  const sourceType = source.type
+    ? checker.getTypeFromTypeNode(source.type)
+    : judged;
+  return sourceType && checker.getPropertyOfType(sourceType, name.text);
 }
 
 /**
