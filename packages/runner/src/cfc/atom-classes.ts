@@ -81,9 +81,11 @@ export const atomPropagationClass = (atom: unknown): PropagationClass => {
 
 const ATOM_URI = "https://commonfabric.org/cfc/atom/";
 
-// Families the spec §15 registry classes provenance that `CLASS_BY_TYPE` does
+// Families the specification treats as provenance that `CLASS_BY_TYPE` does
 // not list: evidence of an event, an environment or an access rather than a
-// claim about a value. A value-intrinsic guard reads them as provenance.
+// claim about a value. They are the §15 registry's provenance families and
+// `UIRuntime`, the UI-runtime attestation an intent carries (§6.3.1). A
+// value-intrinsic guard reads them as provenance.
 const UNLISTED_PROVENANCE_FAMILIES: ReadonlySet<string> = new Set(
   [
     "AddMemberIntent",
@@ -104,6 +106,7 @@ const UNLISTED_PROVENANCE_FAMILIES: ReadonlySet<string> = new Set(
     "SinkContentDisclaimerAttached",
     "TrustedProvider",
     "UIIntent",
+    "UIRuntime",
     "UserAcknowledgedCaveat",
   ].map((name) => `${ATOM_URI}${name}`),
 );
