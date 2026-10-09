@@ -152,6 +152,9 @@ export function routedIdentifier(value: unknown): asserts value is string {
   );
 }
 
+// The router's `scripts/flags.py`, in the infra repository, reads this
+// declaration by its text and compares it with the router's allowlist, so it
+// must stay a plain list of double-quoted names.
 const flags = new Set([
   "genesisRoot",
   "spaceKind",
