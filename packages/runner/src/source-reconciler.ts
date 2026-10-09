@@ -1220,7 +1220,8 @@ export class SourceReconciler {
       return {
         outcome: "refused",
         reason: "identity-mismatch",
-        detail: "the source did not match the version its origin advertised",
+        detail: `the source compiled to ${candidateRef.identity}, not the ` +
+          `${advertisedIdentity} its origin advertises`,
       };
     }
     state.offered = candidateRef;

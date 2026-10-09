@@ -540,6 +540,7 @@ describe("piece source reconciliation", () => {
 
     it("keeps the running source when the served source does not compile to the identity it advertises", async () => {
       const v2Identity = await identityFor(source("v2"));
+      const v3Identity = await identityFor(source("v3"));
       // Advertises v2 while serving v3: the source is not what the origin says
       // it is, so nothing about it can be trusted.
       const piece = await preparePiece(
@@ -550,6 +551,16 @@ describe("piece source reconciliation", () => {
 
       expect(await reconcile(piece)).toBe("refused");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        origin: PARENT_SOURCE,
+        offered: { identity: v2Identity, symbol: SYMBOL },
+      });
+      // Both identities, so a reader can tell which side moved.
+      const detail = getPieceReconciliation(piece)?.detail;
+      expect(detail).toContain(v3Identity);
+      expect(detail).toContain(v2Identity);
     });
 
     it("keeps the running source when the identity route names no identity", async () => {
@@ -744,29 +755,6 @@ describe("piece source reconciliation", () => {
         origin: PARENT_SOURCE,
         detail: "connection refused",
       });
-    });
-
-    it("records source that does not produce its advertised identity as refused", async () => {
-      // A host whose runtime differs from this one's can advertise an identity
-      // this runtime does not reproduce from the source it serves. Opening the
-      // piece again gets the same answer, so it must not read as an origin
-      // that could not be reached and may yet come back.
-      const v2Identity = await identityFor(source("v2"));
-      const piece = await preparePiece(
-        servingFetch(() => v2Identity, () => source("v3")),
-      );
-      await stampSource(piece, PARENT_SOURCE);
-
-      const outcome = await reconcile(piece);
-
-      expect(getPieceReconciliation(piece)).toMatchObject({
-        outcome: "refused",
-        reason: "identity-mismatch",
-        origin: PARENT_SOURCE,
-        offered: { identity: v2Identity, symbol: SYMBOL },
-        detail: "the source did not match the version its origin advertised",
-      });
-      expect(outcome).toBe("refused");
     });
 
     it("records source that does not compile as refused", async () => {
