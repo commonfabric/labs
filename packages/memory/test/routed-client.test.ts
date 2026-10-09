@@ -1039,7 +1039,9 @@ Deno.test("a pushed challenge's signature refused for now is sent again a second
     const sent = auths();
     assertEquals(sent.length, 3);
     assertEquals(sent[2].statement, sent[1].statement);
-    assert(sent[2].at - sent[1].at >= 1000, `${sent[2].at - sent[1].at} ms`);
+    // A second, and the first step of the backoff on top of it: the
+    // backoff's jitter is what keeps keys refused together apart.
+    assert(sent[2].at - sent[1].at >= 1025, `${sent[2].at - sent[1].at} ms`);
     assertEquals(log.filter((e) => e.type === "challenge").length, 0);
     // Admitted, the key is renewed two minutes before its new lease ends.
     await time.tickAsync(470_000);
@@ -1065,7 +1067,11 @@ Deno.test("an attempt armed after a refusal for now waits for an authentication 
   ) {
     await t.step(refusedAttempt, async () => {
       const time = new FakeTime(Date.UTC(2026, 9, 1));
-      const { p, auths, pushChallenge } = routedPeer((n) => n === 2);
+      // The answer to the third statement is held back, so that
+      // authentication is still under way when the armed attempt comes due.
+      const { p, auths, pushChallenge, release } = routedPeer((n) => n === 2, {
+        held: (type, count) => type === "connection.auth" && count === 3,
+      });
       const client = await connect({ transport: p.transport });
       try {
         await client.mount(identity.did(), {}, principal());
@@ -1079,18 +1085,20 @@ Deno.test("an attempt armed after a refusal for now waits for an authentication 
         }
         assertEquals(auths().length, 2);
         // A mount as the same key, made before the refused statement may be
-        // sent again, is the one that sends it. The attempt armed by the
-        // refusal comes due in the same millisecond and must not send it
+        // sent again, is the one that sends it, a second after the refusal.
+        const mount = settling(client.mount(elsewhere, {}, principal()));
+        await tickUntil(time, () => auths().length >= 3);
+        // The attempt armed by the refusal comes due a few milliseconds
+        // later, while that statement is unanswered, and must not send it
         // too: a router closes the connection on a second statement for a
         // challenge it has accepted.
-        let mounted = false;
-        const mounting = client.mount(elsewhere, {}, principal()).then(() => {
-          mounted = true;
-        });
-        await tickUntil(time, () => mounted, 25, 120);
-        await mounting;
-        // Nothing more is sent in the second after that.
-        await tickUntil(time, () => false, 25, 40);
+        await tickUntil(time, () => false, 25, 8);
+        assertEquals(auths().length, 3);
+        release();
+        await tickUntil(time, () => mount.settled);
+        assertEquals(mount, { settled: true });
+        // Nothing more is sent in the seconds after that.
+        await tickUntil(time, () => false, 1000, 2);
         const sent = auths();
         assertEquals(sent.length, 3);
         assertEquals(sent[2].statement, sent[1].statement);
@@ -1135,9 +1143,9 @@ Deno.test("a key released while a refusal for now is on its way is not authentic
         assertEquals(auths().length, 2);
         await client.release(identity.did());
         release();
-        // No attempt is armed for the released key: two seconds pass and
+        // No attempt is armed for the released key: three seconds pass and
         // nothing is sent.
-        await tickUntil(time, () => false, 25, 80);
+        await tickUntil(time, () => false, 1000, 3);
         assertEquals(auths().length, 2);
         assertEquals(client.isConnected(), true);
       } finally {
@@ -1217,7 +1225,7 @@ Deno.test("a renewal refused for now after a pushed challenge was admitted leave
     // The key holds the lease its second statement was admitted for, and
     // that lease's renewal is armed, so the refusal arms no retry: nothing
     // is sent in the next ten seconds.
-    await tickUntil(time, () => false, 25, 400);
+    await tickUntil(time, () => false, 1000, 10);
     assertEquals(auths().length, 3);
     // The admitted lease is renewed two minutes before it ends.
     await time.tickAsync(460_000);
@@ -1458,9 +1466,10 @@ Deno.test("a mount whose open is refused for now is tried again on the same conn
     assertEquals(mount, { settled: true });
     const opens = log.filter((e) => e.type === "open");
     assertEquals(opens.length, 4);
+    // Each wait is a second and a step of the backoff on top of it.
     for (let i = 1; i < opens.length; i++) {
       const waited = opens[i].at - opens[i - 1].at;
-      assert(waited >= 1000, `open ${i + 1} after ${waited} ms`);
+      assert(waited >= 1025, `open ${i + 1} after ${waited} ms`);
     }
     // The key authenticated once, and the connection was not replaced.
     assertEquals(auths().length, 1);

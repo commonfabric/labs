@@ -1313,8 +1313,10 @@ export class Client {
    * Arms another attempt at authenticating `principal` after the server
    * refused one for now: a renewal, or the answer to a pushed challenge.
    * `attempt` counts those refusals from 1. The attempt waits the reconnect
-   * backoff for that count, and a second or more against a router, whose
-   * refusal for now passes over seconds.
+   * backoff for that count, on top of a second against a router, whose
+   * refusal for now passes over seconds. The backoff is added to the second
+   * and not capped below by it, so its jitter is kept and keys refused
+   * together do not all try again in the same millisecond.
    *
    * It arms nothing when the connection of `epoch` is gone, since the next
    * connection authenticates the key itself, or when a renewal is already
@@ -1337,7 +1339,7 @@ export class Client {
       principal,
       epoch,
       attempt,
-      Math.max(floor, reconnectDelayMs(attempt - 1)),
+      floor + reconnectDelayMs(attempt - 1),
     );
   }
 
