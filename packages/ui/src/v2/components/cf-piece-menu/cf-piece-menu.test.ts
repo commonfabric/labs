@@ -2149,7 +2149,9 @@ describe("the origin and history panel", () => {
     expect(rendered).toContain(
       patternRefLabel({ identity: "offered-identity", symbol: "default" }),
     );
-    expect(rendered).toContain("Update from the origin now");
+    // The origin has just answered, so what is on offer is taking that answer
+    // anyway rather than asking again.
+    expect(rendered).not.toContain("Update from the origin now");
     expect(rendered).toContain("Update, ignoring the compatibility check");
   });
 
@@ -2209,21 +2211,14 @@ describe("the origin and history panel", () => {
     const rendered = shows(menu);
     expect(rendered).toContain("piece-origin-follow-detail");
     expect(rendered).not.toContain("piece-origin-force-update");
+    // The origin has just answered, and asking it again adopts nothing new.
+    expect(rendered).not.toContain("piece-origin-update-now");
   });
 
   it("asks the origin for an update on request", async () => {
     const actions: unknown[] = [];
     const menu = openMenu(pieceCell(
-      () =>
-        Promise.resolve({
-          ...SOURCE,
-          reconciliation: {
-            outcome: "refused" as const,
-            at: 1,
-            origin: SOURCE.origin!.url,
-            reason: "incompatible-schema" as const,
-          },
-        }),
+      () => Promise.resolve(SOURCE),
       {
         update: (_pieceId, _space, action) => {
           actions.push(action);
@@ -2287,16 +2282,7 @@ describe("the origin and history panel", () => {
   it("puts away a warning the panel raised when it is declined", async () => {
     const calls: unknown[] = [];
     const menu = openMenu(pieceCell(
-      () =>
-        Promise.resolve({
-          ...SOURCE,
-          reconciliation: {
-            outcome: "refused" as const,
-            at: 1,
-            origin: SOURCE.origin!.url,
-            reason: "incompatible-schema" as const,
-          },
-        }),
+      () => Promise.resolve(SOURCE),
       {
         update: (_pieceId, _space, action, options) => {
           calls.push({ action, options });
@@ -2343,7 +2329,7 @@ describe("the origin and history panel", () => {
     await menu.showPanel("origin");
 
     const rendered = shows(menu);
-    expect(rendered).toContain("piece-origin-update-now");
+    expect(rendered).not.toContain("piece-origin-update-now");
     expect(rendered).not.toContain("piece-origin-force-update");
   });
 
@@ -4794,14 +4780,33 @@ describe("describeFollowState", () => {
           reason,
         },
       });
-    // Asking again is always on offer; ignoring the check is not, when the
-    // refusal named something ignoring it cannot fix.
-    expect(refusal("incompatible-schema").canUpdate).toBe(true);
+    // The origin has just answered, so asking it again is not on offer.
+    // Ignoring the check is, only where the refusal named something ignoring
+    // it can fix.
+    expect(refusal("incompatible-schema").canUpdate).toBe(false);
     expect(refusal("incompatible-schema").canForce).toBe(true);
-    expect(refusal("source-invalid").canUpdate).toBe(true);
+    expect(refusal("source-invalid").canUpdate).toBe(false);
     expect(refusal("source-invalid").canForce).toBe(false);
-    expect(refusal("argument-mismatch").canUpdate).toBe(true);
+    expect(refusal("argument-mismatch").canUpdate).toBe(false);
     expect(refusal("argument-mismatch").canForce).toBe(false);
+  });
+
+  it("does not call a mismatch with the advertised identity permanent", () => {
+    // A host part-way through a deployment can serve modules that compile to
+    // another identity than the one it advertises, and that ends when the
+    // deployment does.
+    const described = describeFollowState({
+      ...SOURCE,
+      reconciliation: {
+        outcome: "refused",
+        at: 1,
+        origin: SOURCE.origin!.url,
+        reason: "identity-mismatch",
+      },
+    });
+    expect(described.detail).toContain("finishes deploying");
+    expect(described.detail).toContain("this client is updated");
+    expect(described.detail).not.toContain("every time");
   });
 
   it("reports a piece nothing has looked at as unknown", () => {
@@ -4858,7 +4863,7 @@ describe("what the source-updates box offers", () => {
         origin: SOURCE.origin!.url,
         reason: "incompatible-schema",
       },
-    }, { box: true, update: true, force: true }],
+    }, { box: true, update: false, force: true }],
     ["refused over data that does not fit", {
       ...SOURCE,
       reconciliation: {
@@ -4867,7 +4872,7 @@ describe("what the source-updates box offers", () => {
         origin: SOURCE.origin!.url,
         reason: "argument-mismatch",
       },
-    }, { box: true, update: true, force: false }],
+    }, { box: true, update: false, force: false }],
     ["refused over unusable source", {
       ...SOURCE,
       reconciliation: {
@@ -4876,7 +4881,16 @@ describe("what the source-updates box offers", () => {
         origin: SOURCE.origin!.url,
         reason: "source-invalid",
       },
-    }, { box: true, update: true, force: false }],
+    }, { box: true, update: false, force: false }],
+    ["refused over source that did not match its advertised identity", {
+      ...SOURCE,
+      reconciliation: {
+        outcome: "refused",
+        at: 1,
+        origin: SOURCE.origin!.url,
+        reason: "identity-mismatch",
+      },
+    }, { box: true, update: false, force: false }],
     ["detached", { ...SOURCE, origin: undefined }, {
       box: false,
       update: false,

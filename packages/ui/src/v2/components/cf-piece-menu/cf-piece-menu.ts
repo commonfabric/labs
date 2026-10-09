@@ -2903,17 +2903,20 @@ export class CFPieceMenu extends BaseElement {
             </p>
           `
           : nothing}
-        ${follow.canUpdate
+        ${follow.canUpdate || follow.canForce
           ? html`
             <div class="warning-actions">
-              <button
-                test-id="piece-origin-update-now"
-                ?disabled="${this.sourceActionPending}"
-                @click="${() => this.changeSource({ kind: "adopt" })}"
-              >
-                Update from the origin now
-              </button>
-              ${follow.canForce
+              ${follow.canUpdate
+                ? html`
+                  <button
+                    test-id="piece-origin-update-now"
+                    ?disabled="${this.sourceActionPending}"
+                    @click="${() => this.changeSource({ kind: "adopt" })}"
+                  >
+                    Update from the origin now
+                  </button>
+                `
+                : nothing} ${follow.canForce
                 ? html`
                   <button
                     test-id="piece-origin-force-update"

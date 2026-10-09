@@ -129,9 +129,11 @@ export interface FollowDescription {
   offered?: { identity: string; symbol: string };
 
   /**
-   * Whether asking the origin now is worth offering. It is not when the
-   * origin has just been asked and offered what the piece runs: a button to
-   * fix a state that is not broken reads as though something is.
+   * Whether asking the origin now is worth offering: only where nothing has
+   * established what the origin holds. An origin that has just been asked
+   * and answered, whether with what the piece runs or with source it refused,
+   * would give the same answer again, and a button to ask reads as though the
+   * answer cannot be trusted.
    */
   canUpdate: boolean;
 
@@ -236,23 +238,38 @@ export function describeFollowState(
     state: "refused",
     label: "New source refused",
     summary: "The origin offered new source and this piece did not take it.",
-    // The one refusal with no override behind it needs to say so, or its box
-    // reads as one whose button someone forgot to add.
-    detail: reconciliation.reason === "argument-mismatch"
-      ? "The new source cannot run on the data this piece holds, so there " +
-        "is nothing to overrule — the data would have to change first. " +
-        "Until then the piece runs the source it last accepted, and can " +
-        "stop following this origin or go back to an earlier version."
-      : "The piece is running the source it last accepted, and this will " +
-        "happen again every time the piece is opened.",
+    detail: refusalOutlook(reconciliation),
     reason: refusalReason(reconciliation),
     at: reconciliation.at,
     ...(reconciliation.offered === undefined
       ? {}
       : { offered: reconciliation.offered }),
-    canUpdate: true,
+    canUpdate: false,
     canForce: reconciliation.reason === "incompatible-schema",
   };
+}
+
+/** What follows from a refusal, and what would end it. */
+function refusalOutlook(reconciliation: PieceReconciliationView): string {
+  switch (reconciliation.reason) {
+    // The one refusal with no override behind it needs to say so, or its box
+    // reads as one whose button someone forgot to add.
+    case "argument-mismatch":
+      return "The new source cannot run on the data this piece holds, so " +
+        "there is nothing to overrule — the data would have to change " +
+        "first. Until then the piece runs the source it last accepted, and " +
+        "can stop following this origin or go back to an earlier version.";
+    // A host part-way through a deployment can serve source that does not
+    // compile to the identity it advertises, as can a host whose runtime
+    // differs from this client's.
+    case "identity-mismatch":
+      return "The piece is running the source it last accepted. This lasts " +
+        "until the origin's host finishes deploying, or until this client " +
+        "is updated to match it.";
+    default:
+      return "The piece is running the source it last accepted, and this " +
+        "will happen again every time the piece is opened.";
+  }
 }
 
 /** How a refused attempt to follow a typed source reads. */
