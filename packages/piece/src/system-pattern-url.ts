@@ -40,7 +40,9 @@ export function deriveSystemPatternOrigin(
     : DEFAULT_APP_PATTERN_ORIGIN;
 }
 
-/** Like {@link deriveSystemPatternOrigin}, except it returns the origin's ref. */
+/**
+ * Like {@link deriveSystemPatternOrigin}, except it returns the origin's ref.
+ */
 export function deriveSystemPatternSource(
   space: MemorySpace,
   runtime: Runtime,

@@ -1286,10 +1286,11 @@ own.
   it offered — the candidate is not an acceptable replacement for what the piece
   runs, its stored data does not satisfy the candidate's contract, the source
   the origin advertises did not compile, or the source it served is not the
-  source it advertises, whether or not that compiles. The first two last until
-  the origin offers other source or the piece's data changes. Source that did
-  not compile lasts until the origin offers other source, or until the client
-  runs a runtime that compiles it. A mismatch with the advertised identity
+  source it advertises, whether or not that compiles. The first lasts until the
+  origin offers other source or the piece's owner takes it anyway, and the
+  second until the origin offers other source or the piece's data changes.
+  Source that did not compile lasts until the origin offers other source, or
+  until the client runs a runtime that compiles it. A mismatch with the advertised identity
   lasts until a deployment in progress at the host finishes, or until the
   client's runtime compiles the source as the host's runtime does. The panel
   says which of these ends the refusal, names the reason, and offers the

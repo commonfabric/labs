@@ -130,9 +130,9 @@ export interface FollowDescription {
 
   /**
    * Whether asking the origin now is worth offering: only where nothing has
-   * established what the origin holds. An origin that has just been asked
-   * and answered, whether with what the piece runs or with source it refused,
-   * would give the same answer again, and a button to ask reads as though the
+   * established what the origin holds. A piece whose origin has answered,
+   * with what the piece runs or with source it refused, is asked again the
+   * next time it is opened, and a button to ask now reads as though that
    * answer cannot be trusted.
    */
   canUpdate: boolean;

@@ -212,17 +212,23 @@ function pinnedPatternIdentity(ref: FabricRef): string | undefined {
 
 /** The source an origin offers now, and the export a transition selects. */
 export type ResolvedPieceOriginSource =
-  /** Source for the caller to compile into the destination space. */
+  /** A fabric origin's source, for the caller to compile into the space. */
   | {
+    /** The authored program, with the export the transition selects. */
     program: RuntimeProgram;
-    pattern: { identity?: string; symbol: string };
+
+    /** That export, under the identity the origin names for its source. */
+    pattern: { identity: string; symbol: string };
   }
   /**
    * A `system:` origin's source, already compiled into the destination space
    * and held to the identity its host advertises.
    */
   | {
+    /** The pattern the selected export compiled to in the space. */
     compiled: Pattern;
+
+    /** The compiled pattern's entry ref, under the advertised identity. */
     pattern: { identity: string; symbol: string };
   };
 

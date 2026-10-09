@@ -625,9 +625,9 @@ export class PiecesController<T = unknown> {
             ) !== undefined
         ) throw error;
       } catch {
-        // A load that throws is a failed check, not evidence that the root's
-        // pattern is gone, so it keeps the start failure as a root the rescue
-        // does not cover does.
+        // A check that throws says nothing about whether the root's pattern is
+        // gone, so the caller sees the start failure, as for a root the rescue
+        // does not cover.
         throw error;
       }
       // A roll-forward that does not happen says why, and carries the start

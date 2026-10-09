@@ -2149,8 +2149,8 @@ describe("the origin and history panel", () => {
     expect(rendered).toContain(
       patternRefLabel({ identity: "offered-identity", symbol: "default" }),
     );
-    // The origin has just answered, so what is on offer is taking that answer
-    // anyway rather than asking again.
+    // The origin has answered, so what is on offer is taking that answer
+    // anyway rather than asking now.
     expect(rendered).not.toContain("Update from the origin now");
     expect(rendered).toContain("Update, ignoring the compatibility check");
   });
@@ -2211,7 +2211,8 @@ describe("the origin and history panel", () => {
     const rendered = shows(menu);
     expect(rendered).toContain("piece-origin-follow-detail");
     expect(rendered).not.toContain("piece-origin-force-update");
-    // The origin has just answered, and asking it again adopts nothing new.
+    // The origin has answered, and is asked again the next time the piece is
+    // opened.
     expect(rendered).not.toContain("piece-origin-update-now");
   });
 
@@ -4780,9 +4781,9 @@ describe("describeFollowState", () => {
           reason,
         },
       });
-    // The origin has just answered, so asking it again is not on offer.
-    // Ignoring the check is, only where the refusal named something ignoring
-    // it can fix.
+    // The origin has answered, and is asked again the next time the piece is
+    // opened, so asking it now is not on offer. Ignoring the check is, only
+    // where the refusal named something ignoring it can fix.
     expect(refusal("incompatible-schema").canUpdate).toBe(false);
     expect(refusal("incompatible-schema").canForce).toBe(true);
     expect(refusal("source-invalid").canUpdate).toBe(false);
