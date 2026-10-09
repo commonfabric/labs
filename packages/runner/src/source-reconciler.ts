@@ -104,7 +104,7 @@ const logger = getLogger("runner.source-reconcile", {
  * - `migrated`: the origin was rewritten into its canonical spelling; the
  *   pattern is unchanged.
  * - `updated`: the piece adopted new source.
- * - `incompatible`: the origin resolved and offered source the piece refused,
+ * - `refused`: the origin resolved and offered source the piece refused,
  *   and offering it again gets the same answer: the source did not compile,
  *   did not produce the identity its origin advertised, or cannot replace what
  *   the piece runs and its owner has not said to take it anyway. The record
@@ -119,7 +119,7 @@ export type ReconcileOutcome =
   | "current"
   | "migrated"
   | "updated"
-  | "incompatible"
+  | "refused"
   | "unavailable";
 
 /**
@@ -139,7 +139,7 @@ const RECORDED_OUTCOME: Record<
   migrated: "followed",
   updated: "followed",
   unavailable: "unreachable",
-  incompatible: "refused",
+  refused: "refused",
   detached: undefined,
   unusable: undefined,
 };
@@ -178,10 +178,10 @@ function refuse(
   state: PieceState,
   reason: PieceReconciliationReason,
   detail: string,
-): "incompatible" {
+): "refused" {
   state.refusal = reason;
   state.detail = detail;
-  return "incompatible";
+  return "refused";
 }
 
 /**

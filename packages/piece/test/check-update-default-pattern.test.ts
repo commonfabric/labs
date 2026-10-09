@@ -1582,7 +1582,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("incompatible");
+    ).toBe("refused");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 1);
@@ -1614,7 +1614,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("incompatible");
+    ).toBe("refused");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 2);
@@ -1808,7 +1808,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("incompatible");
+    ).toBe("refused");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
   });
 

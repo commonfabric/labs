@@ -342,7 +342,7 @@ describe("piece source reconciliation", () => {
           const originalRef = getPatternIdentityRef(piece)!;
           await stampSource(piece, PARENT_SOURCE);
           expect(await reconcile(piece)).toBe(
-            mode === "entry-only host" ? "incompatible" : mode,
+            mode === "entry-only host" ? "refused" : mode,
           );
           const currentRef = getPatternIdentityRef(piece)!;
           if (mode !== "updated") expect(currentRef).toEqual(originalRef);
@@ -547,7 +547,7 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("incompatible");
+      expect(await reconcile(piece)).toBe("refused");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
@@ -712,7 +712,7 @@ describe("piece source reconciliation", () => {
       const origin = `cf:pattern:${changedRef.identity}`;
       await stampSource(piece, origin);
 
-      expect(await reconcile(piece)).toBe("incompatible");
+      expect(await reconcile(piece)).toBe("refused");
 
       // A refusal leaves no revision, so without this record it would look
       // exactly like a piece running what its origin offers.
@@ -765,7 +765,7 @@ describe("piece source reconciliation", () => {
         offered: { identity: v2Identity, symbol: SYMBOL },
         detail: "the source did not match the version its origin advertised",
       });
-      expect(outcome).toBe("incompatible");
+      expect(outcome).toBe("refused");
     });
 
     it("records source that does not compile as refused", async () => {
@@ -795,7 +795,7 @@ describe("piece source reconciliation", () => {
       expect(getPieceReconciliation(piece)?.detail).toContain(
         "notDeclaredAnywhere",
       );
-      expect(outcome).toBe("incompatible");
+      expect(outcome).toBe("refused");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
@@ -1204,7 +1204,7 @@ describe("piece source reconciliation", () => {
       const changedRef = runtime.patternManager.getArtifactEntryRef(changed)!;
       await stampSource(piece, `cf:pattern:${changedRef.identity}`);
 
-      expect(await reconcile(piece)).toBe("incompatible");
+      expect(await reconcile(piece)).toBe("refused");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceSourceRevisions(piece)).toEqual([]);
     });
@@ -1222,7 +1222,7 @@ describe("piece source reconciliation", () => {
       const grownRef = runtime.patternManager.getArtifactEntryRef(grown)!;
       await stampSource(piece, `cf:pattern:${grownRef.identity}`);
 
-      expect(await reconcile(piece)).toBe("incompatible");
+      expect(await reconcile(piece)).toBe("refused");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
