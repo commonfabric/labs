@@ -13,7 +13,10 @@ import {
   getPatternBuilderCallbackArgument,
   resolveCallbackFunctionExpression,
 } from "../../src/ast/mod.ts";
-import { getWithPatternHoistablePatternCall } from "../../src/ast/call-kind.ts";
+import {
+  getWithPatternHoistablePatternCall,
+  isHandlerAppliedCall,
+} from "../../src/ast/call-kind.ts";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -143,6 +146,36 @@ function createLiftBindingProgram() {
   `);
 }
 
+/**
+ * A program holding builder calls applied once (`appliedOnce`,
+ * `aliasAppliedOnce`, `handlerApplied`), calls of what an application returned
+ * (`overApplied`, `viaAppliedResult`, `handlerOverApplied`), a call through a
+ * binding of a `handler()` factory (`viaBoundHandler`), and a call of what an
+ * `ifElse()` call returned (`viaIfElseResult`).
+ */
+function createApplicationProgram() {
+  return createProgram(`
+    declare function lift<T, U>(callback: (value: T) => U): (input: T) => U;
+    declare function handler<E, S>(
+      callback: (event: E, state: S) => void,
+    ): (state: S) => () => void;
+    declare function ifElse<T>(condition: boolean, ifTrue: T, ifFalse: T): T;
+
+    const liftAlias = lift;
+    const appliedResult = lift((value: number) => () => value)(1);
+    const boundHandler = handler((event: unknown, state: {}) => {});
+
+    const appliedOnce = lift((value: number) => value + 1)(1);
+    const aliasAppliedOnce = liftAlias((value: number) => value + 1)(1);
+    const overApplied = lift((value: number) => () => value)(1)();
+    const viaAppliedResult = appliedResult();
+    const viaBoundHandler = boundHandler({});
+    const viaIfElseResult = ifElse(true, () => 1, () => 2)();
+    const handlerApplied = handler((event: unknown, state: {}) => {})({});
+    const handlerOverApplied = handler((event: unknown, state: {}) => {})({})();
+  `);
+}
+
 describe("call-kind", () => {
   describe("detectCallKind()", () => {
     it("returns the builder kind `pattern` for a `pattern()` imported from `commonfabric`", () => {
@@ -230,6 +263,79 @@ describe("call-kind", () => {
           checker,
         )?.kind,
       ).toBeUndefined();
+    });
+    describe("a call of what a builder call returns", () => {
+      // A builder call returns a factory, and calling that factory applies
+      // the builder. What the application returns in turn is no factory, so
+      // calling it is not a call of the builder.
+
+      it("returns `lift-applied` for a `lift()` call applied once", () => {
+        const { sourceFile, checker } = createApplicationProgram();
+
+        expect(
+          detectCallKind(
+            findCallInitializer(sourceFile, "appliedOnce"),
+            checker,
+          )?.kind,
+        ).toBe("lift-applied");
+      });
+
+      it("returns `lift-applied` for a call of a `lift` alias applied once", () => {
+        const { sourceFile, checker } = createApplicationProgram();
+
+        expect(
+          detectCallKind(
+            findCallInitializer(sourceFile, "aliasAppliedOnce"),
+            checker,
+          )?.kind,
+        ).toBe("lift-applied");
+      });
+
+      it("returns `undefined` for a call of what an applied `lift()` call returns", () => {
+        const { sourceFile, checker } = createApplicationProgram();
+
+        expect(
+          detectCallKind(
+            findCallInitializer(sourceFile, "overApplied"),
+            checker,
+          )?.kind,
+        ).toBeUndefined();
+      });
+
+      it("returns `undefined` for a call through a `const` binding of an applied `lift()` call", () => {
+        const { sourceFile, checker } = createApplicationProgram();
+
+        expect(
+          detectCallKind(
+            findCallInitializer(sourceFile, "viaAppliedResult"),
+            checker,
+          )?.kind,
+        ).toBeUndefined();
+      });
+
+      it("returns the builder kind `handler` for a call through a `const` binding of a `handler()` call", () => {
+        const { sourceFile, checker } = createApplicationProgram();
+
+        const callKind = detectCallKind(
+          findCallInitializer(sourceFile, "viaBoundHandler"),
+          checker,
+        );
+
+        expect(callKind?.kind).toBe("builder");
+        expect(callKind?.kind === "builder" ? callKind.builderName : undefined)
+          .toBe("handler");
+      });
+
+      it("returns `undefined` for a call of what an `ifElse()` call returns", () => {
+        const { sourceFile, checker } = createApplicationProgram();
+
+        expect(
+          detectCallKind(
+            findCallInitializer(sourceFile, "viaIfElseResult"),
+            checker,
+          )?.kind,
+        ).toBeUndefined();
+      });
     });
   });
 
@@ -471,6 +577,30 @@ describe("call-kind", () => {
       expect(getCapabilitySummaryCallbackArgument(actionCall, checker)).toBe(
         actionCall.arguments[0],
       );
+    });
+  });
+
+  describe("isHandlerAppliedCall()", () => {
+    it("returns `true` for a `handler()` call applied once", () => {
+      const { sourceFile, checker } = createApplicationProgram();
+
+      expect(
+        isHandlerAppliedCall(
+          findCallInitializer(sourceFile, "handlerApplied"),
+          checker,
+        ),
+      ).toBe(true);
+    });
+
+    it("returns `false` for a call of what an applied `handler()` call returns", () => {
+      const { sourceFile, checker } = createApplicationProgram();
+
+      expect(
+        isHandlerAppliedCall(
+          findCallInitializer(sourceFile, "handlerOverApplied"),
+          checker,
+        ),
+      ).toBe(false);
     });
   });
 
