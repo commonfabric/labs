@@ -24,7 +24,11 @@ a room to anyone its space doesn't admit.
   way. It is what keeps one person's conversation from splitting.
 - **The conversations a container shows** are the adapters the container holds,
   each linking to a placement of one room, plus the container's own chat when it
-  is a social space that has one.
+  is a social space that has one. A client that wants a `loom` root's own chat
+  sends the root's `ensureChatRoom`, which creates the room unless the root
+  names one, and reads it from `chatRoom`. A client MUST NOT create that room
+  itself: a piece created at the top level of the space is registered through
+  the root's `addPiece`, which shows it as a panel.
 - **The people a client offers** when starting a conversation from a social
   space are that space's participants, as claims, until it offers a member set
   (see [social spaces](README.md#social-spaces)).
