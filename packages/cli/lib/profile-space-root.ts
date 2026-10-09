@@ -34,6 +34,40 @@ import { loadPieces, type SpaceConfig } from "./piece.ts";
  */
 export const PROFILE_ROOT_REPAIR_VERSION = 1;
 
+/** Why a run stopped before it wrote anything. */
+export type ProfileSpaceRootRefusalReason =
+  | "server-execution"
+  | "server-execution-unknown"
+  | "inspection-changed";
+
+/**
+ * The exit status `cf profile repair-root` ends with for each refusal: one
+ * for an apply whose receipt no longer matches, one for a server that runs
+ * server execution or does not say.
+ */
+export const PROFILE_ROOT_REPAIR_REFUSAL_EXIT_CODES: Readonly<
+  Record<ProfileSpaceRootRefusalReason, number>
+> = {
+  "inspection-changed": 3,
+  "server-execution": 4,
+  "server-execution-unknown": 4,
+};
+
+/**
+ * A run that stopped, having written nothing, for `reason`; `space` names the
+ * space whose server refused, for a refusal over server execution.
+ */
+export class ProfileSpaceRootRefusal extends Error {
+  constructor(
+    readonly reason: ProfileSpaceRootRefusalReason,
+    message: string,
+    readonly space?: string,
+  ) {
+    super(message);
+    this.name = "ProfileSpaceRootRefusal";
+  }
+}
+
 /** What the repair is asked to do. */
 export interface ProfileSpaceRootConfig extends Omit<SpaceConfig, "space"> {
   /**
@@ -235,9 +269,10 @@ function fromSnapshot(
  * @throws Error when it is given both or neither of `config.snapshot` and
  *   `config.home`, or `config.cells` with `config.home`; when the snapshot
  *   holds no space database, or the Home's space holds no Home; when a named
- *   address is not a full profile address; when a space's server runs
- *   server execution or does not say whether it does, or when the run's
- *   receipt differs from `config.expectedInspection`.
+ *   address is not a full profile address. `ProfileSpaceRootRefusal`, having
+ *   written nothing, when a space's server runs server execution or does not
+ *   say whether it does, or when the run's receipt differs from
+ *   `config.expectedInspection`.
  */
 export async function profileSpaceRoot(
   config: ProfileSpaceRootConfig,
@@ -263,12 +298,15 @@ export async function profileSpaceRoot(
   const refuseServerExecution = async (space: string) => {
     const flags = await serverFlags({ ...config, space });
     if (flags?.serverExecution !== false) {
-      throw new Error(
+      const runs = flags?.serverExecution === true;
+      throw new ProfileSpaceRootRefusal(
+        runs ? "server-execution" : "server-execution-unknown",
         `The server at ${config.apiUrl} ${
-          flags?.serverExecution === true
+          runs
             ? "runs server execution"
             : "does not say whether it runs server execution"
         } for ${space}, so opening a profile space there can write a root into it. Serve the store with server execution off and run the repair against that server, as "Making existing profiles their space's root" in the CLI README describes.`,
+        space,
       );
     }
   };
@@ -358,7 +396,8 @@ export async function profileSpaceRoot(
   );
   if (config.expectedInspection === undefined) return inspected;
   if (inspected.inspection !== config.expectedInspection) {
-    throw new Error(
+    throw new ProfileSpaceRootRefusal(
+      "inspection-changed",
       "The profiles changed after inspection; inspect them again before applying",
     );
   }

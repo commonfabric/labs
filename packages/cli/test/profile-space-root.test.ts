@@ -44,12 +44,14 @@ import {
   PROFILE_ROOT_REPAIR_VERSION,
   profileSpaceRoot,
   type ProfileSpaceRootConfig,
+  ProfileSpaceRootRefusal,
 } from "../lib/profile-space-root.ts";
 
 const unrootedOwner = await Identity.fromPassphrase("repair-root unrooted");
 const plantedOwner = await Identity.fromPassphrase("repair-root planted");
 const rootedOwner = await Identity.fromPassphrase("repair-root rooted");
 const unlistedOwner = await Identity.fromPassphrase("repair-root unlisted");
+const occupiedOwner = await Identity.fromPassphrase("repair-root occupied");
 const admin = await Identity.fromPassphrase("repair-root admin");
 
 const patternsRoot = join(import.meta.dirname!, "..", "..", "patterns");
@@ -129,6 +131,40 @@ describe("profileSpaceRoot()", () => {
     ...extra,
   });
 
+  /**
+   * Runs the real default app, written by the admin, at `cause` in `space`,
+   * and links it as the space's root.
+   */
+  const plantDefaultApp = async (space: string, cause: string) => {
+    const plantRuntime = runtimeAs(admin);
+    const program = await resolveLocalProgram(
+      (resolver) => plantRuntime.harness.resolve(resolver),
+      {
+        main: join(patternsRoot, "system", "default-app.tsx"),
+        root: patternsRoot,
+      },
+    );
+    const pattern = await plantRuntime.patternManager.compilePattern(program, {
+      space: space as MemorySpace,
+    });
+    const { error } = await plantRuntime.editWithRetry((tx) => {
+      const root: Cell<unknown> = plantRuntime.getCell(
+        space as MemorySpace,
+        cause,
+        undefined,
+        tx,
+      );
+      plantRuntime.runner.run(tx, pattern, {}, root, {
+        sourceOrigin: DEFAULT_APP_PATTERN_SOURCE,
+      });
+      plantRuntime.getSpaceCell(space as MemorySpace).withTx(tx).key(
+        "defaultPattern",
+      ).set(root);
+    });
+    expect(error).toBeUndefined();
+    await plantRuntime.storageManager.synced();
+  };
+
   /** The id the space's root resolves to, read by a fresh runtime. */
   const rootIdOf = async (space: string) =>
     (await resolveSpaceRootPattern(runtimeAs(admin), space as MemorySpace))
@@ -165,34 +201,7 @@ describe("profileSpaceRoot()", () => {
 
     // The planted profile's space gets the root an open of it would have
     // made, the real default app, written by the admin.
-    const plantRuntime = runtimeAs(admin);
-    const space = planted.space as MemorySpace;
-    const program = await resolveLocalProgram(
-      (resolver) => plantRuntime.harness.resolve(resolver),
-      {
-        main: join(patternsRoot, "system", "default-app.tsx"),
-        root: patternsRoot,
-      },
-    );
-    const pattern = await plantRuntime.patternManager.compilePattern(program, {
-      space,
-    });
-    const { error } = await plantRuntime.editWithRetry((tx) => {
-      const root: Cell<unknown> = plantRuntime.getCell(
-        space,
-        spaceRootPatternConfig(false).cause,
-        undefined,
-        tx,
-      );
-      plantRuntime.runner.run(tx, pattern, {}, root, {
-        sourceOrigin: DEFAULT_APP_PATTERN_SOURCE,
-      });
-      plantRuntime.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
-        root,
-      );
-    });
-    expect(error).toBeUndefined();
-    await plantRuntime.storageManager.synced();
+    await plantDefaultApp(planted.space, spaceRootPatternConfig(false).cause);
     await stop();
 
     // The snapshot leaves out the unlisted profile's Home, so no Home in it
@@ -576,21 +585,49 @@ describe("profileSpaceRoot()", () => {
       }
     });
 
-    it("writes nothing when it only inspects, though the identity owns every space it reads", async () => {
-      await ownRun(unrootedOwner);
-      await ownRun(plantedOwner);
+    // Copies of the store taken mid-test, each removed after it.
+    let copies: string[];
+
+    beforeEach(() => {
+      copies = [];
+    });
+
+    afterEach(async () => {
+      for (const dir of copies) await Deno.remove(dir, { recursive: true });
+    });
+
+    /**
+     * Copies every space database of the store as it stands, the server
+     * stopped while it does, and returns the copy's directory.
+     */
+    const copyStore = async () => {
       await stop();
+      const dir = await Deno.makeTempDir({ prefix: "repair-root-copy-" });
+      copies.push(dir);
       for (
-        const space of [
-          unrooted.space,
-          planted.space,
-          unrootedOwner.did(),
-          plantedOwner.did(),
-        ]
+        const { did, path } of discoverSpaceDbs({
+          dirs: [storeDir],
+          defaultRoots: false,
+        })
       ) {
+        const db = new Database(path, { readonly: true });
+        try {
+          db.exec(`VACUUM INTO '${dir}/${did}.sqlite'`);
+        } finally {
+          db.close();
+        }
+      }
+      serve();
+      return dir;
+    };
+
+    /** Expects each of `spaces` to hold what its copy in `dir` holds. */
+    const expectUnchangedSince = async (dir: string, spaces: string[]) => {
+      await stop();
+      for (const space of spaces) {
         const live = discoverSpaceDbs({ dirs: [storeDir], defaultRoots: false })
           .find((d) => d.did === space)!;
-        const before = openSpace(`${snapshotDir}/${space}.sqlite`);
+        const before = openSpace(`${dir}/${space}.sqlite`);
         const after = openSpace(live.path);
         try {
           expect(
@@ -604,6 +641,104 @@ describe("profileSpaceRoot()", () => {
           after.close();
         }
       }
+    };
+
+    it("writes nothing when it only inspects, though the identity owns every space it reads", async () => {
+      await ownRun(unrootedOwner);
+      await ownRun(plantedOwner);
+      await expectUnchangedSince(snapshotDir, [
+        unrooted.space,
+        planted.space,
+        unrootedOwner.did(),
+        plantedOwner.did(),
+      ]);
+    });
+
+    it("writes nothing when every profile it lists is already its space's root, applying included", async () => {
+      const first = await ownRun(unrootedOwner);
+      await ownRun(unrootedOwner, { expectedInspection: first.inspection });
+      const copy = await copyStore();
+
+      const plan = await ownRun(unrootedOwner);
+      expect(plan.summary).toEqual({ root: 1 });
+      const applied = await ownRun(unrootedOwner, {
+        expectedInspection: plan.inspection,
+      });
+      expect(applied.applied).toBe(true);
+      expect(applied.summary).toEqual({ root: 1 });
+      await expectUnchangedSince(copy, [unrooted.space, unrootedOwner.did()]);
+    });
+
+    it("refuses an apply whose receipt is stale, writing nothing, as a second apply of one plan is", async () => {
+      const plan = await ownRun(unrootedOwner);
+      await ownRun(unrootedOwner, { expectedInspection: plan.inspection });
+      const copy = await copyStore();
+
+      const refusal = await ownRun(unrootedOwner, {
+        expectedInspection: plan.inspection,
+      }).then(
+        () => undefined,
+        (error) => error,
+      );
+      expect(refusal).toBeInstanceOf(ProfileSpaceRootRefusal);
+      expect((refusal as ProfileSpaceRootRefusal).reason).toBe(
+        "inspection-changed",
+      );
+      await expectUnchangedSince(copy, [unrooted.space, unrootedOwner.did()]);
+    });
+
+    it("leaves an occupied root alone when it applies, writing nothing", async () => {
+      const occupied = await createProfileThroughHome(
+        runtimeAs(occupiedOwner),
+        "O",
+        { shape: "not-root", hostIsRoot: true },
+      );
+      // The default app, but not at the address a space-root ensure derives.
+      await plantDefaultApp(occupied.space, "a root no ensure made");
+      const plan = await ownRun(occupiedOwner);
+      expect(plan.rows.map((row) => [row.status, row.action])).toEqual([[
+        "occupied",
+        "none",
+      ]]);
+      const copy = await copyStore();
+
+      const applied = await ownRun(occupiedOwner, {
+        expectedInspection: plan.inspection,
+      });
+      expect(applied.summary).toEqual({ occupied: 1 });
+      await expectUnchangedSince(copy, [occupied.space, occupiedOwner.did()]);
+    });
+
+    it("reports in the shape the CLI README documents", async () => {
+      const report = await ownRun(unrootedOwner);
+      expect(Object.keys(report).toSorted()).toEqual([
+        "applied",
+        "inspection",
+        "repairVersion",
+        "rows",
+        "summary",
+      ]);
+      expect(typeof report.inspection).toBe("string");
+      expect(Object.keys(report.rows[0]).toSorted()).toEqual([
+        "action",
+        "home",
+        "inspection",
+        "named",
+        "owner",
+        "profile",
+        "status",
+      ]);
+      const replacing = await ownRun(plantedOwner);
+      expect(Object.keys(replacing.rows[0]).toSorted()).toEqual([
+        "action",
+        "home",
+        "inspection",
+        "named",
+        "owner",
+        "profile",
+        "root",
+        "status",
+      ]);
     });
 
     it("refuses, opening no session on the Home or any profile, when the server runs server execution", async () => {

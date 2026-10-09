@@ -72,10 +72,10 @@ execution. The inspection's own connection is a session, so against such a
 server an inspection would write a junk root into each unrooted profile space it
 looked at, and would not leave the store as it found it. Before it opens any
 profile's space, the command reads the server's handshake for that space, which
-says whether server execution is on without opening a session, and exits with an
-error, having opened nothing, when the server reports it on or does not say. A
-server that predates the report does not say. Every run checks, the apply
-included.
+says whether server execution is on without opening a session, and refuses,
+having opened nothing, when the server reports it on or does not say, exiting
+`4` (see "The report and the exit status" below). A server that predates the
+report does not say. Every run checks, the apply included.
 
 To repair a store, then, serve it with server execution off, with
 `EXPERIMENTAL_SERVER_EXECUTION=false` in the server's environment, and point
@@ -86,13 +86,13 @@ first inspection through the apply.
 
 Review the rows, then repeat the command with `--apply --expect <inspection>`.
 It inspects every profile again first. When that run's receipt is not the one
-given, it applies nothing and prints no report: it exits with an error saying
-the profiles changed, and a fresh inspection is what to run next. Otherwise it
-links profile by profile, each only while its own receipt still holds and while
-its space's root is still the one it inspected, with a junk root still running
-the default app and holding nothing registered. A profile that changed in
-between, or whose inspection failed, is reported as `failed` and left alone. A
-second run finds a repaired profile as `root` and writes nothing.
+given, it applies nothing and refuses, exiting `3` with `inspection-changed`,
+and a fresh inspection is what to run next. Otherwise it links profile by
+profile, each only while its own receipt still holds and while its space's root
+is still the one it inspected, with a junk root still running the default app
+and holding nothing registered. A profile that changed in between, or whose
+inspection failed, is reported as `failed` and left alone. A second run finds a
+repaired profile as `root` and writes nothing.
 
 Rehearse it before running it against a store with real data. The live part of a
 repair reads and writes the profile's own space and nothing else, so a rehearsal
@@ -135,24 +135,94 @@ or does not say, checking the Home's space before it opens the Home. It reports
 no `unlisted` or `unreadable` rows, since no snapshot is read, and `--cell`
 needs `--from-snapshot`.
 
-The report carries `repairVersion`, which says which repair this is. An
-install's update step can run the repair once per identity and server:
+#### The report and the exit status
+
+Every run that gets as far as reporting prints one JSON object on stdout and
+exits `0`:
+
+```json
+{
+  "repairVersion": 1,
+  "applied": false,
+  "inspection": "<receipt over every row>",
+  "rows": [
+    {
+      "named": { "space": "<profile space DID>", "id": "<listed slot id>" },
+      "home": "<Home space DID>",
+      "status": "unrooted",
+      "action": "link",
+      "profile": { "space": "…", "id": "…", "scope": "…", "path": [] },
+      "owner": "<DID the profile represents>",
+      "inspection": "<receipt over this row>"
+    }
+  ],
+  "summary": { "unrooted": 1 }
+}
+```
+
+`repairVersion` says which repair this is. `applied` is whether the run applied
+a plan. `summary` counts rows by status. A row also carries `root`, the root the
+space cell links, when it links one, and `reason` for `not-a-profile`. A row
+whose status is `unlisted`, `unreadable` or `failed` carries `named`, `home`
+when a Home lists it, `status`, `action` and `reason`, and no receipt of its
+own; `named` then holds only `space` for an `unreadable` row.
+
+A run that refuses writes nothing, prints one JSON object on stdout naming why,
+and exits with the status for that reason:
+
+```json
+{
+  "repairVersion": 1,
+  "refused": {
+    "reason": "server-execution",
+    "message": "<what to do about it>",
+    "space": "<the space whose server refused>"
+  }
+}
+```
+
+| `reason`                   | Exit | Meaning                                                                                                                         |
+| -------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `inspection-changed`       | `3`  | an apply's `--expect` receipt no longer matches a fresh inspection, as when another run applied the same plan first; no `space` |
+| `server-execution`         | `4`  | the server holding `space` runs server execution                                                                                |
+| `server-execution-unknown` | `4`  | the server holding `space` does not say whether it does                                                                         |
+
+Any other failure, such as an unreadable keyfile, an unreachable server, or a
+Home space whose root is not a Home, prints an error on stderr, nothing on
+stdout, and exits `1`.
+
+What an apply does with each status decides who acts on it:
+
+- `root`: nothing to do.
+- `unrooted` and `junk-root`: `--apply` fixes them, with no person needed.
+- `failed`: a run after this one tries again.
+- `occupied` and `not-a-profile`: no run changes them; a person decides whether
+  anything should.
+
+A dry run writes nothing, and neither does an `--apply` that finds every profile
+already `root` or the others left alone.
+
+#### From an install's update step
+
+An install's update step can run the repair once per identity and server:
 
 1. Run it, and read the JSON.
 2. If a row is `unrooted` or `junk-root`, run it again with `--apply` and
-   `--expect <inspection>`, passing the first run's receipt.
+   `--expect <inspection>`, passing the first run's receipt. An exit of `3`
+   means the profiles changed in between, as when another instance of the step
+   applied first; it wrote nothing, and the step starts over at 1.
 3. Record a clean finish, under the identity's DID and the server's URL, with
-   the `repairVersion` the last run reported, only when that run's rows are all
-   `root`, `occupied` or `not-a-profile`. A run that exits with an error,
-   including a refusal, records nothing, and neither does one leaving a row
-   `unrooted`, `junk-root` or `failed`; the next update runs it again.
+   the `repairVersion` the last run reported, only when that run exited `0` and
+   its rows are all `root`, `occupied` or `not-a-profile`. An exit of `4`
+   records nothing: the store is served with server execution on, or by a server
+   that does not say, and the repair waits until the store's operator serves it
+   with server execution off. Nor does a run leaving a row `unrooted`,
+   `junk-root` or `failed`; the next update runs it again.
 4. Run it again whenever the command reports a `repairVersion` higher than the
    one recorded.
 
 Running it more often than that is harmless: a repaired profile is reported as
-`root`, and a run writes only what it links. On a store served with server
-execution on, the step is refused until the store is served with it off, which
-is for the store's operator to arrange.
+`root`, and a run writes only what it links.
 
 ## Following a piece source
 

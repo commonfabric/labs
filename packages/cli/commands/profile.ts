@@ -13,7 +13,12 @@ import { cliText } from "../lib/cli-name.ts";
 import { getDidFromFile } from "../lib/identity.ts";
 import { createProfile } from "../lib/profile.ts";
 import { profileNameProtection } from "../lib/profile-name-protection.ts";
-import { profileSpaceRoot } from "../lib/profile-space-root.ts";
+import {
+  PROFILE_ROOT_REPAIR_REFUSAL_EXIT_CODES,
+  PROFILE_ROOT_REPAIR_VERSION,
+  profileSpaceRoot,
+  ProfileSpaceRootRefusal,
+} from "../lib/profile-space-root.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
 import { projectWishValue, readWish } from "../lib/wish.ts";
@@ -149,8 +154,9 @@ export async function profileRepairNameProtectionAction(
 }
 
 /**
- * Inspects every profile a store snapshot names, or applies the plan whose
- * receipt the operator reviewed.
+ * Inspects every profile a store snapshot or the identity's own Home names,
+ * or applies the plan whose receipt was reviewed. A run that refuses prints
+ * its refusal as JSON and ends with that refusal's exit status.
  */
 export async function profileRepairRootAction(
   options: ProfileCommandOptions & {
@@ -160,6 +166,9 @@ export async function profileRepairRootAction(
     expect?: string;
   },
   run: typeof profileSpaceRoot = profileSpaceRoot,
+  setExitCode: (code: number) => void = (code) => {
+    Deno.exitCode = code;
+  },
 ): Promise<void> {
   if (!!options.apply !== (options.expect !== undefined)) {
     throw new ValidationError(
@@ -175,8 +184,9 @@ export async function profileRepairRootAction(
   }
   setQuietMode(!!options.quiet);
   const { space: home, ...connectionConfig } = await connection(options);
-  render(
-    await run({
+  let report;
+  try {
+    report = await run({
       ...connectionConfig,
       ...(options.fromSnapshot === undefined
         ? { home }
@@ -184,9 +194,21 @@ export async function profileRepairRootAction(
       ...(options.cell === undefined ? {} : { cells: options.cell }),
       expectedInspection: options.expect,
       jsonOutput: true,
-    }),
-    { json: true },
-  );
+    });
+  } catch (error) {
+    if (!(error instanceof ProfileSpaceRootRefusal)) throw error;
+    render({
+      repairVersion: PROFILE_ROOT_REPAIR_VERSION,
+      refused: {
+        reason: error.reason,
+        message: error.message,
+        ...(error.space === undefined ? {} : { space: error.space }),
+      },
+    }, { json: true });
+    setExitCode(PROFILE_ROOT_REPAIR_REFUSAL_EXIT_CODES[error.reason]);
+    return;
+  }
+  render(report, { json: true });
 }
 
 /**
@@ -303,7 +325,9 @@ unless named with --cell. Each profile is inspected live, as your own identity,
 and the plan prints as JSON with an inspection receipt. Repeat with --apply
 --expect <inspection> to apply it. Always prints JSON.
 It refuses a server that runs server execution, or does not say whether it
-does: serve the store with server execution off.`,
+does, exiting 4: serve the store with server execution off. An apply whose
+receipt no longer matches refuses too, exiting 3. A refusal writes nothing and
+prints its reason as JSON.`,
       ),
     )
       .option(

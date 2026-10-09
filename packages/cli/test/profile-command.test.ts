@@ -25,9 +25,10 @@ import {
   profileNameProtection,
   type ProfileNameProtectionConfig,
 } from "../lib/profile-name-protection.ts";
-import type {
-  ProfileSpaceRootConfig,
-  ProfileSpaceRootReport,
+import {
+  type ProfileSpaceRootConfig,
+  ProfileSpaceRootRefusal,
+  type ProfileSpaceRootReport,
 } from "../lib/profile-space-root.ts";
 import type { WishReadConfig, WishReadResult } from "../lib/wish.ts";
 import { withEnv } from "./utils.ts";
@@ -307,6 +308,82 @@ describe("cf profile command actions", () => {
         expect(requests).toHaveLength(1);
         expect(requests[0].home).toBe(await getDidFromFile(key.path));
         expect("snapshot" in requests[0]).toBe(false);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("prints a refusal as JSON and ends with its exit status", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        for (
+          const [refusal, code] of [
+            [
+              new ProfileSpaceRootRefusal("inspection-changed", "changed"),
+              3,
+            ],
+            [
+              new ProfileSpaceRootRefusal(
+                "server-execution",
+                "runs it",
+                "did:key:zProfileSpace",
+              ),
+              4,
+            ],
+            [
+              new ProfileSpaceRootRefusal(
+                "server-execution-unknown",
+                "does not say",
+                "did:key:zProfileSpace",
+              ),
+              4,
+            ],
+          ] as const
+        ) {
+          const codes: number[] = [];
+          const printed = JSON.parse(
+            await captureStdout(() =>
+              profileRepairRootAction(
+                { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+                () => Promise.reject(refusal),
+                (exitCode) => codes.push(exitCode),
+              )
+            ),
+          );
+          expect(printed).toEqual({
+            repairVersion: 1,
+            refused: {
+              reason: refusal.reason,
+              message: refusal.message,
+              ...(refusal.space === undefined ? {} : { space: refusal.space }),
+            },
+          });
+          expect(codes).toEqual([code]);
+        }
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("passes on an error that is not a refusal, printing nothing", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const codes: number[] = [];
+        let thrown: unknown;
+        const printed = await captureStdout(async () => {
+          try {
+            await profileRepairRootAction(
+              { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+              () => Promise.reject(new Error("no Home")),
+              (exitCode) => codes.push(exitCode),
+            );
+          } catch (error) {
+            thrown = error;
+          }
+        });
+        expect((thrown as Error | undefined)?.message).toBe("no Home");
+        expect(printed).toBe("");
+        expect(codes).toEqual([]);
       } finally {
         await Deno.remove(key.path);
       }
