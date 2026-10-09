@@ -56,11 +56,12 @@ const SOURCE_V1 = patternSource("v1");
 const SOURCE_V2 = patternSource("v2");
 
 /**
- * What a host advertises as its official source's identity in place of what
- * it serves, as one whose runtime compiles that source differently from this
- * client's would.
+ * Source whose identity the stub host advertises in place of the identity of
+ * what it serves, as a host whose runtime compiles that source differently
+ * from this client's would.
  */
 const SOURCE_THE_HOST_COMPILES = patternSource("what-the-host-compiles");
+
 // A roll target WITH a handler: a handler's stream is an internal cell the
 // (reused) root doc has to materialize — the dimension the plain sources
 // above never exercise, and the estuary post-swap failure class.
@@ -358,6 +359,33 @@ describe("opening a space root", () => {
     expect(session.space).toBe(runtime.userIdentityDID);
     controller = new PiecesController(session, runtime);
     await controller.synced();
+  }
+
+  /**
+   * Sets up a space whose root follows the official source, pins the root to
+   * an identity the space cannot load, under `symbol`, and has the host serve
+   * a new version of that source. Returns the pinned ref.
+   */
+  async function pinUnloadableRoot(symbol = "default") {
+    await setup();
+    const root = (await controller.ensureDefaultPattern()).getCell();
+    const staleRef = {
+      identity: await identityForSource(
+        patternSource("unloadable-root-pinned-before-the-new-version"),
+      ),
+      symbol,
+    };
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        staleRef,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    stub.setSource(SOURCE_V2);
+    return staleRef;
   }
 
   beforeEach(() => {
@@ -1095,35 +1123,8 @@ describe("opening a space root", () => {
     // would be moved back by the next client that agrees with the host, so
     // the root stays where it is and the error says why.
 
-    /**
-     * Pins the space's root, which follows the official source, to an
-     * identity this space cannot load, under `symbol`, and has the host serve
-     * a new version of that source.
-     */
-    async function pinRootTheClientCannotReplace(symbol = "default") {
-      await setup();
-      const root = (await controller.ensureDefaultPattern()).getCell();
-      const staleRef = {
-        identity: await identityForSource(
-          patternSource("unloadable-root-pinned-before-the-mismatch"),
-        ),
-        symbol,
-      };
-      await controller.stopPiece(root);
-      const { error } = await runtime.editWithRetry((tx) => {
-        root.withTx(tx).setMetaRaw(
-          "patternIdentity",
-          staleRef,
-          rawMetaWriteAuthorization,
-        );
-      });
-      expect(error).toBeUndefined();
-      stub.setSource(SOURCE_V2);
-      return staleRef;
-    }
-
     it("keeps a root that follows the official source pinned when the client cannot reproduce the advertised identity", async () => {
-      const staleRef = await pinRootTheClientCannotReplace();
+      const staleRef = await pinUnloadableRoot();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
 
       let thrown: unknown;
@@ -1214,8 +1215,8 @@ describe("opening a space root", () => {
       );
     });
 
-    it("does not compile the official source again after following it was refused in the same lookup", async () => {
-      const staleRef = await pinRootTheClientCannotReplace();
+    it("downloads the official source once when following it was refused in the same lookup", async () => {
+      const staleRef = await pinUnloadableRoot();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
       const sourceFetchesBefore = stub.sourceFetches();
 
@@ -1242,7 +1243,7 @@ describe("opening a space root", () => {
     });
 
     it("downloads the official source once on `ensureDefaultPattern()` when following it was refused in the same lookup", async () => {
-      await pinRootTheClientCannotReplace();
+      await pinUnloadableRoot();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
       const sourceFetchesBefore = stub.sourceFetches();
 
@@ -1257,7 +1258,7 @@ describe("opening a space root", () => {
       // Following the origin is refused while the host advertises another
       // identity than it serves. By the time the roll-forward asks, the host
       // advertises what it serves, so that refusal is no longer the answer.
-      await pinRootTheClientCannotReplace();
+      await pinUnloadableRoot();
       stub.setIdentitySource(SOURCE_THE_HOST_COMPILES);
       stub.afterNextIdentityAnswer(() => stub.setIdentitySource(SOURCE_V2));
 
@@ -1268,20 +1269,20 @@ describe("opening a space root", () => {
         symbol: "default",
       });
     });
+  });
 
-    it("rolls forward a root whose refused export is not the one the roll-forward takes", async () => {
-      // The source has no `gone` export, so following the origin for it was
-      // refused; the roll-forward takes `default`, which it does have.
-      await pinRootTheClientCannotReplace("gone");
-      const sourceFetchesBefore = stub.sourceFetches();
+  it("rolls forward a root whose refused export is not the one the roll-forward takes", async () => {
+    // The source has no `gone` export, so following the origin for it was
+    // refused; the roll-forward takes `default`, which it does have.
+    await pinUnloadableRoot("gone");
+    const sourceFetchesBefore = stub.sourceFetches();
 
-      const healed = await controller.getDefaultPattern(true);
+    const healed = await controller.getDefaultPattern(true);
 
-      expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 2);
-      expect(getPatternIdentityRef(healed!)).toEqual({
-        identity: await identityForSource(SOURCE_V2),
-        symbol: "default",
-      });
+    expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 2);
+    expect(getPatternIdentityRef(healed!)).toEqual({
+      identity: await identityForSource(SOURCE_V2),
+      symbol: "default",
     });
   });
 
