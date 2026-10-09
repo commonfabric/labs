@@ -251,10 +251,10 @@ caller, ever. POST-only keeps the door open for a shell/pattern client later.
 
 | Verb | Purpose |
 |---|---|
-| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); returns the token **once** |
+| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); for a journal, returns the device URL and token **once**; a `latest` channel has neither |
 | `POST /api/spaces/:space/ingest-channels/list` | every channel targeting the space, whoever minted it, revoked ones included; never returns `secretHash` |
 | `POST /api/ingest-channels/list` | the caller's own live channels, in whichever spaces; never returns `secretHash` |
-| `POST /api/spaces/:space/ingest-channels/rotate` | new token, same id and target |
+| `POST /api/spaces/:space/ingest-channels/rotate` | new token for a journal, same id and target; a `latest` channel's binding is kept and nothing is returned for a device |
 | `POST /api/spaces/:space/ingest-channels/revoke` | flips `enabled: false` |
 
 The caller's own list takes an empty body and refuses any other, so a request

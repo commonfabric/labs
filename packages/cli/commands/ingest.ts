@@ -145,9 +145,14 @@ const renderMinted = (minted: MintedChannel, verb: string): void => {
         `mailbox names this deployment's topic.\n`,
     );
   } else {
+    // Whether the channel is bound is not in the response, so the hint
+    // covers binding and moving alike.
     render(
-      `\n  A \`latest\` channel: no device URL and no token. Mint it again ` +
-        `with --gmail-access-token or --gmail-id-token to bind a mailbox.\n`,
+      `\n  A \`latest\` channel: no device URL and no token. To bind it to ` +
+        `a mailbox, or move it, mint again with the proof:\n\n    ` +
+        `CF_GMAIL_ACCESS_TOKEN=... ${cliText("cf")} ingest mint --space ` +
+        `${minted.space} --install-id ${minted.installId} --cause-prefix ` +
+        `${minted.causePrefix}\n`,
     );
   }
 };
@@ -200,7 +205,7 @@ export const ingest = new Command()
     "--sink <kind:string>",
     "What the channel's writes land in: `journal`, records in per-day " +
       "partition cells that a device POSTs to (the default), or `latest`, one " +
-      "cell holding the newest Gmail push notification. A mailbox proof " +
+      "cell holding the newest record written to it. A mailbox proof " +
       "makes it `latest`.",
   )
   // The tokens are credentials, so the environment is the better carrier: an

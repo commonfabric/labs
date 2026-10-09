@@ -367,7 +367,7 @@ export function channelId(space: string, installId: string): string {
  * nothing, since the bearer token is the credential.
  */
 export function ingestUrl(apiUrl: string, space: string, id: string): string {
-  return `${apiUrl}/api/spaces/${space}/ingest/${id}`;
+  return `${apiUrl.replace(/\/+$/, "")}/api/spaces/${space}/ingest/${id}`;
 }
 
 export function generateIngestSecret(): { secret: string; secretHash: string } {
@@ -1092,6 +1092,12 @@ export async function appendToJournal(
   partition: string,
   records: Record<string, unknown>[],
 ): Promise<number> {
+  if (registration.sink !== "journal") {
+    throw new Error(
+      `channel ${registration.id} is a ${registration.sink} channel, ` +
+        `not a journal`,
+    );
+  }
   const cell = journalCell(runtime, registration, partition);
   await cell.sync();
   await runtime.storageManager.synced();
@@ -1142,6 +1148,12 @@ export async function writeLatest(
     next: Record<string, unknown>,
   ) => boolean,
 ): Promise<boolean> {
+  if (registration.sink !== "latest") {
+    throw new Error(
+      `channel ${registration.id} is a ${registration.sink} channel, ` +
+        `not a latest channel`,
+    );
+  }
   const cell = latestCell(runtime, registration);
   await cell.sync();
   await runtime.storageManager.synced();

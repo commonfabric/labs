@@ -3,8 +3,8 @@ import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
 import { MAX_TTL_DAYS } from "./ingest-channels.utils.ts";
 
-// The CONTROL plane for ingest channels: mint, list, rotate, revoke, and the
-// Gmail binding verbs.
+// The CONTROL plane for ingest channels: mint, list, rotate, and revoke. A
+// mint may carry a proof of a Gmail mailbox, which binds the channel to it.
 //
 // A verb that acts on one space carries that space in its path, under
 // `/api/spaces/:space/`, so that whatever dispatches requests by space can
@@ -138,19 +138,24 @@ const mintResult = z.object({
   ),
 });
 
-const gmailProof = z.object({
-  accessToken: z.string().min(1).max(4096).optional().describe(
-    "A Google access token that reads the mailbox. Used for one profile " +
-      "lookup and not stored.",
-  ),
-  idToken: z.string().min(1).max(4096).optional().describe(
-    "A Google ID token naming the mailbox, for one of the OAuth client ids " +
-      "this deployment accepts. Grants nothing, and is the proof to prefer.",
-  ),
-}).describe(
-  "Binds the channel to the Gmail mailbox the proof is for, in this mint. " +
-    "Exactly one of the two tokens. Only a `latest` channel binds, which is " +
-    "the sink when none is named.",
+const gmailProof = z.union([
+  z.object({
+    accessToken: z.string().min(1).max(4096).describe(
+      "A Google access token that reads the mailbox. Used for one profile " +
+        "lookup and not stored.",
+    ),
+  }).strict(),
+  z.object({
+    idToken: z.string().min(1).max(4096).describe(
+      "A Google ID token naming the mailbox, for one of the OAuth client " +
+        "ids this deployment accepts. Grants nothing, and is the proof to " +
+        "prefer.",
+    ),
+  }).strict(),
+]).describe(
+  "Binds the channel to the Gmail mailbox the proof is for, in this mint: " +
+    "one of the two tokens, never both. Only a `latest` channel binds, " +
+    "which is the sink when none is named.",
 );
 
 export const mint = createRoute({
@@ -173,8 +178,8 @@ export const mint = createRoute({
             sink: z.enum(["journal", "latest"]).optional().describe(
               "What the channel's writes land in: a `journal` of records in " +
                 "per-day partition cells, which devices POST to, or one " +
-                "`latest` cell holding the newest Gmail push notification. " +
-                "A journal unless named, or `latest` with a `gmail` proof.",
+                "`latest` cell holding the newest record written to it. A " +
+                "journal unless named, or `latest` with a `gmail` proof.",
             ),
             gmail: gmailProof.optional(),
             requestId: requestIdField,

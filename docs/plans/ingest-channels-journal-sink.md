@@ -27,7 +27,7 @@ The missing piece is one generic capability. We already have the trust primitive
 
 You mint an **ingest channel**: a bearer-authed inbound HTTP endpoint bound to a target cell you provide (in your own space). It reuses the webhook *token* machinery — the registry in the toolshed service space, id + secret generation, SHA-256 hash, timing-safe verify with the dummy-hash timing-oracle guard (`webhooks.handlers.ts`, `webhooks.utils.ts`).
 
-The **lifecycle** is its own, and deliberately not webhooks': `mint`/`list`/`rotate`/`revoke` on the `/api/spaces/:space/ingest-channels` prefix, authenticated by a first-party request proof and authorized against the target space's ACL. Revocation is a soft disable rather than webhooks' hard delete, because a registration here records who was authorized to write provenance-marked data into a user's space — that record has to survive. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md).
+The **lifecycle** is its own, and deliberately not webhooks': `mint`/`list`/`rotate`/`revoke` on the `/api/spaces/:space/ingest-channels` prefix, authenticated by a first-party request proof and authorized against the target space's ACL, plus `POST /api/ingest-channels/list`, which lists the caller's own channels across every space and is authorized by the caller's identity alone. Revocation is a soft disable rather than webhooks' hard delete, because a registration here records who was authorized to write provenance-marked data into a user's space — that record has to survive. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md).
 
 An ingest channel has a **sink** — where an inbound POST lands.
 

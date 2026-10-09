@@ -592,6 +592,13 @@ export async function processMint(
           `--install-id to get a channel with cause-prefix '${causePrefix}'.`,
       );
     }
+    // A proof binds a `latest` channel, and this one is a journal for good.
+    if (input.gmail !== undefined && existing.sink !== "latest") {
+      return bad(
+        `Channel ${id} is a journal, and a mailbox binds to a \`latest\` ` +
+          `channel. Use a different --install-id.`,
+      );
+    }
     // The sink is immutable for the same reason: it decides which cells the
     // reader watches. A re-mint that names none keeps the channel's own.
     if (sink !== undefined && existing.sink !== sink) {
@@ -690,9 +697,18 @@ async function proveMailbox(
       result: bad("Gmail push is not configured on this deployment"),
     };
   }
-  const lookup = proof.idToken !== undefined
-    ? await deps.gmail.verifyIdToken(proof.idToken)
-    : await deps.gmail.fetchMailbox(proof.accessToken ?? "");
+  let lookup: MailboxLookup;
+  try {
+    lookup = proof.idToken !== undefined
+      ? await deps.gmail.verifyIdToken(proof.idToken)
+      : await deps.gmail.fetchMailbox(proof.accessToken ?? "");
+  } catch (error) {
+    deps.logger?.error({ error }, "ingest-channels: mailbox proof failed");
+    return {
+      ok: false,
+      result: { status: 502, body: { error: "Google could not be reached" } },
+    };
+  }
   if (lookup.ok) return lookup;
   switch (lookup.reason) {
     case "rejected":

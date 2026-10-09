@@ -34,6 +34,11 @@ export const controlPlaneUrl = (
   verb: string,
   space?: string,
 ): URL => {
+  // The space is one path segment, so a value that is not a DID is refused
+  // here rather than reaching the server as a different path.
+  if (space !== undefined && !isDID(space)) {
+    throw new Error(`Not a space DID: ${space}`);
+  }
   const base = space === undefined
     ? "/api/ingest-channels"
     : `/api/spaces/${space}/ingest-channels`;
@@ -50,7 +55,7 @@ export interface ChannelConfig {
 /**
  * What a channel's writes land in: a `journal` of records in per-day
  * partition cells, which a device POSTs to, or one `latest` cell holding the
- * newest Gmail push notification.
+ * newest record written to it, which is what a Gmail mailbox binds to.
  */
 export type IngestSink = "journal" | "latest";
 
@@ -102,7 +107,9 @@ export interface MintedChannel {
  * profile lookup and kept nowhere, or a Google ID token naming it, which
  * grants nothing. One of the two.
  */
-export type GmailProof = { accessToken: string } | { idToken: string };
+export type GmailProof =
+  | { accessToken: string; idToken?: never }
+  | { idToken: string; accessToken?: never };
 
 /**
  * Accept either a space DID or a space NAME, mirroring `cf acl`. A name is

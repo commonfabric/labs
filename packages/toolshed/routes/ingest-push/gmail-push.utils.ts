@@ -51,6 +51,13 @@ const MAX_ADDRESS_LENGTH = 320;
 // A history id is an unsigned 64-bit integer. It is recorded as a decimal
 // string, because a JSON number that large loses precision.
 const HISTORY_ID_RE = /^[0-9]{1,20}$/;
+const MAX_HISTORY_ID = (1n << 64n) - 1n;
+
+/** Returns whether `value` is a history id: decimal digits within 64 bits. */
+function isHistoryId(value: unknown): value is string {
+  return typeof value === "string" && HISTORY_ID_RE.test(value) &&
+    BigInt(value) <= MAX_HISTORY_ID;
+}
 
 const ChannelListSchema = {
   type: "array",
@@ -377,8 +384,11 @@ export async function verifyGmailIdToken(
  * token is some other subclass.
  */
 function isKeyFetchFailure(error: unknown): boolean {
+  // `fetch` itself reports a network failure as a `TypeError`, which `jose`
+  // lets through unwrapped.
   return error instanceof errors.JWKSTimeout ||
     error instanceof errors.JWKSInvalid ||
+    error instanceof TypeError ||
     (error instanceof errors.JOSEError &&
       error.constructor === errors.JOSEError);
 }
@@ -447,9 +457,7 @@ function decodeNotification(rawBody: string): GmailNotification | null {
   const history = Number.isSafeInteger(historyId)
     ? String(historyId)
     : historyId;
-  if (typeof history !== "string" || !HISTORY_ID_RE.test(history)) {
-    return null;
-  }
+  if (!isHistoryId(history)) return null;
   return { emailAddress, historyId: history, messageId, publishTime };
 }
 
@@ -467,10 +475,8 @@ function supersedes(
 ): boolean {
   const held = current.historyId;
   const incoming = next.historyId;
-  if (typeof incoming !== "string" || !HISTORY_ID_RE.test(incoming)) {
-    return false;
-  }
-  if (typeof held !== "string" || !HISTORY_ID_RE.test(held)) return true;
+  if (!isHistoryId(incoming)) return false;
+  if (!isHistoryId(held)) return true;
   const heldAddress = current.emailAddress;
   if (
     typeof heldAddress !== "string" ||

@@ -61,7 +61,8 @@ A request is accepted when its `Authorization` header carries a Google-signed
 OIDC token that:
 
 - verifies against Google's published keys, with algorithm `RS256`;
-- was issued by `https://accounts.google.com`;
+- was issued by `https://accounts.google.com` or `accounts.google.com`, the
+  two issuer values Google writes;
 - names this deployment's audience, which is the service space's DID unless
   `INGEST_GMAIL_PUSH_AUDIENCE` sets another;
 - is signed for one of `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS`, with
@@ -255,12 +256,14 @@ token is responsible for:
 ## Configuration
 
 Gmail push ingest is on when a service account is set, and off otherwise. Off,
-the push endpoint and both control-plane verbs answer 404.
+the push endpoint answers 404, and a mint carrying a `gmail` proof answers
+400; minting without one is unaffected.
 
 | Var | Notes |
 | --- | --- |
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | Comma-separated service accounts the push subscriptions sign as. |
 | `INGEST_GMAIL_PUSH_AUDIENCE` | The audience the push subscriptions put on their tokens. Unset, it is the service space's DID. |
+| `INGEST_GMAIL_OAUTH_CLIENT_IDS` | Comma-separated OAuth client ids whose Google ID tokens a mint accepts as proof of a mailbox. Unset, a mint proves a mailbox with an access token only. |
 
 The default audience is the service space's DID because that DID is already
 in the push URL, it differs between deployments, so a token minted for one is
@@ -269,7 +272,7 @@ deployment is reached under more than one. A DID is a public identifier, and
 an audience is not a secret: what a push token proves rests on Google's
 signature and the service account.
 
-The binding verbs also need `INGEST_SELF_SERVE_ENABLED`, which mounts the
-control plane they sit on. `INGEST_SERVICE_SPACE`, described in
+Minting at all, with or without a proof, needs `INGEST_SELF_SERVE_ENABLED`,
+which mounts the control plane. `INGEST_SERVICE_SPACE`, described in
 [CONFIGURATION.md](../development/CONFIGURATION.md#ingest-registry), names
 the service space.

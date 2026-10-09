@@ -90,19 +90,25 @@ sequenceDiagram
     participant T as Toolshed
     participant G as Gmail API
 
-    S->>T: mint, with a Google access token or ID token (signed request)
-    T->>G: users/me/profile with an access token
-    G-->>T: the mailbox's address
+    S->>T: mint, with a mailbox proof (signed request)
+    alt the proof is an access token
+        T->>G: users/me/profile with that token
+        G-->>T: the mailbox's address
+    else the proof is an ID token
+        T->>T: verify it against Google's keys for an accepted client id
+    end
     T-->>S: channel id, cause prefix, and the bound address
     loop daily
         S->>G: users.watch, naming the Pub/Sub topic
     end
 ```
 
-A `latest` channel has no device token and no device URL. A journal channel
-is written by a device presenting its token to
-`POST /api/spaces/:space/ingest/:id`; here toolshed is the writer, and what
-authorizes each write is the push token and the binding.
+The two sinks are written by different parties. A journal channel is
+written by a device presenting the channel's bearer token to
+`POST /api/spaces/:space/ingest/:id`, and that token is what mint returns
+for it. A `latest` channel has no device token and no device URL, since
+nothing POSTs to it: toolshed itself writes its cell on each Gmail delivery,
+and what authorizes that write is the push token and the binding.
 
 ## What each request is addressed to
 
@@ -254,7 +260,7 @@ Three facts decide the shape.
 | Toolshed is down, or storage fails | Toolshed returns a non-2xx status or nothing, and Pub/Sub redelivers with backoff. |
 | Pub/Sub delivers a message twice | The second delivery carries no newer history id, so the cell does not change and the syncer is not woken. |
 | The watch expires | The syncer's daily renewal. A watch lasts seven days. |
-| The channel is revoked or expired | Delivery skips it. The syncer rotates the channel or mints a new one, then binds again. |
+| The channel is revoked or expired | Delivery skips it. The syncer mints the channel again with the mailbox proof, which re-enables it and keeps or restores the binding. Rotate alone keeps an existing binding but cannot make one. |
 | The syncer was offline | The cell holds the newest history id, and the syncer catches up from its own cursor when it returns. |
 | The sync falls out of Gmail's history window | The syncer's own recovery, which is a bounded full sync. |
 

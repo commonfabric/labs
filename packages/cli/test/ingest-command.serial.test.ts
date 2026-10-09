@@ -312,7 +312,11 @@ describe("cf ingest mint", () => {
     ], { mint: latest });
 
     expect(output).toContain("Ingest channel minted.");
-    expect(output).toContain("--gmail-access-token");
+    // The hint repeats what the server minted, not what the command line said.
+    expect(output).toContain(
+      `ingest mint --space ${minted.space} --install-id ${minted.installId} ` +
+        `--cause-prefix ${minted.causePrefix}`,
+    );
     expect(output).not.toContain("URL:");
     expect(output).not.toContain("token (shown once");
     expect(output).not.toContain("tok-secret");

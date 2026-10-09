@@ -237,10 +237,10 @@ The watch is set once for the mailbox, whichever deployment or syncer sets
 it, since it names the topic and not a receiver. Renewing it from more than
 one place is harmless.
 
-Only the push path has to face the internet. Mint and bind are called by
-the syncer on the user's machine, with the user's own signing key, so they
-need only the reach the syncer already has to its toolshed, a private
-network included. Where a deployment sits behind something that admits
+Only the push path has to face the internet. Mint is called by the syncer
+on the user's machine, with the user's own signing key, so it needs only
+the reach the syncer already has to its toolshed, a private network
+included. Where a deployment sits behind something that admits
 public traffic by path, the rule to open is `/api/spaces/*/ingest-push/*`
 and nothing wider: the push route refuses everything without a token Google
 signed, and the control plane and data plane gain nothing from being
@@ -262,15 +262,17 @@ opens:
    download its JSON. `installed.client_id` and `installed.client_secret` in
    that file are `<client id>` and `<client secret>`.
 
-The one scope needed is `https://www.googleapis.com/auth/gmail.readonly`. It
-covers the profile lookup that binding makes and the `users.watch` call.
+The scope needed is `https://www.googleapis.com/auth/gmail.readonly`, which
+covers the profile lookup that an access-token proof makes and the
+`users.watch` call. Adding `openid` makes the code exchange return an ID
+token beside the access token, which can prove the mailbox instead.
 
 A Desktop client signs in through a loopback redirect: Google sends the
 browser back to a `localhost` address with a one-time code in the query
 string. Open this in a browser, signed in as the mailbox's account:
 
 ```text
-https://accounts.google.com/o/oauth2/auth?client_id=<client id>&redirect_uri=http://localhost:8765&response_type=code&scope=https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent
+https://accounts.google.com/o/oauth2/auth?client_id=<client id>&redirect_uri=http://localhost:8765&response_type=code&scope=openid%20https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent
 ```
 
 After consent the browser lands on an address beginning
@@ -307,13 +309,14 @@ those into variables too, or run it from a file kept outside the repository.
 
 ## Toolshed settings
 
-Two environment variables on the deployment, described in
-[`CONFIGURATION.md`](../development/CONFIGURATION.md):
+Two environment variables on the deployment, and a third for ID-token
+proofs, described in [`CONFIGURATION.md`](../development/CONFIGURATION.md):
 
 | Variable | Value |
 | --- | --- |
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | `<account>` |
-| `INGEST_SELF_SERVE_ENABLED` | `true`, which mounts the control plane that binding sits on |
+| `INGEST_SELF_SERVE_ENABLED` | `true`, which mounts the control plane that mint sits on |
+| `INGEST_GMAIL_OAUTH_CLIENT_IDS` | `<client id>`, to accept an ID token from that client as the mailbox proof. Unset, only an access token proves a mailbox. |
 
 The audience needs no setting: it defaults to `<service space>`. A deployment
 that wants another sets `INGEST_GMAIL_PUSH_AUDIENCE`. The audience is compared
