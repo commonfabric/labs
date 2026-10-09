@@ -449,3 +449,65 @@ Deno.test("qualifyCommonFabricTypeRefs leaves an import type of the commonfabric
 
   assertStrictEquals(qualified, node);
 });
+
+Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the program's own exports under a commonfabric export's name", () => {
+  const { type, node, checker, print } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      'import { mine } from "./mine";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? mine({ a: 1 }) : cell({ b: 2 });",
+    ].join("\n"),
+    {
+      "/app/main/mine.ts": [
+        "export interface Cell<T> { mine: T; }",
+        "export declare function mine<T>(value: T): Cell<T>;",
+      ].join("\n"),
+    },
+  );
+  assertEquals(
+    print(node),
+    'import("./mine").Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+  });
+
+  assertEquals(
+    print(qualified),
+    'import("./mine").Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+});
+
+Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own type in scope names under a commonfabric export's name", () => {
+  const { type, node, checker, print } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      'import { type Cell, mine } from "./mine";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? mine({ a: 1 }) : cell({ b: 2 });",
+    ].join("\n"),
+    {
+      "/app/main/mine.ts": [
+        "export interface Cell<T> { mine: T; }",
+        "export declare function mine<T>(value: T): Cell<T>;",
+      ].join("\n"),
+    },
+  );
+  assertEquals(
+    print(node),
+    'Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+  });
+
+  assertEquals(
+    print(qualified),
+    'Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+});

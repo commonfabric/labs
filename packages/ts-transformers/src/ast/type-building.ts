@@ -131,11 +131,12 @@ export function qualifyCommonFabricTypeRefs(
   };
 
   // For a union/intersection member TypeNode, find the constituent Type to
-  // pair it with. Matches by commonfabric export name (order-independent):
-  // a bare member ref `X` is paired with the constituent whose CF export name
-  // is `X`. Returns undefined when there's no constituent info or no match —
-  // in which case the member is walked with no paired Type (safe: it can only
-  // be rewritten through a `"commonfabric"` specifier, never misattributed).
+  // pair it with. Matches by name (order-independent): a member printed as `X`
+  // is paired with the one constituent named `X`, when that constituent is the
+  // commonfabric export `X`. Returns undefined when there's no constituent
+  // info or no such constituent — in which case the member is walked with no
+  // paired Type (safe: it can only be rewritten through a `"commonfabric"`
+  // specifier, never misattributed).
   const pairedConstituentForMember = (
     member: ts.TypeNode,
     unionOrIntersectionType: ts.Type | undefined,
@@ -154,18 +155,24 @@ export function qualifyCommonFabricTypeRefs(
         ? importTypeLeafName(member)
         : undefined;
     if (memberName === undefined) return undefined;
-    // Require an UNAMBIGUOUS match. If two constituents share a commonfabric
-    // export name but differ in their type arguments (e.g. `Cell<A> | Cell<B>`,
-    // both printed as bare `Cell<...>`), name-matching alone can't tell which
-    // member pairs with which constituent. Picking the first would walk the
-    // member's nested type args against the wrong constituent's args and could
-    // mis-rewrite a nested generic. On ambiguity, return undefined: the member
-    // is left unpaired (un-normalized) rather than risk a wrong rewrite — the
-    // safe degradation this helper already documents.
-    const matches = constituents.filter(
-      (constituent) => commonFabricExportName(constituent) === memberName,
+    // Require an UNAMBIGUOUS match. If two constituents go by the member's
+    // name, name-matching alone can't tell which member pairs with which
+    // constituent. They may be two commonfabric types that differ in their
+    // type arguments (`Cell<A> | Cell<B>`, both printed as `Cell<...>`), where
+    // picking the first would walk the member's nested type args against the
+    // wrong constituent's args and could mis-rewrite a nested generic. Or one
+    // may be a type of the program's own that shares a commonfabric export's
+    // name, where pairing its member with the commonfabric constituent would
+    // rewrite the program's type to `__cfHelpers.X`. On ambiguity, return
+    // undefined: the member is left unpaired (un-normalized) rather than risk
+    // a wrong rewrite — the safe degradation this helper already documents.
+    const named = constituents.filter((constituent) =>
+      (constituent.aliasSymbol ?? constituent.symbol)?.name === memberName
     );
-    return matches.length === 1 ? matches[0] : undefined;
+    return named.length === 1 &&
+        commonFabricExportName(named[0]) === memberName
+      ? named[0]
+      : undefined;
   };
 
   // Pair a printed alias with its own arguments before consulting the
