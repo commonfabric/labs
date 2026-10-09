@@ -296,7 +296,10 @@ reactions as well as sends from redelivery after an arbitrary offline delay.
 A room keeps its participant roster through the shared `addParticipant` writer.
 A room belonging to an existing social space also lists that root's
 participants. Participant Chat controls forward their original gesture directly
-to the manager. Original-sender checks in handlers use the authenticated
+to the manager, binding the participant’s profile as the control’s `name`. The
+manager reads its principal attestation and offers the room through its share
+inbox. Controls naming a principal through `target.dataset.counterpart` remain
+accepted. Original-sender checks in handlers use the authenticated
 principal; rendering uses the viewer's attested profile principal. Without that
 attestation the room can be read, but original-sender controls are unavailable.
 

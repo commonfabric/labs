@@ -229,6 +229,8 @@ export interface ManagerStreamEvent {
   revision?: string;
   readonly target?: {
     readonly value?: string;
+    /** The participant profile bound to a chat control. */
+    readonly name?: Cell<ChatProfile>;
     readonly dataset?: {
       readonly chatCounterpart?: string;
       readonly counterpart?: string;

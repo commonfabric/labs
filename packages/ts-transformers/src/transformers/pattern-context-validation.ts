@@ -21,6 +21,7 @@
  *
  * - Function creation is NOT allowed in pattern context (must be at module scope)
  * - lift() and handler() must be defined at module scope, not inside patterns
+ * - `let` and `var` are NOT allowed at module scope: module state is `const`
  *
  * Errors reported:
  * - Property access used in computation: ERROR (must wrap in computed())
@@ -35,6 +36,8 @@
  *   auto-wrapped into a lift instead
  * - Function creation in pattern context: ERROR (move to module scope)
  * - lift()/handler() inside pattern: ERROR (move to module scope)
+ * - `let`/`var` statement at module scope: ERROR, or a warning when recompiling
+ *   stored source (declare it `const`)
  * - Local computed()/lift() aliases used as plain values in the same
  *   callback: ERROR (use a nested computed()/lift())
  * - `x[SELF]` where it is `undefined`: inside computed(), action(), lift(), a
@@ -162,10 +165,51 @@ function objectMemberMessage(kind: ObjectMemberKind): string {
   }
 }
 
+/**
+ * Reports each `let` or `var` statement at module scope. Module state is
+ * `const`. The module verifier refuses a top-level `let` or `var` at load
+ * unless it is exported, which compiles to an assignment to `exports`; this
+ * reports both, at the declaration as authored. An ambient declaration
+ * (`declare let`) emits nothing and is not reported.
+ */
+function reportModuleScopeMutableBindings(
+  context: TransformationContext,
+): void {
+  for (const statement of context.sourceFile.statements) {
+    if (
+      !ts.isVariableStatement(statement) ||
+      statement.modifiers?.some((modifier) =>
+        modifier.kind === ts.SyntaxKind.DeclareKeyword
+      )
+    ) {
+      continue;
+    }
+    const declarationList = statement.declarationList;
+    const keyword = (declarationList.flags & ts.NodeFlags.Let) !== 0
+      ? "let"
+      : (declarationList.flags & ts.NodeFlags.BlockScoped) === 0
+      ? "var"
+      : undefined;
+    if (keyword === undefined) continue;
+    context.reportDiagnostic({
+      // Stored source exporting a `let` or `var` was admitted when it was
+      // deployed, and an identity-pinned reload admits nothing new, so there
+      // the report keeps its visibility and loses its veto.
+      severity: context.options.storedSource ? "warning" : "error",
+      type: `module-scope:${keyword}-declaration`,
+      message: `\`${keyword}\` declarations are not allowed at module ` +
+        `scope: module state must be \`const\`. Declare it with \`const\`; ` +
+        `a value that changes belongs in a cell the pattern owns.`,
+      node: declarationList,
+    });
+  }
+}
+
 export class PatternContextValidationTransformer
   extends HelpersOnlyTransformer {
   transform(context: TransformationContext): ts.SourceFile {
     reportNestedCollectionScans(context);
+    reportModuleScopeMutableBindings(context);
     const checker = context.checker;
     const analyze = context.getDataFlowAnalyzer();
 

@@ -3515,6 +3515,9 @@ interface CFButtonAttributes<T> extends CFHTMLAttributes<T> {
   "disabled"?: boolean;
   "outline"?: boolean;
   "type"?: "button" | "submit" | "reset";
+  // A cell bound as the button's `name` crosses into a click's event as
+  // `target.name`, the link to that cell.
+  "$name"?: CellLike<unknown>;
 }
 
 interface CFCopyButtonAttributes<T> extends CFHTMLAttributes<T> {

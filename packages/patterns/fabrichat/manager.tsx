@@ -397,11 +397,16 @@ function writeOpenDirect(
     return;
   }
   const actor = currentPrincipal();
-  if (
-    !actor || !isPrincipalDID(event.counterpart) ||
-    event.counterpart === actor
-  ) {
-    refuse(event.requestId, "Choose another person's principal.", state);
+  if (!actor) {
+    refuse(event.requestId, "Sign in before starting a conversation.", state);
+    return;
+  }
+  if (!isPrincipalDID(event.counterpart)) {
+    refuse(event.requestId, "The counterpart is not a principal.", state);
+    return;
+  }
+  if (event.counterpart === actor) {
+    refuse(event.requestId, "The counterpart is this user.", state);
     return;
   }
   if (
@@ -452,12 +457,21 @@ export const openDirect = handler<ManagerHandlerEvent, StartState>(
   toSchema<StartReadState>(),
   (event, state) => {
     const requestId = event.requestId ?? eventKey();
-    const counterpart = event.counterpart ??
+    const named = event.target?.name;
+    const namedPrincipal = named === undefined
+      ? undefined
+      : principalOf(named, "represents-principal");
+    // Deployed chips may still name a principal without carrying a profile.
+    // TODO(danfuzz): Remove the dataset fallbacks once no deployed room sends
+    // them, and record the resulting event-contract break.
+    const counterpart = event.counterpart ?? namedPrincipal ??
       event.target?.dataset?.counterpart ??
       event.target?.dataset?.chatCounterpart ?? event.target?.value?.trim() ??
       "";
     state.latestStart?.set({ requestId, input: counterpart });
-    writeOpenDirect({ requestId, counterpart, profile: event.profile }, state);
+    const profile = event.profile ??
+      (namedPrincipal === undefined ? undefined : named);
+    writeOpenDirect({ requestId, counterpart, profile }, state);
   },
 );
 

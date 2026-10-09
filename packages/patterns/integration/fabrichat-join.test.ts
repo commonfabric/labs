@@ -24,6 +24,7 @@ import {
   clickTrustedAction,
   collectBrowserLoadSummary,
   fillCfInput,
+  fillCfTextarea,
   waitForRuntimeIdle,
   waitForSettledText,
   waitForText,
@@ -58,10 +59,17 @@ describe("fabrichat-join", () => {
   // Someone the first person chats with second, who never opens a page.
   let thirdIdentity: Identity;
 
+  // Two people who share a group room and nothing else, so that a direct chat
+  // between them is new.
+  let groupOwnerIdentity: Identity;
+  let groupMemberIdentity: Identity;
+
   beforeAll(async () => {
     firstIdentity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
     thirdIdentity = await Identity.generate({ implementation: "noble" });
+    groupOwnerIdentity = await Identity.generate({ implementation: "noble" });
+    groupMemberIdentity = await Identity.generate({ implementation: "noble" });
   });
 
   it("lets two people start a direct chat from home, join it from its link, and exchange a message", async () => {
@@ -153,6 +161,53 @@ describe("fabrichat-join", () => {
     const newRoomView = await waitForPieceSelected(first, newRoomId);
     expect(newRoomView.spaceDid).not.toBe(roomView.spaceDid);
     expect(newRoomView.spaceDid).not.toBe(firstIdentity.did());
+  });
+
+  it("starts a direct chat from a participant's chip in a group room", async () => {
+    const owner = firstShell.page();
+    const member = secondShell.page();
+
+    await gotoHome(secondShell, groupMemberIdentity);
+    await createProfileAtHome(member, "Grace Hopper");
+    await openChatManager(secondShell, groupMemberIdentity);
+    const memberAddress = await readChatAddress(member);
+
+    // The owner creates a group with the member, and opens its page.
+    const groupTitle = "Chip team";
+    await gotoHome(firstShell, groupOwnerIdentity);
+    await createProfileAtHome(owner, "Ada Lovelace");
+    await openChatManager(firstShell, groupOwnerIdentity);
+    await fillCfInput(owner, "#fabrichat-group-title", groupTitle);
+    // The group's members field is the manager page's one textarea.
+    await fillCfTextarea(owner, "cf-textarea", memberAddress);
+    await clickButtonWithExactText(owner, "Create group");
+    await waitForSettledText(owner, "#fabrichat-rooms", groupTitle);
+    const roomId = await clickCellLink(owner, groupTitle);
+    const roomView = await waitForPieceSelected(owner, roomId);
+
+    // The member opens the group's page and adds it to their chats, and then
+    // sees the owner among its participants.
+    await secondShell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: roomView,
+      identity: groupMemberIdentity,
+    });
+    await waitForSettledText(member, "#fabrichat-messages", EMPTY_ROOM_TEXT);
+    await clickButtonWithExactText(member, "Add to my chats");
+    await waitForUnrendered(member, "#fabrichat-add-to-chats");
+    await waitForSettledText(member, "cf-profile-badge", "Ada Lovelace");
+
+    // The owner's chip is the page's one chat start: the member's own chip
+    // offers none. Its click names the owner by their profile, and the
+    // member's manager lists the direct room it starts under the owner's
+    // address, which it reads off that profile.
+    await clickTrustedAction(member, START_ACTION);
+    await openChatManager(secondShell, groupMemberIdentity);
+    await waitForSettledText(
+      member,
+      "#fabrichat-rooms",
+      `With ${groupOwnerIdentity.did()}`,
+    );
   });
 });
 

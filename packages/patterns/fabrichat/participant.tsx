@@ -43,7 +43,7 @@ export const ParticipantChip = pattern<ParticipantChipInput, { [UI]: VNode }>(
           >
             <cf-button
               data-ui-action="ChatStart"
-              data-chat-counterpart={counterpart}
+              $name={participant}
               onClick={startDirect}
             >
               Chat
