@@ -82,9 +82,12 @@ space invitation is a bearer credential, redeemable by whoever holds its code,
 so it can't guarantee that the person admitted is the one intended, and a direct
 room's `counterpart` has to be exactly that person.
 
-A grant gives access but tells the recipient nothing. So the manager also
-produces a **notice** for each other member, saying which room they have been
-admitted to and by whom (see [delivering notices](#delivering-notices)).
+A grant gives access but tells the recipient nothing. So the manager also tells
+each other member: it offers them the room through their share inbox when the
+request names their profile and the profile points at one (see
+[offers](#offers)), and otherwise produces a **notice**, saying which room they
+have been admitted to and by whom (see
+[delivering notices](#delivering-notices)).
 
 ## Views
 
@@ -161,7 +164,8 @@ These rules hold for every stream:
   that says which, rather than ignored.
 - Every stream changes only this user's own manager, except `openDirect` and
   `createGroup`, which also create a room and grant other people access to it,
-  and `openDirect`, which can also offer the room to the other person.
+  and `openDirect`, which can also offer the room to the other person, and add
+  them to its participants.
   `openDirect`, `createGroup` and `accept` also add this user to the room's
   participants, which anyone the room's space admits may do.
 
@@ -192,14 +196,17 @@ outward act when it creates a room.
   outcome, and it is put back in `rooms` if it was forgotten, whatever its
   catalog entry's revision: starting the chat is the person's choice to have it
   listed, so this restore wins over a concurrent forget, from another device,
-  say. Otherwise, if a
-  creation for the same `counterpart` is still pending under another
-  `requestId`, the manager MUST resume that creation rather than start another,
-  and records its outcome under both ids. Otherwise, creates a direct room whose
-  members are this user and `counterpart`, grants `counterpart` access, produces
-  a notice for them, offers the room through `profile`'s inbox when there is
-  one, and records the new entry in `rooms` and `direct`; adding this user to
-  the new room's participants follows.
+  say. Otherwise, if `rooms` lists a direct room whose counterpart is
+  `counterpart`, a room they created and offered this user, that entry is the
+  outcome, the newest if there are several, and it is recorded in `direct`.
+  Otherwise, if a creation for the same `counterpart` is still pending under
+  another `requestId`, the manager MUST resume that creation rather than start
+  another, and records its outcome under both ids. Otherwise, creates a direct
+  room whose members are this user and `counterpart`, grants `counterpart`
+  access, offers the room through `profile`'s inbox when there is one and adds
+  `profile` to the room's participants, or else produces a notice for them, and
+  records the new entry in `rooms` and `direct`; adding this user to the new
+  room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `counterpart` is this
   user, or `profile`'s label doesn't name `counterpart`.
 
@@ -352,8 +359,9 @@ When a request names a member's profile, as `openDirect`'s `profile` does, the
 manager offers the new room to that member through the share inbox the
 profile's `inbox` points at
 ([`private-inbox.md`](../../features/private-inbox.md)), once, after the room is
-created. A profile that points at no inbox is offered nothing. The offer is the
-envelope a share inbox takes:
+created, and adds the profile to the room's participants, through the room's
+`addParticipant`, without a step of the member's own. A profile that points at
+no inbox is offered nothing. The offer is the envelope a share inbox takes:
 
 - `kind` — `fabrichat-room`.
 - `id` — the request's `requestId`. The inbox keeps one offer per sender and
@@ -369,14 +377,16 @@ envelope a share inbox takes:
 The recipient's host reads each offer in the inboxes their Home holds, vets it,
 and registers the room's space in their Home's shared-space catalog
 ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)).
-Nothing tells the sender that an offer arrived, and a member known only by
-their DID has no profile to reach an inbox through, so a notice is produced for
-every other member whether or not an offer was sent.
+A notice is produced for each other member offered nothing: one known only by
+their DID, who has no profile to reach an inbox through, or one whose profile
+points at no inbox. A member sent an offer gets no notice, and nothing tells the
+sender whether the offer arrived.
 
 ## Crossing creations
 
 Each user's manager is their own. If two people each `openDirect` to the other
-before either notice arrives, there are two rooms. Each manager keeps the room
-it recorded first in `direct`. The other stays in `rooms`, and can be forgotten.
-This contract accepts that for now. A deterministic tie-break, such as the room
-whose creator's principal sorts first, is future work.
+before either's offer or notice arrives, there are two rooms. Each manager
+keeps the room it recorded first in `direct`. The other stays in `rooms`, and
+can be forgotten. This contract accepts that for now. A deterministic
+tie-break, such as the room whose creator's principal sorts first, is future
+work.
