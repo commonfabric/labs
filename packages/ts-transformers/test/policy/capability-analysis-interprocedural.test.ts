@@ -521,3 +521,34 @@ Deno.test(
     assertEquals(input.identityPaths, []);
   },
 );
+
+for (
+  const [form, call] of [
+    ["the fallback of a member", "record(input.list ?? []);"],
+    ["the fallback of the root", "record(input ?? spare);"],
+  ]
+) {
+  Deno.test(
+    `${form} leaving for a callee with no summary ends identity use beneath it`,
+    () => {
+      // Each form hands `record` a value it may read the whole of, the
+      // compared elements included, without naming `input.list` directly.
+      const input = getPaths(
+        analyze(`${CELL}
+          interface ReadonlyArray<T> { some(p: (v: T) => boolean): boolean; }
+          declare function record(value: unknown): void;
+          const fn = (
+            input: { list: readonly Cell<number>[] },
+            other: Cell<number>,
+            spare: { list: readonly Cell<number>[] },
+          ) => {
+            if (input.list.some((item) => item.equals(other))) return;
+            ${call}
+          };`),
+        "input",
+      );
+
+      assertEquals(input.identityPaths, []);
+    },
+  );
+}

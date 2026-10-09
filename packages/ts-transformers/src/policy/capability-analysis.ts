@@ -3215,8 +3215,9 @@ export function analyzeFunctionCapabilities(
               markWildcard(leftRef.root);
             } else if (leftRef.path.length === 0) {
               markPassthrough(leftRef.root);
-              if (helperReturnsToCaller && escapesWhole(node.left)) {
-                trackFullShapeRead(leftRef.root, []);
+              if (escapesWhole(node.left)) {
+                recordEscape(leftRef.root, []);
+                if (helperReturnsToCaller) trackFullShapeRead(leftRef.root, []);
               }
             } else {
               trackReadRef(leftRef);
@@ -3227,7 +3228,7 @@ export function analyzeFunctionCapabilities(
                 !isPrimitiveLikeExpression(node.left) &&
                 escapesWhole(node.left)
               ) {
-                trackFullShapeReadRef(leftRef);
+                trackEscapeRef(leftRef);
               }
             }
             // Resolving the ref stood in for walking the operand, so a call on
@@ -3318,8 +3319,12 @@ export function analyzeFunctionCapabilities(
             forEachSourceRefLeaf(held, (leaf) => {
               const ref = materializeSourceRef(leaf);
               if (ref.path.length === 0 && !ref.dynamic) {
+                // A root is passed through rather than read, unless a helper
+                // returns it to a caller that reads it; either way whatever
+                // receives it may read anything beneath it.
                 markPassthrough(ref.root);
-                if (helperReturnsToCaller) trackEscape(ref.root, []);
+                recordEscape(ref.root, []);
+                if (helperReturnsToCaller) trackFullShapeRead(ref.root, []);
               } else {
                 trackReadRef(ref);
                 trackEscapeRef(ref);
@@ -3330,6 +3335,12 @@ export function analyzeFunctionCapabilities(
             const resolvedSource = materializeSourceRef(source);
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
+            const identityOnlyArgumentUse = !!(
+              parent &&
+              ts.isCallExpression(parent) &&
+              parent.arguments.includes(usage) &&
+              isKnownIdentityArgumentCall(parent, checker)
+            );
             // A value below the root that leaves the analysis whole is read
             // in full wherever it lands, so it is charged as a full-shape
             // read rather than a plain one: a plain read at a path keeps the
@@ -3342,6 +3353,15 @@ export function analyzeFunctionCapabilities(
             const wholeValueEscape = !resolvedSource.dynamic &&
               (resolvedSource.path.length > 0 || helperReturnsToCaller) &&
               escapesWhole(node);
+            // A root left to the passthrough accounting is not read here, but
+            // whatever it reaches may read anything beneath it.
+            if (
+              !resolvedSource.dynamic && resolvedSource.path.length === 0 &&
+              !wholeValueEscape && !identityOnlyArgumentUse &&
+              escapesWhole(node)
+            ) {
+              recordEscape(resolvedSource.root, []);
+            }
             if (!parent) {
               // Synthetic identifiers can temporarily be detached from parent links.
               // Preserve narrowed-path reads while avoiding false root-read expansion.
@@ -3406,12 +3426,6 @@ export function analyzeFunctionCapabilities(
                 )
               )
             ) {
-              const identityOnlyArgumentUse = !!(
-                parent &&
-                ts.isCallExpression(parent) &&
-                parent.arguments.includes(usage) &&
-                isKnownIdentityArgumentCall(parent, checker)
-              );
               const identityArrayLocal =
                 getIdentityArrayLocalNameForElementUsage(usage);
               const identityOnlyArrayElementUse = !!identityArrayLocal &&

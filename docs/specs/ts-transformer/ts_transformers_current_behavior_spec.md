@@ -2267,9 +2267,11 @@ computation's input schema:
   into unsatisfiable full-value self-demands
   (`test/policy/capability-analysis.test.ts`).
 - A value whose whole leaves the function (returned to a caller, put in a
-  collection, or handed to a callee with no summary) records an escaped path as
-  well as a full-shape read, and normalization drops every identity path at or
-  below it, since whatever received the value may read anything beneath. A
+  collection, or handed to a callee with no summary, directly or as the operand
+  of a `??`/`||` fallback) records an escaped path, and normalization drops
+  every identity path at or below it, since whatever received the value may
+  read anything beneath. It is charged a full-shape read as well, except a root
+  a builder's callback passes through, which keeps its passthrough accounting. A
   summary carries its escaped paths (`escapedPaths`), and a caller replays them
   at the path it passed the value from. A `.get()` is not an escape: the body's
   uses of what it returns are tracked where they occur, so elements a body only

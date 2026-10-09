@@ -12,6 +12,7 @@
  *
  * `admit` refuses a panel already in the list, found by `equals`, and one
  * whose name the helper finds there. Each refusal is checked by its own step.
+ * `admitThroughFallback` does the same, handing the helper `list ?? []`.
  *
  * Run: deno task cf test packages/patterns/regression/element-identity-helper-read.test.tsx
  */
@@ -36,16 +37,31 @@ const admit = handler<
   panels.set([...list, panel]);
 });
 
+const admitThroughFallback = handler<
+  { panel: Writable<Panel> },
+  { panels: Writable<Writable<Panel>[]> }
+>(({ panel }, { panels }) => {
+  const list = panels.get();
+  if (list.some((existing) => existing.equals(panel))) return;
+  if (holdsName(list ?? [], panel.get().name)) return;
+  panels.set([...list, panel]);
+});
+
 export default pattern(() => {
   const first = new Writable<Panel>({ name: "a" });
   const second = new Writable<Panel>({ name: "b" });
   const namesake = new Writable<Panel>({ name: "a" });
   const panels = new Writable<Writable<Panel>[]>([]);
   const add = admit({ panels });
+  const viaFallback = new Writable<Writable<Panel>[]>([]);
+  const addViaFallback = admitThroughFallback({ panels: viaFallback });
 
   const assertBothAdmitted = assert(() => panels.get().length === 2);
   const assertSameRefused = assert(() => panels.get().length === 2);
   const assertNamesakeRefused = assert(() => panels.get().length === 2);
+  const assertFallbackNamesakeRefused = assert(() =>
+    viaFallback.get().length === 2
+  );
 
   return {
     [TESTS]: [
@@ -56,6 +72,10 @@ export default pattern(() => {
       { assertion: assertSameRefused },
       { action: add, event: { panel: namesake } },
       { assertion: assertNamesakeRefused },
+      { action: addViaFallback, event: { panel: first } },
+      { action: addViaFallback, event: { panel: second } },
+      { action: addViaFallback, event: { panel: namesake } },
+      { assertion: assertFallbackNamesakeRefused },
     ],
   };
 });
