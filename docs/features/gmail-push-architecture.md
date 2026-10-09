@@ -191,12 +191,12 @@ sequenceDiagram
     S->>T: POST /api/spaces/:space/ingest-channels/gmail-bind
     T->>G: GET users/me/profile (one lookup, token not kept)
     T-->>S: bound address
-    S-->>T: subscribe to the cell at <cause prefix> (memory connection)
+    S-->>T: subscribe to the channel's cell, named by its cause prefix (memory connection)
     L->>G: users.watch naming the topic, renewed daily
 
     Note over G,T: Every time mail arrives
     G->>P: publish {emailAddress, historyId}
-    P->>T: POST /api/spaces/<registry DID>/ingest-push/gmail (OIDC token, over the internet)
+    P->>T: POST the push route under the registry's DID (OIDC token)
     T->>T: verify the token, then find the mailbox's latest channels
     T->>T: replace the cell's record if the history id is newer
     T-->>P: 200 {delivered}
