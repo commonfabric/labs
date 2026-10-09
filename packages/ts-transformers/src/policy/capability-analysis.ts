@@ -655,6 +655,19 @@ function isValueTypeAssertion(expression: ts.Expression): boolean {
 }
 
 /**
+ * Whether `expression` asserts a type for a value (`isValueTypeAssertion()`)
+ * under any parentheses, `satisfies` and non-null assertions around it, as in
+ * `(value as T)!`.
+ */
+function isAssertedValue(expression: ts.Expression): boolean {
+  let current = skipKeyWrappers(expression);
+  while (ts.isNonNullExpression(current)) {
+    current = skipKeyWrappers(current.expression);
+  }
+  return isValueTypeAssertion(current);
+}
+
+/**
  * The type a key is judged by. A reference to a variable, parameter, enum
  * member or property is judged by the type it is declared with, not the type
  * flow narrowing gives it at this use, since a narrowing can go stale: a call
@@ -686,8 +699,7 @@ function getDeclaredKeyType(
     const declaration = declared.valueDeclaration;
     if (
       declaration && ts.isVariableDeclaration(declaration) &&
-      declaration.initializer &&
-      isValueTypeAssertion(skipKeyWrappers(declaration.initializer))
+      declaration.initializer && isAssertedValue(declaration.initializer)
     ) {
       return undefined;
     }

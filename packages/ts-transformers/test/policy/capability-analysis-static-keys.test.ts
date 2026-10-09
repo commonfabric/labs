@@ -198,6 +198,15 @@ const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
       expect(usage.readPaths).not.toEqual([]);
     });
 
+    it("reads past a key whose `const` was initialized by a cast under a non-null assertion", () => {
+      const usage = catalogUsage(`const key = (anyKey as "a" | undefined)!;
+const read = (catalog: Cell<Catalog>) => catalog.get().offers[key].space;`);
+
+      expect(usage.readPaths.some((path) => path.startsWith("offers.a")))
+        .toBe(false);
+      expect(usage.readPaths).not.toEqual([]);
+    });
+
     it("reads past a key cast to a literal type inside parentheses and `satisfies`", () => {
       const usage = catalogUsage(
         `const read = (catalog: Cell<Catalog>) =>
