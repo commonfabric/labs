@@ -108,6 +108,7 @@ import {
 } from "./cfc/types.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
+import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -586,6 +587,32 @@ export type ServerRunDemanderResolver = (
   pieceRootIds: readonly string[],
 ) => readonly ScopeKeyIdentity[];
 
+/**
+ * How many other deployments' origins a runtime resolves the memory host of
+ * ({@link Runtime.resolveSpaceHost}), reads in flight included. A site table
+ * names an origin per space, so a table listing more distinct origins than a
+ * person's spaces plausibly live on is bounded here rather than read in full.
+ */
+export const FOREIGN_HOST_LIMIT = 64;
+
+/**
+ * What a runtime knows about where another deployment's origin serves Memory
+ * ({@link Runtime.resolveSpaceHost}): a read in flight, which `settled`
+ * resolves after the entry has been replaced by its outcome; the memory host
+ * it published or, publishing none, its own origin; or that the memory host
+ * could not be learned.
+ */
+type ForeignHostEntry =
+  | { state: "resolving"; settled: Promise<void> }
+  | { state: "resolved"; memoryHost: URL }
+  | { state: "unread" };
+
+/**
+ * Which of storage's two hint methods a registration asks first: a verdict
+ * (`registerSpaceHost`) or a reasoned one (`registerSpaceHostDetailed`).
+ */
+type StorageHintForm = "verdict" | "detailed";
+
 export interface RuntimeOptions {
   apiUrl: URL;
 
@@ -603,8 +630,10 @@ export interface RuntimeOptions {
    * one, such as a memory router's: the HTTP or HTTPS origin `storageManager`
    * was opened on (StorageManager Options.memoryHost). The `remoteClient` and
    * `browserWorker` presets set it from the host their caller opened storage
-   * on. While it is set, a host hint cannot move a space's Memory (see
-   * {@link Runtime.registerSpaceHostDetailed}). Absent, empty, or naming
+   * on. While it is set, a host hint naming another deployment's origin
+   * opens that space's Memory where THAT deployment serves it, read from its
+   * own meta document (see {@link Runtime.resolveSpaceHost}), and a hint
+   * naming this deployment is the default route. Absent, empty, or naming
    * `apiUrl`'s own origin, there is none. Fixed for the runtime's lifetime.
    *
    * It is an input of its own because a storage manager does not report the
@@ -1324,6 +1353,13 @@ export class Runtime {
 
   /** Runtime-learned host hints (site table); see registerSpaceHost. */
   #dynamicHosts = new Map<string, string>();
+
+  /**
+   * Where each other deployment a host hint has named serves Memory, by
+   * origin, for the runtime's lifetime; see {@link resolveSpaceHost}. Holds
+   * at most {@link FOREIGN_HOST_LIMIT} origins, reads in flight included.
+   */
+  #foreignHosts = new Map<string, ForeignHostEntry>();
 
   /**
    * The transaction seal destination (`serving-loop.md` §3d): installed only on
@@ -4730,59 +4766,91 @@ export class Runtime {
    * accepts the hint. Returns whether storage accepted or confirmed the hint.
    *
    * While a memory URL is set, the runtime decides an unseeded space's hint
-   * first, as {@link registerSpaceHostDetailed} describes, and storage is not
-   * asked: a hint naming `apiUrl`'s origin returns `true` without being
-   * recorded, and a hint naming any other host returns `false`.
+   * first, as {@link registerSpaceHostDetailed} describes. A hint naming
+   * another deployment's origin can be registered here only once
+   * {@link resolveSpaceHost} has read where that origin serves Memory;
+   * before that it returns `false`.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
     const route = this.#normalizedSpaceHost(space, host);
-    const routed = this.#memoryRoutedRegistration(space, route);
-    if (routed !== undefined) return routed.accepted;
-    const normalized = route.toString();
-    const storage = this.storageManager;
-    const accept = storage.registerSpaceHost !== undefined
-      ? storage.registerSpaceHost(space, normalized)
-      : storage.registerSpaceHostDetailed?.(space, normalized).accepted;
-    if (accept === undefined) return false; // manager has no remote resolution
-    if (accept) this.#dynamicHosts.set(space, normalized);
-    return accept;
+    return (this.#routedHintVerdict(space, route, "verdict") ??
+      this.#registerWithStorage(space, route, route, "verdict")).accepted;
   }
 
   /**
    * Records a host hint under the rules of {@link registerSpaceHost}, and
-   * says why when storage refuses it. A storage manager that gives only a
-   * verdict has its refusal reported as `unspecified`, and one that takes no
-   * hints at all as `no-remote-resolution`.
+   * says why when it is refused. A storage manager that gives only a verdict
+   * has its refusal reported as `unspecified`, and one that takes no hints at
+   * all as `no-remote-resolution`.
    *
    * While a memory URL is set, the runtime decides an unseeded space's hint
-   * before storage sees it: Memory stays on the memory URL, which places
-   * every space itself, and a hint carries a space's Memory as well as its
-   * HTTP work. A hint naming `apiUrl`'s origin names the default route, and
-   * is accepted without being recorded. Any other host is refused as
-   * `memory-routed`. A seeded space keeps the seed's rules, since the seed is
-   * the embedder's own configuration.
+   * before storage sees it, since Memory is not where the hint's HTTP work
+   * is. A seeded space keeps the seed's rules, since the seed is the
+   * embedder's own configuration. Otherwise:
+   *
+   * - A hint naming `apiUrl`'s origin, or the memory URL's, names this
+   *   deployment, whose Memory is the memory URL: the default route. It is
+   *   accepted without being recorded, so neither spelling can move a space
+   *   off the memory URL or on to the API host. So is a hint naming another
+   *   deployment whose memory host turns out to be this runtime's memory URL
+   *   (the two share a router): that too is the default route.
+   * - A hint naming another deployment's origin is registered once the
+   *   runtime knows where that deployment serves Memory
+   *   ({@link resolveSpaceHost}): storage is offered that memory host, and
+   *   when it accepts, the space's HTTP work is routed to the hinted origin.
+   *   A hint whose origin has not been resolved is refused as
+   *   `foreign-host-unresolved`, one whose memory host could not be learned
+   *   as `foreign-host-unread`, and one past the origins the runtime keeps
+   *   as `foreign-host-limit`.
    */
   registerSpaceHostDetailed(
     space: MemorySpace,
     host: string,
   ): SpaceHostRegistration {
     const route = this.#normalizedSpaceHost(space, host);
-    const routed = this.#memoryRoutedRegistration(space, route);
-    if (routed !== undefined) return routed;
-    const normalized = route.toString();
-    const storage = this.storageManager;
-    let registration: SpaceHostRegistration;
-    if (storage.registerSpaceHostDetailed !== undefined) {
-      registration = storage.registerSpaceHostDetailed(space, normalized);
-    } else if (storage.registerSpaceHost !== undefined) {
-      registration = storage.registerSpaceHost(space, normalized)
-        ? { accepted: true }
-        : { accepted: false, reason: "unspecified" };
-    } else {
-      registration = { accepted: false, reason: "no-remote-resolution" };
+    return this.#routedHintVerdict(space, route, "detailed") ??
+      this.#registerWithStorage(space, route, route, "detailed");
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHostDetailed},
+   * first reading where the hinted origin serves Memory when that is another
+   * deployment under a memory URL. The read is `${origin}/api/meta`, as a
+   * deployed client reads its own deployment's (`deployment-meta.ts`): a
+   * published `memoryUrl` is where that space's Memory opens; a deployment
+   * that publishes none serves Memory on its origin, as every deployment did
+   * before memory URLs. Each origin is read once for the runtime's lifetime,
+   * whatever the outcome, and hints that arrive while the read is in flight
+   * share it; a read that fails leaves the origin `foreign-host-unread`, and
+   * is warned about once, naming the origin, since the origin is read once.
+   * The runtime keeps {@link FOREIGN_HOST_LIMIT} origins; a hint naming one
+   * more is refused as `foreign-host-limit` without a read. Every other hint
+   * is decided as the synchronous form decides it, without waiting.
+   */
+  async resolveSpaceHost(
+    space: MemorySpace,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    const route = this.#normalizedSpaceHost(space, host);
+    if (this.#isForeignHint(space, route)) {
+      const entry = this.#foreignHosts.get(route.origin) ??
+        this.#readForeignHost(route);
+      if (entry?.state === "resolving") await entry.settled;
     }
-    if (registration.accepted) this.#dynamicHosts.set(space, normalized);
-    return registration;
+    return this.registerSpaceHostDetailed(space, host);
+  }
+
+  /**
+   * Whether the runtime, rather than storage, decides `route` for `space`
+   * and must first learn where `route` serves Memory: there is a memory URL,
+   * the seed map does not list the space, and the route names neither
+   * `apiUrl`'s origin nor the memory URL's.
+   */
+  #isForeignHint(space: MemorySpace, route: URL): boolean {
+    return this.memoryUrl !== undefined &&
+      this.spaceHostMap?.[space] === undefined &&
+      !namesApiOrigin(route, this.apiUrl) &&
+      route.origin !== this.memoryUrl.origin;
   }
 
   /**
@@ -4790,15 +4858,113 @@ export class Runtime {
    * storage decides: there is no memory URL, or the seed map lists the space.
    * See {@link registerSpaceHostDetailed}.
    */
-  #memoryRoutedRegistration(
+  #routedHintVerdict(
     space: MemorySpace,
     route: URL,
+    form: StorageHintForm,
   ): SpaceHostRegistration | undefined {
     if (this.memoryUrl === undefined) return undefined;
     if (this.spaceHostMap?.[space] !== undefined) return undefined;
-    return namesApiOrigin(route, this.apiUrl)
-      ? { accepted: true }
-      : { accepted: false, reason: "memory-routed" };
+    if (!this.#isForeignHint(space, route)) return { accepted: true };
+    const entry = this.#foreignHosts.get(route.origin);
+    if (entry === undefined) {
+      return this.#foreignHosts.size >= FOREIGN_HOST_LIMIT
+        ? { accepted: false, reason: "foreign-host-limit" }
+        : { accepted: false, reason: "foreign-host-unresolved" };
+    }
+    switch (entry.state) {
+      case "resolving":
+        return { accepted: false, reason: "foreign-host-unresolved" };
+      case "unread":
+        return { accepted: false, reason: "foreign-host-unread" };
+      case "resolved":
+        // Two deployments sharing one router: the space's Memory is where
+        // this runtime already opens Memory, so the hint names the default
+        // route and is not recorded, as a hint naming this deployment is not.
+        return entry.memoryHost.origin === this.memoryUrl.origin
+          ? { accepted: true }
+          : this.#registerWithStorage(space, route, entry.memoryHost, form);
+    }
+  }
+
+  /**
+   * Offers storage `memoryRoute` for `space`, and when storage accepts or
+   * confirms it, routes the space's HTTP work to `route`. The two are the same
+   * origin except for a hint naming another deployment that publishes a
+   * memory URL, whose Memory opens there while its HTTP work stays on the
+   * hinted origin. `form` says which of storage's two methods is asked first:
+   * {@link registerSpaceHost} asks for a verdict and
+   * {@link registerSpaceHostDetailed} for a reason, each falling back to the
+   * other method where storage implements only that one.
+   */
+  #registerWithStorage(
+    space: MemorySpace,
+    route: URL,
+    memoryRoute: URL,
+    form: StorageHintForm,
+  ): SpaceHostRegistration {
+    const normalized = memoryRoute.toString();
+    const storage = this.storageManager;
+    let registration: SpaceHostRegistration;
+    if (
+      storage.registerSpaceHost !== undefined &&
+      (form === "verdict" || storage.registerSpaceHostDetailed === undefined)
+    ) {
+      registration = storage.registerSpaceHost(space, normalized)
+        ? { accepted: true }
+        : { accepted: false, reason: "unspecified" };
+    } else if (storage.registerSpaceHostDetailed !== undefined) {
+      registration = storage.registerSpaceHostDetailed(space, normalized);
+    } else {
+      registration = { accepted: false, reason: "no-remote-resolution" };
+    }
+    if (registration.accepted) this.#dynamicHosts.set(space, route.toString());
+    return registration;
+  }
+
+  /**
+   * Starts reading where `route`'s deployment serves Memory, and records the
+   * read as in flight, then as its outcome, for the runtime's lifetime
+   * ({@link resolveSpaceHost}). Returns `undefined`, recording nothing, when
+   * the runtime already keeps {@link FOREIGN_HOST_LIMIT} origins. The read is
+   * cancelled when the runtime is disposed, and that cancellation is recorded
+   * as unread without a warning: nothing of the runtime is left to route.
+   */
+  #readForeignHost(route: URL): ForeignHostEntry | undefined {
+    if (this.#foreignHosts.size >= FOREIGN_HOST_LIMIT) return undefined;
+    const origin = route.origin;
+    const settled = memoryHostForForeignOrigin({
+      apiUrl: route,
+      signal: this.#writeTeardown.signal,
+      fetch: (input, init) => this.fetch(input, init),
+    }).then(
+      (outcome) => {
+        if ("memoryHost" in outcome) {
+          this.#foreignHosts.set(origin, {
+            state: "resolved",
+            memoryHost: outcome.memoryHost,
+          });
+          return;
+        }
+        this.#foreignHosts.set(origin, { state: "unread" });
+        // Once per origin, because an origin is read once: the entry below
+        // is recorded before any other hint can start a read, and is never
+        // dropped.
+        console.warn(
+          `[runtime] Where ${origin} serves Memory could not be learned: ` +
+            `${outcome.reason}. Spaces hinted to it stay on no route in ` +
+            `this runtime, since Memory here is routed through ` +
+            `${this.memoryUrl} and that is not where ${origin} keeps its ` +
+            `spaces.`,
+        );
+      },
+      () => {
+        this.#foreignHosts.set(origin, { state: "unread" });
+      },
+    );
+    const entry: ForeignHostEntry = { state: "resolving", settled };
+    this.#foreignHosts.set(origin, entry);
+    return entry;
   }
 
   /**

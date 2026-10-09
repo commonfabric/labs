@@ -2286,12 +2286,15 @@ queries, and fragments are refused. The default admits no foreign spaces; `{}`
 explicitly clears an environment default. The session registers these host
 routes before returning to its callers and refuses a route that conflicts with
 its own space or an established runtime route. Against a deployment that
-publishes a memory URL, such as one behind a memory router, it accepts only a
-route to the deployment's own API origin and refuses a route to any other host
-as `memory-routed`, since Memory opens on that memory URL for every space; a
-refused route makes the session fail to start. The same admission predicate
-governs input-cell minting, `describe_handle`, and `run_pattern` link inputs.
-Named piece attachments continue to resolve in the session's own space.
+publishes a memory URL, such as one behind a memory router, a route to the
+deployment's own API origin or memory URL is the default route, and a route to
+another deployment's origin is registered once the session has read where that
+deployment serves Memory, from its `/api/meta`: a route whose memory host cannot
+be read is refused as `foreign-host-unread`, and one past the 64 origins a
+runtime keeps as `foreign-host-limit`. A refused route makes the session fail to
+start, naming the reason. The same admission predicate governs input-cell
+minting, `describe_handle`, and `run_pattern` link inputs. Named piece
+attachments continue to resolve in the session's own space.
 
 This is trusted startup configuration, unavailable to model tool arguments and
 console task bodies. Reads use the session's configured identity and existing

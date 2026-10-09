@@ -7,6 +7,7 @@ import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server
 import {
   type DeployedClientParams,
   deploymentForShell,
+  memoryHostForForeignOrigin,
   memoryHostNote,
   settingsForDeployedClient,
   SHELL_DEPLOYMENT_FLAGS,
@@ -1095,6 +1096,119 @@ describe("deployment-meta", () => {
       for (const declared of [undefined, null, {}, [], "posture", 3]) {
         expect(shellFlagsFromDeclared(declared), String(declared)).toEqual({});
       }
+    });
+  });
+
+  describe("memoryHostForForeignOrigin()", () => {
+    const origin = new URL("https://foreign.example/");
+    const read = (fetch: typeof globalThis.fetch) =>
+      memoryHostForForeignOrigin({
+        apiUrl: origin,
+        retryDelaysMs: [],
+        attemptTimeoutMs: 5,
+        fetch,
+      });
+
+    it("returns the memory URL the origin publishes", async () => {
+      const requested: string[] = [];
+      const host = await read((input) => {
+        requested.push(String(input));
+        return Promise.resolve(
+          metaResponse({ memoryUrl: "https://router.foreign.example" }),
+        );
+      });
+      expect(host).toEqual({
+        memoryHost: new URL("https://router.foreign.example/"),
+      });
+      expect(requested).toEqual(["https://foreign.example/api/meta"]);
+    });
+
+    it("returns the origin itself where it publishes no memory URL", async () => {
+      for (
+        const answer of [
+          () => Promise.resolve(metaResponse({}, 404)),
+          () => Promise.resolve(metaResponse({}, 405)),
+          () => Promise.resolve(metaResponse({}, 410)),
+          () => Promise.resolve(metaResponse({})),
+          () => Promise.resolve(metaResponse({ memoryUrl: null })),
+          // Its own origin is no memory URL, as it is for a client's own
+          // deployment.
+          () =>
+            Promise.resolve(
+              metaResponse({ memoryUrl: "https://foreign.example" }),
+            ),
+        ]
+      ) {
+        expect(await read(answer)).toEqual({ memoryHost: origin });
+      }
+    });
+
+    it("returns unread, with the reason, where the memory host cannot be learned", async () => {
+      using _warn = stub(console, "warn");
+      const unread = async (
+        fetch: typeof globalThis.fetch,
+        reason: string,
+      ) => {
+        const host = await read(fetch);
+        expect("unread" in host).toBe(true);
+        if ("unread" in host) expect(host.reason).toContain(reason);
+      };
+      const couldNotBeRead =
+        "https://foreign.example/api/meta could not be read";
+      await unread(
+        () => Promise.reject(new TypeError("refused")),
+        couldNotBeRead,
+      );
+      await unread(
+        () => Promise.resolve(metaResponse({}, 500)),
+        couldNotBeRead,
+      );
+      await unread(
+        () => Promise.resolve(metaResponse({}, 401)),
+        couldNotBeRead,
+      );
+      await unread(
+        () => Promise.resolve(metaResponse({}, 503)),
+        couldNotBeRead,
+      );
+      await unread(
+        () => Promise.resolve(new Response("<html>", { status: 200 })),
+        couldNotBeRead,
+      );
+      await unread(
+        () =>
+          Promise.resolve(
+            redirected(
+              metaResponse({ memoryUrl: "https://router.foreign.example" }),
+              "https://login.example/api/meta",
+            ),
+          ),
+        "redirected to https://login.example/api/meta",
+      );
+      await unread(
+        () =>
+          Promise.resolve(
+            metaResponse({ memoryUrl: "wss://router.foreign.example" }),
+          ),
+        "Unsupported memory URL protocol",
+      );
+      await unread(
+        () => Promise.resolve(metaResponse({ memoryUrl: 7 })),
+        "expected a string",
+      );
+      expect(_warn.calls.length).toBe(0);
+    });
+
+    it("throws the abort reason when the signal aborts", async () => {
+      const controller = new AbortController();
+      controller.abort(new Error("stopped"));
+      await expect(
+        memoryHostForForeignOrigin({
+          apiUrl: origin,
+          signal: controller.signal,
+          fetch: () => Promise.resolve(metaResponse({})),
+        }),
+      ).rejects.toThrow("stopped");
     });
   });
 

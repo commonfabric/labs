@@ -24,17 +24,30 @@ export class SpaceHostValidationError extends TypeError {
  *   offered host.
  * - `no-remote-resolution`: storage resolves no per-space host, so a hint can
  *   take no effect.
- * - `memory-routed`: the runtime opens Memory on a memory URL, which places
- *   every space itself, and the hint names a host other than the API host.
- *   A hint carries a space's Memory as well as its HTTP work, so it cannot
- *   name a host for one without the other.
+ * - `foreign-host-unresolved`: the runtime opens Memory on a memory URL, the
+ *   hint names another deployment's origin, and the runtime has not yet read
+ *   where that origin serves Memory. The synchronous registration cannot
+ *   wait for the read; `Runtime.resolveSpaceHost` does, and registers the
+ *   hint once it is done.
+ * - `foreign-host-unread`: the hint names another deployment's origin, and
+ *   where that origin serves Memory could not be learned: its meta document
+ *   could not be read, a redirect left its deployment, or it publishes a
+ *   memory URL that is not an HTTP or HTTPS origin. The space is left on no
+ *   route, since the runtime's own memory URL is no place for another
+ *   deployment's space. The runtime does not ask again; a runtime created
+ *   later can.
+ * - `foreign-host-limit`: the hint names another deployment's origin, and
+ *   the runtime has already resolved as many origins as it keeps
+ *   (`FOREIGN_HOST_LIMIT`).
  * - `unspecified`: storage gave a verdict without a reason.
  */
 export type SpaceHostRefusalReason =
   | "known-different-host"
   | "default-route-in-use"
   | "no-remote-resolution"
-  | "memory-routed"
+  | "foreign-host-unresolved"
+  | "foreign-host-unread"
+  | "foreign-host-limit"
   | "unspecified";
 
 /**

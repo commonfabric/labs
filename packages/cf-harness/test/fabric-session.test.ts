@@ -81,9 +81,9 @@ describe("fabric-session", () => {
       const controller = {
         getSpace: () => "did:key:zLocal",
         runtime: {
-          registerSpaceHostDetailed: (space: string, host: string) => {
+          resolveSpaceHost: (space: string, host: string) => {
             routed.push([space, host]);
-            return { accepted: true };
+            return Promise.resolve({ accepted: true });
           },
         },
       } as unknown as PiecesController;
@@ -112,10 +112,13 @@ describe("fabric-session", () => {
       const disposed: string[] = [];
       const controller = controllerBoundedBy({}, disposed);
       controller.getSpace = () => "did:key:zLocal";
-      controller.runtime.registerSpaceHostDetailed = () => ({
-        accepted: false,
-        reason: "memory-routed",
-      });
+      // The deployment publishes a memory URL and the foreign host's own
+      // memory host could not be read, so the route is refused.
+      controller.runtime.resolveSpaceHost = () =>
+        Promise.resolve({
+          accepted: false,
+          reason: "foreign-host-unread",
+        });
       const factory = createHarnessFabricSessionFactory({
         apiUrl: "https://local.example/",
         identityKeyPath: "/fixture.key",
@@ -126,7 +129,7 @@ describe("fabric-session", () => {
         initialize: () => Promise.resolve(controller),
       });
       await expect(factory()).rejects.toThrow(
-        "host route was refused by the session (memory-routed)",
+        "host route was refused by the session (foreign-host-unread)",
       );
       expect(disposed).toEqual(["runtime"]);
     });

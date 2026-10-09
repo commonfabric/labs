@@ -102,6 +102,32 @@ export function cellFromUrl(
     const routed = target?.space === undefined || typeof spaceHost !== "string"
       ? true
       : space !== undefined && routeSpace(runtime, space, spaceHost);
+    if (routed === "unresolved") {
+      // The host names another deployment whose memory host this runtime has
+      // not read yet. Pending until the read is done; the action runs again
+      // when the flag clears, and finds the host resolved. A read that
+      // finishes after the input has stopped naming this host leaves the flag
+      // alone, as the name derivation above does.
+      const pendingWithTx = pending.withTx(tx);
+      if (pendingWithTx.get() !== true) pendingWithTx.set(true);
+      // `routeSpace` answers "unresolved" only for a named space and a string
+      // host, which is what the assertions below restate.
+      runtime.trackAsyncWork(
+        runtime.resolveSpaceHost(space!, spaceHost as string).then(
+          () =>
+            runtime.editWithRetry((retryTx) => {
+              if (
+                inputsCell.withTx(retryTx).key("spaceHost").get() !== spaceHost
+              ) return;
+              pending.withTx(retryTx).set(false);
+            }),
+          (error) =>
+            console.error("cellFromUrl: resolving a space host:", error),
+        ),
+        parentCell,
+      );
+      return;
+    }
     const id = target && space && routed ? entityUri(space, target) : undefined;
 
     const cellWithTx = cell.withTx(tx);
@@ -156,17 +182,22 @@ function targetOf(
 /**
  * Applies an explicit route without overriding a route the runtime already
  * fixed. A storage manager without remote routing can still confirm its own
- * default origin, which keeps local and emulated runtimes useful.
+ * default origin, which keeps local and emulated runtimes useful. Under a
+ * memory URL, a host naming another deployment is `"unresolved"` until the
+ * runtime has read where that deployment serves Memory
+ * (`Runtime.resolveSpaceHost`); the action waits for that read.
  */
 function routeSpace(
   runtime: Runtime,
   space: MemorySpace,
   host: string,
-): boolean {
+): boolean | "unresolved" {
   let requested: string;
   try {
     requested = new URL(host).origin;
-    if (runtime.registerSpaceHost(space, host)) return true;
+    const registration = runtime.registerSpaceHostDetailed(space, host);
+    if (registration.accepted) return true;
+    if (registration.reason === "foreign-host-unresolved") return "unresolved";
   } catch {
     return false;
   }

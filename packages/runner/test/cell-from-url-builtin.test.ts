@@ -161,9 +161,9 @@ describe("cellFromUrl builtin", () => {
   it("registers an explicit toolshed before resolving a cross-space address", async () => {
     const id = anExistingCell();
     const routes: Array<[string, string]> = [];
-    runtime.registerSpaceHost = (routedSpace, host) => {
+    runtime.registerSpaceHostDetailed = (routedSpace, host) => {
       routes.push([routedSpace, host]);
-      return true;
+      return { accepted: true };
     };
 
     const { id: resolved } = await resolve(
@@ -178,7 +178,11 @@ describe("cellFromUrl builtin", () => {
 
   it("returns no cell when an explicit toolshed conflicts with the fixed route", async () => {
     const id = anExistingCell();
-    runtime.registerSpaceHost = () => false;
+    runtime.registerSpaceHostDetailed = () => ({
+      accepted: false,
+      reason: "known-different-host",
+      existingHost: "https://app.example/",
+    });
 
     const { id: resolved } = await resolve(
       `//${space}/${id}`,
@@ -195,16 +199,37 @@ describe("cellFromUrl builtin", () => {
         memoryUrl === undefined ? "without" : "under"
       } a memory URL`,
       () => {
+        // What `https://remote.example/api/meta` answers: a memory URL, no
+        // document, or a failure. Storage records the host it is offered.
+        let remoteMeta: Record<string, unknown> | number;
+        let offeredToStorage: string[];
         // Storage that takes every hint, so a refusal comes from the runtime.
         beforeEach(() => {
+          remoteMeta = 404;
+          offeredToStorage = [];
           storageManager = Object.assign(
             StorageManager.emulate({ as: signer }),
-            { registerSpaceHostDetailed: () => ({ accepted: true }) as const },
+            {
+              registerSpaceHostDetailed: (_space: string, host: string) => {
+                offeredToStorage.push(host);
+                return { accepted: true } as const;
+              },
+            },
           );
           runtime = new Runtime({
             apiUrl: new URL("https://app.example/"),
             ...(memoryUrl === undefined ? {} : { memoryUrl }),
             storageManager,
+            fetch: (input) => {
+              expect(String(input)).toBe("https://remote.example/api/meta");
+              return Promise.resolve(
+                typeof remoteMeta === "number"
+                  ? new Response(null, { status: remoteMeta })
+                  : new Response(JSON.stringify(remoteMeta), {
+                    headers: { "content-type": "application/json" },
+                  }),
+              );
+            },
           });
           tx = runtime.edit();
           const { commonfabric } = createTrustedBuilder(runtime);
@@ -228,20 +253,89 @@ describe("cellFromUrl builtin", () => {
         it(
           memoryUrl === undefined
             ? "resolves through another host"
-            : "cannot route the space to another host",
+            : "resolves through another host once its memory host is read",
           async () => {
+            remoteMeta = { memoryUrl: "https://router.remote.example" };
+            const id = anExistingCell();
+            const { id: resolved, pending } = await resolve(
+              `//${space}/${id}`,
+              undefined,
+              "https://remote.example",
+              // Under a memory URL the answer is pending while the runtime
+              // reads where remote.example serves Memory, and the action runs
+              // again when the read is done.
+              memoryUrl === undefined ? undefined : () => runtime.settled(),
+            );
+            expect(pending).toBe(false);
+            expect(resolved).toBe(id);
+            expect(runtime.mappedHostFor(space)).toBe(
+              "https://remote.example/",
+            );
+            // Without a memory URL storage is offered the host itself; under
+            // one, the memory URL remote.example publishes, once by the read
+            // and once more when the action runs again and confirms it.
+            expect(new Set(offeredToStorage)).toEqual(
+              new Set([
+                memoryUrl === undefined
+                  ? "https://remote.example/"
+                  : "https://router.remote.example/",
+              ]),
+            );
+          },
+        );
+
+        if (memoryUrl !== undefined) {
+          it("resolves through another host that publishes no memory URL", async () => {
+            remoteMeta = 404;
             const id = anExistingCell();
             const { id: resolved } = await resolve(
               `//${space}/${id}`,
               undefined,
               "https://remote.example",
+              () => runtime.settled(),
             );
-            expect(resolved).toBe(memoryUrl === undefined ? id : undefined);
-            expect(runtime.mappedHostFor(space)).toBe(
-              memoryUrl === undefined ? "https://remote.example/" : undefined,
+            expect(resolved).toBe(id);
+            expect(new Set(offeredToStorage)).toEqual(
+              new Set(["https://remote.example/"]),
             );
-          },
-        );
+          });
+
+          it("resolves to no cell through a host whose memory host cannot be read", async () => {
+            remoteMeta = 500;
+            const id = anExistingCell();
+            const warnings: unknown[] = [];
+            const originalWarn = console.warn;
+            console.warn = (...args: unknown[]) => warnings.push(args[0]);
+            let result: Awaited<ReturnType<typeof resolve>>;
+            try {
+              result = await resolve(
+                `//${space}/${id}`,
+                undefined,
+                "https://remote.example",
+                () => runtime.settled(),
+              );
+            } finally {
+              console.warn = originalWarn;
+            }
+            expect(result.pending).toBe(false);
+            expect(result.id).toBeUndefined();
+            expect(runtime.mappedHostFor(space)).toBeUndefined();
+            expect(offeredToStorage).toEqual([]);
+            expect(warnings.length).toBe(1);
+          });
+
+          it("resolves through the memory URL's own origin, which is the default route", async () => {
+            const id = anExistingCell();
+            const { id: resolved } = await resolve(
+              `//${space}/${id}`,
+              undefined,
+              "https://router.example",
+            );
+            expect(resolved).toBe(id);
+            expect(runtime.mappedHostFor(space)).toBeUndefined();
+            expect(offeredToStorage).toEqual([]);
+          });
+        }
       },
     );
   }

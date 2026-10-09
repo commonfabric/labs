@@ -450,6 +450,65 @@ export async function deploymentForShell(
   };
 }
 
+/**
+ * Where a deployment this client does NOT run against serves Memory: what a
+ * host hint naming another deployment's origin resolves to
+ * (`Runtime.resolveSpaceHost`). The read is one of {@link readDeploymentMeta}
+ * against that origin, which serves `/api/meta` with CORS `*`, so a browser
+ * page can read it too.
+ *
+ * - `memoryHost`: the memory URL the origin publishes, such as its router's;
+ *   or the origin itself where it said it has no document, or returned one
+ *   without the field, or one naming its own origin. Every client opened a
+ *   space's Memory on the hinted origin before deployments published memory
+ *   URLs, so a deployment without a router keeps working.
+ * - `unread`: the memory host could not be learned, and `reason` says why:
+ *   the document could not be read, a redirect left the origin's deployment,
+ *   or the published value is not an HTTP or HTTPS origin. Each is a case the
+ *   client could resolve wrongly if it guessed: the origin may route Memory
+ *   through a router that the origin itself does not serve, and the client's
+ *   own default is its own deployment's router, which is no place for another
+ *   deployment's space. Nothing is warned about here; the caller decides how
+ *   often to.
+ */
+export type ForeignMemoryHost =
+  | { memoryHost: URL }
+  | { unread: true; reason: string };
+
+/**
+ * Reads where `params.apiUrl`, another deployment's origin (an HTTP or HTTPS
+ * origin, as `normalizeSpaceHost` gives it), serves Memory
+ * ({@link ForeignMemoryHost}). Bounded as {@link settingsForDeployedClient}
+ * describes, and an aborted `signal` throws its reason.
+ */
+export async function memoryHostForForeignOrigin(
+  params: DeploymentMetaParams,
+): Promise<ForeignMemoryHost> {
+  const origin = params.apiUrl;
+  const meta = await readDeploymentMeta(params);
+  const metaUrl = new URL(SERVER_EXPERIMENTAL_PATH, origin).href;
+  if (meta.redirectedOffOrigin !== undefined) {
+    return {
+      unread: true,
+      reason: `${metaUrl} redirected to ${meta.redirectedOffOrigin}, ` +
+        "which is not that origin's deployment",
+    };
+  }
+  if (!meta.conclusive) {
+    return { unread: true, reason: `${metaUrl} could not be read` };
+  }
+  const declared = meta.document?.memoryUrl;
+  const parsed = readMemoryUrl(declared, origin);
+  if ("refused" in parsed) {
+    return {
+      unread: true,
+      reason: `${metaUrl} publishes memoryUrl=` +
+        debugStr`$quote${declared} — ${parsed.refused}`,
+    };
+  }
+  return { memoryHost: parsed.memoryUrl ?? origin };
+}
+
 /** What a client that is NOT built alongside its server takes from it. */
 export interface DeployedClientSettings {
   /** The posture ({@link settingsForDeployedClient}). */

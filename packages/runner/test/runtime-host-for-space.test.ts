@@ -2,7 +2,12 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { Runtime, SpaceHostValidationError } from "@commonfabric/runner";
+import {
+  FOREIGN_HOST_LIMIT,
+  Runtime,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "@commonfabric/runner";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
 const signer = await Identity.fromPassphrase("runtime-host-for-space");
@@ -134,31 +139,88 @@ describe("Runtime.registerSpaceHost", () => {
     });
 
     describe("under a memory URL", () => {
-      /** A runtime whose storage takes every hint and records what it saw. */
+      /**
+       * A runtime whose storage takes every hint and records what it saw,
+       * with `fetch` answering the meta documents of other deployments.
+       */
       function routedRuntime(
         options: {
           apiUrl?: URL;
           memoryUrl?: URL;
           spaceHostMap?: Record<string, string>;
+          fetch?: typeof globalThis.fetch;
+          storage?: (space: string, host: string) => SpaceHostRegistration;
         },
       ) {
         const seen: string[] = [];
+        const { storage, ...runtimeOptions } = options;
         const storageManager = Object.assign(
           StorageManager.emulate({ as: signer }),
           {
-            registerSpaceHostDetailed(_space: string, host: string) {
+            registerSpaceHostDetailed(space: string, host: string) {
               seen.push(host);
-              return { accepted: true } as const;
+              return storage?.(space, host) ?? { accepted: true } as const;
             },
           },
         );
         const runtime = new Runtime({
           apiUrl: new URL("http://host-a.test/"),
           storageManager,
-          ...options,
+          fetch: (input) => {
+            throw new Error(`unexpected fetch of ${new URL(input as string)}`);
+          },
+          ...runtimeOptions,
         });
         return { runtime, seen };
       }
+
+      /** The meta document `url` serves, or a status with no document. */
+      type MetaAnswer = Record<string, unknown> | number | Error;
+
+      /**
+       * A `fetch` answering `/api/meta` on each origin of `answers`, counting
+       * the requests by origin. A missing origin fails the connection.
+       */
+      function metaFetch(answers: Record<string, MetaAnswer>) {
+        const requests = new Map<string, number>();
+        const fetch: typeof globalThis.fetch = (input) => {
+          const url = new URL(input as string);
+          expect(url.pathname).toBe("/api/meta");
+          requests.set(url.origin, (requests.get(url.origin) ?? 0) + 1);
+          const answer = answers[url.origin];
+          if (answer === undefined) {
+            return Promise.reject(new TypeError("connection refused"));
+          }
+          if (answer instanceof Error) return Promise.reject(answer);
+          if (typeof answer === "number") {
+            return Promise.resolve(new Response(null, { status: answer }));
+          }
+          return Promise.resolve(
+            new Response(JSON.stringify(answer), {
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        };
+        return { fetch, requests };
+      }
+
+      /** Runs `body` with `console.warn` captured. */
+      async function warningsDuring(
+        body: () => Promise<void>,
+      ): Promise<string[]> {
+        const warnings: string[] = [];
+        const original = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+        try {
+          await body();
+        } finally {
+          console.warn = original;
+        }
+        return warnings;
+      }
+
+      const foreign = "http://host-b.test";
+      const spaceC = "did:key:z6Mk-host-for-space-c" as MemorySpace;
 
       it("accepts the API host as the default route without recording it", async () => {
         const { runtime, seen } = routedRuntime({
@@ -179,25 +241,312 @@ describe("Runtime.registerSpaceHost", () => {
         }
       });
 
-      it("refuses any other host as `memory-routed`", async () => {
+      it("accepts the memory URL's own origin as the default route without recording it", async () => {
+        // The memory URL is where Memory already opens: a hint naming it can
+        // neither move Memory nor route the space's HTTP work there.
         const { runtime, seen } = routedRuntime({
           memoryUrl: new URL("http://router.test/"),
         });
         try {
-          for (const host of ["http://host-b.test/", "http://router.test/"]) {
+          for (const host of ["http://router.test/", "http://Router.test"]) {
             expect(runtime.registerSpaceHostDetailed(spaceB, host))
-              .toEqual({ accepted: false, reason: "memory-routed" });
-            expect(runtime.registerSpaceHost(spaceB, host)).toBe(false);
+              .toEqual({ accepted: true });
+            expect(runtime.registerSpaceHost(spaceB, host)).toBe(true);
+            expect(await runtime.resolveSpaceHost(spaceB, host))
+              .toEqual({ accepted: true });
           }
           expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+          expect(runtime.hostForSpace(spaceB).href).toBe("http://host-a.test/");
           expect(seen).toEqual([]);
         } finally {
           await runtime.dispose();
         }
       });
 
+      it("opens a foreign origin's Memory on the memory URL it publishes", async () => {
+        const { fetch, requests } = metaFetch({
+          [foreign]: { memoryUrl: "http://router-b.test" },
+        });
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+        });
+        try {
+          expect(await runtime.resolveSpaceHost(spaceB, foreign))
+            .toEqual({ accepted: true });
+          // Storage opens the space's Memory where host-b says it serves it;
+          // the space's HTTP work goes to host-b itself.
+          expect(seen).toEqual(["http://router-b.test/"]);
+          expect(runtime.mappedHostFor(spaceB)).toBe("http://host-b.test/");
+          expect(runtime.hostForSpace(spaceB).href).toBe("http://host-b.test/");
+          // A second space on the same origin is decided from the cached
+          // read, synchronously.
+          expect(runtime.registerSpaceHostDetailed(spaceC, `${foreign}/`))
+            .toEqual({ accepted: true });
+          expect(seen).toEqual([
+            "http://router-b.test/",
+            "http://router-b.test/",
+          ]);
+          expect(runtime.mappedHostFor(spaceC)).toBe("http://host-b.test/");
+          expect(requests.get(foreign)).toBe(1);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("opens a foreign origin's Memory on the origin when it publishes none", async () => {
+        for (
+          const answer of [
+            404,
+            405,
+            410,
+            {},
+            { memoryUrl: null },
+            { memoryUrl: "http://host-b.test/" },
+          ] as MetaAnswer[]
+        ) {
+          const { fetch } = metaFetch({ [foreign]: answer });
+          const { runtime, seen } = routedRuntime({
+            memoryUrl: new URL("http://router.test/"),
+            fetch,
+          });
+          try {
+            expect(await runtime.resolveSpaceHost(spaceB, foreign))
+              .toEqual({ accepted: true });
+            expect(seen).toEqual(["http://host-b.test/"]);
+            expect(runtime.mappedHostFor(spaceB)).toBe("http://host-b.test/");
+          } finally {
+            await runtime.dispose();
+          }
+        }
+      });
+
+      it("refuses a foreign origin whose meta document could not be read, warning once", async () => {
+        for (
+          const answer of [
+            500,
+            401,
+            new TypeError("connection refused"),
+            { memoryUrl: "ws://router-b.test/" },
+            { memoryUrl: 7 },
+          ] as MetaAnswer[]
+        ) {
+          const { fetch, requests } = metaFetch({ [foreign]: answer });
+          const { runtime, seen } = routedRuntime({
+            memoryUrl: new URL("http://router.test/"),
+            fetch,
+          });
+          try {
+            const warnings = await warningsDuring(async () => {
+              expect(await runtime.resolveSpaceHost(spaceB, foreign))
+                .toEqual({ accepted: false, reason: "foreign-host-unread" });
+              expect(await runtime.resolveSpaceHost(spaceC, `${foreign}/`))
+                .toEqual({ accepted: false, reason: "foreign-host-unread" });
+              expect(runtime.registerSpaceHostDetailed(spaceB, foreign))
+                .toEqual({ accepted: false, reason: "foreign-host-unread" });
+              expect(runtime.registerSpaceHost(spaceB, foreign)).toBe(false);
+            });
+            // Neither storage nor the runtime routes the space anywhere: its
+            // Memory is not sent to host-b, nor explicitly to this runtime's
+            // own router.
+            expect(seen).toEqual([]);
+            expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+            expect(runtime.mappedHostFor(spaceC)).toBeUndefined();
+            expect(warnings.length).toBe(1);
+            expect(warnings[0]).toContain(
+              "Where http://host-b.test serves Memory could not be learned",
+            );
+            expect(warnings[0]).toContain("http://router.test/");
+            // One read for the runtime's lifetime, retries included.
+            expect(requests.get(foreign)).toBeGreaterThanOrEqual(1);
+            const reads = requests.get(foreign);
+            await runtime.resolveSpaceHost(spaceB, foreign);
+            expect(requests.get(foreign)).toBe(reads);
+          } finally {
+            await runtime.dispose();
+          }
+        }
+      });
+
+      it("refuses a foreign origin whose meta document redirected off its deployment", async () => {
+        const fetch: typeof globalThis.fetch = () =>
+          Promise.resolve(
+            Object.defineProperties(
+              new Response(JSON.stringify({ memoryUrl: "http://evil.test" }), {
+                headers: { "content-type": "application/json" },
+              }),
+              {
+                redirected: { value: true },
+                url: { value: "http://login.test/api/meta" },
+              },
+            ),
+          );
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+        });
+        try {
+          const warnings = await warningsDuring(async () => {
+            expect(await runtime.resolveSpaceHost(spaceB, foreign))
+              .toEqual({ accepted: false, reason: "foreign-host-unread" });
+          });
+          expect(seen).toEqual([]);
+          expect(warnings.length).toBe(1);
+          expect(warnings[0]).toContain("redirected to http://login.test");
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("treats a foreign origin whose memory host is this runtime's memory URL as the default route", async () => {
+        // Two deployments sharing one router: Memory is already where it
+        // would open, and the space's HTTP work is not routed to host-b.
+        const { fetch } = metaFetch({
+          [foreign]: { memoryUrl: "http://router.test" },
+        });
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+        });
+        try {
+          expect(await runtime.resolveSpaceHost(spaceB, foreign))
+            .toEqual({ accepted: true });
+          expect(runtime.registerSpaceHostDetailed(spaceC, foreign))
+            .toEqual({ accepted: true });
+          expect(seen).toEqual([]);
+          expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+          expect(runtime.mappedHostFor(spaceC)).toBeUndefined();
+          expect(runtime.hostForSpace(spaceB).href).toBe("http://host-a.test/");
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("never reads this deployment's own origins", async () => {
+        // The API origin and the memory URL are the default route by rule, not
+        // by what their meta documents say: a meta document that named
+        // another host for either could not move a space.
+        const { fetch, requests } = metaFetch({
+          "http://host-a.test": { memoryUrl: "http://elsewhere.test" },
+          "http://router.test": { memoryUrl: "http://elsewhere.test" },
+        });
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+        });
+        try {
+          for (const host of ["http://host-a.test/", "http://router.test/"]) {
+            expect(await runtime.resolveSpaceHost(spaceB, host))
+              .toEqual({ accepted: true });
+          }
+          expect(requests.size).toBe(0);
+          expect(seen).toEqual([]);
+          expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reports a foreign origin as `foreign-host-unresolved` until it is read, and shares one read", async () => {
+        const gate = Promise.withResolvers<Response>();
+        let reads = 0;
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch: () => {
+            reads++;
+            return gate.promise;
+          },
+        });
+        try {
+          // The synchronous forms start no read.
+          expect(runtime.registerSpaceHostDetailed(spaceB, foreign))
+            .toEqual({ accepted: false, reason: "foreign-host-unresolved" });
+          expect(runtime.registerSpaceHost(spaceB, foreign)).toBe(false);
+          expect(reads).toBe(0);
+          const first = runtime.resolveSpaceHost(spaceB, foreign);
+          const second = runtime.resolveSpaceHost(spaceC, `${foreign}/`);
+          expect(reads).toBe(1);
+          expect(runtime.registerSpaceHostDetailed(spaceB, foreign))
+            .toEqual({ accepted: false, reason: "foreign-host-unresolved" });
+          expect(seen).toEqual([]);
+          gate.resolve(
+            new Response(
+              JSON.stringify({ memoryUrl: "http://router-b.test" }),
+              {
+                headers: { "content-type": "application/json" },
+              },
+            ),
+          );
+          expect(await first).toEqual({ accepted: true });
+          expect(await second).toEqual({ accepted: true });
+          expect(reads).toBe(1);
+          expect(seen).toEqual([
+            "http://router-b.test/",
+            "http://router-b.test/",
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("passes storage's refusal of the resolved memory host through", async () => {
+        const { fetch } = metaFetch({
+          [foreign]: { memoryUrl: "http://router-b.test" },
+        });
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+          storage: () => ({ accepted: false, reason: "default-route-in-use" }),
+        });
+        try {
+          expect(await runtime.resolveSpaceHost(spaceB, foreign))
+            .toEqual({ accepted: false, reason: "default-route-in-use" });
+          expect(seen).toEqual(["http://router-b.test/"]);
+          expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it(`keeps ${FOREIGN_HOST_LIMIT} origins and refuses one more as \`foreign-host-limit\``, async () => {
+        const answers: Record<string, MetaAnswer> = {};
+        const origins = Array.from(
+          { length: FOREIGN_HOST_LIMIT + 1 },
+          (_, i) => `http://host-${i}.foreign.test`,
+        );
+        for (const origin of origins) answers[origin] = {};
+        const { fetch, requests } = metaFetch(answers);
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+        });
+        try {
+          const kept = origins.slice(0, FOREIGN_HOST_LIMIT);
+          const results = await Promise.all(
+            kept.map((origin, i) =>
+              runtime.resolveSpaceHost(
+                `did:key:z6Mk-foreign-${i}` as MemorySpace,
+                origin,
+              )
+            ),
+          );
+          expect(results.every((r) => r.accepted)).toBe(true);
+          expect(seen.length).toBe(FOREIGN_HOST_LIMIT);
+          const extra = origins[FOREIGN_HOST_LIMIT];
+          expect(await runtime.resolveSpaceHost(spaceB, extra))
+            .toEqual({ accepted: false, reason: "foreign-host-limit" });
+          expect(runtime.registerSpaceHostDetailed(spaceB, extra))
+            .toEqual({ accepted: false, reason: "foreign-host-limit" });
+          expect(requests.has(extra)).toBe(false);
+          // A kept origin is still served.
+          expect(await runtime.resolveSpaceHost(spaceB, kept[0]))
+            .toEqual({ accepted: true });
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
       it("leaves a seeded space to storage", async () => {
-        const spaceC = "did:key:z6Mk-host-for-space-c" as MemorySpace;
         const { runtime, seen } = routedRuntime({
           memoryUrl: new URL("http://router.test/"),
           spaceHostMap: { [spaceC]: "http://seed.test/" },

@@ -1377,10 +1377,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * return the reason along with a refusal. `known-different-host` carries the
    * host the space is routed to. `default-route-in-use` is about this session alone:
    * the space issued a stateful operation through the default host, and a
-   * runtime created later can still take the hint. `memory-routed` holds for
-   * the runtime's lifetime: it opens Memory on a memory URL, and the hint names
-   * a host other than the API host. Callers must not mount the space under this
-   * hint unless `accepted` is true.
+   * runtime created later can still take the hint. Under a memory URL a hint
+   * naming another deployment's origin is decided once the runtime has read
+   * where that deployment serves Memory, which this request waits for;
+   * `foreign-host-unread` says that could not be learned, and holds for the
+   * runtime's lifetime. Callers must not mount the space under this hint
+   * unless `accepted` is true.
    */
   async registerSpaceHostDetailed(
     space: DID,

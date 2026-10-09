@@ -167,13 +167,11 @@ async () => {
       if (!isDIDKey(space) || space === pieces.getSpace()) {
         throw new Error("Foreign space host route was refused by the session");
       }
-      const registration = pieces.runtime.registerSpaceHostDetailed(
-        space,
-        host,
-      );
+      // Against a deployment that publishes a memory URL, this first reads
+      // where the foreign host serves Memory; a host whose memory host
+      // cannot be learned is refused as `foreign-host-unread`.
+      const registration = await pieces.runtime.resolveSpaceHost(space, host);
       if (!registration.accepted) {
-        // `memory-routed` is the deployment's: it opens Memory on a memory
-        // URL, which no foreign host can join.
         throw new Error(
           "Foreign space host route was refused by the session " +
             `(${registration.reason})`,

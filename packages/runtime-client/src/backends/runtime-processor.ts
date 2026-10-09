@@ -1220,7 +1220,6 @@ export class RuntimeProcessor {
 
   #siteTableCancel: Cancel | undefined;
   #siteTableWarned = new Set<string>();
-  #memoryRoutedCountsWarned = new Set<number>();
 
   /**
    * Subscribes to the home-space site table and registers the last entry for
@@ -1239,12 +1238,15 @@ export class RuntimeProcessor {
    * this page reached that work.
    *
    * Under a memory URL the runtime decides each remaining entry
-   * (`Runtime.registerSpaceHostDetailed`): one naming `apiUrl`'s origin is
-   * the default route and is accepted without being recorded, which also
-   * retires an earlier row for the space, since only the last row per space
-   * is offered; one naming any other host is refused as `memory-routed`. The
-   * refused rows are warned about together, with their count, once for each
-   * count seen.
+   * (`Runtime.resolveSpaceHost`): one naming `apiUrl`'s origin or the memory
+   * URL is the default route and is accepted without being recorded, which
+   * also retires an earlier row for the space, since only the last row per
+   * space is offered; one naming another deployment's origin is registered
+   * once the runtime has read where that deployment serves Memory, which is
+   * why each entry is registered asynchronously. An origin whose memory host
+   * could not be learned, or past the origins the runtime keeps, leaves its
+   * spaces on no route; the runtime warns about the origin once, so the rows
+   * are not warned about here.
    *
    * ORDERING CONTRACT for embedders: push a newly learned hint through the
    * RegisterSpaceHost IPC before relying on that space, and proceed only when
@@ -1325,57 +1327,8 @@ export class RuntimeProcessor {
                 host: host.toString(),
               });
             }
-            // Rows a memory URL refuses are counted rather than warned
-            // about one by one: the refusal is the deployment's, not the
-            // row's, and a table holding many rows from before the router
-            // would otherwise print one line per row.
-            let memoryRouted = 0;
             for (const entry of latestEntries.values()) {
-              try {
-                const registration = this.#runtime.registerSpaceHostDetailed(
-                  entry.did,
-                  entry.host,
-                );
-                if (registration.accepted) continue;
-                if (registration.reason === "memory-routed") {
-                  memoryRouted++;
-                  continue;
-                }
-                // Warn once per rejected fact. A seeded route or an earlier
-                // accepted hint can fix a different host.
-                const key = `${entry.did}|${entry.host}`;
-                if (this.#siteTableWarned.has(key)) continue;
-                const effective = this.#runtime.hostForSpace(
-                  entry.did,
-                ).toString();
-                if (effective !== entry.host) {
-                  this.#siteTableWarned.add(key);
-                  console.warn(
-                    `[RuntimeProcessor] Site-table hint for ${entry.did} not in effect ` +
-                      `(explicit space route already fixed); using ${effective}`,
-                  );
-                }
-              } catch (error) {
-                console.warn(
-                  `[RuntimeProcessor] Ignoring invalid site-table entry for ${entry.did}:`,
-                  error instanceof Error ? error.message : error,
-                );
-              }
-            }
-            // Once per distinct count, so an unchanged table does not repeat
-            // it on every change. A refused space is unseeded and has no
-            // recorded host, so it uses `apiUrl` for everything but Memory.
-            if (
-              memoryRouted > 0 &&
-              !this.#memoryRoutedCountsWarned.has(memoryRouted)
-            ) {
-              this.#memoryRoutedCountsWarned.add(memoryRouted);
-              console.warn(
-                `[RuntimeProcessor] ${memoryRouted} site-table ` +
-                  `${memoryRouted === 1 ? "hint is" : "hints are"} not in ` +
-                  `effect: Memory is routed through ${this.#runtime.memoryUrl}, ` +
-                  `and their spaces use ${this.#runtime.apiUrl} otherwise`,
-              );
+              this.#registerSiteTableEntry(entry.did, entry.host);
             }
           },
         );
@@ -1391,6 +1344,44 @@ export class RuntimeProcessor {
         error instanceof Error ? error.message : error,
       );
     }
+  }
+
+  /**
+   * Registers one site-table row through `Runtime.resolveSpaceHost`, which
+   * may first read where the row's origin serves Memory, and warns once per
+   * row the runtime refuses for a route already fixed. The rows a foreign
+   * origin's unread or unkept memory host refuses are the runtime's to warn
+   * about, once per origin, and are not repeated here. A row the sink offers
+   * again while its read is in flight shares the read.
+   */
+  #registerSiteTableEntry(did: DID, host: string): void {
+    this.#runtime.resolveSpaceHost(did, host).then(
+      (registration) => {
+        if (registration.accepted) return;
+        if (
+          registration.reason === "foreign-host-unread" ||
+          registration.reason === "foreign-host-limit"
+        ) return;
+        // Warn once per rejected fact. A seeded route or an earlier
+        // accepted hint can fix a different host.
+        const key = `${did}|${host}`;
+        if (this.#siteTableWarned.has(key)) return;
+        const effective = this.#runtime.hostForSpace(did).toString();
+        if (effective !== host) {
+          this.#siteTableWarned.add(key);
+          console.warn(
+            `[RuntimeProcessor] Site-table hint for ${did} not in effect ` +
+              `(explicit space route already fixed); using ${effective}`,
+          );
+        }
+      },
+      (error: unknown) => {
+        console.warn(
+          `[RuntimeProcessor] Ignoring invalid site-table entry for ${did}:`,
+          error instanceof Error ? error.message : error,
+        );
+      },
+    );
   }
 
   /**
@@ -3484,19 +3475,28 @@ export class RuntimeProcessor {
     );
   }
 
-  handleRegisterSpaceHost(
+  /**
+   * Registers a host hint through `Runtime.resolveSpaceHost`, so that under
+   * a memory URL a hint naming another deployment is decided once that
+   * deployment's memory host has been read, and the caller learns the
+   * verdict that read settled rather than that the read is pending.
+   */
+  async handleRegisterSpaceHost(
     request: RegisterSpaceHostRequest,
-  ): BooleanResponse {
-    return {
-      value: this.#runtime.registerSpaceHost(request.space, request.host),
-    };
+  ): Promise<BooleanResponse> {
+    const registration = await this.#runtime.resolveSpaceHost(
+      request.space,
+      request.host,
+    );
+    return { value: registration.accepted };
   }
 
-  handleRegisterSpaceHostDetailed(
+  /** See {@link handleRegisterSpaceHost}. */
+  async handleRegisterSpaceHostDetailed(
     request: RegisterSpaceHostDetailedRequest,
-  ): SpaceHostRegistrationResponse {
+  ): Promise<SpaceHostRegistrationResponse> {
     return {
-      registration: this.#runtime.registerSpaceHostDetailed(
+      registration: await this.#runtime.resolveSpaceHost(
         request.space,
         request.host,
       ),
@@ -3906,9 +3906,9 @@ export class RuntimeProcessor {
       case RequestType.CreateSpace:
         return await this.handleCreateSpace(request);
       case RequestType.RegisterSpaceHost:
-        return this.handleRegisterSpaceHost(request);
+        return await this.handleRegisterSpaceHost(request);
       case RequestType.RegisterSpaceHostDetailed:
-        return this.handleRegisterSpaceHostDetailed(request);
+        return await this.handleRegisterSpaceHostDetailed(request);
       case RequestType.RetrySpaceAccess:
         return await this.handleRetrySpaceAccess(request);
       case RequestType.GetGraphSnapshot:

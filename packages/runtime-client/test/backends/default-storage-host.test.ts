@@ -9,6 +9,7 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import type { Options as StorageOptions } from "@commonfabric/runner/storage/cache";
@@ -127,42 +128,109 @@ describe("default-storage-host", () => {
 
   describe("a host hint over IPC", () => {
     const space = "did:key:z6Mk-ipc-hinted";
-    const ask = (processor: RuntimeProcessor, host: string) =>
-      processor.handleRegisterSpaceHostDetailed({
+    const ask = async (processor: RuntimeProcessor, host: string) =>
+      (await processor.handleRegisterSpaceHostDetailed({
         type: RequestType.RegisterSpaceHostDetailed,
         space,
         host,
-      }).registration;
+      })).registration;
 
-    it("cannot move Memory off the memory URL", async () => {
-      await withProcessor({ ...base, memoryUrl }, (processor) => {
-        // The backend's own origin is the default route.
-        expect(ask(processor, apiUrl)).toEqual({ accepted: true });
-        expect(ask(processor, "http://third.test/")).toEqual({
-          accepted: false,
-          reason: "memory-routed",
-        });
-        expect(processor.handleRegisterSpaceHost({
-          type: RequestType.RegisterSpaceHost,
-          space,
-          host: "http://third.test/",
-        })).toEqual({ value: false });
+    /**
+     * Stubs the global `fetch` to answer `/api/meta` on each origin of
+     * `answers` with its document, or with a status and no document, counting
+     * the reads, until disposed.
+     */
+    const metaAnswering = (
+      answers: Record<string, Record<string, unknown> | number>,
+    ) => {
+      const reads: string[] = [];
+      const fetch = stub(
+        globalThis,
+        "fetch",
+        (input: RequestInfo | URL) => {
+          const url = new URL(String(input));
+          reads.push(url.href);
+          expect(url.pathname).toBe("/api/meta");
+          const answer = answers[url.origin];
+          expect(answer).toBeDefined();
+          return Promise.resolve(
+            typeof answer === "number"
+              ? new Response(null, { status: answer })
+              : new Response(JSON.stringify(answer), {
+                headers: { "content-type": "application/json" },
+              }),
+          );
+        },
+      );
+      return { reads, [Symbol.dispose]: () => fetch.restore() };
+    };
+
+    it("cannot move Memory off the memory URL for this deployment's own origins", async () => {
+      // The processor passes no `fetch` to its runtime, so a read would go
+      // through the global one; neither of these hints makes one.
+      using fetch = stub(globalThis, "fetch");
+      await withProcessor({ ...base, memoryUrl }, async (processor) => {
+        // The backend's own origin and the memory URL are the default route.
+        for (const host of [apiUrl, memoryUrl]) {
+          expect(await ask(processor, host)).toEqual({ accepted: true });
+          expect(
+            await processor.handleRegisterSpaceHost({
+              type: RequestType.RegisterSpaceHost,
+              space,
+              host,
+            }),
+          ).toEqual({ value: true });
+        }
         expect(
           processor.accessForTestingOnly.runtime.mappedHostFor(space),
         ).toBeUndefined();
+        expect(fetch.calls.length).toBe(0);
+      });
+    });
+
+    it("decides a hint naming another deployment once that deployment's memory host is read", async () => {
+      // Emulated storage takes no hints, so a hint that gets as far as
+      // storage is refused there as `no-remote-resolution`: the read was made
+      // and the hint was offered, which is what this checks.
+      using meta = metaAnswering({
+        "http://third.test": { memoryUrl: "http://router.third.test/" },
+        "http://fourth.test": 500,
+      });
+      await withProcessor({ ...base, memoryUrl }, async (processor) => {
+        expect(await ask(processor, "http://third.test/")).toEqual({
+          accepted: false,
+          reason: "no-remote-resolution",
+        });
+        expect(meta.reads).toEqual(["http://third.test/api/meta"]);
+        // A hint whose read failed is refused before storage.
+        using _warn = stub(console, "warn");
+        expect(await ask(processor, "http://fourth.test/")).toEqual({
+          accepted: false,
+          reason: "foreign-host-unread",
+        });
+        expect(
+          await processor.handleRegisterSpaceHost({
+            type: RequestType.RegisterSpaceHost,
+            space,
+            host: "http://fourth.test/",
+          }),
+        ).toEqual({ value: false });
+        expect(_warn.calls.length).toBe(1);
       });
     });
 
     it("is storage's to decide without one", async () => {
       // Emulated storage takes no hints, so the refusal comes from storage,
       // not from the memory URL rule.
-      await withProcessor(base, (processor) => {
+      using fetch = stub(globalThis, "fetch");
+      await withProcessor(base, async (processor) => {
         for (const host of [apiUrl, "http://third.test/"]) {
-          expect(ask(processor, host)).toEqual({
+          expect(await ask(processor, host)).toEqual({
             accepted: false,
             reason: "no-remote-resolution",
           });
         }
+        expect(fetch.calls.length).toBe(0);
       });
     });
   });

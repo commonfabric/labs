@@ -7859,18 +7859,50 @@ describe("runtime-processor", () => {
         }
       });
 
+      /**
+       * A `fetch` serving `/api/meta` for the origins of `answers`: a
+       * document, or a status with none. Any other origin fails to connect.
+       */
+      const metaFetch = (
+        answers: Record<string, Record<string, unknown> | number>,
+      ) => {
+        const reads: string[] = [];
+        const fetch = stub(globalThis, "fetch", (input: RequestInfo | URL) => {
+          const url = new URL(String(input));
+          reads.push(url.href);
+          const answer = answers[url.origin];
+          if (answer === undefined) {
+            return Promise.reject(new TypeError("connection refused"));
+          }
+          return Promise.resolve(
+            typeof answer === "number"
+              ? new Response(null, { status: answer })
+              : new Response(JSON.stringify(answer), {
+                headers: { "content-type": "application/json" },
+              }),
+          );
+        });
+        return { reads, [Symbol.dispose]: () => fetch.restore() };
+      };
+
       for (const memoryUrl of [undefined, new URL("https://router.test/")]) {
         it(
           `registers rows naming the API host and a third host ${
             memoryUrl === undefined ? "without" : "under"
           } a memory URL as the runtime decides`,
           async () => {
-            const { runtime } = createRuntime(
+            const { runtime, storageManager } = createRuntime(
               undefined,
               new URL("https://app.test/"),
               memoryUrl,
             );
+            // Under a memory URL, third.test's own deployment says where it
+            // serves Memory. Without one, nothing is read.
+            using meta = metaFetch({
+              "http://third.test": { memoryUrl: "http://router.third.test" },
+            });
             const verdicts: Array<[string, SpaceHostRegistration]> = [];
+            const offeredToStorage: Array<[string, string]> = [];
             let sawThird = () => {};
             const thirdRegistered = new Promise<void>((resolve) => {
               sawThird = resolve;
@@ -7888,6 +7920,14 @@ describe("runtime-processor", () => {
                 verdicts.push([space, verdict]);
                 if (space === thirdSpace) sawThird();
                 return verdict;
+              },
+            });
+            const storageRegister = storageManager.registerSpaceHostDetailed
+              .bind(storageManager);
+            Object.assign(storageManager, {
+              registerSpaceHostDetailed: (space: string, host: string) => {
+                offeredToStorage.push([space, host]);
+                return storageRegister(space as MemorySpace, host);
               },
             });
             const warnings: unknown[][] = [];
@@ -7922,35 +7962,33 @@ describe("runtime-processor", () => {
             try {
               processor.watchSiteTable();
               await thirdRegistered;
+              expect(verdicts).toEqual([
+                [apiSpace, { accepted: true }],
+                [thirdSpace, { accepted: true }],
+              ]);
+              expect(warnings).toEqual([]);
+              expect(runtime.mappedHostFor(thirdSpace)).toBe(
+                "http://third.test/",
+              );
               if (memoryUrl === undefined) {
-                expect(verdicts).toEqual([
-                  [apiSpace, { accepted: true }],
-                  [thirdSpace, { accepted: true }],
-                ]);
+                expect(meta.reads).toEqual([]);
                 expect(runtime.mappedHostFor(apiSpace)).toBe(
                   "https://app.test/",
                 );
-                expect(runtime.mappedHostFor(thirdSpace)).toBe(
-                  "http://third.test/",
-                );
-                expect(warnings).toEqual([]);
+                expect(offeredToStorage).toEqual([
+                  [apiSpace, "https://app.test/"],
+                  [thirdSpace, "http://third.test/"],
+                ]);
               } else {
                 // The API host's row is the default route, and replaces the
-                // earlier row; the third host cannot take the space's Memory
-                // off the memory URL.
-                expect(verdicts).toEqual([
-                  [apiSpace, { accepted: true }],
-                  [thirdSpace, { accepted: false, reason: "memory-routed" }],
-                ]);
+                // earlier row. The third host's row opens that space's
+                // Memory where third.test publishes it, and routes the
+                // space's HTTP work to third.test.
+                expect(meta.reads).toEqual(["http://third.test/api/meta"]);
                 expect(runtime.mappedHostFor(apiSpace)).toBeUndefined();
-                expect(runtime.mappedHostFor(thirdSpace)).toBeUndefined();
-                expect(runtime.hostForSpace(thirdSpace).toString()).toBe(
-                  "https://app.test/",
-                );
-                expect(warnings.length).toBe(1);
-                expect(String(warnings[0][0])).toContain(
-                  "Memory is routed through https://router.test/",
-                );
+                expect(offeredToStorage).toEqual([
+                  [thirdSpace, "http://router.third.test/"],
+                ]);
               }
             } finally {
               console.warn = originalWarn;
@@ -7960,14 +7998,89 @@ describe("runtime-processor", () => {
         );
       }
 
-      it("warns once for each count of rows a memory URL refuses", async () => {
-        const { runtime } = createRuntime(
+      it("under a memory URL, takes rows naming the memory URL as the default route and reads nothing for them", async () => {
+        const { runtime, storageManager } = createRuntime(
           undefined,
           new URL("https://app.test/"),
           new URL("https://router.test/"),
         );
-        // Resolves once the sink has offered `count` rows in all.
-        let offered = 0;
+        using meta = metaFetch({});
+        const offeredToStorage: string[] = [];
+        Object.assign(storageManager, {
+          registerSpaceHostDetailed: (_space: string, host: string) => {
+            offeredToStorage.push(host);
+            return { accepted: true };
+          },
+        });
+        const routerSpace = "did:key:z6Mk-row-router" as MemorySpace;
+        const verdict = Promise.withResolvers<SpaceHostRegistration>();
+        const registerSpaceHostDetailed = runtime.registerSpaceHostDetailed
+          .bind(runtime);
+        Object.assign(runtime, {
+          registerSpaceHostDetailed: (space: string, host: string) => {
+            const result = registerSpaceHostDetailed(
+              space as MemorySpace,
+              host,
+            );
+            verdict.resolve(result);
+            return result;
+          },
+        });
+        const userDid = runtime.userIdentityDID;
+        const table = runtime.getCell(
+          userDid,
+          siteTableCause(userDid),
+          siteTableSchema,
+        );
+        const tx = runtime.edit();
+        table.withTx(tx).set([
+          { did: routerSpace, host: "https://router.test" },
+        ]);
+        await tx.commit().settled;
+        const cc = new PiecesController(
+          { as: cfcSigner, space: userDid },
+          runtime,
+        );
+        const processor = buildProcessor({
+          runtime,
+          cc,
+          space: userDid,
+          identity: cfcSigner,
+        });
+        try {
+          processor.watchSiteTable();
+          expect(await verdict.promise).toEqual({ accepted: true });
+          expect(meta.reads).toEqual([]);
+          expect(offeredToStorage).toEqual([]);
+          expect(runtime.mappedHostFor(routerSpace)).toBeUndefined();
+          expect(runtime.hostForSpace(routerSpace).href).toBe(
+            "https://app.test/",
+          );
+        } finally {
+          await processor.dispose();
+        }
+      });
+
+      it("leaves rows naming an origin whose memory host cannot be read on no route, warned about once by the runtime", async () => {
+        const { runtime, storageManager } = createRuntime(
+          undefined,
+          new URL("https://app.test/"),
+          new URL("https://router.test/"),
+        );
+        // a.test's meta document cannot be read; b.test publishes none.
+        using meta = metaFetch({
+          "http://a.test": 500,
+          "http://b.test": 404,
+        });
+        const offeredToStorage: Array<[string, string]> = [];
+        Object.assign(storageManager, {
+          registerSpaceHostDetailed: (space: string, host: string) => {
+            offeredToStorage.push([space, host]);
+            return { accepted: true };
+          },
+        });
+        // Resolves once the runtime has given `count` verdicts in all.
+        let decided = 0;
         const waiters: Array<[number, () => void]> = [];
         const registerSpaceHostDetailed = runtime.registerSpaceHostDetailed
           .bind(runtime);
@@ -7977,16 +8090,16 @@ describe("runtime-processor", () => {
               space as MemorySpace,
               host,
             );
-            offered++;
+            decided++;
             for (const [count, resolve] of waiters) {
-              if (offered >= count) resolve();
+              if (decided >= count) resolve();
             }
             return verdict;
           },
         });
-        const offeredAtLeast = (count: number) =>
+        const decidedAtLeast = (count: number) =>
           new Promise<void>((resolve) => {
-            if (offered >= count) resolve();
+            if (decided >= count) resolve();
             else waiters.push([count, resolve]);
           });
         const warnings: unknown[][] = [];
@@ -8008,7 +8121,9 @@ describe("runtime-processor", () => {
           table.withTx(tx).set(value);
           await tx.commit().settled;
         };
-        await write(rows(["http://a.test/", "http://b.test/"]));
+        await write(
+          rows(["http://a.test/", "http://a.test/", "http://b.test/"]),
+        );
         const cc = new PiecesController(
           { as: cfcSigner, space: userDid },
           runtime,
@@ -8021,23 +8136,39 @@ describe("runtime-processor", () => {
         });
         try {
           processor.watchSiteTable();
-          await offeredAtLeast(2);
+          await decidedAtLeast(3);
+          // Two spaces on a.test share one read and one warning; b.test's
+          // space opens Memory on b.test.
+          expect(
+            meta.reads.filter((url) => url.startsWith("http://a.test/")).length,
+          ).toBeGreaterThanOrEqual(1);
           expect(warnings.map((args) => String(args[0]))).toEqual([
-            "[RuntimeProcessor] 2 site-table hints are not in effect: Memory " +
-            "is routed through https://router.test/, and their spaces use " +
-            "https://app.test/ otherwise",
+            expect.stringContaining(
+              "Where http://a.test serves Memory could not be learned",
+            ),
           ]);
-          // The same count again, from other rows: no new line.
-          await write(rows(["http://c.test/", "http://d.test/"]));
-          await offeredAtLeast(4);
-          expect(warnings.length).toBe(1);
-          // A new count is a new line.
+          expect(offeredToStorage).toEqual([
+            ["did:key:z6Mk-routed-2", "http://b.test/"],
+          ]);
+          expect(runtime.mappedHostFor("did:key:z6Mk-routed-0" as MemorySpace))
+            .toBeUndefined();
+          expect(runtime.mappedHostFor("did:key:z6Mk-routed-1" as MemorySpace))
+            .toBeUndefined();
+          expect(runtime.mappedHostFor("did:key:z6Mk-routed-2" as MemorySpace))
+            .toBe("http://b.test/");
+          // The table changing does not read a.test again, nor warn again.
+          const readsSoFar = meta.reads.length;
           await write(
-            rows(["http://c.test/", "http://d.test/", "http://e.test/"]),
+            rows([
+              "http://a.test/",
+              "http://a.test/",
+              "http://b.test/",
+              "http://a.test/",
+            ]),
           );
-          await offeredAtLeast(7);
-          expect(warnings.length).toBe(2);
-          expect(String(warnings[1][0])).toContain("3 site-table hints");
+          await decidedAtLeast(7);
+          expect(meta.reads.length).toBe(readsSoFar);
+          expect(warnings.length).toBe(1);
         } finally {
           console.warn = originalWarn;
           await processor.dispose();
@@ -8046,32 +8177,40 @@ describe("runtime-processor", () => {
     });
 
     describe("handleRegisterSpaceHost()", () => {
-      it("forwards to the runtime and reports the verdict", () => {
+      it("resolves the hint through the runtime and reports the verdict", async () => {
         const calls: Array<[string, string]> = [];
         const processor = buildProcessor({
           runtime: {
-            registerSpaceHost: (space: string, host: string) => {
+            resolveSpaceHost: (space: string, host: string) => {
               calls.push([space, host]);
-              return host === "http://accepted.test/";
+              return Promise.resolve(
+                host === "http://accepted.test/"
+                  ? { accepted: true }
+                  : { accepted: false, reason: "foreign-host-unread" },
+              );
             },
           },
         });
-        expect(processor.handleRegisterSpaceHost({
-          type: RequestType.RegisterSpaceHost,
-          space: "did:key:z6Mk-ipc-a",
-          host: "http://accepted.test/",
-        })).toEqual({ value: true });
-        expect(processor.handleRegisterSpaceHost({
-          type: RequestType.RegisterSpaceHost,
-          space: "did:key:z6Mk-ipc-b",
-          host: "http://refused.test/",
-        })).toEqual({ value: false });
+        expect(
+          await processor.handleRegisterSpaceHost({
+            type: RequestType.RegisterSpaceHost,
+            space: "did:key:z6Mk-ipc-a",
+            host: "http://accepted.test/",
+          }),
+        ).toEqual({ value: true });
+        expect(
+          await processor.handleRegisterSpaceHost({
+            type: RequestType.RegisterSpaceHost,
+            space: "did:key:z6Mk-ipc-b",
+            host: "http://refused.test/",
+          }),
+        ).toEqual({ value: false });
         expect(calls.length).toBe(2);
       });
     });
 
     describe("handleRegisterSpaceHostDetailed()", () => {
-      it("forwards to the runtime and returns each registration unchanged", () => {
+      it("resolves the hint through the runtime and returns each registration unchanged", async () => {
         const calls: Array<[string, string]> = [];
         const registrations = {
           "http://accepted.test/": { accepted: true },
@@ -8088,16 +8227,24 @@ describe("runtime-processor", () => {
             accepted: false,
             reason: "no-remote-resolution",
           },
+          "http://unread.test/": {
+            accepted: false,
+            reason: "foreign-host-unread",
+          },
+          "http://many.test/": {
+            accepted: false,
+            reason: "foreign-host-limit",
+          },
           "http://plain.test/": { accepted: false, reason: "unspecified" },
         } as const;
         const processor = buildProcessor({
           runtime: {
-            registerSpaceHostDetailed: (
+            resolveSpaceHost: (
               space: string,
               host: keyof typeof registrations,
             ) => {
               calls.push([space, host]);
-              return registrations[host];
+              return Promise.resolve(registrations[host]);
             },
           },
         });
@@ -8106,11 +8253,13 @@ describe("runtime-processor", () => {
             keyof typeof registrations
           >
         ) {
-          expect(processor.handleRegisterSpaceHostDetailed({
-            type: RequestType.RegisterSpaceHostDetailed,
-            space: "did:key:z6Mk-ipc-detailed",
-            host,
-          })).toEqual({ registration: registrations[host] });
+          expect(
+            await processor.handleRegisterSpaceHostDetailed({
+              type: RequestType.RegisterSpaceHostDetailed,
+              space: "did:key:z6Mk-ipc-detailed",
+              host,
+            }),
+          ).toEqual({ registration: registrations[host] });
         }
         expect(calls.map(([, host]) => host)).toEqual(
           Object.keys(registrations),
