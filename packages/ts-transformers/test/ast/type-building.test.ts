@@ -303,7 +303,7 @@ const MINIMAL_LIB = [
  * beside `files`, in a program shaped as the js-compiler shapes one: the
  * commonfabric declarations at `commonfabric.d.ts` as a root, under
  * `noResolve`. Returns that type, the node the checker prints for it, the
- * checker, and a function printing a node from the source's file.
+ * checker, a function printing a node from the source's file, and that file.
  */
 function printProbeType(
   source: string,
@@ -372,11 +372,11 @@ function printProbeType(
   const printer = ts.createPrinter({ removeComments: true });
   const print = (printed: ts.TypeNode) =>
     printer.printNode(ts.EmitHint.Unspecified, printed, sourceFile);
-  return { type, node, checker, print };
+  return { type, node, checker, print, sourceFile };
 }
 
 Deno.test("qualifyCommonFabricTypeRefs rewrites an import type a relative path names when its type is the commonfabric export", () => {
-  const { type, node, checker, print } = printProbeType(
+  const { type, node, checker, print, sourceFile } = printProbeType(
     'import { cell } from "commonfabric";\nexport const probe = cell({ a: 1 });',
   );
   assertEquals(
@@ -387,13 +387,14 @@ Deno.test("qualifyCommonFabricTypeRefs rewrites an import type a relative path n
   const qualified = qualifyCommonFabricTypeRefs(node, type, {
     checker,
     factory: ts.factory,
+    sourceFile,
   });
 
   assertEquals(print(qualified), "__cfHelpers.Cell<{ a: number; }>");
 });
 
 Deno.test("qualifyCommonFabricTypeRefs rewrites an import-type member of a union by the constituent it names", () => {
-  const { type, node, checker, print } = printProbeType(
+  const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
       "declare const flag: boolean;",
@@ -408,6 +409,7 @@ Deno.test("qualifyCommonFabricTypeRefs rewrites an import-type member of a union
   const qualified = qualifyCommonFabricTypeRefs(node, type, {
     checker,
     factory: ts.factory,
+    sourceFile,
   });
 
   assertEquals(
@@ -417,7 +419,7 @@ Deno.test("qualifyCommonFabricTypeRefs rewrites an import-type member of a union
 });
 
 Deno.test("qualifyCommonFabricTypeRefs leaves an import type naming a module of the program's own called commonfabric", () => {
-  const { type, node, checker, print } = printProbeType(
+  const { type, node, checker, print, sourceFile } = printProbeType(
     'import { cell } from "../commonfabric";\nexport const probe = cell({ a: 1 });',
     { "/app/commonfabric.ts": COMMONFABRIC_DECLARATIONS },
   );
@@ -426,13 +428,14 @@ Deno.test("qualifyCommonFabricTypeRefs leaves an import type naming a module of 
   const qualified = qualifyCommonFabricTypeRefs(node, type, {
     checker,
     factory: ts.factory,
+    sourceFile,
   });
 
   assertStrictEquals(qualified, node);
 });
 
 Deno.test("qualifyCommonFabricTypeRefs leaves an import type of the commonfabric module itself, which names no export", () => {
-  const { type, checker, print } = printProbeType(
+  const { type, checker, print, sourceFile } = printProbeType(
     'import { cell } from "commonfabric";\nexport const probe = cell({ a: 1 });',
   );
   const node = ts.factory.createImportTypeNode(
@@ -445,13 +448,14 @@ Deno.test("qualifyCommonFabricTypeRefs leaves an import type of the commonfabric
   const qualified = qualifyCommonFabricTypeRefs(node, type, {
     checker,
     factory: ts.factory,
+    sourceFile,
   });
 
   assertStrictEquals(qualified, node);
 });
 
 Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the program's own exports under a commonfabric export's name", () => {
-  const { type, node, checker, print } = printProbeType(
+  const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
       'import { mine } from "./mine";',
@@ -473,16 +477,17 @@ Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the pro
   const qualified = qualifyCommonFabricTypeRefs(node, type, {
     checker,
     factory: ts.factory,
+    sourceFile,
   });
 
   assertEquals(
     print(qualified),
-    'import("./mine").Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+    'import("./mine").Cell<{ a: number; }> | __cfHelpers.Cell<{ b: number; }>',
   );
 });
 
 Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own type in scope names under a commonfabric export's name", () => {
-  const { type, node, checker, print } = printProbeType(
+  const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
       'import { type Cell, mine } from "./mine";',
@@ -504,10 +509,77 @@ Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own t
   const qualified = qualifyCommonFabricTypeRefs(node, type, {
     checker,
     factory: ts.factory,
+    sourceFile,
   });
 
   assertEquals(
     print(qualified),
+    "Cell<{ a: number; }> | __cfHelpers.Cell<{ b: number; }>",
+  );
+});
+
+Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the program's own re-exports under a commonfabric export's name", () => {
+  const { type, node, checker, print, sourceFile } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      'import { mine } from "./mine";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? mine({ a: 1 }) : cell({ b: 2 });",
+    ].join("\n"),
+    {
+      "/app/main/mine.ts": [
+        "interface Other<T> { mine: T; }",
+        "export { Other as Cell };",
+        "export declare function mine<T>(value: T): Other<T>;",
+      ].join("\n"),
+    },
+  );
+  assertEquals(
+    print(node),
+    'import("./mine").Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+    sourceFile,
+  });
+
+  assertEquals(
+    print(qualified),
+    'import("./mine").Cell<{ a: number; }> | __cfHelpers.Cell<{ b: number; }>',
+  );
+});
+
+Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own re-export in scope names under a commonfabric export's name", () => {
+  const { type, node, checker, print, sourceFile } = printProbeType(
+    [
+      'import { cell } from "commonfabric";',
+      'import { type Cell, mine } from "./mine";',
+      "declare const flag: boolean;",
+      "export const probe = flag ? mine({ a: 1 }) : cell({ b: 2 });",
+    ].join("\n"),
+    {
+      "/app/main/mine.ts": [
+        "interface Other<T> { mine: T; }",
+        "export { Other as Cell };",
+        "export declare function mine<T>(value: T): Other<T>;",
+      ].join("\n"),
+    },
+  );
+  assertEquals(
+    print(node),
     'Cell<{ a: number; }> | import("../../commonfabric").Cell<{ b: number; }>',
+  );
+
+  const qualified = qualifyCommonFabricTypeRefs(node, type, {
+    checker,
+    factory: ts.factory,
+    sourceFile,
+  });
+
+  assertEquals(
+    print(qualified),
+    "Cell<{ a: number; }> | __cfHelpers.Cell<{ b: number; }>",
   );
 });

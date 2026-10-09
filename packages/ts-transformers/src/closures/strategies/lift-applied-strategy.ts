@@ -524,7 +524,12 @@ export function transformLiftAppliedCall(
     resultTypeNode = qualifyCommonFabricTypeRefs(
       callback.type,
       state.typeRegistry.get(callback.type),
-      { checker, factory, typeRegistry: state.typeRegistry },
+      {
+        checker,
+        factory,
+        typeRegistry: state.typeRegistry,
+        sourceFile: context.sourceFile,
+      },
     );
   } else if (signature) {
     // Infer from callback signature

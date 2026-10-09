@@ -1834,10 +1834,15 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
   spelling a module of the program's own can share. Such an import type is
   qualified when the type it is paired with is the commonfabric export it names
   (`qualifyCommonFabricTypeRefs()`, `src/ast/type-building.ts`). A member of a
-  union or intersection is paired with the one constituent that goes by the
-  member's name, and with none when two do, as when a type of the program's own
-  shares a commonfabric export's name, so that member is left as printed rather
-  than qualified as the commonfabric type. A cell type
+  union or intersection is paired with a constituent only when the member's
+  provenance names it, since a module of the program's own can export a type
+  under a commonfabric export's name, declared under it or re-exported as it:
+  an import-type member with a constituent of its name declared in the module
+  its specifier names, relative to the file the type was printed for, and a
+  bare member with the constituent its name stands for in that file. It is
+  paired with none when two constituents qualify, and a member of the
+  program's own type is left as printed rather than qualified as the
+  commonfabric type. A cell type
   left unqualified is not recognized as a cell, and a lift's input then keeps
   the whole captured cell rather than the paths its body reads. The fixture
   harness compiles under the same `noResolve`, loading the `commonfabric/schema`
