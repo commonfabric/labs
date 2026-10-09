@@ -368,6 +368,12 @@ describe("share-intake", () => {
       .pull() ?? []) as Row[];
   }
 
+  /** How many failed sends to Home's chat manager the intake has logged. */
+  function acceptFailuresLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["accept-failed"]?.warn ?? 0;
+  }
+
   /** How many conflicts from Home's handler the intake has logged. */
   function conflictsLogged(): number {
     return getLoggerCountsBreakdown()["piece.share-intake"]
@@ -649,6 +655,60 @@ describe("share-intake", () => {
         space: fresh,
         keepArchived: true,
       }]);
+    });
+
+    it("is registered, and not accepted, when Home has no chat manager", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      // Home, but for a `chatManager` holding no `accept` stream.
+      const managerless = {
+        key: (name: string) =>
+          name === "chatManager"
+            ? { key: () => ({ getRaw: () => undefined }) }
+            : home.key(name as never),
+      };
+      const intake = startShareIntakeOf(
+        runtime,
+        managerless as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      const before = acceptFailuresLogged();
+      await deliver([offerOf(space, "managerless")]);
+
+      expect(registeredIds(await registeredThrough("managerless"))).toEqual([
+        "managerless",
+      ]);
+      expect(await acceptedNow(intake)).toEqual([]);
+      // Nothing was sent, so no send failed.
+      expect(acceptFailuresLogged() - before).toBe(0);
+    });
+
+    it("is registered, and the failure logged, when sending Home's chat manager the room fails", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      // Home, but for a `chatManager.accept` that is no stream, so that
+      // sending to it throws.
+      const unacceptable = {
+        key: (name: string) =>
+          name === "chatManager"
+            ? { key: () => ({ getRaw: () => ({ $stream: true }) }) }
+            : home.key(name as never),
+      };
+      const intake = startShareIntakeOf(
+        runtime,
+        unacceptable as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      const before = acceptFailuresLogged();
+      await deliver([offerOf(space, "unaccepted")]);
+
+      expect(registeredIds(await registeredThrough("unaccepted"))).toEqual([
+        "unaccepted",
+      ]);
+      expect(await acceptedNow(intake)).toEqual([]);
+      expect(acceptFailuresLogged() - before).toBe(1);
     });
 
     it("is logged once as a conflict when Home's handler returns one", async () => {
