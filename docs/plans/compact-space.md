@@ -113,6 +113,29 @@ commit is `authored`. The `op_*`, `scheduler_basis`, `execution_outbox` and
 `blob_store` tables are empty, and the `branch` table holds only the default
 branch.
 
+**The production file on 2026-10-09**, snapshotted after the storm and
+after the runtime fix (22.7 GB, `PRAGMA integrity_check` ok, one default
+branch, the `op_*`, `scheduler_basis`, `execution_outbox` and `blob_store`
+tables empty, every commit `authored`):
+
+| | Count or bytes |
+| --- | ---: |
+| commits | 2,482,226 |
+| commits owning a head (the rest are hollowing candidates) | 377,607 |
+| `commit.original` bytes | 13.58 GB |
+| revision rows | 3,741,969 (2,546,095 patches, 1,195,874 sets) |
+| `revision.data` bytes | 5.00 GB (3.98 GB in sets) |
+| revision rows behind a head, and their bytes | 2,546,309, 1.22 GB |
+| head rows | 1,195,660 (869,893 `session:`, 34,639 `user:`) |
+| `computed:` revisions, instances | 2,449,536 across 157,808 |
+| instances over 100 revisions, and the rows they carry | 783, 2,072,241 |
+| patch tails over 1,000 rows | 527 (longest 184,390) |
+| snapshots | 4,300 |
+
+So on the file the tool will actually run against, hollowing the payloads
+of the 2.1 million commits that own no head is where the space is, and the
+`computed:` prefix holds two thirds of the revisions.
+
 **Most heads are session instances.** Of the 672,073 head rows in
 September, 451,721 are `session:` scope keys and 17,813 are `user:`; the
 space-scoped heads number 202,539. The storm's writers followed per-session
