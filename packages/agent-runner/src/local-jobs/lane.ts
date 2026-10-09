@@ -3,11 +3,13 @@
  * once, independently of the Fabric lane. A job is claimed from the store,
  * run through `runHarnessJob` with no fabric under its profile's authority,
  * and ended in the store; while it runs, the transcript events the harness
- * persists become `step` events (the tool the job is using) and `command`
- * events (each command the host ran for it). A job that declared a browser
- * host, under a profile that admits one, browses through it: the lane holds
- * the job's {@link LocalJobBrowserHost} from the first attach or the run's
- * start, whichever is first, until the job ends.
+ * persists become `step` events (the tool the job is using, and then the
+ * same step marked `returned` once the calls of its turn have returned and
+ * its loop's model has the turn) and `command` events (each command the host
+ * ran for it). A job that declared a browser host, under a profile that
+ * admits one, browses through it: the lane holds the job's
+ * {@link LocalJobBrowserHost} from the first attach or the run's start,
+ * whichever is first, until the job ends.
  *
  * Nothing here waits on a timer. The lane looks for work when it starts,
  * when a job is enqueued, and when a job ends.
@@ -375,13 +377,22 @@ export class LocalJobLane {
     let parentStep: Record<string, unknown> | undefined;
     const childSteps = new Map<string, Record<string, unknown>>();
     let lastStep: string | undefined;
-    // A browse publishes transitions, not every repeated snapshot or click.
+    // A browse publishes transitions: a call, its return, and the next call.
     // Turn numbers alone are not a visible change. Commands are never reduced.
     const reportStep = (body: Record<string, unknown>) => {
-      const key = JSON.stringify([body.tool, body.child, body.action]);
+      const key = JSON.stringify([
+        body.tool,
+        body.child,
+        body.action,
+        body.returned,
+      ]);
       if (key === lastStep) return;
       lastStep = key;
       store.report(job.id, "step", body);
+    };
+    const reportActive = () => {
+      const active = [...childSteps.values()].at(-1) ?? parentStep;
+      if (active !== undefined) reportStep(active);
     };
     let result: HarnessJobResult;
     // The host closes however the run ends, a report that throws included.
@@ -394,14 +405,14 @@ export class LocalJobLane {
             signal,
             ...(browserHost !== undefined ? { browserHost } : {}),
             onEvent: (event) => {
+              const { message } = event;
+              const loop = event.subagent?.parentToolCallId;
               if (
-                event.subagent === undefined &&
-                event.message.role === "tool" &&
-                event.message.toolName === LOCAL_JOB_DELEGATE_TOOL &&
-                childSteps.delete(event.message.toolCallId)
+                loop === undefined &&
+                message.role === "tool" &&
+                message.toolName === LOCAL_JOB_DELEGATE_TOOL
               ) {
-                const active = [...childSteps.values()].at(-1) ?? parentStep;
-                if (active !== undefined) reportStep(active);
+                childSteps.delete(message.toolCallId);
               }
               for (const { kind, body } of localJobEventsOf(event)) {
                 if (kind === "command") {
@@ -431,6 +442,23 @@ export class LocalJobLane {
                   if (childSteps.size === 0) reportStep(parentStep);
                 }
               }
+              // The harness reports a turn's tool results once every call of
+              // the turn has returned, so a result hands the loop's model the
+              // turn: the loop's step stays, marked returned, and a child's
+              // return is its latest activity.
+              if (message.role !== "tool") return;
+              const step = loop === undefined
+                ? parentStep
+                : childSteps.get(loop);
+              if (step !== undefined) {
+                const waiting = { ...step, returned: true };
+                if (loop === undefined) parentStep = waiting;
+                else {
+                  childSteps.delete(loop);
+                  childSteps.set(loop, waiting);
+                }
+              }
+              reportActive();
             },
             ...(this.#options.harnessDeps !== undefined
               ? { harnessDeps: this.#options.harnessDeps }

@@ -38,7 +38,14 @@
  * reads the same environment to decide whether Docker is involved at all,
  * and a flag it cannot see would leave the launch and the server describing
  * two different sandboxes. Where the environment names none, a console takes
- * its platform's default, the native runtime on macOS and Docker elsewhere,
+ * its platform's default, the native runtime on macOS (Apple silicon alone:
+ * any other Mac is refused) and Linux and Docker elsewhere. On Linux the
+ * default network needs `pasta` and `setpriv` (and for root `unshare`), which
+ * a `none` or `host` network does not, and a console that is not root needs
+ * unprivileged user namespaces whatever the network
+ * (`user.max_user_namespaces`, `kernel.unprivileged_userns_clone`,
+ * `kernel.apparmor_restrict_unprivileged_userns`; a refusal names the
+ * `sysctl -w`),
  * unless `host.sandboxRuntimeNamedBy` says its caller must name one, as
  * `console:launch` says for a console it launches for a Loom instance; that
  * console is refused on every platform instead.
@@ -174,6 +181,8 @@ import {
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
+  type SandboxProcess,
+  sandboxProcessOf,
   sandboxRuntimeChoiceReason,
   unnamedRuntimeMountNote,
 } from "../src/sandbox/runtime-selection.ts";
@@ -741,12 +750,13 @@ export const parseConsoleArgs = (args: readonly string[]) => {
 /**
  * What a console is told of where it runs. `platform` is the platform whose
  * default sandbox runtime applies where the environment names none, as
- * `Deno.build.os` writes it, which it is when absent. `sandboxRuntimeNamedBy`
+ * `Deno.build.os` writes it, which it is when absent, and `arch` and `uid`
+ * describe the process that default is for. `sandboxRuntimeNamedBy`
  * is set for a console that takes no such default, and names whoever started
  * it and has to name the runtime: a console launched for a Loom instance
  * serves on the runtime Loom chose for that instance, or not at all.
  */
-export interface ConsoleHost {
+export interface ConsoleHost extends SandboxProcess {
   platform?: SandboxPlatform;
   sandboxRuntimeNamedBy?: string;
 }
@@ -759,8 +769,8 @@ export interface ConsoleHost {
  * runtime.
  *
  * @throws HarnessControlError where `env` names no sandbox runtime and
- * `host` says its caller must name one; and where it names none on macOS and
- * the native runtime cannot be provided.
+ * `host` says its caller must name one; and where it names none on macOS or
+ * Linux and the native runtime cannot be provided.
  */
 export const resolveConsoleConfig = async (
   args: readonly string[],
@@ -789,6 +799,7 @@ export const resolveConsoleConfig = async (
     ...(host.sandboxRuntimeNamedBy !== undefined
       ? { namedBy: host.sandboxRuntimeNamedBy }
       : { platform: host.platform ?? Deno.build.os }),
+    ...sandboxProcessOf(host),
     flags: false,
     cwd,
   });
@@ -1379,8 +1390,10 @@ export const consoleHealthRows = (
  * the options every turn is built with, as the engine resolves them, in the
  * environment `env` on `platform`, `Deno.build.os` where absent: on macOS an
  * unnamed rootfs is the kitchen-sink image of the store `CFC_VM_HOME` there
- * names, else of the one under its `HOME`. Throws where a turn would be
- * refused.
+ * names, else of the one under its `HOME`; on Linux it is the unpacked
+ * kitchen-sink image of the store under its `HOME`,
+ * `.local/share/runsc-cfc/images/kitchensink`, which `CFC_VM_HOME` does not
+ * move. Throws where a turn would be refused.
  */
 const resolveConsoleRunscConfig = (
   config: ConsoleConfig,
@@ -1394,6 +1407,16 @@ const resolveConsoleRunscConfig = (
     runscBinary: options.sandboxRunscBinary,
     cfcPolicyPath: options.sandboxCfcPolicy,
     networkMode: options.sandboxRunscNetworkMode,
+    ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
+    ...(options.sandboxRunscNetworkHelper !== undefined
+      ? { networkHelper: options.sandboxRunscNetworkHelper }
+      : {}),
+    ...(options.sandboxRunscUnshare !== undefined
+      ? { unshare: options.sandboxRunscUnshare }
+      : {}),
+    ...(options.sandboxRunscSetpriv !== undefined
+      ? { setpriv: options.sandboxRunscSetpriv }
+      : {}),
     additionalMounts: options.additionalMounts,
     ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,

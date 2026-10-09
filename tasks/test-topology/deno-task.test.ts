@@ -279,8 +279,8 @@ describe("splitting a member's files by the flags they need", () => {
   };
 
   it("numbers each file's run the same whatever files run beside it", () => {
-    // The number names the `deno test` process a file runs in, and the
-    // packer charges that process's setup once for all of the files in it.
+    // The number names the `deno test` run a file goes in, so the files
+    // of one run are the same files whichever others are asked for.
     const files = [
       "test/a.test.ts",
       "test/proc.test.ts",

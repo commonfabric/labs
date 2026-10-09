@@ -61,14 +61,26 @@ first run does without.
 2. **Docker with the `runsc-cfc` runtime.** This walkthrough runs every
    sandboxed tool in a container under that runtime, and names it with
    `CF_HARNESS_SANDBOX_RUNTIME=docker` wherever it starts something. Naming it
-   matters on macOS. There, an entrypoint that takes a default, which is the
-   batch CLI, the interactive stdio entrypoint, the console and its launcher run
-   with no `--instance`, invokes `runsc` directly, with no Docker, from the
-   native cfc-vm store where no runtime is named, and refuses to start where
-   that store is not set up; on every other platform those entrypoints default
-   to Docker. Two entrypoints take no default on any platform and refuse to
-   start unless a runtime is named: the Loom local host, and `console:launch`
-   given `--instance`. The package README's
+   matters on macOS and Linux. On an Apple-silicon Mac, an entrypoint that takes
+   a default, which is the batch CLI, the interactive stdio entrypoint, the
+   console and its launcher run with no `--instance`, invokes `runsc` directly,
+   with no Docker, from the native cfc-vm store where no runtime is named, and
+   refuses to start where that store is not set up; on Linux they do the same
+   from the store gVisor's Linux installer writes, rootless for a user that is
+   not root, with `pasta` for the network; on every other platform those
+   entrypoints default to Docker. On Linux the default network also needs
+   passt's `pasta` and util-linux's `setpriv` on `PATH`, and `unshare` too for
+   root; a refusal names what to install, and
+   `CF_HARNESS_DOCKER_NETWORK_MODE=none` or `host` needs none of the three. A
+   user that is not root also needs a host that allows unprivileged user
+   namespaces, for the store's `runsc`, which runs rootless whatever the
+   network, and for pasta's network even with a named `runsc`; where
+   `user.max_user_namespaces` is 0, `kernel.unprivileged_userns_clone` is 0 or
+   `kernel.apparmor_restrict_unprivileged_userns` is 1, the default is refused,
+   naming the `sudo sysctl -w` that allows them, or running as root. Two
+   entrypoints take no default on any platform and refuse to start unless a
+   runtime is named: the Loom local host, and `console:launch` given
+   `--instance`. The package README's
    [Sandbox runtimes](README.md#sandbox-runtimes) covers the direct driver and
    the default. On macOS, follow the gVisor
    [Docker Desktop CFC setup guide](https://github.com/commonfabric/gvisor/blob/cfc_v2/g3doc/user_guide/quick_start/docker_desktop_cfc.md);
@@ -195,7 +207,7 @@ the toolshed's CFC posture to match what this checkout documents.
 | `CF_HARNESS_FABRIC_API_URL`                   | The toolshed API URL from above.                                                               |
 | `CF_HARNESS_FABRIC_IDENTITY`                  | The absolute path to the keyfile from prerequisite 3.                                          |
 | `CF_HARNESS_FABRIC_SPACE`                     | A space name. A new name is fine; a `did:key` is refused.                                      |
-| `CF_HARNESS_SANDBOX_RUNTIME`                  | `docker`, the driver this walkthrough follows; macOS does not default to it.                   |
+| `CF_HARNESS_SANDBOX_RUNTIME`                  | `docker`, the driver this walkthrough follows; neither macOS nor Linux defaults to it.         |
 | `CF_HARNESS_RUNSC_CFC_RESULT_DIR`             | The host side of `--cfc-result-dir` from prerequisite 2.                                       |
 | `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` | The host side of `--cfc-invocation-context-dir` from prerequisite 2.                           |
 | `MEMORY_DIR`                                  | The toolshed's store directory from above, as a plain path.                                    |

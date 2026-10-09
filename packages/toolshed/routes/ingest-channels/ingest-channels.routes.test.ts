@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import env from "@/env.ts";
 import app from "@/app.ts";
-import { BASE } from "./ingest-channels.routes.ts";
+import { CALLER_BASE, SPACE_BASE } from "./ingest-channels.routes.ts";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -20,6 +20,11 @@ describe("Ingest channels route (transport + middleware)", () => {
   // here will silently turn 401 expectations into 429s. Keep it small, or give
   // the new assertions their own verb.
 
+  const BASE = SPACE_BASE.replace(
+    ":space",
+    "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+  );
+
   const post = (path: string, init: RequestInit = {}) =>
     app.request(path, {
       method: "POST",
@@ -32,6 +37,23 @@ describe("Ingest channels route (transport + middleware)", () => {
     for (const verb of ["mint", "list", "rotate", "revoke"]) {
       const res = await post(`${BASE}/${verb}`);
       expect(res.status).toBe(401);
+    }
+  });
+
+  it("returns 401 for an unsigned request for the caller's own list", async () => {
+    const res = await post(`${CALLER_BASE}/list`);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for a verb other than `list` at the prefix that names no space", async () => {
+    for (const verb of ["mint", "rotate", "revoke", "gmail-bind"]) {
+      const res = await post(`${CALLER_BASE}/${verb}`, {
+        headers: {
+          "Content-Type": "application/json",
+          "X-Forwarded-For": "10.8.0.1",
+        },
+      });
+      expect(res.status).toBe(404);
     }
   });
 
@@ -83,9 +105,11 @@ describe("Ingest channels route (transport + middleware)", () => {
   });
 
   it("does not shadow the data plane", () => {
-    // A separate prefix, not a sub-path: `/api/ingest/channels` would collide
-    // with `POST /api/ingest/:id` and inherit its middleware.
+    // Separate prefixes, not sub-paths: `/api/ingest/channels` would collide
+    // with `POST /api/ingest/:id` and inherit its middleware, and so would an
+    // `ingest` segment under a space.
 
-    expect(BASE.startsWith("/api/ingest/")).toBe(false);
+    expect(CALLER_BASE.startsWith("/api/ingest/")).toBe(false);
+    expect(SPACE_BASE.split("/")).not.toContain("ingest");
   });
 });

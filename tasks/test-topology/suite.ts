@@ -99,15 +99,6 @@ export interface Invocation {
   cwd: string;
   env?: Record<string, string>;
   junit?: readonly JUnitOutput[];
-
-  /**
-   * Which of its suite's {@link Suite.processes} this invocation is. A
-   * lane measures the time before the earliest mark its runner leaves in
-   * the spool saying its units began as the process's setup, and counts
-   * nothing of an invocation that leaves no mark or names no process: what
-   * such an invocation spends is what its units took.
-   */
-  process?: string;
 }
 
 /** What a suite is given when it builds its commands. */
@@ -205,27 +196,6 @@ export interface Suite {
    * suite writes no skip list for.
    */
   whole: readonly Unit[];
-
-  /**
-   * The process each unit runs in, for a suite whose processes spend time
-   * on setup before any of their units begins: a `deno test` type-checking
-   * the module graph of every file it was handed, the pattern test runner
-   * starting up. A lane pays that setup each time it starts such a
-   * process, however many of the process's units it runs, so the packer
-   * charges it the first time a lane opens a unit of that process, and
-   * again for each further run of it a repeated test asks for. What it
-   * charges is measured from the processes that mark when their units
-   * begin, and charged to every process named here, marking or not. The
-   * name is the `process` the invocation running the unit carries, and
-   * means nothing outside its suite.
-   *
-   * A suite names a process for every unit or for none, since the packer
-   * charges a suite's process setup only to the units named here. Absent
-   * where no process the suite starts marks when its units began, such as
-   * a repository gate or one type check over many paths, and whatever such
-   * a process spends is then part of what its units cost.
-   */
-  processes?: ReadonlyMap<Unit, string>;
 
   /**
    * Tree paths this suite accounts for beyond its units. A suite whose
@@ -657,10 +627,6 @@ export function fileSuite(options: FileSuiteOptions): Suite {
     // Every unit here is a file the command names. The preload reads the skip
     // list under the same path.
     whole: [],
-    // One `deno test` per part.
-    processes: new Map(
-      [...partOf].map(([unit, part]) => [unit, part.junit.scope]),
-    ),
     ...(options.measured === undefined ? {} : { measured: options.measured }),
 
     locate(record) {
@@ -723,7 +689,6 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           cwd,
           env,
           junit: [{ path: junitPath, ...part.junit }],
-          process: part.junit.scope,
         });
       }
       return invocations;

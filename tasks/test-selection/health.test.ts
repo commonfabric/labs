@@ -163,7 +163,7 @@ describe("health", () => {
         { "pattern-unit": 3 },
       );
       const capabilities = new Map([["workspace-unit", ["fuse"]]]);
-      expect(suiteCharges(manifest, { capabilities, processes: new Map() }))
+      expect(suiteCharges(manifest, { capabilities }))
         .toEqual({
           "workspace-unit": { fixed: 25, tooLong: 0 },
           "pattern-unit": { fixed: 351, tooLong: 3 },
@@ -180,7 +180,6 @@ describe("health", () => {
       expect(
         suiteCharges(manifest, {
           capabilities: new Map(),
-          processes: new Map(),
         })[
           "pattern-unit"
         ],
@@ -199,7 +198,6 @@ describe("health", () => {
         manifest,
         previous: undefined,
         capabilities: new Map(),
-        processes: new Map(),
         observations: {
           charges: [
             charged("workspace-unit", 10, 20),
@@ -224,7 +222,6 @@ describe("health", () => {
         manifest,
         previous: undefined,
         capabilities: new Map(),
-        processes: new Map(),
         observations: { charges: [charged("gone-unit", 5, 4)], lanes: [] },
       });
       expect(health.suites["gone-unit"]).toEqual({
@@ -246,7 +243,6 @@ describe("health", () => {
         manifest,
         previous: undefined,
         capabilities: new Map(),
-        processes: new Map(),
         observations: { charges: [], lanes },
       });
       expect(health.lanes).toEqual({
@@ -268,7 +264,6 @@ describe("health", () => {
           generatedAt: "2026-09-25T16:30:00.000Z",
         },
         capabilities: new Map(),
-        processes: new Map(),
         observations: { charges: [], lanes: [] },
       });
       expect(health.previous).toEqual({
@@ -295,7 +290,6 @@ describe("health", () => {
         manifest,
         previous,
         capabilities: new Map(),
-        processes: new Map(),
         observations: { charges: [], lanes: [] },
       });
       expect(health.previous?.suites).toEqual({
@@ -328,7 +322,6 @@ describe("health", () => {
           manifest,
           previous,
           capabilities: new Map(),
-          processes: new Map(),
           observations: { charges: [], lanes: [] },
         }).tooLongBaseline;
 
@@ -354,7 +347,6 @@ describe("health", () => {
         }),
         previous: undefined,
         capabilities: new Map(),
-        processes: new Map(),
         observations: { charges: [], lanes: [] },
       });
       expect(health.alarms).toEqual([
@@ -368,7 +360,6 @@ describe("health", () => {
         manifest,
         previous: undefined,
         capabilities: new Map(),
-        processes: new Map(),
         observations: { charges: [], lanes: [] },
       });
       expect(Object.hasOwn(health, "previous")).toBe(false);

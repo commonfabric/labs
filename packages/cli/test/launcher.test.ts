@@ -356,7 +356,7 @@ Deno.test("buildCfLauncherCommand builds the child deno invocation", () => {
         "--allow-write",
         "--allow-env",
         "--allow-run",
-        "--allow-sys=networkInterfaces",
+        "--allow-sys=networkInterfaces,uid",
         "/workspace/labs/packages/cli/mod.ts",
         "check",
         "pattern.tsx",

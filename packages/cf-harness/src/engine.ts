@@ -455,11 +455,20 @@ export interface CreateHarnessEngineOptions
   /** runsc runtime: the binary, default `runsc` on PATH. */
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+  /** runsc runtime: whether runsc runs with `--rootless`. */
+  sandboxRunscRootless?: boolean;
+  /** runsc runtime: the `pasta` that gives the `sandbox` network on Linux. */
+  sandboxRunscNetworkHelper?: string;
+  /** runsc runtime: the `unshare` root's pasta runs under. */
+  sandboxRunscUnshare?: string;
+  /** runsc runtime: the `setpriv` that ties what pasta runs to pasta. */
+  sandboxRunscSetpriv?: string;
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
    * `Deno.build.os` writes it, which it is when absent. On macOS an unnamed
-   * rootfs is the kitchen-sink image of the macOS `runsc`'s store.
+   * rootfs is the kitchen-sink image of the macOS `runsc`'s store, and on
+   * Linux the kitchen-sink rootfs of the Linux store under the home.
    */
   sandboxPlatform?: SandboxPlatform;
 
@@ -1075,6 +1084,16 @@ export class CfHarnessEngine {
         runscBinary: options.sandboxRunscBinary,
         cfcPolicyPath: options.sandboxCfcPolicy,
         networkMode: options.sandboxRunscNetworkMode,
+        ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
+        ...(options.sandboxRunscNetworkHelper !== undefined
+          ? { networkHelper: options.sandboxRunscNetworkHelper }
+          : {}),
+        ...(options.sandboxRunscUnshare !== undefined
+          ? { unshare: options.sandboxRunscUnshare }
+          : {}),
+        ...(options.sandboxRunscSetpriv !== undefined
+          ? { setpriv: options.sandboxRunscSetpriv }
+          : {}),
         additionalMounts: options.additionalMounts,
         runId,
         ...(options.sandboxPlatform !== undefined

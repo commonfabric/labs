@@ -97,18 +97,27 @@ export interface HarnessSessionConfig {
 
   /**
    * The sandbox runtime the run's engine builds: `runsc` is the direct
-   * driver, with no Docker and sessions honoured, and `docker` is the Docker
-   * driver. Absent, the engine builds the Docker driver on every platform;
-   * no platform default is applied here. An entrypoint applies its
-   * platform's default when it derives the selection, before it builds this
-   * configuration, and sets `runsc` for the native runtime macOS defaults
-   * to; `sandboxRuntimeChoice` records how the runtime was selected.
+   * driver, with no Docker and sessions honoured except under pasta's
+   * network, and `docker` is the Docker driver. Absent, the engine builds the
+   * Docker driver on every platform; no platform default is applied here. An
+   * entrypoint applies its platform's default when it derives the selection,
+   * before it builds this configuration, and sets `runsc` for the native
+   * runtime macOS and Linux default to; `sandboxRuntimeChoice` records how
+   * the runtime was selected.
    */
   sandboxRuntimeKind?: SandboxRuntimeKind;
   sandboxRootfs?: string;
   sandboxCfcPolicy?: string;
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+  /** Whether the direct driver's runsc runs with `--rootless`. */
+  sandboxRunscRootless?: boolean;
+  /** The `pasta` that gives the direct driver's `sandbox` network on Linux. */
+  sandboxRunscNetworkHelper?: string;
+  /** The `unshare` root's pasta runs under. */
+  sandboxRunscUnshare?: string;
+  /** The `setpriv` that ties what pasta runs to pasta. */
+  sandboxRunscSetpriv?: string;
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -320,6 +329,18 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
+      : {}),
+    ...(config.sandboxRunscRootless === true
+      ? { sandboxRunscRootless: true }
+      : {}),
+    ...(config.sandboxRunscNetworkHelper !== undefined
+      ? { sandboxRunscNetworkHelper: config.sandboxRunscNetworkHelper }
+      : {}),
+    ...(config.sandboxRunscUnshare !== undefined
+      ? { sandboxRunscUnshare: config.sandboxRunscUnshare }
+      : {}),
+    ...(config.sandboxRunscSetpriv !== undefined
+      ? { sandboxRunscSetpriv: config.sandboxRunscSetpriv }
       : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }

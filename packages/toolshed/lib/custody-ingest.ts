@@ -84,12 +84,15 @@ const cloneValue = <T>(value: T | undefined): T | undefined =>
  * The one governed write. `mutate` runs INSIDE the retrying transaction, so any
  * read-modify-write it does re-reads the current value on every retry (no
  * stale-snapshot lost update). It returns the value the mark's digest binds to.
- * When `channel` is set, the ExternalIngest mark is minted from that value.
+ * When `channel` is set, the ExternalIngest mark is minted from that value,
+ * unless `wrote` says the mutator left the cell as it was: a transaction that
+ * wrote nothing commits nothing, and a mark on it would vouch for nothing.
  */
 const durableEdit = async <T, W>(
   cell: Cell<T>,
   mutate: (bound: Cell<T>) => W,
   channel?: VouchedChannel,
+  wrote: (written: W) => boolean = () => true,
 ): Promise<W> => {
   const link = cell.getAsNormalizedFullLink();
   // Operator wall-clock, captured BEFORE the write: retries must not re-stamp
@@ -98,7 +101,7 @@ const durableEdit = async <T, W>(
   const { ok, error } = await cellRuntime(cell).editWithRetry(
     (tx: IExtendedStorageTransaction): W => {
       const written = mutate(cell.withTx(tx));
-      if (channel !== undefined) {
+      if (channel !== undefined && wrote(written)) {
         stampExternalIngest(tx, {
           channel: channel.channel,
           audience: channel.audience,
@@ -213,5 +216,35 @@ export const custodyIngest = {
       bound.set(next);
       return next;
     }, channel);
+  },
+
+  /**
+   * Durably replaces the cell's value with `value` when the cell is empty or
+   * `supersedes` says `value` is newer than what it holds, minting the mark
+   * from `value`; otherwise writes nothing and mints nothing, so a stale
+   * arrival neither changes the cell nor wakes anything watching it. The
+   * comparison runs inside the retry, against the value the transaction
+   * commits over. Returns whether `value` was written. For a cell whose value
+   * is never `undefined`, which is what lets an unwritten edit be told apart
+   * from a written one.
+   */
+  async replaceIfNewer<T extends object>(
+    cell: Cell<T>,
+    value: T,
+    supersedes: (current: T) => boolean,
+    channel: VouchedChannel,
+  ): Promise<boolean> {
+    const written = await durableEdit(
+      cell,
+      (bound) => {
+        const current = cloneValue(bound.get() as T | undefined);
+        if (current !== undefined && !supersedes(current)) return undefined;
+        bound.set(value);
+        return value;
+      },
+      channel,
+      (written) => written !== undefined,
+    );
+    return written !== undefined;
   },
 } as const;

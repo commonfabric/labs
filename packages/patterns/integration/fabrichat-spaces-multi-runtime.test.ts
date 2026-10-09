@@ -90,7 +90,14 @@ describe("fabrichat spaces across runtimes", () => {
       "room",
     ]);
     // The room starts with no participants, and holds no messages whose
-    // authors it would add, so the one it lists is the starter's join.
+    // authors it would add, so the one it lists is the starter's join. Under
+    // server execution the join is an event the served start emits, which
+    // commits in a later wave than the start's own, and `settle()` waits only
+    // for the start's; so the wait is for the room to list anyone, and the
+    // assertions then say who.
+    await harness.settleUntil(async () =>
+      (await starter.read(["participants", "length"], { piece: room })) !== 0
+    );
     expect(await starter.read(["participants", "length"], { piece: room }))
       .toBe(1);
     expect(await starter.read(["participants", 0, "name"], { piece: room }))
