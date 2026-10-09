@@ -113,6 +113,22 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 | `PLAID_REDIRECT_URI` | _(unset)_ | Optional. |
 | `PLAID_SYNC_ALL_TRANSACTIONS` | `false` | Sync full history vs. incremental. |
 
+### Ingest registry
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_SERVICE_SPACE` | _(unset: the space named by this deployment's identity)_ | The space this deployment keeps its ingest registry in: channel registrations, their indexes, and Gmail mailbox bindings. A space named here must exist already, with an access list in which this deployment's identity is `OWNER` and nobody else is listed, so that nothing but this deployment reads it. It is also the space a Gmail push is addressed to, so a deployment reached through something that dispatches by space names a space dispatched to it. Pointing it somewhere new on a deployment that already has channels leaves them behind: nothing reads the registry it left, so their tokens stop working and their owners mint again. |
+
+### Gmail push ingest
+
+On only when a service account is set; see
+[`gmail-push-ingest.md`](../features/gmail-push-ingest.md).
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts a push token may be signed for. |
+| `INGEST_GMAIL_PUSH_AUDIENCE` | the ingest registry space's DID | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
+
 ---
 
 ## Identity & auth

@@ -34,6 +34,8 @@ import {
   getSpaceLifetimeChannelCount,
   getSpaceRegistrationIndex,
   type IngestRegistration,
+  type IngestSink,
+  ingestUrl,
   isValidRequestId,
   isValidSegment,
   LifetimeChannelCapError,
@@ -127,12 +129,18 @@ export interface ControlDeps {
 /** The one-time mint/rotate view. `token` is shown here and nowhere else. */
 export interface MintedChannel {
   id: string;
-  url: string;
+
+  /**
+   * Where a device POSTs records, with `token` as its bearer secret. A
+   * `journal` channel has both; a `latest` channel, which nothing POSTs to,
+   * has neither.
+   */
+  url?: string;
   space: string;
   causePrefix: string;
   installId: string;
   expiresAt?: string;
-  token: string;
+  token?: string;
 }
 
 export interface ChannelView {
@@ -141,7 +149,7 @@ export interface ChannelView {
   space: string;
   causePrefix: string;
   installId: string;
-  sink: "journal";
+  sink: IngestSink;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -240,7 +248,7 @@ export const channelSummary = (
   space: r.space,
   causePrefix: r.causePrefix,
   installId: r.installId,
-  sink: "journal" as const,
+  sink: r.sink,
   createdAt: r.createdAt,
   enabled: r.enabled,
   ...(r.owner !== undefined ? { owner: r.owner } : {}),
@@ -262,6 +270,7 @@ const persist = async (
     space: string;
     causePrefix: string;
     installId: string;
+    sink: IngestSink;
     existing: IngestRegistration | null;
     callerDid: string;
     ttlDays?: number;
@@ -320,7 +329,7 @@ const persist = async (
     space: params.space,
     causePrefix: params.causePrefix,
     installId: params.installId,
-    sink: "journal",
+    sink: params.sink,
     secretHash,
     createdBy: deps.operatorDid,
     createdAt: params.existing?.createdAt ?? now.toISOString(),
@@ -414,17 +423,25 @@ const persist = async (
     return { status: 502, body: { error: "Storage failure" } };
   }
 
+  // The data plane refuses a `latest` channel, so its URL and secret would
+  // only mislead whoever reads the response. The secret is still minted and
+  // its hash stored: a registration has one whatever its sink.
+  const devicePath = registration.sink === "journal"
+    ? {
+      url: ingestUrl(deps.apiUrl, registration.space, registration.id),
+      // Shown once, here only. Only the hash is ever stored.
+      token: secret,
+    }
+    : {};
   return {
     status: 200,
     body: {
       id: registration.id,
-      url: `${deps.apiUrl}/api/ingest/${registration.id}`,
       space: registration.space,
       causePrefix: registration.causePrefix,
       installId: registration.installId,
       ...(expiresAt !== undefined ? { expiresAt } : {}),
-      // Shown once, here only. Only the hash is ever stored.
-      token: secret,
+      ...devicePath,
     },
   };
 };
@@ -435,6 +452,9 @@ export interface MintInput {
   causePrefix?: string;
   name?: string;
   ttlDays?: number;
+
+  /** What the channel's writes land in; a journal unless named. */
+  sink?: IngestSink;
   requestId: string;
 }
 
@@ -512,6 +532,15 @@ export async function processMint(
           `--install-id to get a channel with cause-prefix '${causePrefix}'.`,
       );
     }
+    // The sink is immutable for the same reason: it decides which cells the
+    // reader watches. A re-mint that names none keeps the channel's own.
+    if (input.sink !== undefined && existing.sink !== input.sink) {
+      return conflict(
+        `Channel ${id} is registered with sink '${existing.sink}', and a ` +
+          `channel's sink cannot change. Use a different --install-id to ` +
+          `get a channel with sink '${input.sink}'.`,
+      );
+    }
   }
 
   // The live-channel and lifetime caps are NOT checked here. They are enforced
@@ -533,6 +562,7 @@ export async function processMint(
     space: input.space,
     causePrefix,
     installId: input.installId,
+    sink: input.sink ?? existing?.sink ?? "journal",
     existing,
     callerDid,
     ttlDays: input.ttlDays,
@@ -580,11 +610,11 @@ const peekReplay = async (
 export async function processRotate(
   deps: ControlDeps,
   callerDid: string,
-  input: { id: string; requestId: string; ttlDays?: number },
+  input: { id: string; requestId: string; ttlDays?: number; space?: string },
 ): Promise<ControlResult<MintedChannel>> {
   if (!isValidRequestId(input.requestId)) return bad("Invalid requestId");
 
-  const existing = await loadOwned(deps, callerDid, input.id);
+  const existing = await loadOwned(deps, callerDid, input.id, input.space);
   if (!existing.ok) return existing.result;
 
   // The SAME takeover protocol mint enforces. `loadOwned` only proves the
@@ -613,6 +643,7 @@ export async function processRotate(
     space: existing.registration.space,
     causePrefix: existing.registration.causePrefix,
     installId: existing.registration.installId,
+    sink: existing.registration.sink,
     existing: existing.registration,
     callerDid,
     ttlDays: input.ttlDays,
@@ -625,11 +656,16 @@ export async function processRotate(
 export async function processRevoke(
   deps: ControlDeps,
   callerDid: string,
-  input: { id: string; requestId: string; expectedRevision: number },
+  input: {
+    id: string;
+    requestId: string;
+    expectedRevision: number;
+    space?: string;
+  },
 ): Promise<ControlResult<{ id: string; revokedAt: string; revision: number }>> {
   if (!isValidRequestId(input.requestId)) return bad("Invalid requestId");
 
-  const existing = await loadOwned(deps, callerDid, input.id);
+  const existing = await loadOwned(deps, callerDid, input.id, input.space);
   if (!existing.ok) return existing.result;
 
   // The caller must name the generation they looked at. This is enforced again
@@ -846,11 +882,17 @@ export async function processList(
  * authorizing against any caller-supplied space while acting on a
  * caller-supplied id would be a one-line confused deputy. A missing
  * registration answers exactly like an unowned one.
+ *
+ * `addressedSpace` is the space a request was addressed to, for a caller that
+ * has one. It narrows and never widens: a channel writing into any other
+ * space answers exactly like a missing one, and the authorization is still
+ * made against the stored space.
  */
-const loadOwned = async (
+export const loadOwned = async (
   deps: ControlDeps,
   callerDid: string,
   id: string,
+  addressedSpace?: string,
 ): Promise<
   | { ok: true; registration: IngestRegistration }
   | { ok: false; result: ControlResult<never> }
@@ -873,6 +915,11 @@ const loadOwned = async (
     };
   }
   if (!registration) return { ok: false, result: forbidden() };
+  // Ahead of the authorization, so that a request addressed to the wrong
+  // space reads no access list at all.
+  if (addressedSpace !== undefined && registration.space !== addressedSpace) {
+    return { ok: false, result: forbidden() };
+  }
 
   const authority = await authorize(deps, registration.space, callerDid);
   if (!authority.ok) return { ok: false, result: fromAuthority(authority) };

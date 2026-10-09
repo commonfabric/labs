@@ -401,8 +401,9 @@ wait_for_http \
 # named, the console of a loom instance (`LOOM_INSTANCE_ID` set, so
 # `--instance` below) does not start, and says that loom must name one: loom
 # chooses each instance's runtime, and a default could be another. Any other
-# console takes its platform's: a Mac serves on its native runtime and refuses
-# to start where that is not set up, and every other platform serves on Docker.
+# console takes its platform's: a Mac and Linux serve on their native runtime
+# and refuse to start where that is not set up, and every other platform
+# serves on Docker.
 CONSOLE_STATUS=""
 
 console_unavailable() {

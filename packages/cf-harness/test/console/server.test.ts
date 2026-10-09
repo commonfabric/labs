@@ -17,6 +17,7 @@ import {
   parseConsoleArgs,
 } from "../../console/server.ts";
 import {
+  LINUX_HOME,
   resolveConsoleConfig,
   startConsoleServer,
 } from "../support/on-linux.ts";
@@ -35,6 +36,8 @@ import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
 import {
   darwinCfcVmRootfs,
   defaultDarwinCfcVmStore,
+  linuxRunscRootfs,
+  linuxRunscStore,
 } from "../../src/sandbox/runsc.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
@@ -767,46 +770,54 @@ describe("console/server", () => {
       );
     });
 
-    for (
-      const [name, env] of [
-        ["names no runtime", {}],
-        ["names `docker`", { CF_HARNESS_SANDBOX_RUNTIME: "docker" }],
-      ] as const
-    ) {
-      it(`builds the Docker driver, with its sidecar transports, when the environment ${name}`, async () => {
-        const { description, run } = await turnSandbox(env);
+    /** The selection that puts a console on Docker. */
+    const DOCKER_ENV = { CF_HARNESS_SANDBOX_RUNTIME: "docker" };
 
-        expect(description).toEqual({
-          kind: "docker-runsc-cfc",
-          defaultWorkingDirectory: "/workspace",
-          cfc: {
-            runtimeRequested: true,
-            runtimeName: "runsc-cfc",
-            image:
-              "us-docker.pkg.dev/commontools-core/common-fabric/sandbox-kitchensink:latest",
-            workspaceMountPath: "/workspace",
-            mounts: [{
-              kind: "workspace",
-              hostPath: "/console/.cf-harness-console/workspace",
-              sandboxPath: "/workspace",
-              readOnly: false,
-            }],
-            networkMode: "bridge",
-            extraDockerArgsCount: 0,
-            invocationContextTransport: "sidecar",
-            invocationContextTransportReadiness: "unverified",
-            invocationContextConfiguredPath:
-              "/console/.cf-harness-console/cfc/invocation-context",
-          },
-        });
-        expect(bashToolDescriptorForRuntime(description, run)).toEqual(
-          bashToolDescriptor,
-        );
+    it("builds the direct runsc driver from the Linux store when the environment names no runtime", async () => {
+      const store = join(LINUX_HOME, ".local", "share", "runsc-cfc");
+
+      const { description } = await turnSandbox({});
+
+      expect(description.kind).toBe("runsc-cfc");
+      expect(description.cfc?.image).toBe(
+        join(store, "images", "kitchensink"),
+      );
+      expect(description.cfc?.runtimeName).toBeUndefined();
+    });
+
+    it("builds the Docker driver, with its sidecar transports, when the environment names `docker`", async () => {
+      const { description, run } = await turnSandbox(DOCKER_ENV);
+
+      expect(description).toEqual({
+        kind: "docker-runsc-cfc",
+        defaultWorkingDirectory: "/workspace",
+        cfc: {
+          runtimeRequested: true,
+          runtimeName: "runsc-cfc",
+          image:
+            "us-docker.pkg.dev/commontools-core/common-fabric/sandbox-kitchensink:latest",
+          workspaceMountPath: "/workspace",
+          mounts: [{
+            kind: "workspace",
+            hostPath: "/console/.cf-harness-console/workspace",
+            sandboxPath: "/workspace",
+            readOnly: false,
+          }],
+          networkMode: "bridge",
+          extraDockerArgsCount: 0,
+          invocationContextTransport: "sidecar",
+          invocationContextTransportReadiness: "unverified",
+          invocationContextConfiguredPath:
+            "/console/.cf-harness-console/cfc/invocation-context",
+        },
       });
-    }
+      expect(bashToolDescriptorForRuntime(description, run)).toEqual(
+        bashToolDescriptor,
+      );
+    });
 
     it("sites the Docker driver's sidecar directories only for a console on Docker", async () => {
-      const docker = await resolveConsoleConfig(ARGS, {}, "/console");
+      const docker = await resolveConsoleConfig(ARGS, DOCKER_ENV, "/console");
       const runsc = await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console");
 
       expect([docker.cfcResultDir, docker.cfcInvocationContextDir]).toEqual([
@@ -869,9 +880,10 @@ describe("console/server", () => {
     it("observes the driver's own default rootfs for a runsc console that names none", async () => {
       // On macOS the driver finds the rootfs in the store under the `HOME` of
       // the environment the console runs in, where no `CFC_VM_HOME` names
-      // another; on any other platform a rootfs must be named, and the turn
-      // is refused. `/Users/console` has no link on the way, as macOS's
-      // `/home` does, so its spelling is the path the driver resolves.
+      // another, and on Linux in the Linux store under that `HOME`; on any
+      // other platform a rootfs must be named, and the turn is refused.
+      // `/Users/console` has no link on the way, as macOS's `/home` does, so
+      // its spelling is the path the driver resolves.
       const [, runtime, rootfs] = await (async () => {
         const health = createConsoleHealth(
           await resolveConsoleConfig(ARGS, {
@@ -891,10 +903,12 @@ describe("console/server", () => {
         );
       })();
 
-      if (Deno.build.os === "darwin") {
-        const expected = darwinCfcVmRootfs(
-          defaultDarwinCfcVmStore("/Users/console"),
-        );
+      const expected = Deno.build.os === "darwin"
+        ? darwinCfcVmRootfs(defaultDarwinCfcVmStore("/Users/console"))
+        : Deno.build.os === "linux"
+        ? linuxRunscRootfs(linuxRunscStore("/Users/console"))
+        : undefined;
+      if (expected !== undefined) {
         expect(rootfs.detail).toBe(expected);
         expect(runtime.detail).toContain(`rootfs ${expected}`);
       } else {
@@ -1150,6 +1164,8 @@ describe("console/server", () => {
 
     /** The runsc selection with no CFC policy named, and none under `HOME`. */
     const RUNSC_NO_POLICY_ENV = {
+      // A home with no policy under it, so none is found by default.
+      HOME: "/nowhere",
       CF_HARNESS_SANDBOX_RUNTIME: "runsc",
       CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
       CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
@@ -1211,7 +1227,7 @@ describe("console/server", () => {
     it("observes the Docker runtime table for a console on Docker", async () => {
       let dockerReads = 0;
       const health = createConsoleHealth(
-        await resolveConsoleConfig(ARGS, {}, "/console"),
+        await resolveConsoleConfig(ARGS, DOCKER_ENV, "/console"),
         undefined,
         undefined,
         {},
@@ -1242,9 +1258,11 @@ describe("console/server", () => {
 
     it("returns the driver and its sidecar directories as its banner for a console on Docker", async () => {
       expect(
-        consoleSandboxBanner(await resolveConsoleConfig(ARGS, {}, "/console")),
+        consoleSandboxBanner(
+          await resolveConsoleConfig(ARGS, DOCKER_ENV, "/console"),
+        ),
       ).toEqual([
-        "  sandbox:    docker; default on linux: the native runtime is macOS only",
+        "  sandbox:    docker; named by CF_HARNESS_SANDBOX_RUNTIME",
         "  results:    /console/.cf-harness-console/cfc/results",
         "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
       ]);
@@ -1286,7 +1304,7 @@ describe("console/server", () => {
       // Strict: `toEqual` would pass a list carrying an `undefined` entry.
       expect(
         consoleDataDirectories(
-          await resolveConsoleConfig(ARGS, {}, "/console"),
+          await resolveConsoleConfig(ARGS, DOCKER_ENV, "/console"),
         ),
       ).toStrictEqual([
         "/console/.cf-harness-console/workspace",
@@ -1314,7 +1332,7 @@ describe("console/server", () => {
             "--skills-registry-url",
             "https://skills.test",
           ],
-          {},
+          DOCKER_ENV,
           "/console",
         ),
       );

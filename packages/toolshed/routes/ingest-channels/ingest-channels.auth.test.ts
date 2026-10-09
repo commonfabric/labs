@@ -4,7 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import env from "@/env.ts";
 import app from "@/app.ts";
-import { BASE } from "./ingest-channels.routes.ts";
+import { CALLER_BASE, SPACE_BASE } from "./ingest-channels.routes.ts";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -27,9 +27,18 @@ describe("Ingest channels route (authenticated)", () => {
   // key across tests turns a later 502 expectation into a 429.
   let clientCounter = 0;
 
-  const signedRequest = async (verb: string, payload: unknown) => {
+  const BASE = SPACE_BASE.replace(
+    ":space",
+    "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+  );
+
+  const signedRequest = async (
+    verb: string,
+    payload: unknown,
+    base = BASE,
+  ) => {
     const identity = await Identity.generate();
-    const url = new URL(`${BASE}/${verb}`, "http://localhost");
+    const url = new URL(`${base}/${verb}`, "http://localhost");
     const body = JSON.stringify(payload);
     const headers = await signFirstPartyHttpRequest({
       url,
@@ -50,7 +59,6 @@ describe("Ingest channels route (authenticated)", () => {
 
   it("accepts a validly signed mint and reaches the handler", async () => {
     const res = await signedRequest("mint", {
-      space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
       installId: "phone-1",
       requestId: crypto.randomUUID(),
     });
@@ -61,9 +69,27 @@ describe("Ingest channels route (authenticated)", () => {
   });
 
   it("accepts a validly signed list", async () => {
-    const res = await signedRequest("list", {});
+    const res = await signedRequest("list", {}, CALLER_BASE);
     expect(res.status).not.toBe(401);
     expect([200, 502]).toContain(res.status);
+  });
+
+  it("returns a status other than 401 for a validly signed list of one space", async () => {
+    const res = await signedRequest("list", {});
+    expect(res.status).not.toBe(401);
+    expect([403, 502]).toContain(res.status);
+  });
+
+  it("returns 422 for a signed request for the caller's own list that names a space", async () => {
+    // That body is strict. A `space` sent there would otherwise be dropped,
+    // and the caller handed its own list in place of the one it asked for.
+
+    const res = await signedRequest(
+      "list",
+      { space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA" },
+      CALLER_BASE,
+    );
+    expect(res.status).toBe(422);
   });
 
   it("accepts a validly signed rotate and revoke", async () => {
@@ -116,7 +142,7 @@ describe("Ingest channels route (authenticated)", () => {
     // signing must not verify.
 
     const identity = await Identity.generate();
-    const url = new URL(`${BASE}/list`, "http://localhost");
+    const url = new URL(`${CALLER_BASE}/list`, "http://localhost");
     const headers = await signFirstPartyHttpRequest({
       url,
       method: "POST",

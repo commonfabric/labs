@@ -264,6 +264,26 @@ describe("scheduler-diagnosis", () => {
       expect(values.get(makeAddressKey(target))).toBe("committed");
     });
 
+    it("records nothing of a runtime secret's value", () => {
+      const secret = address("of:runtime-secret:salt", ["value"]);
+      const values = captureCommittedReads(
+        [secret],
+        () => readerFor(() => ({ ok: { value: "the salt" } }), () => {}),
+      );
+
+      expect(values.has(makeAddressKey(secret))).toBe(false);
+    });
+
+    it("records a read of a runtime secret's label envelope", () => {
+      const envelope = address("of:runtime-secret:salt", ["cfc"]);
+      const values = captureCommittedReads(
+        [envelope],
+        () => readerFor(() => ({ ok: { value: "the envelope" } }), () => {}),
+      );
+
+      expect(values.get(makeAddressKey(envelope))).toBe("the envelope");
+    });
+
     it("marks an address whose read threw", () => {
       const target = address("of:throws", ["value"]);
       const values = captureCommittedReads(

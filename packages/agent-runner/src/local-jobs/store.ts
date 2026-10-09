@@ -74,7 +74,10 @@ export interface LocalJob {
   /** The `seq` of the job's latest event. */
   seq: number;
 
-  /** The tool the job is using, from its latest `step` event. */
+  /**
+   * The tool the job is using, from its latest `step` event; `returned`
+   * when that call has returned and its loop's model is working.
+   */
   step?: Record<string, unknown>;
 
   /** Every command the job ran, from its `command` events, in order. */

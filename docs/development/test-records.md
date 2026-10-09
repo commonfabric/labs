@@ -349,12 +349,11 @@ alongside the tests, on kind `gate` and scope `ci` with a name opening
 one, and it is asked of `record.test` before any alias is resolved. The
 report tool, the dashboard collector, the test-selection fold and the
 topology check all do this. Leaving them in does more than add an identity
-to the output. The figures are not all durations: of the seven a lane writes
-per batch, three are counts, of the times it opened a unit, of its passes and
-of the processes it started, and two hold time another already counts, since
-the longest units' time is part of what the batch's tests took and the
-processes' setup is part of what the batch spent, so a sum over them is a
-number that means nothing. An eighth per batch is what the packer charged the
+to the output. The figures are not all durations: of the four a lane writes
+per batch about what it ran, two are counts, of the times it opened a unit and
+of its passes, and one holds time another already counts, since what the
+batch's tests took is part of what the batch spent, so a sum over them is a
+number that means nothing. A fifth per batch is what the packer charged the
 lane for the batch rather than anything it spent, and the three a lane writes
 about its work as a whole overlap the batches' figures in the same way.
 `Status`, the job that scores a push run's coverage, writes its figures as
