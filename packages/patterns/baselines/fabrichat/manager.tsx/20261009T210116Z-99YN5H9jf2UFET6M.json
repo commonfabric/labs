@@ -274,7 +274,7 @@
           "cell"
         ],
         "default": {},
-        "description": "The direct room shared with each counterpart, for the rooms this manager\ncreated, accepted, or found listed when starting a chat.",
+        "description": "The direct room shared with each counterpart, for the rooms this manager\ncreated or accepted, the ones its user's host accepted for them included.",
         "properties": {},
         "type": "object"
       },
@@ -660,8 +660,8 @@
           "delivered",
           "outgoingNotices",
           "direct",
-          "rooms",
           "requests",
+          "rooms",
           "sharedSpaceCatalog"
         ],
         "type": "object"
@@ -678,6 +678,10 @@
           },
           "joinableByLink": {
             "description": "Whether a new group room admits anyone who has its link; absent for a room\nadmitting its members alone.",
+            "type": "boolean"
+          },
+          "keepArchived": {
+            "description": "Whether accepting a room leaves its entry archived, when it is; absent,\naccepting the room restores it.",
             "type": "boolean"
           },
           "members": {
