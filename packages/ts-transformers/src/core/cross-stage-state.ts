@@ -86,9 +86,10 @@ export type PositionKey =
 /**
  * The positions of a value that an author declared: `true` for every position
  * of the value, `false` for none, or, for a value assembled from parts, the
- * declared positions of each part by its key. A part the map holds under
- * neither its name nor `UNNAMED_POSITIONS` is one the value does not have,
- * which contributes nothing that could be undeclared.
+ * declared positions of each part by its key. A part the map holds no entry
+ * for, under its own key or, for a part with a name, under
+ * `UNNAMED_POSITIONS`, is one the value does not have, which contributes
+ * nothing that could be undeclared.
  */
 export type DeclaredPositions =
   | boolean

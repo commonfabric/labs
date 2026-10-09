@@ -860,37 +860,50 @@ written as `pattern<Input, Output>()` declares every position. A field declared
 as the type of a whole value, written or inferred, says only that the type is
 not known, and declares nothing. So these are declared:
 
-- a value read from the pattern's input, each binding of which is one of its
-  fields, through an alias of `unknown` as much as any other type
+- a field of the pattern's input, taken whole or destructured, as its type
+  declares it by the rule for a type written out, through an alias of `unknown`
+  as much as any other type
 - a field of a type written out: in a local's or a parameter's annotation, a
   cast other than `as const`, a call's type argument, or the return type of a
   callback or a signature, where that return type names no type parameter; a
-  callback whose return type names one is read from its body
+  callback whose return type names one is read from its body. A field declares
+  what its own declaration writes. A field whose declaration writes no type, as
+  an object literal's members and a class field with an initializer, declares
+  only what its inferred type's written parts do, however the written type
+  reaches it: through `typeof`, `ReturnType<…>`, an alias of either, or a
+  method's `this`. A type that holds itself, or that instantiates its own
+  declaration more than three deep, as `Nest<T[]>` inside `Nest<T>` does, is
+  read as declared where it repeats
 - a member read through its own declaration, when that declaration writes its
   type without naming a type parameter
 - a field of a class instance, when the class's declaration of the field
   writes its type, as a property, a parameter property, or a getter's return
-  type; a type naming a type parameter counts only when the construction
-  writes its type arguments, or the class declares no type parameters of its
-  own, so that the `extends` clauses above it fix every one it inherits
+  type; a type naming a type parameter counts only when every parameter it
+  names is fixed in writing, by the construction's type arguments or by the
+  `extends` clause above, whichever fixes it, followed through a constructor's
+  aliases and class expressions
+- a value whose type is an object type an author wrote out, as a non-generic
+  interface or a type literal naming no type parameter, which declares its
+  fields however the value was made; an intersection counts only as far as
+  every one of its parts does
 - another pattern's result, which passed this check in its own compile; a
   cell; a literal, a function, or JSX
 
 The trace follows a local's initializer, the elements of an array literal, the
-properties and spreads of an object literal, and the callback of `computed()`,
-a lift, and an array's `map()`, `filter()`, `slice()`, `toSorted()`,
-`toReversed()`, `find()`, `findLast()` and `at()`, each callback's parameter
-bound to the value it is called with. A callback is written in place or named,
-and a lift may be held in a binding and applied by its name. A name is followed
-through the bindings nothing writes, to a function declaration or to what a
-binding was initialized with; a callback or a lift read from an object, as a
-member or by destructuring, is not followed. Nothing else is declared: an untyped
-`wish()`, `generateObject()` or `generateText()`, whose type argument is
-inferred; another generic call with no type argument written; a helper whose
-written return type is `unknown`; `x as unknown` and a tuple of `unknown`. A
-pattern that returns another pattern's instance passes the references its
-declared result holds without a report, and an untyped `wish()` returned whole
-is reported.
+properties and spreads of an object literal, and the callback of `computed()`, a
+lift, and an array's `map()`, `filter()`, `slice()`, `toSorted()`,
+`toReversed()`, `find()`, `findLast()` and `at()`, called as a member or by a
+literal key, each callback's parameter bound to the value it is called with. A
+callback is written in place or named, and a lift may be held in a binding and
+applied by its name. A name is followed through the bindings nothing writes, to
+a function declaration or to what a binding was initialized with; a callback or
+a lift read from an object, as a member or by destructuring, is not followed.
+Nothing else is declared: an untyped `wish()`, `generateObject()` or
+`generateText()`, whose type argument is inferred; another generic call with no
+type argument written; a helper whose written return type is `unknown`;
+`x as unknown` and a tuple of `unknown`. A pattern that returns another
+pattern's instance passes the references its declared result holds without a
+report, and an untyped `wish()` returned whole is reported.
 
 A value that is one of several alternatives — the arms of a conditional, of
 `??`, `||` and `&&`, and of `ifElse()`, `when()` and `unless()`, or the returns
@@ -909,31 +922,27 @@ the trace cannot read takes every part as an alternative. The positions of an
 array's elements and of these unnamed parts are kept under symbols, so no
 property's name is taken for either.
 
-A binding's traced positions are those of what it was given, so they hold only
-while nothing can change its value. `ValueFlow` decides that from the uses of
-the binding in the file that declares it, where a mention in a type, such as
-`typeof x`, is not a use, and admits only reads: a part of the
-traced result; a primitive read from the value, or a part read from it that
-reaches only reads in turn; a comparison, a condition, a `delete`, a discarded
-expression, an untagged template, or a JSX attribute that does not bind with
-`$`; a method of an array that reads it, such as `map()`, `filter()` or
-`at()`, whose callbacks' parameters reach only reads in turn, and whose result,
-where it can hold the elements, does too; `ifElse()`, `when()` and `unless()`,
-a lift whose callback's parameters reach only reads, and another pattern's
-input; and another binding, by alias or destructuring, whose own uses are
-reads. A value a function returns reaches only reads when the pattern's
-callback returns it, when the function declares the binding itself, so that
-each call makes it afresh, or when the function is a callback written into
-`computed()`, another pattern, or an array method whose result reaches only
-reads. Any other use, such as an assignment to the binding or into its value,
-passing the value to another function, or calling a method that is not a known
-read, means the binding escapes, and so does an exported binding, which another
-module can reach. An unannotated binding that escapes declares nothing. A
-binding whose type is written, in a local's or a callback parameter's
-annotation, keeps the positions that type declares, since whatever changes it
-must satisfy that type, and so do the bindings of the pattern's input. A
-callback or a lift is followed through a binding only when nothing reassigns
-it.
+A binding holds a value something may change through it, so what the trace reads
+of a binding's value is only what holds whatever is done through it: a written
+type, which any change must satisfy, and a reactive value — another pattern's
+result, a `computed()`'s, a lift's, `ifElse()`'s, or that of an array method a
+pattern's body calls on a reactive value — which only the runtime recomputes.
+The structure of a literal the binding holds declares nothing; the literals
+above it on the way to a destructured part, which the binding only reads its
+part out of, still do, and so does the structure of a literal written inline
+into the result. The same holds for a lift's parameter, which holds its
+argument, and for the elements of a plain array whose method is called, which
+the method may hand to a callback whose parameter holds each one. An array
+method called anywhere else makes a plain array, which declares nothing held in
+a binding; inside the callback of `computed()` or of a lift, even the pattern's
+input is a plain array. A literal whose getter or setter uses `this` can change
+itself, so its structure declares nothing anywhere. A binding whose type is
+written out, in an annotation or as an object type an author wrote, keeps what
+that type declares, as do the bindings of the pattern's input. A binding
+something reassigns declares nothing more, and a callback or a lift is followed
+through a binding only when nothing reassigns it. Reassignment is read from the
+uses of the binding in the file that declares it, where a mention in a type,
+such as `typeof x`, is not a use.
 
 ### 6.7 Lowerable Expression-Site Categories
 

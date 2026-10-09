@@ -338,6 +338,13 @@ export default pattern<{ n: number }>(() => ({ out: op(), items: [op()] }));`),
       ).toEqual([]);
     });
 
+    it("reports nothing for a field of an input whose type is a generic type with its arguments written", async () => {
+      expect(
+        await reportedPaths(`interface Box<T> { value: T }
+export default pattern<Box<unknown>>((input) => ({ value: input.value }));`),
+      ).toEqual([]);
+    });
+
     it("reports a field destructured from an untyped `wish()`", async () => {
       expect(
         await reportedPaths(`export default pattern(() => {
@@ -383,6 +390,69 @@ export default pattern<{ n: number }>(({ n }) => {
       ).toEqual([]);
     });
 
+    it("reports a field whose type was inferred, however a written type reaches it", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref: unknown } { return { ref: 1 }; }
+const sample = { ref: op() };
+const holder = { note: note() };
+type Sample = typeof sample;
+function make() { return { ref: op() }; }
+function again(): ReturnType<typeof make> { return make(); }
+function aliased(): Sample { return { ref: op() }; }
+function held(): typeof holder { return holder; }
+class Box { ref = op(); }
+class Ring { next!: Link; own = op(); }
+class Link { ring!: Ring; own = op(); }
+export default pattern(() => ({
+  result: computed(() => {
+    const annotated: typeof sample = { ref: op() };
+    const nested: { inner: Sample } = { inner: { ref: op() } };
+    const joined: Sample & { n: number } = { ref: op(), n: 1 };
+    const boxed: Box = new Box();
+    const cycle: { link: Link; ring: Ring } = {
+      link: new Link(),
+      ring: new Ring(),
+    };
+    return { annotated, nested, joined, boxed, cycle };
+  }),
+  again: again(),
+  aliased: aliased(),
+  held: held(),
+  cast: { ref: op() } as Sample,
+  sorted: [{ ref: op() }].sort(),
+}));`),
+      ).toEqual([[
+        "result.annotated.ref",
+        "result.nested.inner.ref",
+        "result.joined.ref",
+        "result.boxed.ref",
+        "result.cycle.link.ring.own",
+        "result.cycle.link.own",
+        "result.cycle.ring.next.own",
+        "result.cycle.ring.own",
+        "again.ref",
+        "aliased.ref",
+        "cast.ref",
+        "sorted[].ref",
+      ]]);
+    });
+
+    it("reports an input field whose type the input's type takes from a value, taken whole or destructured", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+const defaults = { ref: op() };
+const Whole = pattern<typeof defaults>((input) => ({ v: input.ref }));
+const Destructured = pattern<typeof defaults>(({ ref }) => ({ v: ref }));
+const Nested = pattern<{ inner: typeof defaults }>(({ inner }) => ({
+  v: inner.ref,
+}));
+export default pattern<{ ref: unknown; inner: { ref: unknown } }>(
+  ({ ref, inner }) => ({ v: ref, w: inner.ref, whole: { Whole, Destructured, Nested } }),
+);`),
+      ).toEqual([["v"], ["v"], ["v"]]);
+    });
+
     it("reports nothing for another pattern's result or a typed `wish()`", async () => {
       expect(
         await reportedPaths(`interface Out { mentions: unknown[] }
@@ -403,6 +473,7 @@ const getNote = lift((n: number): Note => ({ ref: n }));
 export default pattern<{ xs: number[] }>(({ xs }) => ({
   note: computed(toNote),
   notes: xs.map(noteOf),
+  bracketed: computed(() => [1]["map"](noteOf)),
   lifted: getNote(1),
 }));`),
       ).toEqual([]);
@@ -411,12 +482,51 @@ export default pattern<{ xs: number[] }>(({ xs }) => ({
     it("reports what a callback whose return type names a type parameter returns, as its body gives it", async () => {
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
+function inspect(x: unknown): void { void x; }
 function identity<T>(x: T): T { return x; }
+function inspected<T>(x: T): T {
+  inspect(x);
+  return x;
+}
+function reset<T>(x: T): T {
+  x = x;
+  return x;
+}
+function relayed<T>(x: T): T {
+  return identity<T>(x);
+}
+function wrap<T>(v: T): { v: T } {
+  return { v };
+}
+interface Box<T> { value: T }
+function box<T>(value: T): Box<T> {
+  return { value };
+}
 export default pattern<{ refs: unknown[] }>(({ refs }) => ({
   declared: refs.map(identity),
   undeclared: [op()].map(identity),
+  escaped: [op()].map(inspected),
+  reassigned: refs.map(reset),
+  wrapped: computed(() => {
+    const w = wrap(op());
+    return w;
+  }),
+  boxed: computed(() => {
+    const b = box(op());
+    return b;
+  }),
+  cloned: [op()].map(structuredClone),
+  relayed: [op()].map(relayed),
 }));`),
-      ).toEqual([["undeclared[]"]]);
+      ).toEqual([[
+        "undeclared[]",
+        "escaped[]",
+        "reassigned[]",
+        "wrapped.v",
+        "boxed.value",
+        "cloned[]",
+        "relayed[]",
+      ]]);
     });
 
     it("reports nothing for a callback or a lift named through an alias", async () => {
@@ -456,6 +566,20 @@ export default pattern(() => ({
         "destructured.ref",
         "destructuredCallback.ref",
       ]]);
+    });
+
+    it("reports what a callback reads from a parameter the trace does not bind", async () => {
+      expect(
+        await reportedPaths(
+          `function note(): { ref: unknown } { return { ref: 1 }; }
+export default pattern(() => ({
+  unbound: computed(() => [note().ref].map((x, i, all) => all[0])),
+  destructured: computed(() =>
+    [note().ref].map((x, i, [first]) => first)
+  ),
+}));`,
+        ),
+      ).toEqual([["unbound[]", "destructured[]"]]);
     });
 
     it("returns from tracing a callback that maps itself", async () => {
@@ -509,98 +633,109 @@ export default pattern(() => ({
       ).toEqual([["result.x", "result.p.x", "result.xs[]"]]);
     });
 
-    it("reports a value that may change through a destructured part, a container, a callback's parameter, a function or a template tag it is passed to, a method called by a literal key, a function that returns it, or another binding assigned it", async () => {
+    it("reports the structure of a literal a local holds, however it may change, and of an inline literal whose accessor uses `this`", async () => {
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
 function note(): { ref: unknown } { return { ref: 1 }; }
-function inspectAll(...values: unknown[]): number { return values.length; }
-function tag(strings: TemplateStringsArray, ...values: unknown[]): string {
-  return strings.join("") + values.length;
-}
-export default pattern(() => ({
+export default pattern<{ notes: { ref: unknown }[] }>(({ notes }) => ({
   result: computed(() => {
     const box = { inner: { ref: note().ref } };
     const { inner } = box;
     inner.ref = op();
     const xs = [note().ref];
     xs["push"](op());
-    const ys = [{ ref: note().ref }];
-    ys.forEach((y) => { y.ref = op(); });
     const p = { ref: note().ref };
     const holder = [p];
     holder[0].ref = op();
     const q = { ref: note().ref };
     Reflect.set(q, "ref", op());
-    const shared = { ref: note().ref };
-    const get = () => shared;
+    const aliased = { ref: note().ref };
+    const get = () => {
+      const alias = aliased;
+      return alias;
+    };
     get().ref = op();
-    const stored = { ref: note().ref };
-    let held = {};
-    held = stored;
-    const looped = { ref: note().ref };
-    for (const item of [looped]) item.ref = op();
-    const spread = { ref: note().ref };
-    inspectAll(...[spread]);
-    const tagged = { ref: note().ref };
-    tag\`\${tagged}\`;
-    const refs = [note().ref];
-    const labels = refs.map(String);
-    const registered = { ref: note().ref };
-    inspectAll(() => registered);
+    const accumulated = { ref: note().ref };
+    [1].reduce((acc) => {
+      acc.ref = op();
+      return acc;
+    }, accumulated);
+    const receiver = { ref: note().ref };
+    [1].forEach(function (this: { ref: unknown }) {
+      this.ref = op();
+    }, receiver);
+    const touched = {
+      ref: note().ref,
+      get touch(): number {
+        this.ref = op();
+        return 0;
+      },
+    };
+    void touched.touch;
+    const mapped = [note().ref].map((r) => r);
+    mapped.push(op());
+    const merged = Object.assign({}, note(), { extra: op() });
+    const echoed = notes.map((n) => ({ n }));
+    echoed.push({ n: { ref: op() } });
     return {
-      box, xs, ys, p, q, shared, stored, looped, spread, tagged, refs, labels,
-      registered,
+      box, xs, p, q, aliased, accumulated, receiver, touched, mapped, merged,
+      echoed,
+      inline: {
+        ref: note().ref,
+        get touch(): number {
+          this.ref = op();
+          return 0;
+        },
+      },
     };
   }),
 }));`),
       ).toEqual([[
         "result.box.inner.ref",
         "result.xs[]",
-        "result.ys[].ref",
         "result.p.ref",
         "result.q.ref",
-        "result.shared.ref",
-        "result.stored.ref",
-        "result.looped.ref",
-        "result.spread.ref",
-        "result.tagged.ref",
-        "result.refs[]",
-        "result.registered.ref",
+        "result.aliased.ref",
+        "result.accumulated.ref",
+        "result.receiver.ref",
+        "result.touched.ref",
+        "result.mapped[]",
+        "result.merged.ref",
+        "result.merged.extra",
+        "result.echoed[].n.ref",
+        "result.inline.ref",
       ]]);
     });
 
-    it("reports nothing for a declared value read in place, through an array method that reads it, or through a binding that only reads it", async () => {
+    it("reports the structure of a literal a local holds, and nothing a written type, another pattern, or a reactive value declares through one", async () => {
       expect(
-        await reportedPaths(
-          `function note(): { ref: unknown } { return { ref: 1 }; }
-export default pattern<{ flag: boolean }>(({ flag }) => ({
-  result: computed(() => {
-    const p = { ref: note().ref, label: "x" };
-    const xs = [note().ref];
-    const alias = p;
-    const { ref } = alias;
-    const kept = xs.filter((x) => !!x).slice(0);
-    const count = xs.length + p.label.length;
-    if (p.ref) console.log(p.label, \`\${p.label}\`);
-    const either = p ?? alias;
-    const same = p === alias;
-    const chosen = (count, p);
-    const flagged = p ? 1 : 0;
-    for (const x of xs) void x;
-    for (const key in p) void key;
-    type Shape = typeof p;
-    const shapeless: Shape | undefined = undefined;
-    const copy = [...xs];
-    const text = \`\${p}\`;
-    const wrapped = xs.map(() => p);
-    return {
-      p, ref, first: xs.at(0), kept, count, picked: flag ? p : alias, either,
-      same, chosen, flagged, copy, text, wrapped, shapeless,
-    };
-  }),
-}));`,
-        ),
-      ).toEqual([]);
+        await reportedPaths(`interface Out { mentions: unknown[] }
+const Sub = pattern<{ seed: string }, Out>(() => ({ mentions: [] }));
+interface Note { ref: unknown }
+function note(): Note { return { ref: 1 }; }
+function loose(): { ref: unknown } { return { ref: 1 }; }
+export default pattern<{ seed: string }>(({ seed }) => {
+  const literal = { ref: note().ref };
+  const copied = { ...note() };
+  const typed = note();
+  const viaTypeLiteral = loose();
+  const annotated: Note = { ref: note().ref };
+  const instance = Sub({ seed });
+  const derived = computed(() => ({ ref: note().ref }));
+  const shown = when(seed, { ref: note().ref });
+  const list = computed(() => [{ ref: note().ref }]);
+  const listed = list.map((item) => ({ item }));
+  return {
+    literal, copied, typed, viaTypeLiteral, annotated, instance, derived,
+    shown, listed,
+    fromGetter: {
+      get ref() {
+        return note().ref;
+      },
+    },
+  };
+});`),
+      ).toEqual([["literal.ref", "copied.ref"]]);
     });
 
     it("reports nothing for another pattern's instance or a computed's result passed to a function, which can change neither", async () => {
@@ -621,61 +756,20 @@ export default pattern<{ seed: string }>(({ seed }) => {
       ).toEqual([]);
     });
 
-    it("reports nothing for a declared value passed to another pattern, `ifElse()`, `when()`, or a lift that only reads it, and reports one a lift changes", async () => {
+    it("reports nothing for a value passed to another pattern, `ifElse()`, `when()`, or a lift whose parameter's type is written", async () => {
       expect(
         await reportedPaths(`interface Out { mentions: unknown[] }
 const Sub = pattern<{ item: { ref: unknown } }, Out>(() => ({ mentions: [] }));
-function op(): unknown { return 1; }
 function note(): { ref: unknown } { return { ref: 1 }; }
 const keep = lift((x: { ref: unknown }) => x);
-const spoil = lift((x: { ref: unknown }) => {
-  x.ref = op();
-  return 1;
-});
-export default pattern<{ flag: boolean }>(({ flag }) => {
-  const p = { ref: note().ref };
-  const q = { ref: note().ref };
-  return {
-    p,
-    q,
-    sub: Sub({ item: p }),
-    picked: ifElse(flag, p, p),
-    shown: when(flag, p),
-    kept: keep(p),
-    inline: lift((x: { ref: unknown }) => x)(p),
-    spoiled: spoil(q),
-  };
-});`),
-      ).toEqual([["q.ref"]]);
-    });
-
-    it("reports nothing for a declared value rendered as JSX, and reports one a `$`-attribute binds", async () => {
-      expect(
-        await reportedPaths(
-          `function note(): { ref: unknown } { return { ref: 1 }; }
-export default pattern(() => {
-  const shown = { ref: note().ref };
-  const bound = { ref: note().ref };
-  return {
-    shown,
-    bound,
-    [UI]: <div>{shown.ref}<cf-input $value={bound} /></div>,
-  };
-});`,
-        ),
-      ).toEqual([["bound.ref"]]);
-    });
-
-    it("reports a value an exported binding holds, by its declaration or an export list, which another module may change", async () => {
-      expect(
-        await reportedPaths(
-          `function note(): { ref: unknown } { return { ref: 1 }; }
-export const shared = { ref: note().ref };
-const listed = { ref: note().ref };
-export { listed as renamed };
-export default pattern(() => ({ shared, listed }));`,
-        ),
-      ).toEqual([["shared.ref", "listed.ref"]]);
+export default pattern<{ flag: boolean }>(({ flag }) => ({
+  sub: Sub({ item: { ref: note().ref } }),
+  picked: ifElse(flag, { ref: note().ref }, { ref: note().ref }),
+  shown: when(flag, { ref: note().ref }),
+  kept: keep({ ref: note().ref }),
+  inline: lift((x: { ref: unknown }) => x)({ ref: note().ref }),
+}));`),
+      ).toEqual([]);
     });
 
     it("reports a value written in the module that defines a lift it imports", async () => {
@@ -724,30 +818,38 @@ export default pattern(() => ({
       ]]);
     });
 
-    it("reports a written callback parameter only when its type is not written", async () => {
+    it("reports a callback parameter holding a literal's structure, and nothing for one holding a value whose type is written, however it changes", async () => {
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
 interface Note { ref: unknown }
+function note(): Note { return { ref: 1 }; }
 export default pattern<{ notes: Note[] }>(({ notes }) => ({
   typed: computed(() => notes.map((n: Note) => { n.ref = op(); return n; })),
   untyped: computed(() => notes.map((n) => { n.ref = op(); return n; })),
-}));`),
-      ).toEqual([["untyped[].ref"]]);
-    });
-
-    it("reports nothing for a declared value a `delete` takes a part from", async () => {
-      expect(
-        await reportedPaths(
-          `function note(): { ref: unknown; extra?: { n: number } } { return { ref: 1 }; }
-export default pattern(() => ({
-  result: computed(() => {
-    const p = { ...note() };
-    delete p.extra;
-    return p;
+  reassigned: computed(() => notes.map((n) => { n = { ref: op() }; return n; })),
+  literal: computed(() =>
+    [{ ref: note().ref }].map((n) => { n.ref = op(); return n; })
+  ),
+  kept: computed(() =>
+    [{ ref: note().ref }].filter((n) => { n.ref = op(); return true; })
+  ),
+  found: computed(() =>
+    [{ ref: note().ref }].find((n) => { n.ref = op(); return true; })
+  ),
+  sorted: computed(() =>
+    [{ ref: note().ref }].toSorted((a) => { a.ref = op(); return 0; })
+  ),
+  filtered: computed(() => {
+    const kept = [note(), note()].filter((n) => !!n);
+    return kept;
   }),
-}));`,
-        ),
-      ).toEqual([]);
+}));`),
+      ).toEqual([[
+        "literal[].ref",
+        "kept[].ref",
+        "found.ref",
+        "sorted[].ref",
+      ]]);
     });
 
     it("reports a destructuring default that is undeclared", async () => {
@@ -783,16 +885,12 @@ export default pattern<{ pairs: [number, unknown][] }>(({ pairs }) => ({
         await reportedPaths(`function op(): unknown { return 1; }
 function note(): { ref: unknown } { return { ref: 1 }; }
 export default pattern<{ k: "a" | "b" }>(({ k }) => ({
-  result: computed(() => {
-    const refs = [note().ref];
-    const byKey = { "[]": note().ref, a: note().ref, b: op() };
-    return {
-      first: refs[0],
-      named: byKey["a"],
-      other: byKey["b"],
-      dynamic: byKey[k],
-    };
-  }),
+  result: computed(() => ({
+    first: [note().ref][0],
+    named: { "[]": note().ref, a: note().ref, b: op() }["a"],
+    other: { "[]": note().ref, a: note().ref, b: op() }["b"],
+    dynamic: { a: note().ref, b: op() }[k],
+  })),
 }));`),
       ).toEqual([["result.other", "result.dynamic"]]);
     });
@@ -801,17 +899,19 @@ export default pattern<{ k: "a" | "b" }>(({ k }) => ({
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
 function note(): { ref: unknown } { return { ref: 1 }; }
+interface Note { ref: unknown }
+function typedNote(): Note { return { ref: 1 }; }
 export default pattern<{ k: string }>(({ k }) => ({
   result: computed(() => {
-    const bag = { [k]: op() };
-    const spread = { ...Object.fromEntries([["a", op()]]) };
-    const shadowed = { a: note().ref, [k]: op() };
-    const replaced = { [k]: op(), a: note().ref };
+    const bag = { [k]: { ref: op() }, note: typedNote() };
+    const copy = { ...bag };
     return {
-      named: bag.foo,
-      spread: spread.a,
-      shadowed: shadowed.a,
-      replaced: replaced.a,
+      named: { [k]: op() }.foo,
+      spread: { ...Object.fromEntries([["a", op()]]) }.a,
+      shadowed: { a: note().ref, [k]: op() }.a,
+      replaced: { [k]: op(), a: note().ref }.a,
+      spreadCopy: { ...{ [k]: { ref: op() }, note: typedNote() } }.note,
+      localCopy: copy.note,
     };
   }),
 }));`),
@@ -841,6 +941,17 @@ class Written {
 class Box<T> { constructor(public value: T) {} }
 class RefBox extends Box<unknown> {}
 class PassedBox<U> extends Box<U> {}
+class CountedBox<U> extends Box<unknown> {
+  constructor(value: unknown, public count: U) {
+    super(value);
+  }
+}
+const Aliased = RefBox;
+const Anonymous = class extends Box<unknown> {};
+class DefaultBox<T = unknown> {
+  constructor(public value: T) {}
+}
+class Defaulted extends DefaultBox {}
 export default pattern(() => ({
   inferred: new Inferred(),
   written: new Written(2),
@@ -848,15 +959,29 @@ export default pattern(() => ({
   typed: new Box<unknown>(op()),
   extended: new RefBox(op()),
   passed: new PassedBox(op()),
+  counted: new CountedBox(op(), 1),
+  aliased: new Aliased(op()),
+  anonymous: new Anonymous(op()),
+  defaulted: new Defaulted(op()),
 }));`),
       ).toEqual([["inferred.ref", "boxed.value", "passed.value"]]);
     });
 
     it("reports nothing for a value of a recursive type written out", async () => {
       expect(
-        await reportedPaths(`type Tree = { ref: unknown } | Tree[];
+        await reportedPaths(`import { Confidential } from "commonfabric";
+type Tree = { ref: unknown } | Tree[];
 function tree(): Tree { return [{ ref: 1 }]; }
-export default pattern(() => ({ tree: tree() }));`),
+type Nest<T> = Confidential<{ v: T; ref: unknown; inner?: Nest<T[]> }, ["secret"]>;
+function nest(): Nest<string> { return { v: "", ref: 1 }; }
+export default pattern(() => ({
+  tree: tree(),
+  forest: computed(() => {
+    const forest = [tree(), tree()];
+    return forest;
+  }),
+  nested: nest(),
+}));`),
       ).toEqual([]);
     });
 

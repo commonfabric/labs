@@ -24,7 +24,12 @@ import { subschemaEdges } from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
-import { detectCallKind, getLiftAppliedInnerCall } from "../ast/mod.ts";
+import {
+  classifyReactiveContext,
+  detectCallKind,
+  getLiftAppliedInnerCall,
+  isReactiveValueExpression,
+} from "../ast/mod.ts";
 import { getDeclaredTypeNodeForBindingElement } from "../ast/type-building.ts";
 import { unwrapOpaqueLikeType } from "../ast/type-inference.ts";
 import { ELEMENT_POSITIONS, UNNAMED_POSITIONS } from "../core/mod.ts";
@@ -42,11 +47,11 @@ import { isPatternFactoryCalleeExpression } from "./structural-reactive-factory.
 
 /**
  * The positions of a pattern's result that an author declared, read from what
- * `callback` returns. Its parameters are the pattern's input: a value
- * destructured from it is one of its fields, and the input taken whole
- * declares the fields its type has. Each return of `callback` is one
- * alternative for the result, combined as `alternatives()` combines two.
- * Positions this cannot trace to a declaration are not declared.
+ * `callback` returns. Its parameters are the pattern's input, which declares
+ * what its type writes, as `typePositions()` reads it, whether it is taken
+ * whole or destructured. Each return of `callback` is one alternative for the
+ * result, combined as `alternatives()` combines two. Positions this cannot
+ * trace to a declaration are not declared.
  */
 export function collectDeclaredResultPositions(
   callback: ts.ArrowFunction | ts.FunctionExpression,
@@ -58,58 +63,40 @@ export function collectDeclaredResultPositions(
   }
   const scope: TraceScope = {
     checker,
-    flow: new ValueFlow(checker, authored),
     bindings: new Map(),
-    inputs: new Set(),
     tracing: new Set(),
-    sealed: false,
+    held: undefined,
   };
   for (const parameter of authored.parameters) {
-    // A value destructured from the input is one of its fields.
     bindParameter(
       parameter,
-      ts.isIdentifier(parameter.name)
-        ? typePositions(checker.getTypeAtLocation(parameter), checker)
-        : true,
+      typePositions(checker.getTypeAtLocation(parameter), checker),
       scope,
     );
   }
-  for (const symbol of scope.bindings.keys()) scope.inputs.add(symbol);
   return returnedPositions(authored, scope);
 }
 
-/** What the trace reads a name through. */
-interface NameContext {
+/** What a trace of declared positions carries from one expression to the next. */
+interface TraceScope {
   /** The checker every symbol is resolved through. */
   readonly checker: ts.TypeChecker;
 
-  /** Where the values the program's bindings hold can reach. */
-  readonly flow: ValueFlow;
-}
-
-/** What a trace of declared positions carries from one expression to the next. */
-interface TraceScope extends NameContext {
   /** Declared positions of the values bound to callback parameters. */
   readonly bindings: Map<ts.Symbol, DeclaredPositions>;
-
-  /**
-   * The bindings of the pattern's input, whose written type declares their
-   * positions whatever is done with them.
-   */
-  readonly inputs: Set<ts.Symbol>;
 
   /** The declarations being traced, so a trace never re-enters one. */
   readonly tracing: Set<ts.Declaration>;
 
   /**
-   * Whether the value being traced may have been changed through a binding
-   * that holds it, so that only what holds whatever is done through the
-   * binding still declares anything: a written type, which every change must
-   * satisfy, or a reactive value, which only the runtime recomputes. A
-   * literal's structure, or the result of a plain array method, then declares
-   * nothing.
+   * How far below the top of the value being traced a binding holds a part
+   * of it: `0` when the binding holds the value itself, `1` when it holds one
+   * of the value's parts, and so on, or `undefined` when no binding holds it.
+   * Whatever is done through a binding can change the structure of what it
+   * holds, so a literal at that depth declares nothing there; the literals
+   * above it, which the binding only reads its part out of, still do.
    */
-  sealed: boolean;
+  held: number | undefined;
 }
 
 /**
@@ -175,6 +162,29 @@ function wholly(positions: DeclaredPositions): boolean {
 }
 
 /**
+ * What `read` returns with `scope` tracing a value a binding holds `held`
+ * levels below its top, or that no binding holds when `held` is `undefined`.
+ */
+function heldAs<T>(
+  scope: TraceScope,
+  held: number | undefined,
+  read: () => T,
+): T {
+  const outer = scope.held;
+  scope.held = held;
+  try {
+    return read();
+  } finally {
+    scope.held = outer;
+  }
+}
+
+/** The depth at which a part of a value held at `held` is held. */
+function partHeld(held: number | undefined): number | undefined {
+  return held === undefined ? undefined : held - 1;
+}
+
+/**
  * Binds `parameter` to a value with `positions`, or to its default where the
  * default may supply it.
  */
@@ -183,12 +193,13 @@ function bindParameter(
   positions: DeclaredPositions,
   scope: TraceScope,
 ): void {
+  const fallback = parameter.initializer;
   bindName(
     parameter.name,
-    parameter.initializer
+    fallback
       ? alternatives(
         positions,
-        expressionPositions(parameter.initializer, scope),
+        heldAs(scope, 0, () => expressionPositions(fallback, scope)),
       )
       : positions,
     scope,
@@ -212,10 +223,14 @@ function bindName(
   for (const element of name.elements) {
     if (ts.isOmittedExpression(element)) continue;
     const part = bindingPart(name, element, positions, scope.checker);
+    const fallback = element.initializer;
     bindName(
       element.name,
-      element.initializer
-        ? alternatives(part, expressionPositions(element.initializer, scope))
+      fallback
+        ? alternatives(
+          part,
+          heldAs(scope, 0, () => expressionPositions(fallback, scope)),
+        )
         : part,
       scope,
     );
@@ -297,8 +312,10 @@ function expressionPositions(
     ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)
   ) {
     // A cast writes the value's type out, except `as const`, which keeps the
-    // type the value has and makes it literal.
-    return ts.isConstTypeReference(expression.type)
+    // type the value has and makes it literal, and a cast to a type naming a
+    // type parameter, whose argument may have been inferred.
+    return ts.isConstTypeReference(expression.type) ||
+        mentionsTypeParameter(expression.type, checker)
       ? expressionPositions(expression.expression, scope)
       : typePositions(checker.getTypeFromTypeNode(expression.type), checker);
   }
@@ -310,10 +327,15 @@ function expressionPositions(
       : symbolPositions(checker.getSymbolAtLocation(expression), scope);
   }
   if (ts.isObjectLiteralExpression(expression)) {
-    return scope.sealed ? false : objectLiteralPositions(expression, scope);
+    // A binding can change the structure of the literal it holds, and an
+    // accessor that uses `this` can change the literal it belongs to.
+    return scope.held === 0 || changesItself(expression)
+      ? false
+      : objectLiteralPositions(expression, scope);
   }
   if (ts.isArrayLiteralExpression(expression)) {
-    if (scope.sealed) return false;
+    if (scope.held === 0) return false;
+    const elementHeld = partHeld(scope.held);
     let elements: DeclaredPositions = true;
     for (const element of expression.elements) {
       elements = alternatives(
@@ -325,7 +347,11 @@ function expressionPositions(
           )
           : ts.isOmittedExpression(element)
           ? true
-          : expressionPositions(element, scope),
+          : heldAs(
+            scope,
+            elementHeld,
+            () => expressionPositions(element, scope),
+          ),
       );
     }
     return new Map([[ELEMENT_POSITIONS, elements]]);
@@ -357,20 +383,24 @@ function expressionPositions(
     return memberPositions(
       expressionPositions(expression.expression, scope),
       expression.name.text,
-      expression.name,
+      expression,
       scope,
     );
   }
   if (ts.isElementAccessExpression(expression)) {
     const object = expressionPositions(expression.expression, scope);
-    if (typeof object === "boolean") return object;
     // An index into an array reads one of its elements.
-    const element = object.get(ELEMENT_POSITIONS);
+    const element = typeof object === "boolean"
+      ? undefined
+      : object.get(ELEMENT_POSITIONS);
     if (element !== undefined) return element;
     const argument = expression.argumentExpression;
+    if (ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)) {
+      return memberPositions(object, argument.text, expression, scope);
+    }
     // A key the trace cannot read may name any part the value holds.
-    return ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)
-      ? memberPositions(object, argument.text, argument, scope)
+    return typeof object === "boolean"
+      ? object
       : [...object.values()].reduce<DeclaredPositions>(alternatives, true);
   }
   if (ts.isCallExpression(expression)) return callPositions(expression, scope);
@@ -405,6 +435,25 @@ function isScalarExpression(expression: ts.Expression): boolean {
     ts.isJsxFragment(expression);
 }
 
+/**
+ * Whether `literal` has an accessor whose body uses `this`, through which the
+ * literal can change its own parts when one of them is merely read or
+ * written.
+ */
+function changesItself(literal: ts.ObjectLiteralExpression): boolean {
+  return literal.properties.some((property) =>
+    (ts.isGetAccessorDeclaration(property) ||
+      ts.isSetAccessorDeclaration(property)) &&
+    property.body !== undefined && usesThis(property.body)
+  );
+}
+
+/** Whether `node` uses `this` anywhere within it. */
+function usesThis(node: ts.Node): boolean {
+  return node.kind === ts.SyntaxKind.ThisKeyword ||
+    ts.forEachChild(node, usesThis) === true;
+}
+
 /** `symbol`, or what it aliases when it is an import. */
 function resolveAlias(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
   return symbol.flags & ts.SymbolFlags.Alias
@@ -413,64 +462,25 @@ function resolveAlias(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
 }
 
 /**
- * The declared positions of the value bound to `symbol`. A binding holds what
- * the trace read it as holding only while `ValueFlow` finds nothing that could
- * change it. One that may have changed still holds what its written type
- * declares, which whatever changed it had to satisfy.
+ * The declared positions of the value bound to `symbol`. A type written out
+ * for the binding declares what it holds, which anything assigned to it or
+ * changed through it must satisfy, and so does the binding's own type where
+ * it is an object type an author wrote, however the binding came by it. A
+ * binding something reassigns declares nothing more. One nothing reassigns
+ * holds what the trace reads of its value with the binding holding it:
+ * whatever is done through the binding can change that value's own structure,
+ * so the structure declares nothing, while a written type or a reactive value
+ * it holds still declares its parts.
  */
 function symbolPositions(
   symbol: ts.Symbol | undefined,
   scope: TraceScope,
 ): DeclaredPositions {
   if (!symbol) return false;
-  const { checker, flow } = scope;
+  const { checker } = scope;
   const resolved = resolveAlias(symbol, checker);
-  const bound = scope.bindings.get(resolved);
-  if (
-    bound !== undefined &&
-    (scope.inputs.has(resolved) || !flow.escapes(resolved))
-  ) {
-    return bound;
-  }
   const declaration = resolved.valueDeclaration ?? resolved.declarations?.[0];
   if (!declaration) return false;
-  if (ts.isVariableDeclaration(declaration)) {
-    if (declaration.type) {
-      return typePositions(
-        checker.getTypeFromTypeNode(declaration.type),
-        checker,
-      );
-    }
-    if (flow.rebound(resolved)) return false;
-    return sealedAs(
-      scope,
-      flow.escapes(resolved),
-      () => traced(declaration, declaration.initializer, scope),
-    );
-  }
-  if (ts.isBindingElement(declaration)) {
-    // A destructured binding holds a field of the value it came from,
-    // declared by that field's written type or by the value's own declared
-    // positions.
-    const declared = getDeclaredTypeNodeForBindingElement(declaration, checker);
-    if (flow.rebound(resolved)) return false;
-    return sealedAs(scope, flow.escapes(resolved), () => {
-      const positions = declared && !mentionsTypeParameter(declared, checker)
-        ? true
-        : destructuredPositions(declaration, scope);
-      return declaration.initializer
-        ? alternatives(
-          positions,
-          expressionPositions(declaration.initializer, scope),
-        )
-        : positions;
-    });
-  }
-  if (ts.isParameter(declaration)) {
-    return declaration.type
-      ? typePositions(checker.getTypeFromTypeNode(declaration.type), checker)
-      : false;
-  }
   // A function, a class, or an enum declares what its name holds.
   if (
     ts.isFunctionDeclaration(declaration) ||
@@ -480,21 +490,64 @@ function symbolPositions(
   ) {
     return true;
   }
-  return false;
+  const written = writtenBindingType(declaration, checker);
+  if (written) {
+    return typePositions(checker.getTypeFromTypeNode(written), checker);
+  }
+  // The binding's own type, where it is written out, declares what any value
+  // it holds has under it.
+  const ownType = writtenPositions(
+    checker.getTypeOfSymbolAtLocation(resolved, declaration),
+    checker,
+  );
+  if (reassigned(resolved, checker)) return ownType;
+  if (ts.isBindingElement(declaration)) {
+    // A destructured binding holds a field of the value it came from, which
+    // the field's written type declares.
+    const field = getDeclaredTypeNodeForBindingElement(declaration, checker);
+    if (field && !mentionsTypeParameter(field, checker)) {
+      return typePositions(checker.getTypeFromTypeNode(field), checker, true);
+    }
+  }
+  let positions: DeclaredPositions;
+  const bound = scope.bindings.get(resolved);
+  if (bound !== undefined) {
+    positions = bound;
+  } else if (ts.isVariableDeclaration(declaration)) {
+    positions = heldAs(
+      scope,
+      0,
+      () => traced(declaration, declaration.initializer, scope),
+    );
+  } else if (ts.isBindingElement(declaration)) {
+    positions = destructuredPositions(declaration, scope);
+    const fallback = declaration.initializer;
+    if (fallback) {
+      positions = alternatives(
+        positions,
+        heldAs(scope, 0, () => expressionPositions(fallback, scope)),
+      );
+    }
+  } else {
+    return false;
+  }
+  return !wholly(positions) && wholly(ownType) ? true : positions;
 }
 
 /**
- * What `read` returns with `scope` tracing a value that may (`sealed`) or may
- * not have been changed through a binding that holds it.
+ * The type `declaration` writes out for the local or the parameter it
+ * declares, unless that type names a type parameter, whose argument may have
+ * been inferred.
  */
-function sealedAs<T>(scope: TraceScope, sealed: boolean, read: () => T): T {
-  const outer = scope.sealed;
-  scope.sealed = sealed;
-  try {
-    return read();
-  } finally {
-    scope.sealed = outer;
-  }
+function writtenBindingType(
+  declaration: ts.Declaration,
+  checker: ts.TypeChecker,
+): ts.TypeNode | undefined {
+  const type =
+    ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)
+      ? declaration.type
+      : undefined;
+  return type && !mentionsTypeParameter(type, checker) ? type : undefined;
 }
 
 /**
@@ -514,117 +567,189 @@ function traced(
 }
 
 /**
- * The declared positions of the part of a destructured value that `element`
- * binds, before its default, when that value is a local's initializer or a
- * part of one.
+ * The declared positions of the part of a local's initializer that `element`
+ * binds, before its own default. The binding holds only that part, so the
+ * initializer is traced holding it as many levels down as `element` is nested,
+ * and each enclosing element's default is an alternative at its own level.
  */
 function destructuredPositions(
   element: ts.BindingElement,
   scope: TraceScope,
 ): DeclaredPositions {
-  const pattern = element.parent;
-  const owner = pattern.parent;
-  let positions: DeclaredPositions;
-  if (ts.isVariableDeclaration(owner)) {
-    positions = traced(owner, owner.initializer, scope);
-  } else if (ts.isBindingElement(owner)) {
-    positions = destructuredPositions(owner, scope);
-    if (owner.initializer) {
+  const path: ts.BindingElement[] = [element];
+  let owner = element.parent.parent;
+  while (ts.isBindingElement(owner)) {
+    path.unshift(owner);
+    owner = owner.parent.parent;
+  }
+  if (!ts.isVariableDeclaration(owner)) return false;
+  const declaration = owner;
+  let positions = heldAs(
+    scope,
+    path.length,
+    () => traced(declaration, declaration.initializer, scope),
+  );
+  path.forEach((step, index) => {
+    positions = bindingPart(step.parent, step, positions, scope.checker);
+    const depth = path.length - 1 - index;
+    const fallback = step.initializer;
+    if (depth > 0 && fallback) {
       positions = alternatives(
         positions,
-        expressionPositions(owner.initializer, scope),
+        heldAs(scope, depth, () => expressionPositions(fallback, scope)),
       );
     }
-  } else {
-    return false;
-  }
-  return bindingPart(pattern, element, positions, scope.checker);
-}
-
-/**
- * The declared positions of member `key` of a value with `object`, read
- * through `name`, the node naming the member. A member of a value with nothing
- * declared is still declared when its own declaration writes its type out.
- */
-function memberPositions(
-  object: DeclaredPositions,
-  key: string,
-  name: ts.Node,
-  scope: TraceScope,
-): DeclaredPositions {
-  if (object !== false) return below(object, key);
-  return writesOwnType(
-    scope.checker.getSymbolAtLocation(name),
-    false,
-    scope.checker,
-  );
-}
-
-/**
- * The declared positions of the instance `construction` makes, by field. A
- * class declares a field of its instances when the field's declaration writes
- * its type out; a field whose type is inferred from its initializer declares
- * nothing.
- */
-function instancePositions(
-  construction: ts.NewExpression,
-  scope: TraceScope,
-): DeclaredPositions {
-  const { checker } = scope;
-  const typeParametersWritten = !!construction.typeArguments?.length ||
-    !constructsGenericClass(construction, checker);
-  const positions = new Map<PositionKey, DeclaredPositions>();
-  for (
-    const member of checker.getTypeAtLocation(construction).getProperties()
-  ) {
-    positions.set(
-      member.name,
-      writesOwnType(member, typeParametersWritten, checker),
-    );
-  }
+  });
   return positions;
 }
 
 /**
- * Whether `construction` builds a class that declares type parameters of its
- * own, whose arguments it may leave to inference. A class that declares none
- * fixes every type parameter it inherits in the `extends` clauses written
- * above it. A constructor the trace finds no class for counts as generic.
+ * The declared positions of member `key` of a value with `object`, read by
+ * `access`. A member of a value with nothing declared is still declared when
+ * its own declaration writes its type out, or when the type of what it holds
+ * is written out.
  */
-function constructsGenericClass(
-  construction: ts.NewExpression,
-  checker: ts.TypeChecker,
-): boolean {
-  const symbol = checker.getSymbolAtLocation(construction.expression);
-  const classes = (symbol && resolveAlias(symbol, checker).declarations)
-    ?.filter((declaration) =>
-      ts.isClassDeclaration(declaration) || ts.isClassExpression(declaration)
-    ) ?? [];
-  return classes.length === 0 ||
-    classes.some((declaration) => !!declaration.typeParameters?.length);
+function memberPositions(
+  object: DeclaredPositions,
+  key: string,
+  access: ts.PropertyAccessExpression | ts.ElementAccessExpression,
+  scope: TraceScope,
+): DeclaredPositions {
+  if (object !== false) return below(object, key);
+  const { checker } = scope;
+  const name = ts.isPropertyAccessExpression(access)
+    ? access.name
+    : access.argumentExpression;
+  return writesOwnType(checker.getSymbolAtLocation(name), checker) ||
+    writtenPositions(checker.getTypeAtLocation(access), checker);
 }
 
 /**
- * Whether the declaration of `member` writes its type out: a property's type,
- * a parameter property's, or a getter's return type. A type naming a type
- * parameter counts only when `typeParametersWritten`, since otherwise the
- * parameter's argument may have been inferred.
+ * Whether the declaration of `member` writes its type out, as a property's
+ * type, a parameter property's, or a getter's return type, without naming a
+ * type parameter, whose argument may have been inferred.
  */
 function writesOwnType(
   member: ts.Symbol | undefined,
-  typeParametersWritten: boolean,
   checker: ts.TypeChecker,
 ): boolean {
+  const type = memberTypeNode(member);
+  return !!type && !mentionsTypeParameter(type, checker);
+}
+
+/**
+ * The type node the declaration of `member` writes out for it: a property's
+ * type, a parameter property's, or a getter's return type.
+ */
+function memberTypeNode(
+  member: ts.Symbol | undefined,
+): ts.TypeNode | undefined {
   const declaration = member?.valueDeclaration ?? member?.declarations?.[0];
-  const type = declaration &&
+  return declaration &&
       (ts.isPropertySignature(declaration) ||
         ts.isPropertyDeclaration(declaration) ||
         ts.isParameter(declaration) ||
         ts.isGetAccessorDeclaration(declaration))
     ? declaration.type
     : undefined;
-  return !!type &&
-    (typeParametersWritten || !mentionsTypeParameter(type, checker));
+}
+
+/**
+ * Whether the declaration of `member` could write its type but does not, so
+ * that its type was inferred: a member of an object literal, a class field or
+ * a parameter property with no type written, or a getter with no return type
+ * written.
+ */
+function infersOwnType(member: ts.Symbol): boolean {
+  const declaration = member.valueDeclaration ?? member.declarations?.[0];
+  return !!declaration && memberTypeNode(member) === undefined &&
+    (ts.isPropertyAssignment(declaration) ||
+      ts.isShorthandPropertyAssignment(declaration) ||
+      ts.isPropertyDeclaration(declaration) ||
+      ts.isParameter(declaration) ||
+      ts.isGetAccessorDeclaration(declaration));
+}
+
+/**
+ * The declared positions of the instance `construction` makes, by field. A
+ * class declares a field of its instances when the field's declaration writes
+ * its type out; a field whose type is inferred from its initializer declares
+ * nothing. A type naming a type parameter declares the field only where every
+ * parameter it names is fixed in writing, by `typeParametersWritten()`.
+ */
+function instancePositions(
+  construction: ts.NewExpression,
+  scope: TraceScope,
+): DeclaredPositions {
+  const { checker } = scope;
+  const constructed = definitionOf(construction.expression, checker);
+  const written = constructed &&
+      (ts.isClassDeclaration(constructed) || ts.isClassExpression(constructed))
+    ? typeParametersWritten(
+      constructed,
+      !!construction.typeArguments?.length,
+      checker,
+    )
+    : new Set<ts.TypeParameterDeclaration>();
+  const positions = new Map<PositionKey, DeclaredPositions>();
+  for (
+    const member of checker.getTypeAtLocation(construction).getProperties()
+  ) {
+    const type = memberTypeNode(member);
+    positions.set(
+      member.name,
+      !!type &&
+        typeParametersIn(type, checker).every((parameter) =>
+          parameter !== undefined && written.has(parameter)
+        ),
+    );
+  }
+  return positions;
+}
+
+/**
+ * The type parameters of `constructed` and of the classes above it whose
+ * arguments are written out for an instance of it: the class's own when
+ * `argumentsWritten` at the construction, and an inherited one when the
+ * `extends` clause that fixes it writes an argument, or the parameter's
+ * declaration writes a default, naming only parameters already fixed so.
+ */
+function typeParametersWritten(
+  constructed: ts.ClassLikeDeclaration,
+  argumentsWritten: boolean,
+  checker: ts.TypeChecker,
+): ReadonlySet<ts.TypeParameterDeclaration> {
+  const written = new Set<ts.TypeParameterDeclaration>(
+    argumentsWritten ? constructed.typeParameters ?? [] : [],
+  );
+  const visited = new Set<ts.Node>();
+  let current: ts.ClassLikeDeclaration = constructed;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const heritage = current.heritageClauses
+      ?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)
+      ?.types[0];
+    const base = heritage && definitionOf(heritage.expression, checker);
+    if (
+      !heritage || !base ||
+      !(ts.isClassDeclaration(base) || ts.isClassExpression(base))
+    ) {
+      break;
+    }
+    base.typeParameters?.forEach((parameter, index) => {
+      const argument = heritage.typeArguments?.[index] ?? parameter.default;
+      if (
+        argument &&
+        typeParametersIn(argument, checker).every((named) =>
+          named !== undefined && written.has(named)
+        )
+      ) {
+        written.add(parameter);
+      }
+    });
+    current = base;
+  }
+  return written;
 }
 
 /**
@@ -632,15 +757,17 @@ function writesOwnType(
  * under a key the trace cannot name, a computed key or a spread value's index
  * signature, may be under any name, so it is an alternative for every name
  * the literal held before it, and a name the literal writes after it replaces
- * it there. A spread member the spread value may lack, being optional, is an
- * alternative to what the literal held under its name before it, rather than
- * a replacement for it.
+ * it there. A spread value's own parts land in the literal as the spread
+ * value holds them. A spread member the spread value may lack, being
+ * optional, is an alternative to what the literal held under its name before
+ * it, rather than a replacement for it.
  */
 function objectLiteralPositions(
   literal: ts.ObjectLiteralExpression,
   scope: TraceScope,
 ): DeclaredPositions {
   const { checker } = scope;
+  const propertyHeld = partHeld(scope.held);
   const positions = new Map<PositionKey, DeclaredPositions>();
   const supply = (key: string, value: DeclaredPositions, optional: boolean) => {
     const before = partAt(positions, key);
@@ -661,6 +788,9 @@ function objectLiteralPositions(
     if (ts.isSpreadAssignment(property)) {
       const spread = expressionPositions(property.expression, scope);
       const type = checker.getTypeAtLocation(property.expression);
+      if (checker.getIndexInfosOfType(type).length > 0) {
+        supplyUnnamed(below(spread, UNNAMED_POSITIONS));
+      }
       for (const member of type.getProperties()) {
         supply(
           member.name,
@@ -668,21 +798,26 @@ function objectLiteralPositions(
           (member.flags & ts.SymbolFlags.Optional) !== 0,
         );
       }
-      if (checker.getIndexInfosOfType(type).length > 0) {
-        supplyUnnamed(below(spread, UNNAMED_POSITIONS));
-      }
       continue;
     }
     let value: DeclaredPositions;
     if (ts.isPropertyAssignment(property)) {
-      value = expressionPositions(property.initializer, scope);
+      value = heldAs(
+        scope,
+        propertyHeld,
+        () => expressionPositions(property.initializer, scope),
+      );
     } else if (ts.isShorthandPropertyAssignment(property)) {
       value = symbolPositions(
         checker.getShorthandAssignmentValueSymbol(property),
         scope,
       );
     } else if (ts.isGetAccessorDeclaration(property)) {
-      value = returnedPositions(property, scope);
+      value = heldAs(
+        scope,
+        propertyHeld,
+        () => returnedPositions(property, scope),
+      );
     } else if (ts.isMethodDeclaration(property)) {
       value = true;
     } else {
@@ -695,7 +830,14 @@ function objectLiteralPositions(
   return positions;
 }
 
-/** The declared positions of the value `call` returns. */
+/**
+ * The declared positions of the value `call` returns. A reactive value, as
+ * `computed()`, a lift, `ifElse()`, `when()`, `unless()`, or an array method a
+ * pattern's body calls on a reactive value makes, changes only when the
+ * runtime recomputes it, so what makes it is traced as no binding holds it.
+ * Any other array method makes a plain array, which a binding holding it can
+ * change.
+ */
 function callPositions(
   call: ts.CallExpression,
   scope: TraceScope,
@@ -710,34 +852,44 @@ function callPositions(
   const kind = detectCallKind(call, checker);
   switch (kind?.kind) {
     case "lift-applied":
-      return liftPositions(getLiftAppliedInnerCall(call), call, scope);
+      return heldAs(
+        scope,
+        undefined,
+        () => liftPositions(getLiftAppliedInnerCall(call), call, scope),
+      );
     case "builder":
       if (kind.builderName === "computed") {
         return callbackPositions(call.arguments[0], true, scope);
       }
       if (kind.builderName === "lift") {
         // A call of a lift bound to a name classifies as the builder itself.
-        const factory = liftFactoryCall(call.expression, scope);
-        if (factory) return liftPositions(factory, call, scope);
+        const factory = liftFactoryCall(call.expression, checker);
+        if (factory) {
+          return heldAs(
+            scope,
+            undefined,
+            () => liftPositions(factory, call, scope),
+          );
+        }
         // Otherwise this call makes the lift, and its value is a function.
-        return resolveCallback(call.arguments[0], scope)
+        return resolveCallback(call.arguments[0], checker)
           ? true
           : signaturePositions(call, scope);
       }
       return signaturePositions(call, scope);
     case "ifElse":
-      return alternatives(
-        argumentPositions(call, 1, scope),
-        argumentPositions(call, 2, scope),
-      );
+      return heldAs(scope, undefined, () =>
+        alternatives(
+          argumentPositions(call, 1, scope),
+          argumentPositions(call, 2, scope),
+        ));
     case "when":
     case "unless":
-      return alternatives(
-        argumentPositions(call, 0, scope),
-        argumentPositions(call, 1, scope),
-      );
-    case "array-method":
-      return arrayMethodPositions(call, scope);
+      return heldAs(scope, undefined, () =>
+        alternatives(
+          argumentPositions(call, 0, scope),
+          argumentPositions(call, 1, scope),
+        ));
     case "cell-factory":
     case "cell-for":
       // A cell is a handle, whatever it holds.
@@ -747,20 +899,49 @@ function callPositions(
     case "generate-text":
       // With no type argument written, the result type is inferred.
       return false;
-    default:
-      if (arrayMethodName(call, checker) === undefined) {
+    default: {
+      const method = methodCallee(call);
+      if (
+        !method ||
+        (kind?.kind !== "array-method" &&
+          !isArray(checker.getTypeAtLocation(method.receiver), checker))
+      ) {
         return signaturePositions(call, scope);
       }
-      // A plain array method makes a plain array, which a change through
-      // the binding holding it may reach.
-      return scope.sealed ? false : arrayMethodPositions(call, scope);
+      if (yieldsReactiveValue(call, method, checker)) {
+        return heldAs(
+          scope,
+          undefined,
+          () => arrayMethodPositions(call, method, true, scope),
+        );
+      }
+      return scope.held === undefined
+        ? arrayMethodPositions(call, method, false, scope)
+        : false;
+    }
   }
 }
 
 /**
+ * Whether `call`, a call of an array method, yields a reactive value, as one
+ * a pattern's body makes on a reactive receiver does: lowering makes it a step
+ * of the reactive graph. Inside a callback such as `computed()`'s, the
+ * receiver is a plain array, and so is what its method makes.
+ */
+function yieldsReactiveValue(
+  call: ts.CallExpression,
+  method: MethodCallee,
+  checker: ts.TypeChecker,
+): boolean {
+  return classifyReactiveContext(call, checker).kind === "pattern" &&
+    isReactiveValueExpression(method.receiver, checker);
+}
+
+/**
  * The declared positions of `applied`, an application of the lift `factory`
- * makes: what the lift's callback returns for `applied`'s argument, or the
- * fields of the lift's result type when its type arguments are written out.
+ * makes: what the lift's callback returns for `applied`'s argument, which its
+ * parameter holds, or the fields of the lift's result type when its type
+ * arguments are written out.
  */
 function liftPositions(
   factory: ts.CallExpression | undefined,
@@ -775,7 +956,7 @@ function liftPositions(
   }
   return callbackPositions(
     factory?.arguments[0],
-    argumentPositions(applied, 0, scope),
+    heldAs(scope, 0, () => argumentPositions(applied, 0, scope)),
     scope,
   );
 }
@@ -783,11 +964,11 @@ function liftPositions(
 /** The call that makes the lift `callee` denotes, as `definitionOf()` reads it. */
 function liftFactoryCall(
   callee: ts.Expression,
-  context: NameContext,
+  checker: ts.TypeChecker,
 ): ts.CallExpression | undefined {
-  const definition = definitionOf(callee, context);
+  const definition = definitionOf(callee, checker);
   if (!definition || !ts.isCallExpression(definition)) return undefined;
-  const kind = detectCallKind(definition, context.checker);
+  const kind = detectCallKind(definition, checker);
   return kind?.kind === "builder" && kind.builderName === "lift"
     ? definition
     : undefined;
@@ -795,22 +976,20 @@ function liftFactoryCall(
 
 /**
  * What `expression` denotes, read through the names it is spelled with: the
- * function a name declares, or what a binding nothing reassigns was
- * initialized with, read in turn. A name the trace cannot follow, or one it
- * reaches a second time, denotes nothing.
+ * function or the class a name declares, or what a binding nothing reassigns
+ * was initialized with, read in turn. A name the trace cannot follow, or one
+ * it reaches a second time, denotes nothing.
  */
 function definitionOf(
   expression: ts.Expression,
-  context: NameContext,
+  checker: ts.TypeChecker,
 ): ts.Node | undefined {
   const followed = new Set<ts.Symbol>();
   let current = unwrapCallee(expression);
   while (ts.isIdentifier(current)) {
-    const symbol = context.checker.getSymbolAtLocation(current);
-    const resolved = symbol && resolveAlias(symbol, context.checker);
-    if (
-      !resolved || followed.has(resolved) || context.flow.rebound(resolved)
-    ) {
+    const symbol = checker.getSymbolAtLocation(current);
+    const resolved = symbol && resolveAlias(symbol, checker);
+    if (!resolved || followed.has(resolved) || reassigned(resolved, checker)) {
       return undefined;
     }
     followed.add(resolved);
@@ -818,7 +997,11 @@ function definitionOf(
       resolved.declarations?.find((candidate) =>
         ts.isFunctionDeclaration(candidate) && candidate.body !== undefined
       );
-    if (declaration && ts.isFunctionDeclaration(declaration)) {
+    if (
+      declaration &&
+      (ts.isFunctionDeclaration(declaration) ||
+        ts.isClassDeclaration(declaration))
+    ) {
       return declaration;
     }
     if (
@@ -844,30 +1027,40 @@ function unwrapCallee(expression: ts.Expression): ts.Expression {
   return current;
 }
 
+/** A method a call calls, and the value it calls it on. */
+interface MethodCallee {
+  /** The method's name. */
+  readonly name: string;
+
+  /** The value the method is called on. */
+  readonly receiver: ts.Expression;
+}
+
 /**
- * The name of the method `call` calls, when it calls one on an array,
- * reactive or not, spelled as a member or by a literal key.
+ * The method `call` calls and the value it calls it on, spelled as a member
+ * or by a literal key.
  */
-function arrayMethodName(
-  call: ts.CallExpression,
-  checker: ts.TypeChecker,
-): string | undefined {
+function methodCallee(call: ts.CallExpression): MethodCallee | undefined {
   const callee = call.expression;
-  const name = ts.isPropertyAccessExpression(callee)
-    ? callee.name.text
-    : ts.isElementAccessExpression(callee) &&
-        ts.isStringLiteralLike(callee.argumentExpression)
-    ? callee.argumentExpression.text
-    : undefined;
-  if (name === undefined) return undefined;
-  const receiver = checker.getTypeAtLocation(
-    (callee as ts.PropertyAccessExpression | ts.ElementAccessExpression)
-      .expression,
-  );
-  const value = unwrapOpaqueLikeType(receiver, checker) ?? receiver;
-  return checker.isArrayType(value) || checker.isTupleType(value)
-    ? name
-    : undefined;
+  if (ts.isPropertyAccessExpression(callee)) {
+    return { name: callee.name.text, receiver: callee.expression };
+  }
+  if (
+    ts.isElementAccessExpression(callee) &&
+    ts.isStringLiteralLike(callee.argumentExpression)
+  ) {
+    return {
+      name: callee.argumentExpression.text,
+      receiver: callee.expression,
+    };
+  }
+  return undefined;
+}
+
+/** Whether `type`, read through a reactive wrapper, is an array or a tuple. */
+function isArray(type: ts.Type, checker: ts.TypeChecker): boolean {
+  const value = unwrapOpaqueLikeType(type, checker) ?? type;
+  return checker.isArrayType(value) || checker.isTupleType(value);
 }
 
 /** The declared positions of argument `index` of `call`, if it has one. */
@@ -887,9 +1080,9 @@ function argumentPositions(
  */
 function resolveCallback(
   expression: ts.Expression | undefined,
-  context: NameContext,
+  checker: ts.TypeChecker,
 ): ts.SignatureDeclaration | undefined {
-  const definition = expression && definitionOf(expression, context);
+  const definition = expression && definitionOf(expression, checker);
   return definition &&
       (ts.isArrowFunction(definition) ||
         ts.isFunctionExpression(definition) ||
@@ -900,21 +1093,18 @@ function resolveCallback(
 
 /**
  * The declared positions of what the function `expression` denotes returns,
- * with its first parameter bound to a value with `argument`.
+ * with its first parameter bound to a value with `argument`. What a callback
+ * returns goes straight into the value its call makes.
  */
 function callbackPositions(
   expression: ts.Expression | undefined,
   argument: DeclaredPositions,
   scope: TraceScope,
 ): DeclaredPositions {
-  const callback = resolveCallback(expression, scope);
+  const callback = resolveCallback(expression, scope.checker);
   if (!callback || scope.tracing.has(callback)) return false;
   scope.tracing.add(callback);
-  // A traced value reaches a callback only through a computed, a lift, or a
-  // method of an array, and a sealed trace only through one the runtime
-  // recomputes, which gives what its callback returns whatever is done to the
-  // value through a binding that holds it.
-  const positions = sealedAs(scope, false, () => {
+  const positions = heldAs(scope, undefined, () => {
     const parameter = callback.parameters[0];
     if (parameter) bindParameter(parameter, argument, scope);
     return returnedPositions(callback, scope);
@@ -923,15 +1113,24 @@ function callbackPositions(
   return positions;
 }
 
-/** The declared positions of an array method's result. */
+/**
+ * The declared positions of what `call` returns, which calls `method` of an
+ * array. A method of a plain array, unlike a `reactive` one, may hand each
+ * element to a callback, whose parameter holds the element and can change it,
+ * so the receiver is read with its elements held.
+ */
 function arrayMethodPositions(
   call: ts.CallExpression,
+  method: MethodCallee,
+  reactive: boolean,
   scope: TraceScope,
 ): DeclaredPositions {
-  const callee = call.expression;
-  if (!ts.isPropertyAccessExpression(callee)) return false;
-  const receiver = expressionPositions(callee.expression, scope);
-  switch (callee.name.text) {
+  const receiver = heldAs(
+    scope,
+    reactive ? undefined : 1,
+    () => expressionPositions(method.receiver, scope),
+  );
+  switch (method.name) {
     case "map":
       return new Map([[
         ELEMENT_POSITIONS,
@@ -977,33 +1176,224 @@ function signaturePositions(
 
 /**
  * The positions a value of `type`, a type an author wrote, declares. A field
- * declares what it holds, so a value with fields declares all of them. `unknown`
- * as the whole value's type, or as an array's elements, declares nothing there.
- * Reactive wrappers are read through, as schema generation reads them.
+ * whose declaration writes its type declares what that type gives it:
+ * `unknown` as a field's type, or as its array's elements, declares a
+ * reference, while `unknown` as the whole value's type, or as its array's
+ * elements, declares nothing there. A field whose type was inferred, as an
+ * object literal's members' are, declares only what `writtenPositions()`
+ * reads of its type, however the written type reaches it: through `typeof`,
+ * `ReturnType<…>`, or `this`. Reactive wrappers are read through, as schema
+ * generation reads them.
  */
 function typePositions(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  inField = false,
+  reading: TypeReading = {
+    open: new Map(),
+    nested: new Map(),
+    read: [new Map(), new Map()],
+    reachedOpen: Infinity,
+  },
+): DeclaredPositions {
+  const value = unwrapOpaqueLikeType(type, checker) ?? type;
+  if ((value.flags & ts.TypeFlags.Unknown) !== 0) return inField;
+  // A type still naming a type parameter is whatever its argument turns out to
+  // be, which may have been inferred.
+  if ((value.flags & ts.TypeFlags.Instantiable) !== 0) return false;
+  const read = reading.read[inField ? 1 : 0];
+  const known = read.get(value);
+  if (known !== undefined) return known;
+  const openAt = reading.open.get(value);
+  if (openAt !== undefined) {
+    reading.reachedOpen = Math.min(reading.reachedOpen, openAt);
+    return true;
+  }
+  // A type read inside an instantiation of its own declaration may instantiate
+  // it without end, as `Nest<T[]>` inside `Nest<T>` does, each level a new
+  // type. As the checker and the schema generator do, the reading takes one
+  // nested `MAX_TYPE_NESTING` deep for a recursion. An array nests in an array
+  // only as far as an author writes it.
+  const declaration = checker.isArrayType(value) || checker.isTupleType(value)
+    ? undefined
+    : value.aliasSymbol ?? value.symbol;
+  const nested = declaration && reading.nested.get(declaration);
+  if (nested && nested.length >= MAX_TYPE_NESTING) {
+    reading.reachedOpen = Math.min(reading.reachedOpen, nested[0]!);
+    return true;
+  }
+  const depth = reading.open.size;
+  reading.open.set(value, depth);
+  if (declaration) reading.nested.set(declaration, [...nested || [], depth]);
+  const outerReached = reading.reachedOpen;
+  reading.reachedOpen = Infinity;
+  let positions: DeclaredPositions = true;
+  if (value.isUnion() || value.isIntersection()) {
+    // Every part of an intersection describes the same value.
+    for (const member of value.types) {
+      positions = alternatives(
+        positions,
+        typePositions(member, checker, inField, reading),
+      );
+    }
+  } else if (checker.isArrayType(value) || checker.isTupleType(value)) {
+    let elements: DeclaredPositions = true;
+    for (const element of checker.getTypeArguments(value as ts.TypeReference)) {
+      elements = alternatives(
+        elements,
+        typePositions(element, checker, inField, reading),
+      );
+    }
+    positions = new Map([[ELEMENT_POSITIONS, elements]]);
+  } else if ((value.flags & ts.TypeFlags.Object) !== 0) {
+    const fields = new Map<PositionKey, DeclaredPositions>();
+    for (const property of value.getProperties()) {
+      const type = checker.getTypeOfSymbol(property);
+      fields.set(
+        property.name,
+        infersOwnType(property)
+          ? writtenPositions(type, checker)
+          : typePositions(type, checker, true, reading),
+      );
+    }
+    positions = wholly(fields) ? true : fields;
+  }
+  reading.open.delete(value);
+  if (declaration) {
+    if (nested) reading.nested.set(declaration, nested);
+    else reading.nested.delete(declaration);
+  }
+  // A read that reached no type open above this one gives the same positions
+  // whichever path reaches the type.
+  if (reading.reachedOpen >= depth) read.set(value, positions);
+  reading.reachedOpen = Math.min(outerReached, reading.reachedOpen);
+  return positions;
+}
+
+/**
+ * How many instantiations of one declaration `typePositions()` reads nested in
+ * one another before it takes the innermost for a recursion without end.
+ */
+const MAX_TYPE_NESTING = 3;
+
+/**
+ * What one read by `typePositions()` carries from part to part. A type that
+ * holds itself is taken as declared where the read reaches it again, which
+ * holds only on the path that reached it, so only a read that reaches no type
+ * open above it is kept for reuse.
+ */
+interface TypeReading {
+  /** The types being read, each by its depth in the read. */
+  readonly open: Map<ts.Type, number>;
+
+  /** The depths of the types being read, by the declaration each instantiates. */
+  readonly nested: Map<ts.Symbol, readonly number[]>;
+
+  /** The positions read so far, outside a field and inside one. */
+  readonly read: readonly [
+    Map<ts.Type, DeclaredPositions>,
+    Map<ts.Type, DeclaredPositions>,
+  ];
+
+  /** The shallowest depth of an open type the read has reached again. */
+  reachedOpen: number;
+}
+
+/**
+ * The positions a value of `type`, inferred or written, declares by the parts
+ * of `type` that are written out: an object type an author wrote, as an
+ * interface or a type literal, declares its fields, whatever made the value.
+ * An object type inferred from a literal, an instance of a class, and an
+ * instance of a generic type, whose arguments may have been inferred, declare
+ * nothing, and neither does `unknown`. An intersection declares only what every
+ * one of its parts does.
+ */
+function writtenPositions(
   type: ts.Type,
   checker: ts.TypeChecker,
   seen = new Set<ts.Type>(),
 ): DeclaredPositions {
   const value = unwrapOpaqueLikeType(type, checker) ?? type;
-  if ((value.flags & ts.TypeFlags.Unknown) !== 0) return false;
+  // A type still naming a type parameter is whatever its argument turns out to
+  // be, which may have been inferred.
+  if (
+    (value.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.Instantiable)) !== 0
+  ) {
+    return false;
+  }
   if (seen.has(value)) return true;
   seen.add(value);
   let positions: DeclaredPositions = true;
   if (value.isUnion()) {
     for (const member of value.types) {
-      positions = alternatives(positions, typePositions(member, checker, seen));
+      positions = alternatives(
+        positions,
+        writtenPositions(member, checker, seen),
+      );
     }
   } else if (checker.isArrayType(value) || checker.isTupleType(value)) {
     let elements: DeclaredPositions = true;
     for (const element of checker.getTypeArguments(value as ts.TypeReference)) {
-      elements = alternatives(elements, typePositions(element, checker, seen));
+      elements = alternatives(
+        elements,
+        writtenPositions(element, checker, seen),
+      );
     }
     positions = new Map([[ELEMENT_POSITIONS, elements]]);
+  } else if (value.isIntersection()) {
+    // Every part of an intersection describes the same value.
+    for (const part of value.types) {
+      positions = alternatives(
+        positions,
+        writtenPositions(part, checker, seen),
+      );
+    }
+  } else if ((value.flags & ts.TypeFlags.Object) !== 0) {
+    positions = isWrittenObjectType(value, checker);
   }
   seen.delete(value);
   return positions;
+}
+
+/**
+ * Whether the object type `type` is one an author wrote out, as a
+ * non-generic interface, or as a type literal naming no type parameter. A
+ * generic one may be instantiated with an inferred argument.
+ */
+function isWrittenObjectType(type: ts.Type, checker: ts.TypeChecker): boolean {
+  if (type.aliasTypeArguments?.length) return false;
+  const declarations = type.symbol?.declarations ?? [];
+  return declarations.length > 0 &&
+    declarations.every((declaration) =>
+      (ts.isTypeLiteralNode(declaration) &&
+        !mentionsTypeParameter(declaration, checker)) ||
+      (ts.isInterfaceDeclaration(declaration) &&
+        !declaration.typeParameters?.length)
+    );
+}
+
+/**
+ * The type parameters the type node `node` names, each by its declaration,
+ * or `undefined` for one the checker gives no declaration for.
+ */
+function typeParametersIn(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): (ts.TypeParameterDeclaration | undefined)[] {
+  const named: (ts.TypeParameterDeclaration | undefined)[] = [];
+  const visit = (child: ts.Node): void => {
+    if (ts.isTypeReferenceNode(child)) {
+      const type = checker.getTypeFromTypeNode(child);
+      if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+        named.push(
+          type.symbol?.declarations?.find(ts.isTypeParameterDeclaration),
+        );
+      }
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return named;
 }
 
 /** Whether the type node `node` names a type parameter anywhere in it. */
@@ -1011,431 +1401,23 @@ function mentionsTypeParameter(
   node: ts.TypeNode,
   checker: ts.TypeChecker,
 ): boolean {
-  const visit = (child: ts.Node): boolean => {
-    if (
-      ts.isTypeReferenceNode(child) &&
-      (checker.getTypeFromTypeNode(child).flags &
-          ts.TypeFlags.TypeParameter) !== 0
-    ) {
-      return true;
-    }
-    return ts.forEachChild(child, visit) === true;
-  };
-  return visit(node);
+  return typeParametersIn(node, checker).length > 0;
 }
 
 //
-// Value flow
+// Reassignment
 //
 
 /**
- * The array methods that read the array they are called on and leave it as it
- * was, provided every function passed to them does too. `true` marks one
- * whose result can hold the array's elements, or what its callback returns,
- * so that where its result goes matters as well.
+ * Whether some use of `symbol`, in the source file that declares it, assigns
+ * it a new value. Only the declaring module can assign one: an import of it
+ * cannot be assigned to.
  */
-const ARRAY_READS: ReadonlyMap<string, boolean> = new Map([
-  ["at", true],
-  ["concat", true],
-  ["entries", true],
-  ["every", false],
-  ["filter", true],
-  ["find", true],
-  ["findIndex", false],
-  ["findLast", true],
-  ["findLastIndex", false],
-  ["flat", true],
-  ["flatMap", true],
-  ["forEach", false],
-  ["includes", false],
-  ["indexOf", false],
-  ["join", false],
-  ["keys", false],
-  ["lastIndexOf", false],
-  ["map", true],
-  ["reduce", true],
-  ["reduceRight", true],
-  ["slice", true],
-  ["some", false],
-  ["toReversed", true],
-  ["toSorted", true],
-  ["toSpliced", true],
-  ["values", true],
-  ["with", true],
-]);
-
-/**
- * The array methods in `ARRAY_READS` whose result can hold a value passed to
- * them, rather than only being compared with it.
- */
-const ARGUMENT_KEPT: ReadonlySet<string> = new Set([
-  "concat",
-  "reduce",
-  "reduceRight",
-  "toSpliced",
-  "with",
-]);
-
-/**
- * The array methods in `ARRAY_READS` whose result holds what their callback
- * returns. The others test it, or discard it.
- */
-const CALLBACK_RESULT_KEPT: ReadonlySet<string> = new Set([
-  "flatMap",
-  "map",
-  "reduce",
-  "reduceRight",
-]);
-
-/** The type flags of the values that hold no reference to anything. */
-const PRIMITIVE_FLAGS = ts.TypeFlags.StringLike | ts.TypeFlags.NumberLike |
-  ts.TypeFlags.BigIntLike | ts.TypeFlags.BooleanLike | ts.TypeFlags.EnumLike |
-  ts.TypeFlags.ESSymbolLike | ts.TypeFlags.Undefined | ts.TypeFlags.Null |
-  ts.TypeFlags.Void | ts.TypeFlags.Never;
-
-/**
- * Where the values a program's bindings hold can reach, which decides whether
- * a binding still holds what the trace read it as holding. A value holds what
- * it was built with only while nothing can change it, and nothing can when
- * every use of the binding is one of the reads `#reachesOnlyReads()` admits.
- * Any other use, such as passing the value to a function, storing it, or
- * calling a method that is not a known read, may change it, and then the
- * binding escapes. The uses of a binding are read from the source file that
- * declares it, so an exported binding, which other files can reach, escapes
- * too.
- */
-class ValueFlow {
-  readonly #checker: ts.TypeChecker;
-  readonly #root: ts.SignatureDeclaration;
-  readonly #names: NameContext;
-  readonly #escaping = new Map<ts.Symbol, boolean>();
-  readonly #analyzing = new Set<ts.Symbol>();
-
-  /**
-   * Constructs an instance reading through `checker`, for a trace of what
-   * `root`, a pattern's callback, returns.
-   */
-  constructor(checker: ts.TypeChecker, root: ts.SignatureDeclaration) {
-    this.#checker = checker;
-    this.#root = root;
-    this.#names = { checker, flow: this };
-  }
-
-  /** Whether some use of `symbol` assigns it a new value. */
-  rebound(symbol: ts.Symbol): boolean {
-    return this.#uses(symbol).some(isWriteTarget);
-  }
-
-  /**
-   * Whether the value `symbol` holds may reach something that could change
-   * it, or `symbol` may be assigned another.
-   */
-  escapes(symbol: ts.Symbol): boolean {
-    const known = this.#escaping.get(symbol);
-    if (known !== undefined) return known;
-    // A binding met again while its own uses are being read is taken not to
-    // escape; any use that does escape decides the question where it is read.
-    if (this.#analyzing.has(symbol)) return false;
-    const declaration = symbol.valueDeclaration;
-    this.#analyzing.add(symbol);
-    const escapes = !declaration ||
-      (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Export) !==
-        0 ||
-      this.#uses(symbol).some((use) => !this.#reachesOnlyReads(use, symbol));
-    this.#analyzing.delete(symbol);
-    // An answer that took another binding not to escape holds only once the
-    // question about that binding is settled, at the outermost question.
-    if (escapes || this.#analyzing.size === 0) {
-      this.#escaping.set(symbol, escapes);
-    }
-    return escapes;
-  }
-
-  /**
-   * The identifiers that use `symbol` in the source file declaring it, which
-   * a declaration file, holding no code, has none of.
-   */
-  #uses(symbol: ts.Symbol): readonly ts.Identifier[] {
-    const sourceFile = (symbol.valueDeclaration ?? symbol.declarations?.[0])
-      ?.getSourceFile();
-    if (!sourceFile || sourceFile.isDeclarationFile) return [];
-    return usesIn(sourceFile, this.#checker).get(symbol) ?? [];
-  }
-
-  /**
-   * Whether the value `start` evaluates to, which is `subject`'s value or
-   * holds a part of it, reaches only reads. A read uses the value without
-   * changing it or keeping it where something else could: it is a part of the
-   * traced result; it takes from the value a primitive, or a part that reaches
-   * only reads in turn; it calls a method of an array that reads it; it passes
-   * the value where its recognized receiver reads it; or it binds the value
-   * to a name whose own uses are reads.
-   */
-  #reachesOnlyReads(start: ts.Expression, subject: ts.Symbol): boolean {
-    let current = start;
-    for (;;) {
-      // A write into the value, or to the binding, changes what it holds.
-      if (isWriteTarget(current)) return false;
-      // No part of a value reaches past a primitive read from it.
-      if (isPrimitive(this.#checker.getTypeAtLocation(current))) return true;
-      const parent = current.parent;
-      if (
-        ts.isParenthesizedExpression(parent) ||
-        ts.isNonNullExpression(parent) || ts.isAsExpression(parent) ||
-        ts.isSatisfiesExpression(parent) ||
-        ts.isTypeAssertionExpression(parent) || ts.isAwaitExpression(parent) ||
-        ts.isArrayLiteralExpression(parent)
-      ) {
-        current = parent;
-        continue;
-      }
-      if (ts.isSpreadElement(parent)) {
-        if (ts.isArrayLiteralExpression(parent.parent)) {
-          current = parent.parent;
-          continue;
-        }
-        return false;
-      }
-      if (
-        ts.isPropertyAssignment(parent) ||
-        ts.isShorthandPropertyAssignment(parent) ||
-        ts.isSpreadAssignment(parent)
-      ) {
-        current = parent.parent;
-        continue;
-      }
-      if (ts.isConditionalExpression(parent)) {
-        if (parent.condition === current) return true;
-        current = parent;
-        continue;
-      }
-      if (ts.isBinaryExpression(parent)) {
-        const operator = parent.operatorToken.kind;
-        if (
-          operator === ts.SyntaxKind.QuestionQuestionToken ||
-          operator === ts.SyntaxKind.BarBarToken ||
-          operator === ts.SyntaxKind.AmpersandAmpersandToken ||
-          (operator === ts.SyntaxKind.CommaToken && parent.right === current)
-        ) {
-          current = parent;
-          continue;
-        }
-        // An assignment keeps the value somewhere else. Comparison,
-        // arithmetic, `in`, `instanceof`, and a discarded left operand read it.
-        return !isAssignmentOperator(operator);
-      }
-      if (
-        ts.isPropertyAccessExpression(parent) ||
-        ts.isElementAccessExpression(parent)
-      ) {
-        const call = parent.parent;
-        if (ts.isCallExpression(call) && call.expression === parent) {
-          return this.#methodReads(call, subject);
-        }
-        // A part read from the value may be an object inside it.
-        current = parent;
-        continue;
-      }
-      if (ts.isCallExpression(parent)) {
-        // Calling the value changes nothing it holds.
-        return parent.expression === current ||
-          this.#argumentReads(parent, subject);
-      }
-      if (
-        ts.isReturnStatement(parent) ||
-        (ts.isArrowFunction(parent) && parent.body === current)
-      ) {
-        const fn = ts.isArrowFunction(parent)
-          ? parent
-          : ts.findAncestor(parent, ts.isFunctionLike);
-        return fn !== undefined && this.#returnReads(fn, subject);
-      }
-      if (
-        (ts.isVariableDeclaration(parent) || ts.isParameter(parent) ||
-          ts.isBindingElement(parent)) && parent.initializer === current
-      ) {
-        return this.#bindingsRead(parent.name);
-      }
-      if (ts.isForOfStatement(parent) && parent.expression === current) {
-        const { initializer } = parent;
-        return ts.isVariableDeclarationList(initializer) &&
-          initializer.declarations.every((declaration) =>
-            this.#bindingsRead(declaration.name)
-          );
-      }
-      return readsInPlace(current, parent);
-    }
-  }
-
-  /**
-   * Whether calling the method `call` names on a value holding `subject`'s
-   * reaches only reads: a method of an array that reads it, passed only
-   * callbacks whose parameters, which receive its elements, reach only reads,
-   * and whose result, where it holds the elements, reaches only reads.
-   */
-  #methodReads(call: ts.CallExpression, subject: ts.Symbol): boolean {
-    const name = arrayMethodName(call, this.#checker);
-    const keepsElements = name === undefined
-      ? undefined
-      : ARRAY_READS.get(name);
-    if (keepsElements === undefined) return false;
-    if (!call.arguments.every((argument) => this.#callbackReads(argument))) {
-      return false;
-    }
-    return !keepsElements || this.#reachesOnlyReads(call, subject);
-  }
-
-  /**
-   * Whether passing a value holding `subject`'s to `call` reaches only reads:
-   * to another pattern, as its input; to `ifElse()`, `when()` or `unless()`,
-   * whose result may be it; to a lift, whose callback's parameters receive it
-   * and whose result may hold it; or to a method of an array that only
-   * compares it, or keeps it in a result that reaches only reads.
-   */
-  #argumentReads(call: ts.CallExpression, subject: ts.Symbol): boolean {
-    const checker = this.#checker;
-    if (isPatternFactoryCalleeExpression(call.expression, checker)) return true;
-    const kind = detectCallKind(call, checker);
-    switch (kind?.kind) {
-      case "ifElse":
-      case "when":
-      case "unless":
-        return this.#reachesOnlyReads(call, subject);
-      case "lift-applied":
-        return this.#liftReads(getLiftAppliedInnerCall(call), call, subject);
-      case "builder":
-        return kind.builderName === "lift" &&
-          this.#liftReads(
-            liftFactoryCall(call.expression, this.#names),
-            call,
-            subject,
-          );
-      default: {
-        const name = arrayMethodName(call, checker);
-        if (name === undefined || !ARRAY_READS.has(name)) return false;
-        return !ARGUMENT_KEPT.has(name) ||
-          this.#reachesOnlyReads(call, subject);
-      }
-    }
-  }
-
-  /**
-   * Whether a value holding `subject`'s, passed to `applied`, an application
-   * of the lift `factory` makes, reaches only reads there and in what
-   * `applied` returns.
-   */
-  #liftReads(
-    factory: ts.CallExpression | undefined,
-    applied: ts.CallExpression,
-    subject: ts.Symbol,
-  ): boolean {
-    const callback = factory &&
-      resolveCallback(factory.arguments[0], this.#names);
-    return callback !== undefined &&
-      callback.parameters.every((parameter) =>
-        this.#bindingsRead(parameter.name)
-      ) &&
-      this.#reachesOnlyReads(applied, subject);
-  }
-
-  /**
-   * Whether `argument`, passed to a method of an array, reads the elements
-   * it is given: a value that is not a function, or a function the trace
-   * finds whose parameters reach only reads.
-   */
-  #callbackReads(argument: ts.Expression): boolean {
-    const callback = resolveCallback(argument, this.#names);
-    if (callback) {
-      return callback.parameters.every((parameter) =>
-        this.#bindingsRead(parameter.name)
-      );
-    }
-    return this.#checker.getTypeAtLocation(argument).getCallSignatures()
-      .length === 0;
-  }
-
-  /**
-   * Whether a value holding `subject`'s, returned by `fn`, reaches only reads.
-   * What the pattern's callback returns is the result. A binding `fn` itself
-   * declares holds what each call gives it, so the call the trace follows
-   * decides where that goes. A value from outside `fn` outlives the call, so
-   * where `fn`'s result goes decides it, which the trace knows for a callback
-   * written into a `computed()`, another pattern, or a method of an array it
-   * recognizes.
-   */
-  #returnReads(fn: ts.SignatureDeclaration, subject: ts.Symbol): boolean {
-    const declaration = subject.valueDeclaration;
-    if (
-      fn === this.#root ||
-      (declaration !== undefined &&
-        ts.findAncestor(declaration, (node) => node === fn) !== undefined)
-    ) {
-      return true;
-    }
-    const site = fn.parent;
-    if (!ts.isCallExpression(site) || !site.arguments.some((a) => a === fn)) {
-      return false;
-    }
-    const kind = detectCallKind(site, this.#checker);
-    if (kind?.kind === "builder") {
-      return kind.builderName === "pattern" ||
-        (kind.builderName === "computed" &&
-          this.#reachesOnlyReads(site, subject));
-    }
-    const name = arrayMethodName(site, this.#checker);
-    if (name === undefined || !ARRAY_READS.has(name)) return false;
-    return !CALLBACK_RESULT_KEPT.has(name) ||
-      this.#reachesOnlyReads(site, subject);
-  }
-
-  /** Whether every name `name` binds reaches only reads. */
-  #bindingsRead(name: ts.BindingName): boolean {
-    if (ts.isIdentifier(name)) {
-      const symbol = this.#checker.getSymbolAtLocation(name);
-      return symbol !== undefined && !this.escapes(symbol);
-    }
-    return name.elements.every((element) =>
-      ts.isOmittedExpression(element) || this.#bindingsRead(element.name)
-    );
-  }
-}
-
-/**
- * Whether the value `current` evaluates to is only read where its parent
- * `parent` uses it, without being passed further: as a computed key, or under
- * `!`, `typeof`, `void` or `delete`; as a statement whose value is discarded,
- * or what an `if`, a `while`, a `do`, a `switch` or a `case` tests;
- * interpolated into a string, or rendered as JSX by an attribute that does not
- * bind it.
- */
-function readsInPlace(current: ts.Expression, parent: ts.Node): boolean {
-  if (
-    ts.isComputedPropertyName(parent) || ts.isPrefixUnaryExpression(parent) ||
-    ts.isTypeOfExpression(parent) || ts.isVoidExpression(parent) ||
-    ts.isDeleteExpression(parent) || ts.isExpressionStatement(parent) ||
-    ts.isJsxSpreadAttribute(parent)
-  ) {
-    return true;
-  }
-  if (
-    ts.isIfStatement(parent) || ts.isWhileStatement(parent) ||
-    ts.isDoStatement(parent) || ts.isSwitchStatement(parent) ||
-    ts.isCaseClause(parent)
-  ) {
-    return parent.expression === current;
-  }
-  if (ts.isForInStatement(parent)) return parent.expression === current;
-  // A tag receives the values interpolated into its template.
-  if (ts.isTemplateSpan(parent)) {
-    return !ts.isTaggedTemplateExpression(parent.parent.parent);
-  }
-  if (ts.isJsxExpression(parent)) {
-    const attribute = parent.parent;
-    return !ts.isJsxAttribute(attribute) ||
-      !(ts.isIdentifier(attribute.name) &&
-        attribute.name.text.startsWith("$"));
-  }
-  return false;
+function reassigned(symbol: ts.Symbol, checker: ts.TypeChecker): boolean {
+  const sourceFile = (symbol.valueDeclaration ?? symbol.declarations?.[0])
+    ?.getSourceFile();
+  if (!sourceFile || sourceFile.isDeclarationFile) return false;
+  return (usesIn(sourceFile, checker).get(symbol) ?? []).some(isWriteTarget);
 }
 
 /**
@@ -1489,13 +1471,6 @@ function isWriteTarget(node: ts.Node): boolean {
 function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
   return kind >= ts.SyntaxKind.FirstAssignment &&
     kind <= ts.SyntaxKind.LastAssignment;
-}
-
-/** Whether every value of `type` is a primitive, which holds no reference. */
-function isPrimitive(type: ts.Type): boolean {
-  return type.isUnion()
-    ? type.types.every(isPrimitive)
-    : (type.flags & PRIMITIVE_FLAGS) !== 0;
 }
 
 /** The uses of each binding in each source file, by the checker reading it. */
