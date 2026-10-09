@@ -938,14 +938,17 @@ function shrinkTypeToNode(
   // The scope lives in the wrapper's alias and brand, not in the scoped
   // type's structure, so a node built from that structure would drop it.
   const scopeWrapper = getScopeWrapper(type, checker);
-  // A value read whole, which no payload of an array narrows (the paths
-  // through its elements do), is printed, as each payload would be: the print
-  // keeps the wrapper, and is read as the declaration spelling the value where
-  // one does (`SchemaHint.spelledBy`), which a wrapper built around the
-  // payloads' prints is not.
+  // A value read whole is printed, as each payload would be: the print keeps
+  // the wrapper, and is read as the declaration spelling the value where one
+  // does (`SchemaHint.spelledBy`), which a wrapper built around the payloads'
+  // prints is not. An array that paths through its elements read as well is
+  // built from its payloads, which those paths narrow.
   if (
     scopeWrapper && normalized.some((path) => path.length === 0) &&
-    !scopeWrapper.payload.some((payload) => isArrayShapeType(payload, checker))
+    (normalized.every((path) => path.length === 0) ||
+      !scopeWrapper.payload.some((payload) =>
+        isArrayShapeType(payload, checker)
+      ))
   ) {
     return typeToTypeNodeWithRegistry(
       type,

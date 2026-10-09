@@ -359,6 +359,27 @@ export default pattern<{ a: Box<Secret> }>(({ a }) => ({
       });
     }
 
+    it("keeps the policy a scoped alias's declaration spells around an array beside `null` written outside the wrapper in the capture of the whole value", async () => {
+      // An array read only whole is printed whole, as any value read whole is;
+      // only paths through its elements narrow it apart from its declaration.
+      const module = await withRules(
+        `type Box<T> = PerUser<Confidential<T[], [PolicyOf<typeof rules>]>> | null;
+export default pattern<{ a: Box<Secret> }>(({ a }) => ({
+  out: computed(() => a),
+}));`,
+      );
+      const [input, capture] = [
+        patternSchemas(module).input,
+        callSchemas(module, "lift")[0]!,
+        // deno-lint-ignore no-explicit-any
+      ].map((schema: any) => schema.properties.a);
+
+      expect(capture).toEqual(input);
+      expect(JSON.stringify(capture)).toContain(
+        '"__ctPolicyIdentityOf":{"file":"/rules.ts","path":["rules"]}',
+      );
+    });
+
     it("keeps the policy a scoped alias's declaration spells beside `null` written outside the wrapper in the capture of the whole value", async () => {
       // The capture's type keeps no alias to read the declaration by; its
       // print is read as the input's annotation, which spells it.
