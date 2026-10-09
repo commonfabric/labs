@@ -565,10 +565,14 @@ will transform it, and run again in stage 4 against the tool's own output:
 A space's history is a promise to the people in it: the transaction log is
 persisted, and anything that happened can be audited. Compaction breaks that
 promise for the compacted range, on purpose and with the owner's agreement,
-and a hollowed commit is indistinguishable from an elided one — a write that
-changed nothing — to anyone reading the log. Robin's review asks for the
-equivalent of a browser's broken-key icon: something developers can wave
-past and a user of what looked like a safe space can see.
+and marks each hollowed commit explicitly: its envelope is replaced by the
+marker, which nothing a client writes can resemble, so a reader of the log
+can tell a hollowed commit from an elided write; what is lost is the
+contents, which are available only in the archive. A commit whose payload
+survives stays inspectable alongside its revisions, and needs no flag of its
+own. Robin's review asks for the space-level counterpart, the equivalent of
+a browser's broken-key icon: something developers can wave past and a user
+of what looked like a safe space can see.
 
 So the compaction commit carries one revision of its own: a whole-document
 `set` of the space's ACL document (`of:<did>`, the one entity named by the
