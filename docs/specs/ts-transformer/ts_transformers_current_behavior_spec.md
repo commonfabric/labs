@@ -271,9 +271,23 @@ Detection is provenance-first:
 
 1. symbol resolution against Common Fabric declarations/imports
 2. stable alias/signature following (`const alias = computed`,
-   `declare const alias: typeof ifElse`)
+   `declare const alias: typeof ifElse`). Builder provenance is followed only
+   through `const` bindings: a call through a `let` or `var` binding of a
+   builder, or of a `lift(...)` call, does not classify as that builder,
+   because the binding can be reassigned. A call through a `const` binding of
+   a `lift(...)` call classifies as the builder `lift`; lift-applied is
+   reserved for a call whose callee is the `lift(...)` call itself
+   (`test/ast/call-kind.test.ts`; fixture
+   `closures/computed-mutable-lift-binding`)
 3. synthetic helper support for `__cfHelpers.*` nodes introduced by earlier
    passes
+
+A callee that is itself a call has a call kind only as a builder's factory:
+`lift(cb)` and `handler(cb)`, written in place or bound to a `const`, are
+factories, and calling one applies the builder. A call of what an application
+returned has no call kind (`lift(cb)(x)(y)`, or a call through a `const` bound
+to `lift(cb)(x)`), and neither does a call of what any other call returned,
+such as `ifElse(...)()` (`test/ast/call-kind.test.ts`).
 
 Remaining fallback behavior is intentionally narrow:
 
@@ -2022,7 +2036,24 @@ adjustments:
 - wildcard roots disable path shrinking for affected parameters/arguments
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
-  than a blanket root read) and suppresses the redundant blanket `.get()` read
+  than a blanket root read) and suppresses the redundant blanket `.get()` read.
+  An element access contributes a path segment when its key is a literal, an
+  expression of a single literal type (`offers[KEY]` with `const KEY = "k"`
+  records `["offers", "k"]`, as `offers.k` does), or a Common Fabric key such
+  as `NAME`. The key's literal type is trusted as its run-time value, so a key
+  whose type is wrong about it — an `as` cast, or a flow narrowing gone stale
+  after a closure reassigned the variable — narrows the schema to the key the
+  type names rather than the one read. A key that can name any member
+  (`offers[key.get()]`, a `string`-typed variable or a widened `let`, a
+  callback parameter, a union of literal types) leaves the chain unresolved.
+  The suppression applies only to the calls of a chain that resolves in full,
+  including a chain nested in a fallback that resolves by its other operand
+  (`a.get().p ?? x.get().offers[key].space`), so an unresolved chain keeps the
+  blanket read: its `.get()` receiver is read in full
+  (`policy/capability-analysis.ts`; fixtures
+  `closures/computed-element-access-*`,
+  `handler-schema/handler-element-access-dynamic-key`,
+  `schema-injection/lift-element-access-dynamic-key`)
 - optional `.get()` chains retain an explicit readonly read of the receiver
   Cell even when a projected result member is observed; this preserves the
   nested Cell in synthesized closure schemas without widening the enclosing
@@ -2291,7 +2322,11 @@ time.
 - **Applied builders** (`lift`, `handler`): the site is `builder(...)(captures)`
   — the callee is itself the inner `builder(...)` call. Hoist the inner call,
   leave `__cfLift_N(captures)` / `__cfHandler_N(captures)` at the site (any
-  trailing `.for(...)` member chain stays anchored on the outer call):
+  trailing `.for(...)` member chain stays anchored on the outer call). Only a
+  single application is one of these sites: in an over-applied
+  `lift(cb)(x)(y)` the outer call is a call of what the application returned,
+  so `lift(cb)` is hoisted and `__cfLift_N(x)(y)` stays at the site
+  (`test/transformers/builder-call-hoisting.test.ts`):
 
   ```ts
   // Shown inside a pattern body.

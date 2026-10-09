@@ -7,7 +7,8 @@
  * replaced. Inside a replaced tile, an element carrying a `data-focus-key` is
  * matched with the element carrying the same key in the replacement, which
  * takes over its keyboard focus and its scroll position; a focused link with
- * no key is matched by its href. Tiles are then put in the rendering's order,
+ * no key is matched by its href, among the replacement's links and the
+ * replacement itself. Tiles are then put in the rendering's order,
  * and a tile the rendering no longer has is removed.
  */
 
@@ -34,7 +35,6 @@ export function reconcileTiles(
 
     // The element in `next` that stands for `element` in `current`.
     const counterpart = (element: Element): HTMLElement | undefined => {
-      if (element === current) return next;
       const key = element.getAttribute("data-focus-key");
       const byKey = key === null ? undefined : keyed(next).find((candidate) =>
         candidate.getAttribute("data-focus-key") === key
@@ -42,9 +42,13 @@ export function reconcileTiles(
       const href = element.localName === "a"
         ? element.getAttribute("href")
         : null;
-      return byKey ?? (href === null ? undefined : [
+      const byHref = href === null ? undefined : [
+        next,
         ...next.querySelectorAll("a"),
-      ].find((link) => link.getAttribute("href") === href));
+      ].find((link) =>
+        link.localName === "a" && link.getAttribute("href") === href
+      );
+      return byKey ?? byHref ?? (element === current ? next : undefined);
     };
     const scrolled = keyed(current)
       .filter((element) => element.scrollTop > 0)

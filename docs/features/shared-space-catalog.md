@@ -2,9 +2,9 @@
 
 The Home pattern owns the shared-space catalog: which shared spaces a person
 keeps in their collection. It exposes reactive `sharedSpaceCatalog` data and the
-`registerSharedSpace` and `changeSharedSpaceMembership` handlers. Authored
-patterns and host applications use these same operations. Catalog types,
-validation, and transitions live in
+`registerSharedSpace`, `changeSharedSpaceMembership`, and `removeSharedSpace`
+handlers. Authored patterns and host applications use these same operations.
+Catalog types, validation, and transitions live in
 `packages/patterns/system/shared-space-catalog.ts`.
 
 The catalog's backing cell has Home's stable `sharedSpaceCatalog` cause. An
@@ -58,6 +58,30 @@ entry with its stale collection. A legacy binding may supply
 `initialState: "archived"` to insert an archived entry in the same commit;
 omitted `initialState` means saved. This hint never overrides an existing Home
 entry.
+
+The whole of what `registerSharedSpace` does is `registerSharedSpaceIn()`,
+exported beside it, which takes the catalog's writable cell and a registration
+and stages its writes in the transaction of the handler that calls it. So a
+Home-space handler holding the catalog cell can register a space in the same
+commit as its own writes, and gets back the outcome the handler would return. A
+new entry's revision names the calling handler's event, so only a handler can
+call it.
+
+Likewise, the whole of what `changeSharedSpaceMembership` does is
+`changeSharedSpaceMembershipIn()`, exported beside it, which applies a
+membership choice in the calling handler's transaction and returns the outcome
+the handler would. So a handler can archive or restore an entry in the same
+commit as its own writes. The revision the change names as observed is the one
+the person saw, carried in on the event. A handler that reads the current
+revision and names that one gives the check up, which is right only where the
+person's request is the choice whatever the entry's state. A new revision names
+the calling handler's event, so only a handler can call it.
+
+FabriChat's manager calls both from its own handlers. Creating a room, or
+accepting one a manager created, registers the room's space, and finding a
+direct room again, or accepting a room, restores its entry if it was archived.
+Asking to open or accept the room is the person's choice to have it listed, so
+that restore names the revision the handler reads.
 
 New entries record `since`, the recipient's admission time in epoch
 milliseconds. Registration records it when admitting the entry; a migration may
@@ -174,9 +198,12 @@ observe the ordinary subscription for a valid catalog; a completed read alone
 does not establish producer readiness or the absence of an interface.
 
 A successfully loaded, accessible Home may predate this catalog interface or
-follow custom source. If the catalog or either handler is absent, consumers
-report `home-update-required`, retain their last confirmed projection, and wait
-for a compatible Home update rather than blindly retrying operations. An
+follow custom source. If the catalog or the registration or membership handler
+is absent, consumers report `home-update-required`, retain their last confirmed
+projection, and wait for a compatible Home update rather than blindly retrying
+operations. A consumer that removes entries reports the same state when
+`removeSharedSpace` is absent; that absence does not make Home outdated for a
+consumer that only registers or changes membership. An
 unfinished or refused read, or a producer that has not settled, cannot establish
 that the interface is absent.
 
@@ -190,10 +217,13 @@ use the same offer ID independently. Receipts remain when an entry is archived,
 and a new receipt never restores an archived entry.
 
 The receiving application validates the sender, recipient access, and target
-before calling registration. A receipt is evidence of that application action,
-not server-attested sender authentication. The catalog stores no invitation
-bearer, identity key, profile inbox pointer, or delivery endpoint. Adopting an
-inbox or changing its ACL is a separate operation.
+before calling registration. The host's share intake is that application for
+offers in Home's private inboxes; [the private
+inbox](private-inbox.md#the-share-intake) says what it checks. A receipt is
+evidence of that application action, not server-attested sender authentication.
+The catalog stores no invitation bearer, identity key, profile inbox pointer, or
+delivery endpoint. Adopting an inbox or changing its ACL is a separate
+operation.
 
 ## Repair and retention
 
@@ -201,15 +231,33 @@ Host, kind, title, and admission provenance describe the first accepted
 registration. A title is a display hint; applications read the space's root for
 its current name. Repeated registration does not refresh that hint. Host and
 kind conflicts require investigation rather than an automatic rewrite. There is
-no supported route-migration, retitle, or repair operation in this API.
+no supported route-migration or retitle operation in this API.
 
-An exceptional owner-authorized repair must preserve a backup and compare its
-observed catalog at commit. Changing a target's host or kind also requires
-updating every retained receipt naming it in the same transaction, so receipt
-and entry evidence cannot disagree. Deleting an entry alone leaves invalid
-receipts. Deleting its receipts as well loses replay evidence and permits a
-stale offer to recreate the entry. Archive is the supported removal from the
-ordinary collection; it retains the membership and receipt evidence.
+Changing a target's host or kind is an exceptional owner-authorized repair. It
+must preserve a backup, compare its observed catalog at commit, and update every
+retained receipt naming the target in the same transaction, so receipt and entry
+evidence cannot disagree.
+
+Archive is the person's removal from the ordinary collection; it retains the
+membership and receipt evidence. Home's `removeSharedSpace` handler instead
+takes an entry back out of the catalog, so that an application that registered
+spaces on the person's behalf can undo that import. That is its only purpose: it
+is not a general way to delete or clean up entries, nothing a person invokes
+calls it, and Home renders no control for it. The caller removes only entries it
+can show it registered itself. It takes the space DID and the revision its
+caller observed, and removes the entry only while it is still at that revision
+and no offer receipt names it. The result is `removed`, or `conflict` with the
+reason `missing`, `revision`, or `offer`. An entry a receipt names stays:
+deleting the entry alone leaves invalid receipts, and deleting its receipts as
+well loses replay evidence and permits a stale offer to recreate the entry. The
+caller keeps the entry it observed as its backup.
+
+Removal leaves no record in the catalog. A later registration admits the space
+as a new entry, so an application undoing its import stops registering those
+spaces first. A re-admitted invocation of the original registration recreates
+the entry at its original revision, because the generation restarts with the
+entry and the event key repeats with the invocation; a caller still holding
+that revision therefore acts on the recreated entry.
 
 Receipts are retained indefinitely. The catalog is one document, so reads,
 validation, and receipt storage grow with the collection and its receipt

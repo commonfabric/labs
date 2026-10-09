@@ -1264,9 +1264,22 @@ home directory. The Fabric lane uses the `context` prompt role, so the default
 
 A run's sandbox, and a local job's, is the one `cf-harness` selects from the
 environment: `CF_HARNESS_SANDBOX_RUNTIME` names `docker` or `runsc`, and with
-none named a Mac runs on its native runtime and every other platform on Docker.
-The runner derives that selection as it starts, before either lane serves, and
-exits with the harness's refusal where the harness would refuse its jobs.
+none named a Mac with Apple silicon and Linux run on their native runtime and
+every other platform on Docker. The native runtime needs its store set up (the
+cfc-vm store on a Mac, `~/.local/share/runsc-cfc` on Linux), though a named
+`runsc` binary, rootfs or policy replaces that piece of it. On Linux its default
+network needs `pasta` (passt) and `setpriv` (util-linux) on `PATH`, and
+`unshare` for a root runner, and a refusal names the one missing; a named `none`
+or `host` network needs none of the three. A runner that is not root runs the
+store's `runsc` rootless, and pasta in a user namespace even with a `runsc`
+named by `CF_HARNESS_RUNSC_BINARY`, which runs as it is, so it needs a host that
+allows unprivileged user namespaces; where `user.max_user_namespaces` is 0,
+`kernel.unprivileged_userns_clone` is 0 or
+`kernel.apparmor_restrict_unprivileged_userns` is 1, the refusal names the
+`sudo sysctl -w` that allows them, or running as root. A Mac that is not Apple
+silicon has no native runtime. The runner derives that selection as it starts,
+before either lane serves, and exits with the harness's refusal where the
+harness would refuse its jobs.
 
 What the Fabric lane does, in order:
 
@@ -2229,11 +2242,22 @@ removes them, and nothing holds them open past that date.
 | `cf cell set-label`      | `cf piece set-label`     |
 | `cf piece call`          | `cf call`                |
 | `cf space recreate-root` | `cf piece recreate-root` |
-| `cf space set-home`      | `cf piece set-home`      |
 
 This is a migration aid rather than a second surface: nothing here teaches the
 right column as an alternative spelling to keep using. `--piece` is a different
 case — a deprecated name for `--cell` that carries no end date and no notice.
+
+### Retired: `cf space set-home`
+
+A Home is created on its user's first open and changed only in place, so a
+command that installs a Home root has no job. `cf space set-home` and its
+`cf piece set-home` mount are retired: both are hidden, and a run of either
+refuses and says what does each half of the work — first open for creation,
+`cf piece setsrc --cell <home-root> ./my-home.tsx` for the source, where the
+root is the link `cf wish '#default' --select @` answers with in the Home space.
+**The spelling stops answering after 2026-10-21**, when a later change removes
+the mounts. See
+[Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern).
 
 ## Evaluating patterns from another tool
 

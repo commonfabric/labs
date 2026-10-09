@@ -151,8 +151,9 @@ wish({ query: "#portfolio", scope: ["profile"] })
 
 ### Well-Known Profile Targets
 
-A user may have multiple profiles, stored on the home default pattern at
-`homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
+A user may have multiple profiles. Each is a piece in a space of its own, and a
+new profile is that space's root. The home default pattern holds links to them
+at `homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
 recency-ordered `mru`. The well-known wishes enumerate that list and resolve,
 ordered **default first, then by MRU, then list order**:
 
@@ -235,7 +236,7 @@ for the rendered output so each viewer sees their own home profile projection.
 
 | Feature    | Favorites (`~`)            | Mentionables (`.`)              | Profile (`profile`)              |
 |------------|----------------------------|---------------------------------|----------------------------------|
-| Storage    | Home default pattern       | Current space                   | Profile default pattern          |
+| Storage    | Home default pattern       | Current space                   | Profile piece                    |
 | Scope      | Cross-space                | Per-space                       | Cross-space, per-user            |
 | Source     | User's favorites list      | Pattern's `mentionable` export  | User's profile element list      |
 | Tag source | Snapshotted when favorited | Computed from schema            | `userTags` first, then `tag`     |
@@ -326,7 +327,7 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
 | `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
 | `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
-| `#profile`          | Profile default pattern object                          |
+| `#profile`          | User's current profile piece                            |
 | `#profileName`      | User's profile display name                             |
 | `#profileAvatar`    | User's profile avatar                                   |
 | `#profileSpace`     | User's profile space cell                               |

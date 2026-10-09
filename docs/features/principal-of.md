@@ -41,6 +41,28 @@ link carries from the document it points to (an entry observed as `followRef`).
 `target` is followed through any links it holds first, so a cell holding a
 link to a profile returns the profile's principal.
 
+## The label on a field that holds a link
+
+A field that links another document has a label of its own, on the document
+holding the link: what the runtime stamped there when the link was written,
+such as `represents-principal` for whoever wrote a field typed
+`RepresentsCurrentUser`. That is a different fact from what the linked
+document's label says. A panel's `addedByProfile` in the Loom root links the
+profile its adder acted under, and any participant may link any profile, so
+the profile's label names its owner while the field's names who acted.
+
+`principalOf(target, kind, { label: "written" })` and the same call of
+`principalsOf()` read the field's label, where the default, `"resolved"`,
+reads the label on the document the field's value resolves to. Links on the
+way to `target` are followed, and so is a redirect stored there, which is where
+a write to `target` would land; a link `target` holds as its value is not. The
+claims are read in the same places relative to that field, and the copies of
+the linked document's claims that the link carries are not counted, as in the
+default read. For a field holding no link, the two reads are the same.
+`options` throws when it is not an object, or when its `label` is neither
+`"written"`, `"resolved"` nor absent; an absent `label` means `"resolved"`, and
+other keys are not read.
+
 ## What it returns
 
 | Result | When |
@@ -105,6 +127,19 @@ of the runtime uses for label metadata, in the calling code's own transaction.
 The read is a dependency like any other, so a computation that called
 `principalOf()` runs again when the label changes.
 
+A document whose load is still in flight has no label to read yet, and that is
+not its state. A computation needs nothing for it, since the load's arrival
+runs the computation again. A handler runs once per event, so in a handler the
+call withdraws the run instead, through the transaction's
+`dispatchedHandlerNotRun`, and the scheduler runs the handler again once the
+load lands; this is what lets a served handler read the label of a cell its
+event names, a cell whose document the serving runtime may never have read
+before. The call withdraws only when the replica has no local basis for the
+document, not even a confirmed absence, and a load for it is in flight. A
+withdrawal therefore always has a load to wait on: once the load for a
+document that does not exist has settled, its absence is confirmed, and the
+handler's next run reads it as unlabeled and gives `undefined`.
+
 ## What the result discloses
 
 What a claim names is public by design. The label-metadata classification in
@@ -158,7 +193,12 @@ stored labels of each shape above, claims the runtime minted in a handler
 (`authored-by` against that handler's `currentPrincipal()`, and
 `represents-principal`), the refused pattern-written claim and the refused
 write-back of a returned DID, the reads the call makes, a lift that runs again
-on a label-only change beside one that holds the same cell and does not, and
-the call in a compiled pattern's handler and `computed()`.
+on a label-only change beside one that holds the same cell and does not, the
+withdrawal of a handler that reads a document still loading beside the cases
+that do not withdraw, and the call in a compiled pattern's handler and
+`computed()`. `packages/runner/test/executor-cross-space.test.ts` covers a
+served handler reading the label of a foreign document its event reaches
+through a link chain, and one whose chain reaches a document that does not
+exist.
 `packages/runner/test/cfc/represents-principal.test.ts` covers
 `exactPrincipalAttestations()` for both kinds.

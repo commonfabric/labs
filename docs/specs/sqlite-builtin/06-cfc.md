@@ -888,17 +888,19 @@ key and the result cell's coordinates. The salt is a runtime secret
 reserved id, minted with a random value by the first settle that needs it.
 The transaction write chokepoint refuses every unprivileged write to that id,
 and the one writer, `ensureRuntimeSecret()`, returns nothing; the read
-chokepoint refuses every read of it but the runtime's own, so no executed code
-reads the salt. A stored salt is trusted only when its stored schema carries
-the writer claim `writeAuthorizedBy: ["runtime-secret"]`, which the runtime
-records under that builtin identity when it mints one and which no executed
-code can satisfy. A value planted in the namespace through a runtime without
-the chokepoint carries no such claim, and the next settle replaces it. A value whose stored schema cannot be resolved, in the
-replica or the schema registry, is neither, and the settle refuses rather than
-replace it. The salt is labeled with the read-failed atom, which no ceiling
-admits; the builtin reads it as a verifier-internal read, which joins nothing
-to the settle's label. A module policy's key is a runtime secret of the same
-kind, stored under that policy's clause instead
+chokepoint refuses every read of its value but the runtime's own, so no
+executed code reads the salt. A stored salt is trusted only when its stored
+schema carries the writer claim `writeAuthorizedBy: ["runtime-secret"]`, which
+the runtime records under that builtin identity when it mints one and which no
+executed code can satisfy. A value planted in the namespace before the
+chokepoint existed, or through a runtime without it, carries no such claim,
+and the next settle replaces it. A value whose stored schema resolves neither
+in the replica nor in the schema registry is neither trusted nor untrusted,
+and the settle fails rather than replace it, since replacing a trusted salt
+would re-key every row document. The salt is labeled with the read-failed
+atom, which no ceiling admits; the builtin reads it as a verifier-internal
+read, which joins nothing to the settle's label. A module policy's key is a
+runtime secret of the same kind, stored under that policy's clause instead
 ([policy secrets](../cfc-policy-secret.md)). Without
 the salt the id would be a value computable from the row, and the reference
 at each slot would have to carry the row's label so that a reader could not
@@ -911,10 +913,10 @@ Three residuals are recorded against §8.17.6:
   slots holding equal rows hold one id, and a row that stays in a result
   across a change of parameter keeps its id. A reader of the result learns
   both under `S` and the membership labels, without reading a row.
-- **The salt's protection is the runtime's.** Anything that reads the space's
-  documents outside the runtime can read the salt and recompute ids. The
-  residual a recomputed id opens is the one the salt closes: whether a guessed
-  row is in a result, disclosed without the row's label.
+- **The salt's protection is the runtime's.** Anything that reads the
+  space's documents outside the runtime can read the salt and recompute ids.
+  The residual a recomputed id opens is the one the salt closes: whether a
+  guessed row is in a result, disclosed without the row's label.
 - **A row document is immutable by construction of its writer, and nothing
   refuses another writer.** The builtin never writes a document twice. A
   pattern holding a row reference can write to it. A writer claim naming the

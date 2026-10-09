@@ -449,9 +449,6 @@ export enum RequestType {
    */
   GetSpaceRootPattern = "pattern:getSpaceRoot",
 
-  /** Replaces a space's root pattern with a freshly created one. */
-  RecreateSpaceRootPattern = "pattern:recreateSpaceRoot",
-
   /**
    * Creates a piece in a space from a URL or a program, optionally running it
    * once created.
@@ -1411,6 +1408,13 @@ export type CustodySealPreview = {
 
   /** The actor's `Context` and `Resource` sources the value draws on. */
   sources: CfcAtom[];
+
+  /**
+   * The people the value was drawn from data shared with, such as a
+   * conversation: one sorted group per distinct set of people a clause names
+   * beside the actor.
+   */
+  heldWith: DID[][];
 
   /**
    * Whether every release rule of the room's policy requires the seal's input
@@ -2586,20 +2590,13 @@ export type GetSpaceRootPatternRequest = BaseRequest & {
    * A caller that only reads what the root exported passes false. Starting
    * a root materializes everything its result reaches, which on a space
    * whose root reaches a large piece is the dominant cost of opening
-   * anything; a stored export costs a read. Either way an absent root is
-   * still created, since a space needs one before it can have exports.
+   * anything; a stored export costs a read.
+   *
+   * A space with no root gets one only when this is true and the requesting
+   * identity owns the space. Otherwise the response names no piece, and
+   * nothing is written.
    */
   start?: boolean;
-};
-
-/** The {@link RequestType.RecreateSpaceRootPattern} request. */
-export type RecreateSpaceRootPatternRequest = BaseRequest & {
-  type: RequestType.RecreateSpaceRootPattern;
-
-  /**
-   * The space whose root pattern to replace.
-   */
-  space: DID;
 };
 
 /**
@@ -3360,7 +3357,6 @@ export type IPCClientRequest =
   | FlushCompileCacheWritesRequest
   | PieceCreateRequest
   | GetSpaceRootPatternRequest
-  | RecreateSpaceRootPatternRequest
   | PieceGetRequest
   | PieceGetSlugRequest
   | SlugResolveRequest
@@ -3614,6 +3610,14 @@ export type PieceResponse = {
    * The piece in question.
    */
   piece: PieceRef;
+};
+
+/** A reference to a space's root, which a space with no root lacks. */
+export type SpaceRootPatternResponse = {
+  /**
+   * The space's root, absent when the space has none.
+   */
+  piece?: PieceRef;
 };
 
 /**
@@ -4104,6 +4108,7 @@ export type RemoteResponse =
   | TriggerTraceResponse
   | WriteStackTraceResponse
   | PieceResponse
+  | SpaceRootPatternResponse
   | SlugReferenceResponse
   | PieceSourceResponse
   | PieceSourceRevisionResponse
@@ -4488,11 +4493,7 @@ export type Commands = {
   };
   [RequestType.GetSpaceRootPattern]: {
     request: GetSpaceRootPatternRequest;
-    response: PieceResponse;
-  };
-  [RequestType.RecreateSpaceRootPattern]: {
-    request: RecreateSpaceRootPatternRequest;
-    response: PieceResponse;
+    response: SpaceRootPatternResponse;
   };
   // Diagnosis requests
   [RequestType.DetectNonIdempotent]: {

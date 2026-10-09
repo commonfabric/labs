@@ -926,41 +926,8 @@ export class XAppView extends BaseView {
     replaceNavigation(view);
   }
 
-  #isRecreatingSpaceRootPattern = false;
-
-  #handleRecreateSpaceRootPattern = async (e: Event) => {
-    const done = (e as CustomEvent).detail?.done as (() => void) | undefined;
-    if (!this.rt || !this.space) {
-      done?.();
-      return;
-    }
-    if (this.#isRecreatingSpaceRootPattern) return;
-    this.#isRecreatingSpaceRootPattern = true;
-    try {
-      await this.rt.recreateSpaceRootPattern(this.space);
-      this._spaceRootPattern.run();
-    } catch (err) {
-      console.error("[AppView] Failed to recreate pattern:", err);
-    } finally {
-      this.#isRecreatingSpaceRootPattern = false;
-      done?.();
-    }
-  };
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.addEventListener(
-      "recreate-space-root-pattern",
-      this.#handleRecreateSpaceRootPattern,
-    );
-  }
-
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this.removeEventListener(
-      "recreate-space-root-pattern",
-      this.#handleRecreateSpaceRootPattern,
-    );
     this.#stopSlugWatch();
   }
 
@@ -1151,6 +1118,13 @@ export class XAppView extends BaseView {
       ? { kind: "piece", error: this._selectedPattern.error }
       : undefined;
     const loadError = this.spaceLoadError ?? patternLoadError;
+    // The lookup returns no root both for a space that has none and when it
+    // had no runtime or space to ask with, and has no value while it is
+    // pending, so only a lookup completed against both says the space has none.
+    const spaceHasNoRoot = isViewingDefaultPattern &&
+      this.rt !== undefined && this.space !== undefined &&
+      this._spaceRootPattern.status === TaskStatus.COMPLETE &&
+      this._spaceRootPattern.value === undefined;
     const runtimeLoadError = loadError
       ? undefined
       : this.#getRuntimeLoadError();
@@ -1169,6 +1143,7 @@ export class XAppView extends BaseView {
         .spaceName="${"spaceName" in this.app.view
           ? this.app.view.spaceName
           : undefined}"
+        .spaceHasNoRoot="${spaceHasNoRoot}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"
         .showSidebar="${config.showSidebar ?? false}"
         .embedded="${embedded}"

@@ -1,13 +1,15 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { spy, stub } from "@std/testing/mock";
+import { spy } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { createBuilder } from "../../runner/src/builder/factory.ts";
+import type { Cell } from "../../runner/src/builder/types.ts";
 
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import { installCustomRoot } from "./install-custom-root.ts";
 
 const identity = await Identity.fromPassphrase("Home recreation protection");
 const program: RuntimeProgram = {
@@ -23,6 +25,9 @@ export default pattern(() => {
   }],
 };
 
+// An identity Home is created once, on first open, and changed only in place.
+// Nothing here may create, replace or unlink its root, however the space is
+// found: absent, installed, or pointing at a target that will not load.
 describe("Home root recreation", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -50,33 +55,32 @@ describe("Home root recreation", () => {
     await storage.close();
   });
 
-  it("creates the first Home when no root is installed", async () => {
-    const home = await controller.recreateDefaultPattern({
-      customProgram: program,
-    });
-    expect((await controller.getDefaultPattern(false))?.equals(home.getCell()))
-      .toBe(true);
-    expect(await home.getCell().asSchema(true).pull()).toMatchObject({
-      saved: { favorite: "retained" },
-    });
+  it("refuses to create a Home, before compiling or writing anything", async () => {
+    using compiled = spy(runtime.patternManager, "compilePattern");
+    using edited = spy(runtime, "editWithRetry");
+    for (const options of [undefined, { customProgram: program }]) {
+      await expect(controller.recreateDefaultPattern(options)).rejects
+        .toThrow("Cannot recreate an identity Home root");
+    }
+    expect(compiled.calls).toHaveLength(0);
+    expect(edited.calls).toHaveLength(0);
+    expect(await controller.getDefaultPattern(false)).toBeUndefined();
+    expect(controller.getSpaceCellContents().key("defaultPattern").getRaw())
+      .toBeUndefined();
   });
 
-  it("refuses replacement before stopping or compiling an existing Home", async () => {
-    const home = await controller.recreateDefaultPattern({
-      customProgram: program,
-    });
-    const before = await home.getCell().asSchema(true).pull();
+  it("refuses to replace an existing Home, before stopping or compiling it", async () => {
+    const home = await installCustomRoot(runtime, controller, program);
+    const before = await home.asSchema(true).pull();
     expect(before).toMatchObject({ saved: { favorite: "retained" } });
     using stopped = spy(runtime.runner, "stop");
     using compiled = spy(runtime.patternManager, "compilePattern");
     for (const options of [undefined, { customProgram: program }]) {
       await expect(controller.recreateDefaultPattern(options)).rejects
-        .toThrow("Cannot replace an existing Home root");
-      expect(
-        (await controller.getDefaultPattern(false))?.equals(home.getCell()),
-      )
+        .toThrow("Cannot recreate an identity Home root");
+      expect((await controller.getDefaultPattern(false))?.equals(home))
         .toBe(true);
-      expect(home.getCell().asSchema(true).get()).toEqual(before);
+      expect(home.asSchema(true).get()).toEqual(before);
     }
     expect(stopped.calls).toHaveLength(0);
     expect(compiled.calls).toHaveLength(0);
@@ -89,49 +93,138 @@ describe("Home root recreation", () => {
     const before = root.getRaw();
     expect(before).toBeDefined();
     await expect(controller.recreateDefaultPattern({ customProgram: program }))
-      .rejects.toThrow("Cannot replace an existing Home root");
+      .rejects.toThrow("Cannot recreate an identity Home root");
+    const other = runtime.getCell(identity.did(), "another-home");
+    await expect(controller.linkDefaultPattern(other)).rejects.toThrow(
+      "Cannot replace an identity Home root",
+    );
     expect(root.getRaw()).toEqual(before);
   });
 
-  it("retains a Home installed while another initializer compiles", async () => {
-    const entered = defer<void>();
-    const release = defer<void>();
-    const compile = runtime.patternManager.compilePattern.bind(
-      runtime.patternManager,
+  it("refuses to link another root over a Home's", async () => {
+    // Linking is how a root comes to be, so it is refused only once a Home
+    // holds one: the low-level replace is the same drop as recreation.
+    const home = await installCustomRoot(runtime, controller, program);
+    const other = runtime.getCell(identity.did(), "another-home");
+    await expect(controller.linkDefaultPattern(other)).rejects.toThrow(
+      "Cannot replace an identity Home root",
     );
-    using _held = stub(
-      runtime.patternManager,
-      "compilePattern",
-      async (...args) => {
-        entered.resolve();
-        await release.promise;
-        return await compile(...args);
+    expect((await controller.getDefaultPattern(false))?.equals(home)).toBe(
+      true,
+    );
+  });
+
+  it("refuses to unlink a Home root", async () => {
+    // The low-level unlink is the one public door left that could drop the
+    // pointer without replacing it, so it carries the same refusal.
+    await installCustomRoot(runtime, controller, program);
+    const root = controller.getSpaceCellContents().key("defaultPattern");
+    const before = root.getRaw();
+    expect(before).toBeDefined();
+    await expect(controller.unlinkDefaultPattern()).rejects.toThrow(
+      "Cannot unlink an identity Home root",
+    );
+    expect(root.getRaw()).toEqual(before);
+  });
+
+  /** A root that lists its pieces in a writable registry, as a custom Home may. */
+  function registryRoot() {
+    const { commonfabric: { handler, pattern } } = createBuilder();
+    const addPiece = handler<
+      { piece: Cell<unknown> },
+      { pieceRegistry: Cell<Cell<unknown>[]> }
+    >(
+      true,
+      {
+        type: "object",
+        properties: { pieceRegistry: { type: "array", asCell: ["cell"] } },
+      },
+      ({ piece }, { pieceRegistry }) => {
+        pieceRegistry.push(piece);
       },
     );
-    const pending = controller.recreateDefaultPattern({
-      customProgram: program,
-    });
-    const refusal = expect(pending).rejects.toThrow(
-      "Cannot replace an existing Home root",
+    return pattern<{ pieceRegistry: Cell<unknown>[] }>(
+      ({ pieceRegistry }) => ({
+        pieceRegistry,
+        addPiece: addPiece({ pieceRegistry }),
+      }),
+    );
+  }
+
+  it("refuses to remove a Home's own root from its registry", async () => {
+    // A registry that lists the root makes ordinary piece removal a way to
+    // drop the root pointer, so that removal carries the unlink refusal.
+    const root = await controller.runPersistent(
+      registryRoot(),
+      { pieceRegistry: [] },
+      "registry-home",
+    );
+    await controller.linkDefaultPattern(root);
+    await runtime.idle();
+    await controller.synced();
+    await controller.add([root]);
+    await runtime.idle();
+    await controller.synced();
+    const pointer = controller.getSpaceCellContents().key("defaultPattern");
+    const before = pointer.getRaw();
+    expect(before).toBeDefined();
+    await expect(controller.remove(root)).rejects.toThrow(
+      "Cannot unlink an identity Home root",
+    );
+    expect(pointer.getRaw()).toEqual(before);
+    expect((await controller.getDefaultPattern(false))?.equals(root)).toBe(
+      true,
+    );
+    const registry = await controller.getPieceRegistry();
+    expect(registry.get().some((member) => member.equals(root))).toBe(true);
+  });
+
+  it("still removes a space's own root from its registry when the space is not a Home", async () => {
+    const other = new PiecesController(
+      createSession({ identity, spaceDid: await runtime.createSpace() }),
+      runtime,
     );
     try {
-      await entered.promise;
-      const winner = runtime.getImmutableCell(identity.did(), {
-        saved: { favorite: "another initializer" },
-      });
-      await controller.linkDefaultPattern(winner);
-      const root = controller.getSpaceCellContents().key("defaultPattern");
-      const installed = root.getRaw();
-      expect(installed).toBeDefined();
-      release.resolve();
-      await refusal;
-      expect(root.getRaw()).toEqual(installed);
-      expect(winner.get()).toEqual({
-        saved: { favorite: "another initializer" },
-      });
+      await other.synced();
+      const root = await other.runPersistent(
+        registryRoot(),
+        { pieceRegistry: [] },
+        "registry-root",
+      );
+      await other.linkDefaultPattern(root);
+      await runtime.idle();
+      await other.synced();
+      await other.add([root]);
+      await runtime.idle();
+      await other.synced();
+      expect(await other.remove(root)).toBe(true);
+      expect(await other.getDefaultPattern(false)).toBeUndefined();
     } finally {
-      release.resolve();
-      await pending.catch(() => {});
+      await other.dispose();
+    }
+  });
+
+  it("still replaces the root of a space that is not a Home", async () => {
+    // The refusal is about the Home, not about recreation: another space's
+    // root is the deploy-time repair it always was.
+    const other = new PiecesController(
+      createSession({ identity, spaceDid: await runtime.createSpace() }),
+      runtime,
+    );
+    try {
+      await other.synced();
+      const first = await other.recreateDefaultPattern({
+        customProgram: program,
+      });
+      const second = await other.recreateDefaultPattern({
+        customProgram: program,
+      });
+      expect(second.getCell().equals(first.getCell())).toBe(false);
+      expect(
+        (await other.getDefaultPattern(false))?.equals(second.getCell()),
+      ).toBe(true);
+    } finally {
+      await other.dispose();
     }
   });
 });

@@ -1,7 +1,8 @@
 /**
  * Home's shared-space collection. Registration retains the first accepted
- * route; explicit membership choices compare the revision the user observed.
- * Handler results describe the action, while the catalog carries membership.
+ * route; explicit membership choices compare the revision the user observed,
+ * and so does a removal. Handler results describe the action, while the catalog
+ * carries membership.
  */
 
 import {
@@ -79,6 +80,17 @@ export type SharedSpaceMembershipResult =
       | "unsupported-state"
       | "unsupported-revision";
   };
+
+/** Names one entry to remove, at the revision its remover observed. */
+export interface SharedSpaceRemoval {
+  space: string;
+  expectedRevision: string;
+}
+
+/** A removal's outcome, carried by its normal handler receipt. */
+export type SharedSpaceRemovalResult =
+  | { status: "removed"; space: string }
+  | { status: "conflict"; reason: "missing" | "revision" | "offer" };
 
 /**
  * The validating reader deliberately selects every stored field. A narrower
@@ -238,11 +250,80 @@ function membershipAction(
     boundedString(value.expectedRevision, 320) && membership(value.state);
 }
 
+/**
+ * Registers an admitted space in `catalog` without changing any existing
+ * membership, staging its writes in the transaction of the handler that calls
+ * it, so a handler can register a space in the same commit as its own writes.
+ * Insert-if-absent: an entry already present for the space keeps its title,
+ * membership and revision, and an archived one stays archived. A registration
+ * naming an offer records a receipt keyed by the offer's sender and ID, beside
+ * the entry, unless one is already there. Returns `conflict` without writing
+ * anything when the space is already registered with another host or kind, or
+ * the offer's receipt names another target. Call it only from a handler,
+ * since a new entry's revision names the handler's event.
+ *
+ * @throws When `input` is not a valid registration, or `catalog` holds
+ *   something other than a valid catalog.
+ */
+export function registerSharedSpaceIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  input: SharedSpaceRegistration,
+): SharedSpaceRegistrationResult {
+  const registration = normalizeRegistration(input);
+  const stored = readSharedSpaceCatalog(catalog);
+  const { space, host, kind, title, offer } = registration;
+  const current = stored.entries[space];
+  if (current && current.host !== host) {
+    return {
+      status: "conflict",
+      reason: "host",
+    };
+  }
+  if (current && current.kind !== kind) {
+    return {
+      status: "conflict",
+      reason: "kind",
+    };
+  }
+  const key = offer && sharedSpaceOfferKey(offer.from, offer.id);
+  const receipt = key && stored.offers[key];
+  if (
+    receipt &&
+    (receipt.space !== space || receipt.host !== host ||
+      receipt.kind !== kind)
+  ) return { status: "conflict", reason: "offer" };
+  if (!current) {
+    catalog.key("entries", space).set({
+      space,
+      host,
+      kind,
+      ...(title === undefined ? {} : { title }),
+      ...(offer === undefined ? {} : { from: offer.from }),
+      since: registration.since ?? Date.now(),
+      state: registration.initialState ?? "saved",
+      revision: revisionAt(1n),
+    });
+  }
+  if (key && offer && !receipt) {
+    catalog.key("offers", key).set({
+      from: offer.from,
+      id: offer.id,
+      space,
+      host,
+      kind,
+    });
+  }
+  return { status: current ? "existing" : "registered", space };
+}
+
 // Retain every event field for validation, including linked payloads whose
 // stored schema would otherwise omit a malformed optional field.
 const eventSchema = toSchema<Record<string, any>>();
 
-/** Registers an admitted space without changing any existing membership. */
+/**
+ * Registers an admitted space without changing any existing membership, as
+ * {@link registerSharedSpaceIn} does.
+ */
 export const registerSharedSpace = handler<
   SharedSpaceRegistration,
   SharedSpaceCatalogState,
@@ -250,56 +331,77 @@ export const registerSharedSpace = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (input, { catalog }) => {
-    const registration = normalizeRegistration(input);
-    const stored = readSharedSpaceCatalog(catalog);
-    const { space, host, kind, title, offer } = registration;
-    const current = stored.entries[space];
-    if (current && current.host !== host) {
-      return {
-        status: "conflict",
-        reason: "host",
-      };
-    }
-    if (current && current.kind !== kind) {
-      return {
-        status: "conflict",
-        reason: "kind",
-      };
-    }
-    const key = offer && sharedSpaceOfferKey(offer.from, offer.id);
-    const receipt = key && stored.offers[key];
-    if (
-      receipt &&
-      (receipt.space !== space || receipt.host !== host ||
-        receipt.kind !== kind)
-    ) return { status: "conflict", reason: "offer" };
-    if (!current) {
-      catalog.key("entries", space).set({
-        space,
-        host,
-        kind,
-        ...(title === undefined ? {} : { title }),
-        ...(offer === undefined ? {} : { from: offer.from }),
-        since: registration.since ?? Date.now(),
-        state: registration.initialState ?? "saved",
-        revision: revisionAt(1n),
-      });
-    }
-    if (key && offer && !receipt) {
-      catalog.key("offers", key).set({
-        from: offer.from,
-        id: offer.id,
-        space,
-        host,
-        kind,
-      });
-    }
-    return { status: current ? "existing" : "registered", space };
-  },
+  (input, { catalog }) => registerSharedSpaceIn(catalog, input),
 );
 
-/** Applies the user's choice only to the revision they observed. */
+/**
+ * Applies the user's membership choice in `catalog` only to the revision they
+ * observed, staging its writes in the transaction of the handler that calls
+ * it, so a handler can apply a choice in the same commit as its own writes.
+ * Returns `conflict` without writing anything when the space has no entry, the
+ * entry's state or action evidence is one this writer doesn't understand, the
+ * observed revision is not the current one, or the next revision would not
+ * fit. Repeating the last applied choice returns `confirmed`. Call it only
+ * from a handler, since a new revision names the handler's event.
+ *
+ * @throws When `change` is not a valid membership action, or `catalog` holds
+ *   something other than a valid catalog.
+ */
+export function changeSharedSpaceMembershipIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  change: SharedSpaceMembershipChange,
+): SharedSpaceMembershipResult {
+  if (
+    !plainObject(change) || !isWellFormedDID(change.space) ||
+    !membershipAction(change)
+  ) {
+    throw new TypeError("Invalid shared-space membership action.");
+  }
+  const current = readSharedSpaceCatalog(catalog).entries[change.space];
+  if (!current) return { status: "conflict", reason: "missing" };
+  if (!membership(current.state)) {
+    return {
+      status: "conflict",
+      reason: "unsupported-state",
+    };
+  }
+  const last = current.lastAction;
+  if (
+    last !== undefined &&
+    (!membershipAction(last) || last.state !== current.state)
+  ) {
+    return { status: "conflict", reason: "action" };
+  }
+  if (last?.id === change.id) {
+    return last.expectedRevision === change.expectedRevision &&
+        last.state === change.state
+      ? { status: "confirmed", space: change.space, id: change.id }
+      : { status: "conflict", reason: "action" };
+  }
+  if (current.revision !== change.expectedRevision) {
+    return {
+      status: "conflict",
+      reason: "revision",
+    };
+  }
+  const revision = nextRevision(current.revision);
+  if (revision === undefined) {
+    return { status: "conflict", reason: "unsupported-revision" };
+  }
+  catalog.key("entries", change.space, "state").set(change.state);
+  catalog.key("entries", change.space, "revision").set(revision);
+  catalog.key("entries", change.space, "lastAction").set({
+    id: change.id,
+    expectedRevision: change.expectedRevision,
+    state: change.state,
+  });
+  return { status: "applied", space: change.space, id: change.id };
+}
+
+/**
+ * Applies the user's choice only to the revision they observed, as
+ * {@link changeSharedSpaceMembershipIn} does.
+ */
 export const changeSharedSpaceMembership = handler<
   SharedSpaceMembershipChange,
   SharedSpaceCatalogState,
@@ -307,51 +409,66 @@ export const changeSharedSpaceMembership = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (change, { catalog }) => {
+  (change, { catalog }) => changeSharedSpaceMembershipIn(catalog, change),
+);
+
+/**
+ * Removes one entry from the catalog, for one purpose only: an application
+ * that registered spaces on the person's behalf undoing that import. It is not
+ * how a person puts a shared space away (archive is, and nothing a person
+ * invokes calls this), and it is not a general way to delete, clean up,
+ * repair, or compact entries.
+ *
+ * It removes the entry only while the entry is still at `expectedRevision`,
+ * the revision its caller observed, so a membership choice made since is never
+ * lost, and only when no offer receipt names the space: removing such an entry
+ * alone leaves an invalid receipt, and removing the receipt as well forgets the
+ * offer that it refuses to replay. Removal grants and revokes no access.
+ *
+ * The rest of a safe undo is the caller's, since only the caller knows it:
+ * - remove only entries it can show it registered itself;
+ * - keep the complete entry it observed, as its backup, before calling;
+ * - stop registering those spaces first, because a later registration admits a
+ *   removed space again as a new entry, and a re-admitted invocation of the
+ *   original registration recreates it at its original revision.
+ *
+ * CFS's `share.catalog-undo` is the caller written to these rules.
+ */
+export const removeSharedSpace = handler<
+  SharedSpaceRemoval,
+  SharedSpaceCatalogState,
+  SharedSpaceRemovalResult
+>(
+  eventSchema,
+  toSchema<SharedSpaceCatalogState>(),
+  (removal, { catalog }) => {
     if (
-      !plainObject(change) || !isWellFormedDID(change.space) ||
-      !membershipAction(change)
+      !plainObject(removal) || !isWellFormedDID(removal.space) ||
+      !boundedString(removal.expectedRevision, 320)
     ) {
-      throw new TypeError("Invalid shared-space membership action.");
+      throw new TypeError("Invalid shared-space removal.");
     }
-    const current = readSharedSpaceCatalog(catalog).entries[change.space];
+    const stored = readSharedSpaceCatalog(catalog);
+    const current = stored.entries[removal.space];
     if (!current) return { status: "conflict", reason: "missing" };
-    if (!membership(current.state)) {
-      return {
-        status: "conflict",
-        reason: "unsupported-state",
-      };
+    if (current.revision !== removal.expectedRevision) {
+      return { status: "conflict", reason: "revision" };
     }
-    const last = current.lastAction;
     if (
-      last !== undefined &&
-      (!membershipAction(last) || last.state !== current.state)
-    ) {
-      return { status: "conflict", reason: "action" };
-    }
-    if (last?.id === change.id) {
-      return last.expectedRevision === change.expectedRevision &&
-          last.state === change.state
-        ? { status: "confirmed", space: change.space, id: change.id }
-        : { status: "conflict", reason: "action" };
-    }
-    if (current.revision !== change.expectedRevision) {
-      return {
-        status: "conflict",
-        reason: "revision",
-      };
-    }
-    const revision = nextRevision(current.revision);
-    if (revision === undefined) {
-      return { status: "conflict", reason: "unsupported-revision" };
-    }
-    catalog.key("entries", change.space, "state").set(change.state);
-    catalog.key("entries", change.space, "revision").set(revision);
-    catalog.key("entries", change.space, "lastAction").set({
-      id: change.id,
-      expectedRevision: change.expectedRevision,
-      state: change.state,
-    });
-    return { status: "applied", space: change.space, id: change.id };
+      Object.values(stored.offers).some((receipt) =>
+        receipt.space === removal.space
+      )
+    ) return { status: "conflict", reason: "offer" };
+    // Writing the entries without this one deletes its slot and leaves the
+    // others unwritten. `undefined` written at the slot itself would be stored
+    // as its value, which the validating reader refuses.
+    catalog.key("entries").set(
+      Object.fromEntries(
+        Object.entries(stored.entries).filter(([space]) =>
+          space !== removal.space
+        ),
+      ),
+    );
+    return { status: "removed", space: removal.space };
   },
 );

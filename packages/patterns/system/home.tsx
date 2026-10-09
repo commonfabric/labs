@@ -26,12 +26,15 @@ import {
   changeSharedSpaceMembership,
   readSharedSpaceCatalog,
   registerSharedSpace,
+  removeSharedSpace,
   type SharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
+  type SharedSpaceRemoval,
+  type SharedSpaceRemovalResult,
 } from "./shared-space-catalog.ts";
 import {
   type CreateProfileEvent,
@@ -48,6 +51,7 @@ import {
   type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
+  type PrivateInboxRefusalHolder,
   type RetainedPrivateInboxes,
 } from "./private-inbox.tsx";
 
@@ -129,6 +133,19 @@ export type HomeOutput = {
   // The inboxes `privateInbox` held before, in the order Home gave them up, so
   // that what senders delivered to them stays readable.
   retainedPrivateInboxes: Writable<RetainedPrivateInboxes | Default<[]>>;
+  // The host's refusal of the inbox the deciding profile points at, under
+  // `refusal`: why the host refused it, by the host's code; the refused inbox;
+  // and when Home first recorded it. `ensurePrivateInbox` records one only
+  // while that profile is in Home's list and still points at the refused inbox,
+  // which is not the one Home holds. The next ensure clears it when Home adopts
+  // or creates an inbox, when the deciding profile points at the inbox Home
+  // holds, or when no profile points at the refused inbox any longer; nothing
+  // else clears it automatically between ensures, though the owner's own code
+  // can, through `ensurePrivateInbox`. No `refusal` while there is none to
+  // report.
+  privateInboxRefusal: Writable<
+    PrivateInboxRefusalHolder | Default<Record<PropertyKey, never>>
+  >;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: Stream<
     SharedSpaceRegistration,
@@ -138,12 +155,19 @@ export type HomeOutput = {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
+  // Only for an application undoing its own import of shared spaces: removes
+  // one entry no offer receipt names, at the revision the caller observed (see
+  // `removeSharedSpace` for what the caller must do). Home renders no control
+  // for it, and nothing a person invokes calls it: archive is how a person puts
+  // a shared space away.
+  removeSharedSpace: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
   createProfile: Stream<CreateProfileEvent>;
   // Gives Home the private inbox the deciding profile advertises: it adopts the
   // one the host vetted and names, with that profile, when the profile is in
   // Home's list and still points at it, or creates one when Home holds none
   // and no profile points at an inbox, and points every profile that points at
-  // no inbox at Home's.
+  // no inbox at Home's. It records the host's refusal of the deciding
+  // profile's inbox in `privateInboxRefusal`.
   // The host sends it the first time a runtime worker brings up Home, and
   // again at that worker's next bring-up if the ensure failed, so Home adopts
   // again only then.
@@ -342,6 +366,10 @@ const Home = pattern(
     // Home holds when it adopts another.
     const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
       .for("retainedPrivateInboxes");
+    // Where `ensurePrivateInbox` records the host's refusal of the inbox the
+    // deciding profile points at.
+    const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({})
+      .for("privateInboxRefusal");
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
     // create a profile. The actual create UI lives in the profile picker below.
@@ -363,10 +391,11 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
-    const chatManager = FabriChatManager({});
+    const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
       retainedPrivateInboxes,
+      privateInboxRefusal,
       profiles: profiles as any,
       pointProfiles: pointProfilesAtPrivateInbox({
         privateInbox,
@@ -510,12 +539,14 @@ const Home = pattern(
       chatManager,
       privateInbox,
       retainedPrivateInboxes,
+      privateInboxRefusal,
 
       sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
 
       // Exported handlers
       registerSharedSpace: registerSharedSpace({ catalog }),
       changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
+      removeSharedSpace: removeSharedSpace({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

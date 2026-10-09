@@ -628,6 +628,50 @@ describe("post-main-report", () => {
       expect(view.manifest).toBe(true);
       expect(view.withheld.get(testIdentityKey(kneads))).toBe("flaky");
       expect(view.selected.has(testIdentityKey(proves))).toBe(true);
+      expect(view.unschedulable.size).toBe(0);
+      expect(view.crowded).toBe(false);
+    });
+
+    // A unit the tree holds and the manifest does not know is mandatory,
+    // and a suite overhead past the bound a lane runs under puts it past
+    // the whole run's budget and leaves no lane able to hold `proves`.
+    // `kneads` is withheld, and a unit that runs whole runs it, so the
+    // packing holds `proves` back with it.
+    it("carries the tests held back with their unit", () => {
+      const view = manifestView(
+        manifest,
+        [{ ...suites[0]!, whole: [bakeryUnit] }],
+        new Set(),
+      );
+      expect([...view.heldWithUnit]).toEqual([testIdentityKey(proves)]);
+      expect(view.selected.has(testIdentityKey(proves))).toBe(false);
+      expect(manifestView(manifest, suites, new Set()).heldWithUnit.size)
+        .toBe(0);
+    });
+
+    it("carries what the packing says about room and cost", () => {
+      const oven = "packages/bakery/test/oven.test.ts";
+      const view = manifestView(
+        {
+          ...manifest,
+          calibration: {
+            setupCost: {},
+            suites: {
+              "workspace-unit": {
+                overhead: 10_000,
+                correction: 1,
+                unitOverhead: 0,
+              },
+            },
+            prologue: 0,
+          },
+        },
+        [{ ...suites[0]!, units: [bakeryUnit, oven] }],
+        new Set(),
+      );
+      expect(view.crowded).toBe(true);
+      expect(view.unschedulable.has(testIdentityKey(proves))).toBe(true);
+      expect(view.selected.has(testIdentityKey(proves))).toBe(false);
     });
 
     it("carries the flake counts and the catches behind every entry", () => {

@@ -231,6 +231,9 @@ statement.
 - The hereditary meet is empty until every input carries the certified atom,
   an under-claim stated in `cfc-observation-classes.md` §5 as the fail-safe
   direction.
+- `atomPropagationClass` classes `ExternalIngest` as provenance where §15.4
+  registers it value-bound, so a verified projection does not carry a scoped
+  form of it: an under-claim of integrity, which §15.1.1 holds sound.
 - One guard matched on a consumed read releases another writer's value in
   the same document at the release gate, stated in
   `cfc-transformed-by-input-witnesses.md` under "What this does not cover" as
@@ -329,7 +332,11 @@ causes to `ExtendedStorageTransaction.addCfcTriggerReads`, which drops `cid:`
 and document-member paths and invalidates a prepared transaction;
 `forEachFlowObservation` in `cfc/prepare.ts` consumes them as recursive value
 reads, with a shape read of a `length` parent, at prepare-time metadata, which
-is their current labels, whatever the gating dial says. With
+is their current labels, whatever the gating dial says. A trigger at the
+sub-path where a link exposes its recognizable form is the invalidation of a
+link probe, and is read as a shallow read of the slot the probe asked about,
+since that sub-path's segments are not child segments (§4.6.3)
+(`triggerReadAt`). With
 `cfcTriggerReadGating` on, the shipped default, `triggerReadSources` adds them
 to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure

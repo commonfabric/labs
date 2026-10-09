@@ -32,6 +32,7 @@ import {
 } from "../src/cfc/policy.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
+import { hostGestureProvenance } from "../src/cfc/host-review.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -145,7 +146,7 @@ const PROJECT: ImplementationIdentity = {
 const trustedClick = (pattern = "CustodySeal") => {
   const event = {
     type: "click",
-    provenance: { origin: "dom", trusted: true, ui: { pattern } },
+    provenance: hostGestureProvenance(pattern),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -1520,7 +1521,7 @@ describe("cfc-custody-seal", () => {
             cfcAtom.user(rotated.did()),
             context(rotated.did()),
             rotated.did(),
-            { anyOf: [cfcAtom.user(alice.did()), cfcAtom.user(bob.did())] },
+            { anyOf: [cfcAtom.user(rotated.did()), cfcAtom.user(bob.did())] },
           ]
         ) {
           const draft = await fixture.draft(alice, honestStance, [clause]);
@@ -1528,6 +1529,166 @@ describe("cfc-custody-seal", () => {
           await expect(refusal).rejects.toThrow(/identity mismatch/);
           await expect(refusal).rejects.toThrow(alice.did());
         }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("seals a value made the actor's own from data shared with others, and names them", async () => {
+      // A message row is labeled with one clause naming its participants and
+      // the store's owner by bare DID (§13.12). Joined with a clause naming
+      // the actor alone, the row's clause is absorbed (§3.1.8(5)) and only
+      // the actor reads the value (§3.1.4); the actor's `User` and bare DID
+      // are one principal.
+      const fixture = await setup();
+      try {
+        const coHolder = await Identity.fromPassphrase(
+          "custody-seal-co-holder",
+        );
+        const row = {
+          anyOf: [cfcAtom.user(bob.did()), coHolder.did(), owner(alice)],
+        };
+        const draft = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          row,
+        ], "row");
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.sources).toEqual([]);
+        expect(prepared.heldWith).toEqual([
+          [bob.did(), coHolder.did()].sort(),
+        ]);
+        expect(Object.isFrozen(prepared.heldWith)).toBe(true);
+
+        // One clause per conversation: two chats stay two groups, and one
+        // group chat stays one.
+        const twoChats = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          { anyOf: [owner(alice), cfcAtom.user(bob.did())] },
+          { anyOf: [owner(alice), coHolder.did()] },
+        ], "two-chats");
+        expect(
+          (await prepareCustodySeal(twoChats, fixture.room(alice))).heldWith,
+        ).toEqual([[bob.did()], [coHolder.did()]].sort());
+
+        // The actor's own `Context` alternative absorbs a clause holding it,
+        // and is still a source the room must allow.
+        const messages = context(owner(alice), "messages");
+        const drawn = await fixture.draft(alice, honestStance, [
+          messages,
+          { anyOf: [messages, cfcAtom.user(bob.did())] },
+        ], "drawn");
+        const allowed = await prepareCustodySeal(drawn, fixture.room(alice), {
+          allowedSources: [messages],
+        });
+        expect(allowed.sources).toEqual([messages]);
+        expect(allowed.heldWith).toEqual([[bob.did()]]);
+        await expect(
+          prepareCustodySeal(drawn, fixture.room(alice), {
+            allowedSources: [context(owner(alice), "calendar")],
+          }),
+        ).rejects.toThrow(/source this room does not allow/);
+
+        // The receipt, the actor's own, records the people; the box entry,
+        // which every seat's projector reads, does not (Bob holds a seat, so
+        // the terms in the entry name him anyway). One entry per actor per
+        // room: the row's seal commits last.
+        const sealed = await commitCustodySeal(
+          prepared.consent,
+          trustedClick(),
+        );
+        expect((sealed.receipt.get() as { heldWith?: unknown }).heldWith)
+          .toEqual([[bob.did(), coHolder.did()].sort()]);
+        expect(JSON.stringify(sealed.box.get())).not.toContain(coHolder.did());
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a value someone else can also read", async () => {
+      const fixture = await setup();
+      try {
+        const carol = await Identity.fromPassphrase("custody-seal-carol");
+        const shared = {
+          anyOf: [cfcAtom.user(owner(alice)), cfcAtom.user(bob.did())],
+        };
+        // No clause names the actor alone, or none that the shared clause
+        // holds: a home space admits whom its access list admits, and a
+        // source is not the actor's person.
+        for (
+          const [index, label] of [
+            [shared],
+            [cfcAtom.space(alice.did()), shared],
+            [cfcAtom.personalSpace(alice.did()), shared],
+            [context(owner(alice), "messages"), shared],
+          ].entries()
+        ) {
+          const draft = await fixture.draft(
+            alice,
+            honestStance,
+            label,
+            `shared-${index}`,
+          );
+          const refusal = prepareCustodySeal(draft, fixture.room(alice));
+          await expect(refusal).rejects.toThrow(/can also read/);
+          await expect(refusal).rejects.toThrow(bob.did());
+          await expect(refusal).rejects.toThrow(alice.did());
+        }
+        // A clause the actor does not hold is refused whatever the others
+        // say: it names Carol, not Bob.
+        const unheld = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          shared,
+          cfcAtom.user(carol.did()),
+        ], "unheld");
+        const unheldRefusal = prepareCustodySeal(unheld, fixture.room(alice));
+        await expect(unheldRefusal).rejects.toThrow(/identity mismatch/);
+        await expect(unheldRefusal).rejects.toThrow(carol.did());
+        await expect(unheldRefusal).rejects.not.toThrow(bob.did());
+        // Beside the actor, a shared clause names only people, whom the
+        // dialog can name: not an expiry, a policy, another principal's
+        // source or space, a caveat by its short name, or an atom with extra
+        // fields.
+        for (
+          const [index, alternative] of [
+            cfcAtom.expires(Date.now() + 60_000),
+            policyOf(SCRATCH),
+            context(bob.did(), "messages"),
+            cfcAtom.space(S),
+            { ...cfcAtom.user(bob.did()), role: "reader" },
+            "prompt-injection-risk-unscreened",
+            "prompt-influence",
+          ].entries()
+        ) {
+          const draft = await fixture.draft(alice, honestStance, [
+            cfcAtom.user(owner(alice)),
+            { anyOf: [cfcAtom.user(owner(alice)), alternative] },
+          ], `not-a-person-${index}`);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/something other than a person/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses at commit a value relabeled after review to name someone else", async () => {
+      const fixture = await setup();
+      try {
+        const carol = await Identity.fromPassphrase("custody-seal-carol");
+        const draft = await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          { anyOf: [owner(alice), cfcAtom.user(bob.did())] },
+        ], "relabeled");
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.heldWith).toEqual([[bob.did()]]);
+        await fixture.draft(alice, honestStance, [
+          cfcAtom.user(owner(alice)),
+          {
+            anyOf: [owner(alice), cfcAtom.user(bob.did()), carol.did()],
+          },
+        ], "relabeled");
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow(/review is stale/);
       } finally {
         await fixture.dispose();
       }
@@ -2555,11 +2716,7 @@ describe("cfc-custody-seal", () => {
           const event of [
             {
               type: "click",
-              provenance: {
-                origin: "dom",
-                trusted: true,
-                ui: { pattern: "CustodySeal" },
-              },
+              provenance: hostGestureProvenance("CustodySeal"),
             },
             trustedClick("ShareSnapshot"),
             undefined,

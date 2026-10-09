@@ -17,7 +17,6 @@ import {
   type BrowserHostResult,
   type BrowserHostValue,
   type HarnessBrowserHost,
-  isBrowserHostResult,
 } from "../contracts/browser-host.ts";
 import { CFC_CONCEPT_KIND, cfcAtom } from "@commonfabric/api/cfc";
 import {
@@ -498,14 +497,7 @@ export const invokeBrowserOnHost = async (
   }
   let result: BrowserHostResult;
   try {
-    const answer: unknown = await host.perform(operation, context.signal);
-    if (!isBrowserHostResult(answer)) {
-      return errorOutput(
-        "host_unavailable",
-        "the browser host answered with something that is not a result",
-      );
-    }
-    result = answer;
+    result = await host.perform(operation, context.signal);
   } catch (error) {
     context.signal?.throwIfAborted();
     return errorOutput(

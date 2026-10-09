@@ -584,6 +584,77 @@ describe("principalOf()", () => {
     });
   });
 
+  describe("a load in flight", () => {
+    /**
+     * Makes the storage manager report a load in flight for every document,
+     * which is the state a first read of a document leaves while the load it
+     * started has not landed.
+     */
+    const loading = () => {
+      Object.assign(storage, { pendingLoadGeneration: () => 1 });
+    };
+
+    it("withdraws the handler that reads its label while its load is in flight", () => {
+      loading();
+      const tx = edit();
+      const target = runtime.getCell(space, "still-loading");
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun?.reason).toContain(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
+    it("withdraws the handler that reads the label of a scoped document loading for the identity its transaction demands", () => {
+      // Only Bob's instance of the document is loading. The runtime acts for
+      // Alice, and the transaction demands Bob, as a served run demands its
+      // actor.
+
+      Object.assign(storage, {
+        pendingLoadGeneration: (key: string) =>
+          key.includes(encodeURIComponent(bob.did())) ? 1 : undefined,
+      });
+      const tx = edit();
+      tx.tx.scopeKeyIdentity = { principal: bob.did() };
+      const target = runtime.getCell(
+        space,
+        "still-loading-for-bob",
+        undefined,
+        undefined,
+        "user",
+      );
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun?.reason).toContain(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
+    it("leaves a reactive computation that reads its label while its load is in flight to run", () => {
+      loading();
+      const tx = edit();
+      const target = runtime.getCell(space, "still-loading");
+      expect(callIn(tx, target, "represents-principal", "lift"))
+        .toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+
+    it("leaves the handler that reads its label to run, returning `undefined`, when no load is in flight", () => {
+      const tx = edit();
+      const target = runtime.getCell(space, "never-written");
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+
+    it("leaves the handler that reads the label of a document it holds to run, while a load is in flight", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      loading();
+      const tx = edit();
+      expect(callIn(tx, profile, "represents-principal")).toBe(bob.did());
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+  });
+
   describe("in a compiled pattern", () => {
     /** Compiles and runs `PROBE_PATTERN` over `profile`. */
     const runProbe = async (profile: Cell<unknown>) => {
@@ -684,6 +755,116 @@ describe("principalOf()", () => {
       expect(() => callIn(edit(), { name: "Bob" }, "authored-by")).toThrow(
         "takes a cell as its target",
       );
+    });
+  });
+
+  describe('with `label` of `"written"`', () => {
+    /** Calls `principalOf(target, kind, options)` in a handler frame. */
+    const callAt = (target: unknown, kind: unknown, options: unknown) =>
+      inFrame(edit(), "handler", () => principalOf(target, kind, options));
+
+    /**
+     * Stores a document under `cause` whose `by` field links a profile that
+     * attests bob, with a label map of `entries`, and returns its cell.
+     */
+    const holding = async (cause: string, entries: SeedEntry[]) => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      return await seed(cause, entries, {
+        by: profile.getAsLink(),
+        title: "Held",
+      });
+    };
+
+    /** The copy of the linked profile's claim a link carries at `by`. */
+    const carried: SeedEntry = {
+      path: ["by"],
+      label: { integrity: [claim("represents-principal", bob.did())] },
+      origin: "link",
+    };
+
+    it("returns the DID attested on a field holding a link, where the default returns the linked document's", async () => {
+      const holder = await holding("holder", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+        carried,
+      ]);
+      const field = holder.key("by");
+      expect(callIn(edit(), field, "represents-principal")).toBe(bob.did());
+      expect(callAt(field, "represents-principal", { label: "resolved" }))
+        .toBe(bob.did());
+      expect(callAt(field, "represents-principal", { label: "written" }))
+        .toBe(alice.did());
+      expect(
+        inFrame(
+          edit(),
+          "handler",
+          () =>
+            principalsOf(field, "represents-principal", { label: "written" }),
+        ),
+      ).toEqual([alice.did()]);
+    });
+
+    it("does not count the claim a link carries from the document it leads to", async () => {
+      const holder = await holding("holder", [carried]);
+      const field = holder.key("by");
+      expect(callAt(field, "represents-principal", { label: "written" }))
+        .toBeUndefined();
+      expect(
+        inFrame(
+          edit(),
+          "handler",
+          () =>
+            principalsOf(field, "represents-principal", { label: "written" }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("follows the links on the way to the field", async () => {
+      const holder = await holding("holder", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+      ]);
+      const via = runtime.getCell<{ by: unknown }>(space, "via");
+      const tx = runtime.edit();
+      via.withTx(tx).set(holder as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(
+        callAt(via.key("by"), "represents-principal", { label: "written" }),
+      ).toBe(alice.did());
+    });
+
+    it("follows a redirect stored in the field, as a write to it would", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      const holder = await seed("redirecting", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+      ], { by: profile.getAsWriteRedirectLink() });
+      expect(
+        callAt(holder.key("by"), "represents-principal", { label: "written" }),
+      ).toBe(bob.did());
+    });
+
+    it("reads a field holding no link as the default does", async () => {
+      const record = await seed("record", [
+        claimsAt(["name"], claim("authored-by", bob.did())),
+      ]);
+      const field = record.key("name" as never);
+      expect(callAt(field, "authored-by", { label: "written" })).toBe(
+        bob.did(),
+      );
+      expect(callIn(edit(), field, "authored-by")).toBe(bob.did());
+    });
+
+    it("throws for `options` in another form", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      for (const options of [null, "no", [], { label: "field" }]) {
+        expect(() => callAt(profile, "represents-principal", options))
+          .toThrow('takes `options` of `{ label?: "written" | "resolved" }`');
+      }
     });
   });
 

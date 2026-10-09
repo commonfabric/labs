@@ -1426,6 +1426,14 @@ the per-epic implementation notes).
 >   omitting it, which parses as `false`, leaves the connection without the
 >   notice, and a refused client then learns of a grant only by asking again.
 >   It is permanent.
+> - **`spaceKind`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server seals the kind a space's genesis commit
+>   declares, and reports it in every `session.open` result
+>   ([`space-kinds.md`](../features/space-kinds.md)). Older servers omit it,
+>   which parses as `false`. A client then refuses to declare a kind there,
+>   since such a server would neither validate nor seal it, and
+>   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
+>   is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 
@@ -1574,13 +1582,16 @@ the per-epic implementation notes).
   ([`packages/toolshed/env.ts`](../../packages/toolshed/env.ts)). Not a
   `RuntimeOptions` flag: it gates an HTTP router, not runtime behavior.
 - **Added by.** Alex Komoroske, in the self-serve ingest channels change.
-- **Purpose.** Gates the `/api/ingest-channels` control plane, through which a
+- **Purpose.** Gates the ingest-channel control plane
+  (`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
+  through which a
   user holding their own identity key mints, lists, rotates, and revokes ingest
   channels for spaces they own — without an operator. When off, the router
   [404s every verb](../../packages/toolshed/routes/ingest-channels/gate.ts)
   before the body limit, the rate limiter, or signature verification runs, so a
   deployment that has not opted in does not advertise the endpoint. The data
-  plane (`/api/ingest/:id`) and the operator provisioning scripts are
+  plane (`/api/spaces/:space/ingest/:id` and `/api/ingest/:id`) and the
+  operator provisioning scripts are
   unaffected by the flag.
 - **Current default and planned end state.** Off by default. The gate exists
   because minting issues a durable bearer capability that outlives the trust

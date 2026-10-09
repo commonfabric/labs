@@ -4,9 +4,9 @@ The contract of test selection: what a test is worth running, what the
 manifest that says so contains, and what a consumer of one may and may
 not conclude from it. This is the normative description of the shipped
 parts; [the operating guide](../development/test-selection.md) says how to
-use them, and
-[the plan this comes from](../plans/pull-request-test-selection.md) carries
-the reasoning and the parts still to be built. It rests on
+use them, and [the archived plan this comes
+from](../history/plans/pull-request-test-selection.md) records the
+reasoning behind it. It rests on
 [test-run records](test-records.md), whose store it reads and beside whose
 dataset area it writes. The implementation is `tasks/test-selection/`, and
 the manifest format itself is
@@ -193,6 +193,11 @@ it, its duration is that net's bound. The bound a safety net carries and
 a lane's bound are the same order of magnitude, so a test that hits one is
 otherwise reported as fitting no lane and held out of every pull request that
 does not touch it.
+
+Only executions on a lane's runner are measured. A workstation is a
+different machine, faster or slower by however it differs, so its record
+counts as evidence about the test and not about what a lane will spend
+running it.
 
 A day records which set of these rules sealed it, and a day carrying no
 such record was sealed before any set was recorded, which reads as
@@ -501,21 +506,21 @@ repeated and fits nowhere runs fewer times, down to once, since all of
 one identity's runs go in one lane and one observation beats none. Down
 to once and never to nothing.
 
-A plan says what a suite costs it, as well as what a test does. A lane
-pays a suite's overhead, what one of its units costs to open, and its
-capabilities' setup before it runs anything of that suite, and that
-charge is the same for every identity the suite has. A lane that runs a suite
-with coverage on pays what that suite's batches have cost with coverage on,
-where such a fit exists, and otherwise its fit without coverage. The two are
-fitted apart, since instrumenting a run costs it time and how much is a
-property of the suite. Where it alone passes
-what a lane holding two things may take, nothing can share a lane with one of
-the suite's identities, so the suite takes a whole lane for each one it places;
+A plan says what a suite costs it, as well as what a test does. A lane pays
+a suite's overhead, what one of its units costs to open, its process setup,
+and its capabilities' setup before it runs anything of that suite, and that
+charge is the same for every identity the suite has. A lane that runs a
+suite with coverage on pays what that suite's batches have cost with
+coverage on, where such a fit exists, and otherwise its fit without
+coverage. The two are fitted apart, since instrumenting a run costs it time
+and how much is a property of the suite. Where it alone passes what a lane
+holding two things may take, nothing can share a lane with one of the
+suite's identities, so the suite takes a whole lane for each one it places;
 where it passes a lane's bound, no lane can hold the suite and every
 discretionary identity it has fits nowhere. Both are reported once for the
 suite, and the identities of a suite in the second case are left out of the
-report that names identities, since the suite's line says what every one of them
-would.
+report that names identities, since the suite's line says what every one of
+them would.
 
 **A unit that runs whole is one choice.** Some units have a runner that
 runs every identity in them, whatever it is asked. The topology lists
@@ -541,13 +546,24 @@ Two rules force a test in.
   grounds that a selector which never runs the unselected starves its own
   data and that a renamed test is an unknown identity until an alias line
   lands.
+
+  What a consumer can see is a unit, so the rule is applied per unit. A
+  unit that no identity the manifest knows in its suite and variant
+  belongs to is represented by a stand-in, and the stand-in must run. A
+  new identity inside a known unit is not forced in. It runs whenever its
+  unit runs, because what a runner is told to skip names only identities
+  the manifest holds. A record a suite writes for itself rather than for
+  one of its units makes no unit known.
 - **What the change touches must run.** A changed test file's identities
   are mandatory. Everything else a change forces in goes through one
   rule, and there is no second rule beside it: a declaration names the
   paths a change reaches something by, and what a change reaches is what
-  it forces. That is how a unit which is not a file — a type-check group,
-  a repository gate, a binary — is reached at all, because only its suite
-  knows what its unit covers. Anything else that has to answer "which
+  it forces. That is how a unit which is not a file — a type-check group
+  or a repository gate — is reached at all, because only its suite knows
+  what its unit covers. A unit whose suite declares nothing, such as the
+  build of a shipped binary, is never forced in by a change. It runs when
+  it is unknown, when the score chooses it, and in a run over the whole
+  corpus. Anything else that has to answer "which
   parts of this repository did the change touch" answers from the same
   declarations, including a consumer deciding not which tests to run but
   which packages to measure. A second mechanism for the same question is
@@ -572,6 +588,100 @@ Two rules force a test in.
   and no `deno test` type-checks anything, so a group left to the score is
   a type error the change may have made that nothing looks for.
 
+## Packing
+
+A run's lanes are filled from a plan, and every lane of the run computes
+the same plan, so packing is part of the contract rather than a detail of
+one consumer.
+
+### What a lane is charged
+
+A lane is charged the setup of each capability it opens, and for each
+suite it holds:
+
+- the suite's `overhead` once for each pass, where a pass is one
+  invocation of the suite's command over the units still asking for runs,
+  so a batch whose identities run three times takes three passes;
+- the suite's `unitOverhead` for each time a pass opens a unit;
+- the suite's process `setup` for each time a process starts, where the
+  suite's fit carries a process fit and the topology names the process
+  each unit runs in;
+- what its tests take, which is the larger of two figures. One is the
+  suite's `correction` times the tests' own costs, each counted once for
+  each time its unit runs. The other is what the longest unit of each pass
+  takes, added together, since a pass does not finish before its longest
+  unit does. The second is the one that binds for a suite whose runner
+  runs its units side by side.
+
+Where the process fit applies, the suite's `overhead`, `correction` and
+`unitOverhead` are that fit's too, fitted to what its batches spent once
+their processes' setup is taken out. Otherwise they are the fit of each
+batch as a whole, which spreads that setup through the three. A suite
+with no fit is charged no overhead, no setup, nothing per unit, and a
+correction of one. A runner that runs units side by side starts the
+costliest first, by the cost the lane hands it with each unit, since the
+second figure assumes nothing long starts last.
+
+The figures are fitted to what the lanes' own batches spent. The fixed
+charges are read high, since a lane charged too little runs past its
+bound. The correction and the per-unit charge are read from the middle of
+what the batches did.
+
+- `correction` is the least-squares slope of what a batch spent against
+  what its tests took. It is believed only over at least
+  `MIN_CORRECTION_SAMPLES` batches whose tests' times span at least
+  `MIN_CORRECTION_SPAN_SECONDS`, and only where it is above zero and the
+  fixed cost it implies is not below zero. A batch whose longest units
+  outlasted what the slope makes of it measured those units rather than
+  the slope, so the slope is fitted again without such batches, and the
+  second slope is taken where it is believed. Where the first is not
+  believed, the second is fitted over the batches whose longest units
+  took under half of what they spent. Where neither is believed the
+  correction is one, which is the reading that needs no evidence.
+- `unitOverhead` is the middle of the rates the batches read on their own:
+  what each spent beyond what its tests are charged, over the units it
+  opened, read as zero where a batch spent less than its tests are
+  charged. Where the count is even it is the higher of the two middle
+  readings.
+- `overhead` is the ninetieth percentile, across the batches, of what is
+  left over per pass, and never below zero. A batch that does not say how
+  many passes it made is read as one.
+- A process fit's `setup` is the ninetieth percentile of what each batch
+  that measured its processes' setup spent on it per process.
+
+A batch carries only the figures its lane wrote. The fit narrows by one
+figure at a time: wherever at least `MIN_CORRECTION_SAMPLES` of the
+batches still being read carry the figure, the rest are left out. The
+correction is taken from the narrowest of those sets that fits one.
+
+### How lanes are filled
+
+The mandatory identities are placed first, the costliest first, with the
+identity's key breaking ties. Each goes in the cheapest lane that can still
+hold it, running fewer times where its repeats fit nowhere, down to once.
+One that fits nowhere even once goes in the lane it leaves shortest. This
+is the only pass that may put a lane past its bound, or past its budget
+with more than one identity in it.
+
+Three passes then spend what is left of the whole run's budget, each up to
+its share of it. `FILL_VALUE_SHARE` is spent in descending score.
+`FILL_DENSITY_SHARE` is spent in descending score per second of what each
+identity would add to the lane it went in, recomputed as placements make
+other identities cheaper. `FILL_EXPLORATION_SHARE` is spent on what
+neither chose, never-run identities first and then the longest unrun,
+with an order shuffled by the manifest's seed breaking ties. A share left
+unspent is available to the passes after it. The shares are of what the
+mandatory pass left rather than of the whole budget, so a change that
+forces in a great deal of work is not given a full budget of
+discretionary work on top of it.
+
+In these passes an identity goes in the cheapest lane that can hold it
+inside its budget, and the emptier lane wins a tie. A lane holding
+nothing may take one identity run once up to the lane's bound, which is
+where an identity costing more than a whole budget runs. An identity that
+would be repeated takes as many of its runs as fit, giving them up one at
+a time down to one.
+
 ## Coverage
 
 Selection breaks a gate on the repository's whole coverage number: a
@@ -594,7 +704,14 @@ units the configuration deliberately does not run is not a set at all,
 since scoring it would score whatever else happened to write into its
 directory.
 
-Four rules hold of every measurement.
+The suite that runs each workspace member's own tests declares one set for
+every member under `packages/` with tests that run under Deno alone, at
+whatever depth the member sits, reached by its own tree less the trees of
+members nested inside it. The repository's `tasks` and `scripts` trees
+carry none. That suite leaves a member out only where the member is named,
+with a reason, on `EXCLUDED_FROM_COVERAGE_GATE`.
+
+Five rules hold of every measurement.
 
 - **Each set is counted on its own.** A set's units write their coverage
   profiles into a directory named for the suite and the member, and a
@@ -614,6 +731,12 @@ Four rules hold of every measurement.
   metric already uses. A member's browser half is not part of any set,
   so that adding a test needing a browser costs a member nothing here,
   and what that half reaches is not counted toward the set.
+- **A change's lanes instrument only what is scored.** They turn coverage
+  on for the members of the sets the gate scores and run everything else
+  unmeasured, since instrumenting a run costs it time and nothing reads a
+  profile no set is scored from. A run over the whole corpus instruments
+  every member, since the baselines and the repository-wide figure come
+  from it.
 - **Nothing about coverage fails a run on the default branch.** That run
   measures every set, which is where the baselines come from, and merges
   every report it produced into the one repository-wide figure, which is
@@ -743,9 +866,13 @@ running, for the reason under [Determinism](#determinism).
 That the manifest may be an ordinary public object rather than a signed
 artifact follows from what it can do. It can only change *which* tests
 run. It cannot change what a test does, what a test asserts, or what the
-repository builds. The worst a corrupted manifest achieves is a change
-that ran fewer tests than it should have, which the full run on the
-default branch catches.
+repository builds. That holds because of what a consumer lets its strings
+reach. The only ones that reach a command are suite and unit names, and
+only those matching a suite and a unit the tree defines. A test's name
+reaches nothing but the list of names a runner is told to skip.
+
+The worst a corrupted manifest achieves is a change that ran fewer tests
+than it should have, which the full run on the default branch catches.
 
 ## Renames
 
@@ -863,9 +990,13 @@ crediting the selector with a decision nothing made. Where the manifest says the
 test was to have run — the packing reached it, or the store has never seen it,
 which makes it mandatory — a run with no record of it recorded less than it ran,
 and that is a different statement from a run that did not reach it. A test the
-packing did not reach is coverage this design traded away rather than something
-the change missed, and it must be described that way. The failure raises the
-test's score, so the next change in that area runs it.
+packing did not reach is something the change did not miss, and it must be
+described by what the plan the lanes computed says about leaving it out: its
+unit runs whole and holds a withheld test, or no lane can hold it, or the tests
+that had to run left no room in the lanes for anything else, or the lanes filled
+what those tests left with other tests. A report must
+not say more than the plan records, and in particular must not attribute the
+choice to the test's score.
 
 A report addresses the change and never a person. No author is named, no
 figure is counted per author or per team, and no history of such reports

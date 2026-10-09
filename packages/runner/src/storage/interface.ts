@@ -375,19 +375,42 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * Creates a space and returns its DID, once the space's genesis commit is
    * confirmed. The space's key is generated from random data, and signs one
    * commit that writes `acl` as the space's access-control document and, when
-   * `root` is given, reserves the space's root pattern. The key is used for
-   * nothing else, and is never stored, returned, or logged.
+   * `genesis.root` is given, reserves the space's root pattern, and when
+   * `genesis.spaceKind` is given, declares the space's kind. The key is used
+   * for nothing else, and is never stored, returned, or logged.
    *
    * `acl` must name a concrete OWNER, and must grant this manager's signer at
-   * least READ if this manager will open the space. `root` requires a host
-   * that supports root reservations; its complete source, cause, arguments,
-   * and attached source roots are snapshotted in the genesis receipt, and a
-   * later mount that declares a root intent must match it.
+   * least READ if this manager will open the space. `genesis.root` is the
+   * reservation itself, or a function computing it from the new space's DID,
+   * which nothing knows before the key is generated. It requires a host that
+   * advertises the `genesisRoot` server flag; its complete source, cause,
+   * arguments, and attached source roots are snapshotted in the genesis
+   * receipt, and a later mount that declares a root intent must match it.
+   * `genesis.spaceKind` requires a host that advertises the `spaceKind` server
+   * flag, and is sealed the same way (`docs/features/space-kinds.md`).
    *
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
-  createSpace?(acl: ACL, root?: GenesisRoot): Promise<MemorySpace>;
+  createSpace?(
+    acl: ACL,
+    genesis?: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<MemorySpace>;
+
+  /**
+   * The kind `space` declares in its genesis commit, or `undefined` when it
+   * declares none (`docs/features/space-kinds.md`). Opens the space, so it
+   * resolves once the memory server has admitted this manager's signer to
+   * it. Optional: emulated/test managers may omit it.
+   *
+   * @throws If the space cannot be opened, as when its access list admits
+   *   this manager's signer to nothing, or if the memory server does not
+   *   advertise `spaceKind`, which leaves the kind unknown rather than absent.
+   */
+  spaceKind?(space: MemorySpace): Promise<string | undefined>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
@@ -601,6 +624,18 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     IMemorySpaceAddress,
     "space" | "scope" | "id"
   >[];
+
+  /**
+   * Whether this manager refuses every read of `address` by construction: a
+   * serving manager reads no scoped instance of a space other than its home
+   * (protocol.md §2's fail-closed interim). Such a read returns no data
+   * however long it is waited for, so the manager registers no pending load
+   * for it, and a served run that reads it has read an absence that is not
+   * the document's state.
+   */
+  refusesReadByConstruction?(
+    address: Pick<IMemorySpaceAddress, "space" | "scope">,
+  ): boolean;
 
   /**
    * Generation of the currently in-flight load for an entity key, or
@@ -2109,6 +2144,16 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   resetNarrowestReadScope(scope?: CellScope): void;
 
   /**
+   * Narrows the transaction's read scope to `scope` when it is narrower than
+   * what the reads so far established. A read records the scope of the
+   * address it lands on by itself; this is for a read that learns a narrower
+   * scope from a declaration rather than from an address, such as a followed
+   * link whose target position is declared narrower than the link's own
+   * scope.
+   */
+  noteReadScope(scope: CellScope): void;
+
+  /**
    * Turn lazy materialization on (or off) for this transaction.
    *
    * A marked transaction hands a reader views that resolve each path as it is
@@ -3466,9 +3511,12 @@ export type PullError =
 /** A serving runtime's refusal of a scoped read of a space other than its home
  * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
  * scope and the runtime's serving posture decide it, never transport or session
- * state, so the same read from the same runtime is refused every time. A served
- * event whose required load meets it terminalizes at once instead of spending
- * the delivery-failure budget (events.md §5). */
+ * state, so the same read from the same runtime is refused every time. So it is
+ * no load in flight: the storage manager registers no pending load for it. A
+ * served run that reads the document's value fails permanently in
+ * `dispatch-load` (events.md §5), and where the refusal reaches a load
+ * failure it is permanent evidence rather than a retryable `connection`
+ * failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
 }

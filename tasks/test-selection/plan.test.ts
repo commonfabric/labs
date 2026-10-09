@@ -7,6 +7,7 @@ import {
   fixedCharges,
   foldWholeUnits,
   fullLaneCount,
+  placedOnlyMandatory,
   plan,
   type PlanInput,
   seededOrder,
@@ -247,6 +248,20 @@ describe("plan", () => {
       });
       expect(result.overBudgetSeconds).toBeCloseTo(90, 6);
       expect(selected(result).length).toBe(4);
+    });
+
+    it("says whether the mandatory set left room for anything else", () => {
+      const manifest = sampleManifest({
+        entries: entries(5, () => ({ cost: 10 })),
+      });
+      const key = testIdentityKey(manifest.entries[0]!.test);
+      const mandatory = new Map([[key, "changed" as const]]);
+      const roomy = run(manifest, { mandatory, budgetSeconds: 230 });
+      expect(selected(roomy).some((s) => s.reason !== "changed")).toBe(true);
+      expect(placedOnlyMandatory(roomy)).toBe(false);
+      const full = run(manifest, { mandatory, budgetSeconds: 10, lanes: 1 });
+      expect(selected(full).map((s) => s.reason)).toEqual(["changed"]);
+      expect(placedOnlyMandatory(full)).toBe(true);
     });
 
     it("says a lane is past its budget where the run's total fits", () => {
@@ -2009,6 +2024,19 @@ describe("a unit its runner runs whole", () => {
     const result = run(manifest, { wholeUnits: WHOLE });
     expect(lanesHolding(result, "half 0")).toEqual([]);
     expect(lanesHolding(result, "half 2")).toEqual([]);
+    // The withheld test is reported as withheld, and the rest of its unit
+    // as held back with it.
+    expect(result.heldWithUnit.map((test) => test.n).sort())
+      .toEqual(["half 0", "half 1"]);
+    // A change that reaches the unit runs it, so nothing is held back.
+    const reached = run(manifest, {
+      wholeUnits: WHOLE,
+      mandatory: new Map([
+        [testIdentityKey({ k: "browser", s: "ui", n: "half 1" }), "changed"],
+      ]),
+    });
+    expect(reached.heldWithUnit).toEqual([]);
+    expect(lanesHolding(reached, "half 0")).toHaveLength(1);
   });
 
   it("excuses a flaky test in the unit on a full run under its own name", () => {

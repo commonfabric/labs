@@ -51,6 +51,11 @@ export const OFFER_TITLE_MAX_LENGTH = 200;
  */
 export const OFFER_ADDRESS_MAX_LENGTH = 256;
 
+/**
+ * The longest refusal code Home records; a longer one is cut to this length.
+ */
+export const REFUSAL_REASON_MAX_LENGTH = 64;
+
 /** The `kind` an offer that names none is kept with. */
 export const OFFER_DEFAULT_KIND = "loom";
 
@@ -192,6 +197,39 @@ export type PrivateInboxHolder = {
  * delivered to the earlier inbox stay readable.
  */
 export type RetainedPrivateInboxes = Cell<PrivateInboxPiece>[];
+
+/**
+ * The host's refusal of the inbox the deciding profile points at, as Home
+ * records it.
+ */
+export type PrivateInboxRefusal = {
+  /**
+   * The host's code for why it refused the inbox, as the event named it,
+   * trimmed and cut to `REFUSAL_REASON_MAX_LENGTH`. Today the host sends one
+   * of `InboxAdoptionRefusal`'s codes, from
+   * `packages/piece/src/ops/private-inbox.ts`, such as
+   * `inbox-adoption-acl-mismatch`.
+   */
+  reason: string;
+
+  /** The inbox refused, which the deciding profile points at. */
+  inbox: Cell<PrivateInboxPiece>;
+
+  /**
+   * When Home first recorded this refusal, of this inbox for this reason, in
+   * milliseconds since the epoch. A handler's clock reads to the second.
+   */
+  refusedAt: number;
+};
+
+/**
+ * Where Home records the host's refusal of the inbox the deciding profile
+ * points at: the refusal, absent while there is none to report.
+ */
+export type PrivateInboxRefusalHolder = {
+  /** The refusal. */
+  refusal?: PrivateInboxRefusal;
+};
 
 /** What the pointing step needs of each profile in Home's list. */
 export type PointTarget = InboxPointable;
@@ -392,6 +430,18 @@ export type EnsurePrivateInboxEvent = {
    * as the first profile in its list that points at an inbox.
    */
   from?: Cell<PointTarget>;
+
+  /**
+   * The host's refusal of the inbox the deciding profile advertises, for Home
+   * to record; absent when the host refused none.
+   */
+  refused?: {
+    /** Why the host refused it, by its code. */
+    reason: string;
+
+    /** The inbox refused. */
+    inbox: Cell<PrivateInboxPiece>;
+  };
 };
 
 /**
@@ -408,11 +458,23 @@ export type EnsurePrivateInboxEvent = {
  * holds, or holds none. A profile pointing at another inbox keeps its pointer.
  * Running it again creates, re-points and retains nothing.
  *
+ * `privateInboxRefusal` holds the host's refusal of the deciding profile's
+ * inbox. A refusal the event names is recorded, in place of a different one
+ * recorded before, under the same check as an adoption: the profile the event
+ * names is in Home's list and still points at the refused inbox, which is not
+ * the inbox Home holds. The record is cleared when Home adopts or creates an
+ * inbox, when the profile the event names is in Home's list and points at the
+ * inbox Home holds, and, on an event recording no refusal, when no profile in
+ * Home's list points at the refused inbox. A repeat of the recorded refusal, of
+ * the same inbox for the same reason, keeps the time it was first recorded.
+ *
  * The check is list membership and the profile's pointer, not order: which
  * profile decides is the host's alone. So an event the owner's own code sends,
  * naming another profile in the list, can move Home between two inboxes its
  * profiles advertise. Each move retains the inbox given up and drops the one
  * adopted from the retained list, so that list holds each inbox at most once.
+ * Such an event can likewise record a refusal of any listed profile's inbox,
+ * with any code, or clear the record.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
@@ -432,20 +494,33 @@ export const ensurePrivateInbox = handler<
   {
     privateInbox: Writable<PrivateInboxHolder>;
     retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
+    privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
     profiles: PointTarget[];
     pointProfiles: Stream<void>;
   }
 >((
   event,
-  { privateInbox, retainedPrivateInboxes, profiles, pointProfiles },
+  {
+    privateInbox,
+    retainedPrivateInboxes,
+    privateInboxRefusal,
+    profiles,
+    pointProfiles,
+  },
 ) => {
   const held = privateInbox.get()?.piece;
   const advertised = advertisedInbox(profiles);
+  // The deciding profile's pointer, when the event names a profile in the
+  // list. Comparisons of links, which read only link shape in the inbox's
+  // space.
+  const deciding = event?.from !== undefined
+    ? pointerOfListed(profiles, event.from)
+    : undefined;
   const adopt = event?.adopt;
+  let replaced = false;
   if (adopt !== undefined) {
-    // Comparisons of links, which read only link shape in the inbox's space.
     const pointer = event?.from !== undefined
-      ? pointerOfListed(profiles, event.from)
+      ? deciding
       : held === undefined
       ? advertised
       : undefined;
@@ -455,6 +530,7 @@ export const ensurePrivateInbox = handler<
     ) {
       if (held !== undefined) retainInbox(retainedPrivateInboxes, held, adopt);
       privateInbox.set({ piece: adopt });
+      replaced = true;
     }
   } else if (held === undefined && advertised === undefined) {
     privateInbox.set({
@@ -464,6 +540,45 @@ export const ensurePrivateInbox = handler<
         })({ offers: [] }),
       ),
     });
+    replaced = true;
+  }
+  const refused = event?.refused;
+  if (replaced) {
+    privateInboxRefusal.set({});
+  } else if (
+    refused !== undefined && deciding !== undefined &&
+    equals(refused.inbox, deciding) &&
+    (held === undefined || !equals(held, refused.inbox))
+  ) {
+    const reason = trimmedText(refused.reason, REFUSAL_REASON_MAX_LENGTH);
+    const recorded = privateInboxRefusal.get()?.refusal;
+    // The same refusal again keeps the time it was first recorded, and
+    // writes nothing.
+    if (
+      recorded === undefined || recorded.reason !== reason ||
+      !equals(recorded.inbox, refused.inbox)
+    ) {
+      privateInboxRefusal.set({
+        refusal: { reason, inbox: refused.inbox, refusedAt: Date.now() },
+      });
+    }
+  } else if (
+    deciding !== undefined && held !== undefined && equals(held, deciding)
+  ) {
+    privateInboxRefusal.set({});
+  } else {
+    // A recorded refusal says the deciding profile points at the refused
+    // inbox, so it ends once no profile in the list points there.
+    const recorded = privateInboxRefusal.get()?.refusal?.inbox;
+    if (
+      recorded !== undefined &&
+      !(profiles ?? []).some((profile) =>
+        profile?.inbox?.piece !== undefined &&
+        equals(profile.inbox.piece, recorded)
+      )
+    ) {
+      privateInboxRefusal.set({});
+    }
   }
   pointProfiles.send();
 });

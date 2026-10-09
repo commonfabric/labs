@@ -71,6 +71,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra: trustStrip("runs", 10),
       duration: 30 * DAY,
       alignChartBottom: true,
+      href: "/repos?name=labs",
+      hint: "repository ↗",
     },
   },
   {
@@ -82,6 +84,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra: trustStrip("loom-runs", 4),
       duration: 30 * DAY,
       alignChartBottom: true,
+      href: "/repos?name=loom",
+      hint: "repository ↗",
     },
   },
   {
@@ -93,6 +97,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra: trustStrip("weaver-runs", 20),
       duration: 30 * DAY,
       alignChartBottom: true,
+      href: "/repos?name=commonfabric-weaver",
+      hint: "repository ↗",
     },
   },
   {

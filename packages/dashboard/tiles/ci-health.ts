@@ -512,7 +512,7 @@ function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
     .sort((a, b) => STATUS_RANK[b.status] - STATUS_RANK[a.status]);
 
   // The rows carry no links of their own: the whole tile is the link to the
-  // page behind it, and an anchor cannot hold another.
+  // page behind it.
   const body = detailList(
     visible.map((row) => ({
       status: row.status,

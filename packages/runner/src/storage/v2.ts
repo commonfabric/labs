@@ -72,7 +72,6 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { getLogger } from "@commonfabric/utils/logger";
 import { maxOf, minOf } from "@commonfabric/utils/math";
@@ -112,6 +111,11 @@ import {
   collectExternalSchemaRefHashes,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
+import {
+  deliverSchemaDocumentClosure,
+  linkSchemaRefHashes,
+} from "../schema-doc-delivery.ts";
 import {
   acquireSchemaRegistryLease,
   lookupSchemaDocument,
@@ -1235,6 +1239,17 @@ export class StorageManager implements IStorageManager {
 
   #settings: IRemoteStorageProviderSettings;
   #providers = new Map<MemorySpace, Provider>();
+
+  /**
+   * The kind each space declares, as {@link spaceKind} read it in a session
+   * of its own, for a space whose provider's session opened before the space
+   * had history. A space with history keeps its kind, so an entry never goes
+   * stale.
+   */
+  #spaceKindsReadAfresh = new Map<
+    MemorySpace,
+    MemoryV2Client.DeclaredSpaceKind
+  >();
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
@@ -1613,30 +1628,47 @@ export class StorageManager implements IStorageManager {
    * The space's key pair is generated here from random data. It opens one
    * session, as the space, through the same route every later session for
    * the DID takes, and signs one commit: `acl` as the space's access-control
-   * document, and `root` as its reserved root pattern when one is given. The
-   * commit reads the document at sequence zero, so it lands only on a space
-   * with no history. The memory client resubmits the identical commit after a
-   * lost connection until the server confirms or refuses it. The key is held
-   * by nothing but this call, and is dropped when the call returns.
+   * document, `genesis.root` as its reserved root pattern when one is given
+   * (computed from the space's DID when it is a function), and
+   * `genesis.spaceKind` as its declared kind when one is given. The session
+   * declares the same root and kind, which the server holds the commit to. The commit reads the document at sequence zero, so it lands
+   * only on a space with no history. The memory client resubmits the
+   * identical commit after a lost connection until the server confirms or
+   * refuses it. The key is held by nothing but this call, and is dropped when
+   * the call returns.
    */
-  async createSpace(acl: ACL, root?: GenesisRoot): Promise<MemorySpace> {
+  async createSpace(
+    acl: ACL,
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    } = {},
+  ): Promise<MemorySpace> {
     const key = await Identity.generate();
     const space = key.did() as MemorySpace;
+    const { spaceKind } = genesis;
+    const root = typeof genesis.root === "function"
+      ? genesis.root(space)
+      : genesis.root;
+    const declarations = {
+      ...(root === undefined ? {} : { genesisRoot: root }),
+      ...(spaceKind === undefined ? {} : { spaceKind }),
+    };
     const aclId = aclDocId(space);
     const { client, session } = await this.#sessionFactory.create(
       space,
       key,
-      {
-        sessionId: crypto.randomUUID(),
-        ...(root === undefined ? {} : { genesisRoot: root }),
-      },
+      { sessionId: crypto.randomUUID(), ...declarations },
     );
     try {
       if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
         throw new Error("Host does not support genesis root reservations");
       }
+      if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
+        throw new Error("Host does not support declared space kinds");
+      }
       await session.transact({
-        ...(root === undefined ? {} : { genesisRoot: root }),
+        ...declarations,
         localSeq: 1,
         reads: {
           confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
@@ -1808,7 +1840,38 @@ export class StorageManager implements IStorageManager {
       0;
   }
 
+  /** @inheritDoc */
+  async spaceKind(space: MemorySpace): Promise<string | undefined> {
+    const declared = await this.#openProvider(space).declaredSpaceKind() ??
+      this.#spaceKindsReadAfresh.get(space);
+    if (declared !== undefined) return declared.kind;
+    // The space's session opened before the space had any history, so it was
+    // told nothing of the kind, and stays open without being told. A session
+    // of its own, opened now, is told the kind as the space stands, and is
+    // closed however the read ends.
+    const { client, session } = await this.#sessionFactory.create(
+      space,
+      this.as,
+      {
+        sessionId: crypto.randomUUID(),
+        ...this.#sessionDescriptorFields(),
+      },
+    );
+    try {
+      const afresh = session.declaredSpaceKind;
+      if (afresh !== undefined) this.#spaceKindsReadAfresh.set(space, afresh);
+      return afresh?.kind;
+    } finally {
+      await client.close();
+    }
+  }
+
   open(space: MemorySpace): IStorageProvider {
+    return this.#openProvider(space);
+  }
+
+  /** Helper for {@link open}, which returns the provider it opens. */
+  #openProvider(space: MemorySpace): Provider {
     // A manager reused after close() starts a new session; retention
     // follows it.
     this.#schemaRegistryLease ??= acquireSchemaRegistryLease();
@@ -1829,8 +1892,7 @@ export class StorageManager implements IStorageManager {
         // Phase 5's producer-side foreign-scoped-read refusal: only a
         // serving manager sets a home space, and only its FOREIGN
         // providers refuse (see Options.servingHomeSpace).
-        refuseForeignScopedReads: this.#servingHomeSpace !== undefined &&
-          this.#servingHomeSpace !== space,
+        refuseForeignScopedReads: this.#refusesForeignScopedReadsIn(space),
         storeReadThrough: () => this.#storeReadThroughs.get(space),
         routeState,
         createSession: this.#sessionFactory.supportsAclBootstrap === true
@@ -2390,11 +2452,24 @@ export class StorageManager implements IStorageManager {
   }
 
   /**
+   * Whether this manager's provider for `space` refuses scoped reads: a
+   * serving manager reads no foreign space's scoped instances (see
+   * `Options.servingHomeSpace`).
+   */
+  #refusesForeignScopedReadsIn(space: MemorySpace): boolean {
+    return this.#servingHomeSpace !== undefined &&
+      this.#servingHomeSpace !== space;
+  }
+
+  /**
    * Registers one pending load of `address` and returns its release step,
    * which takes the load's failure if it had one. The release that brings
    * the key's count back to zero settles the key's waiters and, when no
    * failure was recorded, reports the recovery epoch to
-   * `loadRecoveryObserver`.
+   * `loadRecoveryObserver`. A scoped read of a space whose provider refuses
+   * such reads registers nothing, and its release does nothing: the read
+   * returns no data however long it is waited for, so it is not a load in
+   * flight, and nothing parks on it.
    */
   #registerPendingLoad(
     address: {
@@ -2408,6 +2483,7 @@ export class StorageManager implements IStorageManager {
       scopeKey?: ScopeKey;
     },
   ): (failure?: unknown) => void {
+    if (this.refusesReadByConstruction(address)) return () => {};
     const key = entityKey(address, this.scopeKeyIdentity());
     let entry = this.#pendingLoads.get(key);
     if (entry === undefined) {
@@ -2472,6 +2548,14 @@ export class StorageManager implements IStorageManager {
     scopeKey?: ScopeKey;
   }[] {
     return [...this.#pendingLoads.values()].map((entry) => entry.address);
+  }
+
+  /** @inheritDoc */
+  refusesReadByConstruction(
+    address: { space: MemorySpace; scope?: CellScope },
+  ): boolean {
+    return normalizeCellScope(address.scope) !== "space" &&
+      this.#refusesForeignScopedReadsIn(address.space);
   }
 
   pendingLoadGeneration(key: string): number | undefined {
@@ -2568,8 +2652,10 @@ export class StorageManager implements IStorageManager {
     // The runner's explicit-instance read (server-execution v2 stage A):
     // a served per-instance run's load of a scoped doc NAMES that
     // principal's instance — the load registers, travels, and lands per
-    // instance. Own-identity loads (every client, the OFF arm) name
-    // nothing and take exactly the pre-stage-A path.
+    // instance. A load of a foreign space's scoped doc, which a serving
+    // manager refuses by construction, travels but registers nothing
+    // (`#registerPendingLoad()`). Own-identity loads (every client, the
+    // OFF arm) name nothing and take exactly the pre-stage-A path.
     const instance = this.#foreignInstanceKey(scope, options?.scopeKeyIdentity);
     const releaseLoad = this.#registerPendingLoad({
       space,
@@ -2618,7 +2704,10 @@ export class StorageManager implements IStorageManager {
    * server-execution v2 stage A): the transaction layer's kick for a
    * served per-instance run's read of a scoped instance the replica has
    * never seen. Registered like syncCell's load (the preflight park
-   * cross-matches the instance-keyed address) and named on the wire.
+   * cross-matches the instance-keyed address) and named on the wire,
+   * except that a read this manager refuses by construction
+   * (`refusesReadByConstruction()`) registers nothing for a preflight to
+   * park on.
    * Own-identity or space-scope addresses name nothing and take the
    * ordinary root pull; a load that fails hands back the pull-kick
    * reservation so a later read may retry.
@@ -3268,6 +3357,11 @@ class Provider
         throw error;
       },
     );
+  }
+
+  /** See `SpaceReplica.declaredSpaceKind()`. */
+  declaredSpaceKind(): Promise<MemoryV2Client.DeclaredSpaceKind | undefined> {
+    return this.#followReplacement((replica) => replica.declaredSpaceKind());
   }
 
   operationCodecs(): Promise<readonly string[]> {
@@ -4784,6 +4878,24 @@ export class SpaceReplica
     return (await session.queryOperationField(query)).field;
   }
 
+  /**
+   * What the memory server told this replica's session, when it last opened,
+   * of the kind the space declares in its genesis commit; see
+   * `SpaceSession.declaredSpaceKind`.
+   *
+   * @throws If the session cannot be opened, or if the memory server does not
+   *   advertise `spaceKind`.
+   */
+  async declaredSpaceKind(): Promise<
+    MemoryV2Client.DeclaredSpaceKind | undefined
+  > {
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.spaceKind !== true) {
+      throw new Error("memory server does not report a space's declared kind");
+    }
+    return session.declaredSpaceKind;
+  }
+
   async operationCodecs(): Promise<readonly string[]> {
     const { client } = await this.#activeSessionHandle();
     if (client.serverFlags?.applyOp !== true) return [];
@@ -5278,11 +5390,51 @@ export class SpaceReplica
    * resolves as delivered (`EventAppendDuplicateError` — events.md §5's
    * duplicate-submission rule). The returned promise settles with the
    * delivery outcome; rendering never waits on it (the echo is local).
+   * The append carries the schema documents its payload's links reference
+   * and this space does not hold, as a transaction writing those links
+   * would (`#withPayloadSchemaDocuments`).
    */
   enqueueEventAppend(
     append: Omit<QueuedEventAppend, "clientSeq"> & { clientSeq?: number },
   ): Promise<EventAppendOutcome> {
-    return this.#ensureEventAppendQueue().enqueue(append);
+    return this.#ensureEventAppendQueue().enqueue(
+      this.#withPayloadSchemaDocuments(append),
+    );
+  }
+
+  /**
+   * Helper for `enqueueEventAppend()`, which returns `append` carrying the
+   * closure of schema documents behind its payload's link schemas, from the
+   * realm registry, less what this replica has confirmed the server holds.
+   * Gated on `contentAddressedSchemas` as a transaction's link scan is: only
+   * that writer stamps a link schema as a reference. Taken at enqueue, while
+   * the registry is certain to hold what the sender's links name; a document
+   * the server comes to hold meanwhile is installed as a no-op.
+   */
+  #withPayloadSchemaDocuments<T extends Pick<QueuedEventAppend, "payload">>(
+    append: T,
+  ): T {
+    if (!getContentAddressedSchemasConfig() || append.payload === undefined) {
+      return append;
+    }
+    const schemaDocuments: Record<string, JSONSchema> = {};
+    const { missing } = deliverSchemaDocumentClosure(
+      linkSchemaRefHashes(append.payload),
+      (hash) => this.isContentAddressedDocPersisted(hash),
+      (hash, schema) => {
+        schemaDocuments[hash] = schema;
+      },
+    );
+    for (const hash of missing.keys()) {
+      logger.warn("event-append-schema-doc-missing", () => [
+        "An event payload's link names a schema document the registry " +
+        "cannot supply:",
+        `cid:${hash}`,
+      ]);
+    }
+    return Object.keys(schemaDocuments).length === 0
+      ? append
+      : { ...append, schemaDocuments };
   }
 
   async resolveEventAttention(
@@ -5653,9 +5805,12 @@ export class SpaceReplica
     // persistently attempted one foreign scoped read. Refusing the
     // OFFENDING caller's pull keeps the refusal action-scoped, the
     // arc's standing refusal convention. The refusal is typed rather than
-    // a `ConnectionError`: it can never heal in this runtime, so a served
-    // event whose required load meets it terminalizes at once
-    // (`toReplicaLoadFailureError`).
+    // a `ConnectionError`: it can never heal in this runtime. For the same
+    // reason the manager registers no pending load for such a read
+    // (`#registerPendingLoad()`), so a served event's preflight never parks
+    // on one, whenever the refusal lands relative to the preflight. A served
+    // run that reads the document's value is failed at dispatch instead
+    // (`refusesReadByConstruction()`).
     if (this.#refuseForeignScopedReads) {
       for (const [address] of normalizedEntries) {
         const scope = normalizeCellScope(address.scope) ?? "space";
@@ -7974,14 +8129,9 @@ export class SpaceReplica
       // Link positions — the `schema` metadata member was embedded above.
       // An `$alias`-shaped record in an arriving document is plain data,
       // never a delivery obligation.
-      mapLinkSchemas(doc as FabricValue, (schema) => {
-        for (
-          const hash of collectExternalSchemaRefHashes(schema as JSONSchema)
-        ) {
-          embed(hash, id);
-        }
-        return schema;
-      });
+      for (const hash of linkSchemaRefHashes(doc as FabricValue)) {
+        embed(hash, id);
+      }
     }
     for (const [id, document] of registered) {
       for (const dep of collectExternalSchemaRefHashes(document)) {
@@ -9408,14 +9558,9 @@ export class SpaceReplica
           }
         }
       } else {
-        mapLinkSchemas(upsert.doc as FabricValue, (schema) => {
-          for (
-            const hash of collectExternalSchemaRefHashes(schema as JSONSchema)
-          ) {
-            hashes.add(hash);
-          }
-          return schema;
-        });
+        for (const hash of linkSchemaRefHashes(upsert.doc as FabricValue)) {
+          hashes.add(hash);
+        }
       }
       return hashes;
     };

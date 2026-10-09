@@ -84,26 +84,22 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
 /**
  * A host that records each operation it is sent and answers from a script,
- * `ok` on the page above once the script runs out.
+ * `ok` on the page above once the script runs out. An `Error` in the script
+ * stands for a host that could not be reached.
  */
 class FakeBrowserHost implements HarnessBrowserHost {
   readonly operations: BrowserHostOperation[] = [];
 
-  readonly #answers: unknown[];
+  readonly #answers: (BrowserHostResult | Error)[];
 
-  constructor(answers: unknown[] = []) {
+  constructor(answers: (BrowserHostResult | Error)[] = []) {
     this.#answers = answers;
   }
 
   perform(operation: BrowserHostOperation): Promise<BrowserHostResult> {
     this.operations.push(operation);
     const next = this.#answers.shift() ?? { status: "ok", page: PAGE };
-    if (next instanceof Error) {
-      return Promise.reject(next);
-    }
-    // The fake answers whatever the script holds, results or not, so a test
-    // can hand the tool something a real host would never send.
-    return Promise.resolve(next as BrowserHostResult);
+    return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
   }
 }
 
@@ -1068,29 +1064,6 @@ describe("browser-host-backend", () => {
         "session_ended",
         "command_failed",
       ]);
-    });
-
-    it("returns host_unavailable for an answer that is not a result", async () => {
-      const host = new FakeBrowserHost([
-        { status: "ok" },
-        "ok",
-        { status: "ok", page: { url: "https://shop.example/", title: 7 } },
-      ]);
-      const engine = createEngine(host);
-
-      const outputs = [];
-      for (let index = 0; index < 3; index++) {
-        outputs.push(await invoke(engine, { action: "reload" }));
-      }
-
-      for (const output of outputs) {
-        expect(output).toMatchObject({
-          status: "error",
-          code: "host_unavailable",
-          message:
-            "the browser host answered with something that is not a result",
-        });
-      }
     });
 
     it("returns host_unavailable, with the reason, for a host that cannot be reached", async () => {

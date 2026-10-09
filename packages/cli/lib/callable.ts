@@ -10,6 +10,7 @@ import {
   type NormalizedFullLink,
   renderCellReference,
   sendEvent,
+  transactionFailureMessage,
 } from "@commonfabric/runner";
 import {
   cfcSchemaResolvedRoot,
@@ -345,29 +346,6 @@ export function runtimeErrorLog(runtime: unknown): CliRuntimeErrorRecord[] {
     CF_RUNTIME_ERROR_LOG
   ];
   return Array.isArray(log) ? log as CliRuntimeErrorRecord[] : [];
-}
-
-function errorMessage(error: unknown): string {
-  if (
-    isObjectOrArray(error) && "reason" in error &&
-    (error as { reason?: unknown }).reason != null
-  ) {
-    // A StorageTransactionAborted carries the abort's cause as `reason`, and
-    // its own message is the generic "Transaction was aborted". Prefer the
-    // cause: for a pre-dispatch drop — a send refused at the backlog cap, a
-    // piece that failed to load — the reason is the whole signal.
-    return errorMessage((error as { reason: unknown }).reason);
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (isObjectOrArray(error) && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string") {
-      return message;
-    }
-  }
-  return String(error);
 }
 
 /**
@@ -1734,7 +1712,7 @@ export async function executeResolvedCallable(
         ?.message;
       throw new Error(
         `Handler "${resolved.cellKey}" failed: ${
-          latestRuntimeError ?? errorMessage(txStatus.error)
+          latestRuntimeError ?? transactionFailureMessage(txStatus.error)
         }`,
       );
     }
@@ -1790,7 +1768,7 @@ export async function executeResolvedCallable(
     ) {
       throw new Error(
         `Handler "${resolved.cellKey}" failed: ${
-          errorMessage(handledStatus.error)
+          transactionFailureMessage(handledStatus.error)
         }`,
       );
     }

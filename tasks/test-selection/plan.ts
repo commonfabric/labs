@@ -9,7 +9,10 @@
  * The exploration draw's seed comes from the manifest.
  */
 
-import { testIdentityKey } from "@commonfabric/test-support/records";
+import {
+  type TestIdentity,
+  testIdentityKey,
+} from "@commonfabric/test-support/records";
 import { maxOf } from "@commonfabric/utils/math";
 import {
   FILL_DENSITY_SHARE,
@@ -21,6 +24,7 @@ import {
   LANE_BOUND_SECONDS,
   LANE_BUDGET_SECONDS,
   LANES,
+  NAMED_UNSCHEDULABLE,
 } from "./policy.ts";
 import type {
   Calibration,
@@ -108,6 +112,13 @@ export interface Plan {
    * for a full run, which declines nothing.
    */
   withheld: Manifest["withheld"];
+
+  /**
+   * Identities this plan declined to run because their unit runs whole
+   * and holds a test the manifest withholds, which running the unit would
+   * run. Empty for a full run.
+   */
+  heldWithUnit: TestIdentity[];
 
   /**
    * Identities this plan is running whose failures do not fail the run.
@@ -1106,9 +1117,19 @@ export function plan(given: PlanInput): Plan {
   const excluded = new Set<string>();
   // A test that is held back holds back its whole unit, because running the
   // unit runs that test.
+  const withheldKeys = new Set(
+    manifest.withheld.map((held) => testIdentityKey(held.test)),
+  );
+  const heldWithUnit: TestIdentity[] = [];
   for (const held of manifest.withheld) {
     const key = placedAs(testIdentityKey(held.test));
-    if (!requiredOf.has(key)) excluded.add(key);
+    if (requiredOf.has(key) || excluded.has(key)) continue;
+    excluded.add(key);
+    for (const member of folding.members.get(key) ?? []) {
+      if (!withheldKeys.has(testIdentityKey(member.test))) {
+        heldWithUnit.push(member.test);
+      }
+    }
   }
   for (const entry of manifest.entries) {
     const key = testIdentityKey(entry.test);
@@ -1372,11 +1393,30 @@ export function plan(given: PlanInput): Plan {
     // every reason the manifest gives holds a test back, and only a
     // flake rate excuses one.
     withheld: everything ? [] : manifest.withheld,
+    heldWithUnit,
     nonGating: everything ? excused(manifest) : [],
     overBudgetSeconds: overBudget,
     unschedulable,
     crowding,
   };
+}
+
+/** The reasons the three discretionary passes place an identity for. */
+const DISCRETIONARY: ReadonlySet<SelectionReason> = new Set([
+  "value",
+  "density",
+  "exploration",
+]);
+
+/**
+ * Whether a budgeted plan placed nothing beyond its mandatory identities,
+ * which is what a plan does once the mandatory work leaves no room in any
+ * lane for anything else.
+ */
+export function placedOnlyMandatory(laid: Pick<Plan, "lanes">): boolean {
+  return !laid.lanes.some((lane) =>
+    lane.selections.some((selection) => DISCRETIONARY.has(selection.reason))
+  );
 }
 
 /**
@@ -1392,9 +1432,6 @@ export function plan(given: PlanInput): Plan {
 function excused(manifest: Manifest): Manifest["withheld"] {
   return manifest.withheld.filter((held) => held.reason === "flaky");
 }
-
-/** How many of the costliest identities no lane can hold a report names. */
-export const NAMED_UNSCHEDULABLE = 10;
 
 /**
  * The costliest identities no lane can hold, and the rest of them. A

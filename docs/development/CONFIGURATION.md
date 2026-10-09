@@ -113,6 +113,22 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 | `PLAID_REDIRECT_URI` | _(unset)_ | Optional. |
 | `PLAID_SYNC_ALL_TRANSACTIONS` | `false` | Sync full history vs. incremental. |
 
+### Ingest registry
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_SERVICE_SPACE` | _(unset: the space named by this deployment's identity)_ | The space this deployment keeps its ingest registry in: channel registrations, their indexes, and Gmail mailbox bindings. A space named here must exist already, with an access list in which this deployment's identity is `OWNER` and nobody else is listed, so that nothing but this deployment reads it. It is also the space a Gmail push is addressed to, so a deployment reached through something that dispatches by space names a space dispatched to it. Pointing it somewhere new on a deployment that already has channels leaves them behind: nothing reads the registry it left, so their tokens stop working and their owners mint again. |
+
+### Gmail push ingest
+
+On only when a service account is set; see
+[`gmail-push-ingest.md`](../features/gmail-push-ingest.md).
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts a push token may be signed for. |
+| `INGEST_GMAIL_PUSH_AUDIENCE` | the ingest registry space's DID | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
+
 ---
 
 ## Identity & auth
@@ -323,9 +339,9 @@ the labs checkout and dispatches to `packages/cli/mod.ts`.
 
 | Var | Default | Notes |
 |---|---|---|
-| `CF_IDENTITY` | _(none)_ | Path to identity keyfile. Required for the server-touching commands — `cell`, `piece`, `space recreate-root`/`set-home`, `wish`, `acl`, `exec` — against a remote toolshed. |
+| `CF_IDENTITY` | _(none)_ | Path to identity keyfile. Required for the server-touching commands — `cell`, `piece`, `space recreate-root`, `wish`, `acl`, `exec` — against a remote toolshed. |
 | `CF_API_URL` | _(none)_ | Toolshed URL. Required for the same commands as above. |
-| `CF_SPACE` | _(none)_ | The space a command acts on, when `--space` is absent. Read by `cell`, `piece`, `space recreate-root`, `wish`, `acl` and `deps`. `check`, `fuse` and `ingest` take a space and do not read it, and neither does `space set-home`, which acts on the identity's own home space and declares the option only through the shared target flags. `--space` overrides it, and a written `--space` beside `--url` is still refused where an ambient one yields to the space the URL carries. A command that writes names the space it wrote to on stderr, which is what makes an ambient default safe to leave set. |
+| `CF_SPACE` | _(none)_ | The space a command acts on, when `--space` is absent. Read by `cell`, `piece`, `space recreate-root`, `wish`, `acl` and `deps`. `check`, `fuse` and `ingest` take a space and do not read it. `--space` overrides it, and a written `--space` beside `--url` is still refused where an ambient one yields to the space the URL carries. A command that writes names the space it wrote to on stderr, which is what makes an ambient default safe to leave set. |
 | `CF_INVOCATION_SESSION` | _(none)_ | Invocation session `cf piece call` scopes an invocation id to. Mint one per agent run with `cf invocation-session new`. Carried here rather than as `--invocation-session <id>` because the session is what makes a call's outcome unguessable, and an argument is readable in a process listing. |
 | `CF_LOG_LEVEL` | `error` | `debug` \| `info` \| `warn` \| `error` \| `silent`. Also settable per-invocation with `--log-level`. |
 | `CF_CLI_NAME` | `cf` | Override the displayed CLI name (for branded builds). |

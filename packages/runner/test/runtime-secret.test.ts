@@ -16,7 +16,10 @@ import {
 } from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
-import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  Metadata,
+} from "../src/storage/interface.ts";
 import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("runner-runtime-secret");
@@ -140,22 +143,22 @@ describe("runtime-secret", () => {
       }
     });
 
-    it("throws, rather than returning `undefined`, when the stored schema cannot be resolved", async () => {
-      // A replica can hold a document before the schema document its
-      // metadata names: a frame delivers the metadata without it. Reading
-      // that as "no writer claim" would have the mint write over a trusted
-      // secret, and nothing in its commit would catch the overwrite. The
-      // stand-in transaction reads the stored metadata with its schema hash
-      // swapped for one that neither the replica nor the schema registry
-      // holds, which is that replica's view.
-
-      await mint();
+    /**
+     * A stand-in for a replica that holds the secret's document but not the
+     * schema document its metadata names, which a frame delivering the
+     * metadata without it leaves: `tx`, reading the stored metadata with its
+     * schema hash swapped for one that neither the replica nor the schema
+     * registry holds, and reading `held` as the secret's value when given.
+     */
+    const unresolvableReplica = (
+      tx: IExtendedStorageTransaction,
+      held?: unknown,
+    ): IExtendedStorageTransaction => {
       const unresolvable = internSchemaAsTaggedHashString({
         type: "string",
         description: "a schema no replica and no registry holds",
       });
-      const tx = runtime.edit();
-      const replica = new Proxy(tx, {
+      return new Proxy(tx, {
         get(target, property) {
           if (property === "readOrThrow") {
             return (
@@ -173,16 +176,61 @@ describe("runtime-secret", () => {
                 : value;
             };
           }
+          if (property === "readValueOrThrow" && held !== undefined) {
+            return (
+              address: Parameters<
+                IExtendedStorageTransaction["readValueOrThrow"]
+              >[0],
+              options: Parameters<
+                IExtendedStorageTransaction["readValueOrThrow"]
+              >[1],
+            ) =>
+              address.id === link.id
+                ? held
+                : target.readValueOrThrow(address, options);
+          }
           const value = Reflect.get(target, property, target);
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
+    };
+
+    it("throws, rather than returning `undefined`, when the stored schema cannot be resolved", async () => {
+      // Reading that as "no writer claim" would have the mint write over a
+      // trusted secret, and nothing in its commit would catch the overwrite.
+      await mint();
+
+      const tx = runtime.edit();
       try {
         expect(() =>
-          readRuntimeSecret(replica, space, unusableRuntimeSecret(NAME))
-        ).toThrow(RuntimeSecretUnresolvedError);
+          readRuntimeSecret(
+            unresolvableReplica(tx),
+            space,
+            unusableRuntimeSecret(NAME),
+          )
+        )
+          .toThrow(RuntimeSecretUnresolvedError);
       } finally {
         tx.abort("unresolvable schema");
+      }
+    });
+
+    it("throws over a value that is not a string when the stored schema cannot be resolved", async () => {
+      // No secret the runtime mints is anything but a string, and still a
+      // value whose writer is unknown is never one the mint writes over.
+      await mint();
+
+      const tx = runtime.edit();
+      try {
+        expect(() =>
+          readRuntimeSecret(
+            unresolvableReplica(tx, 42),
+            space,
+            unusableRuntimeSecret(NAME),
+          )
+        ).toThrow(RuntimeSecretUnresolvedError);
+      } finally {
+        tx.abort("unresolvable schema over a number");
       }
     });
   });
@@ -212,6 +260,38 @@ describe("runtime-secret", () => {
           .toThrow(/runtime secret/);
       } finally {
         tx.abort("refused read");
+      }
+    });
+
+    it("refuses a read whose metadata answers every lookup", async () => {
+      // A cell read hands its caller's metadata to the transaction, so code
+      // holding a cell chooses it, a proxy included.
+      await mint();
+
+      const forged = new Proxy({}, { get: () => true }) as Metadata;
+      const tx = runtime.edit();
+      try {
+        expect(() => tx.readValueOrThrow(link, { meta: forged })).toThrow(
+          /runtime secret/,
+        );
+      } finally {
+        tx.abort("forged read");
+      }
+    });
+
+    it("refuses a tracked read of the value among other paths", async () => {
+      await mint();
+
+      const tx = runtime.edit();
+      try {
+        expect(() =>
+          tx.trackReadPaths?.(
+            { space, id: link.id, type: "application/json" },
+            [["cfc"], ["value"]],
+          )
+        ).toThrow(/runtime secret/);
+      } finally {
+        tx.abort("refused tracked read");
       }
     });
 

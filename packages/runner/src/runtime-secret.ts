@@ -19,10 +19,11 @@
  *
  * A stored value is trusted only when its stored schema carries the writer
  * claim `writeAuthorizedBy: [RUNTIME_SECRET_WRITER]` over the confidentiality
- * the secret is stored under, or when the transaction reading it minted it. The runtime committing a write refuses a claim whose
- * writer is not the builtin it names, and no runtime lets executed code act as
- * a builtin, so a value that code planted in the namespace through a runtime
- * without the chokepoint carries no such claim.
+ * the secret is stored under, or when the transaction reading it minted it.
+ * The runtime committing a write refuses a claim whose writer is not the
+ * builtin it names, and no runtime lets executed code act as a builtin, so a
+ * value that code planted in the namespace, before the chokepoint existed or
+ * through a runtime without it, carries no such claim.
  * `ensureRuntimeSecret()` replaces an untrusted value. A value whose stored
  * schema is named but resolves neither in the replica nor in the schema
  * registry is neither trusted nor untrusted, and reading it throws: a replica
@@ -51,18 +52,20 @@ import { CFC_LABEL_READ_FAILED_ATOM } from "./cfc/observation.ts";
 import type { CfcModulePolicyMarker } from "./cfc/policy.ts";
 import { loadSchemaDocument } from "./cfc/prepare.ts";
 import type { NormalizedFullLink } from "./link-utils.ts";
+import {
+  isRuntimeSecretId,
+  RUNTIME_SECRET_ID_PREFIX,
+} from "./runtime-secret-id.ts";
 import type { URI } from "./sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   Metadata,
 } from "./storage/interface.ts";
 import {
   internalVerifierRead,
   stableInternalVerifierRead,
 } from "./storage/reactivity-log.ts";
-
-/** The reserved id namespace of runtime secrets. */
-export const RUNTIME_SECRET_ID_PREFIX = "of:runtime-secret:";
 
 /**
  * The confidentiality a runtime secret is stored under: the read-failed
@@ -136,11 +139,27 @@ export const runtimeSecretLink = (
   path: [],
 });
 
-/** Returns whether `id` names a runtime secret. */
-export const isRuntimeSecretId = (id: string): boolean =>
-  id.startsWith(RUNTIME_SECRET_ID_PREFIX);
+/**
+ * Returns whether a read of `address` reads a runtime secret's value: the
+ * whole document, or a path inside its value. A read of another field, such
+ * as the label envelope, holds nothing secret.
+ */
+export const readsRuntimeSecretValue = (
+  address: Pick<IMemorySpaceAddress, "id" | "path">,
+): boolean =>
+  isRuntimeSecretId(address.id) &&
+  (address.path.length === 0 || address.path[0] === "value");
 
 const ownReadMarker: unique symbol = Symbol("runtimeSecretOwnReadMarker");
+
+/**
+ * What this module's reads carry under their marker. The read chokepoint
+ * compares it by identity, so metadata that answers every lookup, such as a
+ * proxy a caller hands a cell read, cannot pass for one of these reads; a
+ * copy of the metadata, such as the merge with a transaction's ambient read
+ * metadata, keeps it.
+ */
+const ownReadToken: unique symbol = Symbol("runtimeSecretOwnReadToken");
 
 /**
  * The runtime's verifier-internal read of a secret: it joins nothing to the
@@ -149,7 +168,7 @@ const ownReadMarker: unique symbol = Symbol("runtimeSecretOwnReadMarker");
  */
 const trustRead: Metadata = {
   ...stableInternalVerifierRead,
-  [ownReadMarker]: true,
+  [ownReadMarker]: ownReadToken,
 };
 
 /**
@@ -157,22 +176,25 @@ const trustRead: Metadata = {
  * so it joins nothing, and scheduled, so the transaction runs again when the
  * secret is stored.
  */
-const watchRead: Metadata = { ...internalVerifierRead, [ownReadMarker]: true };
+const watchRead: Metadata = {
+  ...internalVerifierRead,
+  [ownReadMarker]: ownReadToken,
+};
 
 /**
  * The runtime's ordinary read of a secret, which joins the secret's stored
  * label to the reading transaction.
  */
-const flowRead: Metadata = { [ownReadMarker]: true };
+const flowRead: Metadata = { [ownReadMarker]: ownReadToken };
 
 /**
  * Returns whether `meta` marks one of this module's reads of a runtime
  * secret's value, the only reads of it the read chokepoint admits from a
- * transaction outside a privileged write. The marker is private to this
- * module.
+ * transaction outside a privileged write. The marker and its token are
+ * private to this module.
  */
 export const isRuntimeSecretOwnRead = (meta?: Metadata): boolean =>
-  meta?.[ownReadMarker] === true;
+  meta?.[ownReadMarker] === ownReadToken;
 
 /**
  * Thrown by a read of a runtime secret whose stored metadata names a schema
@@ -206,10 +228,11 @@ export const readRuntimeSecret = (
 ): string | undefined => {
   const link = runtimeSecretLink(space, secret.name);
   const value = tx.readValueOrThrow(link, { meta: trustRead });
-  if (typeof value !== "string") return undefined;
-  return mintedIn(tx, link) || carriesWriterClaim(tx, link, secret)
-    ? value
-    : undefined;
+  // The writer is settled before the value's type: a stored value whose
+  // writer is unknown makes the read throw whatever the value is, so the
+  // mint never replaces it.
+  const trusted = mintedIn(tx, link) || carriesWriterClaim(tx, link, secret);
+  return trusted && typeof value === "string" ? value : undefined;
 };
 
 /**
