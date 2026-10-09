@@ -161,6 +161,26 @@ describe("ingest journal sink", () => {
       .toBe("device");
   });
 
+  it("a registration stored with the `latest` sink reads as a gmail channel writing the cell its prefix named", async () => {
+    const { kind: _kind, ...legacy } = reg({
+      id: "ing_legacy_latest",
+      causePrefix: "gmail-push",
+    });
+    await saveRegistration(runtime, space, {
+      ...legacy,
+      sink: "latest",
+    } as unknown as IngestRegistration);
+
+    const read = await getRegistration(runtime, space, "ing_legacy_latest");
+    expect(read?.kind).toBe("gmail");
+    expect(read?.causePrefix).toBeUndefined();
+    expect(read?.target).toEqual({
+      space,
+      id: runtime.getCell(space, "gmail-push").getAsNormalizedFullLink().id,
+      path: [],
+    });
+  });
+
   it("writeLatest: fills an empty cell, replaces a superseded record, and mints the mark", async () => {
     const r = latestReg();
     const newer = (

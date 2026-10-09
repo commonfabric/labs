@@ -228,13 +228,43 @@ export async function getMailboxChannels(
  * @throws BindingConflictError when the channel's binding changed while this
  *   ran; the caller may try again.
  */
-export async function bindMailbox(
+export function bindMailbox(
   runtime: Runtime,
   serviceSpace: string,
   id: string,
   address: string,
 ): Promise<void> {
-  const key = mailboxKey(address);
+  return bindMailboxKey(runtime, serviceSpace, id, mailboxKey(address));
+}
+
+/**
+ * Puts channel `id` back in the list of the mailbox its binding names, when
+ * it has fallen out of it: a channel retired at the time another channel
+ * bound the mailbox gave up its place, and minting it again without a proof
+ * is what brings it back. Returns whether the channel is bound to a mailbox
+ * at all. Throws what `bindMailbox()` throws.
+ */
+export async function restoreBinding(
+  runtime: Runtime,
+  serviceSpace: string,
+  id: string,
+): Promise<boolean> {
+  const binding = channelBindingCell(runtime, serviceSpace, id);
+  await binding.sync();
+  await runtime.storageManager.synced();
+  const key = (binding.get() as ChannelBinding | undefined)?.mailbox;
+  if (key === undefined) return false;
+  await bindMailboxKey(runtime, serviceSpace, id, key);
+  return true;
+}
+
+/** Helper for `bindMailbox()` and `restoreBinding()`: the bind, by mailbox key. */
+async function bindMailboxKey(
+  runtime: Runtime,
+  serviceSpace: string,
+  id: string,
+  key: string,
+): Promise<void> {
   const target = mailboxChannelsCell(runtime, serviceSpace, key);
   const binding = channelBindingCell(runtime, serviceSpace, id);
   await target.sync();

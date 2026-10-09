@@ -357,6 +357,50 @@ describe("cf ingest mint", () => {
     });
   });
 
+  it("resolves a space name inside the target against the channel's space", async () => {
+    const { calls } = await run([
+      "mint",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--space",
+      "ingest-command-space",
+      "--install-id",
+      "gmail-1",
+      "--target",
+      `//ingest-command-space/${TARGET_ID}`,
+      "--gmail-access-token",
+      "a",
+    ], { mint: gmailMinted });
+
+    const space = await resolveSpaceDid(keyPath, "ingest-command-space");
+    expect(calls[0].body.target).toEqual({
+      "/": { "link@1": { id: TARGET_ID, space, path: [] } },
+    });
+  });
+
+  it("rejects a target that names a piece slug rather than a document", async () => {
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--target",
+        "/my-piece/inbox",
+        "--gmail-access-token",
+        "a",
+      ],
+      '"my-piece" is a piece slug',
+    );
+  });
+
   it("rejects a target in another space, and one carrying a member", async () => {
     const other = "did:key:z6MkIngestCommandOtherSpaceAAAAAAAAAAAAAAAAAAAA";
     await expectValidationError(

@@ -57,8 +57,10 @@ export interface ChannelConfig {
  * device POSTing records with the channel's token, into journal cells under
  * its cause prefix. A `gmail` channel is written by the server on each Gmail
  * push notification for the mailbox bound to it, into the cell its target
- * names. A mint decides it: a mailbox proof and a target make a gmail
- * channel, and a mint without them makes a device channel.
+ * names. A new mint decides it: a mailbox proof and a target make a gmail
+ * channel, and a mint without them makes a device channel. A re-mint keeps
+ * the channel's kind, and one carrying neither field keeps a gmail channel's
+ * binding and target as well.
  */
 export type IngestChannelKind = "device" | "gmail";
 

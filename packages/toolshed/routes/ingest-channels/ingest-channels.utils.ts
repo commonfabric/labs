@@ -55,6 +55,7 @@ import {
   MailboxBindingFullError,
   type MailboxLookup,
   MAX_CHANNELS_PER_MAILBOX,
+  restoreBinding,
 } from "@/routes/ingest-push/gmail-push.utils.ts";
 
 const DEFAULT_CAUSE_PREFIX = "location";
@@ -513,8 +514,10 @@ export interface MintInput {
 
   /**
    * The cell a gmail channel writes, as a link the caller names, in the space
-   * the mint is addressed to. Comes with `gmail`, and the two together make
-   * the channel a gmail channel; a mint without them makes a device channel.
+   * the mint is addressed to. Comes with `gmail`, and the two together make a
+   * new channel a gmail channel; a new mint without them makes a device
+   * channel. A re-mint keeps the channel's kind whatever it carries, and one
+   * carrying neither keeps a gmail channel's binding and target too.
    */
   target?: unknown;
 
@@ -558,6 +561,12 @@ export async function processMint(
       link === undefined || link.id === undefined || link.space === undefined
     ) {
       return bad("The target is not a complete cell link");
+    }
+    if (link.scope !== undefined && link.scope !== "space") {
+      return bad("The target cell must be space-scoped");
+    }
+    if (!link.id.startsWith("of:")) {
+      return bad("The target id is not a document id");
     }
     target = cellTargetOf(link);
     // The mint is addressed to one space and authorized against it, so a cell
@@ -708,13 +717,22 @@ export async function processMint(
     // remove, on the single most likely path to reach it.
     ...(existing ? { rotatedFrom: existing.secretHash } : {}),
   });
-  if (minted.status !== 200 || mailbox === undefined) return minted;
+  if (minted.status !== 200) return minted;
 
   // The binding is a second write, after the registration's. A binding that
   // fails leaves a minted channel bound to nothing, and the caller mints
-  // again with the same install id and proof to bind it.
+  // again with the same install id and proof to bind it. A re-mint of a gmail
+  // channel with no proof keeps the mailbox it has, and puts the channel
+  // back in that mailbox's list where a retirement had pruned it.
   try {
-    await bindMailbox(deps.runtime, deps.serviceSpace, id, mailbox);
+    if (mailbox !== undefined) {
+      await bindMailbox(deps.runtime, deps.serviceSpace, id, mailbox);
+    } else if (existing?.kind === "gmail") {
+      await restoreBinding(deps.runtime, deps.serviceSpace, id);
+      return minted;
+    } else {
+      return minted;
+    }
   } catch (error) {
     if (error instanceof MailboxBindingFullError) {
       return conflict(

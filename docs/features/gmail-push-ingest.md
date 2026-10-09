@@ -155,10 +155,22 @@ again is what re-enables or extends it.
 | Status | When |
 | --- | --- |
 | 200 | Minted and bound |
-| 400 | Gmail push is not configured here, a proof without a target or a target without a proof, a cause prefix beside them, a proof on a device channel, a target in another space or not a complete link, two proofs or none in the field, a proof Google did not accept, or an ID token where none is accepted |
+| 400 | Gmail push is not configured here, a proof without a target or a target without a proof, a cause prefix beside them, a proof on a device channel, a target in another space, not space-scoped, or not a complete link to a document, a proof Google did not accept, or an ID token where none is accepted |
 | 403 | Not an owner of the space |
 | 409 | Replayed `requestId`, the channel is another owner's or writes another cause prefix or target cell, this deployment cannot write to the space, or the channel was minted but the mailbox is at its limit |
+| 422 | The body failed schema validation: two proofs or none in `gmail`, or a malformed `target` |
 | 502 | Storage failed, or Google could not be reached |
+
+**Choosing the install id.** The channel id is derived from the space and
+the install id, so the same pair names the same channel: a retry, a renewal,
+or a reconnect mints it again rather than making another. Choose one stable
+id per mailbox subscription within a space, `gmail-personal` and
+`gmail-work` say, and never one per attempt. Minting an existing channel
+with a proof for a different mailbox moves that channel's binding; two
+mailboxes that should both deliver need two install ids, even where their
+notifications are meant to land in the same cell. The target is a separate
+choice: two channels naming one cell write the same cell, and a caller who
+wants notifications kept apart gives each channel its own.
 
 From the command line, `cf ingest mint` takes `--target`, a cell reference
 in the channel's space, and `--gmail-access-token` or `--gmail-id-token`,

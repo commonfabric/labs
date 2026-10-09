@@ -134,6 +134,11 @@ export function cellTargetOf(link: NormalizedLink): CellTarget {
   if (link.id === undefined || link.space === undefined) {
     throw new Error("a target cell link must carry a space and an id");
   }
+  // The parts hold no scope, so only a space-scoped cell round-trips through
+  // them; a user- or session-scoped link would come back as another cell.
+  if (link.scope !== undefined && link.scope !== "space") {
+    throw new Error("a target cell must be space-scoped");
+  }
   return {
     space: link.space,
     id: link.id,
@@ -328,6 +333,8 @@ const RegistrationSchema = {
     },
     installId: { type: "string" },
     kind: { type: "string" },
+    // What a registration carried before `kind`; read only to classify one.
+    sink: { type: "string" },
     secretHash: { type: "string" },
     createdBy: { type: "string" },
     createdAt: { type: "string" },
@@ -786,11 +793,30 @@ export async function getRegistration(
   await cell.sync();
   await runtime.storageManager.synced();
   const stored = cell.get() as
-    | (Omit<IngestRegistration, "kind"> & { kind?: IngestChannelKind })
+    | (Omit<IngestRegistration, "kind"> & {
+      kind?: IngestChannelKind;
+      sink?: string;
+    })
     | undefined;
   if (stored === undefined) return null;
-  // Every registration written before kinds existed is a device channel.
-  return { ...stored, kind: stored.kind ?? "device" };
+  if (stored.kind !== undefined) return { ...stored, kind: stored.kind };
+  // A registration written before kinds existed carried a `sink` instead. A
+  // `latest` one is a gmail channel whose cell was the cause its prefix
+  // named; everything else is a device channel.
+  if (stored.sink === "latest" && stored.causePrefix !== undefined) {
+    const { causePrefix, ...rest } = stored;
+    return {
+      ...rest,
+      kind: "gmail",
+      target: {
+        space: stored.space,
+        id: runtime.getCell(stored.space as MemorySpace, causePrefix)
+          .getAsNormalizedFullLink().id,
+        path: [],
+      },
+    };
+  }
+  return { ...stored, kind: "device" };
 }
 
 /**

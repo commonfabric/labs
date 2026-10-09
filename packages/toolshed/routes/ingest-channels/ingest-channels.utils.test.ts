@@ -363,6 +363,51 @@ describe("ingest-channels control plane", () => {
       expect(stored?.target).toEqual(first.target);
     });
 
+    it("puts a pruned channel back in its mailbox's list when minted again without a proof", async () => {
+      const first = ok(await gmailMint("req-1"));
+      const registration = await getRegistration(
+        runtime,
+        operator.did(),
+        first.id,
+      );
+      ok(
+        await processRevoke(deps, alice.did(), {
+          id: first.id,
+          requestId: "req-revoke",
+          expectedRevision: registration?.revision ?? 0,
+        }),
+      );
+      // Another channel binding the mailbox prunes the revoked one.
+      ok(
+        await gmailMint("req-2", {
+          installId: "gmail-2",
+          target: targetLink("gmail-2"),
+        }),
+      );
+      expect(await bound()).not.toContain(first.id);
+
+      const again = ok(await mint(alice, "req-3", { installId: "gmail-1" }));
+
+      expect(again.id).toBe(first.id);
+      expect(await bound()).toContain(first.id);
+    });
+
+    it("returns 400 for a target that is not space-scoped, or whose id is not a document id", async () => {
+      const scoped = structuredClone(targetLink("gmail-1")) as {
+        "/": { "link@1": Record<string, unknown> };
+      };
+      scoped["/"]["link@1"].scope = "user";
+      expect((await gmailMint("req-1", { target: scoped })).status).toBe(400);
+
+      const slug = structuredClone(targetLink("gmail-1")) as {
+        "/": { "link@1": Record<string, unknown> };
+      };
+      slug["/"]["link@1"].id = "my-piece";
+      expect((await gmailMint("req-2", { target: slug })).status).toBe(400);
+
+      expect(proofs).toEqual([]);
+    });
+
     it("refuses to rotate a gmail channel, and says to mint instead", async () => {
       const first = ok(await gmailMint("req-1"));
 

@@ -363,7 +363,16 @@ CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest mint --space <space> --ins
 ```
 
 It prints the mailbox it bound, which is the one Gmail reports for the
-token, and the target as a reference the command reads back. A consent that returned a Google ID token can pass that instead, as
+token, and the target as a reference the command reads back. `<install id>`
+names the subscription within the space, one per mailbox, and the same id
+mints the same channel again on a retry or renewal; a second mailbox gets a
+second install id and, unless their notifications are meant to share a
+cell, a second target:
+
+```bash
+CF_GMAIL_ACCESS_TOKEN="$PERSONAL_TOKEN" cf ingest mint --space <space> --install-id gmail-personal --target /of:fid1:…personal
+CF_GMAIL_ACCESS_TOKEN="$WORK_TOKEN" cf ingest mint --space <space> --install-id gmail-work --target /of:fid1:…work
+``` A consent that returned a Google ID token can pass that instead, as
 `CF_GMAIL_ID_TOKEN`, on a deployment whose `INGEST_GMAIL_OAUTH_CLIENT_IDS`
 names the consent's client.
 

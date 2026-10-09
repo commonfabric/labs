@@ -142,6 +142,17 @@ export async function provisionChannel(
   // silently move where data lands (orphaning loom's existing read path), since
   // channelId derives from (space, installId) only. Refuse unless --force.
   const existing = await getRegistration(runtime, serviceSpace, id);
+  // This script provisions device channels. A gmail channel has a mailbox
+  // binding and a target cell that replacing its registration would strand,
+  // and no --force makes that honest.
+  if (existing?.kind === "gmail") {
+    return {
+      ok: false,
+      code: 2,
+      message: `Channel ${id} is a gmail channel, which this script does not ` +
+        `provision. Use a different --install-id for a device channel.`,
+    };
+  }
   if (existing && existing.causePrefix !== causePrefix && !request.force) {
     return {
       ok: false,

@@ -92,13 +92,16 @@ const renderTarget = (target: CellTarget): string =>
 
 /**
  * Reads `--target`, a cell reference in the channel's space, into the link a
- * mint names. The reference may carry the space, in which case it has to be
- * the channel's; a member, scope, or pin is not a cell to write.
+ * mint names. The reference names a document by its id, `of:…`, since a
+ * piece slug is resolved against a session this command does not hold. It
+ * may carry the space, as a DID or a name, in which case it has to resolve
+ * to the channel's; a member, scope, or pin is not a cell to write.
  */
-const targetLinkOf = (
+const targetLinkOf = async (
+  config: ChannelConfig,
   reference: string | undefined,
   space: string,
-): CellTargetLink | undefined => {
+): Promise<CellTargetLink | undefined> => {
   if (reference === undefined) return undefined;
   const parts = parseCellReference(reference);
   if (
@@ -111,11 +114,21 @@ const targetLinkOf = (
       { exitCode: 1 },
     );
   }
-  if (parts.space !== undefined && parts.space !== space) {
+  if (!parts.id.startsWith("of:")) {
     throw new ValidationError(
-      `--target is in ${parts.space}, not in the channel's space ${space}.`,
+      `--target names the cell's document by its id, of:…; "${parts.id}" ` +
+        "is a piece slug, which this command does not resolve.",
       { exitCode: 1 },
     );
+  }
+  if (parts.space !== undefined) {
+    const named = await resolveSpaceDid(config.identityPath, parts.space);
+    if (named !== space) {
+      throw new ValidationError(
+        `--target is in ${parts.space}, not in the channel's space ${space}.`,
+        { exitCode: 1 },
+      );
+    }
   }
   return { "/": { "link@1": { id: parts.id, space, path: parts.path } } };
 };
@@ -220,7 +233,12 @@ export const ingest = new Command()
   )
   .option(
     "--install-id <id:string>",
-    "Stable per-device id. Also the cross-repo join key and the mark's audience.",
+    "A stable id for this channel within the space: the same space and id " +
+      "name the same channel, so a retry or renewal mints it again rather " +
+      "than making another. For a device, the device's own id. For Gmail, " +
+      "one per mailbox subscription, such as gmail-personal and gmail-work; " +
+      "a proof for another mailbox moves that channel's binding rather than " +
+      "adding one. Also the cross-repo join key and the mark's audience.",
   )
   .option(
     "--cause-prefix <prefix:string>",
@@ -288,7 +306,7 @@ export const ingest = new Command()
       causePrefix: options.causePrefix,
       name: options.name,
       ttlDays: options.ttlDays,
-      target: targetLinkOf(options.target, space),
+      target: await targetLinkOf(config, options.target, space),
       gmail: gmailProof(options.gmailAccessToken, options.gmailIdToken),
       requestId: newRequestId(),
     });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { Runtime } from "@commonfabric/runner";
+import { type MemorySpace, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   channelId,
@@ -435,6 +435,36 @@ describe("ingest channel operator scripts", () => {
         installId: "phone-1",
         ...over,
       });
+
+    it("refuses to re-provision a gmail channel, with or without --force", async () => {
+      const id = channelId(SPACE, "phone-1");
+      await saveRegistration(
+        runtime,
+        serviceSpace,
+        reg({
+          id,
+          space: SPACE,
+          kind: "gmail",
+          causePrefix: undefined,
+          target: {
+            space: SPACE,
+            id: runtime.getCell(SPACE as MemorySpace, "gmail-push")
+              .getAsNormalizedFullLink().id,
+            path: [],
+          },
+        }),
+      );
+
+      for (const force of [false, true]) {
+        const outcome = await provision({ force });
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok === false && outcome.message).toContain(
+          "gmail channel",
+        );
+      }
+      expect((await getRegistration(runtime, serviceSpace, id))?.kind)
+        .toBe("gmail");
+    });
 
     it("refuses bad input before touching storage", async () => {
       for (
