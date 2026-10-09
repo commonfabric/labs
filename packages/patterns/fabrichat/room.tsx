@@ -550,7 +550,8 @@ export interface ChatRoomView {
    * The principal each of `participants` stands for, as its profile's
    * `represents-principal` label attests it: each once, in the order of
    * `participants`, leaving out a profile that attests none, or whose label
-   * this reader can't read. Like `participants`, it is not proof of access.
+   * can't be read where the list is derived. Like `participants`, it is not
+   * proof of access.
    */
   participantPrincipals: string[];
 
@@ -741,9 +742,8 @@ export const FabriChatRoomCore = pattern<
   );
   const participants = computed(() => participantsOf(listed, entries));
   // A profile lives in its owner's own space, and attests no one to a reader
-  // that space refuses, so each participant's principal is read per session:
-  // stored once for every reader, a value readers derive differently is one
-  // their runtimes overwrite without end.
+  // that space refuses, so the list is derived per session: one instance for
+  // every reader is one their runtimes hold differently.
   const participantPrincipals = computed((): PerSession<string[]> =>
     participants.reduce<string[]>((found, participant) => {
       const principal = principalOf(participant, "represents-principal");
