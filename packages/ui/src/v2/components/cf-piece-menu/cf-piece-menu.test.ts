@@ -4809,6 +4809,23 @@ describe("describeFollowState", () => {
     expect(described.detail).not.toContain("every time");
   });
 
+  it("says source that does not compile lasts until the origin offers other source or this client compiles it", () => {
+    // Source written for a newer runtime than this client's can compile at
+    // the origin's host and fail here, which an update to this client ends.
+    const described = describeFollowState({
+      ...SOURCE,
+      reconciliation: {
+        outcome: "refused",
+        at: 1,
+        origin: SOURCE.origin!.url,
+        reason: "source-invalid",
+      },
+    });
+    expect(described.detail).toContain("until the origin offers other source");
+    expect(described.detail).toContain("runs a version that compiles it");
+    expect(described.detail).not.toContain("every time");
+  });
+
   it("reports a piece nothing has looked at as unknown", () => {
     expect(describeFollowState(SOURCE).state).toBe("unknown");
   });

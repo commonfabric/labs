@@ -468,7 +468,7 @@ storage schema to use these exact TypeScript field names.
 | Active origin | No origin, a `system:` ref, a stable mutable fabric-entity URL, or a content-addressed fabric pattern URL with an export symbol | **Partial**: `patternSource` stores the active origin string. Explicit history actions can clear it, restore an earlier origin, or accept one a person typed. Fabric origin creation and the stored export selector remain required |
 | Revision head | The stable identifier of the latest accepted source and origin state | **Partial**: the last valid `pieceSourceHistory` entry is the guarded head. It is not yet mirrored in the complete source-state schema |
 | Source revision log | Ordered records of every accepted source and origin state, with a durable reference to each immutable authored-program manifest | **Partial**: source-backed direct Piece API creation, lifecycle-aware edits, detach, revert, repoint, provenance repair, and origin updates append guarded records. Each record links to an existing source-document closure that is verified in the lifecycle write transaction. Programmatically constructed patterns without retained source, other creation paths, and immutable authored-program manifests remain required |
-| Last reconciliation | What following the active origin last did — followed, could not reach it, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, and a refusal's reason on the piece, and an accepted transition clears it. A candidate whose compile fails in a way that recurs for the same source, or whose selected export is not a pattern, is recorded as refused with the reason `source-invalid`. One that does not compile to the identity its `system:` origin advertises is recorded as refused with the reason `identity-mismatch`. A module the module verifier rejects or that throws while it is evaluated, and a candidate whose setup the piece's stored data refuses during an unattended reconciliation, are recorded as could-not-reach. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing |
+| Last reconciliation | What following the active origin last did — followed, could not reach it, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, and a refusal's reason on the piece, and an accepted transition clears it. A candidate that is not the source its origin advertises, whether or not it compiles, is recorded as refused with the reason `identity-mismatch`. One that is, or whose identity cannot be computed without compiling it, is recorded as refused with the reason `source-invalid` when its compile fails in a way that recurs for the same source or its selected export is not a pattern. A module the module verifier rejects or that throws while it is evaluated, a compile that fails while a pattern-coverage collector runs, and a candidate whose setup the piece's stored data refuses during an unattended reconciliation, are recorded as could-not-reach. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing |
 | Descriptive repository | Optional locator shown by tooling; never followed | Implemented as `patternRepository` metadata |
 
 The runtime-neutral program digest is
@@ -1285,14 +1285,17 @@ own.
 - **New source refused.** The origin resolved, and the piece did not adopt what
   it offered — the candidate is not an acceptable replacement for what the piece
   runs, its stored data does not satisfy the candidate's contract, the source
-  did not compile, or the source did not produce the identity its origin
-  advertised. The first three last until the origin offers other source or the
-  piece's data changes. A mismatch with the advertised identity lasts until a
-  deployment in progress at the host finishes, or until the client's runtime and
-  the host's compile the source alike, and the panel says so. The panel names
-  the reason, and offers the actions that end it: take the candidate anyway,
-  detach, or repoint. What the attempt reported goes on a line of its own rather
-  than into a sentence, because a compiler's report is not a clause.
+  the origin advertises did not compile, or the source it served is not the
+  source it advertises, whether or not that compiles. The first two last until
+  the origin offers other source or the piece's data changes. Source that did
+  not compile lasts until the origin offers other source, or until the client
+  runs a runtime that compiles it. A mismatch with the advertised identity
+  lasts until a deployment in progress at the host finishes, or until the
+  client's runtime compiles the source as the host's runtime does. The panel
+  says which of these ends the refusal, names the reason, and offers the
+  actions that end it: take the candidate anyway, detach, or repoint. What the
+  attempt reported goes on a line of its own rather than into a sentence,
+  because a compiler's report is not a clause.
 
 A state that has nothing to report says nothing. A piece running what its
 origin offered gets its line in the panel's facts and no more: an explanation
@@ -1348,11 +1351,12 @@ Telling could-not-reach from refused needs the reconciliation to separate an
 origin it could not reach from one that resolved and offered source it could
 not use — a program that did not compile, one that did not produce the identity
 its origin advertised, one whose setup the piece's data refused. The first may
-fix itself on the next open. A program that did not compile, and setup the
-piece's data refused, will not. A program that did not produce its advertised
-identity lasts until a deployment in progress at the host finishes, or until
-the client's runtime and the host's compile it alike. They do not share a state
-on the panel.
+fix itself on the next open. The rest last while their causes do: setup the
+data refused until the data or the source changes, a program that did not
+compile until the origin offers another or the client runs a runtime that
+compiles it, and one that did not produce its advertised identity until a
+deployment in progress at the host finishes or the client's runtime compiles
+it as the host's runtime does. They do not share a state on the panel.
 
 Distinguishing these needs the outcome of the last reconciliation to outlive
 the reconciliation, so the panel can show it to a reader who opened the piece

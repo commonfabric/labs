@@ -802,6 +802,37 @@ describe("piece source reconciliation", () => {
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
+    it("records modules that do not compile together, and are not the advertised source, as an identity mismatch", async () => {
+      // The entry still imports an export its module no longer has, as when a
+      // host part-way through a deployment serves the two from different
+      // revisions. That is not the source the origin advertises, whatever the
+      // compiler says about it.
+      const renamed = [
+        "import { computed, pattern } from 'commonfabric';",
+        `export const Renamed = pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "v2") }));`,
+        "",
+      ].join("\n");
+      const advertised = await identityFor(source("v2"));
+      const served = await identityFor(renamed);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => renamed),
+      );
+      const originalRef = getPatternIdentityRef(piece);
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("refused");
+
+      expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      const detail = getPieceReconciliation(piece)?.detail;
+      expect(detail).toContain(served);
+      expect(detail).toContain(advertised);
+    });
+
     it("records source that uses a name the compiler reserves as refused", async () => {
       // Rejected before the compiler proper runs, and as surely every time.
       const reserved = `const __cfHelpers = "taken";\n${source("v2")}`;

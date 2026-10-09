@@ -43,6 +43,8 @@ import type { Pattern } from "./builder/types.ts";
 import type { Cell } from "./cell.ts";
 import { prepareSourceClosureVerification } from "./compilation-cache/cell-cache.ts";
 import { isDeterministicCompileFailure } from "./harness/compile-failure.ts";
+import { ensureCompilerStack } from "./harness/deferred-compiler-stack.ts";
+import { computeEntryIdentity } from "./harness/entry-identity.ts";
 import type { RuntimeProgram } from "./harness/types.ts";
 import type { PreparedSourceUpdate } from "./pattern-manager.ts";
 import {
@@ -92,6 +94,52 @@ const logger = getLogger("runner.source-reconcile", {
 });
 
 /**
+ * The entry identity `program` has, computed without compiling it, or
+ * `undefined` when it cannot be computed that way: a closure with a fabric
+ * import, or one missing a module it imports.
+ */
+async function uncompiledEntryIdentity(
+  program: RuntimeProgram,
+): Promise<string | undefined> {
+  try {
+    await ensureCompilerStack();
+    return computeEntryIdentity(program.main, program.files, {
+      ...(program.sourceRoots === undefined
+        ? {}
+        : { sourceRoots: program.sourceRoots }),
+      ...(program.dataFiles === undefined
+        ? {}
+        : { dataFiles: program.dataFiles }),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The refusal of source whose identity is `served` where its origin advertises
+ * `advertised`, which names both so a reader can tell which side moved.
+ */
+function identityMismatch(
+  space: MemorySpace,
+  served: string,
+  advertised: string,
+): SourceRefusal {
+  logger.warn("advertised-identity-mismatch", () => [
+    "the origin's source is not the identity it advertises",
+    space,
+    advertised,
+    served,
+  ]);
+  return {
+    outcome: "refused",
+    reason: "identity-mismatch",
+    detail: `the source is ${served}, not the ${advertised} its origin ` +
+      `advertises`,
+  };
+}
+
+/**
  * What one reconciliation did, or why it did nothing. Every recorded origin
  * lands on exactly one of these.
  *
@@ -103,13 +151,15 @@ const logger = getLogger("runner.source-reconcile", {
  *   pattern is unchanged.
  * - `updated`: the piece adopted new source.
  * - `refused`: the origin resolved and offered source the piece refused: the
- *   source did not compile, did not produce the identity its origin
- *   advertised, or cannot replace what the piece runs and its owner has not
- *   said to take it anyway. The record the reconciliation leaves names which.
- *   The first and last are refused again for as long as the origin offers the
- *   same source. A mismatch with the advertised identity lasts until a
- *   deployment in progress at the host finishes, or until this runtime and the
- *   host's compile that source alike.
+ *   source is not the one its origin advertises, the advertised source does
+ *   not compile, or it cannot replace what the piece runs and its owner has
+ *   not said to take it anyway. The record the reconciliation leaves names
+ *   which. A mismatch with the advertised identity lasts until a deployment in
+ *   progress at the host finishes, or until this runtime compiles the source
+ *   as the host's runtime does. Source that does not compile lasts until the
+ *   origin offers other source, or until this runtime is updated to one that
+ *   compiles it. Source that cannot replace what the piece runs lasts until
+ *   the origin offers other source, or until the owner takes it anyway.
  * - `unavailable`: the origin's current source could not be adopted this
  *   time — it could not be reached, or the piece changed underneath the
  *   attempt and the write it was going to make no longer describes it.
@@ -153,10 +203,11 @@ export type SystemSourceCandidate =
   | CompiledCandidate
   /**
    * It was refused, as reconciliation refuses it, and `offered` names the
-   * identity the origin advertised. Source that does not compile is refused
-   * for as long as the origin serves it. A mismatch with the advertised
-   * identity lasts until a deployment in progress at the host finishes, or
-   * until this runtime and the host's compile the source alike.
+   * identity the origin advertised. A mismatch with that identity lasts until
+   * a deployment in progress at the host finishes, or until this runtime
+   * compiles the source as the host's runtime does. Advertised source that
+   * does not compile lasts until the host serves other source, or until this
+   * runtime is updated to one that compiles it.
    */
   | (SourceRefusal & { readonly offered: PatternRef })
   /**
@@ -1192,15 +1243,10 @@ export class SourceReconciler {
   }
 
   /**
-   * Compile a resolved candidate, check it may replace what is running, and
-   * commit the transition and the swap together.
-   *
-   * `advertisedIdentity`, where the origin supplied one, must equal what the
-   * candidate compiles to. A source that does not produce the identity its own
-   * origin advertises is not the source that origin names, and is refused.
-   * So is a candidate whose compile fails in a way that recurs for the same
-   * source ({@link isDeterministicCompileFailure}), or whose selected export is
-   * not a pattern; any other compile failure throws.
+   * Compiles a resolved candidate, checks it may replace what is running, and
+   * commits the transition and the swap together. The compile is
+   * `#compileCandidate`'s, which holds the candidate to `advertised`, the
+   * identity its origin names, and says what it refuses.
    *
    * The transition records the origin the piece already follows, as an
    * update to it. A `claim` records a different one instead: the origin a
@@ -1213,7 +1259,7 @@ export class SourceReconciler {
     program: RuntimeProgram,
     origin: PieceOriginKind,
     signal: AbortSignal,
-    advertisedIdentity?: string,
+    advertised: string,
     claim?: OriginClaim,
   ): Promise<FollowResult> {
     const runtime = this.#runtime;
@@ -1221,7 +1267,7 @@ export class SourceReconciler {
     const compiled = await this.#compileCandidate(
       program,
       state.space,
-      advertisedIdentity,
+      advertised,
     );
     if (compiled.outcome === "refused") return compiled;
     const { pattern: candidate, ref: candidateRef } = compiled;
@@ -1323,19 +1369,20 @@ export class SourceReconciler {
 
   /**
    * Helper for `#adopt` and {@link compileSystemSource}, which compiles a
-   * candidate into `space` and holds it to `advertised`, where its origin
-   * advertised an identity.
+   * candidate into `space` and holds it to `advertised`, the identity its
+   * origin names.
    *
-   * Refuses a candidate that does not compile to `advertised`, whose compile
-   * fails in a way that recurs for the same source
-   * ({@link isDeterministicCompileFailure}), or whose selected export is not a
-   * pattern. Any other compile failure throws, and so does every compile
-   * failure in a runtime with a pattern-coverage collector.
+   * Refuses a candidate that is not the `advertised` source, whether or not it
+   * compiles. Refuses one that is, or whose identity cannot be computed
+   * without compiling it, when its compile fails in a way that recurs for the
+   * same source ({@link isDeterministicCompileFailure}) or its selected export
+   * is not a pattern. Any other compile failure throws, and so does every
+   * compile failure in a runtime with a pattern-coverage collector.
    */
   async #compileCandidate(
     program: RuntimeProgram,
     space: MemorySpace,
-    advertised: string | undefined,
+    advertised: string,
   ): Promise<CompiledCandidate | SourceRefusal> {
     const manager = this.#runtime.patternManager;
     let pattern: Pattern;
@@ -1348,6 +1395,13 @@ export class SourceReconciler {
         this.#runtime.patternCoverage !== undefined ||
         !isDeterministicCompileFailure(error)
       ) throw error;
+      // Modules from different revisions, as a host part-way through a
+      // deployment can serve, need not compile together. Such a closure is
+      // not the source its origin advertises, and is refused as that.
+      const served = await uncompiledEntryIdentity(program);
+      if (served !== undefined && served !== advertised) {
+        return identityMismatch(space, served, advertised);
+      }
       logger.warn("candidate-did-not-compile", () => [
         "the origin's current source did not compile",
         space,
@@ -1375,19 +1429,8 @@ export class SourceReconciler {
         }\` export is not a pattern`,
       };
     }
-    if (advertised !== undefined && ref.identity !== advertised) {
-      logger.warn("advertised-identity-mismatch", () => [
-        "resolved source did not compile to the identity its origin advertises",
-        space,
-        advertised,
-        ref,
-      ]);
-      return {
-        outcome: "refused",
-        reason: "identity-mismatch",
-        detail: `the source compiled to ${ref.identity}, not the ` +
-          `${advertised} its origin advertises`,
-      };
+    if (ref.identity !== advertised) {
+      return identityMismatch(space, ref.identity, advertised);
     }
     return { outcome: "compiled", pattern, ref };
   }

@@ -266,6 +266,12 @@ function refusalOutlook(reconciliation: PieceReconciliationView): string {
       return "The piece is running the source it last accepted. This lasts " +
         "until the origin's host finishes deploying, or until this client " +
         "is updated to match it.";
+    // Source written for a newer runtime than this client's can compile at
+    // the origin's host and fail here.
+    case "source-invalid":
+      return "The piece is running the source it last accepted. This lasts " +
+        "until the origin offers other source, or until this client runs a " +
+        "version that compiles it.";
     default:
       return "The piece is running the source it last accepted, and this " +
         "will happen again every time the piece is opened.";

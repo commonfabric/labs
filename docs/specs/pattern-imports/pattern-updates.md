@@ -534,12 +534,16 @@ with that exact identity.
 This also fails closed across a rolling deployment. If `?identity`, the entry
 source, or any import comes from a different revision, the assembled closure
 normally hashes to a different entry identity and the pattern pointer is not
-written. The piece records an identity-mismatch refusal, which lasts only until
-the deployment finishes. The same rule covers an identity-algorithm
-incompatibility between an older worker and a newer toolshed: disagreement
-prevents the update. No `/api/meta` request, git-SHA comparison, pattern
-response build header, or worker-to-shell version-skew signal is part of the
-authorization path.
+written. The piece records an `identity-mismatch` refusal whether or not that
+closure compiles, because one that does not compile is hashed without compiling
+it, and the refusal lasts only until the deployment finishes. A closure that
+cannot be hashed without compiling it, such as one with a fabric import, and
+that does not compile is recorded as `source-invalid` instead. The same rule
+covers an identity-algorithm incompatibility between an older worker and a
+newer toolshed: disagreement prevents the update until the worker is updated,
+and so does advertised source that only the newer runtime compiles. No
+`/api/meta` request, git-SHA comparison, pattern response build header, or
+worker-to-shell version-skew signal is part of the authorization path.
 
 Authored identity deliberately does not fingerprint bare runtime imports or the
 runtime's implementation. Local compilation and evaluation are a capability
