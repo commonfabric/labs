@@ -56,7 +56,9 @@ export type RecordPatternFeedbackResult =
  */
 export const recordPatternFeedback = async (
   client: PatternIndexClient,
-  request: Omit<PatternIndexRecordEventRequest, "did">,
+  request: Omit<PatternIndexRecordEventRequest, "did" | "eventType"> & {
+    eventType: PatternFeedbackEventType;
+  },
 ): Promise<RecordPatternFeedbackResult> => {
   const answer = await client.recordEvent(request);
   return answer.ok === true ? { ok: true } : {

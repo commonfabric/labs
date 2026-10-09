@@ -1092,19 +1092,24 @@ The current package provides:
   `CF_HARNESS_PATTERN_INDEX_URL` environment fallback), which needs the fabric
   session configuration: index requests are signed with the session identity
   under the CF1 first-party scheme, and an indexed pattern runs in the session's
-  space. It adds the `search_patterns` tool, which finds published patterns by
-  hashtag or free text and reports each hit's kind, evidence quality,
-  description, hashtags, usage signals, declared argument and result shapes, and
-  the `cf:pattern:<patternId>` import specifier that composes it. The shared
-  client resolves same-owner `priorPatternId` chains from the discoverable
-  catalog and places the final generation once at the earliest matching rank,
-  including replacements outside the original result limit. Penalized final
-  generations are withheld; branches or cycles fail the affected search.
-  Exact-ID reads and existing imports keep their requested generation. Every
-  nonempty search refreshes catalog membership; immutable metadata is cached per
-  client. Index-supplied inherited signals retain their predecessor, publication
-  cutoff, counts, and score, so a proven tier need not mean that the current
-  generation has run. See
+  space. The signed client, successor resolution, search request shaping,
+  feedback vocabulary and recorder, and safe status rule live in
+  [`@commonfabric/pattern-index`](../../pattern-index/README.md).
+  [`src/pattern-index/factory.ts`](../src/pattern-index/factory.ts) loads the
+  configured harness identity. Composition, the ledger, and publication gates
+  belong to cf-harness. It adds the `search_patterns` tool, which finds
+  published patterns by hashtag or free text and reports each hit's kind,
+  evidence quality, description, hashtags, usage signals, declared argument and
+  result shapes, and the `cf:pattern:<patternId>` import specifier that composes
+  it. The shared client resolves same-owner `priorPatternId` chains from the
+  discoverable catalog and places the final generation once at the earliest
+  matching rank, including replacements outside the original result limit.
+  Penalized final generations are withheld; branches or cycles fail the affected
+  search. Exact-ID reads and existing imports keep their requested generation.
+  Every nonempty search refreshes catalog membership; immutable metadata is
+  cached per client. Index-supplied inherited signals retain their predecessor,
+  publication cutoff, counts, and score, so a proven tier need not mean that the
+  current generation has run. See
   [Pattern generations in search](../README.md#pattern-generations-in-search).
   Free-text search removes stopwords, matches whole words plus light suffix
   variants, and is disjunctive: one content term may return a hit, so extra

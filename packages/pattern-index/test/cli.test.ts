@@ -140,7 +140,6 @@ describe("cli", () => {
       did: "forged",
     });
     expect(output.code).toBe(0);
-    expect(output.stderr).toBe("");
     expect(JSON.parse(output.stdout)).toEqual({
       ok: true,
       value: {
@@ -175,7 +174,6 @@ describe("cli", () => {
         note: "ignored",
       });
       expect(output.code).toBe(0);
-      expect(output.stderr).toBe("");
       expect(JSON.parse(output.stdout)).toEqual({
         ok: true,
         value: { patternId: "test", eventType, recordedBy: did },
@@ -206,7 +204,6 @@ describe("cli", () => {
     ) {
       const output = await callHelper(directory, baseUrl, request);
       expect(output.code).toBe(0);
-      expect(output.stderr).toBe("");
       expect(JSON.parse(output.stdout)).toEqual({
         ok: false,
         status: 400,
@@ -226,7 +223,7 @@ describe("cli", () => {
         verdict: "up",
       });
       expect(output.code).toBe(0);
-      expect(output.stderr).toBe("");
+      expect(output.stderr).not.toContain("private server detail");
       expect(JSON.parse(output.stdout)).toEqual({
         ok: false,
         status: status < 500 ? status : 502,

@@ -43,7 +43,7 @@ const jsonResponse = (body: unknown, status = 200): Response =>
     headers: { "Content-Type": "application/json" },
   });
 
-describe("PatternIndexClient", () => {
+describe("createHarnessPatternIndexClientFactory()", () => {
   it("constructs clients that sign as the identity read from the configured keyfile", async () => {
     const root = await Deno.makeTempDir();
     try {
