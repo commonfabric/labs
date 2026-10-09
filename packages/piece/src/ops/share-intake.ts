@@ -520,8 +520,8 @@ export class ShareIntake {
    * receipt at `link`: has Home's chat manager accept `root`, the vetted root
    * of the row's space, when the handler registered a new entry, and logs,
    * once for the row, a `conflict` the handler returned. A receipt that cannot
-   * be read is left unreported, since the handling it describes has committed
-   * either way.
+   * be read is left unreported, and leads to no acceptance, since the handling
+   * it describes has committed either way.
    */
   async #afterRegistration(
     row: string,
