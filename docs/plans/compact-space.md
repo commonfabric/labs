@@ -976,7 +976,7 @@ history from absence.
    the tool will transform them, red on the engine before and green after;
    an uncompacted instance's genuine absence still proves identity as
    today, and so does a basis at the boundary itself.
-3. **Dry run and report** — PR_PLACEHOLDER. `packages/memory/v2/compact.ts`
+3. **Dry run and report** — [labs#8649](https://github.com/commonfabric/labs/pull/8649). `packages/memory/v2/compact.ts`
    with the selection, the cut, and the report, read-only; `cf space compact
    --dry-run` over it, which refuses to run without the flag until stage 4.
    Tests: a store built with the engine, patched past the snapshot interval,
