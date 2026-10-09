@@ -254,7 +254,7 @@ statement.
   input of the join, §8.12.8 drops each per-value claim wherever a component
   carries none, and against that reading the runtime over-claims wherever any
   does. Which reading holds is open in
-  [commonfabric/specs#SPECS_PR](https://github.com/commonfabric/specs/pull/SPECS_PR).
+  [commonfabric/specs#60](https://github.com/commonfabric/specs/pull/60).
 
 ## 5. Position in the §18.6.3 matrix and the auxiliary dials
 
