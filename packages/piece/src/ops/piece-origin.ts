@@ -10,6 +10,7 @@
 import { isDID } from "@commonfabric/identity/did";
 import {
   type Cell,
+  classifyPieceOriginString,
   fabricAuthorityMatchesSpaceHost,
   type FabricRef,
   formatFabricRef,
@@ -22,12 +23,15 @@ import {
   NAME,
   normalizePatternSource,
   parseFabricRef,
+  type Pattern,
   type PieceReconciliation,
   type ReconcileOutcome,
   resolveSystemPatternSource,
   type Runtime,
   type RuntimeProgram,
+  type SourceRefusal,
   spaceHostFromFabricAuthority,
+  type SystemPieceOrigin,
 } from "@commonfabric/runner";
 import {
   entityKindOfIdString,
@@ -35,7 +39,6 @@ import {
   uriSchemeForEntityKind,
 } from "@commonfabric/runner/entity-kind";
 import { nameSchema } from "@commonfabric/runner/schemas";
-import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
@@ -151,6 +154,22 @@ export class PieceOriginError extends Error {
   }
 }
 
+/**
+ * The source an origin offers, refused as following that origin refuses it:
+ * it did not compile to the identity its origin advertises, or did not compile
+ * at all. `refusal` is what a reconciliation records for it.
+ */
+export class PieceOriginRefusedError extends PieceOriginError {
+  constructor(
+    readonly refusal: SourceRefusal & {
+      readonly offered: { identity: string; symbol: string };
+    },
+  ) {
+    super(refusal.detail);
+    this.name = "PieceOriginRefusedError";
+  }
+}
+
 /** The identity a fabric ref pins, when the ref is immutable. */
 function pinnedPatternIdentity(ref: FabricRef): string | undefined {
   if (ref.pin !== undefined) return ref.pin;
@@ -159,10 +178,21 @@ function pinnedPatternIdentity(ref: FabricRef): string | undefined {
     : undefined;
 }
 
-export interface ResolvedPieceOriginSource {
-  program: RuntimeProgram;
-  pattern: { identity?: string; symbol: string };
-}
+/** The source an origin offers now, and the export a transition selects. */
+export type ResolvedPieceOriginSource =
+  /** Source for the caller to compile into the destination space. */
+  | {
+    program: RuntimeProgram;
+    pattern: { identity?: string; symbol: string };
+  }
+  /**
+   * A `system:` origin's source, already compiled into the destination space
+   * and held to the identity its host advertises.
+   */
+  | {
+    compiled: Pattern;
+    pattern: { identity: string; symbol: string };
+  };
 
 type StableFabricRef = FabricRef & {
   ref: Extract<FabricRef["ref"], { kind: "uri" }>;
@@ -183,6 +213,11 @@ export function qualifyFabricOrigin(
  * Resolves an origin now, returning the authored program and selected export a
  * repoint transition should apply.
  *
+ * A `system:` origin's source is compiled here, as following that origin
+ * compiles it, and is held to the same check: one that does not compile to
+ * the identity its host advertises, or does not compile, throws
+ * {@link PieceOriginRefusedError}.
+ *
  * `self` names the piece the origin is being resolved for. A mutable fabric
  * origin naming that piece is rejected: a piece that follows itself supplies
  * its own next source, and there is no source outside it for either end of
@@ -196,21 +231,23 @@ export async function resolvePieceOriginSource(
   options: { self?: { space: MemorySpace; pieceId: string } } = {},
 ): Promise<ResolvedPieceOriginSource> {
   const origin = classifyOrigin(runtime, destinationSpace, recorded);
-  if (origin.kind === "system") {
-    const program = await runtime.harness.resolve(
-      new HttpProgramResolver(
-        origin.url,
-        (input, init) =>
-          runtime.fetch(input, {
-            ...init,
-            cache: "no-cache",
-          }),
-      ),
+  const system = systemOriginOf(
+    recorded.trim(),
+    runtime.hostForSpace(destinationSpace),
+  );
+  if (system !== undefined) {
+    const candidate = await runtime.sourceReconciler.compileSystemSource(
+      destinationSpace,
+      system,
+      historicalSymbol,
     );
-    return {
-      program: { ...program, mainExport: historicalSymbol },
-      pattern: { symbol: historicalSymbol },
-    };
+    if (candidate.outcome === "refused") {
+      throw new PieceOriginRefusedError(candidate);
+    }
+    if (candidate.outcome === "unreachable") {
+      throw new PieceOriginError(candidate.detail);
+    }
+    return { compiled: candidate.pattern, pattern: candidate.ref };
   }
 
   const ref = parseFabricRef(origin.url)!;
@@ -293,6 +330,21 @@ export async function resolvePieceOriginSource(
     program: { ...program, mainExport: pattern.symbol },
     pattern,
   };
+}
+
+/**
+ * The `system:` origin `recorded` names, in any spelling reconciliation
+ * follows, or `undefined` when it names an origin of another kind.
+ */
+function systemOriginOf(
+  recorded: string,
+  host: string | URL,
+): SystemPieceOrigin | undefined {
+  const origin = classifyPieceOriginString(recorded, host);
+  if (origin.kind === "system") return origin;
+  return origin.kind === "legacy-path" && origin.ref !== undefined
+    ? systemOriginOf(origin.ref, host)
+    : undefined;
 }
 
 /**

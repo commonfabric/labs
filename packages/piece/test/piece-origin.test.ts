@@ -316,7 +316,7 @@ describe("resolvePieceOriginSource", () => {
     );
 
     expect(resolved.pattern).toEqual({ identity: HASH, symbol: "upstream" });
-    expect(resolved.program.mainExport).toBe("upstream");
+    expect(resolved).toMatchObject({ program: { mainExport: "upstream" } });
     expect(reads).toEqual([`piece:${otherSpace}`, `source:${otherSpace}`]);
   });
 
@@ -422,7 +422,7 @@ describe("resolvePieceOriginSource", () => {
         );
 
         expect(resolved.pattern).toEqual(state.pattern);
-        expect(resolved.program.main).toBe("/main.tsx");
+        expect(resolved).toMatchObject({ program: { main: "/main.tsx" } });
       }
     } finally {
       await runtime.dispose();

@@ -10,6 +10,7 @@ import {
   getPatternSource,
   getPieceReconciliation,
   getPieceSourceSnapshot,
+  resolveEntryIdentity,
   Runtime,
   type RuntimeProgram,
   setPatternSource,
@@ -176,12 +177,18 @@ function unionValueProgram(): RuntimeProgram {
   };
 }
 
+/**
+ * Serves each program in `sources` at its path, answering `?identity` as a
+ * host does with the identity of what it serves there, unless `advertised`
+ * names another for that path.
+ */
 function installFetchStub(
   sources: Record<string, RuntimeProgram>,
   onFetch: () => void = () => {},
+  advertised: Record<string, string> = {},
 ): () => void {
   const original = globalThis.fetch;
-  globalThis.fetch = ((input: string | URL | Request) => {
+  globalThis.fetch = (async (input: string | URL | Request) => {
     const url = new URL(
       typeof input === "string"
         ? input
@@ -191,16 +198,25 @@ function installFetchStub(
     );
     onFetch();
     const program = sources[url.pathname];
-    if (program === undefined) {
-      return Promise.resolve(new Response("not found", { status: 404 }));
+    const entry = program?.files.find((file) => file.name === program.main);
+    if (entry === undefined) {
+      return new Response("not found", { status: 404 });
     }
-    const entry = program.files.find((file) => file.name === program.main);
-    return Promise.resolve(
-      new Response(entry?.contents ?? "not found", {
-        status: entry === undefined ? 404 : 200,
-        headers: { "content-type": "text/typescript-jsx" },
-      }),
-    );
+    if (url.searchParams.has("identity")) {
+      return new Response(
+        advertised[url.pathname] ??
+          await resolveEntryIdentity(
+            url.pathname,
+            (name) =>
+              name === url.pathname
+                ? Promise.resolve(entry.contents)
+                : Promise.reject(new Error(`not found: ${name}`)),
+          ),
+      );
+    }
+    return new Response(entry.contents, {
+      headers: { "content-type": "text/typescript-jsx" },
+    });
   }) as typeof globalThis.fetch;
   return () => {
     globalThis.fetch = original;
@@ -212,13 +228,19 @@ describe("piece source lifecycle", () => {
   let runtime: Runtime;
   let pieces: PiecesController;
   let webSources: Record<string, RuntimeProgram>;
+  let webAdvertised: Record<string, string>;
   let webFetches: number;
   let restoreFetch: () => void;
 
   beforeEach(async () => {
     webSources = {};
+    webAdvertised = {};
     webFetches = 0;
-    restoreFetch = installFetchStub(webSources, () => webFetches++);
+    restoreFetch = installFetchStub(
+      webSources,
+      () => webFetches++,
+      webAdvertised,
+    );
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
@@ -533,6 +555,67 @@ describe("piece source lifecycle", () => {
       outcome: "unreachable",
       origin,
     });
+  });
+
+  it("records an update whose source does not compile to the identity its origin advertises", async () => {
+    const origin = "system:mismatched.tsx";
+    webSources["/api/patterns/mismatched.tsx"] = versionProgram("origin-v1");
+    webAdvertised["/api/patterns/mismatched.tsx"] = "advertised-elsewhere";
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    await stampOrigin(piece, origin);
+
+    // Taking it would move the piece somewhere every client that agrees with
+    // the host moves it back from.
+    await expect(piece.changeSource({ kind: "adopt" })).rejects.toThrow(
+      "not the advertised-elsewhere its origin advertises",
+    );
+
+    expect(await piece.result.get(["version"])).toBe("v1");
+    expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+      outcome: "refused",
+      reason: "identity-mismatch",
+      origin,
+      offered: { identity: "advertised-elsewhere", symbol: "default" },
+    });
+  });
+
+  it("records an update whose source does not compile as refused", async () => {
+    const origin = "system:broken.tsx";
+    webSources["/api/patterns/broken.tsx"] = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: "export default notDeclaredAnywhere;\n",
+      }],
+    };
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    await stampOrigin(piece, origin);
+
+    await expect(piece.changeSource({ kind: "adopt" })).rejects.toThrow(
+      "notDeclaredAnywhere",
+    );
+
+    expect(await piece.result.get(["version"])).toBe("v1");
+    expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+      outcome: "refused",
+      reason: "source-invalid",
+      origin,
+    });
+  });
+
+  it("refuses to point a piece at source that does not compile to what its origin advertises", async () => {
+    webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
+    webAdvertised["/api/patterns/entered.tsx"] = "advertised-elsewhere";
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+
+    await expect(
+      piece.changeSource({ kind: "repoint", url: "system:entered.tsx" }),
+    ).rejects.toThrow("its origin advertises");
+
+    // Nothing describes a relationship with an origin the piece never took.
+    expect(getPatternSource(piece.getCell())).toBeUndefined();
+    expect(getPieceReconciliation(piece.getCell())).toBeUndefined();
+    expect(await piece.result.get(["version"])).toBe("v1");
   });
 
   it("drops an outcome about a piece that moved while it was being reached", async () => {
@@ -1451,7 +1534,7 @@ describe("piece source lifecycle", () => {
           kind: "follow",
           revisionId: revision.revisionId,
         }),
-      ).rejects.toThrow("candidate source has no pattern identity");
+      ).rejects.toThrow("`default` export is not a pattern");
     } finally {
       runtime.patternManager.getArtifactEntryRef = getEntryRef;
     }

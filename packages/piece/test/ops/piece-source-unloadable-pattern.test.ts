@@ -4,6 +4,7 @@ import { createSession, Identity } from "@commonfabric/identity";
 import {
   getPatternIdentityRef,
   getPatternSource,
+  resolveEntryIdentity,
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -64,17 +65,26 @@ describe("piece-controller", () => {
       runtime = new Runtime({
         apiUrl: new URL("http://toolshed.test"),
         storageManager,
-        fetch: (input) => {
+        fetch: async (input) => {
           const url = new URL(input instanceof Request ? input.url : input);
           const entry = url.pathname === ORIGIN_ROUTE
             ? served.files.find((file) => file.name === served.main)
             : undefined;
-          return Promise.resolve(
-            new Response(entry?.contents ?? "not found", {
-              status: entry === undefined ? 404 : 200,
-              headers: { "content-type": "text/typescript-jsx" },
-            }),
-          );
+          if (entry === undefined) {
+            return new Response("not found", { status: 404 });
+          }
+          // The identity a host advertises for what it serves there.
+          if (url.searchParams.has("identity")) {
+            return new Response(
+              await resolveEntryIdentity(
+                ORIGIN_ROUTE,
+                () => Promise.resolve(entry.contents),
+              ),
+            );
+          }
+          return new Response(entry.contents, {
+            headers: { "content-type": "text/typescript-jsx" },
+          });
         },
       });
       pieces = new PiecesController(
