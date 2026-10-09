@@ -263,14 +263,10 @@ export async function resolvePieceOriginSource(
   options: { self?: { space: MemorySpace; pieceId: string } } = {},
 ): Promise<ResolvedPieceOriginSource> {
   const origin = classifyOrigin(runtime, destinationSpace, recorded);
-  const system = systemOriginOf(
-    recorded.trim(),
-    runtime.hostForSpace(destinationSpace),
-  );
-  if (system !== undefined) {
+  if (origin.kind === "system") {
     const candidate = await runtime.sourceReconciler.compileSystemSource(
       destinationSpace,
-      system,
+      systemOriginOf(origin, runtime.hostForSpace(destinationSpace)),
       historicalSymbol,
     );
     if (candidate.outcome === "refused") {
@@ -282,7 +278,13 @@ export async function resolvePieceOriginSource(
     return { compiled: candidate.pattern, pattern: candidate.ref };
   }
 
-  const ref = parseFabricRef(origin.url)!;
+  const ref = parseFabricRef(origin.url);
+  if (ref === undefined) {
+    throw new Error(
+      `\`${origin.url}\` classifies as a \`${origin.kind}\` origin and ` +
+        `is not a fabric URL`,
+    );
+  }
   if (ref.subpath !== undefined) {
     throw new PieceOriginError("piece source subpaths are not supported");
   }
@@ -365,18 +367,26 @@ export async function resolvePieceOriginSource(
 }
 
 /**
- * The `system:` origin `recorded` names, in any spelling reconciliation
- * follows, or `undefined` when it names an origin of another kind.
+ * The `system:` origin a deployment-served `origin` names, as reconciliation
+ * follows it. `origin.url` is the route on `host`, which reconciliation reads
+ * as a legacy locator for that `system:` ref. Throws when it reads it as
+ * anything else.
  */
 function systemOriginOf(
-  recorded: string,
+  origin: PieceOrigin,
   host: string | URL,
-): SystemPieceOrigin | undefined {
-  const origin = classifyPieceOriginString(recorded, host);
-  if (origin.kind === "system") return origin;
-  return origin.kind === "legacy-path" && origin.ref !== undefined
-    ? systemOriginOf(origin.ref, host)
-    : undefined;
+): SystemPieceOrigin {
+  const locator = classifyPieceOriginString(origin.url, host);
+  const followed = locator.kind === "legacy-path" && locator.ref !== undefined
+    ? classifyPieceOriginString(locator.ref, host)
+    : locator;
+  if (followed.kind !== "system") {
+    throw new Error(
+      `\`${origin.url}\` classifies as a \`system\` origin, and ` +
+        `reconciliation follows it as \`${followed.kind}\``,
+    );
+  }
+  return followed;
 }
 
 /**

@@ -511,6 +511,45 @@ describe("piece source lifecycle", () => {
     expect(state.history.at(-1)?.origin?.recorded).toBe(origin);
   });
 
+  for (
+    const [spelling, origin] of [
+      ["rooted path", "/api/patterns/legacy.tsx"],
+      ["URL on the host", "http://toolshed.test/api/patterns/legacy.tsx"],
+    ]
+  ) {
+    describe(`an origin recorded as a patterns-route ${spelling}`, () => {
+      it("adopts what the origin offers now", async () => {
+        webSources["/api/patterns/legacy.tsx"] = versionProgram("origin-v1");
+        const piece = await pieces.create(versionProgram("v1"), { input: {} });
+        await stampOrigin(piece, origin);
+
+        expect(await piece.changeSource({ kind: "adopt" })).toEqual({
+          status: "applied",
+        });
+
+        expect(await piece.result.get(["version"])).toBe("origin-v1");
+      });
+
+      it("refuses source that does not compile to what the origin advertises", async () => {
+        webSources["/api/patterns/legacy.tsx"] = versionProgram("origin-v1");
+        webAdvertised["/api/patterns/legacy.tsx"] = "advertised-elsewhere";
+        const piece = await pieces.create(versionProgram("v1"), { input: {} });
+        await stampOrigin(piece, origin);
+
+        await expect(piece.changeSource({ kind: "adopt" })).rejects.toThrow(
+          "not the advertised-elsewhere its origin advertises",
+        );
+
+        expect(await piece.result.get(["version"])).toBe("v1");
+        expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+          outcome: "refused",
+          reason: "identity-mismatch",
+          origin,
+        });
+      });
+    });
+  }
+
   it("records an update that found the origin already current", async () => {
     const origin = "system:already-current.tsx";
     webSources["/api/patterns/already-current.tsx"] = versionProgram(
