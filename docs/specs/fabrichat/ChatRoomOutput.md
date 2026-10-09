@@ -18,6 +18,9 @@ interface ChatRoomOutput {
   /** The room's participants, plus any author it doesn't list. */
   participants: Cell<ChatProfile>[];
 
+  /** The principal each participant's profile attests, once each. */
+  participantPrincipals: string[];
+
   /** Adds a profile to those who joined the room, once. */
   addParticipant: Stream<{ profile: Cell<ChatProfile> }>;
 
@@ -55,6 +58,19 @@ interface ChatRoomOutput {
     message: Cell<ChatMessage>;
     emoji: string;
   }>;
+
+  /** Admits someone to the room's space, from a trusted gesture. */
+  addMember: Stream<{ requestId: string; target: { value: string } }>;
+
+  /** Whether this reader can add someone to the room's space. */
+  canAdd: boolean;
+
+  /** The outcome of each of this reader's adds, by its `requestId`. */
+  addRequests: Record<
+    string,
+    | { status: "done" }
+    | { status: "refused"; reason: string; code?: "direct-room" }
+  >;
   [UI]: VNode;
   [VIEWS]: { room: object };
 }
@@ -97,8 +113,8 @@ which needs no event, but can't open other windows, send, or react.
 
 A room keeps no membership of its own. Who is in its space, and with what
 access, is the space's business: its access list changes through the space's
-own tools, such as the CLI's `cf acl`, and, for a room in a space of its own,
-through the room's [`addMember`](#addmembertarget--value-string-), from
+own tools, such as the CLI's `cf acl`, and, for a group room in a space of its
+own, through the room's [`addMember`](#addmemberrequestid-string-target--value-string-), from
 which any OWNER admits someone else as OWNER. Its root lists its
 participants' profiles, claims each member contributes by joining the space: a
 room in a space of its own is that root, and keeps them itself, each added
@@ -138,6 +154,15 @@ space.
 - **`participants`** are links to profiles, compared with `equals()`: the
   profiles its space's root lists, as [membership](#membership) says, plus any
   author none of them is, each once. They are not proof of access.
+- **`participantPrincipals`** names the principal each of `participants` stands
+  for, as its profile's `represents-principal` label attests it: each once, in
+  the order of `participants`. A profile that attests none is left out, and so
+  is one whose label can't be read where the list is derived, as when the
+  profile's space refuses the reader, so two readers can read different lists.
+  It holds only the principals whose profiles can be read for the reader, so it
+  is a best-effort list of who is already in the room, not an access list, and
+  like `participants` it is a claim, not proof of access. A client uses it to
+  leave the people already in the room out of its own add control.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, and `latest`, the newest messages of
   the main conversation, which every member can read, a READ member included. It
@@ -147,6 +172,12 @@ space.
   now: their access is WRITE or OWNER, and their profile resolves. It lets a
   client tell a READ member why their gestures would be refused before they
   make one.
+- **`canAdd`** says whether the reader can add someone to the room's space: the
+  room is a group room in a space of its own, and their access is OWNER. It is
+  false in a direct room, whose space keeps its two members, and in a space's
+  own chat. A client offers its own add control only where it holds.
+- **`addRequests`** holds the outcome of each of the reader's
+  [`addMember`](#addmemberrequestid-string-target--value-string-) requests, by its `requestId`.
 - **`recentActivity`** is a log of what the room recorded recently: each message
   sent, edited, deleted, or obliterated, and each reaction added or removed, as
   a [`ChatRoomActivity`](ChatRoomActivity.md), in `seq` order. A client follows
@@ -163,8 +194,9 @@ space.
 
 ## Scopes
 
-A room's fields fall into two [scopes](../scoped-cell-instances.md#summary),
-plus one value computed for each reader, and the difference matters to a client:
+A room's fields fall into three [scopes](../scoped-cell-instances.md#summary),
+plus two values computed for each reader, and the difference matters to a
+client:
 
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
   room's space admits. That is nearly everything: `about`, the messages,
@@ -172,21 +204,23 @@ plus one value computed for each reader, and the difference matters to a client:
   streams. These are the room: a link to the room names them, and passing the
   link around, to another component or another person, passes the room.
 - **`PerSession`**: one instance per memory session in the room's space. That is
-  only `messages.windows`, the windows a session has opened onto the messages
-  (see [`ChatMessageList`](ChatMessageList.md#scope)). Passing the room's link
-  to someone else never passes a session's windows: they read their own.
-- **Computed for each reader**: `canSend`. It is derived when it's read, from
-  the reader's own access and profile, so each reader sees their own answer,
-  through the room or through a placement, and it needs no instance and no
-  write.
+  `messages.windows`, the windows a session has opened onto the messages (see
+  [`ChatMessageList`](ChatMessageList.md#scope)), and `participantPrincipals`,
+  which each session derives under its own access. Passing the room's link to
+  someone else never passes a session's windows: they read their own.
+- **`PerUser`**: one instance per user, which follows them across sessions.
+  That is only `addRequests`, the outcomes of the reader's own adds. No one
+  else reads them.
+- **Computed for each reader**: `canSend` and `canAdd`. Each is derived when
+  it's read, from the reader's own access and profile, so each reader sees
+  their own answer, through the room or through a placement, and it needs no
+  instance and no write.
 
 Some values are derived when they're read, and stored nowhere, so reading them
 needs no instance of anything: `participants`, and in `messages`, everything but
 `windows`. A session's windows come into being with its first `openWindow`, so a
 READ member, who can't write, never has any, and can still read
 `messages.latest`.
-
-Nothing in a room is `PerUser`.
 
 ## Streams
 
@@ -495,23 +529,34 @@ Removes the sender's reaction to a message.
 A client never toggles: it sends whichever of the two the person asked for, so a
 repeated or delayed event can't undo what the person meant.
 
-### `addMember(target: { value: string })`
+### `addMember(requestId: string, target: { value: string })`
 
+- `requestId: string` — Chosen by the sender, and unique among its adds. The
+  outcome is recorded under it in `addRequests`, and sending the same event
+  again with it changes nothing. The rendered add control's click carries none,
+  and is given one of its own.
 - `target.value: string` — The chat address of the person to admit: a
   principal's DID, as the room's add control holds it.
 
-Admits someone to a room's space. Unlike the streams above, it is on the room's
-output but not in `[VIEWS]`.
+Admits someone to a room's space. Unlike the streams in the table, it takes a
+gesture of its own, and it is in `[VIEWS]` with them.
 
 - **Admitted:** as a trusted gesture on `ChatAddMemberSurface`, from the room's
   rendered add control or from a client's own control through the sanctioned
   issuing path (see [`clients.md`](clients.md#the-sanctioned-issuing-path)),
-  from an OWNER of the room's space, for a room in a space of its own.
+  from an OWNER of the room's space, for a group room in a space of its own.
 - **Effect:** grants the principal OWNER on the room's space, so they too may
   add others. Granting someone the OWNER they already hold changes nothing.
-- **Refused:** an address that is not a principal's DID, a sender without
-  OWNER, a room that shares an existing space, and anything the space's access
-  list refuses. The rendering tells the session what came of its add.
+- **Refused:** a direct room, whose space keeps its two members; an address
+  that is not a principal's DID, a sender without OWNER, a room that shares an
+  existing space, and anything the space's access list refuses. The rendering
+  tells the session what came of its add, and shows a direct room no add
+  control.
+- **Outcome:** recorded in `addRequests`: `done`, or `refused` with a `reason`
+  for a person to read. A direct room's refusal also carries the `code`
+  `direct-room`, which stays the same whatever the `reason` says; the others
+  carry none. An add the stream doesn't admit, as one without the gesture,
+  records nothing.
 
 ### `addParticipant(profile: Cell<ChatProfile>)`
 
@@ -521,7 +566,7 @@ output but not in `[VIEWS]`.
 Adds a profile to those who joined the room: for a room in a space of its own,
 the participants it keeps for its space. Unlike the streams in the table, it
 takes no `requestId`: a profile already listed is not added again, so a repeat
-changes nothing. Like them, and unlike `addMember`, it is in `[VIEWS]`. Any
+changes nothing. Like them, and like `addMember`, it is in `[VIEWS]`. Any
 participant may add any profile, so an entry is a claim. A member's chat
 manager adds its user when it creates or accepts the room.
 
@@ -536,7 +581,8 @@ manager adds its user when it creates or accepts the room.
   adapter's rendering embeds it, so a composer is always the room's own surface.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
   that draw natively. It includes `messages`, through whose link a client
-  reaches its own windows and their streams, and `canSend`. A client uses it to
+  reaches its own windows and their streams, `canSend`, and `addMember` with
+  `canAdd` and `addRequests`. A client uses it to
   show a room outside any container. Inside a container, it reads the
   placement's `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).

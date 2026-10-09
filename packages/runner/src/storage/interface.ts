@@ -42,6 +42,7 @@ import type {
   ScopeKey,
   ScopeKeyIdentity,
   SessionReadCeiling,
+  SessionReport,
   SessionSyncUpsert,
   SqliteDbRef,
   SqliteOperation,
@@ -969,6 +970,27 @@ export const hasPresenceStorageCapability = (
   if (value === null || value === undefined) return false;
   const candidate = value as Partial<IPresenceStorageCapability>;
   return typeof candidate.joinPresenceRoom === "function";
+};
+
+/**
+ * A storage provider that reports diagnostics about its space session to the
+ * memory server serving the space (memory-v2 `04-protocol.md` §4.14).
+ */
+export interface ISessionReportStorageCapability {
+  /**
+   * Sends `report` on this provider's space session, best-effort: a server
+   * without the capability, a connection that is down, and a refusal all
+   * drop the report without an error.
+   */
+  sendReport(report: SessionReport): void;
+}
+
+export const hasSessionReportStorageCapability = (
+  value: unknown,
+): value is ISessionReportStorageCapability => {
+  if (value === null || value === undefined) return false;
+  const candidate = value as Partial<ISessionReportStorageCapability>;
+  return typeof candidate.sendReport === "function";
 };
 
 /**

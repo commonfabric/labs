@@ -131,7 +131,7 @@ provide, the document says so, under the heading "Prerequisites".
 - **Member.** A principal the room space's access list admits. A member with
   READ reads only the newest messages; WRITE or OWNER is needed to act. Who is
   a member changes through the space's own tools, such as the CLI's `cf acl`,
-  and, for a room in a space of its own, through the room's add control.
+  and, for a group room in a space of its own, through the room's add control.
 - **Direct room.** A room created for exactly two members, found by the manager
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
@@ -293,8 +293,9 @@ from this design, as below.
   root and the space declaring itself a `fabrichat-room`, naming grants: the
   creator and each other member OWNER, and everyone WRITE for a group made
   joinable by its link. After that, who is in it changes through the space's
-  own tools, and through the room's add control, from which any OWNER admits
-  someone as OWNER with `grantSpaceAccess()`. A client that draws natively can
+  own tools, and, for a group room, through the room's add control, from which
+  any OWNER admits someone as OWNER with `grantSpaceAccess()`. A direct room
+  keeps its two members, so its room offers no add. A client that draws natively can
   offer it too, through the sanctioned issuing path (see
   [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 - **A room keeps its own participants.** A room in a space of its own keeps

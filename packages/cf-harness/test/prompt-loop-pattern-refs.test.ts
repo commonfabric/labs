@@ -6,6 +6,7 @@
  */
 
 import { describe, it } from "@std/testing/bdd";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import type { FabricValue } from "@commonfabric/data-model";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
@@ -17,7 +18,6 @@ import {
 } from "@commonfabric/runner";
 
 import { CfHarnessEngine } from "../src/engine.ts";
-import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
@@ -90,7 +90,7 @@ const PATTERN_RECORD = {
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };

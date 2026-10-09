@@ -13,6 +13,7 @@ import {
 import {
   childNodes,
   clickButton,
+  countElements,
   findElement,
   hasText,
   propValue,
@@ -107,6 +108,8 @@ export default pattern(() => {
   const moveLastFromUI = action(() => clickFirstPanel(loom[UI], "Move last"));
   const moveFirstFromUI = action(() => clickFirstPanel(loom[UI], "Move first"));
   const removeFromUI = action(() => clickFirstPanel(loom[UI], "Remove"));
+  const hideFromUI = action(() => clickFirstPanel(loom[UI], "Hide for me"));
+  const showFromUI = action(() => clickButton(loom[UI], "Show"));
   const me = new Writable("");
   const recordMe = action(() => me.set(currentPrincipal() ?? ""));
   // DID Core admits empty inner segments and percent-encodings.
@@ -311,6 +314,26 @@ export default pattern(() => {
       { assertion: assert(() => !loom.panels[0].equals(documentPanel)) },
       { action: removeFromUI },
       { assertion: assert(() => loom.panels.length === 4) },
+      // Hiding a panel from the UI takes it out of this viewer's cards and
+      // list, and out of nobody's `panels`; Show puts it back.
+      { action: hideFromUI },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          loom.panels.length === 4 && loom.viewerPanels.length === 3 &&
+          countElements(loom[UI], "cf-card") === 3 &&
+          hasText(loom[UI], "Hidden")
+        ),
+      },
+      { action: showFromUI },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          loom.viewerPanels.length === 4 &&
+          countElements(loom[UI], "cf-card") === 4 &&
+          !hasText(loom[UI], "Hidden")
+        ),
+      },
       // Each occurrence the root created records the principal its event
       // acted for; the occurrences a caller made and linked record none.
       { action: recordMe },

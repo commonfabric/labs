@@ -33,10 +33,14 @@ import {
   COST_WINDOW_DAYS,
   FLAKE_COMMIT_REACH,
   FLAKE_EXCLUSION_RATE,
+  MASS_FAILURE_MIN_IDENTITIES,
   SAME_COMMIT_REACH_DAYS,
   VALUE_FLOOR,
 } from "./policy.ts";
-import { testIdentityKey } from "@commonfabric/test-support/records";
+import {
+  type TestIdentity,
+  testIdentityKey,
+} from "@commonfabric/test-support/records";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes a fact" };
 const KEY = testIdentityKey(TEST);
@@ -70,9 +74,45 @@ describe("score", () => {
       const context = emptyContext();
       context.mainAtCommit.set("k c1", { day: "2026-08-20", outcome: "fail" });
       context.credited.set("k c1 branch", "2026-08-20");
+      context.crowds.set("c1 branch", {
+        day: "2026-08-20",
+        identities: new Set(["k", "j"]),
+      });
       const back = parseContext(serializeContext(context));
       expect(back.mainAtCommit.get("k c1")?.outcome).toBe("fail");
       expect(back.credited.get("k c1 branch")).toBe("2026-08-20");
+      expect(back.crowds.get("c1 branch")).toEqual({
+        day: "2026-08-20",
+        identities: new Set(["k", "j"]),
+      });
+    });
+
+    it("reads what each run broke as nothing when none was stored", () => {
+      const back = parseContext({
+        outcomesAtCommit: [],
+        mainAtCommit: [],
+        credited: [],
+        failures: [],
+      });
+      expect(back.crowds.size).toBe(0);
+    });
+
+    it("drops a run it cannot age, and an identity it cannot name", () => {
+      // A run whose day cannot be read is never aged, and would go on
+      // counting toward a crowd for good.
+      const back = parseContext({
+        outcomesAtCommit: [],
+        mainAtCommit: [],
+        credited: [],
+        failures: [],
+        crowds: [
+          ["c1 a", { day: "nope", identities: ["k"] }],
+          ["c1 b", { day: "2026-08-20", identities: ["k", 3] }],
+          ["c1 c", { day: "2026-08-20", identities: "k" }],
+        ],
+      });
+      expect([...back.crowds.keys()]).toEqual(["c1 b"]);
+      expect(back.crowds.get("c1 b")?.identities).toEqual(new Set(["k"]));
     });
 
     it("drops what it cannot read rather than believing it", () => {
@@ -219,9 +259,18 @@ describe("score", () => {
       context.mainAtCommit.set("k old", { day: "2026-01-01", outcome: "fail" });
       context.mainAtCommit.set("k new", { day: "2026-08-20", outcome: "fail" });
       context.credited.set("k old branch", "2026-01-01");
+      context.crowds.set("c0 branch", {
+        day: "2026-01-01",
+        identities: new Set(["k"]),
+      });
+      context.crowds.set("c1 branch", {
+        day: "2026-08-20",
+        identities: new Set(["k"]),
+      });
       trimContext(context, "2026-08-20");
       expect([...context.mainAtCommit.keys()]).toEqual(["k new"]);
       expect(context.credited.size).toBe(0);
+      expect([...context.crowds.keys()]).toEqual(["c1 branch"]);
     });
 
     it("drops a failure list once every failure in it is stale", () => {
@@ -386,6 +435,31 @@ describe("score", () => {
       expect(state.mainCatches).toBe(0);
       expect(state.flakesByDay["2026-08-20"]).toBe(1);
       expect(flakeRate(state, "2026-08-21")).toBeGreaterThan(
+        FLAKE_EXCLUSION_RATE,
+      );
+    });
+    it("reads a full run's rerun of its own failure as a flake", () => {
+      // A lane of the full run that saw a test fail runs it again, and
+      // ships the rerun in the run's own records: the same commit, the
+      // same start, the same seed. Commits that alternate between failing
+      // and passing are otherwise a run of catches.
+      const history = (rerun: boolean) =>
+        ["c1", "c2", "c3", "c4"].flatMap((commit, at) => {
+          const run = {
+            commit,
+            seed: 7,
+            startedAt: `2026-08-20T0${at}:00:00.000Z`,
+          };
+          return at % 2 === 1
+            ? [saw("pass", run)]
+            : [saw("fail", run), ...rerun ? [saw("pass", run)] : []];
+        });
+      expect(stateFrom(history(false)).mainCatches).toBe(2);
+      const state = stateFrom(history(true));
+      expect(state.mainCatches).toBe(0);
+      expect(state.pendingMain).toEqual([]);
+      expect(state.flakesByDay["2026-08-20"]).toBe(2);
+      expect(flakeRate(state, "2026-08-20")).toBeGreaterThan(
         FLAKE_EXCLUSION_RATE,
       );
     });
@@ -1298,6 +1372,224 @@ describe("a failure seen from many places at once", () => {
     expect(state.failuresByDay["2026-08-20"]).toBe(3);
     // Four sources in all, but never four at once, so each is a catch.
     expect(state.prCatches).toBe(4);
+  });
+});
+
+describe("a run that newly breaks a crowd of tests", () => {
+  /** As many distinct identities as asked for. */
+  function crowdOf(count: number, name = "case"): TestIdentity[] {
+    return Array.from(
+      { length: count },
+      (_, i) => ({ k: "unit", s: "memory", n: `${name} ${i}` }),
+    );
+  }
+
+  /** Every one of `tests` failing in one run on a pull request. */
+  function failing(
+    tests: readonly TestIdentity[],
+    fields: Partial<Observation> = {},
+  ): Observation[] {
+    return tests.map((test) =>
+      saw("fail", { test, place: "pr", source: "branch", ...fields })
+    );
+  }
+
+  /** Each test's catches, wherever they happened. */
+  function catchesOf(
+    folded: Map<string, IdentityState>,
+    tests: readonly TestIdentity[],
+  ): number[] {
+    return tests.map((test) => {
+      const state = folded.get(testIdentityKey(test));
+      return (state?.localCatches ?? 0) + (state?.prCatches ?? 0) +
+        (state?.mainCatches ?? 0);
+    });
+  }
+
+  it("credits none of them, and still counts each failure", () => {
+    // Whichever of them a change runs sees the breakage, so it says
+    // nothing about any one of them.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const folded = foldObservations(failing(crowd));
+    expect(catchesOf(folded, crowd)).toEqual(crowd.map(() => 0));
+    for (const test of crowd) {
+      const state = folded.get(testIdentityKey(test))!;
+      expect(state.failuresByDay["2026-08-20"]).toBe(1);
+      expect(state.sources).toEqual([]);
+      expect(state.lastCatch).toBeUndefined();
+    }
+  });
+
+  it("credits each of them when the crowd is one short", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    expect(catchesOf(foldObservations(failing(crowd)), crowd)).toEqual(
+      crowd.map(() => 1),
+    );
+  });
+
+  it("counts an identity the run failed twice once", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    const folded = foldObservations([
+      ...failing(crowd),
+      ...failing(crowd.slice(0, 1)),
+    ]);
+    expect(catchesOf(folded, crowd)).toEqual(crowd.map(() => 1));
+  });
+
+  it("does not count what the default branch was already failing", () => {
+    // The default branch went red for a crowd before this run, and what
+    // this run newly broke is the one test beside them.
+    const red = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "red");
+    const fresh = crowdOf(1, "fresh");
+    const folded = foldObservations([
+      ...red.map((test) => saw("fail", { test, commit: "m1" })),
+      ...failing([...red, ...fresh], { commit: "c2" }),
+    ]);
+    expect(catchesOf(folded, fresh)).toEqual([1]);
+    expect(catchesOf(folded, red)).toEqual(red.map(() => 0));
+  });
+
+  it("does not count a test that disagreed with itself there", () => {
+    const flaky = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "flaky");
+    const fresh = crowdOf(1, "fresh");
+    const folded = foldObservations([
+      ...flaky.map((test) =>
+        saw("pass", { test, place: "pr", source: "branch" })
+      ),
+      ...failing([...flaky, ...fresh]),
+    ]);
+    expect(catchesOf(folded, fresh)).toEqual([1]);
+  });
+
+  it("counts what each source saw apart", () => {
+    // A workstation names the commit its uncommitted changes sit on, so
+    // two sources at one commit ran two different trees.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const half = crowd.length / 2;
+    const folded = foldObservations([
+      ...failing(crowd.slice(0, half)),
+      ...failing(crowd.slice(half), { place: "local", source: "someone" }),
+    ]);
+    expect(catchesOf(folded, crowd)).toEqual(crowd.map(() => 1));
+  });
+
+  it("counts each run on one workstation at one commit apart", () => {
+    // Each ran whatever uncommitted changes sat on top of the commit then.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    const later = crowdOf(1, "later");
+    const local = { place: "local" as const, source: "someone" };
+    const folded = foldObservations([
+      ...failing(crowd, { ...local, startedAt: "2026-08-20T01:00:00.000Z" }),
+      ...failing(later, { ...local, startedAt: "2026-08-20T09:00:00.000Z" }),
+    ]);
+    expect(catchesOf(folded, [...crowd, ...later])).toEqual(
+      [...crowd, ...later].map(() => 1),
+    );
+  });
+
+  it("does not count a failure the environment explains", () => {
+    // Failing on enough sources at once reads as the environment, which
+    // is no catch whatever its run did.
+    const shared = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "shared");
+    const fresh = crowdOf(1, "fresh");
+    const elsewhere = ["a", "b", "c", "d"].flatMap((source) =>
+      failing(shared, { source, commit: `c-${source}` })
+    );
+    const folded = foldObservations([
+      ...elsewhere,
+      ...failing([...shared, ...fresh]),
+    ]);
+    expect(catchesOf(folded, fresh)).toEqual([1]);
+  });
+
+  it("counts what one source saw at each commit apart", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const half = crowd.length / 2;
+    const folded = foldObservations([
+      ...failing(crowd.slice(0, half), { commit: "c1" }),
+      ...failing(crowd.slice(half), { commit: "c2" }),
+    ]);
+    expect(catchesOf(folded, crowd)).toEqual(crowd.map(() => 1));
+  });
+
+  it("reaches the part of a run that arrives in a later batch", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES + 1);
+    const context = emptyContext();
+    const first = foldObservations(failing(crowd.slice(0, -1)), { context });
+    const last = crowd.slice(-1);
+    const second = foldObservations(failing(last), {
+      context: parseContext(serializeContext(context)),
+      prior: first,
+    });
+    expect(catchesOf(second, last)).toEqual([0]);
+  });
+
+  describe("on the default branch", () => {
+    it("credits none of them when a later commit fixes them", () => {
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const folded = foldObservations([
+        ...crowd.map((test) => saw("fail", { test, commit: "c1" })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c2" })),
+      ]);
+      expect(catchesOf(folded, crowd)).toEqual(crowd.map(() => 0));
+      expect(folded.get(testIdentityKey(crowd[0]!))!.pendingMain).toEqual([]);
+    });
+
+    it("credits each of them when the crowd is one short", () => {
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+      const folded = foldObservations([
+        ...crowd.map((test) => saw("fail", { test, commit: "c1" })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c2" })),
+      ]);
+      expect(catchesOf(folded, crowd)).toEqual(crowd.map(() => 1));
+    });
+
+    it("keeps the breakage a crowd while the branch goes on failing", () => {
+      // A pass judges only the failures in its own order, and the order
+      // moves on with the day, so the first failure it reads can be one
+      // that continued the breakage rather than the one that began it.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const folded = foldObservations([
+        ...crowd.map((test) => saw("fail", { test, commit: "c1", seed: 1 })),
+        ...crowd.map((test) => saw("fail", { test, commit: "c2", seed: 2 })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c3", seed: 2 })),
+      ]);
+      expect(catchesOf(folded, crowd)).toEqual(crowd.map(() => 0));
+    });
+
+    it("credits none of them when a later run fixes them", () => {
+      // The waiting failures travel in the stored aggregate, and the run
+      // that judges them can be a later publisher run altogether.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const first = foldObservations(
+        crowd.map((test) => saw("fail", { test, commit: "c1" })),
+      );
+      const stored: Map<string, IdentityState> = new Map(
+        Object.entries(JSON.parse(JSON.stringify(Object.fromEntries(first)))),
+      );
+      const second = foldObservations(
+        crowd.map((test) => saw("pass", { test, commit: "c2" })),
+        { prior: stored },
+      );
+      expect(catchesOf(second, crowd)).toEqual(crowd.map(() => 0));
+    });
+
+    it("does not count what it was already failing", () => {
+      // Red for a crowd already, and newly broken for one more test.
+      const red = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "red");
+      const fresh = crowdOf(1, "fresh");
+      const folded = foldObservations([
+        ...red.map((test) => saw("fail", { test, commit: "c1" })),
+        ...[...red, ...fresh].map((test) =>
+          saw("fail", { test, commit: "c2" })
+        ),
+        ...[...red, ...fresh].map((test) =>
+          saw("pass", { test, commit: "c3" })
+        ),
+      ]);
+      expect(catchesOf(folded, fresh)).toEqual([1]);
+      expect(catchesOf(folded, red)).toEqual(red.map(() => 0));
+    });
   });
 });
 

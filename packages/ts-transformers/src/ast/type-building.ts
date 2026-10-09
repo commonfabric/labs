@@ -1,7 +1,12 @@
 import ts from "typescript";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
-import { scopeForWrapperName } from "@commonfabric/schema-generator/scope-brand";
+import {
+  getScopeBrand,
+  SCOPE_WRAPPER_FOR_SCOPE,
+  scopeForWrapperName,
+  scopePayloadType,
+} from "@commonfabric/schema-generator/scope-brand";
 import {
   denotesSameType,
   readAuthoredTypeNodeOnce,
@@ -53,9 +58,21 @@ import {
  * The root Type passed in carries full symbol info; walking the Type tree
  * and TypeNode tree in parallel propagates that info to every nested ref.
  *
- * Also handles the `import("commonfabric").X<...>` `ImportTypeNode` form
- * (TS emits this when no in-scope alias exists). This case is syntactically
- * unambiguous and is rewritten without needing the paired Type.
+ * Also handles the `ImportTypeNode` form TS emits when no in-scope alias
+ * exists. A specifier of `"commonfabric"` names the module outright, so that
+ * form is rewritten without needing the paired Type. The printer writes it
+ * only while the program declares `"commonfabric"` as an ambient module, as
+ * the `commonfabric/schema` types do; otherwise it names the declarations' file
+ * by a path relative to the file it prints for
+ * (`import("../commonfabric").X<...>`), a spelling a module of the program's
+ * own could share, so that form is rewritten only when its paired Type is the
+ * commonfabric export it names.
+ *
+ * A type that carries a scope's brand with no alias to print it by, as the
+ * checker leaves a type it narrowed, holds its payload intersected with that
+ * brand, whose key is not in scope where the node is emitted. Given
+ * `context.print`, a node paired with such a type is written as the wrapper
+ * around its payload, each member printed afresh.
  *
  * The original TypeNode is preserved when no rewrite is needed; only
  * subtrees that change are rebuilt via `factory.create*`.
@@ -68,6 +85,14 @@ export function qualifyCommonFabricTypeRefs(
     readonly factory: ts.NodeFactory;
     readonly typeRegistry?: WeakMap<ts.Node, ts.Type>;
     readonly tsContext?: ts.TransformationContext;
+    /** Prints a type the walk rewrites from its members. */
+    readonly print?: (type: ts.Type) => ts.TypeNode | undefined;
+    /**
+     * The file `typeNode` was printed for, where a name it writes bare is
+     * in scope and which a relative import-type specifier in it is relative
+     * to.
+     */
+    readonly sourceFile: ts.SourceFile;
   },
 ): ts.TypeNode {
   const { factory } = context;
@@ -82,6 +107,14 @@ export function qualifyCommonFabricTypeRefs(
       factory.createIdentifier("__cfHelpers"),
       factory.createIdentifier(leafName),
     );
+
+  // The name an import type's qualifier ends in: `Cell` for
+  // `import("commonfabric").Cell<T>`.
+  const importTypeLeafName = (node: ts.ImportTypeNode): string | undefined => {
+    const qualifier = node.qualifier;
+    if (!qualifier) return undefined;
+    return ts.isIdentifier(qualifier) ? qualifier.text : qualifier.right.text;
+  };
 
   const isCommonFabricSymbol = (sym: ts.Symbol | undefined): boolean => {
     if (!sym) return false;
@@ -116,12 +149,44 @@ export function qualifyCommonFabricTypeRefs(
     return isCommonFabricSymbol(type.symbol) ? type.symbol.name : undefined;
   };
 
+  // The module the specifier of `member`, an import type, names by a path
+  // relative to the file the node was printed for, as a path from the root
+  // without an extension or an `index` file's name, as `modulePathOf()`
+  // writes a declaring file's, or `undefined` for any other specifier.
+  const importTypeModulePath = (
+    member: ts.ImportTypeNode,
+  ): string | undefined => {
+    const argument = member.argument;
+    return ts.isLiteralTypeNode(argument) &&
+        ts.isStringLiteral(argument.literal) &&
+        /^\.\.?\//.test(argument.literal.text)
+      ? modulePathOf(
+        resolveModulePath(context.sourceFile.fileName, argument.literal.text),
+      )
+      : undefined;
+  };
+
+  // The symbol a type name the printer wrote bare stands for in the file it
+  // printed for, seen through an import's alias.
+  const resolveBareTypeName = (name: string): ts.Symbol | undefined => {
+    const symbol = context.checker.resolveName(
+      name,
+      context.sourceFile,
+      ts.SymbolFlags.Type,
+      false,
+    );
+    return symbol && symbol.flags & ts.SymbolFlags.Alias
+      ? context.checker.getAliasedSymbol(symbol)
+      : symbol;
+  };
+
   // For a union/intersection member TypeNode, find the constituent Type to
-  // pair it with. Matches by commonfabric export name (order-independent):
-  // a bare member ref `X` is paired with the constituent whose CF export name
-  // is `X`. Returns undefined when there's no constituent info or no match —
-  // in which case the member is walked with no paired Type (safe: it can only
-  // be rewritten via the syntactic Import-form branch, never misattributed).
+  // pair it with (order-independent): the one constituent the member was
+  // printed from, when that constituent is the commonfabric export the member
+  // names. Returns undefined when there's no constituent info or no such
+  // constituent — in which case the member is walked with no paired Type
+  // (safe: it can only be rewritten through a `"commonfabric"` specifier,
+  // never misattributed).
   const pairedConstituentForMember = (
     member: ts.TypeNode,
     unionOrIntersectionType: ts.Type | undefined,
@@ -131,24 +196,60 @@ export function qualifyCommonFabricTypeRefs(
       (unionOrIntersectionType as ts.UnionOrIntersectionType).types;
     if (!constituents) return undefined;
 
-    // Only bare identifier refs can be name-matched (the case the printer
-    // emits for in-scope/aliasable commonfabric types inside unions).
-    if (!ts.isTypeReferenceNode(member) || !ts.isIdentifier(member.typeName)) {
-      return undefined;
+    // Bare identifier refs and import types can be name-matched (the forms
+    // the printer emits for commonfabric types inside unions).
+    const memberName =
+      ts.isTypeReferenceNode(member) && ts.isIdentifier(member.typeName)
+        ? member.typeName.text
+        : ts.isImportTypeNode(member) && !member.isTypeOf
+        ? importTypeLeafName(member)
+        : undefined;
+    if (memberName === undefined) return undefined;
+    // The name a member is printed with does not say which constituent it
+    // is: a module of the program's own can export a type under a
+    // commonfabric export's name while declaring it under another
+    // (`export { Other as Cell }`). A bare member is paired only with a
+    // constituent the name stands for in the file it was printed for, or,
+    // for a name not in scope there, which the printer writes for a type it
+    // cannot reach by a name in scope, with a constituent declared under it.
+    // An import-type member's specifier is a path without an extension,
+    // which names `/commonfabric.ts` and `/commonfabric.d.ts` alike, so the
+    // member is paired only with a constituent of its name declared in the
+    // one file of that path the union's constituents come from. Then require
+    // an UNAMBIGUOUS match: two constituents can still qualify, two
+    // commonfabric types that differ in their type arguments
+    // (`Cell<A> | Cell<B>`, both printed as `Cell<...>`), where picking the
+    // first would walk the member's nested type args against the wrong
+    // constituent's args and could mis-rewrite a nested generic. On
+    // ambiguity, or when the one constituent is not the commonfabric export
+    // the member names, return undefined: the member is left unpaired
+    // (un-normalized) rather than risk a wrong rewrite — the safe degradation
+    // this helper already documents.
+    let named: ts.Type[] = [];
+    if (ts.isImportTypeNode(member)) {
+      const modulePath = importTypeModulePath(member);
+      const inModule = constituents.filter((constituent) => {
+        const fileName = declaringFileName(constituent);
+        return fileName !== undefined && modulePathOf(fileName) === modulePath;
+      });
+      if (new Set(inModule.map(declaringFileName)).size === 1) {
+        named = inModule.filter((constituent) =>
+          (constituent.aliasSymbol ?? constituent.symbol).name === memberName
+        );
+      }
+    } else {
+      const bareTarget = resolveBareTypeName(memberName);
+      named = constituents.filter((constituent) => {
+        const declared = constituent.aliasSymbol ?? constituent.symbol;
+        return bareTarget !== undefined
+          ? declared === bareTarget
+          : declared?.name === memberName;
+      });
     }
-    const memberName = member.typeName.text;
-    // Require an UNAMBIGUOUS match. If two constituents share a commonfabric
-    // export name but differ in their type arguments (e.g. `Cell<A> | Cell<B>`,
-    // both printed as bare `Cell<...>`), name-matching alone can't tell which
-    // member pairs with which constituent. Picking the first would walk the
-    // member's nested type args against the wrong constituent's args and could
-    // mis-rewrite a nested generic. On ambiguity, return undefined: the member
-    // is left unpaired (un-normalized) rather than risk a wrong rewrite — the
-    // safe degradation this helper already documents.
-    const matches = constituents.filter(
-      (constituent) => commonFabricExportName(constituent) === memberName,
-    );
-    return matches.length === 1 ? matches[0] : undefined;
+    return named.length === 1 &&
+        commonFabricExportName(named[0]) === memberName
+      ? named[0]
+      : undefined;
   };
 
   // Pair a printed alias with its own arguments before consulting the
@@ -198,25 +299,27 @@ export function qualifyCommonFabricTypeRefs(
 
   // The walker takes a TypeNode and the Type it represents, and returns a
   // (possibly-rewritten) TypeNode. The Type may be undefined when the
-  // paired info isn't available — in that case nested ImportType
-  // recognition still works (it's purely syntactic), but bare-identifier
-  // commonfabric-ref detection is skipped (no false-positive risk).
+  // paired info isn't available — in that case an import type with a
+  // `"commonfabric"` specifier is still recognized (by its spelling), but
+  // every other commonfabric-ref detection is skipped (no false-positive risk).
   const walk = (
     node: ts.TypeNode,
     pairedType: ts.Type | undefined,
   ): ts.TypeNode => {
-    // `import("commonfabric").X<...>` → `__cfHelpers.X<...>` (syntactic).
+    const scoped = writeScopeWrapper(pairedType);
+    if (scoped) return scoped;
+
+    // `import("commonfabric").X<...>`, or `import("../commonfabric").X<...>`
+    // paired with the commonfabric export `X` → `__cfHelpers.X<...>`.
     if (ts.isImportTypeNode(node) && !node.isTypeOf) {
       const arg = node.argument;
+      const leafName = importTypeLeafName(node);
       if (
-        ts.isLiteralTypeNode(arg) &&
-        ts.isStringLiteral(arg.literal) &&
-        arg.literal.text === "commonfabric" &&
-        node.qualifier
+        leafName !== undefined &&
+        ((ts.isLiteralTypeNode(arg) && ts.isStringLiteral(arg.literal) &&
+          arg.literal.text === "commonfabric") ||
+          commonFabricExportName(pairedType) === leafName)
       ) {
-        const leafName = ts.isIdentifier(node.qualifier)
-          ? node.qualifier.text
-          : node.qualifier.right.text;
         const visitedTypeArgs = node.typeArguments
           ? factory.createNodeArray(
             node.typeArguments.map((arg, i) =>
@@ -315,8 +418,8 @@ export function qualifyCommonFabricTypeRefs(
     // constituent whose commonfabric export name equals the ref's identifier.
     // This is order-independent and only ever supplies a paired Type that
     // would make the member rewrite to that same name — a non-CF member finds
-    // no match and passes through unchanged. The Import-form (ImportTypeNode)
-    // members are still handled syntactically without needing a paired Type.
+    // no match and passes through unchanged. An import-type member is matched
+    // by the name its qualifier ends in, the same way.
     if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
       const rewritten = node.types.map((t) =>
         walk(t, pairedConstituentForMember(t, pairedType))
@@ -346,6 +449,79 @@ export function qualifyCommonFabricTypeRefs(
     }
 
     return node;
+  };
+
+  // The types `writeScopeWrapper()` is writing. Each member is printed afresh,
+  // so the print of a recursive type's member holds the type again, which the
+  // printer has not seen in that print. It is left there as printed.
+  const writing = new Set<ts.Type>();
+
+  // `__cfHelpers.PerUser<A | B & C>` for a type the scope wrapper `PerUser`
+  // resolves to, over the alternatives `A` and `B & C`, or `undefined` for a
+  // type that is not a scope wrapper's, that the printer writes by an alias,
+  // its own or each branded member's, or that is being written already. A
+  // branded type with no alias to print it by is one the checker narrowed, as
+  // assignment narrows `PerUser<boolean> | null` to the brand over `false`
+  // and `true`.
+  const writeScopeWrapper = (
+    type: ts.Type | undefined,
+  ): ts.TypeNode | undefined => {
+    if (!type || writing.has(type)) return undefined;
+    writing.add(type);
+    try {
+      return writeScopeWrapperOf(type);
+    } finally {
+      writing.delete(type);
+    }
+  };
+
+  // Whether each member of `type` that is no `null` or `undefined` has an
+  // alias the printer writes it by, as `PerUser<A>` in `PerUser<A> | null`.
+  const printsByAliases = (type: ts.Type): boolean =>
+    (type.isUnion() ? type.types : [type]).every((member) =>
+      (member.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0 ||
+      member.aliasSymbol !== undefined
+    );
+
+  /** Helper for `writeScopeWrapper()`, which writes `type`. */
+  const writeScopeWrapperOf = (type: ts.Type): ts.TypeNode | undefined => {
+    const brand = !type.aliasSymbol && context.print &&
+      getScopeBrand(type, context.checker);
+    if (!brand || printsByAliases(type)) return undefined;
+    // A payload of one type per alternative is printed whole, which joins the
+    // literals the brand was distributed over, as `false` and `true` into
+    // `boolean`.
+    // A checker that cannot join them hands back the branded type itself.
+    const whole = brand.payload.every((members) => members.length === 1)
+      ? scopePayloadType(type, brand, context.checker)
+      : undefined;
+    const payload = whole && whole !== type ? [[whole]] : brand.payload;
+    const alternatives: ts.TypeNode[] = [];
+    for (const members of payload) {
+      const parts: ts.TypeNode[] = [];
+      for (const member of members) {
+        const printed = context.print!(member);
+        if (!printed) return undefined;
+        parts.push(walk(printed, member));
+      }
+      alternatives.push(
+        parts.length === 1
+          ? parts[0]!
+          : factory.createIntersectionTypeNode(parts),
+      );
+    }
+    const wrapper = factory.createTypeReferenceNode(
+      buildHelperQualifiedName(SCOPE_WRAPPER_FOR_SCOPE[brand.scope]),
+      [
+        alternatives.length === 1
+          ? alternatives[0]!
+          : factory.createUnionTypeNode(alternatives),
+      ],
+    );
+    // Schema generation reads the wrapper by its type, and the synthesized
+    // reference resolves to nothing where it is emitted.
+    context.typeRegistry?.set(wrapper, type);
+    return wrapper;
   };
 
   const result = walk(typeNode, rootType);
@@ -378,6 +554,47 @@ export interface TypeLiteralRegistrationContext {
   readonly factory: ts.NodeFactory;
   readonly checker: ts.TypeChecker;
   readonly typeRegistry?: WeakMap<ts.Node, ts.Type>;
+}
+
+/**
+ * `fileName` as a path from the root, as the compiler, whose current
+ * directory is `/`, resolves it: a type file can be named without the leading
+ * `/`.
+ */
+function rootedPath(fileName: string): string {
+  return fileName.startsWith("/") ? fileName : `/${fileName}`;
+}
+
+/**
+ * The module `specifier`, a path relative to the directory of `fromFile`,
+ * names, as a path from the root without an extension: `/app/commonfabric`
+ * for `../commonfabric` from `/app/main/main.tsx`.
+ */
+function resolveModulePath(fromFile: string, specifier: string): string {
+  const segments = rootedPath(fromFile).split("/").slice(0, -1);
+  for (const segment of specifier.split("/")) {
+    if (segment === "..") segments.pop();
+    else if (segment !== ".") segments.push(segment);
+  }
+  return segments.join("/");
+}
+
+/**
+ * The file that declares `type`, as a path from the root (`rootedPath()`), or
+ * `undefined` for a type no declaration states.
+ */
+function declaringFileName(type: ts.Type): string | undefined {
+  const fileName = (type.aliasSymbol ?? type.symbol)?.declarations?.[0]
+    ?.getSourceFile().fileName;
+  return fileName && rootedPath(fileName);
+}
+
+/**
+ * The path a module specifier names `fileName` by: without its extension, and
+ * without an `index` file's name.
+ */
+function modulePathOf(fileName: string): string {
+  return fileName.replace(/(\.d)?\.[cm]?[jt]sx?$/, "").replace(/\/index$/, "");
 }
 
 /**
@@ -425,6 +642,13 @@ export function typeToTypeNodeWithRegistry(
     checker: context.checker,
     factory: context.factory,
     typeRegistry,
+    print: (member) =>
+      context.checker.typeToTypeNode(
+        member,
+        context.sourceFile,
+        flags | ts.NodeBuilderFlags.AllowEmptyTuple,
+      ),
+    sourceFile: context.sourceFile,
   });
 
   if (typeRegistry) {

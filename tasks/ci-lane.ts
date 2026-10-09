@@ -18,6 +18,11 @@
  * which identities inside a unit are skipped — is the same code, so the
  * two runs cannot come to different answers about the same tree.
  *
+ * Once its plan has run and its verdict is settled, a lane of the full run
+ * also runs again the units holding a test that failed every time, and
+ * ships what those reruns record. That is evidence for the publisher, and
+ * it changes neither the plan nor the verdict.
+ *
  * `main` cannot fix its number of lanes ahead of time the way a pull
  * request does, because the number depends on how much work there is and
  * the job matrix has to exist before anything starts. So one job asks
@@ -110,8 +115,11 @@ import {
   FULL_LANES_MAX,
   LANE_PROLOGUE_SECONDS,
   LANES,
+  RERUN_BUDGET_SECONDS,
+  RERUN_EXECUTIONS,
 } from "./test-selection/policy.ts";
 import { say } from "./step-summary.ts";
+import { outcomesOf, verdictOf } from "./test-selection/report.ts";
 import { duration } from "./test-selection/duration.ts";
 import { writeLcovReport } from "./write-coverage-lcov.ts";
 import {
@@ -120,6 +128,7 @@ import {
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
   laneMeasurementName,
+  RERUN_MEASUREMENT_NAME,
 } from "./lane-measurement.ts";
 
 /** What the lane was asked to do. */
@@ -1161,6 +1170,246 @@ export function describeAccounting(
 }
 
 /**
+ * The units of a batch holding a test that failed every time the batch
+ * ran it, each with those tests by key.
+ *
+ * A test that both passed and failed in the batch has disagreed with
+ * itself at this commit already, so running it again adds nothing. A
+ * failure the suite places in none of the batch's units is left out, since
+ * a lane can run again only a unit it ran.
+ */
+export function unsettled(
+  batch: Batch,
+  records: readonly TestRecord[],
+): Map<Unit, Set<string>> {
+  const outcomes = outcomesOf(records);
+  const held = new Set(batch.units.map(({ unit }) => unit));
+  const units = new Map<Unit, Set<string>>();
+  for (const record of records) {
+    const key = testIdentityKey(record.test);
+    if (verdictOf(outcomes.get(key)) !== "fail") continue;
+    const location = batch.suite.locate(record);
+    if (location?.level !== "unit" || !held.has(location.unit)) continue;
+    units.set(location.unit, (units.get(location.unit) ?? new Set()).add(key));
+  }
+  return units;
+}
+
+/** A batch whose failures a lane of the full run runs again. */
+export interface Rerun {
+  batch: Batch;
+
+  /** The environment the batch ran in. */
+  env: Record<string, string>;
+
+  /** What `unsettled()` found in the batch's records. */
+  failing: ReadonlyMap<Unit, ReadonlySet<string>>;
+}
+
+/** What rerunning a lane's failures came to, with each test by key. */
+export interface Reruns {
+  /** Seconds the reruns took. */
+  seconds: number;
+
+  /** Tests that passed on a rerun. */
+  passed: string[];
+
+  /** Tests a rerun recorded, and that never passed. */
+  failed: string[];
+
+  /** Tests whose unit ran again, and that no rerun recorded. */
+  unrecorded: string[];
+
+  /** Tests whose unit was not run again, for want of budget. */
+  unrun: string[];
+
+  /** Records the reruns kept as written, as `runBatch()` reports them. */
+  conflicts: TestRecord[];
+}
+
+/**
+ * Runs again the units holding a test that failed every time its batch
+ * ran it, and ships what those runs record as ordinary records.
+ *
+ * The publisher reads a test that passed and failed at one commit, in one
+ * order, as flaky, and a test run once per commit can never do that, so
+ * its failures on the full run read as commits breaking it. These reruns
+ * give it the pass a flaky test needs, and a test that fails every rerun
+ * goes on reading as broken. They collect evidence and decide nothing:
+ * what the lane fails for is settled from the batches' own records.
+ *
+ * A unit runs again as its batch ran it, with the same skip list, so the
+ * rerun asks the same tests the same thing. A unit its suite runs whole
+ * runs whole again, and is charged for every test it holds. Coverage is
+ * off, since nothing scores what a rerun would measure.
+ *
+ * Each rerun goes to the batch holding the unit that has run again least,
+ * across every batch, and offers that batch's units the budget in the same
+ * order, so the budget is spread over the lane's failures before it is
+ * spent on one of them. A unit starts only where what the packer charges
+ * for it fits in what the reruns have left of `RERUN_BUDGET_SECONDS`, and
+ * the reruns' own time is what they take off it.
+ */
+export async function rerunFailures(
+  reruns: readonly Rerun[],
+  manifest: Manifest,
+  selections: readonly Selection[],
+  options: LaneOptions,
+  workDir: string,
+  spool: string | undefined,
+): Promise<Reruns> {
+  let seconds = 0;
+  let passes = 0;
+  const passed = new Set<string>();
+  const recorded = new Set<string>();
+  const reached = new Set<string>();
+  const conflicts: TestRecord[] = [];
+  const waiting = reruns.map(({ failing }) => new Map(failing));
+  // How many times each batch's units have run again.
+  const counts = reruns.map(() => new Map<Unit, number>());
+  /** What the packer charges for one pass of `batch` over `requests`. */
+  const chargeFor = (
+    batch: Batch,
+    requests: readonly UnitRequest[],
+  ): number => {
+    const held = new Set(requests.map(({ unit }) => unit));
+    return suiteCharge(
+      manifest,
+      batch.suite.id,
+      selections
+        .filter(({ entry }) =>
+          entry.suite === batch.suite.id && held.has(entry.unit)
+        )
+        .map(({ entry }) => ({ entry, repeats: 1 })),
+    );
+  };
+  for (;;) {
+    const left = RERUN_BUDGET_SECONDS - seconds;
+    let next: number | undefined;
+    let least = Infinity;
+    for (const [index, { batch }] of reruns.entries()) {
+      const pending = waiting[index]!;
+      for (const request of batch.units) {
+        if (!pending.has(request.unit)) continue;
+        const times = counts[index]!.get(request.unit) ?? 0;
+        // What is left only shrinks, so a unit that does not fit on its
+        // own now never will.
+        if (
+          times >= RERUN_EXECUTIONS || chargeFor(batch, [request]) > left
+        ) {
+          pending.delete(request.unit);
+          continue;
+        }
+        if (times < least) {
+          least = times;
+          next = index;
+        }
+      }
+    }
+    if (next === undefined) break;
+    const { batch, env } = reruns[next]!;
+    const pending = waiting[next]!;
+    const count = counts[next]!;
+    // The first unit offered fits on its own, so something is chosen. One
+    // that fits on its own but not beside those already chosen waits for
+    // a later rerun, where it is offered ahead of them.
+    const chosen: UnitRequest[] = [];
+    let charge = 0;
+    const offered = batch.units
+      .filter(({ unit }) => pending.has(unit))
+      .sort((a, b) => (count.get(a.unit) ?? 0) - (count.get(b.unit) ?? 0));
+    for (const request of offered) {
+      const charged = chargeFor(batch, [...chosen, request]);
+      if (charged > left) continue;
+      chosen.push(request);
+      charge = charged;
+    }
+    // Handed over in the batch's own order, as the batch was.
+    const units = batch.units.filter((request) => chosen.includes(request));
+    for (const { unit } of units) count.set(unit, (count.get(unit) ?? 0) + 1);
+    passes += 1;
+    const startedAt = performance.now();
+    const result = await runBatch(
+      {
+        suite: batch.suite,
+        units,
+        runs: new Map(units.map(({ unit }) => [unit, 1])),
+        projected: charge,
+      },
+      options,
+      path.join(workDir, `rerun-${passes}`),
+      undefined,
+      env,
+    );
+    seconds += (performance.now() - startedAt) / 1000;
+    if (spool !== undefined) spoolRecords(spool, result.records);
+    for (const conflict of result.conflicts) conflicts.push(conflict);
+    for (const record of result.records) {
+      const key = testIdentityKey(record.test);
+      recorded.add(key);
+      if (record.outcome === "pass") passed.add(key);
+    }
+    for (const { unit } of units) {
+      const keys = [...pending.get(unit)!];
+      for (const key of keys) reached.add(key);
+      const still = keys.filter((key) => !passed.has(key));
+      if (still.length === 0) pending.delete(unit);
+      else pending.set(unit, new Set(still));
+    }
+  }
+  const failing = reruns.flatMap(({ failing }) =>
+    [...failing.values()].flatMap((keys) => [...keys])
+  ).sort();
+  return {
+    seconds,
+    passed: failing.filter((key) => passed.has(key)),
+    failed: failing.filter((key) => recorded.has(key) && !passed.has(key)),
+    unrecorded: failing.filter((key) => reached.has(key) && !recorded.has(key)),
+    unrun: failing.filter((key) => !reached.has(key)),
+    conflicts,
+  };
+}
+
+/** Says what rerunning a lane's failures came to, where it came to anything. */
+export function describeReruns(reruns: Reruns): void {
+  if (
+    reruns.passed.length + reruns.failed.length + reruns.unrecorded.length +
+        reruns.unrun.length === 0
+  ) {
+    return;
+  }
+  const lines = [
+    "## Reruns",
+    "",
+    `Rerunning failures took ${duration(reruns.seconds)} of ` +
+    `${duration(RERUN_BUDGET_SECONDS)}. What a rerun records is evidence ` +
+    "for the publisher, and changes nothing about whether this run fails.",
+  ];
+  /** One paragraph of the summary, headed and then listed. */
+  const section = (head: string, keys: readonly string[]): void => {
+    if (keys.length === 0) return;
+    lines.push("", head, "");
+    for (const key of keys) lines.push(`- ${key}`);
+  };
+  section(
+    "Passed on a rerun, so this commit holds both outcomes for them:",
+    reruns.passed,
+  );
+  section("Run again and never passed:", reruns.failed);
+  section(
+    "Their unit ran again and no rerun recorded them, so nothing was " +
+      "learned about them:",
+    reruns.unrecorded,
+  );
+  section(
+    "Not run again, because their unit did not fit what was left of the " +
+      "budget:",
+    reruns.unrun,
+  );
+  say(lines);
+}
+
+/**
  * Prints the end of every log the opened capabilities named.
  *
  * A capability runs outside the test process, so a failure on its side is
@@ -1195,7 +1444,8 @@ export function describeConflicts(conflicts: readonly TestRecord[]): void {
     "These records name a surface the suite that ran them does not " +
     "declare, so they were kept as written rather than marked:",
     "",
-    ...conflicts.map((record) => `- ${testIdentityKey(record.test)}`),
+    ...[...new Set(conflicts.map((record) => testIdentityKey(record.test)))]
+      .map((key) => `- ${key}`),
   ]);
 }
 
@@ -1647,7 +1897,9 @@ export function describeFullLanes(laid: Plan, prologue: number): void {
     `Each is packed against ${duration(laid.budgetSeconds)} of work, and ` +
     `the job around it takes about ${duration(prologue)} more to set up ` +
     `and ship. The longest is projected to take ` +
-    `${duration(longest + prologue)} in all.`,
+    `${duration(longest + prologue)} in all. A lane holding a test that ` +
+    `failed every time may start up to ${duration(RERUN_BUDGET_SECONDS)} ` +
+    `of reruns after that.`,
     "",
     "| Lane | Tests | Projected work | Projected job |",
     "| --- | --- | --- | --- |",
@@ -1864,8 +2116,15 @@ export async function runLane(
   // failing the run.
   const excused = new Set<string>();
   const unexcused = new Set<string>();
+  // The batches holding a test that failed every time, which the full run
+  // runs again once every batch has run.
+  const reruns: Rerun[] = [];
+  let rerun: Reruns | undefined;
   try {
     for (const batch of batches) {
+      // Two capabilities may export the same name and mean different
+      // things by it, and the two server-execution arms can share a lane.
+      const env = opened.envFor(batch.suite.needs);
       // A failure never stops the lane: one failing batch would otherwise
       // hide every batch and every repeat after it, and the point of a
       // lane is what it measured.
@@ -1874,10 +2133,7 @@ export async function runLane(
         options,
         workDir,
         spool,
-        // Two capabilities may export the same name and mean different
-        // things by it, and the two server-execution arms can share a
-        // lane.
-        opened.envFor(batch.suite.needs),
+        env,
         batchCoverage(options, batch.suite.id, seen.coverage),
       );
       for (const conflict of result.conflicts) conflicts.push(conflict);
@@ -1913,6 +2169,10 @@ export async function runLane(
       for (const key of accounting.excused) {
         (excusing ? excused : unexcused).add(key);
       }
+      if (options.full) {
+        const failing = unsettled(batch, result.records);
+        if (failing.size > 0) reruns.push({ batch, env, failing });
+      }
     }
     // Written once every batch has run, so that a batch that withdrew an
     // excusal is heard before any is recorded, and a report of this run
@@ -1925,6 +2185,20 @@ export async function runLane(
           measurementRecord(excusedMeasurementName(key), 0, true)
         ),
       );
+    }
+    // After every batch, so that a rerun never displaces the work the lane
+    // was packed with, and after the lane's verdict is settled, so that
+    // nothing a rerun records can change it.
+    if (options.full) {
+      rerun = await rerunFailures(
+        reruns,
+        seen.manifest,
+        mine.selections,
+        options,
+        workDir,
+        spool,
+      );
+      for (const conflict of rerun.conflicts) conflicts.push(conflict);
     }
   } catch (error) {
     // A lane whose loop threw has failed, whatever the batches it got
@@ -1942,6 +2216,7 @@ export async function runLane(
     await leaveWorkDir(ok);
   }
   describeConflicts(conflicts);
+  if (rerun !== undefined) describeReruns(rerun);
   // After the capabilities are closed, because a conversion is the lane's
   // own work and needs nothing a suite opened. A conversion that lost a
   // tracked file fails the lane: every line of that file reads as
@@ -1958,14 +2233,19 @@ export async function runLane(
   // bound less the prologue the budget was derived with. Read last, so that
   // it holds everything the lane did after its prologue. The publisher
   // counts from these how many lanes ran past their bound, and how many of
-  // those the packer had expected to.
+  // those the packer had expected to. The packer charges nothing for
+  // reruns, so their time is left out of the lane's work and recorded
+  // apart.
   if (spool !== undefined) {
     spoolRecords(spool, [
       timingRecord(
         laneMeasurementName("spent"),
-        (performance.now() - startedAt) / 1000,
+        (performance.now() - startedAt) / 1000 - (rerun?.seconds ?? 0),
         ok,
       ),
+      ...(rerun === undefined
+        ? []
+        : [timingRecord(RERUN_MEASUREMENT_NAME, rerun.seconds, ok)]),
       timingRecord(
         laneMeasurementName("projected"),
         mine.projectedSeconds,

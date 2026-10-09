@@ -2,9 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts, { type DiagnosticMessageChain } from "typescript";
 import {
+  type AuthoredSourceLookup,
   CompilationError,
   CompilerError,
   type DiagnosticMessageTransformer,
+  formatTransformerDiagnostic,
 } from "../typescript/diagnostics/errors.ts";
 import { Checker } from "../typescript/diagnostics/mod.ts";
 
@@ -232,5 +234,170 @@ describe("Checker", () => {
     );
     expect(() => checker.check([chainDiagnostic("manufactured emit failure")]))
       .toThrow("clearer: manufactured emit failure");
+  });
+});
+
+describe("authored source locations", () => {
+  // A caller that adds a line ahead of the authored text, as the runtime
+  // engine's helper injection does, hands the compiler a lookup from each
+  // compiler input to its authored text and the line shift between them.
+
+  /** A lookup holding one authored file, one line shorter at the top. */
+  function injectedOneLine(
+    fileName: string,
+    authored: string,
+  ): AuthoredSourceLookup {
+    return (name) =>
+      name === fileName ? { contents: authored, lineOffset: -1 } : undefined;
+  }
+
+  /** The CompilerError a type check of `files` throws. */
+  function typeCheckError(
+    files: Record<string, string>,
+    authoredSource: AuthoredSourceLookup,
+  ): CompilerError {
+    const checker = new Checker(programFor(files), { authoredSource });
+    try {
+      checker.typeCheck();
+    } catch (error) {
+      if (error instanceof CompilerError) return error;
+      throw error;
+    }
+    throw new Error("Expected the type check to throw");
+  }
+
+  it("names the authored line and quotes the authored text in a type error", () => {
+    const authored = "export const x: number = 'nope';";
+    const error = typeCheckError(
+      { "/bad.ts": `// added\n${authored}` },
+      injectedOneLine("/bad.ts", authored),
+    );
+
+    expect(error.errors.map((e) => e.line)).toEqual([1]);
+    expect(error.message).toContain(`1 | ${authored}`);
+    expect(error.message).not.toContain("// added");
+  });
+
+  it("keeps the compiler input's line for a diagnostic on a line the caller added", () => {
+    const error = typeCheckError(
+      { "/bad.ts": "export const y: number = 'no';\nexport const x = 1;" },
+      injectedOneLine("/bad.ts", "export const x = 1;"),
+    );
+
+    expect(error.errors.map((e) => e.line)).toEqual([1]);
+    expect(error.message).toContain("1 | export const y: number = 'no';");
+  });
+
+  it("names the authored line in a formatted transformer diagnostic", () => {
+    const formatted = formatTransformerDiagnostic(
+      {
+        severity: "error",
+        type: "module-scope:let-declaration",
+        message: "no `let` here",
+        fileName: "/main.ts",
+        line: 2,
+        column: 1,
+        start: 9,
+        length: 3,
+      },
+      "// added\nlet x = 0;",
+      injectedOneLine("/main.ts", "let x = 0;"),
+    );
+
+    expect(formatted).toContain("/main.ts:1:1 - error: no `let` here");
+    expect(formatted).toContain("1 | let x = 0;");
+  });
+
+  describe("around a line the caller rewrote", () => {
+    // A rewrite that keeps the line count, as the engine's import
+    // normalization does, moves tokens within the lines it rewrites and
+    // leaves every later line where the one-line shift expects it.
+
+    const authored = "import a, {\n  b,\n} from './x';\nlet x = 0;";
+    const compiled = "// added\n" +
+      "import a from './x'; import { b } from './x';\n\n\nlet x = 0;";
+    const diagnosticAt = (line: number, column: number) => ({
+      severity: "error" as const,
+      type: "module-scope:let-declaration",
+      message: "a diagnostic",
+      fileName: "/main.ts",
+      line,
+      column,
+      start: 0,
+      length: 1,
+    });
+
+    it("names the compiler input's line and quotes its text for a diagnostic on the rewritten line", () => {
+      const formatted = formatTransformerDiagnostic(
+        diagnosticAt(2, 37),
+        compiled,
+        injectedOneLine("/main.ts", authored),
+      );
+
+      expect(formatted).toContain("/main.ts:2:37 - error:");
+      expect(formatted).toContain(
+        "2 | import a from './x'; import { b } from './x';",
+      );
+    });
+
+    it("names the authored line for a diagnostic after the rewritten one", () => {
+      const formatted = formatTransformerDiagnostic(
+        diagnosticAt(5, 1),
+        compiled,
+        injectedOneLine("/main.ts", authored),
+      );
+
+      expect(formatted).toContain("/main.ts:4:1 - error:");
+      expect(formatted).toContain("4 | let x = 0;");
+    });
+  });
+
+  it("quotes the authored text for a diagnostic that carries no source", () => {
+    // Diagnostics the emit reports reach `CompilationError` with no source
+    // text of their own.
+
+    const authored = "export const x: number = 'nope';";
+    const compiled = `// added\n${authored}`;
+    const file = ts.createSourceFile(
+      "/bad.ts",
+      compiled,
+      ts.ScriptTarget.ES2020,
+    );
+    const error = new CompilationError(
+      {
+        diagnostic: {
+          category: ts.DiagnosticCategory.Error,
+          code: 2322,
+          file,
+          start: compiled.indexOf("x:"),
+          length: 1,
+          messageText: "Type 'string' is not assignable to type 'number'.",
+        },
+      },
+      undefined,
+      injectedOneLine("/bad.ts", authored),
+    );
+
+    expect(error.line).toBe(1);
+    expect(error.displayInline()).toContain(`1 | ${authored}`);
+  });
+
+  it("names the compiler input's line in a formatted transformer diagnostic without a lookup", () => {
+    const formatted = formatTransformerDiagnostic(
+      {
+        severity: "error",
+        type: "module-scope:let-declaration",
+        message: "no `let` here",
+        fileName: "/main.ts",
+        line: 2,
+        column: 1,
+        start: 9,
+        length: 3,
+      },
+      "// added\nlet x = 0;",
+    );
+
+    expect(formatted).toContain("/main.ts:2:1 - error: no `let` here");
+    expect(formatted).toContain("2 | let x = 0;");
   });
 });

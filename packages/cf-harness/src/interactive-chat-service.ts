@@ -20,7 +20,7 @@ import {
 } from "./prompt-loop.ts";
 import { establishHarnessSessionContext } from "./session-assembly.ts";
 import {
-  SANDBOX_RUNTIME_ENV,
+  DOCKER_RUNTIME_NAME,
   sandboxRuntimeNamed,
   sandboxRuntimeOfOptions,
 } from "./sandbox/runtime-selection.ts";
@@ -908,11 +908,10 @@ export class HarnessInteractiveChatService {
     }
     this.#runIdForTurn = options.runIdForTurn;
     // Every turn of this host runs on one runtime: the one of the engine or
-    // runtime it was handed, or the one its options select.
+    // runtime it was handed, or the one its engines build.
     this.#sandboxRuntime = sandboxRuntimeOfOptions({
       sandboxRuntime: this.#basePromptLoopOptions.engine?.sandbox ??
         this.#basePromptLoopOptions.sandboxRuntime,
-      sandboxRuntimeKind: this.#basePromptLoopOptions.sandboxRuntimeKind,
     });
     if (options.systemPrompt !== undefined) {
       this.#systemPrompt = options.systemPrompt;
@@ -1528,16 +1527,24 @@ export class HarnessInteractiveChatService {
       }
     }
     // What the session's earlier turns labelled is labelled where the runtime
-    // they ran on keeps labels, which the other runtime need not read. A
-    // session stored before hosts recorded a runtime has none to compare, and
-    // is bound below to the runtime this turn runs on. The status is read
-    // from a store another build may have written, so a runtime it names is
-    // checked rather than trusted to be one of the two.
+    // they ran on keeps labels, which another runtime need not read, so a
+    // session goes on only on the runtime it started on. A session stored
+    // before hosts recorded a runtime has none to compare, and is bound below
+    // to the runtime this turn runs on. The status is read from a store
+    // another build may have written, so a runtime it names is checked rather
+    // than trusted to be the one there is.
     const recorded: string | undefined = record.status.sandboxRuntime;
-    const startedOn = recorded === undefined
-      ? undefined
-      : sandboxRuntimeNamed(recorded);
-    if (recorded !== undefined && startedOn === undefined) {
+    if (recorded === DOCKER_RUNTIME_NAME) {
+      return providerMismatchError(
+        requestId,
+        `chat session \`${params.sessionId}\` started on the Docker driver ` +
+          "(`docker`), which this cf-harness no longer has, and a session " +
+          "goes on only on the runtime it started on, since another need not " +
+          "read the CFC labels of its files where that one kept them. Start a " +
+          "new session.",
+      );
+    }
+    if (recorded !== undefined && sandboxRuntimeNamed(recorded) === undefined) {
       return providerMismatchError(
         requestId,
         `chat session \`${params.sessionId}\` records that it started on the ` +
@@ -1545,17 +1552,6 @@ export class HarnessInteractiveChatService {
           "know, so it cannot tell whether this host runs the same one. " +
           "Start a new session, or go on with this one on the cf-harness " +
           "that started it.",
-      );
-    }
-    if (startedOn !== undefined && startedOn !== this.#sandboxRuntime) {
-      return providerMismatchError(
-        requestId,
-        `chat session \`${params.sessionId}\` started on the \`${startedOn}\` ` +
-          `sandbox runtime, and this host runs \`${this.#sandboxRuntime}\`. ` +
-          "The two need not keep the CFC labels of a session's files where " +
-          "the other reads them, and on macOS they do not, so a session goes " +
-          "on only on the runtime it started on: restart the host with " +
-          `\`${SANDBOX_RUNTIME_ENV}=${startedOn}\`, or start a new session.`,
       );
     }
     if (record.status.status === "closed") {
@@ -1656,7 +1652,7 @@ export class HarnessInteractiveChatService {
       // A session with no recorded runtime is bound to the one its first turn
       // here runs on. The status is saved with the event below, so the
       // binding is durable exactly where the turn is.
-      if (startedOn === undefined) {
+      if (record.status.sandboxRuntime === undefined) {
         record.status = {
           ...record.status,
           sandboxRuntime: this.#sandboxRuntime,

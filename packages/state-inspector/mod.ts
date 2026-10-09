@@ -15,6 +15,7 @@ export * from "./multispace.ts";
 export * from "./discover.ts";
 export * from "./remote.ts";
 export * from "./grouping.ts";
+export * from "./profile-discovery.ts";
 export * from "./graph.ts";
 export * from "./timetravel.ts";
 export * from "./scopes.ts";

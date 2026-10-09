@@ -1,5 +1,6 @@
 import { hashOf } from "@commonfabric/data-model";
 import type {
+  AuthoredSourceLookup,
   Program,
   ProgramResolver,
   Source,
@@ -670,6 +671,11 @@ export class Engine extends EventTarget {
             : undefined,
           diagnosticMessageTransformer: compilerStack()
             .createReactiveErrorTransformer(options.verboseErrors),
+          authoredSource: authoredSourceForCompile({
+            id,
+            mounts,
+            sourceFiles: authoredCompileSources,
+          }),
           beforeTransformers: (program) => {
             const pipeline = new (compilerStack()
               .CommonFabricTransformerPipeline)({
@@ -965,9 +971,15 @@ export class Engine extends EventTarget {
     const unioned = new Map<string, Source>();
     const mains: string[] = [];
     const batchIds: string[] = [];
+    const authoredSources: AuthoredSourceLookup[] = [];
     for (const program of programs) {
       const id = computeId(program);
       batchIds.push(id);
+      authoredSources.push(authoredSourceForCompile({
+        id,
+        mounts: [],
+        sourceFiles: partitionDataFiles(program).codeFiles,
+      }));
       const mapped = pretransformProgramForModules(program, id);
       const resolver = new EngineProgramResolver(
         { ...mapped, files: partitionDataFiles(mapped).codeFiles },
@@ -996,6 +1008,14 @@ export class Engine extends EventTarget {
     } = compiler
       .compileToModulesCollecting(merged, {
         runtimeModules: Engine.runtimeModuleNames(),
+        // Each lookup knows only its own program's `/<id>` prefix.
+        authoredSource: (fileName) => {
+          for (const lookup of authoredSources) {
+            const authored = lookup(fileName);
+            if (authored !== undefined) return authored;
+          }
+          return undefined;
+        },
         beforeTransformers: runTransform
           ? (program) => {
             const moduleIdentities = new Map(
@@ -1233,6 +1253,11 @@ export class Engine extends EventTarget {
         // authoring-hygiene diagnostics (a now-unused @ts-expect-error) must
         // not brick the reload (CT-1916).
         storedSource: true,
+        authoredSource: authoredSourceForCompile({
+          id: undefined,
+          mounts,
+          sourceFiles: pristineSourceFiles,
+        }),
         beforeTransformers: (program) => {
           const pipeline = new (compilerStack()
             .CommonFabricTransformerPipeline)({
@@ -2058,15 +2083,16 @@ function injectMountSources(files: readonly Source[]): Source[] {
 // import ahead of the first content line and appends an `h` shim after the last
 // (packages/ts-transformers/src/core/cf-helpers.ts); only the leading import
 // moves the authored lines, so an injected file shifts by exactly one line.
-// Two kinds of file reach the compiler unchanged and keep their authored
-// lines: a stored legacy envelope, whose authored bytes already carry the
-// helper import (tolerated only on the storage-fed paths — `checkCFHelperVar`
-// rejects those bytes on every authoring path), and a file with no content
-// line to inject ahead of.
-export function helperInjectionLineOffset(contents: string): number {
+// Three kinds of file reach the compiler unchanged and keep their authored
+// lines: a declaration file, which the injector skips; a stored legacy
+// envelope, whose authored bytes already carry the helper import (tolerated
+// only on the storage-fed paths — `checkCFHelperVar` rejects those bytes on
+// every authoring path); and a file with no content line to inject ahead of.
+export function helperInjectionLineOffset(file: Source): number {
+  if (file.name.endsWith(".d.ts")) return 0;
   const { isLegacyInjectedEnvelope } = compilerStack();
-  if (isLegacyInjectedEnvelope(contents)) return 0;
-  if (findFirstContentLineIndex(contents.split("\n")) === null) return 0;
+  if (isLegacyInjectedEnvelope(file.contents)) return 0;
+  if (findFirstContentLineIndex(file.contents.split("\n")) === null) return 0;
   return -1;
 }
 
@@ -2083,7 +2109,7 @@ function builderSourceSiteOptionsForCompile(params: {
     params.sourceFiles.map((file) => [
       coverageFilenameFor(file.name, params.id, params.mounts),
       {
-        lineOffset: helperInjectionLineOffset(file.contents),
+        lineOffset: helperInjectionLineOffset(file),
         lineCount: lineCountOf(file.contents),
       },
     ]),
@@ -2102,6 +2128,28 @@ function builderSourceSiteOptionsForCompile(params: {
       return { ...site, line };
     },
   };
+}
+
+/**
+ * The authored bytes behind each helper-injected compiler input, so that a
+ * compile diagnostic names the line the author wrote and quotes its text.
+ */
+function authoredSourceForCompile(params: {
+  id: string | undefined;
+  mounts: readonly FabricMount[];
+  sourceFiles: readonly Source[];
+}): AuthoredSourceLookup {
+  const authored = new Map(
+    params.sourceFiles.map((file) => [
+      coverageFilenameFor(file.name, params.id, params.mounts),
+      {
+        contents: file.contents,
+        lineOffset: helperInjectionLineOffset(file),
+      },
+    ]),
+  );
+  return (fileName) =>
+    authored.get(coverageFilenameFor(fileName, params.id, params.mounts));
 }
 
 /**
@@ -2134,7 +2182,7 @@ function patternCoverageOptionsForCompile(
     params.sourceFiles.map((file) => [
       coverageFilenameFor(file.name, params.id, params.mounts),
       {
-        lineOffset: helperInjectionLineOffset(file.contents),
+        lineOffset: helperInjectionLineOffset(file),
         lineCount: lineCountOf(file.contents),
       },
     ]),

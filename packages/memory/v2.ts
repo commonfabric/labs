@@ -1306,6 +1306,15 @@ export type MemoryProtocolFlags = {
    */
   admissionNotice?: boolean;
 
+  /**
+   * Server capability: the server records the diagnostics a client reports
+   * about its own session with `session.report` (04-protocol.md §4.14).
+   * Build-inherent, so a server of this version always advertises it.
+   * Absent (an older server) parses to false, and a client then keeps its
+   * reports to itself rather than sending a message the server would refuse.
+   */
+  sessionReportV1?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 };
@@ -1341,6 +1350,7 @@ export type WireMemoryProtocolFlags = {
   sessionClose?: boolean;
   connectionAuth?: boolean;
   admissionNotice?: boolean;
+  sessionReportV1?: boolean;
   routedAuthV1?: boolean;
 };
 
@@ -2119,6 +2129,80 @@ export type PresenceLeaveRequest = {
   room: string;
 };
 
+/** The document a remote-echo breaker report names. */
+export type EchoBreakerReportDocument = {
+  /** The document's id. */
+  id: string;
+
+  /**
+   * The scope instance the action wrote, resolved: `space`, a principal's
+   * `user:` instance, or a session's `session:` instance. A serving runtime
+   * runs actions for many sessions and reports them all on its own, so the
+   * report names the instance rather than leaving the reporting session to
+   * stand for it.
+   */
+  scopeKey: ScopeKey;
+};
+
+/**
+ * A client's remote-echo breaker tripped: one of its reactive actions kept
+ * rewriting `document`, each time re-triggered by another writer's change to
+ * that same document, and the client is now deferring the action's re-runs
+ * (docs/plans/scheduler-remote-echo-breaker.md).
+ */
+export type EchoBreakerTripReport = {
+  kind: "echo-breaker";
+  event: "trip";
+  document: EchoBreakerReportDocument;
+
+  /** The action's scheduler id, cut to {@link SESSION_REPORT_TEXT_MAX}. */
+  action: string;
+};
+
+/**
+ * A tripped breaker cleared: the action wrote `document` without changing
+ * it (`convergence`), saw no echo for the breaker's quiet reset (`quiet`),
+ * was unregistered (`retired`), or lost its pair to the breaker's bounded
+ * table (`evicted`).
+ */
+export type EchoBreakerClearReport = {
+  kind: "echo-breaker";
+  event: "clear";
+  document: EchoBreakerReportDocument;
+
+  /** The action's scheduler id, cut to {@link SESSION_REPORT_TEXT_MAX}. */
+  action: string;
+
+  reason: "convergence" | "quiet" | "retired" | "evicted";
+
+  /** Echoes the pair saw after it tripped, each of which renewed the
+   * backoff. */
+  renewals: number;
+
+  /** Milliseconds from the trip to the clear. */
+  trippedMs: number;
+};
+
+/** A diagnostic a client reports about its own session (section 4.14). */
+export type SessionReport = EchoBreakerTripReport | EchoBreakerClearReport;
+
+/** The longest string a session report carries in any one field. */
+export const SESSION_REPORT_TEXT_MAX = 512;
+
+/**
+ * Reports a client-side diagnostic to the memory server serving `space`,
+ * which records it against the session (section 4.14). Like presence it is
+ * not a commit, carries no `seq`, and is handled outside the ordered frame
+ * queue.
+ */
+export type SessionReportRequest = {
+  type: "session.report";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  report: SessionReport;
+};
+
 /** A room member's record replaced, pushed to the room's other members. */
 export type PresenceUpsertMessage = {
   type: "presence/upsert";
@@ -2225,7 +2309,8 @@ export type ClientMessage =
   | EventAttentionResolveRequest
   | PresenceJoinRequest
   | PresencePublishRequest
-  | PresenceLeaveRequest;
+  | PresenceLeaveRequest
+  | SessionReportRequest;
 export type ServerMessage =
   | HelloOkMessage
   | ResponseMessage<FabricValue>
@@ -2459,6 +2544,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // the notice. A routed connection records no refusal, so it is told
   // nothing whatever both peers advertise.
   admissionNotice: true,
+  // Build-inherent: this build's server records the diagnostics a client
+  // reports about its session.
+  sessionReportV1: true,
   routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
@@ -2655,6 +2743,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const sessionReportV1 = value.sessionReportV1;
+  if (sessionReportV1 !== undefined && typeof sessionReportV1 !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2702,6 +2795,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older peer) parses to false: a server then sends that
     // client no `session/admissible`.
     admissionNotice: admissionNotice === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // `session.report`.
+    sessionReportV1: sessionReportV1 === true,
     routedAuthV1: value.routedAuthV1 === true,
   };
 };
@@ -2740,6 +2836,7 @@ export const wireMemoryProtocolFlags = (
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
   admissionNotice: flags.admissionNotice,
+  sessionReportV1: flags.sessionReportV1,
   routedAuthV1: flags.routedAuthV1,
 });
 

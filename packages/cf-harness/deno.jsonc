@@ -62,7 +62,6 @@
     "./contracts/tool-result": "./src/contracts/tool-result.ts",
     "./contracts/tool-descriptor": "./src/contracts/tool-descriptor.ts",
     "./contracts/transcript": "./src/contracts/transcript.ts",
-    "./sandbox": "./src/sandbox/docker-runsc.ts",
     "./tools": "./src/tools/registry.ts",
     "./tools/read-skill-resource": "./src/tools/read-skill-resource.ts",
     "./tools/web-fetch": "./src/tools/web-fetch.ts",

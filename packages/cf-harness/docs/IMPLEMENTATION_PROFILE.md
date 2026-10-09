@@ -24,7 +24,7 @@ separately, under
 
 | Class         | Status                                                     | Evidence boundary                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core batch    | implemented; provisional conformance                       | Package unit tests cover configuration, lifecycle, context management, tools, handles, attachment integrity, artifacts, resume, and diagnostics. Real Docker, Fabric, and other external-runtime behavior requires integration tests.                                                                                                                                                                               |
+| Core batch    | implemented; provisional conformance                       | Package unit tests cover configuration, lifecycle, context management, tools, handles, attachment integrity, artifacts, resume, and diagnostics. Real `runsc`, Fabric, and other external-runtime behavior requires integration tests.                                                                                                                                                                              |
 | Delegation    | implemented; experimental                                  | Unit tests cover profiles, fresh child context, retained child artifacts, and sanitized/structured return handling. A child inherits its parent's model-context label, and its return brings the child's label back into the parent's, since whatever crosses was derived from what the child observed. Children run together only when one model turn starts them; nothing schedules or budgets them across turns. |
 | Interactive   | implemented; experimental                                  | NDJSON v1 and SQLite-backed sessions/turns/events/replay are covered by package and Loom adapter tests, including crash-restart regressions that reconstruct a service from the same SQLite store at each mid-tool fault point and assert the transcript the next turn is given. The protocol is not yet declared stable.                                                                                           |
 | CFC transport | partial; reduced assurance in current product integrations | Prompt-slot, invocation-context, model-influence, mediation, and deny/recovery behavior are tested. Loom and Pattern Factory still select `observe` because trusted mediation is not wired end to end.                                                                                                                                                                                                              |
@@ -34,11 +34,11 @@ separately, under
 The CFC specification defines three implementation profiles in
 `cfc/18-runtime-implementation-profiles.md`. This package's position on each:
 
-| Profile                   | Position                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CfcAgentHarnessProfile`  | **Not claimed.** Which of §18.3.3's obligations are answered is held in [`audit/conformance-manifest.ts`](../audit/conformance-manifest.ts) and printed by `deno task cfc-audit`, so it is not restated here.                                                                                                                                                                                                                                                                                                            |
-| `CfcGVisorSandboxProfile` | **Not claimed, and not this package's to claim.** cf-harness runs tools under the sibling gVisor runtime, which is `runsc-cfc` as registered with Docker under the Docker driver and a `runsc` binary with no Docker registration under the direct driver, so the profile is in scope for a deployment; the mediation it requires belongs to that runtime, the Common Fabric FUSE daemon, and the runner's label store. Four of §18.2.7's nineteen documentation obligations are this package's, and are answered below. |
-| `CfcTrustedRenderProfile` | **Not applicable.** cf-harness has no user-visible render surface. Its outputs are model context, operator terminal lines, and artifact files, none of which is a certified authorship boundary.                                                                                                                                                                                                                                                                                                                         |
+| Profile                   | Position                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CfcAgentHarnessProfile`  | **Not claimed.** Which of §18.3.3's obligations are answered is held in [`audit/conformance-manifest.ts`](../audit/conformance-manifest.ts) and printed by `deno task cfc-audit`, so it is not restated here.                                                                                                                                                                                                                |
+| `CfcGVisorSandboxProfile` | **Not claimed, and not this package's to claim.** cf-harness runs tools under the sibling gVisor runtime, a `runsc` binary it invokes directly with no Docker, so the profile is in scope for a deployment; the mediation it requires belongs to that runtime, the Common Fabric FUSE daemon, and the runner's label store. Four of §18.2.7's nineteen documentation obligations are this package's, and are answered below. |
+| `CfcTrustedRenderProfile` | **Not applicable.** cf-harness has no user-visible render surface. Its outputs are model context, operator terminal lines, and artifact files, none of which is a certified authorship boundary.                                                                                                                                                                                                                             |
 
 Which §18.3.3 obligations are answered, and which are not, is
 [`audit/conformance-manifest.ts`](../audit/conformance-manifest.ts) and not this
@@ -74,28 +74,20 @@ The four §18.2.7 obligations that are this package's:
   session-local, persisted with the run's artifacts, reconstructed across batch
   resume, and never visible to the sandbox, which sees only tokens. The label
   store is the runner's; sandbox labels arrive in the CFC result `runsc`
-  reports, which the Docker driver reads from the `runsc-cfc` result sidecar and
-  which, under the direct driver, `runsc` writes to a descriptor the driver
-  opens for the call.
+  reports, which `runsc` writes to a descriptor the driver opens for the call.
 - **Which handle scopes, TTLs, revocation behavior, and metadata labels are
   implemented.** Scopes are `invocation`, `run`, and `session` — the spec's
   third scope is named `plan` and is the same idea — and a handle carries an
   optional expiry. No revocation or tombstoning exists and handle metadata is
   unlabeled.
 - **How stdout/stderr are prevented from bypassing the trusted runtime.** Raw
-  streams return through the `runsc-cfc` result sidecar and are withheld from
-  model context when the sidecar reports tainted output. An enforcing run whose
-  invocation-context or result transport is unwired fails at startup rather than
-  degrading silently, and the registered Docker runtime is separately checked
-  for an absolute directory on each flag. The two directory spellings are
-  deliberately not compared, because comparing two path strings cannot establish
-  that they name one directory, so two absolute paths that disagree pass both
-  checks. That describes the Docker driver. The direct `runsc` driver has no
-  registration to check, because it carries the invocation context and the
-  result on descriptors it opens itself: there an enforcing run with no CFC
-  policy fails at startup, and a call that names a sandbox session is refused in
-  an enforcing mode, because a session's result cannot vouch for everything that
-  reaches the call's output.
+  streams return with the CFC result `runsc` reports for the call and are
+  withheld from model context when that result reports tainted output. The
+  driver carries the invocation context and the result on descriptors it opens
+  itself, so there is no registration to check: an enforcing run with no CFC
+  policy fails at startup rather than degrading silently, and a call that names
+  a sandbox session is refused in an enforcing mode, because a session's result
+  cannot vouch for everything that reaches the call's output.
 
 The obligation-by-obligation working, with the code each answer rests on, is in
 [`docs/history/packages/cf-harness/cfc-profile-conformance-gap-2026-09-03.md`](../../../docs/history/packages/cf-harness/cfc-profile-conformance-gap-2026-09-03.md).
@@ -115,10 +107,10 @@ It reports CLI fields, repeatable fields, parent and built-in tools, child
 profiles, native model tools, and optional features. Adapters should use this
 probe to handle vendor skew.
 
-The probe does not health-check Docker, the selected Docker runtime, a directly
-invoked `runsc` or its rootfs, Browser Access, a model gateway, configured mount
-sources, or the Fabric session used by `run_pattern`. Callers must not treat
-advertised capability as dependency readiness.
+The probe does not health-check a directly invoked `runsc` or its rootfs,
+Browser Access, a model gateway, configured mount sources, or the Fabric session
+used by `run_pattern`. Callers must not treat advertised capability as
+dependency readiness.
 
 ## Trust and execution profile
 
@@ -135,18 +127,16 @@ advertised capability as dependency readiness.
   broken Codex binding does not fall back to gateway billing or retention. The
   dedicated local Loom host uses the fixed credential owner `local`, a canonical
   home identity, and the persisted provider/authentication source.
-- Execution substrate: a gVisor sandbox reached through one of two drivers. One
-  is Docker, normally with the sibling gVisor `runsc-cfc` runtime, with
-  configurable image and runtime. The other invokes a `runsc` binary directly,
-  with no Docker and with a configurable rootfs, CFC policy, and binary. A run
-  names its driver; where it names none, macOS takes the direct driver over its
-  native cfc-vm store, refusing where that is not set up, and every other
-  platform takes Docker, except that the Loom local host, and a console launched
-  for a Loom instance, refuse where none is named.
-  [Sandbox runtimes](CURRENT_STATE.md#sandbox-runtimes) describes both.
-- CFC authority: Common Fabric runner/runtime evidence and trusted sandbox
-  sidecars. Harness-local policy logic is conservative transport/enforcement,
-  not the source of label meaning.
+- Execution substrate: a gVisor sandbox reached through one driver, which
+  invokes a `runsc` binary directly, with no Docker and with a configurable
+  rootfs, CFC policy, and binary. A run can name it; where it names none, macOS
+  and Linux take the native runtime from their stores, refusing where that is
+  not set up, and every other platform, the Loom local host, and a console
+  launched for a Loom instance refuse.
+  [Sandbox runtimes](CURRENT_STATE.md#sandbox-runtimes) describes it.
+- CFC authority: Common Fabric runner/runtime evidence and the CFC results the
+  trusted sandbox runtime reports. Harness-local policy logic is conservative
+  transport/enforcement, not the source of label meaning.
 - Host execution: no parent-run shell reaches the host. Bounded host-side
   surfaces exist beside the sandbox: the browser child profile's typed `browser`
   tool, which a browser host attached to the run carries out when there is one
@@ -347,10 +337,10 @@ placeholders resolve only at the SQLite query boundary.
 ## Known deviations and retirement conditions
 
 1. **Dependency readiness.** The capability probe does not establish health for
-   Docker, `runsc-cfc`, a directly invoked `runsc`, Browser Access, mounts,
-   gateways, or Fabric sessions. Owner: `cf-harness` and each product adapter.
-   Retirement: the selected run profile has a caller-visible preflight that
-   checks every required dependency before the first model turn.
+   a directly invoked `runsc`, Browser Access, mounts, gateways, or Fabric
+   sessions. Owner: `cf-harness` and each product adapter. Retirement: the
+   selected run profile has a caller-visible preflight that checks every
+   required dependency before the first model turn.
 2. **Product `observe` bridges.** Loom and Pattern Factory select `observe` for
    workflows whose sandbox output does not yet carry trusted mediation metadata
    end to end. Which mode each adapter selects is a fact about adapters that
@@ -360,11 +350,11 @@ placeholders resolve only at the SQLite query boundary.
    plus the cf-harness/CFC integration. Retirement: real sidecar evidence is
    present for every exposed observation and enforcing-mode adapter suites pass
    without opaque-output regressions.
-3. **Provisional network policy.** Package-default bridge networking and the
-   shell `curl` guard are integration mechanisms, not a complete destination
-   capability system. Owner: `cf-harness`. Retirement: network authority is
-   represented and enforced as an explicit profile across sandbox and dedicated
-   web tools.
+3. **Provisional network policy.** The package-default `sandbox` network, which
+   on the Linux default `pasta` gives egress and the host, and the shell `curl`
+   guard are integration mechanisms, not a complete destination capability
+   system. Owner: `cf-harness`. Retirement: network authority is represented and
+   enforced as an explicit profile across sandbox and dedicated web tools.
 4. **Incomplete opaque-reference boundary.** Address handles cover cell
    addresses but not the reserved value-handle form. Denial-path messages are
    not swapped, and cross-agent transfer exists only across an explicit

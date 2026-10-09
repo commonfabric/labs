@@ -150,3 +150,11 @@ export {
   type ProfileNameProtectionInspection,
   repairProfileNameProtection,
 } from "./profile-name-protection.ts";
+
+export {
+  inspectProfileSpaceRoot,
+  listedProfiles,
+  type ProfileSpaceRootInspection,
+  type ProfileSpaceRootStatus,
+  repairProfileSpaceRoot,
+} from "./profile-space-root.ts";

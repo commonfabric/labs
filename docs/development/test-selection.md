@@ -532,6 +532,7 @@ measurement to look at rather than a setting to fix.
 | `CATCH_WEIGHT_MAIN` | 1.5 | multiplier | chosen | Up when an escape should pull harder on what gets selected next; down when the failures on `main` are mostly environmental rather than real. |
 | `BREADTH_SATURATION` | 2 | sources | chosen | Where the `breadth` term reaches half its ceiling. Up when the term should go on telling eight sources from four; down when one source should already be worth nearly all it can give. |
 | `ENVIRONMENTAL_MIN_SOURCES` | 5 | sources | chosen | How many distinct sources a failure must span inside `CATCH_BREADTH_WINDOW_DAYS` before it reads as the environment. Up when a genuinely broad regression is written off; down when a broken runner's failures still count as catches. |
+| `MASS_FAILURE_MIN_IDENTITIES` | 50 | identities | chosen | How many identities one run must newly break before none of those failures is a catch. Up when a breakage that reached many tests still escaped the pull requests that ran some of them; down when one broken run still credits a catch to a whole suite. |
 | `CHURN_HALF_LIFE_DAYS` | 14 | days | chosen | Up when recent trouble should stay relevant for longer; down when a problem already fixed keeps its tests selected for weeks afterwards. |
 | `CHURN_WINDOW_DAYS` | 60 | days | chosen | How far back the decayed counts are read. Past this the weight is under one part in sixteen, so moving it is a performance decision rather than a policy one. |
 | `FLAKE_HALF_LIFE_RUNS` | 200 | runs | chosen | How many runs without disagreeing halve what a disagreement counts for. It is also how much evidence the share is measured over, so far below one over `FLAKE_EXCLUSION_RATE` the share swings about on too little: up when it does; down when a test that has plainly settled is still judged by what it did. |
@@ -553,6 +554,8 @@ measurement to look at rather than a setting to fix.
 | `FLAKE_ANCHOR_RATE` | 0.01 | share of runs | chosen | With `FLAKE_ANCHOR_EXECUTIONS`, the point the count's line passes through. Down to make the count climb faster with the rate; up to make it climb slower. |
 | `FLAKE_ANCHOR_EXECUTIONS` | 5 | runs of one item | chosen | What an item at `FLAKE_ANCHOR_RATE` runs. Up when intermittent regressions still get through; down when executions crowd a lane. |
 | `MAX_EXECUTIONS` | 10 | runs of one item | chosen | Where the line stops. Up when the flakiest items a change forces in still are not proven by what runs; down when they crowd a lane. |
+| `RERUN_EXECUTIONS` | 3 | runs of one unit | chosen | The most times the full run runs a unit again where a test in it failed every time. Up when flaky tests on `main` fail every rerun and go on being counted as catches; down when a real break's reruns take time that tells nobody anything. |
+| `RERUN_BUDGET_SECONDS` | 300 | seconds | chosen | What one lane of the full run may spend rerunning its failures. Up when failures go without reruns for want of it; down when a broken `main` holds every lane this much longer than it needs. |
 | `COVERAGE_COMMENT_LINES` | 25 | lines | chosen | Up when coverage comments are too noisy; down when debt is climbing unnoticed. |
 | `LOCAL_COVERAGE_MAX_SECONDS` | 30 | seconds | chosen | Up when too many sets are reported as expensive for the report to be worth reading; down when one is quietly eating a lane. Nothing is excluded either way; it only decides what the summary mentions. |
 | `LOCAL_COVERAGE_MAX_SETS` | 2 | measured sets | chosen | Up when broader changes should still be gated and the run can afford those sets' whole unit lists; down when sweeping changes are crowding lanes. |
@@ -620,6 +623,19 @@ day's sample is stored does not change `COST_RULE`: the days already
 stored are read forward into the new form, at or above what they held,
 and keep the stamp of the rules that sealed them.
 
+An aggregate also carries the set of rules its catches were credited
+under, as `CATCH_RULE`, and an aggregate carrying none was written before
+that stamp began. Changing what decides whether a failure is a catch, or
+which run and day one is attributed to, means changing `CATCH_RULE` in the
+same change. The next run then reads an aggregate naming another set, and
+rather than folding onto it, folds every day from the first one that
+aggregate's history holds into an empty aggregate, saying so in its log.
+That run takes about as long as a bootstrap over the same days. Nothing
+is lost: records carry no retention, so the whole history is still there
+to fold. Changing a weight that multiplies the counts does not change
+`CATCH_RULE`, since the counts are the same and the weights are applied
+when a manifest is scored.
+
 A change to what a manifest or an aggregate holds needs no cold start.
 The area both are written under is named rather than numbered and does
 not move, so a run finds the aggregate the run before it left; a stored
@@ -685,8 +701,7 @@ happens, naming what it passed over and what it folded onto. The newest
 state is read whatever day it carries, since taking it is not a choice
 between two aggregates.
 
-A cold start cannot read the whole window in one job, and is asked for
-deliberately: the bootstrap is a manual dispatch with the bootstrap input
+A cold start is asked for deliberately: the bootstrap is a manual dispatch with the bootstrap input
 set, run once, and an incremental run that finds no aggregate at all says
 so and stops. After that the incremental path keeps up. A store holding
 no aggregate is the whole of what asks for a bootstrap. A change to what
@@ -759,15 +774,16 @@ same place.
 Reading a day the long way costs more than the one run it happens on.
 Every object of that day goes into the aggregate's list of folded
 objects, where the rollup path would have written one receipt, and that
-list is carried in every state object written from then on. The day is
-also folded after the rollup days that follow it, because every rollup
-day is read before the raw pass begins. The rules that decide whether a
-failure is a catch look a day or two either side of it, and the fold has
-by then aged its cross-batch context past the day being folded, so that
-evidence is not in view. Every local submission of every day is folded
-after every rollup day for the same reason. The day's own records are all
-there and none of them is counted twice; what the day loses is some of
-the evidence that would have classified them.
+list is carried in every state object written from then on.
+
+The window is folded one day at a time, oldest first, whichever way each
+day is read. The rules that decide whether a failure is a catch look a
+day or two either side of it, and back at what the default branch last
+said, so a day folded after a later one would be judged against what
+happened after it. A day read from its rollup is folded in one batch
+with that day's local submissions, which the fold replays in time order.
+A day read the long way is folded in chunks of whole workflow runs, its
+local submissions among them.
 
 What the fallback rests on is that the shards that did read reached the
 batch and nothing else. Replaying the spooled observations is a read of
@@ -858,7 +874,10 @@ projected lane`, what the packer projected that to be; and `ci-lane bound
 lane`, the bound the lane was packed to finish inside less
 `LANE_PROLOGUE_SECONDS`. The packer charges nothing for converting coverage,
 so a lane whose conversion is slow is one the model under-charges, and it
-counts as such. Only a lane that passed is read, since one that went red
+counts as such. The packer charges nothing for [running a failure
+again](#running-a-failure-again) either, but that is not the model's error, so
+`ci-lane lane` leaves the time out and a lane of the full run records it apart
+as `ci-lane reruns`. Only a lane that passed is read, since one that went red
 stopped early.
 
 Four things count as broken. Their dials are in [Every dial](#every-dial).
@@ -1363,6 +1382,57 @@ Two things go with that rule.
   coverage gate](#the-coverage-gate) says what that leaves for a later
   pull request.
 
+### Running a failure again
+
+The publisher reads a test as flaky only where it both passed and failed at
+one commit, in one order. The run on the default branch runs most tests once
+per commit, so a flaky test there never does that on its own. Each of its
+failures is instead followed by a pass at a later commit, and the publisher
+credits the change between them with a catch. The test's score rises, and
+selection picks it more often for doing what made it look valuable.
+
+So a lane of the full run runs a test again when the test failed every time
+the lane ran it. After its last batch, the lane runs the unit holding that
+test again, up to `RERUN_EXECUTIONS` times, and stops once each such test in
+it has passed. Every rerun is shipped as ordinary records of the lane's run:
+the same commit, the same seed, and the same start. A flaky test therefore
+leaves a pass beside its failure, and the publisher counts a flake rather
+than a catch. A test that is really broken fails every rerun, and its failure
+waits for a later commit to judge it, as before.
+
+The reruns collect evidence and decide nothing. Whether the lane fails is
+settled from its batches' own records, with the excusal rules above, before
+any rerun starts. A failure that passes when run again still fails the run,
+and an excused failure stays excused whatever its reruns record.
+
+Every rerun is a run of the test like any other. A test that passed on a
+rerun is read everywhere as having disagreed with itself at the commit,
+including by [the comment a run on the default branch
+leaves](#the-comment-a-run-on-the-default-branch-leaves), which does not name
+it as a first failure. A test that failed every rerun counts each of those
+failures in its churn.
+
+A unit runs again as its batch ran it, with the same skip list, so that the
+rerun asks the same tests the same thing. A [unit that runs
+whole](#units-that-run-whole) runs whole again, and the records of every test
+in it ship. Coverage is off for a rerun, since nothing scores what a rerun
+would measure. A test that has already passed beside its failure in the lane,
+because its unit was repeated, has the evidence already and is no reason to
+run its unit again. It still runs again where another test in its unit is.
+
+What a lane spends on reruns is bounded by `RERUN_BUDGET_SECONDS`. Each rerun
+goes to the unit that has run again least across all of the lane's suites, so
+the budget is spread over the lane's failures rather than spent on the first. A
+unit starts only where what the packer charges for it fits in what is left of
+the budget, and the time the reruns take is what comes off it. A rerun takes
+along any other waiting units of the same suite that fit beside it. The charge
+is read from passing runs, so a rerun that hangs runs for as long as the hang,
+and the lane's step timeout is what bounds that. The lane's job summary says
+what the reruns took, which tests passed on a rerun, which never did, which no
+rerun recorded, and which tests' units did not fit. A pull request's lanes
+rerun nothing, unless the pull request is labelled `ci: full`, which runs its
+lanes as the full run.
+
 A lane decides all of this from the records its batches gathered rather
 than from what a command exited with. A runner that failed only on
 identities a flake rate excuses has told the run nothing it should stop
@@ -1599,11 +1669,12 @@ integration script. A lane that asks for one test of such a unit runs
 every test in it.
 
 Each suite lists these units in `whole`, and a lane writes no skip list
-for one. Most units in `whole` hold a single identity, such as a gate, a
-type-check group, a binary build, one pattern's check, or one vintage
-fixture's replay. Only the four kinds above hold several. A unit's shape
-does not tell you which kind it is, because two of the four kinds are
-paths.
+for one. A lane of the full run that [runs a failure
+again](#running-a-failure-again) inside one runs the whole unit again. Most
+units in `whole` hold a single identity, such as a gate, a type-check group,
+a binary build, one pattern's check, or one vintage fixture's replay. Only the
+four kinds above hold several. A unit's shape does not tell you which kind it
+is, because two of the four kinds are paths.
 
 `tasks/test-topology.test.ts` checks `whole` in both directions. Every unit
 outside it has to be a test file in the tree, because the preload looks a

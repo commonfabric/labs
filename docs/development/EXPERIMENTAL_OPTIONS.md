@@ -39,7 +39,6 @@ was last checked against the code.
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env / shell build define, or `RuntimeOptions.experimental` | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
-| [`remoteEchoBreaker`](#remoteechobreaker) | `EXPERIMENTAL_REMOTE_ECHO_BREAKER` env, or `RuntimeOptions.experimental` | off | Gideon Wald (remote-echo breaker) | tune thresholds against a live rate signal, soak, then fold into base scheduler semantics and delete the flag | implemented, off by default |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
@@ -787,61 +786,6 @@ holds the measurements and the conditions for revisiting.
   authority entry, the shell define, `RemoteSessionFactory`'s
   connection-per-space path, and the `?space=` address parameter.
 
-### `remoteEchoBreaker`
-
-**Last checked:** 2026-10-08. **Status:** implemented, off by default.
-
-- **Toggle via.** `EXPERIMENTAL_REMOTE_ECHO_BREAKER` env, or
-  `new Runtime({ experimental: { remoteEchoBreaker: true } })`.
-  Server-authoritative (`EXPERIMENTAL_FLAG_AUTHORITY`): under server execution
-  the server runs the derivations, so a client and server that disagreed on
-  whether to rate-limit a shared document's re-runs would write it at
-  different cadences, and the deployment decides.
-- **Purpose.** Bound the remote-echo write loop in the scheduler: a derivation
-  that reads and writes one document, re-triggered by a remote change to that
-  same document and writing a differing value back, because another session is
-  writing the same document from the other side. Each run succeeds and commits
-  cleanly, so the reactive retry budget and committed-write backpressure never
-  see it. Under this flag the scheduler counts the successful re-runs per
-  `(action, document)` pair and, once they sustain, defers the action's
-  re-runs with capped exponential backoff renewed on every further echo, so a
-  continuing loop re-runs at most once per backoff. It logs one counted line
-  per trip and exposes `scheduler.getEchoBreakerStats()`. A run that leaves the
-  document unchanged clears the pair. It is trigger-independent: it
-  bounds the loop whatever made the two sides disagree, the guardrail Topic 911
-  waits for and the first of Topic 913's three.
-- **Behavior and design.**
-  [`../plans/scheduler-remote-echo-breaker.md`](../plans/scheduler-remote-echo-breaker.md)
-  — the detection conditions, the thresholds, the backoff, how it is told from
-  legitimate collaboration, and how it composes with the existing retry budget
-  and with server execution.
-- **Current default and planned end state.** Off by default: a new guardrail
-  that changes write cadence under a loop, enabled deliberately for dogfooding
-  on a dev space before any default-on decision. The thresholds
-  (`ECHO_WINDOW_MS`, `ECHO_TRIP_THRESHOLD`, the backoff bounds, and
-  `ECHO_QUIET_RESET_MS` in `packages/runner/src/scheduler/constants.ts`)
-  await the per-space rate signal of Topic 913 for live tuning; the window and
-  the threshold are set against the Topics space's own loops and quiet weeks,
-  which `packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts`
-  replays. The end state is to fold the breaker into base scheduler semantics
-  and delete the flag once the thresholds have soaked.
-- **Status on 2026-10-08.** Implemented behind the flag; detection hooked at
-  the reactive commit success path (`scheduler/run.ts`), backoff through the
-  existing gate primitive (`scheduler/gates.ts`, the `echoBackoffUntil` field).
-  The classifier, the threshold, the renewal and reset rules, and the bounded
-  table are pinned by
-  `packages/runner/test/scheduler-remote-echo-breaker.test.ts`, which also
-  drives a two-session loop over a shared emulated server: the trip, the
-  sustained one-re-run-per-backoff bound, the reset once the sessions agree, a
-  legitimate re-derivation that does not trip, and a re-registration that does
-  not inherit an old backoff. `scoped-output-convergence.test.ts` runs the
-  October storm's pattern shape under the flag and shows nothing trips once
-  the sessions place their output the same way.
-- **Path to removal.** Tune the thresholds from live rate data, soak at a
-  default-on posture, then make the breaker unconditional in
-  `#createActionRunState`, remove the env mapping, the runtime option and its
-  authority entry, and the explicit-off tests.
-
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
 Contextual Flow Control (CFC) is the label-propagation and egress-gating layer
@@ -1478,6 +1422,13 @@ the per-epic implementation notes).
 >   it, which parses as `false`, and a client then reports presence as
 >   unavailable rather than sending a message the server would refuse. It is
 >   permanent.
+> - **`sessionReportV1`** is a build-inherent capability, hardwired to `true`.
+>   It advertises that the server records the diagnostics a client reports
+>   about its own session — the `session.report` command of the memory
+>   protocol chapter's section 4.14 — and shows them on the health route.
+>   Older servers omit it, which parses as `false`, and a client then keeps its
+>   reports to itself rather than sending a message the server would refuse.
+>   It is permanent.
 > - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
 >   on both peers. It advertises the `session/admissible` push of the memory
 >   protocol chapter's section 4.2.2: a server tells a connection it refused a
@@ -2122,6 +2073,20 @@ foreign channels, and by `retire-ingest-channels`. The same `ingestGate`
 middleware still fronts the Gmail push route, on whether a push service
 account is configured. The feature's design is
 [`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md).
+
+### `remoteEchoBreaker` / `EXPERIMENTAL_REMOTE_ECHO_BREAKER` (removed)
+
+Gated the scheduler's remote-echo breaker, which bounds a reactive
+computation that keeps rewriting a document it reads, re-triggered each time
+by another writer's change to that same document
+([plan](../plans/scheduler-remote-echo-breaker.md)). Added off by default in
+#8587 (2026-10-08). The browser shell bakes experimental flags in at build
+time and had no define for it, so the flag could not reach the browser tabs
+where the loops it bounds run. It was deleted on 2026-10-09 to keep the
+runtime's configuration small: the breaker runs unconditionally, and its
+trips and clears are reported, best-effort, over each space's memory session
+to the health route (`sessionReports`, memory protocol §4.14), which is where
+its behavior is judged.
 
 ### `persistentSchedulerState` / `EXPERIMENTAL_PERSISTENT_SCHEDULER_STATE` (removed)
 

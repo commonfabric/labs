@@ -32,9 +32,10 @@ import {
   type RunscCfcResultSidecar,
 } from "./runsc-cfc-result.ts";
 import {
-  type DockerRunscAdditionalMount,
-  type DockerRunscAdditionalMountConfig,
+  type RunscNetworkMode,
   SANDBOX_SESSION_NAME_PATTERN,
+  type SandboxAdditionalMount,
+  type SandboxAdditionalMountConfig,
   type SandboxCommandRequest,
   type SandboxCommandResult,
   type SandboxPlatform,
@@ -93,14 +94,12 @@ export const DEFAULT_RUNSC_BINARY = "runsc";
 export const DEFAULT_RUNSC_WORKSPACE_MOUNT_PATH = "/workspace";
 export const DEFAULT_RUNSC_SHELL = "/bin/sh";
 /**
- * The docker runtime defaults to `--network bridge`; this is the runsc
- * spelling of the same posture, so a run that names no network mode has the
- * same reach on either runtime. On macOS it is runsc's own netstack, which the
- * darwin runsc runs as the VM's network. On Linux it is `pasta`'s network
- * (egress, and the host at `host.docker.internal`) where the configuration
- * names a `networkHelper`, as the Linux default does; without one, runsc's own
- * netstack gives a container loopback alone. A lane that wants isolation says
- * so, as the docker lanes do, through `CF_HARNESS_DOCKER_NETWORK_MODE=none`.
+ * The network a run that names no network mode has. On macOS it is runsc's
+ * own netstack, which the darwin runsc runs as the VM's network. On Linux it
+ * is `pasta`'s network (egress, and the host at `host.docker.internal`) where
+ * the configuration names a `networkHelper`, as the Linux default does;
+ * without one, runsc's own netstack gives a container loopback alone. A lane
+ * that wants isolation says so through `CF_HARNESS_DOCKER_NETWORK_MODE=none`.
  */
 export const DEFAULT_RUNSC_NETWORK_MODE: RunscNetworkMode = "sandbox";
 export const DEFAULT_RUNSC_FABRIC_MOUNT_PATH = "/fabric";
@@ -168,7 +167,7 @@ export const linuxRunscRootfs = (
   imageKey = LINUX_RUNSC_IMAGE_KEY,
 ): string => joinHostPath(store, "images", imageKey);
 
-export type RunscNetworkMode = "none" | "sandbox" | "host";
+export type { RunscNetworkMode };
 
 /**
  * How `pasta` (from passt) gives a container on Linux the `sandbox` network:
@@ -264,7 +263,7 @@ export interface RunscSandboxConfig {
   workspaceMountPath: string;
   shellPath: string;
   networkMode: RunscNetworkMode;
-  additionalMounts: readonly DockerRunscAdditionalMount[];
+  additionalMounts: readonly SandboxAdditionalMount[];
   /** Global runsc flags placed before the subcommand, verbatim. */
   extraRunscArgs: readonly string[];
   /**
@@ -326,7 +325,7 @@ export interface ResolveRunscSandboxConfigOptions {
   workspaceMountPath?: string;
   shellPath?: string;
   networkMode?: RunscNetworkMode;
-  additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
+  additionalMounts?: readonly SandboxAdditionalMountConfig[];
   extraRunscArgs?: readonly string[];
   /** Whether runsc runs with `--rootless`; see {@link RunscSandboxConfig}. */
   rootless?: boolean;
@@ -398,8 +397,8 @@ const requireAbsoluteSandboxPath = (label: string, path: string): string => {
 };
 
 const resolveAdditionalMounts = (
-  configs: readonly DockerRunscAdditionalMountConfig[],
-): DockerRunscAdditionalMount[] =>
+  configs: readonly SandboxAdditionalMountConfig[],
+): SandboxAdditionalMount[] =>
   configs.map((mount) => {
     if (mount.kind === "fabric-fuse") {
       return {
@@ -412,8 +411,6 @@ const resolveAdditionalMounts = (
           "fabric mount sandbox path",
           mount.sandboxPath ?? DEFAULT_RUNSC_FABRIC_MOUNT_PATH,
         ),
-        // The docker runtime's default, so `/fabric` is writable or not on
-        // both runtimes alike.
         readOnly: mount.readOnly ?? false,
       };
     }
@@ -991,8 +988,7 @@ export const resolveRunscSandboxConfig = (
 };
 
 /**
- * The enforcing floor for this runtime, the counterpart of the docker
- * runtime's sidecar-transport check: without a policy runsc runs with no
+ * The enforcing floor for this runtime: without a policy runsc runs with no
  * `--cfc` at all, so every result would arrive unmediated and an enforcing
  * mode would deny each one after the command had already run. Refuse the
  * run before anything executes instead.
@@ -1290,7 +1286,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     return callId === undefined ? state : joinHostPath(state, callId);
   }
 
-  /** A call's working directory: inside the mounts, as the docker runtime requires. */
+  /** A call's working directory: inside the mounts. */
   #cwd(cwd: string | undefined): string {
     return cwd === undefined
       ? this.defaultWorkingDirectory()
@@ -1298,9 +1294,8 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   }
 
   /**
-   * The docker runtime refuses, per call, an enforcing invocation context it
-   * has no transport for. The counterpart here: without a policy runsc runs
-   * with no `--cfc`, the context would be dropped and no result produced.
+   * An enforcing invocation context with no policy: runsc runs with no
+   * `--cfc`, so the context would be dropped and no result produced.
    * The engine refuses such a run at its start, but a runtime constructed
    * or injected directly has no engine in front of it.
    */
