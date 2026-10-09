@@ -266,16 +266,24 @@ const listenerOutput: string[] = [];
  * happened) and `reason` (why) for `source`.
  */
 async function logged(verdict: string, reason: string, source: string) {
-  const found = async () =>
-    (await listenerLog()).split("\n").some((line) => {
+  // The event names the source only by a keyed hash: 96 bits as hex. The
+  // address itself appears nowhere in what the router logs.
+  const found = async () => {
+    const log = await listenerLog();
+    if (log.includes(source.replace(/\/\d+$/, ""))) {
+      throw new Error(`the router logged the address ${source}`);
+    }
+    return log.split("\n").some((line) => {
       try {
         const e = JSON.parse(line);
         return e.event === "memory-router-connection" &&
-          e.verdict === verdict && e.reason === reason && e.source === source;
+          e.verdict === verdict && e.reason === reason &&
+          e.source === undefined && /^[0-9a-f]{24}$/.test(e.source_hash);
       } catch {
         return false;
       }
     });
+  };
   for (const end = Date.now() + 10000; !(await found());) {
     if (Date.now() >= end) {
       throw new Error(`no ${verdict} ${reason} logged for ${source}`);
