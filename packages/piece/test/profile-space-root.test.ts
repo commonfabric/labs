@@ -22,6 +22,7 @@ import {
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import {
   inspectProfileSpaceRoot,
+  listedProfiles,
   repairProfileSpaceRoot,
 } from "../src/ops/profile-space-root.ts";
 
@@ -295,5 +296,33 @@ describe("profile-space-root", () => {
     expect(await rootAddressOf(controller.getSpace())).toBe(
       planted.getAsNormalizedFullLink().id,
     );
+  });
+
+  describe("listedProfiles()", () => {
+    it("lists each profile a Home lists, by the slot it was appended through", async () => {
+      const listed = await createProfileThroughHome(runtimeAs(owner), "Ada", {
+        shape: "not-root",
+        hostIsRoot: true,
+      });
+      const home = new PiecesController(
+        { as: owner, space: owner.did() as MemorySpace },
+        runtimeAs(owner),
+        { deferSpaceCellSync: true },
+      );
+      expect(await listedProfiles(home)).toEqual([
+        { space: listed.space, id: listed.id },
+      ]);
+    });
+
+    it("refuses a space whose root is not a Home", async () => {
+      const { controller } = await legacyProfile();
+      await expect(listedProfiles(controller)).rejects.toThrow(
+        "is not a Home with a profiles list",
+      );
+      await plantRoot(controller);
+      await expect(listedProfiles(controller)).rejects.toThrow(
+        "is not a Home with a profiles list",
+      );
+    });
   });
 });
