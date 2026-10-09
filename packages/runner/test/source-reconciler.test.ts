@@ -342,7 +342,7 @@ describe("piece source reconciliation", () => {
           const originalRef = getPatternIdentityRef(piece)!;
           await stampSource(piece, PARENT_SOURCE);
           expect(await reconcile(piece)).toBe(
-            mode === "entry-only host" ? "unavailable" : mode,
+            mode === "entry-only host" ? "incompatible" : mode,
           );
           const currentRef = getPatternIdentityRef(piece)!;
           if (mode !== "updated") expect(currentRef).toEqual(originalRef);
@@ -547,7 +547,7 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toBe("incompatible");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
@@ -743,6 +743,89 @@ describe("piece source reconciliation", () => {
         origin: PARENT_SOURCE,
         detail: "connection refused",
       });
+    });
+
+    it("records source that does not produce its advertised identity as refused", async () => {
+      // A host whose runtime differs from this one's can advertise an identity
+      // this runtime does not reproduce from the source it serves. Opening the
+      // piece again gets the same answer, so it must not read as an origin
+      // that could not be reached and may yet come back.
+      const v2Identity = await identityFor(source("v2"));
+      const piece = await preparePiece(
+        servingFetch(() => v2Identity, () => source("v3")),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      const outcome = await reconcile(piece);
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        origin: PARENT_SOURCE,
+        offered: { identity: v2Identity, symbol: SYMBOL },
+        detail: "the source did not match the version its origin advertised",
+      });
+      expect(outcome).toBe("incompatible");
+    });
+
+    it("records source that does not compile as refused", async () => {
+      // The same holds for source this runtime cannot compile at all, which is
+      // how a host running a newer runtime than this one usually shows.
+      const uncompilable = [
+        "import { pattern } from 'commonfabric';",
+        `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: notDeclaredAnywhere }));`,
+        "",
+      ].join("\n");
+      const advertised = await identityFor(uncompilable);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => uncompilable),
+      );
+      const originalRef = getPatternIdentityRef(piece);
+      await stampSource(piece, PARENT_SOURCE);
+
+      const outcome = await reconcile(piece);
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        origin: PARENT_SOURCE,
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      // What the compiler said is the reason, on a line of its own.
+      expect(getPieceReconciliation(piece)?.detail).toContain(
+        "notDeclaredAnywhere",
+      );
+      expect(outcome).toBe("incompatible");
+      expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+    });
+
+    it("records an origin whose source could not be downloaded as unreachable", async () => {
+      // The identity route answers and the module it names does not. That is
+      // an origin out of reach, which may come back, not source it refused.
+      const v2Identity = await identityFor(source("v2"));
+      const serving = servingFetch(() => v2Identity, () => source("v2"));
+      const piece = await preparePiece((input, init) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        return url.pathname === SOURCE_PATH
+          ? Promise.resolve(new Response("unavailable", { status: 503 }))
+          : serving(input, init);
+      });
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("unavailable");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+        offered: { identity: v2Identity, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.reason).toBeUndefined();
     });
 
     it("settles on a failure that arrives without a message", async () => {

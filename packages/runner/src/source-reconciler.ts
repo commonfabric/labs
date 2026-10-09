@@ -32,6 +32,10 @@
  */
 
 import { isDID } from "@commonfabric/identity/did";
+import {
+  CompilerError,
+  TransformerError,
+} from "@commonfabric/js-compiler/errors";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { LRUCache } from "@commonfabric/utils/cache";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
@@ -100,8 +104,11 @@ const logger = getLogger("runner.source-reconcile", {
  * - `migrated`: the origin was rewritten into its canonical spelling; the
  *   pattern is unchanged.
  * - `updated`: the piece adopted new source.
- * - `incompatible`: the origin offered source that cannot replace what the
- *   piece runs, and its owner has not said to take it anyway.
+ * - `incompatible`: the origin resolved and offered source the piece refused,
+ *   and offering it again gets the same answer: the source did not compile,
+ *   did not produce the identity its origin advertised, or cannot replace what
+ *   the piece runs and its owner has not said to take it anyway. The record
+ *   the reconciliation leaves names which.
  * - `unavailable`: the origin's current source could not be adopted this
  *   time — it could not be reached, or the piece changed underneath the
  *   attempt and the write it was going to make no longer describes it.
@@ -126,36 +133,65 @@ export type ReconcileOutcome =
  */
 const RECORDED_OUTCOME: Record<
   ReconcileOutcome,
-  | { outcome: PieceReconciliationOutcome; reason?: PieceReconciliationReason }
-  | undefined
+  PieceReconciliationOutcome | undefined
 > = {
-  current: { outcome: "followed" },
-  migrated: { outcome: "followed" },
-  updated: { outcome: "followed" },
-  unavailable: { outcome: "unreachable" },
-  // The reason travels with the result rather than being inferred from the
-  // outcome, so a second kind of refusal has to say which one it is instead
-  // of inheriting this one.
-  incompatible: { outcome: "refused", reason: "incompatible-schema" },
+  current: "followed",
+  migrated: "followed",
+  updated: "followed",
+  unavailable: "unreachable",
+  incompatible: "refused",
   detached: undefined,
   unusable: undefined,
 };
 
-/** What a reconciliation's result leaves on the piece it ran for. */
+/**
+ * What a reconciliation's result leaves on the piece it ran for.
+ *
+ * Throws for a refusal that does not name its reason: the panel offers a
+ * different way out for each, so a refusal recorded without one would offer
+ * the wrong one.
+ */
 function reconciliationFor(
   state: FollowedPieceState,
   outcome: ReconcileOutcome,
 ): PieceReconciliation | undefined {
   const recorded = RECORDED_OUTCOME[outcome];
   if (recorded === undefined) return undefined;
+  if (recorded === "refused" && state.refusal === undefined) {
+    throw new Error("a refused reconciliation must name its reason");
+  }
   return {
-    outcome: recorded.outcome,
+    outcome: recorded,
     at: Date.now(),
     origin: state.storedSource,
     ...(state.offered === undefined ? {} : { offered: state.offered }),
-    ...(recorded.reason === undefined ? {} : { reason: recorded.reason }),
+    ...(recorded === "refused" ? { reason: state.refusal } : {}),
     ...(state.detail === undefined ? {} : { detail: state.detail }),
   };
+}
+
+/**
+ * End a reconciliation by refusing what its origin offered, saying why in the
+ * terms the record keeps and in the attempt's own words.
+ */
+function refuse(
+  state: PieceState,
+  reason: PieceReconciliationReason,
+  detail: string,
+): "incompatible" {
+  state.refusal = reason;
+  state.detail = detail;
+  return "incompatible";
+}
+
+/**
+ * Whether `error` is the compiler's verdict on the source it was given, which
+ * is the same every time that source is compiled. Anything else that stops a
+ * compile, such as storage failing or a compiler that would not load, may not
+ * be.
+ */
+function isSourceRejection(error: unknown): boolean {
+  return error instanceof CompilerError || error instanceof TransformerError;
 }
 
 async function abortable<T>(
@@ -204,6 +240,9 @@ type PieceState = {
    * says what it moved to, or what it declined.
    */
   offered?: { identity: string; symbol: string };
+
+  /** Why the piece refused what the origin offered, once it has. */
+  refusal?: PieceReconciliationReason;
 
   /** Why this reconciliation ended as it did, where it can say. */
   detail?: string;
@@ -1084,7 +1123,9 @@ export class SourceReconciler {
    *
    * `advertisedIdentity`, where the origin supplied one, must equal what the
    * candidate compiles to. A source that does not produce the identity its own
-   * origin advertises is not the source that origin names.
+   * origin advertises is not the source that origin names. That, and source
+   * the compiler rejects, are refused: a runtime that compiles the same bytes
+   * differently from the host serving them gets the same answer every time.
    *
    * The transition records the origin the piece already follows, as an
    * update to it. A `claim` records a different one instead: the origin a
@@ -1102,9 +1143,21 @@ export class SourceReconciler {
   ): Promise<ReconcileOutcome> {
     const runtime = this.#runtime;
     if (signal.aborted) return "unavailable";
-    const candidate = await runtime.patternManager.compilePattern(program, {
-      space: state.space,
-    });
+    let candidate: Pattern;
+    try {
+      candidate = await runtime.patternManager.compilePattern(program, {
+        space: state.space,
+      });
+    } catch (error) {
+      if (!isSourceRejection(error)) throw error;
+      logger.warn("candidate-did-not-compile", () => [
+        "the origin's current source did not compile",
+        state.space,
+        state.storedSource,
+        error,
+      ]);
+      return refuse(state, "source-invalid", reconciliationDetail(error));
+    }
     const candidateRef = runtime.patternManager.getArtifactEntryRef(candidate);
     if (candidateRef === undefined) {
       logger.warn("candidate-without-identity", () => [
@@ -1124,9 +1177,11 @@ export class SourceReconciler {
         advertisedIdentity,
         candidateRef,
       ]);
-      state.detail =
-        "the source did not match the version its origin advertised";
-      return "unavailable";
+      return refuse(
+        state,
+        "identity-mismatch",
+        "the source did not match the version its origin advertised",
+      );
     }
     state.offered = candidateRef;
     if (
@@ -1145,8 +1200,7 @@ export class SourceReconciler {
         candidateRef,
         refusal,
       ]);
-      state.detail = refusal;
-      return "incompatible";
+      return refuse(state, "incompatible-schema", refusal);
     }
 
     const baseline = await preparePieceSourceTransitionBaseline(
