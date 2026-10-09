@@ -119,6 +119,8 @@ async function uncompiledEntryIdentity(
 /**
  * The refusal of source whose identity is `served` where its origin offered
  * `offered`, which names both identities so a reader can tell which side moved.
+ * Its detail is plain text, as is every detail the reconciler words itself:
+ * the source panel shows a detail as written.
  */
 function identityMismatch(
   space: MemorySpace,
@@ -1494,7 +1496,8 @@ export class SourceReconciler {
       return {
         outcome: "refused",
         reason: "source-invalid",
-        detail: `the source's \`${offered.symbol}\` export is not a pattern`,
+        // Plain text, for the panel, as `identityMismatch()` says.
+        detail: `the source's ${offered.symbol} export is not a pattern`,
         offered,
       };
     }

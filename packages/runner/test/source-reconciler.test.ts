@@ -493,7 +493,7 @@ describe("piece source reconciliation", () => {
       expect(fetched).toEqual([PARENT_PATH, SOURCE_PATH]);
     });
 
-    it("keeps the running source when the candidate compiles to no identity", async () => {
+    it("keeps the running source when the export it runs is not a pattern", async () => {
       // Nothing can point a piece at source that has no identity to point at.
       // An export that is not a pattern the runtime built has none, and it is
       // the same export every time this source is offered.
@@ -513,7 +513,10 @@ describe("piece source reconciliation", () => {
         reason: "source-invalid",
         offered: { identity: advertised, symbol: SYMBOL },
       });
-      expect(getPieceReconciliation(piece)?.detail).toContain(SYMBOL);
+      // Plain text, which is how the panel shows it.
+      expect(getPieceReconciliation(piece)?.detail).toBe(
+        `the source's ${SYMBOL} export is not a pattern`,
+      );
     });
 
     it("records the pattern it displaced when its source is gone", async () => {
@@ -1469,7 +1472,7 @@ describe("piece source reconciliation", () => {
       });
     });
 
-    it("refuses source that does not compile to the identity its origin advertises", async () => {
+    it("returns a refusal for source that does not compile to the identity its origin advertises", async () => {
       const v2Identity = await identityFor(source("v2"));
       const v3Identity = await identityFor(source("v3"));
       createRuntime(servingFetch(() => v2Identity, () => source("v3")));
@@ -1482,7 +1485,7 @@ describe("piece source reconciliation", () => {
       });
     });
 
-    it("refuses an export the source does not have", async () => {
+    it("returns a `source-invalid` refusal for an export the source does not have", async () => {
       const v2Identity = await identityFor(source("v2"));
       createRuntime(servingFetch(() => v2Identity, () => source("v2")));
 
@@ -1628,6 +1631,22 @@ describe("piece source reconciliation", () => {
 
       expect(await compile()).toMatchObject({
         outcome: "unreachable",
+        offered: { identity: v2Identity, symbol: SYMBOL },
+      });
+    });
+
+    it("returns unreachable, naming what was advertised, when the compile fails for a reason other than the source", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v2")));
+      using _compile = stub(
+        runtime.patternManager,
+        "compilePattern",
+        () => Promise.reject(new Error("the compiler stack did not load")),
+      );
+
+      expect(await compile()).toEqual({
+        outcome: "unreachable",
+        detail: "the compiler stack did not load",
         offered: { identity: v2Identity, symbol: SYMBOL },
       });
     });
