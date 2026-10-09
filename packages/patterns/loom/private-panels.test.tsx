@@ -3,7 +3,11 @@
  * removed by them, and refused when they live in the Loom's own space.
  */
 import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
-import { clickButton, countElements } from "../test/vnode-helpers.ts";
+import {
+  clickButton,
+  countElements,
+  textContent,
+} from "../test/vnode-helpers.ts";
 import Loom from "./main.tsx";
 import type { Panel } from "./schemas.tsx";
 
@@ -17,6 +21,10 @@ const urlOf = (panel: Writable<Panel>): string => {
   const value = panel.get();
   return value.kind === "url" ? value.url : "";
 };
+
+/** Where the text of `ui` first shows `url`, or `-1` where it does not. */
+const shownAt = (ui: unknown, url: string): number =>
+  textContent(ui).indexOf(url);
 
 interface Held {
   mine?: Writable<Panel>;
@@ -101,11 +109,30 @@ export default pattern(() => {
           urlOf(loom.viewerPanels[2]) === "https://example.com/second"
         ),
       },
+      // The root's view shows its card in the same place.
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          shownAt(loom[UI], "https://example.com/first") >= 0 &&
+          shownAt(loom[UI], "https://example.com/first") <
+            shownAt(loom[UI], "https://example.com/mine") &&
+          shownAt(loom[UI], "https://example.com/mine") <
+            shownAt(loom[UI], "https://example.com/second")
+        ),
+      },
       { action: moveLast },
       {
         assertion: assert(() =>
           loom.viewerPanels.length === 3 &&
           urlOf(loom.viewerPanels[2]) === "https://example.com/mine"
+        ),
+      },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          shownAt(loom[UI], "https://example.com/second") >= 0 &&
+          shownAt(loom[UI], "https://example.com/second") <
+            shownAt(loom[UI], "https://example.com/mine")
         ),
       },
       { action: moveFirst },
@@ -115,6 +142,14 @@ export default pattern(() => {
           urlOf(loom.viewerPanels[0]) === "https://example.com/mine"
         ),
       },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          shownAt(loom[UI], "https://example.com/mine") >= 0 &&
+          shownAt(loom[UI], "https://example.com/mine") <
+            shownAt(loom[UI], "https://example.com/first")
+        ),
+      },
       // Its anchor hidden, it shows after every shared panel the viewer sees.
       { action: hideFirst },
       {
@@ -122,6 +157,14 @@ export default pattern(() => {
           loom.viewerPanels.length === 2 &&
           urlOf(loom.viewerPanels[0]) === "https://example.com/second" &&
           urlOf(loom.viewerPanels[1]) === "https://example.com/mine"
+        ),
+      },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          shownAt(loom[UI], "https://example.com/second") >= 0 &&
+          shownAt(loom[UI], "https://example.com/second") <
+            shownAt(loom[UI], "https://example.com/mine")
         ),
       },
       { action: unhideFirst },

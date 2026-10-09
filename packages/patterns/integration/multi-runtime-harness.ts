@@ -757,6 +757,8 @@ export class MultiRuntimeHarness {
   #startSession: (
     spec: string | MultiRuntimeSessionSpec,
   ) => Promise<MultiRuntimeSession>;
+  /** The labels of the sessions `addSession()` is still starting. */
+  readonly #startingLabels = new Set<string>();
 
   private constructor(
     sessions: MultiRuntimeSession[],
@@ -931,26 +933,35 @@ export class MultiRuntimeHarness {
   /**
    * Starts a session in a runtime of its own and opens the piece in it, as a
    * client starting after the others does: it holds nothing of the piece and
-   * reads all of it from storage. Its label must be one no session holds.
-   * Throws, and starts nothing, when the space's access list does not admit
-   * its identity, as it did when the harness was made or as a grant since has.
+   * reads all of it from storage. Its label must be one no session holds or
+   * is starting under. Throws, and starts nothing, when the space's access list
+   * does not admit its identity, as it did when the harness was made or as a
+   * grant since has.
    */
   async addSession(
     spec: string | MultiRuntimeSessionSpec,
   ): Promise<MultiRuntimeSession> {
     const label = typeof spec === "string" ? spec : spec.label;
-    if (this.sessions.some((session) => session.label === label)) {
+    if (
+      this.#startingLabels.has(label) ||
+      this.sessions.some((session) => session.label === label)
+    ) {
       throw new Error(`A session labeled "${label}" already exists`);
     }
-    const session = await this.#startSession(spec);
+    this.#startingLabels.add(label);
     try {
-      await session.client().call("openPiece", { pieceId: this.pieceId });
-    } catch (error) {
-      await session.disposeSession().catch(() => {});
-      throw error;
+      const session = await this.#startSession(spec);
+      try {
+        await session.client().call("openPiece", { pieceId: this.pieceId });
+      } catch (error) {
+        await session.disposeSession().catch(() => {});
+        throw error;
+      }
+      this.sessions.push(session);
+      return session;
+    } finally {
+      this.#startingLabels.delete(label);
     }
-    this.sessions.push(session);
-    return session;
   }
 
   /**

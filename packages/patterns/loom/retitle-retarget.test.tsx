@@ -131,7 +131,11 @@ export default pattern(() => {
         }),
       },
       { action: clearTitle },
-      { assertion: assert(() => !loom.panels[0].get().titleOverride) },
+      {
+        assertion: assert(() =>
+          loom.panels[0].get().titleOverride === undefined
+        ),
+      },
       // A panel outside the Loom, a document's content, and a URL a panel may
       // not hold are each refused, and change nothing.
       { action: retitleOutside },
