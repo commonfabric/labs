@@ -29,6 +29,7 @@ const NODE_PORT_DEPS = {
   "@deno/shim-deno": "^0.19.2",
   "core-js": "3.46.0",
   "esbuild": "^0.25.12",
+  "fake-indexeddb": "^6.2.5",
 };
 
 function versionKey(range) {

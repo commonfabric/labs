@@ -1,0 +1,26 @@
+#!/bin/bash
+#
+# Runs a workspace member's unit tests under Node:
+#
+#   nodejs/bin/test-member <member-dir> [<node --test option>...]
+#
+# e.g. `nodejs/bin/test-member packages/data-model`. The test files are every
+# `*.test.ts` and `*.test.tsx` under the member's `test/` directory. Node's
+# runner ends its output with `ℹ tests N`, `ℹ pass N`, `ℹ fail N`, and so on.
+
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+member="$1"
+shift
+
+if [[ ! -d "${member}/test" ]]; then
+  echo "No test directory: ${member}/test" 1>&2
+  exit 1
+fi
+
+files=()
+while IFS= read -r f; do
+  files+=("${f}")
+done < <(find "${member}/test" \( -name '*.test.ts' -o -name '*.test.tsx' \) | sort)
+
+# The Deno tasks run with `ENV=test`; some modules read it.
+ENV=test exec "${dir}/cfnode" --test --test-reporter=spec "$@" "${files[@]}"

@@ -1,0 +1,11 @@
+#!/bin/bash
+#
+# Runs Node with what the workspace's modules need: the loader hooks and
+# globals from `nodejs/register.mjs`, and `__proto__` deleted from
+# `Object.prototype`, as Deno does. Arguments are passed to `node`, so
+# `cfnode <module.ts> [args...]` runs a module and `cfnode --test <files>`
+# runs tests.
+
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+exec node --disable-proto=delete --import "${dir}/register.mjs" "$@"

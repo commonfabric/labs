@@ -6,6 +6,7 @@ import * as childProcess from "node:child_process";
 import * as http from "node:http";
 import { Readable, Writable } from "node:stream";
 import * as nodeTest from "node:test";
+import { fileURLToPath } from "node:url";
 import { Deno as shim } from "@deno/shim-deno";
 
 // ---------------------------------------------------------------------------
@@ -307,14 +308,66 @@ function serve(...args) {
 
 // ---------------------------------------------------------------------------
 
+// Deno.unrefTimer: Node's timer functions return objects, which unref
+// themselves. A numeric id (from `+timer`) is looked up among the timers
+// this module has seen.
+
+const timersById = new Map();
+for (const name of ["setTimeout", "setInterval"]) {
+  const original = globalThis[name];
+  globalThis[name] = function (...args) {
+    const timer = original.apply(this, args);
+    timersById.set(+timer, new WeakRef(timer));
+    return timer;
+  };
+}
+
+function unrefTimer(id) {
+  const timer = typeof id === "object" ? id : timersById.get(id)?.deref();
+  timer?.unref?.();
+}
+
+function refTimer(id) {
+  const timer = typeof id === "object" ? id : timersById.get(id)?.deref();
+  timer?.ref?.();
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps a shim function so that a `file:` URL argument becomes a path: Deno's
+ * file APIs take either, and the shim passes a URL to `node:fs` as a string.
+ */
+function acceptingUrls(fn) {
+  return function (...args) {
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a instanceof URL && a.protocol === "file:") {
+        args[i] = fileURLToPath(a);
+      } else if (typeof a === "string" && a.startsWith("file://")) {
+        args[i] = fileURLToPath(a);
+      }
+    }
+    return fn.apply(this, args);
+  };
+}
+
 const Deno = Object.create(null);
-for (const key of Object.keys(shim)) Deno[key] = shim[key];
+for (const key of Object.keys(shim)) {
+  const value = shim[key];
+  const isClass = typeof value === "function" && /^[A-Z]/.test(key);
+  Deno[key] = typeof value === "function" && !isClass
+    ? acceptingUrls(value)
+    : value;
+}
 Object.assign(Deno, {
   test,
   bench,
   Command,
   ChildProcess,
   serve,
+  unrefTimer,
+  refTimer,
   // Deno's `args` are the script's arguments only.
   args: process.argv.slice(2),
 });

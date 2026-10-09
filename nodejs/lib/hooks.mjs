@@ -7,7 +7,7 @@
 // * `load` compiles TypeScript and JSX with esbuild, using the root's JSX
 //   settings.
 //
-// Registered by `nodejs/register.mjs`.
+// Registered (in-thread, synchronously) by `nodejs/register.mjs`.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
