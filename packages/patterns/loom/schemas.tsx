@@ -224,6 +224,7 @@ export interface LoomOutput {
   addParticipant: Stream<{ profile: ParticipantProfile }>;
   chatRoom?: Writable<LinkedChatRoom>;
   setChatRoom: Stream<ChatRoomChoice>;
+  ensureChatRoom: Stream<void>;
   retitleLoom: Stream<{ title: string }>;
   retitlePanel: Stream<PanelTitle>;
   retargetPanel: Stream<PanelRetarget>;

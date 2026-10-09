@@ -1,7 +1,8 @@
 /**
  * A FabriChat manager with no profile, as in this lane: it offers no start
- * controls, and refuses every start and every acceptance, recording why and
- * changing nothing else.
+ * controls, and refuses every start, recording why and changing nothing else.
+ * Accepting a room needs no profile, so an acceptance naming no room is
+ * refused for that alone.
  *
  * `creation.test.tsx` covers the rooms a manager creates, and its other
  * refusals, with a profile of its own.
@@ -53,7 +54,7 @@ export default pattern(() => {
           reasonOf(manager.requests, "d-1") === NEEDS_PROFILE &&
           reasonOf(manager.requests, "g-1") === NEEDS_PROFILE &&
           reasonOf(manager.requests, "a-1") ===
-            "Accepting a chat needs a profile." &&
+            "The request names no room." &&
           manager.rooms.length === 0 &&
           manager.outgoingNotices.length === 0
         ),

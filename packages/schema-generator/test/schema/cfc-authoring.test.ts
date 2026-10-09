@@ -2323,12 +2323,13 @@ describe("Schema: CFC authoring aliases", () => {
     });
 
     it("leaves a scope wrapper that stands for several members to the rules for a scope wrapper in a union", async () => {
-      // `PerUser<boolean>` distributes over `true` and `false`. Where a scope
-      // lands in a union is `scope-placement.ts`'s to decide, so the wrapper
-      // is not read whole as one alternative, which would put its scope
-      // inside an `anyOf` branch.
+      // `PerUser<boolean>` distributes over `true` and `false`. It is not read
+      // whole as one alternative, which would put its scope inside an `anyOf`
+      // branch: beside `null` alone it is one type with
+      // `PerUser<boolean | null>`, whose scope is the whole slot's.
       await expect(fieldSchema("PerUser<boolean> | null")).resolves.toEqual({
-        anyOf: [{ type: "null" }, { type: "boolean" }],
+        anyOf: [{ type: "boolean" }, { type: "null" }],
+        scope: "user",
       });
     });
 

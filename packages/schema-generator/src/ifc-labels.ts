@@ -146,7 +146,7 @@ export const withIfcLabels = (
  * `definitions`, nearest first. A chain that comes back to a definition
  * already on it ends there: walking it again would add nothing.
  */
-const referenceChain = (
+export const referenceChain = (
   position: MutableJSONSchemaObj,
   definitions: Readonly<Record<string, MutableJSONSchema>>,
 ): MutableJSONSchemaObj[] => {

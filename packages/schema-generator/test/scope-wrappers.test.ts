@@ -7,6 +7,7 @@ import ts from "typescript";
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
+  asObjectSchema,
   createTestProgram,
   getTypeFromCode,
   getTypeFromFiles,
@@ -28,11 +29,253 @@ interface SchemaRoot {
       .toThrow("Nested scope wrappers require a cell boundary between scopes.");
   });
 
+  for (
+    const [form, declarations, declared] of [
+      ["written out", "", "PerSession<PerUser<Cell<string>>>"],
+      [
+        "through an alias",
+        "type Draft = PerUser<Cell<string>>;",
+        "PerSession<Draft>",
+      ],
+    ] as const
+  ) {
+    it(`rejects scope wrappers of two scopes around one cell ${form}`, async () => {
+      // The cell's own scope caps its handle, which the outer wrapper's would
+      // replace.
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${declarations}
+interface SchemaRoot {
+  invalid: ${declared};
+}
+`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow(
+        "Nested scope wrappers require a cell boundary between scopes.",
+      );
+    });
+  }
+
+  describe("two scopes' brands on one value where the schema declares no scope", () => {
+    // An inferred result declares no scope, so the brands the checker
+    // intersects onto its value are no part of its schema, as any other
+    // brand-only member is not.
+
+    it("returns the payload of a value two scope wrappers brand", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot = PerUser<string> & PerSpace<string>;`,
+        "SchemaRoot",
+      );
+
+      expect(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          declaresNoScope: true,
+        }),
+      ).toEqual({ type: "string" });
+    });
+
+    it("returns the payload of a property two scope wrappers brand", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot = { value: PerUser<string> & PerSpace<string> };`,
+        "SchemaRoot",
+      );
+
+      expect(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          declaresNoScope: true,
+        }),
+      ).toEqual({
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+      });
+    });
+
+    it("returns the payload of a type parameter two scope wrappers brand", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot<T extends string> = PerUser<T> & PerSpace<T>;`,
+        "SchemaRoot",
+      );
+
+      expect(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          declaresNoScope: true,
+        }),
+      ).toEqual({ type: "string" });
+    });
+  });
+
+  describe("scope wrappers around a type parameter, intersected", () => {
+    // While its payload holds a type parameter, a wrapper's brand is a
+    // conditional type the checker defers, and an intersection of wrappers
+    // keeps no wrapper's alias, so the brand names the scope.
+
+    it("emits the payload's schema in the scope of two wrappers of one scope", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `type SchemaRoot<T extends string> = PerUser<T> & PerUser<T>;`,
+        "SchemaRoot",
+      );
+
+      expect(new SchemaGenerator().generateSchema(type, checker, typeNode))
+        .toEqual({ type: "string", scope: "user" });
+    });
+
+    it("emits the scope of a property two wrappers of one scope type", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot<T extends { a: string }> = {
+  value: PerUser<T> & PerUser<T>;
+};`,
+        "SchemaRoot",
+      );
+
+      expect(
+        asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+          .properties?.value,
+      ).toEqual({
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        scope: "user",
+      });
+    });
+
+    it("throws for wrappers of two scopes", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `type SchemaRoot<T extends string> = PerUser<T> & PerSession<T>;`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      )
+        .toThrow(
+          "Nested scope wrappers require a cell boundary between scopes.",
+        );
+    });
+  });
+
+  describe("a mapped type over a scope wrapper around an indexed object", () => {
+    // `Readonly<PerSpace<Record<string, A>>>` is one object holding the brand
+    // beside the index signature, which is not the brand alone.
+
+    for (
+      const [declaration, values] of [
+        [
+          "Readonly<PerSpace<Record<string, Cell<string>>>>",
+          { type: "string", asCell: ["cell"] },
+        ],
+        ["Partial<PerUser<Record<string, number>>>", {
+          type: ["number", "undefined"],
+        }],
+      ] as const
+    ) {
+      it(`keeps the values of \`${declaration}\``, async () => {
+        const { type, checker } = await getTypeFromCode(
+          `interface SchemaRoot { value: ${declaration}; }`,
+          "SchemaRoot",
+        );
+
+        expect(
+          asObjectSchema(
+            asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+              .properties?.value,
+          ).additionalProperties,
+        ).toEqual(values);
+      });
+    }
+  });
+
+  describe("a scope wrapper around `unknown` read from its node alone", () => {
+    // A node the checker has no type for, as a synthetic node, is read at the
+    // wrapper's place as `unknown`, which the payload's `unknown` is too.
+
+    for (
+      const [payload, expected] of [
+        ["unknown", { type: "unknown" }],
+        ["unknown[]", { type: "array", items: { type: "unknown" } }],
+        ["{ a: unknown }", {
+          type: "object",
+          properties: { a: { type: "unknown" } },
+          required: ["a"],
+        }],
+      ] as const
+    ) {
+      it(`emits the payload's schema in the scope for \`PerUser<${payload}>\``, async () => {
+        const { checker, sourceFile } = await createTestProgram(
+          `type SchemaRoot = PerUser<${payload}>;`,
+        );
+        const root = sourceFile.statements.find(ts.isTypeAliasDeclaration)!;
+        const { $schema: _, ...schema } = new SchemaGenerator()
+          .generateSchemaFromSyntheticTypeNode(
+            root.type,
+            checker,
+            undefined,
+            undefined,
+            sourceFile,
+          ) as JSONSchemaObj;
+
+        expect(schema).toEqual({ ...expected, scope: "user" });
+      });
+    }
+  });
+
+  describe("a scope wrapper around `unknown` read by its type", () => {
+    // The checker drops `unknown` from the wrapper's intersection, leaving
+    // the brand alone, which is the wrapper around `unknown`.
+
+    it("emits `unknown` in the scope for the values of a record", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type SchemaRoot = Record<string, PerUser<unknown>>;`,
+        "SchemaRoot",
+      );
+
+      expect(
+        asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+          .additionalProperties,
+      ).toEqual({ type: "unknown", scope: "user" });
+    });
+
+    it("emits `unknown` in the scope for a property an alias of it types", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Anything = PerSession<unknown>;
+interface SchemaRoot {
+  value: Anything;
+}`,
+        "SchemaRoot",
+      );
+
+      expect(
+        asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+          .properties?.value,
+      ).toEqual({ type: "unknown", scope: "session" });
+    });
+  });
+
+  it("caps a cell that two wrappers of one scope hold with that scope", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `
+interface SchemaRoot {
+  draft: PerUser<PerUser<Cell<string>>>;
+}
+`,
+      "SchemaRoot",
+    );
+
+    expect(
+      asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, typeNode),
+      ).properties?.draft,
+    ).toEqual({ type: "string", asCell: [{ kind: "cell", scope: "user" }] });
+  });
+
   it("throws for a scope wrapper that is a union member", async () => {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<string> | undefined;
+  draft: PerUser<string> | number;
 }
 `,
       "SchemaRoot",
@@ -46,7 +289,7 @@ interface SchemaRoot {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<Cell<string>> | undefined;
+  draft: PerUser<Cell<string>> | number;
 }
 `,
       "SchemaRoot",
@@ -56,11 +299,13 @@ interface SchemaRoot {
       .toThrow("A scope wrapper cannot be a member of a union.");
   });
 
-  it("throws for a scope wrapper unioned with a value type", async () => {
+  it("throws for a scope wrapper over a union that is a union member", async () => {
+    // `PerUser<boolean>` distributes into `true` and `false`, each carrying
+    // the brand, beside `number`.
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<string> | null;
+  draft: PerUser<boolean> | number;
 }
 `,
       "SchemaRoot",
@@ -68,6 +313,434 @@ interface SchemaRoot {
 
     expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
       .toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  it("throws for a scope wrapper around a cell beside anything, `null` and `undefined` included", async () => {
+    // Beside anything, the cell is an `anyOf` branch, where its handle's cap
+    // would sit apart from the slot's scope. A cell whose value may be `null`
+    // holds it inside, and a cell that may be absent is an optional property.
+    for (
+      const declaration of [
+        "PerSpace<Cell<string> | number>",
+        "PerSpace<Cell<string> | Cell<number>>",
+        "PerSpace<Cell<string>> | PerSpace<Cell<number>>",
+        "PerSpace<Writable<string> | null>",
+        "PerSpace<Writable<string>> | null",
+        "PerSpace<Cell<string> | undefined>",
+        "PerSpace<Cell<string>> | undefined",
+        "PerUser<Cell<PerSession<Cell<string>> | null>>",
+        "PerSpace<Writable<string | null> | null>",
+        "PerSpace<Writable<string | null>> | null",
+        "PerSpace<Writable<string | undefined>> | undefined",
+        "PerSpace<Writable<{ a: string } | { b: number }>> | null",
+      ]
+    ) {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `interface SchemaRoot { handle: ${declaration}; }`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("A scope wrapper around a cell cannot hold anything beside");
+    }
+  });
+
+  it("throws for a scoped cell written beside `undefined` where its type does not hold it", async () => {
+    // `Required` takes the `undefined` out of the member's type, which then
+    // holds the cell alone, and leaves the member's node as written.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "type SchemaRoot = Required<{ handle?: PerSpace<Cell<string>> | undefined }>;",
+      "SchemaRoot",
+    );
+
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("A scope wrapper around a cell cannot hold anything beside");
+  });
+
+  /**
+   * `Handle`, a labelled cell, which an alias hoists into a definition of its
+   * own.
+   */
+  const LABELLED_HANDLE =
+    `type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+type Handle = Confidential<Writable<string>, ["owner"]>;`;
+
+  for (
+    const [form, declarations] of [
+      ["`null`", "type Maybe = Writable<string> | null;"],
+      ["`undefined`", "type Maybe = Writable<string> | undefined;"],
+      [
+        "`null` through a chain of aliases",
+        "type Inner = Writable<string> | null; type Maybe = Inner;",
+      ],
+      [
+        "`null`, the cell an alias of a labelled cell",
+        `${LABELLED_HANDLE} type Maybe = Handle | null;`,
+      ],
+      [
+        "`undefined` in a union nested in an alias",
+        `${LABELLED_HANDLE} type Inner = Handle | null; type Maybe = Inner | undefined;`,
+      ],
+      [
+        "`null`, the cell an alias of a labelled cell whose value is a union",
+        `${LABELLED_HANDLE} type Valued = Confidential<Writable<string | null>, ["owner"]>; type Maybe = Valued | null;`,
+      ],
+      [
+        "`null` in a recursive definition",
+        `${LABELLED_HANDLE} type Maybe = Handle | { next: Maybe } | null;`,
+      ],
+    ] as const
+  ) {
+    it(`throws for a scope wrapper around an alias of a cell beside ${form}`, async () => {
+      // The alias's union is hoisted into a definition, which the wrapper's
+      // payload only references, as the union's branch may reference the
+      // cell's.
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${declarations} interface SchemaRoot { handle: PerSpace<Maybe>; }`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("A scope wrapper around a cell cannot hold anything beside");
+    });
+  }
+
+  it("caps the handle of a scope wrapper around an alias of a labelled cell as written in place", async () => {
+    // The labelled cell's alias is hoisted into a definition the payload only
+    // references, and the cap is on the handle here.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `${LABELLED_HANDLE}
+interface SchemaRoot {
+  aliased: PerSpace<Handle>;
+  inline: PerSpace<Confidential<Writable<string>, ["owner"]>>;
+  optional?: PerSpace<Handle>;
+}`,
+      "SchemaRoot",
+    );
+    const properties = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker, typeNode),
+    ).properties;
+
+    expect(properties?.aliased).toEqual(properties?.inline);
+    expect(properties?.optional).toEqual(properties?.inline);
+    expect(properties?.inline).toMatchObject({
+      asCell: [{ kind: "cell", scope: "space" }],
+      ifc: { confidentiality: ["owner"] },
+    });
+  });
+
+  it("caps the handle of a scope wrapper around an alias of a cell", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "type Handle = Writable<string>; interface SchemaRoot { handle: PerSpace<Handle>; }",
+      "SchemaRoot",
+    );
+
+    expect(
+      asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, typeNode),
+      ).properties?.handle,
+    ).toMatchObject({ asCell: [{ kind: "cell", scope: "space" }] });
+  });
+
+  it("throws for a scoped cell a generic alias writes beside `undefined` where its type does not hold it", async () => {
+    // The member's node names the alias, whose body writes the union.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `type CellBox<T> = PerSpace<Cell<T>> | undefined;
+type SchemaRoot = Required<{ handle?: CellBox<string> }>;`,
+      "SchemaRoot",
+    );
+
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("A scope wrapper around a cell cannot hold anything beside");
+  });
+
+  it("caps the handle of a scoped cell whose value may be `null`", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `interface SchemaRoot { handle: PerSpace<Writable<string | null>>; }`,
+      "SchemaRoot",
+    );
+
+    expect(
+      asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, typeNode),
+      ).properties?.handle,
+    ).toMatchObject({ asCell: [{ kind: "cell", scope: "space" }] });
+  });
+
+  it("caps the handle of an optional property's scoped cell", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "interface SchemaRoot { handle?: PerSpace<Cell<string>>; }",
+      "SchemaRoot",
+    );
+
+    expect(
+      (new SchemaGenerator().generateSchema(type, checker, typeNode) as {
+        properties: unknown;
+      }).properties,
+    ).toEqual({
+      handle: { type: "string", asCell: [{ kind: "cell", scope: "space" }] },
+    });
+  });
+
+  it("throws for a scope wrapper unioned with a value type", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `
+interface SchemaRoot {
+  draft: PerUser<string> | { other: string };
+}
+`,
+      "SchemaRoot",
+    );
+
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  describe("a scope wrapper beside only `null` or `undefined`", () => {
+    // `Scoped` keeps `null` and `undefined` outside the brand, so the wrapper
+    // beside them is one type with the wrapper around them, and scopes the
+    // whole slot as that does.
+
+    /** The schema of `SchemaRoot`'s `draft`, declared as `declaration`. */
+    const draftSchema = async (declaration: string) => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `interface SchemaRoot { draft: ${declaration}; }`,
+        "SchemaRoot",
+      );
+      return (new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+      ) as JSONSchemaObj).properties?.draft;
+    };
+
+    it("scopes the slot of a value beside `undefined`", async () => {
+      expect(await draftSchema("PerUser<string> | undefined")).toEqual({
+        type: ["string", "undefined"],
+        scope: "user",
+      });
+    });
+
+    it("scopes the slot of a value beside `null`", async () => {
+      expect(await draftSchema("PerUser<string> | null")).toEqual({
+        anyOf: [{ type: "string" }, { type: "null" }],
+        scope: "user",
+      });
+    });
+
+    it("reads `PerUser<boolean> | null` as `PerUser<boolean | null>`", async () => {
+      expect(await draftSchema("PerUser<boolean> | null")).toEqual(
+        await draftSchema("PerUser<boolean | null>"),
+      );
+    });
+
+    it("keeps a policy only the payload's syntax names, with `null` written outside a generic alias's wrapper", async () => {
+      // The binding `typeof rules` names is in the declaration's syntax, and
+      // the alias's body is a union, read at the payload written in it, as
+      // the payload is read with `null` written inside the wrapper.
+      const { type, checker } = await getTypeFromFiles(
+        {
+          "/cfc-types.ts":
+            `export type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };`,
+          "/entry.ts": `
+            import type { PolicyOf } from "./cfc-types.ts";
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+            type Confidential<T, X extends readonly unknown[]> =
+              Cfc<T, { confidentiality: X }>;
+            declare const rules: unknown;
+            interface Dict<U> { [key: string]: U }
+            type Outside<T> =
+              PerUser<Confidential<T, readonly [PolicyOf<typeof rules>]>> | null;
+            type Inside<T> =
+              PerUser<Confidential<T, readonly [PolicyOf<typeof rules>]> | null>;
+            interface SchemaRoot {
+              outside: Outside<string>;
+              inside: Inside<string>;
+              outsideValues: Dict<Outside<string>>;
+              insideValues: Dict<Inside<string>>;
+            }
+          `,
+        },
+        "/entry.ts",
+        "SchemaRoot",
+      );
+      const { properties } = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+
+      expect(properties?.outside).toEqual({
+        anyOf: [{
+          type: "string",
+          ifc: {
+            confidentiality: [{
+              type: "https://commonfabric.org/cfc/atom/Policy",
+              policyRefKind: "module",
+              __ctPolicyIdentityOf: { file: "/entry.ts", path: ["rules"] },
+              subject: { __ctOwningSpace: true },
+            }],
+          },
+        }, { type: "null" }],
+        scope: "user",
+      });
+      expect(properties?.outside).toEqual(properties?.inside);
+      expect(properties?.outsideValues).toEqual(properties?.insideValues);
+      expect(asObjectSchema(properties?.outsideValues).additionalProperties)
+        .toEqual(properties?.outside);
+    });
+
+    it("keeps a policy only the payload's syntax names, with `null` written outside the wrapper at the end of a chain of generic aliases", async () => {
+      // Each alias in the chain is the whole body of the one before, and binds
+      // its parameters to the arguments the reference to it writes.
+      const { type, checker } = await getTypeFromFiles(
+        {
+          "/cfc-types.ts":
+            `export type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };`,
+          "/entry.ts": `
+            import type { PolicyOf } from "./cfc-types.ts";
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+            type Confidential<T, X extends readonly unknown[]> =
+              Cfc<T, { confidentiality: X }>;
+            declare const rules: unknown;
+            interface Dict<U> { [key: string]: U }
+            type Outside<T> =
+              PerUser<Confidential<T, readonly [PolicyOf<typeof rules>]>> | null;
+            type Middle<T> = Outside<T>;
+            type Box<T> = Middle<T>;
+            type Inside<T> =
+              PerUser<Confidential<T, readonly [PolicyOf<typeof rules>]> | null>;
+            interface SchemaRoot {
+              outside: Box<string>;
+              inside: Inside<string>;
+              outsideValues: Dict<Box<string>>;
+            }
+          `,
+        },
+        "/entry.ts",
+        "SchemaRoot",
+      );
+      const { properties } = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+
+      expect(properties?.outside).toEqual(properties?.inside);
+      expect(asObjectSchema(properties?.outsideValues).additionalProperties)
+        .toEqual(properties?.inside);
+      expect(JSON.stringify(properties?.inside)).toContain(
+        '"__ctPolicyIdentityOf":{"file":"/entry.ts","path":["rules"]}',
+      );
+    });
+
+    /** A payload holding a policy only the syntax `typeof rules` names. */
+    const LABELED = "Confidential<T, readonly [PolicyOf<typeof rules>]>";
+
+    /**
+     * The properties of `SchemaRoot`, declared in `declarations` beside a
+     * `Confidential` alias and the `rules` a policy names.
+     */
+    const policySchema = async (declarations: string) => {
+      const { type, checker } = await getTypeFromFiles(
+        {
+          "/cfc-types.ts":
+            `export type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };`,
+          "/entry.ts": `
+            import type { PolicyOf } from "./cfc-types.ts";
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+            type Confidential<T, X extends readonly unknown[]> =
+              Cfc<T, { confidentiality: X }>;
+            declare const rules: unknown;
+            ${declarations}
+          `,
+        },
+        "/entry.ts",
+        "SchemaRoot",
+      );
+      return asObjectSchema(new SchemaGenerator().generateSchema(type, checker))
+        .properties;
+    };
+
+    for (
+      const [form, aliased, written] of [
+        [
+          "an alias of `null`",
+          `type Nil = null; type Aliased<T> = PerUser<${LABELED}> | Nil;`,
+          `type Written<T> = PerUser<${LABELED}> | null;`,
+        ],
+        [
+          "an alias of `undefined`",
+          `type Undef = undefined; type Aliased<T> = PerUser<${LABELED}> | Undef;`,
+          `type Written<T> = PerUser<${LABELED}> | undefined;`,
+        ],
+        [
+          "a `never`",
+          `type Aliased<T> = PerUser<${LABELED}> | never | null;`,
+          `type Written<T> = PerUser<${LABELED}> | null;`,
+        ],
+        [
+          "a union nested in the union",
+          `type Aliased<T> = (PerUser<${LABELED}> | null) | undefined;`,
+          `type Written<T> = PerUser<${LABELED}> | null | undefined;`,
+        ],
+      ] as const
+    ) {
+      it(`keeps a policy only the payload's syntax names, with the wrapper written beside ${form}`, async () => {
+        const properties = await policySchema(`${aliased} ${written}
+          interface SchemaRoot { aliased: Aliased<string>; written: Written<string> }`);
+
+        expect(properties?.aliased).toEqual(properties?.written);
+        expect(JSON.stringify(properties?.aliased)).toContain(
+          '"__ctPolicyIdentityOf":{"file":"/entry.ts","path":["rules"]}',
+        );
+      });
+    }
+
+    it("keeps a policy only the payload's syntax names, read where a member's `?` takes the `undefined` written beside the wrapper out of its type", async () => {
+      // `Required` leaves the member's node, `Box<string>`, whose alias writes
+      // the wrapper beside `undefined`, as the type it is read at does not.
+      const properties = await policySchema(`
+        type Box<T> = PerUser<${LABELED}> | undefined;
+        type SchemaRoot = Required<{ box?: Box<string> }> & {
+          bare: PerUser<Confidential<string, readonly [PolicyOf<typeof rules>]>>;
+        };`);
+
+      expect(properties?.box).toEqual(properties?.bare);
+      expect(JSON.stringify(properties?.box)).toContain(
+        '"__ctPolicyIdentityOf":{"file":"/entry.ts","path":["rules"]}',
+      );
+    });
+
+    for (
+      const [form, box] of [
+        [
+          "a generic alias writing the union",
+          `type Maybe<T> = T | null; type Box<T> = Maybe<PerUser<${LABELED}>>;`,
+        ],
+        [
+          "a generic alias of the wrapper",
+          `type Scoped<T> = PerUser<${LABELED}>; type Box<T> = Scoped<T> | null;`,
+        ],
+      ] as const
+    ) {
+      it(`throws for a scope wrapper beside \`null\` written through ${form}`, async () => {
+        // The union's members are written apart from the bindings they are
+        // read under, so its type alone would be read, which loses the policy.
+        await expect(
+          policySchema(`${box} interface SchemaRoot { box: Box<string> }`),
+        ).rejects.toThrow(
+          "A scope wrapper beside `null` or `undefined` is read from the union written around it",
+        );
+      });
+    }
+
+    it("throws for a handle's cap in a branch that is not the slot's scope", async () => {
+      // `PerUser<Cell<string>> | PerSession<Cell<string>>` puts two caps in
+      // branches under no scope of the slot's own.
+      await expect(
+        draftSchema("PerUser<Cell<string>> | PerSession<Cell<string>>"),
+      ).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+    });
   });
 
   it("throws for a scope inside a cell that is a union member", async () => {
@@ -474,7 +1147,7 @@ interface SchemaRoot { head: Node<{ a: string }>; }
       const { type, checker, typeNode } = await getTypeFromCode(
         `
 type Draft = PerUser<Cell<string>>;
-interface SchemaRoot { draft: Draft | undefined; }
+interface SchemaRoot { draft: Draft | number; }
 `,
         "SchemaRoot",
       );
@@ -639,6 +1312,8 @@ interface Later { x: never; }
       type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
       type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
       interface Stored { name?: string }
+      interface A { a: string }
+      interface B { b: number }
     `;
     const named = (name: string) => ts.factory.createTypeReferenceNode(name);
 
@@ -693,6 +1368,34 @@ interface Later { x: never; }
         $defs: {
           Stored: { type: "object", properties: { name: { type: "string" } } },
         },
+      });
+    });
+
+    it("emits the resolved payload for an intersection printed as import types", async () => {
+      // The checker cannot intersect `A` and `B` again without the brand, so
+      // the payload is the wrapper's own type, read in place without the
+      // wrapper's node, which would read it as the wrapper once more.
+      const importType = (name: string) =>
+        ts.factory.createImportTypeNode(
+          ts.factory.createLiteralTypeNode(
+            ts.factory.createStringLiteral("./types.ts"),
+          ),
+          undefined,
+          ts.factory.createIdentifier(name),
+        );
+      const schema = await printedSchema(
+        "A & B",
+        ts.factory.createIntersectionTypeNode([
+          importType("A"),
+          importType("B"),
+        ]),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        scope: "user",
       });
     });
 

@@ -49,6 +49,7 @@ export const TIER_DIRECTORIES: Readonly<Record<string, MarkedTier>> = {
   "collaborative-note/": "legacy",
   "factory-outputs/": "legacy",
   "gideon-tests/": "fixture",
+  "loom-chat-room-fixture/": "fixture",
   "loom-overlay-fixture/": "fixture",
   "map-captured-object-spread/": "fixture",
   "plain-array-callback-locals/": "fixture",

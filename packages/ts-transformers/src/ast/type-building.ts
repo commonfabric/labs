@@ -1,7 +1,12 @@
 import ts from "typescript";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
-import { scopeForWrapperName } from "@commonfabric/schema-generator/scope-brand";
+import {
+  getScopeBrand,
+  SCOPE_WRAPPER_FOR_SCOPE,
+  scopeForWrapperName,
+  scopePayloadType,
+} from "@commonfabric/schema-generator/scope-brand";
 import {
   denotesSameType,
   readAuthoredTypeNodeOnce,
@@ -63,6 +68,12 @@ import {
  * own could share, so that form is rewritten only when its paired Type is the
  * commonfabric export it names.
  *
+ * A type that carries a scope's brand with no alias to print it by, as the
+ * checker leaves a type it narrowed, holds its payload intersected with that
+ * brand, whose key is not in scope where the node is emitted. Given
+ * `context.print`, a node paired with such a type is written as the wrapper
+ * around its payload, each member printed afresh.
+ *
  * The original TypeNode is preserved when no rewrite is needed; only
  * subtrees that change are rebuilt via `factory.create*`.
  */
@@ -74,6 +85,8 @@ export function qualifyCommonFabricTypeRefs(
     readonly factory: ts.NodeFactory;
     readonly typeRegistry?: WeakMap<ts.Node, ts.Type>;
     readonly tsContext?: ts.TransformationContext;
+    /** Prints a type the walk rewrites from its members. */
+    readonly print?: (type: ts.Type) => ts.TypeNode | undefined;
     /**
      * The file `typeNode` was printed for, where a name it writes bare is
      * in scope and which a relative import-type specifier in it is relative
@@ -293,6 +306,9 @@ export function qualifyCommonFabricTypeRefs(
     node: ts.TypeNode,
     pairedType: ts.Type | undefined,
   ): ts.TypeNode => {
+    const scoped = writeScopeWrapper(pairedType);
+    if (scoped) return scoped;
+
     // `import("commonfabric").X<...>`, or `import("../commonfabric").X<...>`
     // paired with the commonfabric export `X` → `__cfHelpers.X<...>`.
     if (ts.isImportTypeNode(node) && !node.isTypeOf) {
@@ -435,6 +451,79 @@ export function qualifyCommonFabricTypeRefs(
     return node;
   };
 
+  // The types `writeScopeWrapper()` is writing. Each member is printed afresh,
+  // so the print of a recursive type's member holds the type again, which the
+  // printer has not seen in that print. It is left there as printed.
+  const writing = new Set<ts.Type>();
+
+  // `__cfHelpers.PerUser<A | B & C>` for a type the scope wrapper `PerUser`
+  // resolves to, over the alternatives `A` and `B & C`, or `undefined` for a
+  // type that is not a scope wrapper's, that the printer writes by an alias,
+  // its own or each branded member's, or that is being written already. A
+  // branded type with no alias to print it by is one the checker narrowed, as
+  // assignment narrows `PerUser<boolean> | null` to the brand over `false`
+  // and `true`.
+  const writeScopeWrapper = (
+    type: ts.Type | undefined,
+  ): ts.TypeNode | undefined => {
+    if (!type || writing.has(type)) return undefined;
+    writing.add(type);
+    try {
+      return writeScopeWrapperOf(type);
+    } finally {
+      writing.delete(type);
+    }
+  };
+
+  // Whether each member of `type` that is no `null` or `undefined` has an
+  // alias the printer writes it by, as `PerUser<A>` in `PerUser<A> | null`.
+  const printsByAliases = (type: ts.Type): boolean =>
+    (type.isUnion() ? type.types : [type]).every((member) =>
+      (member.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0 ||
+      member.aliasSymbol !== undefined
+    );
+
+  /** Helper for `writeScopeWrapper()`, which writes `type`. */
+  const writeScopeWrapperOf = (type: ts.Type): ts.TypeNode | undefined => {
+    const brand = !type.aliasSymbol && context.print &&
+      getScopeBrand(type, context.checker);
+    if (!brand || printsByAliases(type)) return undefined;
+    // A payload of one type per alternative is printed whole, which joins the
+    // literals the brand was distributed over, as `false` and `true` into
+    // `boolean`.
+    // A checker that cannot join them hands back the branded type itself.
+    const whole = brand.payload.every((members) => members.length === 1)
+      ? scopePayloadType(type, brand, context.checker)
+      : undefined;
+    const payload = whole && whole !== type ? [[whole]] : brand.payload;
+    const alternatives: ts.TypeNode[] = [];
+    for (const members of payload) {
+      const parts: ts.TypeNode[] = [];
+      for (const member of members) {
+        const printed = context.print!(member);
+        if (!printed) return undefined;
+        parts.push(walk(printed, member));
+      }
+      alternatives.push(
+        parts.length === 1
+          ? parts[0]!
+          : factory.createIntersectionTypeNode(parts),
+      );
+    }
+    const wrapper = factory.createTypeReferenceNode(
+      buildHelperQualifiedName(SCOPE_WRAPPER_FOR_SCOPE[brand.scope]),
+      [
+        alternatives.length === 1
+          ? alternatives[0]!
+          : factory.createUnionTypeNode(alternatives),
+      ],
+    );
+    // Schema generation reads the wrapper by its type, and the synthesized
+    // reference resolves to nothing where it is emitted.
+    context.typeRegistry?.set(wrapper, type);
+    return wrapper;
+  };
+
   const result = walk(typeNode, rootType);
 
   // Carry the registry association forward. The walk returns a fresh node when
@@ -553,6 +642,12 @@ export function typeToTypeNodeWithRegistry(
     checker: context.checker,
     factory: context.factory,
     typeRegistry,
+    print: (member) =>
+      context.checker.typeToTypeNode(
+        member,
+        context.sourceFile,
+        flags | ts.NodeBuilderFlags.AllowEmptyTuple,
+      ),
     sourceFile: context.sourceFile,
   });
 

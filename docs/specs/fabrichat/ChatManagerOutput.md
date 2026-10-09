@@ -82,9 +82,12 @@ space invitation is a bearer credential, redeemable by whoever holds its code,
 so it can't guarantee that the person admitted is the one intended, and a direct
 room's `counterpart` has to be exactly that person.
 
-A grant gives access but tells the recipient nothing. So the manager also
-produces a **notice** for each other member, saying which room they have been
-admitted to and by whom (see [delivering notices](#delivering-notices)).
+A grant gives access but tells the recipient nothing. So the manager also tells
+each other member: it offers them the room through their share inbox when the
+request names their profile and the profile points at one (see
+[offers](#offers)), and otherwise produces a **notice**, saying which room they
+have been admitted to and by whom (see
+[delivering notices](#delivering-notices)).
 
 ## Views
 
@@ -161,7 +164,8 @@ These rules hold for every stream:
   that says which, rather than ignored.
 - Every stream changes only this user's own manager, except `openDirect` and
   `createGroup`, which also create a room and grant other people access to it,
-  and `openDirect`, which can also offer the room to the other person.
+  and `openDirect`, which can also offer the room to the other person, and add
+  them to its participants.
   `openDirect`, `createGroup` and `accept` also add this user to the room's
   participants, which anyone the room's space admits may do.
 
@@ -169,7 +173,7 @@ These rules hold for every stream:
 | --- | --- | --- |
 | [`openDirect`](#opendirectrequestid-string-counterpart-string-profile-cellchatprofile) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
 | [`createGroup`](#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
-| [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
+| [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string-keeparchived-boolean) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput-revision-string) | none | the entry removed from `rooms`; the room itself is untouched |
 | [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
 
@@ -192,14 +196,16 @@ outward act when it creates a room.
   outcome, and it is put back in `rooms` if it was forgotten, whatever its
   catalog entry's revision: starting the chat is the person's choice to have it
   listed, so this restore wins over a concurrent forget, from another device,
-  say. Otherwise, if a
-  creation for the same `counterpart` is still pending under another
-  `requestId`, the manager MUST resume that creation rather than start another,
-  and records its outcome under both ids. Otherwise, creates a direct room whose
-  members are this user and `counterpart`, grants `counterpart` access, produces
-  a notice for them, offers the room through `profile`'s inbox when there is
-  one, and records the new entry in `rooms` and `direct`; adding this user to
-  the new room's participants follows.
+  say. A room `counterpart` created and offered this user is in `direct` once
+  this user's host has accepted it for them (see [offers](#offers)).
+  Otherwise, if a creation for the same `counterpart` is still pending under
+  another `requestId`, the manager MUST resume that creation rather than start
+  another, and records its outcome under both ids. Otherwise, creates a direct
+  room whose members are this user and `counterpart`, grants `counterpart`
+  access, offers the room through `profile`'s inbox when there is one and adds
+  `profile` to the room's participants, or else produces a notice for them, and
+  records the new entry in `rooms` and `direct`; adding this user to the new
+  room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `counterpart` is this
   user, or `profile`'s label doesn't name `counterpart`.
 
@@ -234,7 +240,7 @@ Creates a group room. This is an outward act: it grants other people access.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
   `members` is absent, or a member is not a principal's DID.
 
-### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string)`
+### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
@@ -247,29 +253,38 @@ Creates a group room. This is an outward act: it grants other people access.
   [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room) and
   [`clients.md`](clients.md#finding-conversations)); a notice's claim of who
   sent it is only a hint. Ignored for a group room.
+- `keepArchived?: boolean` — Whether an archived entry for the room stays
+  archived. An acceptance this user's host makes on their behalf sets it (see
+  [offers](#offers)), since it is not the person's choice to have the room
+  listed. Absent or false, accepting the room restores an archived entry.
 
 Records a room this user has been admitted to.
 
 - **Admitted:** without a reviewed gesture, since it changes only this user's
   own index, beside adding them to the room's participants, which needs none.
   Whether to add a room to their index is the user's decision (see
-  [`clients.md`](clients.md#finding-conversations)).
+  [`clients.md`](clients.md#finding-conversations)), except for a room offered
+  to them, which their host accepts for them once it has vetted and registered
+  the offer.
 - **Effect:** records an entry in `rooms`, putting a forgotten room back
-  whatever its catalog entry's revision: accepting the room is the person's
-  choice to have it listed, so this restore wins over a concurrent forget. For
-  a direct room, the counterpart it
+  whatever its catalog entry's revision, unless `keepArchived` is set: accepting
+  the room is the person's choice to have it listed, so this restore wins over
+  a concurrent forget. With `keepArchived`, an archived entry stays archived,
+  and the rest of the effect is the same. For a direct room, the counterpart it
   records is the creator `about.record`'s label names, which it reads itself;
   once the room's space has a member set, it also checks that the counterpart is
   a member. For a direct room, it also records the entry in `direct`, unless
   `direct` already has an entry for `counterpart`, in which case that entry
   stays, as under [crossing creations](#crossing-creations). Adding this
-  user's profile to the room's participants follows.
-- **Outcome:** `done` with the entry, or `refused` if this user has no
-  profile to join the room's participants as, or the request names no room, or
-  this user can't read the room, or the room is a social space's own chat, or
-  if the room is direct and its label names
-  no creator, names this user, or names someone other than a `counterpart`
-  sent, or, once there are member sets, the counterpart isn't a member.
+  user's profile to the room's participants follows, when the profile has
+  resolved. Without one, the room is recorded all the same, and joins no one:
+  an acceptance this user's host makes on their behalf can come before their
+  profile resolves, and the room's sender has already joined them to it.
+- **Outcome:** `done` with the entry, or `refused` if the request names no
+  room, or this user can't read the room, or the room is a social space's own
+  chat, or if the room is direct and its label names no creator, names this
+  user, or names someone other than a `counterpart` sent, or, once there are
+  member sets, the counterpart isn't a member.
 
 A social space's own chat is created with its space and not by a manager, so
 it has no `about.record`, and the catalog lists rooms by their own spaces, so
@@ -352,8 +367,9 @@ When a request names a member's profile, as `openDirect`'s `profile` does, the
 manager offers the new room to that member through the share inbox the
 profile's `inbox` points at
 ([`private-inbox.md`](../../features/private-inbox.md)), once, after the room is
-created. A profile that points at no inbox is offered nothing. The offer is the
-envelope a share inbox takes:
+created, and adds the profile to the room's participants, through the room's
+`addParticipant`, without a step of the member's own. A profile that points at
+no inbox is offered nothing. The offer is the envelope a share inbox takes:
 
 - `kind` — `fabrichat-room`.
 - `id` — the request's `requestId`. The inbox keeps one offer per sender and
@@ -368,15 +384,24 @@ envelope a share inbox takes:
 
 The recipient's host reads each offer in the inboxes their Home holds, vets it,
 and registers the room's space in their Home's shared-space catalog
-([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)).
-Nothing tells the sender that an offer arrived, and a member known only by
-their DID has no profile to reach an inbox through, so a notice is produced for
-every other member whether or not an offer was sent.
+([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)). When
+that registers a new entry, the host then sends the room to the recipient's own
+manager's `accept`, with `keepArchived`, so the recipient's manager records the
+room as theirs. A direct room goes in their `direct` under its creator, unless
+`direct` already holds a room with the sender, which stays, as under [crossing
+creations](#crossing-creations); either way their later `openDirect` with the
+sender returns the room `direct` holds rather than creating another. An entry
+already in the catalog, archived or not, gets no acceptance. A notice is
+produced for each other member offered nothing: one known only by their DID,
+who has no profile to reach an inbox through, or one whose profile points at no
+inbox. A member sent an offer gets no notice, and nothing tells the
+sender whether the offer arrived.
 
 ## Crossing creations
 
 Each user's manager is their own. If two people each `openDirect` to the other
-before either notice arrives, there are two rooms. Each manager keeps the room
-it recorded first in `direct`. The other stays in `rooms`, and can be forgotten.
-This contract accepts that for now. A deterministic tie-break, such as the room
-whose creator's principal sorts first, is future work.
+before either's offer or notice arrives, there are two rooms. Each manager
+keeps the room it recorded first in `direct`. The other stays in `rooms`, and
+can be forgotten. This contract accepts that for now. A deterministic
+tie-break, such as the room whose creator's principal sorts first, is future
+work.

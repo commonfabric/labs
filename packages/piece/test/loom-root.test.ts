@@ -6,6 +6,7 @@ import {
   type Cell,
   type JSONSchema,
   type MemorySpace,
+  NAME,
   Runtime,
   sendEvent,
   type Stream,
@@ -87,6 +88,23 @@ const editSchema = {
     retitlePanel: { asCell: ["stream"] },
     retargetPanel: { asCell: ["stream"] },
   },
+} as const;
+
+// The stream that creates the Loom's chat room, and where the room shows up.
+const chatSchema = {
+  type: "object",
+  required: ["panels", "ensureChatRoom"],
+  properties: {
+    panels: { type: "array", items: { type: "unknown", asCell: ["cell"] } },
+    chatRoom: { type: "unknown", asCell: ["cell"] },
+    ensureChatRoom: { asCell: ["stream"] },
+  },
+} as const;
+
+// A FabriChat room's name.
+const roomNameSchema = {
+  type: "object",
+  properties: { [NAME]: { type: "string" } },
 } as const;
 
 // A document labeled the way a Fabric profile is: integrity, no
@@ -1151,6 +1169,52 @@ describe("loom-root", () => {
       [signer.did(), thirdOwner.did()].sort(),
     );
     read.abort();
+  });
+
+  it("creates its chat room as a piece in its own space that a fresh runtime starts, with no panel, and creates no second one", async () => {
+    const output = root.asSchema(chatSchema);
+    const ensure = await output.key("ensureChatRoom").pull();
+    await sendAndSettle(ensure, {}, "ensure-chat-room-first");
+    await runtime.idle();
+    const room = (await output.key("chatRoom").pull())!.resolveAsCell();
+    const link = room.getAsNormalizedFullLink();
+    expect(link.space).toBe(pieces.getSpace());
+    expect(link.id).not.toBe(root.getAsNormalizedFullLink().id);
+    // The space's root is still the Loom, not the room.
+    expect(
+      (await pieces.getDefaultPattern(false))?.getAsNormalizedFullLink().id,
+    ).toBe(root.getAsNormalizedFullLink().id);
+    expect(await output.key("panels").pull()).toEqual([]);
+    expect(await (await pieces.getPieceRegistry()).pull()).toEqual([]);
+
+    // A repeat of the invocation is refused as already handled, and another
+    // invocation finds the room named and creates none.
+    expect(await sendAgain(ensure, {}, "ensure-chat-room-first"))
+      .toMatchObject(receiptExists);
+    await sendAndSettle(ensure, {}, "ensure-chat-room-second");
+    await runtime.idle();
+    const again = (await output.key("chatRoom").pull())!.resolveAsCell();
+    expect(again.getAsNormalizedFullLink()).toEqual(link);
+    expect(await output.key("panels").pull()).toEqual([]);
+
+    await pieces.synced();
+    const freshRuntime = new Runtime({
+      apiUrl: new URL("http://localhost:9999"),
+      storageManager: manager,
+    });
+    try {
+      const freshPieces = new PiecesController(
+        createSession({ identity: signer, spaceDid: pieces.getSpace() }),
+        freshRuntime,
+      );
+      await freshPieces.synced();
+      const freshRoom = freshRuntime.getCellFromLink(link);
+      await freshPieces.startPiece(freshRoom);
+      expect(await freshRoom.asSchema(roomNameSchema).key(NAME).pull())
+        .toBe("Chat");
+    } finally {
+      await freshRuntime.dispose();
+    }
   });
 
   describe("a repeated edit invocation", () => {
