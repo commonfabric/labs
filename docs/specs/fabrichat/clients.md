@@ -66,7 +66,12 @@ A client that draws natively MUST:
   never by display name.
 - **Show members from the room's space.** A room's `participants` are its
   space's participants, as claims, plus its authors. None of them is proof that
-  someone can read the room.
+  someone can read the room. To name each of them, and to tell which one is the
+  reader, as when titling a direct room with the other person's name, a client
+  reads the room's `participantEntries`, which pairs each participant's profile
+  with the principal it attests. It is best effort and derived for each reader:
+  an entry whose profile the reader can't read holds no principal, and it is
+  not an access list.
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
@@ -118,8 +123,8 @@ in a direct room, and `addRequests`, where each add's outcome is recorded under
 its `requestId` (see
 [`ChatRoomOutput`](ChatRoomOutput.md#addmemberrequestid-string-target--value-string-)).
 To leave the people already in the room out of its add control, it reads the
-room's `participantPrincipals`, the principal each participant's profile
-attests. It is a best-effort set to leave out, not an access list: someone who
+room's `participantPrincipals`, the principals the room's `participantEntries`
+hold. It is a best-effort set to leave out, not an access list: someone who
 has been added but has never joined isn't among them, and neither is a
 participant whose profile the reader can't read.
 

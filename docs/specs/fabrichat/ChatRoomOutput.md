@@ -18,7 +18,10 @@ interface ChatRoomOutput {
   /** The room's participants, plus any author it doesn't list. */
   participants: Cell<ChatProfile>[];
 
-  /** The principal each participant's profile attests, once each. */
+  /** Each participant's profile, with the principal it attests. */
+  participantEntries: { profile: Cell<ChatProfile>; principal?: string }[];
+
+  /** The principals `participantEntries` holds, once each. */
   participantPrincipals: string[];
 
   /** Adds a profile to those who joined the room, once. */
@@ -154,15 +157,22 @@ space.
 - **`participants`** are links to profiles, compared with `equals()`: the
   profiles its space's root lists, as [membership](#membership) says, plus any
   author none of them is, each once. They are not proof of access.
-- **`participantPrincipals`** names the principal each of `participants` stands
-  for, as its profile's `represents-principal` label attests it: each once, in
-  the order of `participants`. A profile that attests none is left out, and so
-  is one whose label can't be read where the list is derived, as when the
-  profile's space refuses the reader, so two readers can read different lists.
-  It holds only the principals whose profiles can be read for the reader, so it
-  is a best-effort list of who is already in the room, not an access list, and
-  like `participants` it is a claim, not proof of access. A client uses it to
-  leave the people already in the room out of its own add control.
+- **`participantEntries`** pairs each of `participants` with the principal it
+  stands for: one entry per participant, in the order of `participants`,
+  holding its `profile` and, as `principal`, the principal its profile's
+  `represents-principal` label attests. An entry has no `principal` when its
+  profile attests none, or when the label can't be read where the list is
+  derived, as when the profile's space refuses the reader, so two readers can
+  read different principals for the same participant. It is derived for each
+  reader and is best effort, not an access list, and like `participants` it is
+  a claim, not proof of access. A client uses it to name each participant and
+  to tell which of them is the reader, whose entry holds the reader's own
+  principal.
+- **`participantPrincipals`** is derivable from `participantEntries`: each
+  `principal` the entries hold, once, in the order of `participants`. Like the
+  entries, it is a best-effort list of who is already in the room, not an
+  access list. A client uses it to leave the people already in the room out of
+  its own add control.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, and `latest`, the newest messages of
   the main conversation, which every member can read, a READ member included. It
@@ -205,9 +215,10 @@ client:
   link around, to another component or another person, passes the room.
 - **`PerSession`**: one instance per memory session in the room's space. That is
   `messages.windows`, the windows a session has opened onto the messages (see
-  [`ChatMessageList`](ChatMessageList.md#scope)), and `participantPrincipals`,
-  which each session derives under its own access. Passing the room's link to
-  someone else never passes a session's windows: they read their own.
+  [`ChatMessageList`](ChatMessageList.md#scope)), and `participantEntries` and
+  `participantPrincipals`, which each session derives under its own access.
+  Passing the room's link to someone else never passes a session's windows:
+  they read their own.
 - **`PerUser`**: one instance per user, which follows them across sessions.
   That is only `addRequests`, the outcomes of the reader's own adds. No one
   else reads them.

@@ -33,14 +33,16 @@ manager creates, is its space's root, and reads only its own roster: its
 `latest`) is computed from the messages, and `canSend` from the reader's access
 and profile, when they're read. Neither is stored.
 
-`participantPrincipals` is computed from `participants`, reading the
-`represents-principal` label on each profile with `principalOf()`. A profile
-lives in its owner's own space, so a reader that space refuses reads no
-principal from it. The list is derived per session, so each session reads an
-instance of its own, derived under its own access.
+`participantEntries` is computed from `participants`, reading the
+`represents-principal` label on each profile with `principalOf()`, and
+`participantPrincipals` is computed from those entries. A profile lives in its
+owner's own space, so a reader that space refuses reads no principal from it.
+Both are derived per session, so each session reads instances of its own,
+derived under its own access.
 
 The `PerSession` values in the contract are `messages.windows`, the session's
-windows, kept as a `PerSession` keyed collection, and `participantPrincipals`.
+windows, kept as a `PerSession` keyed collection, `participantEntries`, and
+`participantPrincipals`.
 The windows come into being with the session's first `openWindow`, so a session
 that only reads, as a READ member's does, has none.
 
