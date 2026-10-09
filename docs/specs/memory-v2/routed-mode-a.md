@@ -384,8 +384,11 @@ the toolshed reaches it with dedicated connections whatever the deployment's
 sharing flag says (rollout steps 4 and 5).
 
 `test/routed-router.exercise.ts` is a disposable Linux CLI driven by the Rust
-repository's CI; it uses two real SQLite toolsheds and the actual SDK. Unit
-tests cover exact crypto records, parser failures, durable replay custody,
+repository's CI; it uses two real SQLite toolsheds and the actual SDK. Its
+systemd mode kills the idle spawner before any client connects and verifies
+automatic listener restart through process-exit and journal events, without
+client traffic triggering recovery. Unit tests cover exact crypto records,
+parser failures, durable replay custody,
 router revocation isolation and queued protected turns. This test support does
 not establish that an existing public deployment is eligible or has been
 changed.

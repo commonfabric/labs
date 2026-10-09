@@ -945,6 +945,87 @@ try {
     pass(
       "mismatched existing role UIDs or GIDs refuse startup before firewall changes",
     );
+
+    // No client has connected yet. Waiting on process exit and the journal
+    // keeps the public listener idle throughout automatic recovery.
+    assertEquals(clients.length, 0);
+    assertEquals(workerStats().length, 0);
+    const idleListener = rolePid("listener");
+    const idleSpawner = rolePid("spawner");
+    await command([
+      "python3",
+      "-c",
+      String.raw`
+import json, os, select, signal, subprocess, sys
+
+unit = "memory-router-listener.service"
+listener, spawner = map(int, sys.argv[1:])
+
+def state():
+    output = subprocess.check_output([
+        "systemctl", "show", unit,
+        "--property=MainPID,NRestarts,Type,ActiveState,SubState",
+    ], text=True)
+    return dict(line.split("=", 1) for line in output.splitlines())
+
+before = state()
+assert before["Type"] == "notify", before
+assert before["ActiveState"] == "active", before
+assert before["SubState"] == "running", before
+assert int(before["MainPID"]) == listener, before
+
+# A cursor replays every event after this point even if the restart happens
+# before journalctl attaches. Sync includes the completed initial start.
+subprocess.run(["journalctl", "--sync"], check=True)
+last = subprocess.check_output([
+    "journalctl", "--unit", unit, "--lines=1", "--output=json", "--no-pager",
+], text=True)
+cursor = json.loads(last)["__CURSOR"]
+journal = subprocess.Popen([
+    "journalctl", "--unit", unit, "--follow", "--output=json",
+    "--after-cursor", cursor, "--no-pager",
+], stdout=subprocess.PIPE, text=True)
+try:
+    listener_fd = os.pidfd_open(listener)
+    try:
+        spawner_fd = os.pidfd_open(spawner)
+        try:
+            signal.pidfd_send_signal(spawner_fd, signal.SIGKILL)
+        finally:
+            os.close(spawner_fd)
+        select.select([listener_fd], [], [])
+    finally:
+        os.close(listener_fd)
+
+    for line in journal.stdout:
+        event = json.loads(line)
+        # systemd emits UNIT_STARTED only after the Type=notify readiness.
+        if (event.get("MESSAGE_ID") == "39f53479d3a045ac8e11786248231fbf"
+                and event.get("UNIT") == unit):
+            break
+    else:
+        raise AssertionError("journal ended before the listener restarted")
+
+    after = state()
+    assert after["ActiveState"] == "active", after
+    assert after["SubState"] == "running", after
+    assert int(after["MainPID"]) > 0, after
+    assert after["MainPID"] != before["MainPID"], (before, after)
+    assert int(after["NRestarts"]) == int(before["NRestarts"]) + 1, (before, after)
+finally:
+    journal.terminate()
+    journal.wait()
+    journal.stdout.close()
+`,
+      String(idleListener),
+      String(idleSpawner),
+    ]);
+    assert(rolePid("listener") !== idleListener);
+    assert(rolePid("spawner") !== idleSpawner);
+    assertEquals(workerStats().length, 0);
+    pass(
+      "an idle spawner exit automatically restarts the listener without client traffic",
+    );
   } else {
     await startRouter();
   }
