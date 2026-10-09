@@ -146,10 +146,10 @@ export interface ParticipantEntry {
 export const participantEntriesOf = (
   participants: readonly ProfileCell[],
 ): ParticipantEntry[] =>
-  participants.map((profile) => {
-    const principal = principalOf(profile, "represents-principal");
-    return principal === undefined ? { profile } : { profile, principal };
-  });
+  participants.map((profile) => ({
+    profile,
+    principal: principalOf(profile, "represents-principal"),
+  }));
 
 /** The principals `entries` attest, each once, in the order of `entries`. */
 export const principalsOf = (

@@ -245,8 +245,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             entries.every((entry, index) =>
               equals(entry.profile, room.participants[index]) &&
               entry.principal === expected[index]
-            ) &&
-            !("principal" in entries[1]);
+            );
         }),
       },
       // The reader's own entry, the one for the profile they read the room
