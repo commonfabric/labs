@@ -1,6 +1,6 @@
 # Self-Serve Ingest Channels
 
-*Minting an ingest channel is a user action — "let my own device write into my own space." Today it is an operator action. This closes the create-authorization gap named in [ingest-channels-journal-sink.md](../plans/ingest-channels-journal-sink.md) §"Security model & the create-authorization gap".*
+*Minting an ingest channel is a user action — "let my own device write into my own space." A user holding their own identity key mints into a space they own, with no operator in the loop. This closes the create-authorization gap named in [ingest-channels-journal-sink.md](../plans/ingest-channels-journal-sink.md) §"Security model & the create-authorization gap".*
 
 **Status:** implemented, mounted on every deployment · **Updated:**
 2026-10-09 · **Depends on:** the landed `journal` sink (labs #4446) and first-party HTTP request proofs (`docs/specs/toolshed-access-control.md`)
@@ -9,12 +9,14 @@
 
 ## Why
 
-The only way to mint an ingest channel is `deno task provision-ingest-channel`,
-run on the deployed host with the toolshed's private identity
-(`packages/toolshed/scripts/provision-ingest-channel.ts`). Every user onboarding
-a device is an admin ticket to whoever holds the Ansible vault password. That
-does not scale past a handful of people, and it blocks the iOS location beacon's
-first-run experience entirely.
+Without self-serve, the only way to mint an ingest channel is
+`deno task provision-ingest-channel`, run on the deployed host with the
+toolshed's private identity
+(`packages/toolshed/scripts/provision-ingest-channel.ts`). Every user
+onboarding a device would be an admin ticket to whoever holds the Ansible
+vault password. That does not scale past a handful of people, and it would
+block the iOS location beacon's first-run experience entirely. The operator
+script remains for channels an operator provisions.
 
 There is also a sharper, quieter problem. `MEMORY_ACL_MODE` now defaults to
 `enforce` (`packages/toolshed/env.ts:230`) and ingest writes into the *user's*
