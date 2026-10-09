@@ -55,7 +55,8 @@ manager given no catalog keeps one of its own.
 
 Creating or accepting a room also adds this user's profile to the room's
 participants, through the room's `addParticipant`, from an event of its own
-that follows; accepting a room is refused while the user has no profile.
+that follows. Accepting a room needs no profile: one accepted before the
+user's profile resolves is recorded all the same, and the user isn't added.
 Offering a new room to a member adds that member's profile the same way (see
 [first contact](#first-contact)).
 

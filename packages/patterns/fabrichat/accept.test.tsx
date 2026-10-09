@@ -5,10 +5,11 @@
  * refuses an event naming someone else, and with no counterpart named, records
  * the creator. The room offers its other member the control that asks their
  * manager to list it, until the manager does, and accepting the room lists
- * them among its participants. A room a host registered and accepted on the
- * user's behalf, as its share intake does, is found by a start with its
- * creator, again once it is forgotten, and an acceptance that keeps an
- * archived entry archived leaves it so. A later room accepted with the same
+ * them among its participants, while a manager whose user's profile hasn't
+ * resolved accepts it without joining them. A room a host registered and
+ * accepted on the user's behalf, as its share intake does, is found by a start
+ * with its creator, again once it is forgotten, and an acceptance that keeps
+ * an archived entry archived leaves it so. A later room accepted with the same
  * creator leaves the one `direct` holds in place.
  */
 import {
@@ -284,6 +285,32 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   } as AddArg);
   const action_add = action(() => clickButton(adder[UI], "Add to my chats"));
 
+  // A manager whose user's profile hasn't resolved.
+  const profilelessDirect = Writable.of<Record<string, ChatIndexEntry>>({});
+  const profilelessRequests = Writable.of<Record<string, ChatRequestOutcome>>(
+    {},
+  );
+  const profileless = FabriChatManagerCore({
+    myProfile: Writable.of<TestProfile>(),
+    sharedSpaceCatalog: emptyCatalog(),
+    direct: profilelessDirect,
+    requests: profilelessRequests,
+    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+  } as ManagerArg);
+  const action_accept_profileless = acceptAsHost({
+    accept: profileless.accept,
+    held: setup.held,
+    requestId: "no-profile",
+    keepArchived: true,
+  });
+  // How many participants the room lists, as of the latest note.
+  const rosterBefore = Writable.of<number>(-1);
+  const action_note_roster = action(() =>
+    rosterBefore.set(
+      (setup.held.key("room").get()?.get()?.participants ?? []).length,
+    )
+  );
+
   // A manager whose catalog lists the room as a host registers an offered
   // one, without `accept`, so `direct` holds nothing for it.
   const offeredCatalog = emptyCatalog();
@@ -417,6 +444,22 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           (setup.held.key("room").get()?.get()?.participants ?? []).some((
             known,
           ) => equals(known, bobProfile))
+        ),
+      },
+      // A manager whose user's profile hasn't resolved accepts the room all
+      // the same, recording it in `direct`, and adds no one to the room's
+      // participants.
+      { action: action_note_roster },
+      { action: action_accept_profileless },
+      {
+        assertion: assert(() =>
+          profilelessRequests.get()["no-profile"]?.status === "done" &&
+          spaceOf(profilelessDirect.get()[setup.aliceDid.get()]?.room) ===
+            spaceOf(setup.held.key("room")) &&
+          profileless.rooms.length === 1 &&
+          rosterBefore.get() > 0 &&
+          (setup.held.key("room").get()?.get()?.participants ?? []).length ===
+            rosterBefore.get()
         ),
       },
       // A room listed only by the catalog names its labeled creator as its

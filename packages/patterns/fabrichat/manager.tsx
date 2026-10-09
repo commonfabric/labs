@@ -643,16 +643,6 @@ const performManagerAct = (
     });
     return;
   }
-  // So is accepting one, whose acceptance adds this user's profile to the
-  // room's participants.
-  if (act === "accept" && state.myProfile?.get() === undefined) {
-    recordOutcome(state, requestId, {
-      status: "refused",
-      reason: "Accepting a chat needs a profile.",
-    });
-    return;
-  }
-
   if (act === "delivered") {
     const id = event?.id ?? state.id;
     // An event's type doesn't refuse an event that lacks a field it requires,
@@ -925,6 +915,10 @@ const performManagerAct = (
     title: kind === "group" ? room.key("about").get()?.title : undefined,
     restore: event?.keepArchived !== true,
   });
+  // A user whose profile hasn't resolved is listed without joining the
+  // room's participants, which `joinRooms` leaves as they are: an acceptance
+  // the host makes on their behalf can come before the profile resolves, and
+  // the room's sender has joined them to it already.
   if (state.myProfile !== undefined) {
     state.joinRooms.send({ room, profile: state.myProfile });
   }
@@ -951,7 +945,8 @@ export const commitStart = handler<ManagerStreamEvent, ManagerActState>(
  * Performs one of the manager's other acts: accepting a room, forgetting one,
  * or reporting a notice delivered. None of them needs a gesture, since each
  * changes only this user's own manager, except that accepting a room also
- * adds this user to its participants, which anyone in its space may do.
+ * adds this user to its participants, when their profile has resolved, which
+ * anyone in its space may do.
  */
 export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
   (event, state) => performManagerAct(event, state),
