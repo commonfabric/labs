@@ -863,14 +863,16 @@ not known, and declares nothing. So these are declared:
 - a value read from the pattern's input, each binding of which is one of its
   fields, through an alias of `unknown` as much as any other type
 - a field of a type written out: in a local's or a parameter's annotation, a
-  cast other than `as const`, a call's type argument, a callback's return
-  type, or the return type of a signature that names no type parameter
+  cast other than `as const`, a call's type argument, or the return type of a
+  callback or a signature, where that return type names no type parameter; a
+  callback whose return type names one is read from its body
 - a member read through its own declaration, when that declaration writes its
   type without naming a type parameter
 - a field of a class instance, when the class's declaration of the field
   writes its type, as a property, a parameter property, or a getter's return
-  type; a type naming the class's type parameter counts only when the
-  construction writes its type arguments
+  type; a type naming a type parameter counts only when the construction
+  writes its type arguments, or the class declares no type parameters of its
+  own, so that the `extends` clauses above it fix every one it inherits
 - another pattern's result, which passed this check in its own compile; a
   cell; a literal, a function, or JSX
 
@@ -900,20 +902,38 @@ destructuring or a parameter default is an alternative to the value it
 destructures, and an optional member of an object spread is an alternative to
 what the literal held under that key before it, which a required member
 replaces. A part an object holds under a key the trace cannot name, a computed
-key or a spread value's index signature, is an alternative under every name
-read from it.
+key or a spread value's index signature, may be under any name: it is an
+alternative under every name the object held before it, a name written after
+it replaces it, and a name the object does not otherwise hold reads it. A key
+the trace cannot read takes every part as an alternative. The positions of an
+array's elements and of these unnamed parts are kept under symbols, so no
+property's name is taken for either.
 
-A binding's traced positions are those of its initializer, so they hold only
-while nothing writes to it. A binding with no type written that is reassigned,
-or written through — a property or index assignment, `push()`, `unshift()`,
-`splice()`, `fill()`, `set()` or `add()`, `Object.assign()`,
-`Object.defineProperty()` or `Object.defineProperties()`, a destructuring
-assignment, a `for…of` or `for…in` loop onto it, `++` or `--` — declares
-nothing, and a write through a binding initialized with another, or with a
-path through one, counts against that other binding too. A `delete` only takes
-a part away, which leaves nothing undeclared, so it is not a write. A binding
-whose type is written, in a local's or a callback parameter's annotation, keeps
-the positions that type declares, since every write must satisfy it.
+A binding's traced positions are those of what it was given, so they hold only
+while nothing can change its value. `ValueFlow` decides that from the uses of
+the binding in the file that declares it, where a mention in a type, such as
+`typeof x`, is not a use, and admits only reads: a part of the
+traced result; a primitive read from the value, or a part read from it that
+reaches only reads in turn; a comparison, a condition, a `delete`, a discarded
+expression, an untagged template, or a JSX attribute that does not bind with
+`$`; a method of an array that reads it, such as `map()`, `filter()` or
+`at()`, whose callbacks' parameters reach only reads in turn, and whose result,
+where it can hold the elements, does too; `ifElse()`, `when()` and `unless()`,
+a lift whose callback's parameters reach only reads, and another pattern's
+input; and another binding, by alias or destructuring, whose own uses are
+reads. A value a function returns reaches only reads when the pattern's
+callback returns it, when the function declares the binding itself, so that
+each call makes it afresh, or when the function is a callback written into
+`computed()`, another pattern, or an array method whose result reaches only
+reads. Any other use, such as an assignment to the binding or into its value,
+passing the value to another function, or calling a method that is not a known
+read, means the binding escapes, and so does an exported binding, which another
+module can reach. An unannotated binding that escapes declares nothing. A
+binding whose type is written, in a local's or a callback parameter's
+annotation, keeps the positions that type declares, since whatever changes it
+must satisfy that type, and so do the bindings of the pattern's input. A
+callback or a lift is followed through a binding only when nothing reassigns
+it.
 
 ### 6.7 Lowerable Expression-Site Categories
 

@@ -64,16 +64,35 @@ export interface NodeTypeLinks {
   printedWithin?: ts.TypeNode;
 }
 
+/** The key of an array's elements in `DeclaredPositions`. */
+export const ELEMENT_POSITIONS: unique symbol = Symbol("elements");
+
+/**
+ * The key in `DeclaredPositions` of the parts a value holds under keys a trace
+ * cannot name: the values of an index signature, or properties written with
+ * computed keys.
+ */
+export const UNNAMED_POSITIONS: unique symbol = Symbol("unnamed keys");
+
+/**
+ * A key in `DeclaredPositions`: a property's name, or one of the two markers,
+ * which are symbols so that no property name can be taken for one.
+ */
+export type PositionKey =
+  | string
+  | typeof ELEMENT_POSITIONS
+  | typeof UNNAMED_POSITIONS;
+
 /**
  * The positions of a value that an author declared: `true` for every position
  * of the value, `false` for none, or, for a value assembled from parts, the
- * declared positions of each part by its key. The elements of an array are
- * keyed `[]`. A key the map does not hold names a part the value does not
- * have, which contributes nothing that could be undeclared.
+ * declared positions of each part by its key. A part the map holds under
+ * neither its name nor `UNNAMED_POSITIONS` is one the value does not have,
+ * which contributes nothing that could be undeclared.
  */
 export type DeclaredPositions =
   | boolean
-  | ReadonlyMap<string, DeclaredPositions>;
+  | ReadonlyMap<PositionKey, DeclaredPositions>;
 
 /**
  * What SchemaInjection records about a `toSchema` call it created to describe a

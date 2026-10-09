@@ -224,8 +224,12 @@
  */
 
 export { TransformationContext } from "./context.ts";
-export { CrossStageState } from "./cross-stage-state.ts";
-export type { DeclaredPositions } from "./cross-stage-state.ts";
+export {
+  CrossStageState,
+  ELEMENT_POSITIONS,
+  UNNAMED_POSITIONS,
+} from "./cross-stage-state.ts";
+export type { DeclaredPositions, PositionKey } from "./cross-stage-state.ts";
 export type {
   BuilderSourceSiteOptions,
   CapabilityParamDefault,
