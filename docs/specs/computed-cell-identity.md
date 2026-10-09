@@ -145,25 +145,19 @@ names it carries the child over (`planInstanceCarryOver`):
 - where the pattern the parent last set up, which `patternSetupIdentity`
   names, is loaded, the child is the one at the `legacyPartialCause` that
   pattern gives the same instance name;
-- otherwise, the set-up children at the positional spots the parent's
-  manifest records are matched to the instances by what they hold, in passes
-  from the surest sign down, each claiming its children before the next: a
-  `patternIdentity` that is the instance's own child pattern identity; then
-  the most named partial causes in the child's own manifest that the
-  instance's child pattern also names; and last, for a child pattern that
-  names none, a child that names none either. Children a pass scores alike
-  for an instance are told apart by the instance's own `legacyPartialCause`,
-  which is where its child runs with no instance names. A pass takes nothing
-  it cannot tell apart that way, and gives no child to two instances that
-  would each take it.
+- otherwise, it is the one set-up child, among the positional spots the
+  parent's manifest records, whose `patternIdentity` is the instance's own
+  child pattern identity. No such child, more than one, or one that two
+  instances would each take, carries nothing over.
 
 A child is carried over by one instance at most.
 
 A start's pre-sync loads that previous pattern by identity first. The carried
 child's link is recorded by instance name in the parent's `instanceChildren`
 meta, and binding the instance reads it there on every later start. An
-instance that finds no child to carry over starts fresh, and the setup logs
-`instance-carry-over` naming it.
+instance that carries nothing over starts fresh, and the setup logs
+`instance-carry-over` naming it, its positional cause and the child left set
+up there, if any.
 
 A child at a positional spot refuses to set up over a stored child of another
 pattern identity when the parent shows the children have moved spots: the
@@ -173,6 +167,24 @@ pattern sets up the stored identity (`refuseDisplacedChild`). The error names
 both identities. A stored child of a different identity with none of those
 signs is taken for the same child under a newer version of its own source,
 since a child's identity changes whenever its own source does.
+
+What this leaves open:
+
+- A parent whose previous pattern is not loaded, because it carries no setup
+  marker or its stored source no longer compiles, carries over only children
+  whose own pattern identity is unchanged. Any other child of a named instance
+  starts fresh with the warning above, and the deployed child stays where it
+  is, unreached.
+- Anonymous roots other than named instances stay positional: an instance not
+  bound to a `const`, a `.map()` output and the element children under it.
+  When such a root moves to a number nothing held, its children are minted
+  afresh and the old ones are orphaned with no refusal, since nothing sets up
+  over them.
+- A runtime change to how a pattern lowers, which adds or removes an
+  anonymous root, renumbers positional roots with no change to the pattern's
+  source. A named instance is immune to that; carrying its child over relies
+  on the previous pattern compiling under today's runtime to the numbering it
+  was deployed with.
 
 ### Transaction provenance
 

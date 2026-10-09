@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { Cell } from "../src/cell.ts";
@@ -79,6 +80,19 @@ const NAMED_WITH_NEWER_COUNTER = parentProgram(
   `${COUNTER}// A newer version.\n`,
 );
 
+// The parent as deployed with two children of one pattern, `a` and `b`.
+const DEPLOYED_TWO = parentProgram([
+  "  const [a, b] = [Counter({ label: 'a' }), Counter({ label: 'b' })];",
+  "  return { views: [a, b], aCount: a.count, bCount: b.count };",
+].join("\n"));
+
+// The same parent source with both children bound to a `const`.
+const NAMED_TWO = parentProgram([
+  "  const a = Counter({ label: 'a' });",
+  "  const b = Counter({ label: 'b' });",
+  "  return { views: [a, b], aCount: a.count, bCount: b.count };",
+].join("\n"));
+
 // An unrelated sibling `s` inserted ahead of `a`.
 const NAMED_WITH_SIBLING = parentProgram([
   "  const s = Other({ label: 's' });",
@@ -117,17 +131,28 @@ describe("instance-carry-over", () => {
     rt.patternManager.compilePattern(program, { space });
 
   /**
-   * A stopped parent holding `a`'s count of 7 at the positional spot the
-   * deployed parent gave it, its pattern pointers naming `NAMED`, the source
-   * it runs, unless `marker` is `"absent"`, which leaves no setup marker, as
-   * a parent set up before the marker existed has none.
+   * A stopped parent that ran `deployed`, with `counts` written to its result,
+   * its pattern pointers naming `named`, the source it runs, unless `marker`
+   * is `"absent"`, which leaves no setup marker, as a parent set up before
+   * the marker existed has none. By default the parent holds `a`'s count of 7
+   * at the positional spot `DEPLOYED` gives it.
    */
   const deployedParent = async (
     name: string,
-    marker: "named" | "absent" = "named",
+    {
+      marker = "named",
+      deployed: deployedProgram = DEPLOYED,
+      named: namedProgram = NAMED,
+      counts = { aCount: 7 },
+    }: {
+      marker?: "named" | "absent";
+      deployed?: RuntimeProgram;
+      named?: RuntimeProgram;
+      counts?: Record<string, number>;
+    } = {},
   ): Promise<Cell<Record<string, unknown>>> => {
-    const deployed = await compile(DEPLOYED);
-    const named = await compile(NAMED);
+    const deployed = await compile(deployedProgram);
+    const named = await compile(namedProgram);
     const namedRef = rt.patternManager.getArtifactEntryRef(named)!;
     const tx = rt.edit();
     const cell = rt.getCell<Record<string, unknown>>(
@@ -140,7 +165,9 @@ describe("instance-carry-over", () => {
     await tx.commit().settled;
     await running.pull();
     const write = rt.edit();
-    cell.withTx(write).key("aCount").set(7);
+    for (const [key, count] of Object.entries(counts)) {
+      cell.withTx(write).key(key).set(count);
+    }
     expect((await write.commit().settled).error).toBeUndefined();
     await rt.idle();
     rt.runner.stop(cell);
@@ -159,6 +186,12 @@ describe("instance-carry-over", () => {
     expect((await stamp.commit().settled).error).toBeUndefined();
     return cell;
   };
+
+  // How many times an instance has been reported starting fresh.
+  const freshStarts = (): number =>
+    (getLoggerCountsBreakdown()["runner"]?.["instance-carry-over"] as
+      | { warn?: number }
+      | undefined)?.warn ?? 0;
 
   /**
    * Updates the parent at `cell` to `program`, through the root repair call
@@ -197,7 +230,9 @@ describe("instance-carry-over", () => {
     });
 
     it("keeps its deployed child's state when the parent carries no setup marker", async () => {
-      const cell = await deployedParent("no-setup-marker", "absent");
+      const cell = await deployedParent("no-setup-marker", {
+        marker: "absent",
+      });
 
       const result = await update(cell, NAMED_WITH_SIBLING);
 
@@ -207,38 +242,63 @@ describe("instance-carry-over", () => {
       });
     });
 
-    it("keeps its deployed child's state when the parent carries no setup marker and the child's own source changed", async () => {
-      const cell = await deployedParent(
-        "no-setup-marker-newer-child",
-        "absent",
-      );
+    it("starts fresh, and reports it, when the parent carries no setup marker and the child's own source changed", async () => {
+      const cell = await deployedParent("no-setup-marker-newer-child", {
+        marker: "absent",
+      });
+      const before = freshStarts();
 
       const result = await update(cell, NAMED_WITH_NEWER_COUNTER);
 
-      expect(result.aCount).toBe(7);
+      expect(result.aCount).toBe(0);
+      expect(freshStarts() - before).toBe(1);
     });
 
-    it("starts fresh, rather than take a deployed child another instance matches as well, when the parent carries no setup marker", async () => {
-      // Both children's patterns name `count`, so with `Counter`'s identity
-      // changed, the one deployed child matches `a` and `s` alike.
+    it("starts fresh, and reports it, when the parent carries no setup marker and two deployed children run its pattern", async () => {
+      const cell = await deployedParent("no-setup-marker-two-candidates", {
+        marker: "absent",
+        deployed: DEPLOYED_TWO,
+        named: NAMED_TWO,
+        counts: { aCount: 7, bCount: 9 },
+      });
+      const before = freshStarts();
 
-      const cell = await deployedParent("no-setup-marker-ambiguous", "absent");
+      const result = await update(cell, NAMED_TWO);
 
-      const result = await update(
-        cell,
-        parentProgram(
-          [
-            "  const s = Other({ label: 's' });",
-            "  const a = Counter({ label: 'a' });",
-            "  return { views: [s, a], aCount: a.count, sCount: s.count };",
-          ].join("\n"),
-          `${COUNTER}// A newer version.\n`,
-        ),
-      );
-
-      expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
         aCount: 0,
-        sCount: 0,
+        bCount: 0,
+      });
+      expect(freshStarts() - before).toBe(2);
+    });
+
+    it("starts fresh, and reports it, when the parent carries no setup marker and another instance would take the same deployed child", async () => {
+      const cell = await deployedParent("no-setup-marker-contested", {
+        marker: "absent",
+      });
+      const before = freshStarts();
+
+      const result = await update(cell, NAMED_TWO);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 0,
+        bCount: 0,
+      });
+      expect(freshStarts() - before).toBe(2);
+    });
+
+    it("keeps each deployed child's state when the parent's previous pattern names two children of one pattern", async () => {
+      const cell = await deployedParent("two-children-named", {
+        deployed: DEPLOYED_TWO,
+        named: NAMED_TWO,
+        counts: { aCount: 7, bCount: 9 },
+      });
+
+      const result = await update(cell, NAMED_TWO);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 7,
+        bCount: 9,
       });
     });
 

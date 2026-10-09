@@ -977,37 +977,21 @@ function readInstanceChildren(
   return children;
 }
 
+/**
+ * A named instance that carries no child over: its name and, where it was
+ * matched by position, its positional cause and the child left at it.
+ */
+type UncarriedInstance = {
+  name: string;
+  legacyPartialCause?: JSONValue;
+  leftBehind?: string;
+};
+
 /** What `instanceChildren` records for the child at `link`. */
 function instanceChildRecord(
   link: NormalizedFullLink,
 ): Record<string, string> {
   return { space: link.space, id: link.id, scope: link.scope };
-}
-
-/**
- * The canonical keys of the partial causes in `descriptors` that a pattern
- * names, with `.for()` or by a result key or node input, rather than one the
- * builder generates.
- */
-function namedPartialCauses(
-  descriptors: readonly { partialCause: JSONValue }[] | undefined,
-): Set<string> {
-  const keys = new Set<string>();
-  for (const { partialCause } of descriptors ?? []) {
-    if (isObjectNotArray(partialCause) && "$generated" in partialCause) {
-      continue;
-    }
-    keys.add(hashStringOf(partialCause));
-  }
-  return keys;
-}
-
-/** The derived internal cell manifest `cell` holds, as setup recorded it. */
-function storedManifestOf(cell: Cell<any>): InternalCellDescriptor[] {
-  const stored = convertibleJsFromFabricValue(
-    cell.getMetaRaw("internal", { meta: ignoreReadForScheduling }),
-  );
-  return Array.isArray(stored) ? stored as InternalCellDescriptor[] : [];
 }
 
 /** Whether two `{ identity, symbol }` pattern references name one pattern. */
@@ -12982,11 +12966,15 @@ export class Runner {
       tx,
     );
     this.#preparedCarryOvers.delete(this.#getDocKey(resultCell));
-    if (uncarried.length > 0) {
+    for (const { name, legacyPartialCause, leftBehind } of uncarried) {
       logger.warn("instance-carry-over", () => [
-        `instances ${uncarried.join(", ")} of ` +
-        `${resultCell.getAsNormalizedFullLink().id} found no child to carry ` +
-        "over from where a version without instance names set one up",
+        debugStr`instance $quote${name} of ` +
+        `${resultCell.getAsNormalizedFullLink().id} starts fresh: it found ` +
+        "no child to carry over from where a version without instance names " +
+        "set one up" +
+        (leftBehind === undefined
+          ? ""
+          : debugStr`; the child ${leftBehind} at its positional cause $quote${legacyPartialCause} is left where it is`),
       ]);
     }
     if (carried.size === 0) return;
@@ -13016,17 +13004,21 @@ export class Runner {
    * instance's positional cause. That cause is the one the pattern the parent
    * last set up, which `patternSetupIdentity` names, gives the same name;
    * this is exact wherever that pattern is loaded in this runtime. Where it is
-   * not, the children at the positional spots the parent's manifest records
-   * are matched to instances by what they hold. A child is carried over by
-   * one instance at most.
+   * not, an instance carries over the one child, among the positional spots
+   * the parent's manifest records, that runs the instance's own child pattern
+   * identity, and none when no spot or more than one does. A child is carried
+   * over by one instance at most.
    */
   #planInstanceCarryOver(
     resultCell: Cell<any>,
     pattern: Pattern,
     tx?: IExtendedStorageTransaction,
-  ): { carried: Map<string, NormalizedFullLink>; uncarried: string[] } {
+  ): {
+    carried: Map<string, NormalizedFullLink>;
+    uncarried: UncarriedInstance[];
+  } {
     const carried = new Map<string, NormalizedFullLink>();
-    const uncarried: string[] = [];
+    const uncarried: UncarriedInstance[] = [];
     const instances = (pattern.derivedInternalCells ?? []).filter((
       descriptor,
     ) => descriptor.legacyPartialCause !== undefined);
@@ -13075,7 +13067,7 @@ export class Runner {
         deepEqual(candidate.partialCause, descriptor.partialCause)
       );
       if (node === undefined || node.module.targetSpaceRoot) {
-        uncarried.push(name);
+        uncarried.push({ name });
         continue;
       }
       if (previous === undefined) {
@@ -13089,89 +13081,55 @@ export class Runner {
         descriptor,
       );
       if (child === undefined || claimed.has(child.id)) {
-        uncarried.push(name);
+        uncarried.push({ name });
         continue;
       }
       claimed.add(child.id);
       carried.set(name, child);
     }
-    // Without the previous pattern, the children at the positional spots the
-    // parent's manifest records are matched to instances by what the
-    // children hold, from the surest sign down, each pass claiming before the
-    // next: the instance's own child pattern identity, then the most `.for()`
-    // names in common with the instance's child pattern, and last, for a
-    // child pattern that names nothing, a child that names nothing either.
-    // Candidates a pass scores alike for one instance are told apart by the
-    // instance's own positional spot, where its child runs with no instance
-    // names, and a pass takes nothing it cannot tell apart.
-    const passes: ((candidate: Cell<any>, module: Module) => number)[] = [
-      (candidate, module) => {
-        const ref = getPatternIdentityRef(candidate);
-        const wanted = this.#runtime.patternManager.getArtifactEntryRef(
-          module.implementation as Pattern,
-        );
-        return ref !== undefined && wanted !== undefined &&
-            samePatternRef(ref, wanted)
-          ? 1
-          : 0;
-      },
-      (candidate, module) => {
-        const wanted = namedPartialCauses(
-          (module.implementation as Pattern).derivedInternalCells,
-        );
-        const held = namedPartialCauses(storedManifestOf(candidate));
-        return [...held].filter((key) => wanted.has(key)).length;
-      },
-      (candidate, module) =>
-        namedPartialCauses(
-              (module.implementation as Pattern).derivedInternalCells,
-            ).size === 0 &&
-          namedPartialCauses(storedManifestOf(candidate)).size === 0
-          ? 1
-          : 0,
-    ];
-    for (const score of passes) {
-      const picks = unmatched.map((entry) => {
-        const ownSpot = this.#childAtPartialCause(
-          tx,
-          parent,
-          entry.module,
-          entry.descriptor.legacyPartialCause!,
-        ).getAsNormalizedFullLink().id;
-        const top = this.#topRecordedChildren(
-          tx,
-          parent,
-          manifest,
-          claimed,
-          (candidate) => score(candidate, entry.module),
-          entry.module,
-        );
-        const choice = top === undefined
-          ? undefined
-          : top.links.length === 1
-          ? top.links[0]
-          : top.links.find((link) => link.id === ownSpot);
-        return { entry, score: top?.score ?? 0, choice };
-      });
-      for (const pick of picks) {
-        const { choice } = pick;
-        if (choice === undefined) continue;
-        // A child two instances would each take goes to neither: one of them
-        // may sit where the other's child sat before its siblings moved.
-        if (
-          picks.some((other) =>
-            other !== pick && other.choice?.id === choice.id &&
-            other.score >= pick.score
-          )
-        ) {
-          continue;
-        }
-        claimed.add(choice.id);
-        carried.set(pick.entry.name, choice);
-        unmatched.splice(unmatched.indexOf(pick.entry), 1);
+    // Without the previous pattern, an instance carries over the one child,
+    // among the positional spots the parent's manifest records, whose pattern
+    // identity is the instance's own child pattern identity. A child two
+    // instances would each take goes to neither.
+    const picks = unmatched.map((entry) => ({
+      entry,
+      child: this.#soleRecordedChild(
+        tx,
+        parent,
+        manifest,
+        entry.module,
+        claimed,
+      ),
+    }));
+    for (const pick of picks) {
+      const { child } = pick;
+      if (
+        child === undefined ||
+        picks.some((other) => other !== pick && other.child?.id === child.id)
+      ) {
+        continue;
       }
+      claimed.add(child.id);
+      carried.set(pick.entry.name, child);
+      unmatched.splice(unmatched.indexOf(pick.entry), 1);
     }
-    for (const { name } of unmatched) uncarried.push(name);
+    for (const { name, module, descriptor } of unmatched) {
+      // What runs at the instance's own positional spot is where its child
+      // runs with no instance names, and stays there unreached.
+      const left = this.#childAtPartialCause(
+        tx,
+        parent,
+        module,
+        descriptor.legacyPartialCause!,
+      );
+      uncarried.push({
+        name,
+        legacyPartialCause: descriptor.legacyPartialCause,
+        ...(getPatternIdentityRef(left) !== undefined && {
+          leftBehind: left.getAsNormalizedFullLink().id,
+        }),
+      });
+    }
     return { carried, uncarried };
   }
 
@@ -13227,40 +13185,38 @@ export class Runner {
   }
 
   /**
-   * The unclaimed set-up children, among the positional spots the parent
-   * `resultCell`'s manifest records for a node with module `module`, that
-   * `score` scores highest, with that score, when it is above zero.
+   * The one unclaimed child, among the positional spots the parent
+   * `resultCell`'s manifest records, that runs the pattern identity of the
+   * child of `module`; `undefined` when no spot or more than one does.
    */
-  #topRecordedChildren(
+  #soleRecordedChild(
     tx: IExtendedStorageTransaction | undefined,
     resultCell: Cell<any>,
     manifest: readonly InternalCellDescriptor[],
-    claimed: ReadonlySet<string>,
-    score: (candidate: Cell<any>) => number,
     module: Module,
-  ): { links: NormalizedFullLink[]; score: number } | undefined {
-    let links: NormalizedFullLink[] = [];
-    let topScore = 0;
+    claimed: ReadonlySet<string>,
+  ): NormalizedFullLink | undefined {
+    const wanted = this.#runtime.patternManager.getArtifactEntryRef(
+      module.implementation as Pattern,
+    );
+    if (wanted === undefined) return undefined;
+    let found: NormalizedFullLink | undefined;
     for (const entry of manifest) {
       if (!isPositionalPartialCause(entry.partialCause)) continue;
-      const candidate = this.#childAtPartialCause(
+      const child = this.#childAtPartialCause(
         tx,
         resultCell,
         module,
         entry.partialCause,
       );
-      const link = candidate.getAsNormalizedFullLink();
+      const ref = getPatternIdentityRef(child);
+      if (ref === undefined || !samePatternRef(ref, wanted)) continue;
+      const link = child.getAsNormalizedFullLink();
       if (claimed.has(link.id)) continue;
-      if (getPatternIdentityRef(candidate) === undefined) continue;
-      const value = score(candidate);
-      if (value > topScore) {
-        links = [link];
-        topScore = value;
-      } else if (value === topScore && value > 0) {
-        links.push(link);
-      }
+      if (found !== undefined) return undefined;
+      found = link;
     }
-    return topScore > 0 ? { links, score: topScore } : undefined;
+    return found;
   }
 
   /**
