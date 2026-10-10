@@ -347,6 +347,12 @@ export async function seedTopicBoard(
       topics.push({ fid: created.id, title });
       options.onTopic?.(index);
     }
+    // The board's crossref pivot is what every topic reads its backlinks
+    // from, and a reader that opens one topic runs that topic, not the board.
+    // Derived here once, over the seeded board, so the table a reader finds
+    // is the one these references make; per write it would be rebuilt as
+    // many times as there are topics.
+    await board.result.get(["crossrefs"]);
 
     return {
       spaceDid,
