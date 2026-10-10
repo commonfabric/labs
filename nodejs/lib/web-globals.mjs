@@ -8,6 +8,7 @@
 
 import * as workerThreads from "node:worker_threads";
 import "fake-indexeddb/auto";
+import "./report-error.mjs";
 
 /** `workerData` key marking a thread started by the `Worker` shim. */
 const WEB_WORKER_MARK = "__cfWebWorker";
