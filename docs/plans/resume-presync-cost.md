@@ -74,9 +74,9 @@ stage 0 is what every later stage reports against.
       reaches the test through `Runner.accessForTestingOnly.presyncPlanRecorder`.
       The ratio is one: the root's waves plan each pair once, and a child
       whose family is whole does not name it again. What the field load pays
-      is the
-      next stage's hold, which this shape does not provoke because the
-      root's own run computes the derived argument before the rows start.
+      is the next stage's hold, which this shape does not provoke because
+      the root's own run computes the derived argument before the rows
+      start.
 - [ ] A benchmark in `packages/runner/test/` that resumes the same shape at
       sizes 10, 20, and 40 rows and reports wall time, `#nodePlan` calls,
       and watch roots requested, with the fixture outside the timed window
