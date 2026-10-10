@@ -400,6 +400,21 @@ describe("CFSlider bound to a cell", () => {
     );
   });
 
+  it("writes nothing for a step still waiting when the slider is removed", async () => {
+    const value = createMockCellHandle<number | undefined>();
+    const answer = holdReads(value);
+    const element = sliderWith(value);
+    const inputs = announcements(element, "cf-input");
+    press(element, "ArrowRight");
+
+    element.disconnectedCallback();
+    answer({ value: 40 });
+    await settle();
+
+    expect(written(value)).toEqual([]);
+    expect(inputs).toEqual([]);
+  });
+
   it("takes a key pressed mid-drag into the drag", async () => {
     const value = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(value);

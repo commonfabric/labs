@@ -608,11 +608,17 @@ export class CFSlider extends BaseElement {
         this.#moved(next, held ?? this.#shown(held), gesture);
         return;
       }
+      // A step still waiting on the worker when the slider is removed or
+      // bound anew belongs to the old binding: it writes and announces nothing.
+      const binding = this.#binding;
       let written: { value: number; oldValue: number } | undefined;
       const announce = () => {
-        if (written) this.#moved(written.value, written.oldValue, gesture);
+        if (written && binding === this.#binding) {
+          this.#moved(written.value, written.oldValue, gesture);
+        }
       };
       const settled = this.#controller.updateValue((held) => {
+        if (binding !== this.#binding) return held;
         const value = step(this.#shown(held));
         // Unchanged, empty cell included: nothing is written.
         if (value === (held ?? this.#shown(held))) return held;
