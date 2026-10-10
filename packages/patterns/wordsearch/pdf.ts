@@ -245,11 +245,13 @@ const titleOps = (title: string): string => {
 const fitted = (title: string, size: number): string => {
   if (textWidth(title, "Helvetica-Bold", size) <= CONTENT_WIDTH) return title;
   const room = CONTENT_WIDTH - textWidth("...", "Helvetica-Bold", size);
-  let end = title.length;
-  while (
-    end > 0 && textWidth(title.slice(0, end), "Helvetica-Bold", size) > room
-  ) {
-    end--;
+  // One pass, measuring each glyph once: the longest start that fits.
+  let width = 0;
+  let end = 0;
+  for (const c of title) {
+    width += textWidth(c, "Helvetica-Bold", size);
+    if (width > room) break;
+    end += c.length;
   }
   return `${title.slice(0, end)}...`;
 };
