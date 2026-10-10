@@ -9,7 +9,7 @@ import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
-import { planCompaction } from "../v2/compact.ts";
+import { normalizePrefixes, planCompaction } from "../v2/compact.ts";
 
 const A = "computed:a";
 const B = "computed:b";
@@ -37,12 +37,22 @@ const build = (engine: Engine): void => {
     id: ACL,
     value: { value: { owners: ["did:key:z6MkTestSpace"] } },
   }]);
-  apply([{ op: "set", id: A, value: { value: { n: 0 } } }]);
+  // Non-ASCII content throughout, so a count of characters and a count of
+  // stored bytes cannot agree by accident.
+  apply([{
+    op: "set",
+    id: A,
+    value: { value: { n: 0, note: "ünïcödé — ✓" } },
+  }]);
   for (let index = 1; index <= 15; index++) {
     apply([{
       op: "patch",
       id: A,
-      patches: [{ op: "replace", path: "/value/n", value: index }],
+      patches: [{ op: "replace", path: "/value/n", value: index }, {
+        op: "replace",
+        path: "/value/note",
+        value: `ünïcödé ${index} ✓`,
+      }],
     }]);
   }
   apply([{ op: "set", id: B, value: { value: { n: 0 } } }]);
@@ -80,8 +90,8 @@ const withStore = async (
 /** Rows and bytes of `id` strictly before `(seq, opIndex)`, by hand. */
 const behind = (db: Database, id: string, seq: number, opIndex: number) =>
   db.prepare(
-    `SELECT count(*) AS n, COALESCE(sum(length(data)), 0) AS bytes FROM revision
-     WHERE id = ? AND (seq < ? OR (seq = ? AND op_index < ?))`,
+    `SELECT count(*) AS n, COALESCE(sum(length(CAST(data AS BLOB))), 0) AS bytes
+     FROM revision WHERE id = ? AND (seq < ? OR (seq = ? AND op_index < ?))`,
   ).get<{ n: number; bytes: number }>(id, seq, seq, opIndex)!;
 
 const head = (db: Database, id: string) =>
@@ -110,9 +120,15 @@ describe("planCompaction", () => {
         bytesDeleted: hand.bytes,
       });
       const snapshots = db.prepare(
-        `SELECT count(*) AS n, COALESCE(sum(length(value)), 0) AS bytes FROM snapshot WHERE id = ?`,
+        `SELECT count(*) AS n, COALESCE(sum(length(CAST(value AS BLOB))), 0) AS bytes
+         FROM snapshot WHERE id = ?`,
       ).get<{ n: number; bytes: number }>(A)!;
       expect(snapshots.n).toBeGreaterThan(0);
+      // Stored bytes, not characters: the fixture's content makes them differ.
+      const characters = db.prepare(
+        `SELECT sum(length(value)) AS n FROM snapshot WHERE id = ?`,
+      ).get<{ n: number }>(A)!.n;
+      expect(snapshots.bytes).toBeGreaterThan(characters);
       expect(report.snapshots).toEqual({
         rowsDeleted: snapshots.n,
         bytesDeleted: snapshots.bytes,
@@ -123,9 +139,11 @@ describe("planCompaction", () => {
         opIndex: a.op_index,
         op: "patch",
       });
+      expect(report.compactionCommit.localSeq).toBe(1);
       expect(report.preconditions).toMatchObject({
         singleBranch: true,
         genesisPresent: true,
+        foreignKeyViolations: 0,
         opTableRows: 0,
       });
       expect(report.compactionCommit.seq).toBe(
@@ -238,7 +256,7 @@ describe("planCompaction", () => {
       )
         .toBe(
           db.prepare(
-            `SELECT sum(length(original)) AS b FROM "commit" WHERE seq <> 1`,
+            `SELECT sum(length(CAST(original AS BLOB))) AS b FROM "commit" WHERE seq <> 1`,
           ).get<{ b: number }>()!.b,
         );
 
@@ -251,6 +269,67 @@ describe("planCompaction", () => {
         nothing.payloads.hollowed.owningHead.commits +
           nothing.payloads.hollowed.headless.commits,
       ).toBe(0);
+    });
+  });
+
+  it("counts an instance once however many prefixes select it", async () => {
+    await withStore((db) => {
+      const once = planCompaction(db, {
+        selection: { prefixes: ["computed:"] },
+      });
+      const twice = planCompaction(db, {
+        selection: {
+          prefixes: ["computed:", "computed:a", "computed:", "computed:a"],
+        },
+      });
+      expect(twice.instances).toEqual(once.instances);
+      expect(twice.revisions).toEqual(once.revisions);
+      expect(twice.snapshots).toEqual(once.snapshots);
+      expect(twice.largest.map((plan) => plan.id)).toEqual([A]);
+      expect(normalizePrefixes(["of:", "of:c", "computed:", "of:"])).toEqual([
+        "of:",
+        "computed:",
+      ]);
+    });
+  });
+
+  it("refuses options it cannot read as intended, by name", async () => {
+    await withStore((db) => {
+      const plan = (extra: Record<string, unknown>) => () =>
+        planCompaction(
+          db,
+          { selection: { prefixes: ["computed:"] }, ...extra } as never,
+        );
+      expect(plan({ cut: { before: "2026-10-09T10:30:00Z" } })).toThrow(
+        "before",
+      );
+      expect(plan({ cut: { before: "not-a-date" } })).toThrow("before");
+      expect(plan({ cut: { before: "2026-13-45 99:99:99" } })).toThrow(
+        "before",
+      );
+      expect(plan({ cut: { keepLast: -1 } })).toThrow("keepLast");
+      expect(plan({ cut: { beforeSeq: 1.5 } })).toThrow("beforeSeq");
+      expect(plan({ keepPayloadsMs: -5 })).toThrow("keepPayloadsMs");
+      expect(() => planCompaction(db, { selection: { prefixes: [] } })).toThrow(
+        "prefix",
+      );
+      // The canonical spelling of the same instant is accepted.
+      expect(plan({ cut: { before: "2026-10-09 10:30:00" } })).not.toThrow();
+    });
+  });
+
+  it("reports a foreign-key violation as a failed precondition", async () => {
+    await withStore((db) => {
+      db.exec(`PRAGMA foreign_keys = OFF`);
+      db.exec(
+        `INSERT INTO revision (branch, id, scope_key, seq, op_index, op, data, commit_seq)
+         VALUES ('', 'of:dangling', 'space', 999, 0, 'set', '{"value":1}', 999)`,
+      );
+      db.exec(`PRAGMA foreign_keys = ON`);
+      const report = planCompaction(db, {
+        selection: { prefixes: ["computed:"] },
+      });
+      expect(report.preconditions.foreignKeyViolations).toBe(1);
     });
   });
 });

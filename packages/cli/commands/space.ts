@@ -34,7 +34,6 @@ import {
   planCompaction,
 } from "@commonfabric/memory/v2/compact";
 import type { CellScope } from "@commonfabric/memory/v2";
-import { Database } from "@db/sqlite";
 import {
   clonePaths,
   contentFingerprint,
@@ -553,7 +552,8 @@ export const space = new Command()
   .option(
     "--before <timestamp:string>",
     "The same, as a UTC timestamp in the store's own format " +
-      "(YYYY-MM-DD HH:MM:SS), resolved to the newest commit created before it.",
+      "(YYYY-MM-DD HH:MM:SS, no other spelling), resolved to the newest " +
+      "commit created before it.",
   )
   .option(
     "--keep-last <n:integer>",
@@ -587,26 +587,39 @@ export const space = new Command()
     } catch {
       throw new ValidationError(`no store at ${store}`);
     }
-    const db = new Database(store, { readonly: true });
+    // The inspector's read-only opener, which also shims `scope_key` onto a
+    // store from before that column existed, so the planner's reads of it
+    // hold on every store the server ever wrote.
+    const space = openSpace(store);
     try {
-      const report = planCompaction(db, {
-        selection: { prefixes, ...(scope === undefined ? {} : { scope }) },
-        cut: {
-          ...(options.beforeSeq === undefined
-            ? {}
-            : { beforeSeq: options.beforeSeq }),
-          ...(options.before === undefined ? {} : { before: options.before }),
-          ...(options.keepLast === undefined
-            ? {}
-            : { keepLast: options.keepLast }),
-        },
-        keepPayloadsMs,
-      });
+      let report;
+      try {
+        report = planCompaction(space.db, {
+          selection: { prefixes, ...(scope === undefined ? {} : { scope }) },
+          cut: {
+            ...(options.beforeSeq === undefined
+              ? {}
+              : { beforeSeq: options.beforeSeq }),
+            ...(options.before === undefined ? {} : { before: options.before }),
+            ...(options.keepLast === undefined
+              ? {}
+              : { keepLast: options.keepLast }),
+          },
+          keepPayloadsMs,
+        });
+      } catch (error) {
+        // The planner refuses an option it cannot read as intended, by name;
+        // that is a usage error here.
+        if (error instanceof TypeError) {
+          throw new ValidationError(error.message);
+        }
+        throw error;
+      }
       out(!!options.json, report, () => {
         console.log(formatCompactionReport(report));
       });
     } finally {
-      db.close();
+      space.close();
     }
   })
   /* space create */

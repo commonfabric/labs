@@ -75,6 +75,9 @@ export type CompactionReport = {
     branches: string[];
     genesisPresent: boolean;
     opTableRows: number;
+    /** Rows `PRAGMA foreign_key_check` reports; any means the store is not
+     * one the run will write. */
+    foreignKeyViolations: number;
   };
   instances: {
     matched: number;
@@ -100,13 +103,70 @@ export type CompactionReport = {
   };
   /** The instances contributing the most deleted rows, up to ten. */
   largest: InstancePlan[];
-  /** The seq and session id the run's compaction commit would take. */
-  compactionCommit: { seq: number; sessionId: string };
+  /** The identity the run's compaction commit would take: its seq, and the
+   * `(session_id, local_seq)` pair the commit table holds unique. */
+  compactionCommit: { seq: number; sessionId: string; localSeq: number };
   elapsedMs: number;
 };
 
 const DEFAULT_KEEP_PAYLOADS_MS = 24 * 60 * 60 * 1000;
 const LARGEST = 10;
+
+/** The store's own `created_at` format, which `before` must be written in. */
+const CREATED_AT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/**
+ * Refuses options the planner cannot read as intended, by name.
+ *
+ * `before` is compared with `created_at` as text, so a value in any other
+ * spelling — an ISO `T`, an offset, a bare date — would still compare and
+ * would move the cut rather than fail; a non-negative integer bound that is
+ * not one would keep or delete the wrong rows the same way.
+ */
+const validateOptions = (options: PlanOptions): void => {
+  const nonNegativeInteger = (name: string, value: number | undefined) => {
+    if (value === undefined) return;
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new TypeError(
+        `${name} must be a non-negative integer, not ${value}`,
+      );
+    }
+  };
+  if (options.selection.prefixes.length === 0) {
+    throw new TypeError("a compaction selects at least one id prefix");
+  }
+  for (const prefix of options.selection.prefixes) {
+    if (prefix.length === 0) throw new TypeError("an id prefix is not empty");
+  }
+  const cut = options.cut ?? {};
+  nonNegativeInteger("beforeSeq", cut.beforeSeq);
+  nonNegativeInteger("keepLast", cut.keepLast);
+  nonNegativeInteger("keepPayloadsMs", options.keepPayloadsMs);
+  if (cut.before !== undefined) {
+    const parsed = new Date(cut.before.replace(" ", "T") + "Z");
+    if (
+      !CREATED_AT.test(cut.before) ||
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 19).replace("T", " ") !== cut.before
+    ) {
+      throw new TypeError(
+        `before must be a UTC timestamp in the store's format, YYYY-MM-DD HH:MM:SS, not ${cut.before}`,
+      );
+    }
+  }
+};
+
+/**
+ * The prefixes as one selection: repeats dropped, and a prefix another one
+ * covers dropped with them, so that no instance is scanned twice and the
+ * totals count each once.
+ */
+export const normalizePrefixes = (prefixes: readonly string[]): string[] => {
+  const unique = [...new Set(prefixes)];
+  return unique.filter((prefix) =>
+    !unique.some((other) => other !== prefix && prefix.startsWith(other))
+  );
+};
 
 /** The id range a prefix selects, as the index serves it. */
 const prefixRange = (prefix: string): { lo: string; hi: string } => ({
@@ -134,9 +194,10 @@ const earlierBy = (createdAt: string, ms: number): string => {
   return new Date(at).toISOString().slice(0, 19).replace("T", " ");
 };
 
-// Byte totals are summed as REAL: the driver returns an INTEGER column as a
-// 32-bit value, and a store's payloads sum past that (13.58 GB on the
-// 2026-10-09 Topics snapshot came back negative before this cast).
+// Stored sizes are measured on the BLOB: `length()` of a TEXT column counts
+// characters, and these JSON columns hold whatever the documents hold.
+const BYTES_OF = (column: string): string => `length(CAST(${column} AS BLOB))`;
+
 type RevisionRow = {
   id: string;
   scope_key: string;
@@ -160,6 +221,8 @@ export const planCompaction = (
   options: PlanOptions,
 ): CompactionReport => {
   const started = performance.now();
+  validateOptions(options);
+  const prefixes = normalizePrefixes(options.selection.prefixes);
   const keepPayloadsMs = options.keepPayloadsMs ?? DEFAULT_KEEP_PAYLOADS_MS;
   const cut: CompactionReport["cut"] = { ...(options.cut ?? {}) };
   if (cut.before !== undefined) {
@@ -184,6 +247,8 @@ export const planCompaction = (
   ).all<{ name: string }>().map((row) => row.name);
   const genesisPresent =
     db.prepare(`SELECT 1 FROM "commit" WHERE seq = 1`).get() !== undefined;
+  const foreignKeyViolations =
+    db.prepare(`PRAGMA foreign_key_check`).all().length;
   const opTableRows = db.prepare(
     `SELECT (SELECT count(*) FROM op_field_epoch) + (SELECT count(*) FROM op_submission) +
             (SELECT count(*) FROM op_integrated) + (SELECT count(*) FROM op_checkpoint) AS n`,
@@ -198,8 +263,12 @@ export const planCompaction = (
   const revisions = { rowsDeleted: 0, bytesDeleted: 0 };
   const snapshots = { rowsDeleted: 0, bytesDeleted: 0 };
   const largest: InstancePlan[] = [];
+  // A total is summed as REAL: the driver hands back an INTEGER column as a
+  // 32-bit value, which a store's bytes exceed.
   const snapshotsBelow = db.prepare(
-    `SELECT count(*) AS n, CAST(COALESCE(sum(length(value)), 0) AS REAL) AS bytes
+    `SELECT count(*) AS n, CAST(COALESCE(sum(${
+      BYTES_OF("value")
+    }), 0) AS REAL) AS bytes
      FROM snapshot
      WHERE branch = '' AND id = ? AND scope_key = ? AND seq <= ?`,
   );
@@ -258,10 +327,12 @@ export const planCompaction = (
   };
 
   const scopePredicate = scopeKeyPredicate(options.selection.scope);
-  for (const prefix of options.selection.prefixes) {
+  for (const prefix of prefixes) {
     const { lo, hi } = prefixRange(prefix);
     const statement = db.prepare(
-      `SELECT r.id, r.scope_key, r.seq, r.op_index, r.op, length(r.data) AS bytes
+      `SELECT r.id, r.scope_key, r.seq, r.op_index, r.op, ${
+        BYTES_OF("r.data")
+      } AS bytes
        FROM revision r
        JOIN head h ON h.branch = r.branch AND h.id = r.id AND h.scope_key = r.scope_key
        WHERE r.branch = '' AND r.id >= ? AND r.id < ? AND r.id NOT LIKE 'of:did:%'
@@ -313,7 +384,7 @@ export const planCompaction = (
          ELSE 'headless'
        END AS kind,
        count(*) AS n,
-       CAST(COALESCE(sum(length(c.original)), 0) AS REAL) AS bytes
+       CAST(COALESCE(sum(${BYTES_OF("c.original")}), 0) AS REAL) AS bytes
      FROM "commit" c
      GROUP BY kind`,
   ).all<{ kind: string; n: number; bytes: number }>(cutoffAt);
@@ -329,6 +400,7 @@ export const planCompaction = (
       branches,
       genesisPresent,
       opTableRows,
+      foreignKeyViolations,
     },
     instances,
     revisions,
@@ -355,6 +427,7 @@ export const planCompaction = (
     compactionCommit: {
       seq: (newest.seq ?? 0) + 1,
       sessionId: `compaction:${new Date().toISOString()}`,
+      localSeq: 1,
     },
     elapsedMs: performance.now() - started,
   };
@@ -417,13 +490,19 @@ export const formatCompactionReport = (report: CompactionReport): string => {
       `${n(h.headless.commits)} owning none, ${size(h.headless.bytes)}`,
   );
   lines.push(
-    `commit     seq ${report.compactionCommit.seq} as ${report.compactionCommit.sessionId}`,
+    `commit     seq ${report.compactionCommit.seq} as ${report.compactionCommit.sessionId}` +
+      ` local_seq ${report.compactionCommit.localSeq}`,
   );
   const checks = [
     preconditions.singleBranch
       ? "one branch"
       : `REFUSED: branches ${preconditions.branches.join(", ")}`,
     preconditions.genesisPresent ? "genesis present" : "REFUSED: no commit 1",
+    preconditions.foreignKeyViolations === 0
+      ? "foreign keys intact"
+      : `REFUSED: ${
+        n(preconditions.foreignKeyViolations)
+      } foreign-key violation(s)`,
     `op_* rows ${n(preconditions.opTableRows)}`,
   ];
   lines.push(`checks     ${checks.join("; ")}`);

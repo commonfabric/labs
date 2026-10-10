@@ -1075,12 +1075,13 @@ export type DocumentCacheStats = {
    * the rows after that, so what this counts is how far back the rebuild had
    * to start.
    *
-   * Every rebuild counts, whichever of the two callers asked for it: a read
-   * the cache did not serve, and the commit-time check that the pre-state a
-   * patch lands on carries no reserved schema reference. The second reads
-   * only in a space whose commits or stored rows carry such a reference, and
-   * resumes from the same cache, so it is replay work of the same kind rather
-   * than a separate population. */
+   * Every rebuild counts, whichever caller asked for it: a read the cache
+   * did not serve; the commit-time check that the pre-state a patch lands on
+   * carries no reserved schema reference, which reads only in a space whose
+   * commits or stored rows carry such a reference and resumes from the same
+   * cache; and {@link readRevision}, whose rebuild of a row that is not its
+   * commit's last operation on the document starts from a snapshot below the
+   * row's seq rather than at it, so counts the rows from there. */
   patchReplays: number;
 };
 
@@ -7666,8 +7667,10 @@ const validateStatefulEntityRevisions = (
 
 /**
  * The two rows a reconstruction at `(seq, opIndex)` can start from: the
- * newest snapshot at or before `seq`, and the newest `set` or `delete` at or
- * before the revision but no older than that snapshot. A base older than the
+ * newest snapshot at or before `seq` — strictly before it under
+ * `snapshotBelow`, for a reconstruction at a row that is not its commit's
+ * last on the document — and the newest `set` or `delete` at or before the
+ * revision but no older than that snapshot. A base older than the
  * snapshot never wins the choice between them (the snapshot already holds its
  * effect and every patch since), so the base lookup is bounded below by the
  * snapshot's seq rather than walking the document's whole patch history to

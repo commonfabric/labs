@@ -1091,19 +1091,22 @@ It takes the store's file path rather than a space name, for the reason the
 the directory's neighbors are the authority on where a space's file is. The file
 is opened read-only. `--documents` names the instances by id prefix (`of:`,
 `computed:` or `cid:`), and may repeat; the ACL document is never selected.
-`--scope` restricts the selection to `space`, `user` or `session` instances. The
-cut is the head of every selected instance unless `--before-seq`,
-`--before <YYYY-MM-DD HH:MM:SS>` or `--keep-last <n>` bounds it, and a row
-survives if any bound keeps it. `--keep-payloads <duration>` (default `24h`) is
-the window within which commits keep their payload.
+`--scope` restricts the selection to `space`, `user` or `session` instances;
+repeated or nested prefixes count as one selection. The cut is the head of
+every selected instance unless `--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>`
+(UTC, in the store's own format and no other) or `--keep-last <n>` bounds it,
+and a row survives if any bound keeps it. `--keep-payloads <duration>`
+(default `24h`) is the window within which commits keep their payload; outside
+it a commit's payload is hollowed unless its seq is 1 or an `op_*` row
+references it, whether or not a surviving revision still points at the commit.
 
 The report counts the instances matched and truncated, the boundaries that
 become a `set`, the revision and snapshot rows and bytes that would go, the
 commit payloads the run would hollow split by whether the commit still owns a
 head, the ten instances contributing the most rows, the seq the compaction
-commit would take, and the preconditions a run checks. On a store of twenty
-gigabytes the payload accounting reads every commit and takes minutes. `--json`
-emits the same report as JSON.
+commit would take, and the preconditions a run checks, foreign-key integrity
+among them. The payload accounting reads every commit's payload and is the slow
+part of the run. `--json` emits the same report as JSON.
 
 ## Creating a space
 

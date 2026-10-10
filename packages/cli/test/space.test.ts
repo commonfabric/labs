@@ -180,6 +180,12 @@ describe("cf space compact", () => {
       const nothing = await cf(`space compact ${store} --dry-run`);
       expect(nothing.code).not.toBe(0);
       expect(text(nothing.stderr)).toContain("--documents");
+
+      const iso = await cf(
+        `space compact ${store} --documents computed: --dry-run --before 2026-10-09T10:30:00Z`,
+      );
+      expect(iso.code).not.toBe(0);
+      expect(text(iso.stderr)).toContain("YYYY-MM-DD HH:MM:SS");
     } finally {
       await Deno.remove(root, { recursive: true });
     }
