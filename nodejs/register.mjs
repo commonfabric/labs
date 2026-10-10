@@ -13,5 +13,6 @@ import * as hooks from "./lib/hooks.mjs";
 registerHooks({ resolve: hooks.resolve, load: hooks.load });
 await import("./lib/deno-global.mjs");
 await import("./lib/web-globals.mjs");
+await import("./lib/fs-file.mjs");
 await import("./lib/global-events.mjs");
 await import("./lib/internal-timers.mjs");

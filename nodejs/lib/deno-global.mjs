@@ -7,6 +7,7 @@ import * as http from "node:http";
 import { Readable, Writable } from "node:stream";
 import * as nodeTest from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import * as util from "node:util";
 import { Deno as shim } from "@deno/shim-deno";
 import { attachWebSocketUpgrade, upgradeWebSocket } from "./deno-websocket.mjs";
 import { bindTcpSync } from "./tcp-bind.mjs";
@@ -367,62 +368,30 @@ function refTimer(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Deno.customInspect: an object's `[Symbol.for("Deno.customInspect")]`
+// method is honored by Node's `util.inspect()` (and so `console.log()` and
+// `Deno.inspect()`) through an accessor for Node's own symbol on
+// `Object.prototype`, which yields an adapter wherever Deno's method exists.
 
-/**
- * Deno's error classes: the shim's, plus those it lacks. A missing one would
- * make `error instanceof Deno.errors.X` throw rather than answer false.
- */
-const errors = { ...shim.errors };
-for (
-  const name of [
-    "IsADirectory",
-    "NotADirectory",
-    "FilesystemLoop",
-    "NetworkUnreachable",
-    "NotSupported",
-    "WouldBlock",
-    "NotCapable",
-  ]
-) {
-  if (errors[name]) continue;
-  errors[name] = {
-    [name]: class extends Error {
-      name = name;
-    },
-  }[name];
-}
+const DENO_CUSTOM_INSPECT = Symbol.for("Deno.customInspect");
 
-/** Deno's error class for each Node system error code. */
-const ERRORS_BY_CODE = {
-  ENOENT: errors.NotFound,
-  EACCES: errors.PermissionDenied,
-  EPERM: errors.PermissionDenied,
-  EEXIST: errors.AlreadyExists,
-  EISDIR: errors.IsADirectory,
-  ENOTDIR: errors.NotADirectory,
-  ELOOP: errors.FilesystemLoop,
-  EADDRINUSE: errors.AddrInUse,
-  EADDRNOTAVAIL: errors.AddrNotAvailable,
-  ECONNREFUSED: errors.ConnectionRefused,
-  ECONNRESET: errors.ConnectionReset,
-  ECONNABORTED: errors.ConnectionAborted,
-  ENOTCONN: errors.NotConnected,
-  ENETUNREACH: errors.NetworkUnreachable,
-  EPIPE: errors.BrokenPipe,
-  EBUSY: errors.Busy,
-  ETIMEDOUT: errors.TimedOut,
-  ENOTSUP: errors.NotSupported,
-  EBADF: errors.BadResource,
-};
+Object.defineProperty(Object.prototype, util.inspect.custom, {
+  configurable: true,
+  enumerable: false,
+  get() {
+    const denoInspect = this?.[DENO_CUSTOM_INSPECT];
+    if (typeof denoInspect !== "function") return undefined;
+    return function (_depth, options, inspect) {
+      return denoInspect.call(
+        this,
+        (v, o) => inspect(v, o ?? options),
+        options,
+      );
+    };
+  },
+});
 
-/** `error` as Deno would throw it: a Node system error becomes a Deno one. */
-function denoError(error) {
-  const Class = ERRORS_BY_CODE[error?.code];
-  if (!Class || error instanceof Class) return error;
-  const converted = new Class(error.message, { cause: error });
-  converted.code = error.code;
-  return converted;
-}
+// ---------------------------------------------------------------------------
 
 /**
  * Wraps a shim function as Deno has it: a `file:` URL argument becomes a path
@@ -446,13 +415,69 @@ function denoFunction(fn) {
     } catch (e) {
       throw denoError(e);
     }
-    if (result instanceof Promise) {
-      return result.catch((e) => {
+    return result instanceof Promise
+      ? result.catch((e) => {
         throw denoError(e);
-      });
-    }
-    return result;
+      })
+      : result;
   };
+}
+
+// `Deno.errors` classes Deno 2 has and the shim lacks.
+for (
+  const name of [
+    "FilesystemLoop",
+    "IsADirectory",
+    "NetworkUnreachable",
+    "NotADirectory",
+    "NotCapable",
+    "NotSupported",
+    "WouldBlock",
+  ]
+) {
+  shim.errors[name] ??= class extends Error {
+    name = name;
+  };
+}
+
+/** Node error codes and the `Deno.errors` class each corresponds to. */
+const ERROR_CLASSES = {
+  ENOENT: "NotFound",
+  ENOTDIR: "NotADirectory",
+  EISDIR: "IsADirectory",
+  ELOOP: "FilesystemLoop",
+  ENETUNREACH: "NetworkUnreachable",
+  EEXIST: "AlreadyExists",
+  EACCES: "PermissionDenied",
+  EPERM: "PermissionDenied",
+  ECONNREFUSED: "ConnectionRefused",
+  ECONNRESET: "ConnectionReset",
+  ECONNABORTED: "ConnectionAborted",
+  EADDRINUSE: "AddrInUse",
+  EADDRNOTAVAIL: "AddrNotAvailable",
+  EPIPE: "BrokenPipe",
+  ETIMEDOUT: "TimedOut",
+  EBUSY: "Busy",
+  EINTR: "Interrupted",
+  ENOTCONN: "NotConnected",
+  ENOTSUP: "NotSupported",
+  EBADF: "BadResource",
+};
+
+/**
+ * Converts a Node system error to the `Deno.errors` class Deno would throw.
+ * The shim maps only some of its functions' errors (`realPathSync`, for one,
+ * throws Node's own). An error already converted, or with no counterpart,
+ * passes through.
+ */
+function denoError(e) {
+  const name = ERROR_CLASSES[e?.code];
+  const DenoClass = name && shim.errors[name];
+  if (!DenoClass || e instanceof DenoClass) return e;
+  const converted = new DenoClass(e.message, { cause: e });
+  converted.code = e.code;
+  converted.stack = e.stack;
+  return converted;
 }
 
 const Deno = Object.create(null);
@@ -464,7 +489,6 @@ for (const key of Object.keys(shim)) {
     : value;
 }
 Object.assign(Deno, {
-  errors,
   test,
   bench,
   Command,

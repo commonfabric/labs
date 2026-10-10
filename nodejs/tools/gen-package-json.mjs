@@ -1,6 +1,9 @@
 // Writes `nodejs/package.json` from the `npm:` and `jsr:` specifiers declared
-// in the workspace's `deno.jsonc` files. Each package gets one version (node
-// resolution is flat here): the highest one any config asks for.
+// in the workspace's `deno.jsonc` files, pinned to what `deno.lock` resolved
+// them to, so that Node runs the same package versions Deno does. Each
+// direct dependency gets one version (resolution is flat here): the one the
+// lock gives the highest range any config asks for. Transitive packages are
+// pinned through `overrides`, for each package the lock holds one version of.
 //
 // Usage: node nodejs/tools/gen-package-json.mjs
 
@@ -10,6 +13,7 @@ import {
   jsrNameToNpm,
   loadWorkspace,
   NODEJS_DIR,
+  ROOT,
   splitNameVersionSubpath,
 } from "../lib/workspace.mjs";
 
@@ -57,6 +61,26 @@ function collectSpecifiers(value, out) {
   }
 }
 
+const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "deno.lock"), "utf8"));
+
+/**
+ * The version `deno.lock` resolved a specifier to, without peer suffixes.
+ * The lock writes some ranges in a normalized form (`@0.220` for
+ * `@^0.220.0`), so a specifier with no exact entry takes the highest version
+ * the lock resolved any range of the same package to.
+ */
+function lockedVersion(kind, name, range) {
+  const strip = (v) => v.replace(/_.*$/, "");
+  const exact = lock.specifiers?.[`${kind}:${name}${range ? "@" + range : ""}`];
+  if (exact !== undefined) return strip(exact);
+  const prefix = `${kind}:${name}@`;
+  const versions = Object.entries(lock.specifiers ?? {})
+    .filter(([k]) => k.startsWith(prefix))
+    .map(([, v]) => strip(v))
+    .sort(compareVersions);
+  return versions.at(-1);
+}
+
 const { root, members } = loadWorkspace();
 const specs = [];
 for (const { config } of [root, ...members]) {
@@ -71,7 +95,7 @@ for (const spec of specs) {
   const { name, version } = splitNameVersionSubpath(body);
   const npmName = kind === "jsr" ? jsrNameToNpm(name) : name;
   if (DENO_ONLY.has(npmName)) continue;
-  const range = version ?? "*";
+  const range = lockedVersion(kind, name, version) ?? version ?? "*";
   const prior = deps[npmName];
   if (prior === undefined) {
     deps[npmName] = range;
@@ -81,11 +105,40 @@ for (const spec of specs) {
     deps[npmName] = winner;
   }
 }
-Object.assign(deps, NODE_PORT_DEPS);
+for (const [name, range] of Object.entries(NODE_PORT_DEPS)) {
+  deps[name] ??= range;
+}
 
 const sorted = Object.fromEntries(
   Object.entries(deps).sort(([a], [b]) => a.localeCompare(b)),
 );
+
+// Transitive pins: every package the lock holds exactly one version of,
+// other than the direct dependencies, which are pinned above.
+const lockedVersions = new Map();
+const addLocked = (npmName, version) => {
+  if (!lockedVersions.has(npmName)) lockedVersions.set(npmName, new Set());
+  lockedVersions.get(npmName).add(version);
+};
+for (const key of Object.keys(lock.npm ?? {})) {
+  const { name, version } = splitNameVersionSubpath(key);
+  addLocked(name, version.replace(/_.*$/, ""));
+}
+for (const key of Object.keys(lock.jsr ?? {})) {
+  const { name, version } = splitNameVersionSubpath(key);
+  addLocked(jsrNameToNpm(name), version);
+}
+const overrides = {};
+for (
+  const [npmName, versions] of [...lockedVersions].sort(([a], [b]) =>
+    a.localeCompare(b)
+  )
+) {
+  if (versions.size !== 1 || npmName in deps || DENO_ONLY.has(npmName)) {
+    continue;
+  }
+  overrides[npmName] = [...versions][0];
+}
 
 const pkg = {
   name: "@commonfabric/nodejs",
@@ -93,6 +146,7 @@ const pkg = {
   type: "module",
   description: "Node.js runtime support for the Common Fabric workspace.",
   dependencies: sorted,
+  overrides,
 };
 
 fs.writeFileSync(
@@ -100,5 +154,8 @@ fs.writeFileSync(
   JSON.stringify(pkg, null, 2) + "\n",
 );
 
-console.log(`Wrote ${Object.keys(sorted).length} dependencies.`);
+console.log(
+  `Wrote ${Object.keys(sorted).length} dependencies, ` +
+    `${Object.keys(overrides).length} overrides.`,
+);
 for (const c of conflicts) console.log(`  version conflict: ${c}`);
