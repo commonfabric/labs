@@ -244,9 +244,14 @@ certificate private key, compromise exposes that key too.
     connection and upstream TLS sessions, cannot create or connect sockets, and
     asks a credential-free directory process for a canonical space DID rather
     than naming an upstream address. The directory process passes an
-    unnegotiated TCP connection and a single-use ticket to the worker and closes
-    its copy of the socket; the worker performs upstream TLS and verifies the
-    toolshed. Only a separate link agent holds the router identity key, issues
+    unnegotiated TCP connection and a single-use ticket to the worker; the worker
+    performs upstream TLS and verifies the toolshed. The directory process
+    retains at most one pending socket per worker and refuses further placement
+    while setup is pending. After the link agent confirms that no binding was
+    issued, rollback shuts down that socket before acknowledging the worker,
+    revoking any descriptor the worker retained. Successful setup commits the
+    assignment irreversibly and closes the directory process's copy without
+    shutdown. Only a separate link agent holds the router identity key, issues
     client challenges, obtains toolshed-issued tickets, and controls router
     links. The pristine process creates a narrow worker-to-link-agent IPC
     channel so the link agent can bind each challenge and proof receipt to that

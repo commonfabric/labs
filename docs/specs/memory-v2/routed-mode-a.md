@@ -61,6 +61,13 @@ whether the toolshed a DID maps to is down or saturated, not whether a space
 exists or what its ACL grants; without an `unlisted` rule it also shows that a
 DID is listed while its toolshed is down.
 
+A failed data handshake is retriable on the same connection only before the
+link agent issues its signed `mdb1` binding. The worker then releases its broker
+assignment through the acknowledged internal rollback described below. Once a
+binding has been issued, a failed hello or transport closes the public
+connection: the signature may already have redeemed its single-use ticket, so
+the worker cannot authorize a second binding by reporting failure.
+
 `sharedMemoryConnection` controls the runner's socket topology. Both topologies
 supply a `SessionPrincipal`, so authentication follows the peer's advertised
 capabilities. A routed peer always requires signed `connection.auth`; a direct
@@ -209,6 +216,37 @@ the client handshake. Execution posture is therefore unknown on a routed
 connection: toolsheds can have different postures or change them after a
 restart, so an intersection cannot establish that execution is off. Operations
 requiring a confirmed execution-off posture must refuse an unknown one.
+
+### Router-internal data-assignment lifecycle
+
+`mdf1` is descriptor-free IPC between the worker, directory broker and link
+agent, not a toolshed control operation. Its payload is the four-byte ASCII tag,
+a big-endian unsigned 16-bit toolshed index, and the 32-byte ticket. The channel
+identifies the client context. The broker validates the index and ticket against
+its assigned state; the link agent serializes rollback with binding issuance and
+refuses rollback once a binding has been issued for that toolshed/link epoch.
+
+The broker retains a descriptor for at most one pending data socket per worker
+and refuses further placement requests while setup is pending. The link agent
+confirms rollback with descriptor-free `[0]`. Only after that confirmation does
+the broker shut down the socket in both directions, clear its assignment and
+cached ticket, and return descriptor-free `[0]` to the worker. Shutdown revokes
+any descriptor the worker retained. Space ownership and other toolsheds remain
+unchanged.
+
+After a successful handshake, the worker sends `mdc1` with the same index and
+ticket fields to the broker. The broker commits that assignment, releases its
+retained descriptor without shutting down the socket, and returns
+descriptor-free `[0]`. A committed assignment cannot be rolled back, including
+one committed by a worker before it obtained a binding.
+
+After rollback, the next open receives a new data socket and consults the link
+agent for its ticket. An unbound ticket with sufficient lifetime is reused; an
+expired ticket is replaced. Binding requires less than 13 seconds elapsed since
+the issuance request began; replacement requires at least 15 seconds elapsed
+since its response arrived. These monotonic bounds account for issuance delay
+and the toolshed's whole-second expiry clock. Between them, the open is refused
+for now without issuing another ticket that could exceed the toolshed's budget.
 
 ## Toolshed authority and lifecycle
 
