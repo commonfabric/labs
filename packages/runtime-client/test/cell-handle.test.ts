@@ -3468,6 +3468,20 @@ describe("cell-handle", () => {
       expect(cell.get()).toBe(30);
     });
 
+    it("queued behind a read, computes from what the read found, and shows no value over a later write", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 40 });
+
+      const reading = cell.pull();
+      const updating = cell.update((n) => (n ?? 0) + 1);
+      const setting = cell.set(30);
+      fake.answerReads({ value: 50 });
+      await Promise.all([reading, updating, setting]);
+
+      expect(fake.written()).toEqual([51, 30]);
+      expect(cell.get()).toBe(30);
+    });
+
     it("orders a write another handle on the cell asks for after it", async () => {
       const fake = worker(50);
       const stepping = new CellHandle<number>(fake.runtime, ref);
@@ -3496,6 +3510,18 @@ describe("cell-handle", () => {
         RequestType.CellSet,
         RequestType.CellSet,
       ]);
+      expect(fake.written()).toEqual([10, 11]);
+    });
+
+    it("computes from a write another handle on the cell made before it", async () => {
+      const fake = worker(5, false);
+      const stepping = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+      const setting = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      const set = setting.set(10);
+      const updating = stepping.update((n) => (n ?? 0) + 1);
+      await Promise.all([set, updating]);
+
       expect(fake.written()).toEqual([10, 11]);
     });
 
