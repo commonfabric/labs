@@ -1307,6 +1307,14 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           `transaction is pinned at "enforce"`,
       );
     }
+    // Not part of the prepared digest, so a real change after prepare
+    // invalidates the prepared decision, as the other dials' setters do.
+    if (
+      this.#cfcState.argumentInputRequirementsMode !== mode &&
+      this.#cfcState.prepare.status === "prepared"
+    ) {
+      this.invalidateCfc("argument-input-requirements-mode-changed");
+    }
     this.#cfcState.argumentInputRequirementsMode = mode;
     if (mode === "enforce") this.#cfcArgumentInputRequirementsPinned = true;
   }

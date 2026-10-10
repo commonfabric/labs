@@ -28,9 +28,12 @@
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isObjectOrArray, isPlainContainer } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "../builder/types.ts";
+import { ContextualFlowControl } from "../cfc.ts";
+import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
 import {
   isCellLink,
   isPrimitiveCellLink,
@@ -71,7 +74,10 @@ export const argumentIntegrityRequirements = (
         ? entry.schema.ifc?.requiredIntegrity
         : undefined;
       if (!Array.isArray(required) || required.length === 0) continue;
-      requirements.push({ path: entry.path, requiredIntegrity: required });
+      const requirement = { path: entry.path, requiredIntegrity: required };
+      // The same floor from both schemas is one requirement.
+      if (requirements.some((kept) => deepEqual(kept, requirement))) continue;
+      requirements.push(requirement);
     }
   }
   return requirements;
@@ -82,17 +88,100 @@ export type ArgumentRequirementResolution = {
   readonly requirements: ArgumentRequirement[];
   /** Whether the code's own argument schema was found. */
   readonly codeSchema: boolean;
-  /** Whether a schema other than the code's declares a `default`. */
-  readonly graphDefaults: boolean;
+  /**
+   * The schema the graph carries for the node when it is not the code's own,
+   * whose `default`s would be the wiring's choice.
+   */
+  readonly foreignSchema: JSONSchema | undefined;
 };
 
-/** Whether `schema` declares a `default` anywhere. */
-export const schemaDeclaresDefault = (schema: unknown): boolean =>
-  Array.isArray(schema)
-    ? schema.some(schemaDeclaresDefault)
-    : isObjectOrArray(schema) &&
-      (Object.hasOwn(schema, "default") ||
-        Object.values(schema).some(schemaDeclaresDefault));
+/** The subschemas that describe the same position as `schema`. */
+const sameDepth = (schema: Record<string, unknown>): unknown[] =>
+  ["allOf", "anyOf", "oneOf"].flatMap((keyword) => {
+    const branches = schema[keyword];
+    return Array.isArray(branches) ? branches : [];
+  });
+
+/** The subschemas that describe the child `segment` of `schema`'s position. */
+const childSchemas = (
+  schema: Record<string, unknown>,
+  segment: string,
+): unknown[] => {
+  const children: unknown[] = [];
+  const properties = schema.properties;
+  if (isObjectOrArray(properties)) {
+    if (segment === "*") children.push(...Object.values(properties));
+    else if (Object.hasOwn(properties, segment)) {
+      children.push(properties[segment]);
+    }
+  }
+  for (const keyword of ["additionalProperties", "items"]) {
+    if (schema[keyword] !== undefined) children.push(schema[keyword]);
+  }
+  const prefixItems = schema.prefixItems;
+  if (Array.isArray(prefixItems)) {
+    const index = Number(segment);
+    if (segment === "*") children.push(...prefixItems);
+    else if (Number.isInteger(index)) children.push(prefixItems[index]);
+  }
+  const patternProperties = schema.patternProperties;
+  if (isObjectOrArray(patternProperties)) {
+    children.push(...Object.values(patternProperties));
+  }
+  return children;
+};
+
+/** Whether `value` holds something at `path` (`*` matching any member). */
+const valueReachesPath = (value: unknown, path: readonly string[]): boolean => {
+  if (value === undefined) return false;
+  if (path.length === 0) return true;
+  if (!isPlainContainer(value)) return false;
+  const [segment, ...rest] = path;
+  return Object.entries(value).some(([key, child]) =>
+    (segment === "*" || key === segment) && valueReachesPath(child, rest)
+  );
+};
+
+/**
+ * Whether `schema` could supply a value at `path` with a `default`: one at
+ * or below `path`, or one above it whose value reaches `path`. A `$ref` that does not resolve
+ * against `root` counts as one, which refuses more.
+ */
+export const schemaDefaultsAt = (
+  schema: unknown,
+  path: readonly string[],
+  root: unknown = schema,
+  visited: Map<object, Set<number>> = new Map(),
+): boolean => {
+  if (!isObjectOrArray(schema) || Array.isArray(schema)) return false;
+  // Each subschema once per remaining depth, so a recursive `$ref` ends.
+  const depths = visited.get(schema) ?? new Set<number>();
+  if (depths.has(path.length)) return false;
+  depths.add(path.length);
+  visited.set(schema, depths);
+  let node: Record<string, unknown> = schema;
+  if (typeof schema.$ref === "string") {
+    const resolved = isObjectOrArray(root) && !Array.isArray(root)
+      ? ContextualFlowControl.resolveSchemaRefs(schema, root)
+      : undefined;
+    if (!isObjectOrArray(resolved) || Array.isArray(resolved)) return true;
+    node = resolved;
+  }
+  // A default at or below the path supplies a value there; one above it
+  // supplies one only if that default holds something at the rest of the path.
+  if (
+    Object.hasOwn(node, "default") &&
+    valueReachesPath(Reflect.get(node, "default"), path)
+  ) return true;
+  const inner = (child: unknown, at: readonly string[]) =>
+    schemaDefaultsAt(child, at, root, visited);
+  if (sameDepth(node).some((branch) => inner(branch, path))) return true;
+  if (path.length === 0) {
+    return childSchemas(node, "*").some((child) => inner(child, []));
+  }
+  const [segment, ...rest] = path;
+  return childSchemas(node, segment).some((child) => inner(child, rest));
+};
 
 /** What a lift's binding gives one declared argument path. */
 type ArgumentReach = {
@@ -113,11 +202,12 @@ type ArgumentReach = {
 
 /**
  * The leaf positions of a value read from a document, relative to it: each
- * scalar and each reference slot, which is checked where it is held. An
- * empty container has none: like an absent value, it shows nothing.
+ * scalar, each special value (bytes, an instance), and each reference slot,
+ * which is checked where it is held. An empty plain container has none: like
+ * an absent value, it shows nothing.
  */
 const leafPaths = (value: unknown): (readonly string[])[] =>
-  isPrimitiveCellLink(value) || !isObjectOrArray(value)
+  isPrimitiveCellLink(value) || !isPlainContainer(value)
     ? [[]]
     : Object.entries(value).flatMap(([key, child]) =>
       leafPaths(child).map((leaf) => [key, ...leaf])
@@ -130,13 +220,15 @@ const descend = (
   visit: (child: unknown, key: string) => void,
   absent: () => void,
 ): void => {
-  if (!isObjectOrArray(value)) return absent();
+  // A special value has no members the code could reach by path.
+  if (!isPlainContainer(value)) return absent();
   if (segment === "*") {
     for (const [key, child] of Object.entries(value)) visit(child, key);
     return;
   }
   if (!Object.hasOwn(value, segment)) return absent();
-  visit(value[segment], segment);
+  const child: unknown = Reflect.get(value, segment);
+  visit(child, segment);
 };
 
 /**
@@ -150,11 +242,14 @@ const reachThroughArgument = (
   base: NormalizedFullLink,
   path: readonly string[],
   meta: Metadata,
-  graphDefaults: boolean,
+  foreignSchema: JSONSchema | undefined,
 ): ArgumentReach => {
   const locations: ArgumentReach["locations"] = [];
   let inWiring = 0;
   const followed = new Set<string>();
+  // The graph's own schema, where it is not the code's, could fill an absence
+  // anywhere it declares a `default` at or around the declared path.
+  const graphDefaults = schemaDefaultsAt(foreignSchema, path);
 
   // Absence is no observation, unless a schema the code did not declare —
   // the graph's, or one a reference on the way carries — could hand the code
@@ -170,9 +265,10 @@ const reachThroughArgument = (
     value: unknown,
     rest: readonly string[],
     defaulting: boolean,
+    chain: readonly string[],
   ): void => {
     if (isPrimitiveCellLink(value)) {
-      return follow(parseLink(value, location), rest, defaulting);
+      return follow(parseLink(value, location), rest, defaulting, chain);
     }
     if (rest.length === 0) {
       if (value === undefined) return absent(defaulting);
@@ -190,6 +286,7 @@ const reachThroughArgument = (
           child,
           remaining,
           defaulting,
+          chain,
         ),
       () => absent(defaulting),
     );
@@ -201,17 +298,31 @@ const reachThroughArgument = (
     link: NormalizedFullLink,
     rest: readonly string[],
     defaulting: boolean,
+    chain: readonly string[],
   ) => {
     const walk = [...link.path, ...rest];
-    const carriesDefault = defaulting || schemaDeclaresDefault(link.schema);
-    // A cycle of references reaches no value.
-    const key = JSON.stringify([
+    // The link's schema describes its target, so a `default` in it at or
+    // around the rest of the walk is one the code could be handed.
+    const carriesDefault = defaulting || schemaDefaultsAt(link.schema, rest);
+    // A reference this chain already passed through, or a chain longer than
+    // the runtime itself resolves, never reaches a value the code is
+    // handed; whatever it would show is not evidence, so it counts as the
+    // wiring's rather than as absence.
+    const target = JSON.stringify([
       link.space,
       link.id,
       normalizeCellScope(link.scope),
-      walk,
+      link.path,
     ]);
-    if (followed.has(key)) return absent(carriesDefault);
+    if (
+      chain.includes(target) || chain.length >= MAX_PATH_RESOLUTION_LENGTH
+    ) {
+      inWiring += 1;
+      return;
+    }
+    // The same target and walk observe the same values: once is enough.
+    const key = JSON.stringify([target, rest]);
+    if (followed.has(key)) return;
     followed.add(key);
     const root = { ...link, path: [] };
     inDocument(
@@ -219,6 +330,7 @@ const reachThroughArgument = (
       tx.readValueOrThrow(root, { meta }),
       walk,
       carriesDefault,
+      [...chain, target],
     );
   };
 
@@ -226,9 +338,9 @@ const reachThroughArgument = (
   // followed, and every scalar in it is the wiring's own.
   const heldAtPath = (value: unknown): void => {
     if (isCellLink(value)) {
-      return follow(parseLink(value, base), [], graphDefaults);
+      return follow(parseLink(value, base), [], graphDefaults, []);
     }
-    if (isObjectOrArray(value)) {
+    if (isPlainContainer(value)) {
       for (const child of Object.values(value)) heldAtPath(child);
       return;
     }
@@ -237,7 +349,7 @@ const reachThroughArgument = (
 
   const inBinding = (value: unknown, rest: readonly string[]): void => {
     if (isCellLink(value)) {
-      return follow(parseLink(value, base), rest, graphDefaults);
+      return follow(parseLink(value, base), rest, graphDefaults, []);
     }
     if (rest.length === 0) return heldAtPath(value);
     const [segment, ...remaining] = rest;
@@ -270,7 +382,7 @@ export const argumentInputRefusals = (
   base: NormalizedFullLink,
   requirements: readonly ArgumentRequirement[],
   meta: Metadata,
-  graphDefaults = false,
+  foreignSchema?: JSONSchema,
 ): CfcArgumentInputRefusal[] => {
   if (requirements.length === 0) return [];
   if (tx.hasWrites()) {
@@ -288,7 +400,7 @@ export const argumentInputRefusals = (
       base,
       requirement.path,
       meta,
-      graphDefaults,
+      foreignSchema,
     );
     const observations: (readonly CfcAtom[])[] = [
       ...reach.locations.flatMap(({ location, leaves }) =>

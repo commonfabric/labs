@@ -67,16 +67,17 @@ Under [the correspondence procedure](../development/cfc-spec-correspondence.md):
    Under the proposed answer:
    - a read is consumed at the argument path of the value it materialized
      (§8.10.1.1, §8.2.4);
-   - the schema is the one the code's own module declares.
+   - the schema is the one the code's own module declares; the graph's may add
+     requirements and cannot remove one.
 2. **An identity guard resting on bound requirements needs specs#51's §8.7.2
    paragraph to allow it.** A comment on specs#51 proposes the wording.
 3. **The check itself is a conforming implementation** of §8.10.3 once
-   question 1 is ruled. Until then it lands under a `SPEC-PENDING` marker, at
-   `observe`. Today `verifyInputRequirements` walks only the schemas of write
-   targets, and the kernel manifest marks it `missing`. Nothing reads `ifc` on
-   an argument schema. A `RequiresIntegrity` on a lift argument is therefore
-   accepted and ignored, which errs toward admitting more than the
-   specification allows.
+   question 1 is ruled. It has landed for verified lifts under a `SPEC-PENDING`
+   marker naming commonfabric/specs#62, at `observe`
+   (`cfc/argument-input-requirements.ts`). Before it, `verifyInputRequirements`
+   walked only the schemas of write targets (the kernel manifest still marks
+   row 8.10.3 `missing` until the re-pin), so a `RequiresIntegrity` on a lift
+   argument was accepted and ignored.
 4. **How reads are attributed to arguments is a host arrangement.** So is the
    handling of substituted defaults, dropped reads and assembled objects below.
    The conformance statement records each.
@@ -114,13 +115,14 @@ argument is read through comes from the node's own module data
 an endorsed function's `$implRef` with an argument schema of its own runs under
 the endorsed identity with no declaration to check.
 
-`#resolveJavaScriptFunction` already resolves the registered builder artifact
-by identity and symbol. When the function resolves to a verified artifact, the
-node reads its argument through that artifact's own argument schema, and checks
-the requirements that schema declares. A node whose module data carries a
-different schema is read as the artifact declares. A node whose function has
-neither a registered artifact nor verified provenance has no identity, so no
-identity guard matches its output.
+As landed, the check takes the requirements of the argument schema of the
+artifact indexed under the identity the run is stamped with, together with the
+requirements of the node's module data, so a graph built as data can add a
+requirement and cannot remove one. A verified identity with no indexed artifact
+is refused. The node still reads its argument through its module data's
+schema; reading it through the artifact's is not done here. A node whose
+function has no verified provenance has no identity, so no identity guard
+matches its output.
 
 ### Attributing reads to an argument
 
@@ -129,7 +131,8 @@ runtime cannot attribute counts at every declared path. Under-attribution is
 the failure to rule out. A read made through `p` but missing from `p` would let
 a stand-in bypass `p`'s requirement.
 
-There are two mechanisms, and a spike chooses between them:
+The spike chose neither of the two mechanisms below (see the Plan): the check
+follows the binding instead. They are kept for the record.
 
 - **Tagging at read time.** The view's per-field descent (`childOrAbsent` in
   `schema-view.ts`) tags each read with its argument path. This is the
@@ -156,16 +159,19 @@ These rules follow from §8.10.3, and the conformance statement records them:
   set: the first skips public locations, and the second drops `cid:`
   documents and a document's own members.
 - **A read the flow join drops counts as unlabeled** when it carries a value.
-- **A value the schema substituted counts as unlabeled.** This covers a
-  `default`, flagged in traversal by `substituteCoveredMissingTarget`.
-  Otherwise an absent key under a stamped container would carry its writer's
-  stamp to a value the schema chose.
-- **A reference followed inside an argument earns its writer's stamp only
-  where that writer supplied it**, as `followedReferenceWitnesses` resolves it.
-  So an object assembled from references to two stamped records fails.
-- **The binding document's slot holding the argument's reference is exempt**,
-  as dereference plumbing (§8.2.4). Anything else the binding document holds
-  at or below that slot is an unlabeled read, a missing argument included.
+- **Absence is no observation**, as in §8.10.3's handler check: no document,
+  a missing field or an empty container consumes nothing. A `default` that a
+  schema other than the code's (one a reference carries, or the graph's where
+  it is not the code's) would supply there counts as a value written in the
+  wiring, so it fails; a default in the code's own schema is the code's choice.
+- **A reference on the way to a declared path is followed** (§8.2.4 puts the
+  reference's integrity in the dereference's). A reference inside the value
+  reached is checked where it is held, without link-carried evidence copied
+  from its target. An object assembled from references to stamped records
+  therefore passes; the stricter reading is the specs ruling's option D.
+- **The binding document's slots and object structure are exempt**, as
+  dereference plumbing (§8.2.4). A scalar the binding document holds at or
+  below a declared path is a public read.
 
 ### The check
 

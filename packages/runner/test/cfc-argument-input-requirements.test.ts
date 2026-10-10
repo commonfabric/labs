@@ -22,6 +22,7 @@ import type {
   CfcArgumentInputRefusal,
   CfcArgumentInputRequirementsMode,
 } from "../src/cfc/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -498,9 +499,10 @@ describe("cfc argument input requirements", () => {
       body: (
         refusals: (
           binding: unknown,
-          graphDefaults: boolean,
+          graphSchema?: JSONSchema,
         ) => readonly unknown[],
-        link: (schema?: unknown) => unknown,
+        link: (schema?: unknown, path?: string[]) => unknown,
+        write: (value: unknown) => void,
       ) => void,
     ) => {
       const storageManager = StorageManager.emulate({ as: signer });
@@ -512,18 +514,20 @@ describe("cfc argument input requirements", () => {
         const tx = runtime.edit();
         const empty = runtime.getCell(space, "missing gate", undefined, tx);
         const base = empty.getAsNormalizedFullLink();
-        const link = (schema?: unknown) => ({
+        const link = (schema?: unknown, path: string[] = ["gate"]) => ({
           "/": {
             "link@1": {
               id: base.id,
               space: base.space,
-              path: ["gate"],
+              path,
               ...(schema === undefined ? {} : { schema }),
             },
           },
         });
+        const write = (value: unknown) =>
+          tx.writeValueOrThrow({ ...base, path: [] }, value as never);
         body(
-          (binding, graphDefaults) =>
+          (binding, graphSchema) =>
             argumentInputRefusals(
               tx,
               "code",
@@ -531,9 +535,10 @@ describe("cfc argument input requirements", () => {
               base,
               requirements,
               stableInternalVerifierRead,
-              graphDefaults,
+              graphSchema,
             ),
           link,
+          write,
         );
         tx.abort();
       } finally {
@@ -544,22 +549,51 @@ describe("cfc argument input requirements", () => {
 
     it("observes nothing at a gate that is not there", async () => {
       await withMissingGate((refusals, link) => {
-        expect(refusals({ gate: link() }, false)).toEqual([]);
+        expect(refusals({ gate: link() })).toEqual([]);
       });
     });
 
     it("refuses a gate a reference's own schema would default", async () => {
       await withMissingGate((refusals, link) => {
         expect(
-          refusals({ gate: link({ default: { always: true } }) }, false),
+          refusals({ gate: link({ default: { always: true } }) }),
         ).toHaveLength(1);
+        // A default on another field of the target fills nothing at the gate,
+        // and neither does an ancestor default that holds no gate.
+        expect(
+          refusals(
+            link({
+              type: "object",
+              properties: { other: { type: "string", default: "x" } },
+              default: { other: "x" },
+            }, []),
+          ),
+        ).toEqual([]);
       });
     });
 
     it("refuses a gate the graph's own schema would default", async () => {
       await withMissingGate((refusals, link) => {
-        expect(refusals({ gate: link() }, true)).toHaveLength(1);
-        expect(refusals({}, true)).toHaveLength(1);
+        const defaulting: JSONSchema = {
+          type: "object",
+          properties: { gate: { type: "object", default: { always: true } } },
+        };
+        expect(refusals({ gate: link() }, defaulting)).toHaveLength(1);
+        expect(refusals({}, defaulting)).toHaveLength(1);
+        // A default on another argument fills nothing at the gate.
+        const elsewhere: JSONSchema = {
+          type: "object",
+          properties: { other: { type: "string", default: "x" } },
+        };
+        expect(refusals({}, elsewhere)).toEqual([]);
+      });
+    });
+
+    // A reference whose target path grows through itself never resolves.
+    it("refuses a reference cycle whose path grows", async () => {
+      await withMissingGate((refusals, link, write) => {
+        write({ gate: link(undefined, ["gate", "inner"]) });
+        expect(refusals({ gate: link() })).toHaveLength(1);
       });
     });
   });

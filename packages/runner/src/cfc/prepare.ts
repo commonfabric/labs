@@ -6832,9 +6832,12 @@ export const consumedIntegrityAt = (
     path,
     false,
   ).map((location) => location.integrity);
+  // A leaf's own evidence, as a witness reads it: a `*` template's
+  // integrity is membership provenance, not evidence about the value.
+  const evidence = entries.filter(isWitnessEvidence).map(asWitnessEvidence);
   for (const leaf of leaves) {
     observations.push(
-      labelForEntriesAtPath(entries, [...path, ...leaf])?.integrity ?? [],
+      labelForEntriesAtPath(evidence, [...path, ...leaf])?.integrity ?? [],
     );
   }
   return observations.length > 0 ? observations : [[]];

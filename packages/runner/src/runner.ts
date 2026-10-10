@@ -85,7 +85,6 @@ import {
   argumentInputRefusals,
   argumentIntegrityRequirements,
   type ArgumentRequirementResolution,
-  schemaDeclaresDefault,
 } from "./cfc/argument-input-requirements.ts";
 import {
   recordNewDocumentProtectedDefaults,
@@ -10674,9 +10673,9 @@ export class Runner {
    * function here — together with those of the schema the graph carries for
    * the node, which can add a requirement and cannot remove one. `codeSchema`
    * is false when no artifact is indexed under that identity, so the code's
-   * own schema is unknown. `graphDefaults` is true when the graph's schema
-   * is not the code's and declares a `default`, which would hand the code a
-   * value the graph chose where the binding reaches none.
+   * own schema is unknown. `foreignSchema` is the graph's schema when it is
+   * not the code's: a `default` in it would hand the code a value the graph
+   * chose where the binding reaches none.
    */
   #argumentRequirements(
     identity: Extract<ImplementationIdentity, { kind: "verified" }>,
@@ -10690,16 +10689,16 @@ export class Runner {
           identity.symbol,
         );
     if (typeof artifact !== "function" && !isObjectOrArray(artifact)) {
-      return { requirements: [], codeSchema: false, graphDefaults: false };
+      return { requirements: [], codeSchema: false, foreignSchema: undefined };
     }
     const declared: unknown = Reflect.get(artifact, "argumentSchema");
     const codeSchema = isSubschema(declared) ? declared : undefined;
     return {
       requirements: argumentIntegrityRequirements([codeSchema, graphSchema]),
       codeSchema: true,
-      graphDefaults: graphSchema !== undefined &&
-        !deepEqual(graphSchema, codeSchema) &&
-        schemaDeclaresDefault(graphSchema),
+      foreignSchema: deepEqual(graphSchema, codeSchema)
+        ? undefined
+        : graphSchema,
     };
   }
 
@@ -10754,7 +10753,7 @@ export class Runner {
             base,
             argument.requirements,
             stableInternalVerifierRead,
-            argument.graphDefaults,
+            argument.foreignSchema,
           )
         ) {
           tx.recordCfcArgumentInputRefusal(refusal);
@@ -10779,7 +10778,7 @@ export class Runner {
         base,
         argument.requirements,
         stableInternalVerifierRead,
-        argument.graphDefaults,
+        argument.foreignSchema,
       );
     } catch (error) {
       refusals = [{

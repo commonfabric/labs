@@ -95,6 +95,7 @@ describe("the CFC posture record", () => {
       cfcPolicyEvaluation: "enforcing",
       cfcLabelMetadataProtection: "observing",
       cfcDeclaredMonotonicity: "on",
+      cfcArgumentInputRequirements: "observing",
       cfcTriggerReadGating: "true",
       cfcDecomposedEnvelopes: 1,
       cfcContentAddressedLabels: 1,

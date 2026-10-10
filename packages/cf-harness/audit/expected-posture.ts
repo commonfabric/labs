@@ -262,7 +262,18 @@ export const postureMismatches = (
     const expected = spec[field];
     if (expected === undefined) continue;
     const rungs = rungLadder(field);
-    const found = record[field].rung;
+    // A record written before a dial existed carries no field for it, which
+    // satisfies no floor.
+    const dial: CfcPostureReport[typeof field] | undefined = record[field];
+    if (dial === undefined) {
+      mismatches.push({
+        field,
+        expected: `${expected} or stricter`,
+        found: "absent",
+      });
+      continue;
+    }
+    const found = dial.rung;
     if (rungs.indexOf(found) < rungs.indexOf(expected)) {
       mismatches.push({ field, expected: `${expected} or stricter`, found });
     }

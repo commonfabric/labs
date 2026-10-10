@@ -1191,17 +1191,20 @@ the per-epic implementation notes).
   on its arguments (spec §8.10.3) against every value the lift can reach
   through each such argument, before its body runs. A value with no label, an
   unlabeled leaf of a reached value, and a scalar written in the wiring carry
-  no evidence and fail; a declared path where no value is reached (no
+  no evidence and fail. A declared path where no value is reached (no
   document, a missing field, an empty container) is no observation, as in the
-  handler check. The requirements are those of the argument schema the code's
-  own module declares, together with the graph's; an `$implRef` whose code
-  schema cannot be found is refused. Values are `off`, `observe`, and
-  `enforce`. `observe` reads through a scratch transaction it then discards,
-  so the attempt's reads, commit preconditions, read scope and local-read
-  basis are unchanged, and records each failure as a diagnostic. `enforce`
-  reads through the attempt as the verifier's own reads and records each
-  failure as a prepare reason, which rejects the commit under the enforcing
-  enforcement modes. Both count failures in `getCfcStats()`
+  handler check, unless a schema other than the code's could fill it with a
+  `default` (one a reference on the way carries, or the graph's schema where
+  it is not the code's): that value is the wiring's and fails too. The
+  requirements are those of the argument schema of the artifact indexed under
+  the identity the run is stamped with, together with the graph's own; a
+  verified identity with no indexed artifact is refused. Values are `off`,
+  `observe`, and `enforce`. `observe` reads through a scratch transaction it
+  then discards, so the attempt's reads, commit preconditions, read scope and
+  local-read basis are unchanged, and records each failure as a diagnostic.
+  `enforce` reads through the attempt as the verifier's own reads and records
+  each failure as a prepare reason, which rejects the commit under the
+  enforcing enforcement modes. Both count failures in `getCfcStats()`
   (`argumentInputRefusals`).
 - **Current default and planned end state.** `observe` by default. The rule
   awaits a specification ruling and runs under a `SPEC-PENDING` marker; the
