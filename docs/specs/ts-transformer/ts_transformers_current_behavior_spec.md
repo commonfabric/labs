@@ -2255,11 +2255,14 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   `event.details`, the field survives the shrink, and cell-likeness is judged
   on the value rather than on the recording helper's untyped result
   (`unwrapAssertCapture` in `utils/expression.ts`;
-  `test/assert-diagnostics.test.ts`). Only the receiver is read through. A
-  recording in argument position still hides what it wraps from the callee's
-  capability contract, so `assert(() => helper(count))` charges `count`
-  whatever its own use in the body says, while `computed(() => helper(count))`
-  charges it the wrapper capability `helper` declares for that parameter
+  `test/assert-diagnostics.test.ts`). A known identity call's arguments are
+  read through the same way, so `equals(refusal.inbox, x)` in an `assert` body
+  records `inbox` as a comparable use, as it does in a `computed`. Beyond
+  those two, a recording in argument position still hides what it wraps from
+  the callee's capability contract, so `assert(() => helper(count))` charges
+  `count` whatever its own use in the body says, while
+  `computed(() => helper(count))` charges it the wrapper capability `helper`
+  declares for that parameter
 - node-driven shrinking can still shrink the inner type of cell-like wrappers
   when `.get()` contributes an empty path but coexists with more specific
   non-empty paths
