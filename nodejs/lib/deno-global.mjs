@@ -6,9 +6,11 @@ import * as childProcess from "node:child_process";
 import * as http from "node:http";
 import { Readable, Writable } from "node:stream";
 import * as nodeTest from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as util from "node:util";
 import { Deno as shim } from "@deno/shim-deno";
+import { attachWebSocketUpgrade, upgradeWebSocket } from "./deno-websocket.mjs";
+import { bindTcpSync } from "./tcp-bind.mjs";
 
 // ---------------------------------------------------------------------------
 // Deno.test
@@ -49,8 +51,22 @@ function denoContext(t, name, parent) {
   return ctx;
 }
 
+/**
+ * Calls `nodeTest.test()` from a frame attributed to the main module (under
+ * `node --test`, the test file). `node:test` reports each test as located at
+ * the frame that called `test()`, which would otherwise be this file for every
+ * test; the `sourceURL` comment names the frame's file instead.
+ */
+const callAsMainModule = process.argv[1]
+  ? (0, eval)(
+    "(function (f, ...args) { return f(...args); })\n//# sourceURL=" +
+      pathToFileURL(process.argv[1]).href,
+  )
+  : (f, ...args) => f(...args);
+
 function registerTest(def) {
-  nodeTest.test(
+  callAsMainModule(
+    nodeTest.test,
     def.name,
     { skip: def.ignore === true, only: def.only === true },
     (t) => def.fn(denoContext(t, def.name, undefined)),
@@ -142,12 +158,21 @@ class ChildProcess {
   }
 }
 
+/**
+ * The stand-in for the `deno` executable: `Deno.execPath()` names it, and a
+ * `Deno.Command` for `deno` runs it.
+ */
+const DENO_AS_NODE = fileURLToPath(
+  new URL("../bin/deno-as-node", import.meta.url),
+);
+
 class Command {
   #command;
   #options;
 
   constructor(command, options = {}) {
     this.#command = command instanceof URL ? command.pathname : String(command);
+    if (this.#command === "deno") this.#command = DENO_AS_NODE;
     this.#options = options;
   }
 
@@ -275,6 +300,15 @@ function serve(...args) {
     }
   });
 
+  attachWebSocketUpgrade(server, toRequest, handler, (req) => ({
+    remoteAddr: {
+      transport: "tcp",
+      hostname: req.socket.remoteAddress,
+      port: req.socket.remotePort,
+    },
+    completed: new Promise((resolve) => req.socket.on("close", resolve)),
+  }));
+
   let resolveFinished;
   const finished = new Promise((resolve) => (resolveFinished = resolve));
   server.on("close", () => resolveFinished());
@@ -297,12 +331,12 @@ function serve(...args) {
     },
   };
 
-  server.listen(port, hostname, () => {
-    const address = server.address();
-    result.addr = { transport: "tcp", hostname, port: address.port };
-    if (options.onListen) options.onListen(result.addr);
-    else console.log(`Listening on http://${hostname}:${address.port}/`);
-  });
+  // Deno binds before `serve()` returns, so `addr` names the port at once.
+  const bound = bindTcpSync(hostname, port);
+  result.addr = { transport: "tcp", hostname, port: bound.port };
+  server.listen(bound.handle);
+  if (options.onListen) options.onListen(result.addr);
+  else console.log(`Listening on http://${hostname}:${bound.port}/`);
   options.signal?.addEventListener("abort", () => result.shutdown());
   return result;
 }
@@ -360,10 +394,70 @@ Object.defineProperty(Object.prototype, util.inspect.custom, {
 // ---------------------------------------------------------------------------
 
 /**
- * Wraps a shim function so that a `file:` URL argument becomes a path: Deno's
- * file APIs take either, and the shim passes a URL to `node:fs` as a string.
+ * Deno's error classes: the shim's, plus those it lacks. A missing one would
+ * make `error instanceof Deno.errors.X` throw rather than answer false.
  */
-function acceptingUrls(fn) {
+const errors = { ...shim.errors };
+for (
+  const name of [
+    "IsADirectory",
+    "NotADirectory",
+    "FilesystemLoop",
+    "NetworkUnreachable",
+    "NotSupported",
+    "WouldBlock",
+    "NotCapable",
+  ]
+) {
+  if (errors[name]) continue;
+  errors[name] = {
+    [name]: class extends Error {
+      name = name;
+    },
+  }[name];
+}
+
+/** Deno's error class for each Node system error code. */
+const ERRORS_BY_CODE = {
+  ENOENT: errors.NotFound,
+  EACCES: errors.PermissionDenied,
+  EPERM: errors.PermissionDenied,
+  EEXIST: errors.AlreadyExists,
+  EISDIR: errors.IsADirectory,
+  ENOTDIR: errors.NotADirectory,
+  ELOOP: errors.FilesystemLoop,
+  EADDRINUSE: errors.AddrInUse,
+  EADDRNOTAVAIL: errors.AddrNotAvailable,
+  ECONNREFUSED: errors.ConnectionRefused,
+  ECONNRESET: errors.ConnectionReset,
+  ECONNABORTED: errors.ConnectionAborted,
+  ENOTCONN: errors.NotConnected,
+  ENETUNREACH: errors.NetworkUnreachable,
+  EPIPE: errors.BrokenPipe,
+  EBUSY: errors.Busy,
+  ETIMEDOUT: errors.TimedOut,
+  ENOTSUP: errors.NotSupported,
+  EBADF: errors.BadResource,
+  EINTR: errors.Interrupted,
+};
+
+/** `error` as Deno would throw it: a Node system error becomes a Deno one. */
+function denoError(error) {
+  const Class = ERRORS_BY_CODE[error?.code];
+  if (!Class || error instanceof Class) return error;
+  const converted = new Class(error.message, { cause: error });
+  converted.code = error.code;
+  converted.stack = error.stack;
+  return converted;
+}
+
+/**
+ * Wraps a shim function as Deno has it: a `file:` URL argument becomes a path
+ * (Deno's file APIs take either, and the shim passes a URL to `node:fs` as a
+ * string), and a Node system error it throws or rejects with becomes Deno's
+ * error class for it.
+ */
+function denoFunction(fn) {
   return function (...args) {
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
@@ -387,75 +481,25 @@ function acceptingUrls(fn) {
   };
 }
 
-// `Deno.errors` classes Deno 2 has and the shim lacks.
-for (
-  const name of [
-    "FilesystemLoop",
-    "IsADirectory",
-    "NetworkUnreachable",
-    "NotADirectory",
-    "NotCapable",
-  ]
-) {
-  shim.errors[name] ??= class extends Error {
-    name = name;
-  };
-}
-
-/** Node error codes and the `Deno.errors` class each corresponds to. */
-const ERROR_CLASSES = {
-  ENOENT: "NotFound",
-  ENOTDIR: "NotADirectory",
-  EISDIR: "IsADirectory",
-  ELOOP: "FilesystemLoop",
-  ENETUNREACH: "NetworkUnreachable",
-  EEXIST: "AlreadyExists",
-  EACCES: "PermissionDenied",
-  EPERM: "PermissionDenied",
-  ECONNREFUSED: "ConnectionRefused",
-  ECONNRESET: "ConnectionReset",
-  ECONNABORTED: "ConnectionAborted",
-  EADDRINUSE: "AddrInUse",
-  EADDRNOTAVAIL: "AddrNotAvailable",
-  EPIPE: "BrokenPipe",
-  ETIMEDOUT: "TimedOut",
-  EBUSY: "Busy",
-  EINTR: "Interrupted",
-  ENOTCONN: "NotConnected",
-};
-
-/**
- * Converts a Node system error to the `Deno.errors` class Deno would throw.
- * The shim maps only some of its functions' errors (`realPathSync`, for one,
- * throws Node's own). An error already converted, or with no counterpart,
- * passes through.
- */
-function denoError(e) {
-  const name = ERROR_CLASSES[e?.code];
-  const DenoClass = name && shim.errors[name];
-  if (!DenoClass || e instanceof DenoClass) return e;
-  const converted = new DenoClass(e.message, { cause: e });
-  converted.code = e.code;
-  converted.stack = e.stack;
-  return converted;
-}
-
 const Deno = Object.create(null);
 for (const key of Object.keys(shim)) {
   const value = shim[key];
   const isClass = typeof value === "function" && /^[A-Z]/.test(key);
   Deno[key] = typeof value === "function" && !isClass
-    ? acceptingUrls(value)
+    ? denoFunction(value)
     : value;
 }
 Object.assign(Deno, {
+  errors,
   test,
   bench,
   Command,
   ChildProcess,
   serve,
+  upgradeWebSocket,
   unrefTimer,
   refTimer,
+  execPath: () => DENO_AS_NODE,
   // Deno's `args` are the script's arguments only.
   args: process.argv.slice(2),
 });
