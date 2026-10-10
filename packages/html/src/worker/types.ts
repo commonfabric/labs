@@ -10,6 +10,7 @@ import type { Cancel, Cell, JSONSchema } from "@commonfabric/runner";
 import type {
   CfcConfClause,
   CfcModulePolicySource,
+  ListMembershipProvider,
   RenderConfidentialityResolver,
   SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -460,6 +461,15 @@ export interface WorkerReconcilerOptions {
    * upgrade (Stage-1 sync snapshot only; still sound, just less precise).
    */
   membershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The spec §4.9.5 list provider backing {@link resolveRenderConfidentiality}.
+   * When present, a rendered cell whose label names a list (`Members(...)`)
+   * subscribes to that list within its cancel group, so adding or removing a
+   * member re-renders. Absent → no reactive upgrade; the sync snapshot still
+   * gates soundly.
+   */
+  listMembershipProvider?: ListMembershipProvider;
 
   /**
    * The module-policy manifest source backing

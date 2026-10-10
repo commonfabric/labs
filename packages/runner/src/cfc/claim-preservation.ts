@@ -31,6 +31,7 @@ const CLAIMS: Readonly<
 > = {
   uiContract: (stored, merged) => deepEqual(stored, merged),
   exactCopyOf: (stored, merged) => deepEqual(stored, merged),
+  members: (stored, merged) => deepEqual(stored, merged),
   projection: (stored, merged) => deepEqual(stored, merged),
   ownerPrincipal: (stored, merged) => deepEqual(stored, merged),
   writeAuthorizedBy: (stored, merged) => keepsWriterClaim(stored, merged),

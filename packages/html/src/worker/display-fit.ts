@@ -31,6 +31,8 @@ import {
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
+  type ListMembershipProvider,
+  listMembersInConfidentiality,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
@@ -61,6 +63,7 @@ const logger = getLogger("display-fit", { enabled: false, level: "debug" });
 export type DisplayFitSources = {
   readonly resolveConfidentiality?: RenderConfidentialityResolver;
   readonly membership?: SpaceMembershipProvider;
+  readonly listMembership?: ListMembershipProvider;
   readonly modulePolicies?: WorkerReconcilerOptions["modulePolicySource"];
 };
 
@@ -421,6 +424,15 @@ function watchLabelSources(
       watchDocument(
         `membership:${space}`,
         () => provider.subscribe(space, reeval),
+      );
+    }
+  }
+  const lists = sources.listMembership;
+  if (lists !== undefined) {
+    for (const list of listMembersInConfidentiality(confidentiality)) {
+      watchDocument(
+        `list:${JSON.stringify(list)}`,
+        () => lists.subscribe(list, reeval),
       );
     }
   }

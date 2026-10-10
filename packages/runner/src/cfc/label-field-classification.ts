@@ -133,6 +133,15 @@ export const LABEL_FIELD_CLASSIFICATION:
     // DID-bearing fields are `principal` and `space` (CfcHasRoleAtom).
     entry({ type: CFC_ATOM_TYPE.HasRole }, ["principal"], "commitment"),
     entry({ type: CFC_ATOM_TYPE.HasRole }, ["space"], "commitment"),
+    // Members.list → public, as Space.id: the display boundary must
+    // dereference it for the spec §4.9.5 point query, and a commitment would
+    // break the release. It names a list position, not a person. Members.subject
+    // → commitment, as Policy.subject: it is consumed only by equality with
+    // the selecting module reference's subject. ListedIn mirrors HasRole.
+    entry({ type: CFC_ATOM_TYPE.Members }, ["list"], "public"),
+    entry({ type: CFC_ATOM_TYPE.Members }, ["subject"], "commitment"),
+    entry({ type: CFC_ATOM_TYPE.ListedIn }, ["principal"], "commitment"),
+    entry({ type: CFC_ATOM_TYPE.ListedIn }, ["list"], "public"),
     entry({ type: CFC_ATOM_TYPE.UserSurfaceInput }, ["user"], "commitment"),
     entry({ type: CFC_ATOM_TYPE.ExternalIngest }, ["audience"], "commitment"),
   ]);

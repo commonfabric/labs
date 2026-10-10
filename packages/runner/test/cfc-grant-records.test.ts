@@ -660,6 +660,15 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
           .toThrow(/audience/);
         // Empty audience grants nothing — an authoring error.
         expect(attempt([])).toThrow(/audience/);
+        // A list or list fact would add a list no capture check admitted
+        // (spec §8.7.5).
+        const list = { space: signer.did(), id: "of:list", path: [] };
+        expect(attempt([cfcAtom.members(list, signer.did())])).toThrow(
+          /audience/,
+        );
+        expect(attempt([cfcAtom.listedIn(signer.did(), list)])).toThrow(
+          /audience/,
+        );
         tx.abort();
       });
     });

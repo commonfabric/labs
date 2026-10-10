@@ -68,6 +68,7 @@ const CLASS_BY_TYPE = new Map<string, PropagationClass>([
   [CFC_ATOM_TYPE.DisclosureAcknowledged, "provenance"],
   [CFC_ATOM_TYPE.DisclosureRendered, "provenance"],
   [CFC_ATOM_TYPE.HasRole, "provenance"],
+  [CFC_ATOM_TYPE.ListedIn, "provenance"],
 ]);
 
 export const atomPropagationClass = (atom: unknown): PropagationClass => {

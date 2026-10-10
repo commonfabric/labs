@@ -249,6 +249,9 @@ export {
   STANDARD_RENDER_EXCHANGE_RULES,
 } from "./render-ceiling.ts";
 export type { SpaceMembershipProvider, SpaceRole } from "./space-membership.ts";
+export type { ListMembershipProvider } from "./list-membership.ts";
+export { listMembersInConfidentiality } from "./list-membership.ts";
+export { createRuntimeListMembershipProvider } from "./runtime-list-membership.ts";
 export {
   createRuntimeSpaceMembershipProvider,
   spaceReaderRole,
