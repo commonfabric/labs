@@ -7,6 +7,7 @@ import {
   createMockCellHandle,
   holdReads,
   pushRefusal,
+  pushUpdate,
   writesSent,
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFSlider } from "./index.ts";
@@ -32,6 +33,8 @@ type SliderInternals = {
   decrement(): void;
   _handleKeyDown(event: { key: string; preventDefault(): void }): void;
   _beginDrag(): void;
+  _isDragging: boolean;
+  disconnectedCallback(): void;
   _moveTo(value: number, gesture: "drag"): void;
   _commitDrag(): void;
 };
@@ -304,6 +307,81 @@ describe("CFSlider bound to a cell", () => {
     ]);
   });
 
+  it("commits what the drag wrote, not what another writer did meanwhile", async () => {
+    const value = createMockCellHandle(30);
+    const element = sliderWith(value);
+    const changes = announcements(element, "cf-change");
+
+    // Pressed and held: someone else sets 60, and the person lets go.
+    element._beginDrag();
+    pushUpdate(value, 60);
+    element._commitDrag();
+    // Dragged to 40; someone else sets 60; let go.
+    element._beginDrag();
+    element._moveTo(40, "drag");
+    pushUpdate(value, 60);
+    element._commitDrag();
+    await settle();
+
+    expect(changes.map((a) => a.detail)).toEqual([
+      { value: 40, oldValue: 60 },
+    ]);
+  });
+
+  it("commits nothing to a cell bound mid-drag, or from a removed slider", async () => {
+    const first = createMockCellHandle(30);
+    const element = sliderWith(first);
+    const changes = announcements(element, "cf-change");
+    element._beginDrag();
+    element._moveTo(40, "drag");
+    element.value = createMockCellHandle(80, { path: ["other"] });
+    element.willUpdate(new Map([["value", undefined]]));
+    element._commitDrag();
+
+    // Removed mid-drag; a mouseup that still arrives commits nothing.
+    element._beginDrag();
+    element._moveTo(50, "drag");
+    element.disconnectedCallback();
+    element._commitDrag();
+    await settle();
+
+    expect(changes).toEqual([]);
+  });
+
+  it("commits a drag on a cell not yet read, even to the minimum", async () => {
+    const value = createMockCellHandle<number>();
+    holdReads(value);
+    const element = sliderWith(value);
+    const changes = announcements(element, "cf-change");
+
+    element._beginDrag();
+    element._moveTo(0, "drag");
+    element._commitDrag();
+    await settle();
+
+    expect(written(value)).toEqual([0]);
+    expect(changes.map((a) => a.detail)).toEqual([{ value: 0, oldValue: 0 }]);
+  });
+
+  it("takes a key pressed mid-drag into the drag", async () => {
+    const value = createMockCellHandle(30);
+    const element = sliderWith(value);
+    const changes = announcements(element, "cf-change");
+
+    element._beginDrag();
+    element._moveTo(40, "drag");
+    element._isDragging = true;
+    press(element, "ArrowRight");
+    element._isDragging = false;
+    element._commitDrag();
+    await settle();
+
+    expect(written(value)).toEqual([40, 41]);
+    expect(changes.map((a) => a.detail)).toEqual([
+      { value: 41, oldValue: 30 },
+    ]);
+  });
+
   it("commits nothing for a drag released where it began", async () => {
     const value = createMockCellHandle(20);
     const element = sliderWith(value);
@@ -426,6 +504,15 @@ describe("CFSlider given a plain number", () => {
 
     expect(() => element.setValue(NaN)).toThrow(RangeError);
     expect(writesSent(value)).toEqual([]);
+  });
+
+  it("steps by 1 when the step is not a positive number", () => {
+    const element = sliderWith(30);
+    element.step = NaN;
+
+    press(element, "ArrowRight");
+
+    expect(element.value).toBe(31);
   });
 
   it("keeps a finite value when the step is zero", () => {

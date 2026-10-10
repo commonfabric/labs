@@ -29,8 +29,9 @@ type Gesture = "drag" | "key";
  * @fires cf-input - Fired for every move a person makes, once it is written,
  *   with detail: { value, oldValue }
  * @fires cf-change - Fired when a person commits a move: a key press at once,
- *   a drag when it is released (if it moved the value), with detail:
- *   { value, oldValue }, `oldValue` being the value before the drag began.
+ *   a drag when it is released (if it wrote a value), with detail:
+ *   { value, oldValue }: for a drag, the value it last wrote and the value
+ *   shown when it began. A key pressed mid-drag is part of the drag.
  *   A call from code (`setValue`, `increment`, `decrement`) fires neither.
  *
  * @example
@@ -357,7 +358,9 @@ export class CFSlider extends BaseElement {
     super.disconnectedCallback();
     this.removeEventListener("keydown", this._handleKeyDown);
 
-    // Remove document listeners if dragging
+    // Remove document listeners if dragging; a removed slider commits
+    // nothing, as a removed native input fires no change.
+    this._drag = undefined;
     if (this._isDragging) {
       this._stopDragging();
     }
@@ -370,6 +373,8 @@ export class CFSlider extends BaseElement {
     if (changedProperties.has("value")) {
       this._binding++;
       this._queue = undefined;
+      // A drag on one cell commits nothing to another.
+      this._drag = undefined;
       this._valueCellController.bind(this.value, numberSchema);
     }
   }
@@ -480,7 +485,7 @@ export class CFSlider extends BaseElement {
       } else {
         this.value = next;
       }
-      if (gesture) this._announce(next, held ?? this._shown(held), gesture);
+      this._moved(next, held ?? this._shown(held), gesture);
     });
   }
 
@@ -500,14 +505,12 @@ export class CFSlider extends BaseElement {
         const next = step(this._shown(held));
         if (next === (held ?? this._shown(held))) return;
         this.value = next;
-        if (gesture) this._announce(next, held ?? this._shown(held), gesture);
+        this._moved(next, held ?? this._shown(held), gesture);
         return;
       }
       let written: { value: number; oldValue: number } | undefined;
       const announce = () => {
-        if (written && gesture) {
-          this._announce(written.value, written.oldValue, gesture);
-        }
+        if (written) this._moved(written.value, written.oldValue, gesture);
       };
       const settled = this._valueCellController.updateValue((held) => {
         const value = step(this._shown(held));
@@ -532,24 +535,43 @@ export class CFSlider extends BaseElement {
     if (gesture === "key") this.emit("cf-change", { value, oldValue });
   }
 
-  /** The value a drag began from, until it is released. */
-  private _dragFrom: number | undefined;
+  /** A move a person made has been written: report it. */
+  private _moved(
+    value: number,
+    oldValue: number,
+    gesture: Gesture | undefined,
+  ): void {
+    if (gesture === undefined) return;
+    if (gesture === "drag" && this._drag) this._drag.to = value;
+    this._announce(value, oldValue, gesture);
+  }
+
+  /**
+   * The drag under way, until it is released: the value shown when it
+   * began, whether that value was known (read) then, and the last value the
+   * drag itself wrote. What other writers do meanwhile is not the drag's.
+   */
+  private _drag: { from: number; known: boolean; to?: number } | undefined;
 
   private _beginDrag(): void {
     // In order, so a step still waiting on the worker lands first.
     this._inOrder(() => {
-      this._dragFrom = this._held ?? this._shown(this._held);
+      this._drag ??= {
+        from: this._current,
+        known: this._known,
+      };
     });
   }
 
-  /** A released drag commits what it moved, with one `cf-change`. */
+  /** A released drag commits what it wrote, with one `cf-change`. */
   private _commitDrag(): void {
     this._inOrder(() => {
-      const from = this._dragFrom;
-      this._dragFrom = undefined;
-      const value = this._held;
-      if (from === undefined || value === undefined || value === from) return;
-      this.emit("cf-change", { value, oldValue: from });
+      const drag = this._drag;
+      this._drag = undefined;
+      if (drag?.to === undefined) return;
+      // From a value not yet read, any write is a change.
+      if (drag.known && drag.to === drag.from) return;
+      this.emit("cf-change", { value: drag.to, oldValue: drag.from });
     });
   }
 
@@ -604,23 +626,27 @@ export class CFSlider extends BaseElement {
 
   /** `n` without binary-fraction noise: 3 steps of 0.1 are 0.3. */
   private _tidy(n: number): number {
-    return Number(n.toFixed(10));
+    return Number(n.toPrecision(15));
+  }
+
+  /** The step, or 1 where it is not a positive number, as a native range has it. */
+  private get _stepSize(): number {
+    return this.step > 0 && Number.isFinite(this.step) ? this.step : 1;
   }
 
   /** The highest stop a whole number of steps above `min`. */
   private get _lastStep(): number {
-    const steps = Math.floor((this.max - this.min) / this.step + 1e-9);
-    return this._tidy(this.min + Math.max(0, steps) * this.step);
+    const steps = Math.floor((this.max - this.min) / this._stepSize + 1e-9);
+    return this._tidy(this.min + Math.max(0, steps) * this._stepSize);
   }
 
   /** The stop nearest `value`. */
   private _snapToStep(value: number): number {
     const v = this._clampValue(value);
-    if (!(this.step > 0)) return v;
     const last = this._lastStep;
     if (v >= last) return v - last < this.max - v ? last : this.max;
     return this._tidy(
-      this.min + Math.round((v - this.min) / this.step) * this.step,
+      this.min + Math.round((v - this.min) / this._stepSize) * this._stepSize,
     );
   }
 
@@ -630,12 +656,11 @@ export class CFSlider extends BaseElement {
    */
   private _stopFrom(value: number, count: number): number {
     const v = this._clampValue(value);
-    if (!(this.step > 0)) return v;
-    const position = (v - this.min) / this.step;
+    const position = (v - this.min) / this._stepSize;
     const index = count > 0
       ? Math.floor(position + 1e-9) + count
       : Math.ceil(position - 1e-9) + count;
-    const stop = this._tidy(this.min + Math.max(0, index) * this.step);
+    const stop = this._tidy(this.min + Math.max(0, index) * this._stepSize);
     return stop > this._lastStep ? this.max : stop;
   }
 
@@ -776,9 +801,11 @@ export class CFSlider extends BaseElement {
   private _handleKeyDown = (event: KeyboardEvent): void => {
     if (this.disabled) return;
 
+    // A key pressed mid-drag is part of the drag.
+    const gesture: Gesture = this._isDragging ? "drag" : "key";
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      this._moveTo(event.key === "Home" ? this.min : this.max, "key");
+      this._moveTo(event.key === "Home" ? this.min : this.max, gesture);
       return;
     }
     // Stops to move: one for an arrow, ten for a page key.
@@ -793,7 +820,7 @@ export class CFSlider extends BaseElement {
     const count = counts[event.key];
     if (count === undefined) return;
     event.preventDefault();
-    this._moveBy((current) => this._stopFrom(current, count), "key");
+    this._moveBy((current) => this._stopFrom(current, count), gesture);
   };
 
   /**
