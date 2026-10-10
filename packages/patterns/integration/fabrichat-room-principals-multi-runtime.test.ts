@@ -1,13 +1,14 @@
 /**
  * A FabriChat room's participants' principals across runtimes whose
- * principals may read different things. A profile lives in its owner's own
- * space, and a reader that space refuses can't read whom the profile attests,
- * so two members of a room derive the list differently. Two sessions share the
- * harness's space, where the manager lives: the starter, who creates a group
- * room, and a member, named in it, who joins it under a profile in a space
- * that admits the member alone. Each session reads the list from an instance
- * of its own, and once every runtime has caught up, none of them commits
- * anything more.
+ * principals may read different things: the entry pairing each participant
+ * with whom their profile attests, and the list of those principals. A profile
+ * lives in its owner's own space, and a reader that space refuses can't read
+ * whom the profile attests, so two members of a room derive both differently.
+ * Two sessions share the harness's space, where the manager lives: the
+ * starter, who creates a group room, and a member, named in it, who joins it
+ * under a profile in a space that admits the member alone. Each session reads
+ * both from instances of its own, and once every runtime has caught up, none
+ * of them commits anything more.
  *
  * Kept apart from `fabrichat-spaces-multi-runtime.test.ts`, whose test
  * selection record names that file's whole `describe()`, so that a lane
@@ -35,6 +36,9 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 
 // Where a client that draws natively reads the participants' principals.
 const PRINCIPALS = ["$VIEWS", "room", "participantPrincipals"];
+
+// Where it reads each participant paired with whom they stand for.
+const ENTRIES = ["$VIEWS", "room", "participantEntries"];
 
 /** Whether this run's harness serves handlers from a serving loop. */
 const SERVER_EXECUTION = resolveServerExecution();
@@ -66,7 +70,7 @@ describe("fabrichat room principals across runtimes", () => {
     await harness?.dispose();
   });
 
-  it("gives each session the principals it can read, and commits nothing more once every runtime has caught up", async () => {
+  it("gives each session the participant entries and principals it can read, and commits nothing more once every runtime has caught up", async () => {
     await starter.send("createGroup", {
       requestId: "g-principals",
       title: "Team",
@@ -105,9 +109,30 @@ describe("fabrichat room principals across runtimes", () => {
     expect(await starter.read(PRINCIPALS, { piece: room }))
       .toEqual(SERVER_EXECUTION ? [member.identity.did()] : []);
 
-    // Each session reads an instance of its own: one instance for every
-    // reader is a document the readers' runtimes hold differently.
+    // The entries pair the same participants, in the same order, with whom
+    // each attests as the reader can read it: the starter's stand-in no one,
+    // and the member's profile the member, which is how the member tells
+    // which participant is them.
+    for (const session of [starter, member]) {
+      expect(await session.read([...ENTRIES, "length"], { piece: room }))
+        .toBe(2);
+      expect(await session.read([...ENTRIES, 0, "principal"], { piece: room }))
+        .toBeUndefined();
+    }
+    for (const index of [0, 1]) {
+      expect(await member.link([...ENTRIES, index, "profile"], { piece: room }))
+        .toEqual(await member.link(["participants", index], { piece: room }));
+    }
+    expect(await member.read([...ENTRIES, 1, "principal"], { piece: room }))
+      .toBe(member.identity.did());
+    expect(await starter.read([...ENTRIES, 1, "principal"], { piece: room }))
+      .toBe(SERVER_EXECUTION ? member.identity.did() : undefined);
+
+    // Each session reads instances of its own: one instance for every reader
+    // is a document the readers' runtimes hold differently.
     expect(await starter.link(PRINCIPALS, { piece: room }))
+      .toMatchObject({ scope: "session" });
+    expect(await starter.link(ENTRIES, { piece: room }))
       .toMatchObject({ scope: "session" });
 
     // A whole settle of every runtime and the server, with nothing left to
