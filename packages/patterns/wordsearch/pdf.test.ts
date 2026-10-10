@@ -1,17 +1,19 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { generateWordSearch } from "./generator.ts";
+import { generateWordSearch, type WordSearchOptions } from "./generator.ts";
 import { wordSearchPdf } from "./pdf.ts";
 
-const ws = generateWordSearch({
-  words: ["apple", "banana", "cherry", "kiwi"],
-  rows: 8,
-  cols: 10,
-  diagonals: true,
-  backwards: true,
-  seed: 3,
-});
+const puzzle = (overrides: Partial<WordSearchOptions> = {}) =>
+  generateWordSearch({
+    words: ["apple", "Banana", "Café au lait", "kiwi"],
+    rows: 8,
+    cols: 12,
+    diagonals: true,
+    backwards: true,
+    seed: 3,
+    ...overrides,
+  });
 
 /** The content stream of each page, in page order. */
 const streams = (pdf: string): string[] =>
@@ -23,7 +25,20 @@ const drawnText = (content: string): string[] =>
     m[1].replace(/\\(.)/g, "$1")
   );
 
+/** The size every `Tf` on a page sets, in order. */
+const fontSizes = (content: string): number[] =>
+  [...content.matchAll(/\/F\d ([\d.]+) Tf/g)].map((m) => Number(m[1]));
+
+/** The side of a grid cell: the frame's width over the column count. */
+const cellSide = (content: string, cols: number): number =>
+  Number(
+    content.match(/re S/) &&
+      content.match(/[\d.]+ [\d.]+ ([\d.]+) [\d.]+ re S/)![1],
+  ) /
+  cols;
+
 describe("wordSearchPdf", () => {
+  const ws = puzzle();
   const pdf = wordSearchPdf(ws, "Fruit (Café) \\ Search ✓");
 
   it("is ASCII, so string offsets are byte offsets", () => {
@@ -48,23 +63,73 @@ describe("wordSearchPdf", () => {
     }
   });
 
-  it("puts the puzzle and word list on page one", () => {
-    const [puzzle] = streams(pdf);
-    const drawn = drawnText(puzzle);
+  it("puts the puzzle and the words as written on page one", () => {
+    const [page] = streams(pdf);
+    const drawn = drawnText(page);
     expect(drawn[0]).toBe("Fruit (Cafe) \\ Search ");
-    expect(drawn.slice(1, 1 + ws.rows * ws.cols).join(""))
-      .toBe(ws.grid.join(""));
-    expect(drawn.slice(1 + ws.rows * ws.cols))
-      .toEqual(["APPLE", "BANANA", "CHERRY", "KIWI"]);
+    expect(drawn.slice(1, 1 + ws.rows)).toEqual(ws.grid);
+    expect(drawn.slice(1 + ws.rows))
+      .toEqual(["APPLE", "BANANA", "CAFE AU LAIT", "KIWI"]);
     // No answer bands on the puzzle page.
-    expect(puzzle).not.toMatch(/ l S/);
+    expect(page).not.toMatch(/ l S/);
   });
 
   it("marks one band per word on the answer key, and no word list", () => {
     const [, key] = streams(pdf);
     const drawn = drawnText(key);
     expect(drawn[0]).toBe("Fruit (Cafe) \\ Search  - Answer key");
-    expect(drawn.slice(1).join("")).toBe(ws.grid.join(""));
+    expect(drawn.slice(1)).toEqual(ws.grid);
     expect([...key.matchAll(/ l S/g)].length).toBe(ws.placements.length);
+  });
+});
+
+describe("wordSearchPdf with many words", () => {
+  const words = Array.from(
+    { length: 200 },
+    (_, i) =>
+      `w${"abcdefghijklmnopqrstuvwxyz"[i % 26]}${
+        "abcdefghijklmnopqrstuvwxyz"[Math.floor(i / 26)]
+      }q`,
+  );
+  const ws = puzzle({ words, rows: 30, cols: 30 });
+  const pages = streams(wordSearchPdf(ws, "Many"));
+
+  it("keeps the grid readable and moves the list to pages of its own", () => {
+    expect(ws.placements.length).toBeGreaterThan(150);
+    expect(pages.length).toBeGreaterThan(2);
+    expect(cellSide(pages[0], 30)).toBeGreaterThanOrEqual(14);
+    expect(drawnText(pages[0]).slice(1)).toEqual(ws.grid);
+  });
+
+  it("lists every placed word once across the list pages", () => {
+    const listed = pages.slice(1, -1).flatMap((page) =>
+      drawnText(page).slice(1)
+    );
+    expect(listed.sort()).toEqual(
+      ws.placements.map((p) => p.label.toUpperCase()).sort(),
+    );
+  });
+
+  it("draws every list word on the page", () => {
+    for (const page of pages.slice(1, -1)) {
+      for (const m of page.matchAll(/([\d.]+) ([\d.]+) Td/g)) {
+        expect(Number(m[2])).toBeGreaterThanOrEqual(54 - 16);
+      }
+    }
+  });
+});
+
+describe("wordSearchPdf titles", () => {
+  it("shrinks a long title to fit, and cuts one past the smallest size", () => {
+    const ws = puzzle();
+    const long = "A".repeat(50);
+    const [page] = streams(wordSearchPdf(ws, long));
+    expect(fontSizes(page)[0]).toBeLessThan(22);
+    expect(drawnText(page)[0]).toBe(long);
+
+    const [cut] = streams(wordSearchPdf(ws, "B".repeat(200)));
+    expect(fontSizes(cut)[0]).toBe(12);
+    expect(drawnText(cut)[0]).toMatch(/^B+\.\.\.$/);
+    expect(drawnText(cut)[0].length * 12 * 0.6).toBeLessThanOrEqual(504);
   });
 });

@@ -207,6 +207,25 @@ describe("generateWordSearch", () => {
     }
   });
 
+  it("drops words a crowded grid would repeat, and reports them", () => {
+    // 200 near-identical words leave some cell where every letter spells a
+    // second copy of one of them.
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const similar = Array.from(
+      { length: 200 },
+      (_, i) => `W${alphabet[i % 26]}${alphabet[Math.floor(i / 26)]}Q`,
+    );
+    const all = directionsFor({ diagonals: true, backwards: true });
+    const ws = generateWordSearch(
+      options({ words: similar, rows: 30, cols: 30, seed: 3 }),
+    );
+    expect(ws.placements.length + ws.skipped.length).toBe(200);
+    for (const p of ws.placements) {
+      expect({ word: p.word, copies: copies(ws, p.word, all) })
+        .toEqual({ word: p.word, copies: 1 });
+    }
+  });
+
   it("finds a word spelled inside a longer one there, not twice", () => {
     for (let seed = 0; seed < 30; seed++) {
       const ws = generateWordSearch(

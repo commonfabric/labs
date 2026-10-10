@@ -1,6 +1,8 @@
 /**
- * A printable word search as a two-page PDF: the puzzle with its word list,
- * then the same grid with every hidden word circled as the answer key.
+ * A printable word search as a PDF: the puzzle with its word list, then the
+ * same grid with every hidden word banded as the answer key. A list too long
+ * to share the puzzle's page at a readable size moves to pages of its own
+ * between the two, rather than shrinking the grid.
  *
  * The PDF is written by hand rather than through a library because a pattern
  * cannot reach the browser's print dialog, and what it needs is small: text in
@@ -8,21 +10,27 @@
  * output is plain ASCII, so it travels as an ordinary string to the
  * `cf-file-download` button, and byte offsets are string offsets.
  */
-import { type WordSearch } from "./generator.ts";
+import { stripAccents, type WordSearch } from "./generator.ts";
 
 // US Letter, in points, with half-inch margins.
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
 const MARGIN = 54;
-// PAGE_WIDTH - 2 * MARGIN, written out: SES admits only literal module values.
+// PAGE_WIDTH - 2 * MARGIN, written out: the sandbox verifier refuses a
+// module-level value computed from other bindings.
 const CONTENT_WIDTH = 504;
 
 const TITLE_SIZE = 22;
+const MIN_TITLE_SIZE = 12;
 const TITLE_GAP = 18;
+// The page's top edge less the margin, the title and its gap.
+const BODY_TOP = 698;
 const LIST_SIZE = 11;
 const LIST_LEADING = 16;
 const LIST_GAP = 24;
 const MAX_CELL = 30;
+/** Below this a cell's letter is too small to circle with a pencil. */
+const MIN_CELL = 14;
 
 /**
  * Text as a PDF string literal. The standard fonts here carry no glyphs past
@@ -30,8 +38,7 @@ const MAX_CELL = 30;
  */
 const pdfString = (text: string): string =>
   "(" +
-  text.normalize("NFD").replace(/[̀-ͯ]/g, "")
-    .replace(/[^\x20-\x7e]/g, "")
+  stripAccents(text).replace(/[^\x20-\x7e]/g, "")
     .replace(/[\\()]/g, (c) => `\\${c}`) +
   ")";
 
@@ -43,109 +50,98 @@ const text = (
   x: number,
   y: number,
   value: string,
+  spacing = 0,
 ): string =>
-  `BT /${font} ${num(size)} Tf ${num(x)} ${num(y)} Td ${
+  `BT /${font} ${num(size)} Tf ${num(spacing)} Tc ${num(x)} ${num(y)} Td ${
     pdfString(value)
   } Tj ET`;
 
-/** Where the grid and word list sit on a page, shared by both pages. */
-interface Layout {
+/** Where the grid sits: shared by the puzzle and the answer key. */
+interface Grid {
   cell: number;
   left: number;
   top: number;
-  listLeft: number;
-  listColumns: number;
-  listColumnWidth: number;
-  listTop: number;
 }
 
-const layoutFor = (ws: WordSearch, words: readonly string[]): Layout => {
-  const longest = words.reduce((most, w) => Math.max(most, w.length), 1);
+/** How the word list is laid out in columns. */
+interface List {
+  columns: number;
+  columnWidth: number;
+  left: number;
+}
+
+const listFor = (labels: readonly string[], grid?: Grid, cols = 0): List => {
+  const longest = labels.reduce((most, w) => Math.max(most, w.length), 1);
   // Helvetica capitals average about 0.7 em, plus a gutter between columns.
-  const columnWidth = longest * LIST_SIZE * 0.7 + 18;
-  const listColumns = Math.max(
-    1,
-    Math.min(4, Math.floor(CONTENT_WIDTH / columnWidth)),
-  );
-  const listHeight = words.length === 0
-    ? 0
-    : LIST_GAP + Math.ceil(words.length / listColumns) * LIST_LEADING;
-  const top = PAGE_HEIGHT - MARGIN - TITLE_SIZE - TITLE_GAP;
-  const cell = Math.min(
-    MAX_CELL,
-    CONTENT_WIDTH / ws.cols,
-    (top - MARGIN - listHeight) / ws.rows,
-  );
-  const left = (PAGE_WIDTH - cell * ws.cols) / 2;
-  // The list sits under the grid, and widens to the margins only when its
-  // columns would not fit under a narrow grid.
-  const underGrid = cell * ws.cols >= listColumns * columnWidth;
-  return {
-    cell,
-    left,
-    top,
-    listLeft: underGrid ? left : MARGIN,
-    listColumns,
-    listColumnWidth: (underGrid ? cell * ws.cols : CONTENT_WIDTH) /
-      listColumns,
-    listTop: top - cell * ws.rows - LIST_GAP,
-  };
+  const needed = longest * LIST_SIZE * 0.7 + 18;
+  const columns = Math.max(1, Math.min(4, Math.floor(CONTENT_WIDTH / needed)));
+  // The list sits under the grid when its columns fit there, and otherwise
+  // spans the margins.
+  const gridWidth = grid ? grid.cell * cols : 0;
+  return grid && gridWidth >= columns * needed
+    ? { columns, columnWidth: gridWidth / columns, left: grid.left }
+    : { columns, columnWidth: CONTENT_WIDTH / columns, left: MARGIN };
 };
 
-const cellCenter = (layout: Layout, row: number, col: number) => ({
-  x: layout.left + (col + 0.5) * layout.cell,
-  y: layout.top - (row + 0.5) * layout.cell,
+const gridAt = (ws: WordSearch, height: number): Grid => {
+  const cell = Math.min(MAX_CELL, CONTENT_WIDTH / ws.cols, height / ws.rows);
+  return { cell, left: (PAGE_WIDTH - cell * ws.cols) / 2, top: BODY_TOP };
+};
+
+const cellCenter = (grid: Grid, row: number, col: number) => ({
+  x: grid.left + (col + 0.5) * grid.cell,
+  y: grid.top - (row + 0.5) * grid.cell,
 });
 
-const titleOps = (title: string): string =>
-  text(
-    "F1",
-    TITLE_SIZE,
-    MARGIN,
-    PAGE_HEIGHT - MARGIN - TITLE_SIZE,
-    title,
+/** The title at the size that fits the line, cut short only past the floor. */
+const titleOps = (title: string): string => {
+  // Helvetica-Bold averages about 0.6 em across mixed case.
+  const size = Math.max(
+    MIN_TITLE_SIZE,
+    Math.min(TITLE_SIZE, CONTENT_WIDTH / (title.length * 0.6)),
   );
-
-const gridOps = (ws: WordSearch, layout: Layout): string[] => {
-  const size = layout.cell * 0.6;
-  // Courier is monospaced at 0.6 em, and its capitals stand about 0.57 em,
-  // so these offsets put each letter's middle on the cell's middle.
-  const letters = ws.grid.flatMap((line, row) =>
-    [...line].map((letter, col) => {
-      const { x, y } = cellCenter(layout, row, col);
-      return text("F2", size, x - size * 0.3, y - size * 0.285, letter);
-    })
-  );
-  const frame = `0.5 w ${num(layout.left)} ${
-    num(layout.top - layout.cell * ws.rows)
-  } ${num(layout.cell * ws.cols)} ${num(layout.cell * ws.rows)} re S`;
-  return [frame, ...letters];
+  const fits = Math.floor(CONTENT_WIDTH / (size * 0.6));
+  const shown = title.length <= fits ? title : `${title.slice(0, fits - 3)}...`;
+  return text("F1", size, MARGIN, PAGE_HEIGHT - MARGIN - TITLE_SIZE, shown);
 };
 
-const wordListOps = (words: readonly string[], layout: Layout): string[] => {
-  const perColumn = Math.ceil(words.length / layout.listColumns);
-  return words.map((word, i) =>
+/** The frame and one line of text per row, spaced to the cell width. */
+const gridOps = (ws: WordSearch, grid: Grid): string[] => {
+  const size = grid.cell * 0.6;
+  // Courier advances 0.6 em per letter, so the character spacing makes up
+  // the rest of a cell; its capitals stand about 0.57 em, so these offsets
+  // put each letter's middle on its cell's middle.
+  const spacing = grid.cell - size * 0.6;
+  const rows = ws.grid.map((line, row) => {
+    const { x, y } = cellCenter(grid, row, 0);
+    return text("F2", size, x - size * 0.3, y - size * 0.285, line, spacing);
+  });
+  const frame = `0.5 w ${num(grid.left)} ${
+    num(grid.top - grid.cell * ws.rows)
+  } ${num(grid.cell * ws.cols)} ${num(grid.cell * ws.rows)} re S`;
+  return [frame, ...rows];
+};
+
+const listOps = (labels: readonly string[], list: List, top: number) => {
+  const perColumn = Math.ceil(labels.length / list.columns);
+  return labels.map((label, i) =>
     text(
       "F3",
       LIST_SIZE,
-      layout.listLeft + Math.floor(i / perColumn) * layout.listColumnWidth,
-      layout.listTop - (i % perColumn) * LIST_LEADING,
-      word,
+      list.left + Math.floor(i / perColumn) * list.columnWidth,
+      top - (i % perColumn) * LIST_LEADING,
+      label,
     )
   );
 };
 
 /** A rounded band under each placed word, drawn before the letters. */
-const answerOps = (ws: WordSearch, layout: Layout): string[] => [
-  `0.82 G 1 J ${num(layout.cell * 0.7)} w`,
+const answerOps = (ws: WordSearch, grid: Grid): string[] => [
+  `0.82 G 1 J ${num(grid.cell * 0.7)} w`,
   ...ws.placements.map((p) => {
-    const start = cellCenter(layout, p.row, p.col);
+    const start = cellCenter(grid, p.row, p.col);
     const last = p.word.length - 1;
-    const end = cellCenter(
-      layout,
-      p.row + p.dRow * last,
-      p.col + p.dCol * last,
-    );
+    const end = cellCenter(grid, p.row + p.dRow * last, p.col + p.dCol * last);
     return `${num(start.x)} ${num(start.y)} m ${num(end.x)} ${num(end.y)} l S`;
   }),
   "0 G",
@@ -175,36 +171,79 @@ const stream = (ops: string[]): string => {
   return `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
 };
 
+/** The content of each page, in order. */
+const pages = (ws: WordSearch, title: string): string[][] => {
+  const labels = [...ws.placements]
+    .sort((a, b) => (a.word < b.word ? -1 : a.word > b.word ? 1 : 0))
+    .map((p) => stripAccents(p.label).toUpperCase());
+  const bodyHeight = BODY_TOP - MARGIN;
+  const rowsUnder = (list: List) => Math.ceil(labels.length / list.columns);
+
+  // One page if the list fits under a grid of readable cells.
+  const fullList = listFor(labels);
+  const shared = gridAt(
+    ws,
+    bodyHeight - LIST_GAP - rowsUnder(fullList) * LIST_LEADING,
+  );
+  const key = [titleOps(`${title} - Answer key`)];
+  if (labels.length === 0 || shared.cell >= MIN_CELL) {
+    const list = listFor(labels, shared, ws.cols);
+    const listTop = shared.top - shared.cell * ws.rows - LIST_GAP;
+    return [
+      [
+        titleOps(title),
+        ...gridOps(ws, shared),
+        ...listOps(labels, list, listTop),
+      ],
+      [...key, ...answerOps(ws, shared), ...gridOps(ws, shared)],
+    ];
+  }
+
+  // Otherwise the grid takes its page, and the list follows on its own.
+  const grid = gridAt(ws, bodyHeight);
+  const perPage = Math.floor(bodyHeight / LIST_LEADING) * fullList.columns;
+  const listPages = Array.from(
+    { length: Math.ceil(labels.length / perPage) },
+    (_, i) => [
+      titleOps(`${title} - Words`),
+      ...listOps(
+        labels.slice(i * perPage, (i + 1) * perPage),
+        fullList,
+        BODY_TOP,
+      ),
+    ],
+  );
+  return [
+    [titleOps(title), ...gridOps(ws, grid)],
+    ...listPages,
+    [...key, ...answerOps(ws, grid), ...gridOps(ws, grid)],
+  ];
+};
+
 /**
- * The PDF for `ws`: page one is the puzzle under `title` with the placed words
- * listed alphabetically below it; page two is the answer key.
+ * The PDF for `ws`: the puzzle under `title` with the hidden words listed as
+ * they were written, alphabetically; then the answer key.
  */
 export const wordSearchPdf = (ws: WordSearch, title: string): string => {
-  const words = ws.placements.map((p) => p.word).sort();
-  const layout = layoutFor(ws, words);
-  const puzzle = [
-    titleOps(title),
-    ...gridOps(ws, layout),
-    ...wordListOps(words, layout),
-  ];
-  const key = [
-    titleOps(`${title} - Answer key`),
-    ...answerOps(ws, layout),
-    ...gridOps(ws, layout),
-  ];
+  const contents = pages(ws, title);
+  // Objects 1–5 are the catalog, page tree and fonts; then each page is a
+  // page object followed by its content stream.
+  const pageRef = (i: number) => 6 + 2 * i;
   const font = (name: string) =>
     `<< /Type /Font /Subtype /Type1 /BaseFont /${name} >>`;
-  const page = (contents: number) =>
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents ${contents} 0 R >>`;
   return assemble([
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [6 0 R 8 0 R] /Count 2 >>",
+    `<< /Type /Pages /Kids [${
+      contents.map((_, i) => `${pageRef(i)} 0 R`).join(" ")
+    }] /Count ${contents.length} >>`,
     font("Helvetica-Bold"),
     font("Courier-Bold"),
     font("Helvetica"),
-    page(7),
-    stream(puzzle),
-    page(9),
-    stream(key),
+    ...contents.flatMap((ops, i) => [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents ${
+        pageRef(i) + 1
+      } 0 R >>`,
+      stream(ops),
+    ]),
   ]);
 };

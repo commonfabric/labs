@@ -308,28 +308,48 @@ export const generateWordSearch = (options: WordSearchOptions): WordSearch => {
   }
 
   // Each empty cell takes the first letter, in a seeded order, that completes
-  // no run of any word through it. Such a run would be a second copy: a
-  // placed word's own run never covers an empty cell.
+  // no run of any word through it: such a run would be a second copy, since a
+  // placed word's own run never covers an empty cell. Rarely, among many
+  // similar words, every letter completes one. Then the letter completing the
+  // fewest is used, and the words it repeats leave the puzzle as `no-room`:
+  // their letters stay as filler, which is harmless once nobody looks for them.
+  const dropped = new Set<string>();
   board.cells.forEach((value, cell) => {
     if (value !== null) return;
-    const letter = shuffled([...ALPHABET], random).find((candidate) => {
-      board.cells[cell] = candidate;
+    const order = shuffled([...ALPHABET], random);
+    const safe = order.find((letter) => {
+      board.cells[cell] = letter;
       return repeatsNothing([cell]);
     });
-    if (letter === undefined) {
-      throw new Error(
-        `No letter for cell ${cell} keeps every word unique: ${
-          words.join(", ")
-        }`,
-      );
+    if (safe !== undefined) return;
+    const least = order.map((letter) => {
+      board.cells[cell] = letter;
+      return {
+        letter,
+        repeats: words.filter((w) => runsOf(board, w, cell).size > 0),
+      };
+    }).reduce((a, b) => b.repeats.length < a.repeats.length ? b : a);
+    board.cells[cell] = least.letter;
+    for (const w of least.repeats) {
+      words.splice(words.indexOf(w), 1);
+      dropped.add(w);
     }
   });
+  for (const word of dropped) {
+    skipped.push({ label: entries.get(word)!, reason: "no-room" });
+  }
 
   const grid = Array.from(
     { length: rows },
     (_, r) => board.cells.slice(r * cols, (r + 1) * cols).join(""),
   );
-  return { rows, cols, grid, placements, skipped };
+  return {
+    rows,
+    cols,
+    grid,
+    placements: placements.filter((p) => !dropped.has(p.word)),
+    skipped,
+  };
 };
 
 /** The cells a placement covers, as `row * cols + col` indices. */
