@@ -1,4 +1,4 @@
-import { css, html, LitElement, type PropertyValues } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import { createRef, ref } from "lit/directives/ref.js";
@@ -58,11 +58,6 @@ const KEY_STOPS: Readonly<Record<string, number>> = {
  * <cf-slider orientation="vertical" style="height: 200px"></cf-slider>
  */
 export class CFSlider extends BaseElement {
-  static override shadowRootOptions = {
-    ...LitElement.shadowRootOptions,
-    delegatesFocus: true,
-  };
-
   // deno-fmt-ignore
   static override styles = [
     BaseElement.baseStyles,
@@ -224,7 +219,7 @@ export class CFSlider extends BaseElement {
       outline: none;
     }
 
-    :host(:focus-visible) .thumb {
+    :host(:not([disabled]):focus-visible) .thumb {
       outline: 2px solid transparent;
       outline-offset: 2px;
       box-shadow:
@@ -233,6 +228,11 @@ export class CFSlider extends BaseElement {
     }
 
     /* Dragging state */
+    .slider.dragging,
+    .slider.dragging .track {
+      cursor: grabbing;
+    }
+
     .slider.dragging .thumb {
       cursor: grabbing;
       transform: translate(-50%, -50%) scale(1.1);
@@ -689,9 +689,16 @@ export class CFSlider extends BaseElement {
 
   #onPointerDown = (event: PointerEvent): void => {
     const track = this.#track.value;
-    if (this.disabled || event.button !== 0 || track === undefined) return;
+    // One pointer drags: a second finger, or a second button, is ignored, as
+    // on a native range.
+    if (
+      this.disabled || event.button !== 0 || !event.isPrimary ||
+      this.#pointer !== undefined || track === undefined
+    ) return;
     event.preventDefault();
-    this.focus();
+    // Focused for the keys that follow, without scrolling the press away from
+    // where it landed, and without a focus ring for a pointer.
+    this.focus({ preventScroll: true, focusVisible: false });
     track.setPointerCapture(event.pointerId);
     this.#beginDrag(event.pointerId);
     // Pressing the track moves there; grabbing the thumb keeps its value.

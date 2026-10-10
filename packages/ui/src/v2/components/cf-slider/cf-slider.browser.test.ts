@@ -2,7 +2,8 @@
  * A slider driven by real pointer events in a browser: pressing the track
  * moves there, a drag reports each move and commits once on release, the
  * thumb can be grabbed without jumping, and a capture lost before release
- * still ends the drag. Unit tests drive the same moves by value; this file
+ * still ends the drag, a press focuses the slider for the keys that follow,
+ * and a second pointer is ignored. Unit tests drive the same moves by value; this file
  * is where the pointer, its capture and the track's geometry meet them.
  */
 
@@ -10,7 +11,13 @@ import { expect } from "@std/expect";
 import "./index.ts";
 import type { CFSlider } from "./index.ts";
 
-const pointer = { bubbles: true, composed: true, pointerId: 1, button: 0 };
+const pointer = {
+  bubbles: true,
+  composed: true,
+  pointerId: 1,
+  button: 0,
+  isPrimary: true,
+};
 
 /** A 200px slider over 0–100 in the page, and the events it fires. */
 async function mounted(): Promise<{
@@ -147,6 +154,83 @@ Deno.test("a capture lost before release ends the drag", async () => {
       }),
     );
     expect(slider.value).toBe(40);
+  } finally {
+    slider.remove();
+  }
+});
+
+Deno.test("a press focuses the slider, and the keys that follow move it", async () => {
+  const { slider, track, at } = await mounted();
+  try {
+    const y = track.getBoundingClientRect().top + 2;
+    track.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        ...pointer,
+        clientX: at(50),
+        clientY: y,
+      }),
+    );
+    track.dispatchEvent(
+      new PointerEvent("pointerup", {
+        ...pointer,
+        clientX: at(50),
+        clientY: y,
+      }),
+    );
+    expect(document.activeElement).toBe(slider);
+
+    slider.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    expect(slider.value).toBe(51);
+  } finally {
+    slider.remove();
+  }
+});
+
+Deno.test("only the primary pointer drags, one drag at a time", async () => {
+  const { slider, track, at } = await mounted();
+  try {
+    const y = track.getBoundingClientRect().top + 2;
+    // A pointer that is not the primary one (a second finger whose first
+    // landed elsewhere) does not start a drag. Pointer 1 is the mouse, which
+    // a page can always capture, so a press the slider did not ignore would
+    // reach its move rather than fail on capture first.
+    track.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        ...pointer,
+        isPrimary: false,
+        clientX: at(80),
+        clientY: y,
+      }),
+    );
+    expect(slider.value).toBe(20);
+    track.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        ...pointer,
+        clientX: at(30),
+        clientY: y,
+      }),
+    );
+    // Nor does a second, non-primary pointer during the drag.
+    track.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        ...pointer,
+        isPrimary: false,
+        clientX: at(90),
+        clientY: y,
+      }),
+    );
+    expect(slider.value).toBe(30);
+    // A press while a drag is under way is not a second drag either.
+    track.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        ...pointer,
+        clientX: at(70),
+        clientY: y,
+      }),
+    );
+    expect(slider.value).toBe(30);
   } finally {
     slider.remove();
   }
