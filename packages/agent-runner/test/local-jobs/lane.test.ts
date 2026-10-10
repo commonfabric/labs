@@ -966,6 +966,22 @@ describe("local-jobs/lane", () => {
         expect(lane.browserHost("job-unknown")).toBeUndefined();
       });
 
+      it("fails its stop with a run that could not close its host", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({
+          profiles: BROWSING,
+        });
+        lane.start();
+        const id = enqueue("a", DECLARED);
+        const run = await nextRun(0);
+        lane.browserHost(id)!.close = () => {
+          throw new Error("the host would not close");
+        };
+        const stopped = lane.stop();
+        run.settle({ outcome: "cancelled" });
+        await expect(stopped).rejects.toBeInstanceOf(AggregateError);
+        expect(store.get(id)?.state).toBe("running");
+      });
+
       it("ends a failed run and closes its host when reporting the failure throws", async () => {
         const { store, lane, nextRun, enqueue } = laneWith({
           profiles: BROWSING,
