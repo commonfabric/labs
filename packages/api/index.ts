@@ -1371,7 +1371,12 @@ export interface ICell<T>
     IDerivable<T>,
     IResolvable<T, Cell<T>> {}
 
-export interface Cell<T = unknown> extends BrandedCell<T, "cell">, ICell<T> {}
+// `out` is the variance the checker measures for this interface, its methods
+// being compared bivariantly. Declared, it is read; undeclared, the first
+// expression of a compile that relates two cells has the checker measure it,
+// by comparing two instantiations of the interface member by member.
+export interface Cell<out T = unknown>
+  extends BrandedCell<T, "cell">, ICell<T> {}
 
 export declare const Cell: CellTypeConstructor<AsCell>;
 
