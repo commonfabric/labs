@@ -3797,13 +3797,8 @@ class PiecePropIo implements PieceCellIo {
     // reads what the served run stored. Pulling the result root for a send
     // would demand every derivation of the result on every send, a read as
     // wide as the whole result for a write that touched none of it.
-    if (this.#type === "input") {
-      await pieces.getResult(this.#cc.getCell()).pull();
-    } else if (!sentEvent) {
-      await targetCell.pull();
-    }
-    // A stream reached through either the input or the result owes the same.
     if (sentEvent) {
+      // A stream reached through the input or the result owes the same.
       await pieces.runtime.idle();
       if (streamSendOptions !== undefined && sentStreamLink !== undefined) {
         await pieces.runtime.speculationOverlay?.waitForIntentConsequence(
@@ -3815,6 +3810,10 @@ class PiecePropIo implements PieceCellIo {
           ),
         );
       }
+    } else if (this.#type === "input") {
+      await pieces.getResult(this.#cc.getCell()).pull();
+    } else {
+      await targetCell.pull();
     }
     await pieces.synced();
     return { wrote: true };
