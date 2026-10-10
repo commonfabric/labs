@@ -273,11 +273,11 @@ export class CFSlider extends BaseElement {
   declare disabled: boolean;
   declare orientation: SliderOrientation;
 
-  // A drag would otherwise write the cell once per snapped mousemove; the
-  // throttle's leading edge keeps the first write immediate, and the end of a
-  // drag flushes the last.
+  // Immediate, so a move's announcement and its write happen together: a
+  // write held back by a timer can be cancelled (by a rebind, a refusal or a
+  // disconnect) after its move was announced.
   private _valueCellController = createCellController<number>(this, {
-    timing: { strategy: "throttle", delay: 50 },
+    timing: { strategy: "immediate" },
   });
 
   private _trackElement: HTMLElement | null = null;
@@ -333,7 +333,7 @@ export class CFSlider extends BaseElement {
     // A plain value is the slider's own, so it is brought within bounds here.
     // A cell's value belongs to the cell: it is shown clamped, never rewritten.
     if (!this._valueCellController.hasCell()) {
-      this.value = this._snapToStep(this._clampValue(this._current));
+      this.value = this._clampValue(this._snapToStep(this._current));
     }
     this._updateAriaAttributes();
 
@@ -371,7 +371,7 @@ export class CFSlider extends BaseElement {
         changedProperties.has("step"))
     ) {
       // Re-clamp and snap the value when constraints change
-      const clampedValue = this._snapToStep(this._current);
+      const clampedValue = this._clampValue(this._snapToStep(this._current));
       if (clampedValue !== this.value) {
         this.value = clampedValue;
       }
@@ -412,16 +412,21 @@ export class CFSlider extends BaseElement {
    * read announces nothing. A plain value moves now.
    */
   private _move(next: (current: number) => number): void {
+    // Snapped, then clamped: a step that does not divide the range would
+    // otherwise snap past the maximum.
     const target = (current: number) =>
-      this._snapToStep(this._clampValue(next(current)));
+      this._clampValue(this._snapToStep(next(current)));
+    // Taken now: on a cell not yet read the move is computed after the worker
+    // answers, by which time a short drag may have ended.
+    const dragging = this._isDragging;
     if (this._valueCellController.hasCell()) {
       void this._valueCellController.updateValue((held) => {
         const oldValue = this._shown(held);
         const value = target(oldValue);
-        // A move that leaves the shown value alone writes nothing, even to a
-        // cell holding a value out of bounds.
-        if (value === oldValue && typeof held === "number") return held;
-        this._announce(value, oldValue);
+        // A move that leaves the shown value alone is not announced, and
+        // writes nothing to a cell that holds a value, even one out of bounds.
+        if (value === oldValue) return held ?? value;
+        this._announce(value, oldValue, dragging);
         return value;
       });
       return;
@@ -430,12 +435,12 @@ export class CFSlider extends BaseElement {
     const value = target(oldValue);
     if (value === oldValue) return;
     this.value = value;
-    this._announce(value, oldValue);
+    this._announce(value, oldValue, dragging);
   }
 
-  /** `cf-input` while dragging, and `cf-change` for every move. */
-  private _announce(value: number, oldValue: number): void {
-    if (this._isDragging) this.emit("cf-input", { value, oldValue });
+  /** `cf-input` for a move made while dragging, and `cf-change` for every move. */
+  private _announce(value: number, oldValue: number, dragging: boolean): void {
+    if (dragging) this.emit("cf-input", { value, oldValue });
     this.emit("cf-change", { value, oldValue });
   }
 
@@ -574,7 +579,6 @@ export class CFSlider extends BaseElement {
     document.removeEventListener("touchmove", this._handleTouchMove);
     document.removeEventListener("touchend", this._handleTouchEnd);
     this.classList.remove("dragging");
-    this._valueCellController.flush();
   }
 
   private _handleMouseMove = (event: MouseEvent): void => {

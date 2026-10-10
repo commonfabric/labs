@@ -28,6 +28,7 @@ type SliderInternals = {
   value: CellHandle<number> | number;
   min: number;
   max: number;
+  step: number;
   addEventListener(type: string, listener: (event: Event) => void): void;
   getAttribute(name: string): string | null;
   willUpdate(changedProperties: Map<string, unknown>): void;
@@ -117,6 +118,62 @@ describe("CFSlider bound to a cell", () => {
     element.setValue(100);
 
     expect(writesSent(value)).toEqual([]);
+  });
+
+  it("never snaps past the maximum", () => {
+    const value = createMockCellHandle(8);
+    const element = sliderWith(value);
+    element.max = 10;
+    element.step = 4;
+
+    element.setValue(10);
+
+    expect(writesSent(value)).toEqual([
+      expect.objectContaining({ type: "cell:set", value: 10 }),
+    ]);
+  });
+
+  it("announces nothing for a move that leaves an empty cell's shown value", () => {
+    const value = createMockCellHandle<number>(undefined);
+    const element = sliderWith(value);
+    const announced = announcements(element);
+
+    element.setValue(0);
+    element.decrement();
+
+    expect(announced).toEqual([]);
+  });
+
+  it("announces exactly the writes it sends", async () => {
+    const value = createMockCellHandle(30);
+    const element = sliderWith(value);
+    const announced = announcements(element);
+
+    element.increment();
+    element.increment();
+    element.value = createMockCellHandle(70);
+    element.willUpdate(new Map([["value", undefined]]));
+    const time = new FakeTime();
+    try {
+      // Writes already handed to the cell go out on the next microtasks.
+      await time.runMicrotasks();
+    } finally {
+      time.restore();
+    }
+
+    // However many of the moves the rebind cut short, each announcement
+    // names a write that went out, and each write was announced.
+    const written = writesSent(value).map((write) =>
+      "value" in write ? write.value : undefined
+    );
+    expect(written.length).toBeGreaterThan(0);
+    expect(
+      announced.map((event) =>
+        typeof event === "object" && event !== null && "value" in event
+          ? event.value
+          : undefined
+      ),
+    ).toEqual(written);
   });
 
   it("shows an out-of-range cell clamped, and stays bound to it", () => {
