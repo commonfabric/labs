@@ -4260,10 +4260,16 @@ export function analyzeFunctionCapabilities(
           }
         }
         if (identityArgumentCall) {
+          // An `assert` body's operand recording wraps each argument, and
+          // which source an argument comes from, and whether it is cell-like,
+          // are questions about the value the recording hands back. The
+          // member-access visit charges no read to a member argument and
+          // leaves its identity use to be recorded here.
           for (const argument of node.arguments) {
-            const source = resolveSourceRef(argument);
+            const comparedArgument = unwrapAssertCapture(argument);
+            const source = resolveSourceRef(comparedArgument);
             if (source) {
-              markIdentityUseRef(source, argument, {
+              markIdentityUseRef(source, comparedArgument, {
                 comparable: identityEqualsCall,
               });
             }
