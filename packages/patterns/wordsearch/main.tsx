@@ -10,6 +10,7 @@
 import {
   computed,
   Default,
+  handler,
   NAME,
   pattern,
   UI,
@@ -36,6 +37,15 @@ interface WordSearchMakerInput {
   backwards?: Writable<boolean | Default<false>>;
   seed?: Writable<number | Default<1>>;
 }
+
+// cf-slider holds a plain number rather than a cell, so its change event is
+// how a move reaches the setting.
+const setSize = handler<
+  { detail: { value: number } },
+  { size: Writable<number> }
+>(
+  (event, { size }) => size.set(event.detail.value),
+);
 
 interface WordSearchMakerOutput {
   [NAME]: string;
@@ -72,10 +82,20 @@ export default pattern<WordSearchMakerInput, WordSearchMakerOutput>(
                 <cf-textarea $value={wordText} rows={10} />
               </cf-field>
               <cf-field label={rowsLabel}>
-                <cf-slider $value={rows} min={MIN_SIZE} max={MAX_SIZE} />
+                <cf-slider
+                  value={rows}
+                  min={MIN_SIZE}
+                  max={MAX_SIZE}
+                  oncf-change={setSize({ size: rows })}
+                />
               </cf-field>
               <cf-field label={colsLabel}>
-                <cf-slider $value={cols} min={MIN_SIZE} max={MAX_SIZE} />
+                <cf-slider
+                  value={cols}
+                  min={MIN_SIZE}
+                  max={MAX_SIZE}
+                  oncf-change={setSize({ size: cols })}
+                />
               </cf-field>
               <cf-hstack gap="2" align="center">
                 <cf-switch $checked={diagonals} />
