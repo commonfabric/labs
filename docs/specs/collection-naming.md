@@ -209,8 +209,11 @@ an item addresses one of them:
 
 A collection an item holds is one of its fields, so naming the collection and
 naming the field are the same act, and the segment after an item stays what it
-already is — a path into that item. Depth is uniform and unbounded, and it needs
-no second mechanism.
+already is — a path into that item. The segment after a collection is a member
+name, resolved through that collection's forward resolution rather than read as
+a position or key of what the field stores; [A field that holds a
+collection](#a-field-that-holds-a-collection) below says how an item marks one.
+Depth is uniform and unbounded, and it needs no second mechanism.
 
 An item's fields and a collection's member names are different namespaces, and
 the segment after an item belongs to the fields. Keeping an item out of the
@@ -223,6 +226,93 @@ The shell does not yet resolve nested collection addresses such as
 `<space>/top/42/comments/7`. It reads one member after a collection's name and
 refuses an address carrying segments past that member, naming them, so the
 address above states the design rather than one that opens today.
+
+### A field that holds a collection
+
+An item declares which of its fields hold collections. A field it does not
+declare is an ordinary path, and the segment after it reads what the field
+stores, by position or by key. A field it declares is a collection, and the
+segment after it is a member name:
+
+```text
+<space>/<board>/items/42        member 42 of the collection the board holds
+                                in its `items` field
+```
+
+The field names the membership, and the declaration says where the forward
+resolution lives, which need not be the same field. A collection that numbers
+its members commonly keeps them in a list, in the order they joined, and keeps
+its names in a map from name to member beside it. A list's positions are not
+names: removing a member moves every position after it, and a position is
+nothing the collection promised to keep. So the address names the field a
+person thinks of as the collection, and the walk resolves the member through
+the map the declaration points at.
+
+A declared field gives up positional addressing. `42` cannot mean both the
+member named `42` and the entry at position 42, and a numbered collection makes
+that collision certain rather than possible, so in an address the member name
+is the only reading. The field's stored value is unchanged, and so is code that
+navigates it: the rule governs addresses — page URLs, `cf` references, the slug
+walk — and never cell navigation inside a program, where a position is an index
+the code computed rather than a name a person typed.
+
+A declared field's name is the collection's name in every address through the
+item, so it is held to the grammar in [Character set](#character-set) like any
+other name: an item may store a collection under a field such as `byNumber`,
+but it cannot declare that field a collection under that name.
+
+An item-relative address is what an item publishes when it links to one of its
+own members. It needs no binding, so it works wherever the item is reachable,
+and it names the collection by the field the item holds it in, which is a name
+the item chose rather than one a binding gave it. A slug bound to the same
+collection reaches the member through the same forward resolution, so
+`<space>/top/42` and `<space>/<board>/items/42` are two routes to one answer.
+
+#### The declaration
+
+An item declares its collections in one field of its result, `collections`: a
+map from each declared field's name to what that collection declares.
+
+```ts
+// Shown for illustration only.
+collections: {
+  items: {
+    forward: <link to the map from member name to member>,
+    reverse: <link to the rows pairing each member with its name>,
+    naming: { policy: { … }, compact: true },
+  },
+}
+```
+
+The key is the declared field's name, so it is the collection's name in an
+address through the item, and it names a field the item holds. An address that
+stops at the field, `<space>/<board>/items`, reads that field as stored: the
+membership, in whatever form the item keeps it. Only a member segment after it
+goes through the declaration.
+
+`forward` and `reverse` are links rather than field names. A link reaches a
+sibling field, a computed value, or a cell in another document alike, so the
+declaration says where a collection's resolution lives without constraining
+how the item stores it. The walk follows `forward` to a map and looks the member
+up as a key, followed through its links to a piece — the lookup a slug bound to
+a collection already makes. `reverse` is required for the reason
+[What a collection declares](#what-a-collection-declares) gives: without it a
+renderer cannot shorten a reference to a member.
+
+`naming` carries the policy and compact-spelling eligibility a collection
+publishes about its names. It carries no name of its own: the key is the
+collection's name in an item-relative address, and the name a binding gives a
+collection is the binding's.
+
+A field the map does not hold is an ordinary path. The walk reads `collections`
+on each item it passes through, which is what keeps the rule local to the item:
+nothing outside the item can make one of its fields a collection.
+
+The resolver lives in `runner`, so the declaration's type does too, or below
+it, and a pattern takes it from `commonfabric` rather than from a pattern
+library. `collections` is part of the item's result schema, which makes
+declaring or undeclaring a field a contract change: either one changes what an
+address through the item means, and `pattern-compat` sees it as such.
 
 ## Resolution scope
 
@@ -581,7 +671,12 @@ landed.
 Still to build: a collection declares the name it answers to, its name policy,
 and forward and reverse resolutions. Whatever allocator it needs is its own; a
 collection that accepts names from people can reuse the claim from step 2 at
-collection scope, which is itself unbuilt.
+collection scope, which is itself unbuilt. An item declares its collections in
+its `collections` field, and the walk reads that declaration: a path through an
+item that reaches a declared field resolves the next segment through the
+forward resolution, as [The declaration](#the-declaration) describes. Today
+the walk reads every segment after an item as a path, so
+`<space>/<board>/items/42` opens the entry at position 42.
 
 Landed: address resolution (`packages/piece/src/slugs.ts`) splits along what
 the caller is asking for. An address alone resolves through
@@ -601,7 +696,13 @@ that nested view-bearing cell in its target space; navigation does not rebind
 the address to the current space or replace it with a root-piece slug.
 The URL carries a nonempty pointer path as a JSON string array in `cellPath` so
 spaces, punctuation, empty keys, and dot segments survive URL parsing. This
-query cannot accompany a slug, another `cellPath`, or a path after the id.
+query cannot accompany a slug, another `cellPath`, or a path after the id. An
+item-relative member address is the case the query does not fit: its segments
+are a declared field's name and a member name, both held to the grammar in
+[Character set](#character-set) and so able to survive a URL segment as
+written, and the address is one a person reads and types. The shell reads such
+an address written as path segments, and still to build is writing it back the
+same way rather than rewriting it into `cellPath`.
 `urlToAppView` (`packages/navigation/src/view.ts`) reads the segment after a
 slug as the member name and carries it in the view, which serializes back to
 `<space>/<collection>/<member>`. It walks no further: segments past the member
@@ -748,7 +849,9 @@ resolver compares one, and member resolution
 (`packages/runner/src/slug-resolution.ts`) reads no part of it. Making one
 consumer real is [#6986](https://github.com/commonfabric/labs/issues/6986),
 whose natural first consumer is that check, with a name assigned onto a
-collection written into the declaration.
+collection written into the declaration. The walk in step 3 reads an item's
+declaration of its collection fields, but that says where a collection lives
+rather than what it is called, so this check stays open.
 
 **Whether member resolution applies a collection's grammar.** It applies no
 member-name grammar
