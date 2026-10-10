@@ -61,9 +61,10 @@ const SOURCE_SCHEMA = internSchema(
 );
 
 /**
- * Seed a cell whose `/secret` carries `label` as persisted store-policy
- * metadata — integrity evidence included, which is how screening evidence
- * actually travels with a value (a schema `ifc` declaration carries only the
+ * Seed a cell whose `/secret` carries `label`: its confidentiality as
+ * persisted store-policy metadata, and its integrity as the stamp a
+ * screening builtin's write mints on the value, which is how screening
+ * evidence travels with a value (a schema `ifc` declaration carries only the
  * declared components, not per-value evidence). The seed itself commits under
  * the full bundle, so the posture's metadata-protection and monotonicity
  * dials sign off on it too.
@@ -91,7 +92,22 @@ const seedSource = async (
     cfc: {
       version: 1,
       schemaHash: SOURCE_SCHEMA.taggedHashString,
-      labelMap: { version: 1, entries: [{ path: ["secret"], label }] },
+      labelMap: {
+        version: 1,
+        entries: [
+          {
+            path: ["secret"],
+            label: { confidentiality: label.confidentiality ?? [] },
+          },
+          ...((label.integrity?.length ?? 0) > 0
+            ? [{
+              path: ["secret"],
+              origin: "minted" as const,
+              label: { integrity: label.integrity },
+            }]
+            : []),
+        ],
+      },
     },
   });
   tx.writeOrThrow({
