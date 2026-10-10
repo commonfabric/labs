@@ -14,7 +14,8 @@ import { type WordSearch } from "./generator.ts";
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
 const MARGIN = 54;
-const CONTENT_WIDTH = PAGE_WIDTH - 2 * MARGIN;
+// PAGE_WIDTH - 2 * MARGIN, written out: SES admits only literal module values.
+const CONTENT_WIDTH = 504;
 
 const TITLE_SIZE = 22;
 const TITLE_GAP = 18;
