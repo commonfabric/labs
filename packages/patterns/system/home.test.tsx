@@ -13,9 +13,14 @@ import {
   findNodeById,
   findNodeByProp,
   hasText,
+  propValue,
 } from "../test/vnode-helpers.ts";
 import Home from "./home.tsx";
-import PrivateInbox, { type PrivateInboxPiece } from "./private-inbox.tsx";
+import PrivateInbox, {
+  type PrivateInboxPiece,
+  TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE,
+  TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
+} from "./private-inbox.tsx";
 
 type SpaceEntry = { name: string; did?: string };
 
@@ -33,6 +38,23 @@ const REFUSED_AT = Date.UTC(2026, 9, 9, 12, 0, 0);
 /** Home's private-inbox refusal notice in the rendering `ui`, if it shows. */
 function refusalNoticeIn(ui: unknown): unknown {
   return findNodeById(ui, "home-private-inbox-refusal");
+}
+
+/**
+ * Whether the rendering `ui` shows the button that replaces the refused inbox,
+ * marked as the action it is, inside the notice marked as its trusted surface.
+ */
+function offersReplacementIn(ui: unknown): boolean {
+  const notice = refusalNoticeIn(ui);
+  return propValue(notice, "data-ui-pattern") ===
+      TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE &&
+    propValue(notice, "data-ui-event-integrity") ===
+      TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE &&
+    propValue(
+        findNodeById(notice, "home-private-inbox-replace"),
+        "data-ui-action",
+      ) === TRUSTED_REPLACE_REFUSED_INBOX_ACTION &&
+    hasText(notice, "Use a new inbox");
 }
 
 /** An inbox's result, as the link a refusal record keeps. */
@@ -215,8 +237,9 @@ export default pattern(() => {
   );
 
   // The refusal notice shows while Home records a refusal, with the host's code
-  // as given, a sentence saying what a code Home knows means, and when Home
-  // first recorded it; it is gone once the record is cleared.
+  // as given, a sentence saying what a code Home knows means, when Home first
+  // recorded it, and the button that replaces the refused inbox, marked as its
+  // trusted surface's action; it is gone once the record is cleared.
   const refusedInbox = PrivateInbox({ offers: [] });
   const assert_no_refusal_notice = assert(() =>
     refusalNoticeIn(home[UI]) === undefined
@@ -237,7 +260,12 @@ export default pattern(() => {
       "Reason: inbox-adoption-acl-mismatch.",
     ) &&
     hasText(refusalNoticeIn(home[UI]), "does not make you its owner") &&
-    hasText(refusalNoticeIn(home[UI]), new Date(REFUSED_AT).toLocaleString())
+    hasText(
+      refusalNoticeIn(home[UI]),
+      new Date(REFUSED_AT).toLocaleString(),
+    ) &&
+    hasText(refusalNoticeIn(home[UI]), "stops receiving loom shares") &&
+    offersReplacementIn(home[UI])
   );
   const action_record_unknown_refusal = action(() => {
     home.privateInboxRefusal.set({

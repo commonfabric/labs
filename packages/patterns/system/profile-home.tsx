@@ -232,6 +232,30 @@ export function pointAtInboxIfUnset(
   profile.setInbox?.send({ inbox });
 }
 
+/**
+ * Points `profile` at the inbox `holder` holds, through the profile's own
+ * `setInbox`, when the profile points at `replaced`, by a comparison of links
+ * that reads only link shape. Does nothing when `holder` holds no inbox, or
+ * when the profile points at another inbox or at none. Call it as
+ * {@link pointAtInboxIfUnset} is called, and for `replaced`, a typed link.
+ *
+ * The read and the `setInbox` it leads to are two transactions in two spaces,
+ * so a pointer set between them is replaced.
+ */
+export function pointAtInboxInPlaceOf(
+  profile: InboxPointable | undefined,
+  replaced: Cell<ShareInboxPiece>,
+  holder: ProfileInbox | undefined,
+): void {
+  // The profile is given the inbox's own result document, for the reason
+  // `pointAtInboxIfUnset()` gives it.
+  const inbox = holder?.piece?.resolveAsCell();
+  if (inbox === undefined || profile === undefined) return;
+  const pointer = profile.inbox?.piece;
+  if (pointer === undefined || !equals(pointer, replaced)) return;
+  profile.setInbox?.send({ inbox });
+}
+
 type VerifiedIdentityListWrite<Binding> = OwnerProtectedProfileWrite<
   VerifiedExternalIdentityCell[],
   Binding

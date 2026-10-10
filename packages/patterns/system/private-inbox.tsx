@@ -26,6 +26,7 @@ import {
   NAME,
   pattern,
   type Stream,
+  type TrustedActionWrite,
   UI,
   type VNode,
   Writable,
@@ -33,6 +34,7 @@ import {
 import {
   type InboxPointable,
   pointAtInboxIfUnset,
+  pointAtInboxInPlaceOf,
   type ShareInboxPiece,
 } from "./profile-home.tsx";
 
@@ -61,6 +63,17 @@ export const OFFER_DEFAULT_KIND = "loom";
 
 /** The name, in Home's space, of the space Home's private inbox lives in. */
 export const PRIVATE_INBOX_SPACE_NAME = "private-inbox";
+
+/**
+ * The trusted surface Home renders its private-inbox refusal notice on, which
+ * carries the button that replaces the refused inbox.
+ */
+export const TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE =
+  "PrivateInboxRefusalSurface";
+
+/** The action of the button that replaces the refused inbox. */
+export const TRUSTED_REPLACE_REFUSED_INBOX_ACTION =
+  "ReplaceRefusedPrivateInbox";
 
 /** A value readable only by the principal who creates the inbox. */
 export type OwnerPrivate<T> = Confidential<
@@ -231,6 +244,49 @@ export type PrivateInboxRefusalHolder = {
   refusal?: PrivateInboxRefusal;
 };
 
+/**
+ * The refusal the owner acted on when they had Home replace the refused inbox,
+ * as Home records it.
+ */
+export type PrivateInboxReplacement = {
+  /** The refused inbox, which the profiles pointing at it no longer advertise. */
+  inbox: Cell<PrivateInboxPiece>;
+
+  /** The host's code for why it refused that inbox, as the refusal held it. */
+  reason: string;
+
+  /** When Home first recorded the refusal, as the refusal held it. */
+  refusedAt: number;
+
+  /**
+   * When the owner had Home replace the inbox, in milliseconds since the epoch.
+   * A handler's clock reads to the second.
+   */
+  replacedAt: number;
+};
+
+/**
+ * Where Home records the last refusal the owner had it replace: the
+ * replacement, absent until the first.
+ */
+export type PrivateInboxReplacementRecord = {
+  /** The replacement. */
+  replacement?: PrivateInboxReplacement;
+};
+
+/**
+ * {@link PrivateInboxReplacementRecord} as Home holds it: only
+ * {@link replaceRefusedPrivateInbox} writes it, and only for a click on the
+ * button Home renders on {@link TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE}, so a
+ * run that writes it otherwise, and the rest of that run, is refused.
+ */
+export type PrivateInboxReplacementHolder = TrustedActionWrite<
+  PrivateInboxReplacementRecord,
+  typeof replaceRefusedPrivateInbox,
+  typeof TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
+  typeof TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE
+>;
+
 /** What the pointing step needs of each profile in Home's list. */
 export type PointTarget = InboxPointable;
 
@@ -373,6 +429,21 @@ function inboxLinkOf(inbox: unknown): unknown {
 }
 
 /**
+ * Creates Home's own private inbox, in the space named
+ * {@link PRIVATE_INBOX_SPACE_NAME} in Home's space, and returns the link Home
+ * holds it by. Call it from a handler. The space grants every principal
+ * `WRITE`, so a sender's write is admitted whether the sender's own runtime
+ * makes it or the space's server does.
+ */
+function createPrivateInbox(): Cell<PrivateInboxPiece> {
+  return inboxLinkOf(
+    PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
+      grants: { "*": "WRITE" },
+    })({ offers: [] }),
+  );
+}
+
+/**
  * The link the first profile in `profiles` that points at an inbox holds, or
  * `undefined` when none does. Call it from a handler, with `profiles` bound as
  * a value of type {@link PointTarget}, so that each pointer is read as a typed
@@ -478,8 +549,6 @@ export type EnsurePrivateInboxEvent = {
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
- * The space grants every principal `WRITE`, so a sender's write is admitted
- * whether the sender's own runtime makes it or the space's server does.
  *
  * The list is bound as a value: the runner resolves it before the body runs,
  * and withdraws the dispatch until every profile it names has loaded, so an
@@ -533,13 +602,7 @@ export const ensurePrivateInbox = handler<
       replaced = true;
     }
   } else if (held === undefined && advertised === undefined) {
-    privateInbox.set({
-      piece: inboxLinkOf(
-        PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
-          grants: { "*": "WRITE" },
-        })({ offers: [] }),
-      ),
-    });
+    privateInbox.set({ piece: createPrivateInbox() });
     replaced = true;
   }
   const refused = event?.refused;
@@ -600,6 +663,83 @@ export const pointProfilesAtPrivateInbox = handler<
 >((_event, { privateInbox, profiles }) => {
   for (const profile of profiles ?? []) {
     pointAtInboxIfUnset(profile, privateInbox);
+  }
+});
+
+/**
+ * Replaces the inbox Home's refusal record names, for the owner, from the
+ * button Home's refusal notice carries: Home keeps the inbox it holds, or
+ * creates its own when it holds none, clears the refusal, records it as
+ * replaced in `privateInboxReplacement`, and then has each profile in Home's
+ * list that points at the refused inbox point at Home's instead. Profiles
+ * pointing at any other inbox, or at none, are left to the ensure. Does nothing
+ * while Home records no refusal. The refused inbox does not go into
+ * `retainedPrivateInboxes`: Home never held it.
+ *
+ * `privateInboxReplacement` admits a write only from this handler, and only
+ * for an event the renderer marks as a click on
+ * {@link TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE}; any other send of it is
+ * refused, with everything else the run writes and sends.
+ *
+ * The re-pointing is a second step, queued behind this one, for the reason
+ * {@link ensurePrivateInbox}'s pointing is.
+ */
+export const replaceRefusedPrivateInbox = handler<
+  void,
+  {
+    privateInbox: Writable<PrivateInboxHolder>;
+    privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
+    privateInboxReplacement: Writable<PrivateInboxReplacementRecord>;
+    repointProfiles: Stream<void>;
+  }
+>((
+  _event,
+  {
+    privateInbox,
+    privateInboxRefusal,
+    privateInboxReplacement,
+    repointProfiles,
+  },
+) => {
+  const refusal = privateInboxRefusal.get()?.refusal;
+  if (refusal === undefined) return;
+  if (privateInbox.get()?.piece === undefined) {
+    privateInbox.set({ piece: createPrivateInbox() });
+  }
+  privateInboxRefusal.set({});
+  privateInboxReplacement.set({
+    replacement: {
+      inbox: refusal.inbox,
+      reason: refusal.reason,
+      refusedAt: refusal.refusedAt,
+      replacedAt: Date.now(),
+    },
+  });
+  repointProfiles.send();
+});
+
+/**
+ * Points each profile in `profiles` that points at the inbox
+ * `privateInboxReplacement` records as replaced at Home's private inbox, as
+ * `pointAtInboxInPlaceOf()` does. It reads the replaced inbox from that record
+ * rather than from its event, so a send of it can only repeat a replacement
+ * the owner made.
+ *
+ * The list is bound as a value, for the reason it is in
+ * {@link pointProfilesAtPrivateInbox}.
+ */
+export const repointProfilesFromReplacedInbox = handler<
+  void,
+  {
+    privateInbox: PrivateInboxHolder;
+    privateInboxReplacement: PrivateInboxReplacementRecord;
+    profiles: PointTarget[];
+  }
+>((_event, { privateInbox, privateInboxReplacement, profiles }) => {
+  const replaced = privateInboxReplacement?.replacement?.inbox;
+  if (replaced === undefined) return;
+  for (const profile of profiles ?? []) {
+    pointAtInboxInPlaceOf(profile, replaced, privateInbox);
   }
 });
 

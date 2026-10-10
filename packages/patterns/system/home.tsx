@@ -52,7 +52,12 @@ import {
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
   type PrivateInboxRefusalHolder,
+  type PrivateInboxReplacementHolder,
+  replaceRefusedPrivateInbox,
+  repointProfilesFromReplacedInbox,
   type RetainedPrivateInboxes,
+  TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE,
+  TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
 } from "./private-inbox.tsx";
 
 // Types from favorites-manager.tsx
@@ -146,6 +151,11 @@ export type HomeOutput = {
   privateInboxRefusal: Writable<
     PrivateInboxRefusalHolder | Default<Record<PropertyKey, never>>
   >;
+  // The last refusal the owner had Home replace, under `replacement`: the
+  // refused inbox, the refusal's code and time, and when the owner acted. Only
+  // `replaceRefusedPrivateInbox` writes it, from the button on Home's refusal
+  // notice. No `replacement` before the first.
+  privateInboxReplacement: Writable<PrivateInboxReplacementHolder>;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: Stream<
     SharedSpaceRegistration,
@@ -172,6 +182,11 @@ export type HomeOutput = {
   // again at that worker's next bring-up if the ensure failed, so Home adopts
   // again only then.
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
+  // For the owner, from the button on Home's refusal notice: replaces the
+  // refused inbox with the one Home holds, or with one it creates when it holds
+  // none, and points the profiles that point at the refused inbox at Home's.
+  // Refused unless the renderer marks the event as a click on that button.
+  replaceRefusedPrivateInbox: Stream<void>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
     tags?: string[];
@@ -401,6 +416,11 @@ const Home = pattern(
     // gives its offers. The notice renders after everything else, for the
     // reason the chats panel does, and the screen's header slot shows it
     // above the tabs.
+    // The last refusal the owner had Home replace, which only the notice's
+    // button writes.
+    const privateInboxReplacement = new Writable<PrivateInboxReplacementHolder>(
+      {},
+    ).for("privateInboxReplacement");
     const refusalReason = privateInboxRefusal.key("refusal").key("reason");
     const refusedAt = privateInboxRefusal.key("refusal").key("refusedAt");
     // Untrusted-write regression surface: this stream is exported so tests can
@@ -436,6 +456,16 @@ const Home = pattern(
       profiles: profiles as any,
       pointProfiles: pointProfilesAtPrivateInbox({
         privateInbox,
+        profiles: profiles as any,
+      }),
+    });
+    const replaceRefusedInboxStream = replaceRefusedPrivateInbox({
+      privateInbox,
+      privateInboxRefusal,
+      privateInboxReplacement,
+      repointProfiles: repointProfilesFromReplacedInbox({
+        privateInbox,
+        privateInboxReplacement,
         profiles: profiles as any,
       }),
     });
@@ -575,7 +605,11 @@ const Home = pattern(
               const code = reason || "none given";
               const noticed = new Date(at).toLocaleString();
               return (
-                <div id="home-private-inbox-refusal">
+                <div
+                  id="home-private-inbox-refusal"
+                  data-ui-pattern={TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE}
+                  data-ui-event-integrity={TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE}
+                >
                   <cf-alert status="warning">
                     <h4 slot="title">Shares may not reach you</h4>
                     <cf-vstack slot="description" gap="1">
@@ -588,6 +622,22 @@ const Home = pattern(
                       <span style={{ fontSize: "12px", color: "#666" }}>
                         Reason: <code>{code}</code>. First noticed {noticed}.
                       </span>
+                      <span style={{ fontSize: "12px", color: "#666" }}>
+                        Using a new inbox points the profiles that point at the
+                        refused one at Home's own inbox instead. A loom daemon
+                        running as an identity other than yours then stops
+                        receiving loom shares.
+                      </span>
+                      <div>
+                        <cf-button
+                          id="home-private-inbox-replace"
+                          size="sm"
+                          data-ui-action={TRUSTED_REPLACE_REFUSED_INBOX_ACTION}
+                          onClick={replaceRefusedInboxStream}
+                        >
+                          Use a new inbox
+                        </cf-button>
+                      </div>
                     </cf-vstack>
                   </cf-alert>
                 </div>
@@ -611,6 +661,7 @@ const Home = pattern(
       privateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
+      privateInboxReplacement,
 
       sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
 
@@ -627,6 +678,7 @@ const Home = pattern(
       renameSpace: renameSpaceHandler({ spaces }),
       createProfile: createProfileStream,
       ensurePrivateInbox: ensurePrivateInboxStream,
+      replaceRefusedPrivateInbox: replaceRefusedInboxStream,
     };
   },
   homeArgumentSchema,
