@@ -1066,14 +1066,29 @@ describe("resume node plan pre-sync", () => {
         DEEP_READ_PROGRAM,
         { space },
       );
-      const resumed = await createAndResume(
-        DEEP_READ_PROGRAM,
-        { def: top },
+      // The piece is set up on runtime 1 and only its result document is
+      // local on runtime 2: the pre-sync below is the first on that
+      // replica, so the frame answering its plan's sync is the one that
+      // reports the link into the other space.
+      const tx1b = rt1.edit();
+      const resultCell1 = rt1.getCell<Record<string, unknown>>(
+        space,
         "principal-only family",
+        undefined,
+        tx1b,
       );
-      await rt2.idle();
-      await managerB.synced();
-      await rt2.idle();
+      // deno-lint-ignore no-explicit-any
+      const r1 = rt1.run(tx1b, compiled as any, { def: top }, resultCell1);
+      rt1.prepareTxForCommit(tx1b);
+      expect((await tx1b.commit().settled).error).toBeUndefined();
+      await r1.pull();
+      await rt1.idle();
+      await rt1.patternManager.flushCompileCacheWrites();
+      await rt1.storageManager.synced();
+      const resumed = rt2.getCellFromLink<Record<string, unknown>>(
+        r1.getAsNormalizedFullLink(),
+      );
+      await resumed.sync();
 
       const identity = { principal: signer.did() };
       const tx = rt2.edit();

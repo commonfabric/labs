@@ -873,8 +873,11 @@ carry them, so current servers leave alias schemas inline. Clients deployed
 against the earlier revision continue to expand references at alias schema
 positions, so those positions remain covered by the reservation rule below.
 
+The compaction interns the `schema` of each entry in `crossings` the same way,
+and the client expands it with the same table.
+
 The `schema-ref@2:` prefix is reserved in the `schema` field of `link@1` and
-`$alias` payloads. Link recognition follows the canonical cell-rep form — in
+`$alias` payloads, and of `crossings` entries. Link recognition follows the canonical cell-rep form — in
 the legacy representation, the single-key `{ "/": { "link@1": … } }`
 envelope — so an envelope carrying sibling keys is not a link and its contents
 are ordinary data. Memory servers MUST reject set or patch operations

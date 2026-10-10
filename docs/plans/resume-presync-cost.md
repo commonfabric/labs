@@ -168,11 +168,10 @@ could deliver is missing.
       payload, `docs/specs/memory-v2/04-protocol.md`, advertised as
       `syncCrossingsV1`), each as the target-rooted path and schema the
       read needed, the way the walk already shapes a same-space miss. The
-      storage manager loads each from the target space, and a sync whose
-      frame carried crossings resolves once those loads have landed,
-      through their own frames' crossings in turn. The pre-sync's
-      cross-space pass has nothing left to read against such a server and
-      skips its plans (`followsCrossings`); against an older server it
+      storage manager kicks a load for each from the target space and lists
+      it while in flight, and the pre-sync awaits those loads by document,
+      through their own frames' crossings in turn, instead of reading its
+      plans to find them (`followsCrossings`); against an older server it
       reads as before. The first round had materialized every plan under
       its read schema to find the crossings: on the room, 101
       `resumeCrossSpaceRead` spans after stage 2's second part, 2,586

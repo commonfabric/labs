@@ -5,6 +5,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { Runtime } from "../src/runtime.ts";
 import type { Cell } from "../src/cell.ts";
+import { entityKey } from "../src/scheduler/keys.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -87,7 +88,7 @@ describe("memory-v2-sync-crossings", () => {
     return { leaf, top };
   }
 
-  it("holds the far document once a sync that crossed into its space resolves", async () => {
+  it("kicks the far document's load from the crossing a sync's frame carries", async () => {
     const { leaf, top } = await writeCrossing("resolved sync");
     const top2 = rt2.getCellFromLink<{ next?: { name?: string } }>({
       ...top.getAsNormalizedFullLink(),
@@ -95,9 +96,19 @@ describe("memory-v2-sync-crossings", () => {
     });
     expect(localOnB(leaf, farSpace)).toBe(false);
     await top2.sync();
-    // Nothing read through the link; the frame's crossing loaded it, which
-    // the manager reports once its session has negotiated the capability.
+    // Nothing read through the link: the frame's crossing kicked the far
+    // load, which the manager lists until it lands, and reports following
+    // once its session has negotiated the capability.
     expect(managerB.followsCrossings?.(space)).toBe(true);
+    const leafLink = leaf.getAsNormalizedFullLink();
+    const pending = managerB.pendingCrossingLoadAddresses?.() ?? [];
+    expect(pending.map((address) => [address.space, address.id])).toEqual([
+      [farSpace, leafLink.id],
+    ]);
+    await managerB.loadsSettled(
+      pending.map((address) => entityKey(address, managerB.scopeKeyIdentity())),
+    );
+    expect(managerB.pendingCrossingLoadAddresses?.()).toEqual([]);
     expect(localOnB(leaf, farSpace)).toBe(true);
     expect(top2.get()).toEqual({ next: { name: "Ada" } });
   });

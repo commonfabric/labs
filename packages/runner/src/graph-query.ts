@@ -84,21 +84,22 @@ export const createGraphQueryWalkStats = (): GraphQueryWalkStats => ({
 
 /**
  * The key a walk records a crossing under: the target document by space,
- * scope NAME, and id. The scope stays a name rather than resolving to an
+ * scope NAME, and id, as one JSON array, so any character in an id survives
+ * the round trip. The scope stays a name rather than resolving to an
  * instance, since the client that loads the target resolves it under its
- * own identity. None of the three parts holds a NUL, which separates them.
+ * own identity.
  */
 export const crossingDocKey = (
   space: MemorySpace,
   id: string,
   scope: CellScope | undefined,
-): string => `${space}\0${scope ?? "space"}\0${id}`;
+): string => JSON.stringify([space, scope ?? "space", id]);
 
 /** The parts of a {@link crossingDocKey}. */
 export const parseCrossingDocKey = (
   key: string,
 ): { space: MemorySpace; scope: CellScope; id: string } => {
-  const [space, scope, id] = key.split("\0");
+  const [space, scope, id] = JSON.parse(key) as [string, string, string];
   return { space: space as MemorySpace, scope: scope as CellScope, id };
 };
 

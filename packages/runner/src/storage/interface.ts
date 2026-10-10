@@ -756,15 +756,30 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<void>;
 
   /**
-   * Whether a sync of a document in `space` also loads what the server's
-   * walk reached through links into other spaces: the server reports those
-   * links with the frame (`SessionSync.crossings`), and the sync resolves
-   * once their loads have landed. A caller that would otherwise read each
-   * synced document to find such links has nothing to find. Optional:
-   * managers without lazy remote replication, and sessions on servers
-   * that do not report crossings, answer false or nothing.
+   * Whether a sync of a document in `space` also kicks the loads of what
+   * the server's walk reached through links into other spaces: the server
+   * reports those links with the frame (`SessionSync.crossings`), and the
+   * manager loads each from its space as a pending load, listed by
+   * `pendingCrossingLoadAddresses()` and awaited through `loadsSettled()`.
+   * A caller that would otherwise read each synced document to find such
+   * links has nothing to find. Optional: managers without lazy remote
+   * replication, and sessions on servers that do not report crossings,
+   * answer false or nothing.
    */
   followsCrossings?(space: MemorySpace): boolean;
+
+  /**
+   * The crossing loads in flight (see `followsCrossings`): the address of
+   * each document a frame's crossing named that has not landed or failed
+   * yet. A caller awaits them through `loadsSettled()` by their
+   * pending-load keys, those its identity can resolve, and asks again
+   * once they settle, since a crossing's own frame can report crossings.
+   */
+  pendingCrossingLoadAddresses?(): readonly {
+    space: MemorySpace;
+    scope: CellScope;
+    id: URI;
+  }[];
 }
 
 export interface IRemoteStorageProviderSettings {

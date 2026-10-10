@@ -341,6 +341,7 @@ export class SessionRegistry {
     session.watchIndex = new Map();
     session.graphs = new Map();
     session.entities = new Map();
+    session.deliveredCrossings = new Set();
     session.trackedIds = new Set();
     session.operationTrackedIds = new Set();
     session.operationCursors = new Map();

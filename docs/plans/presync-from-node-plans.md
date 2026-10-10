@@ -144,13 +144,17 @@ cannot deliver, since its query is per space. The walk reports them instead:
 a link it follows into another space is a crossing on the frame that answers
 the watch (`SessionSync.crossings`, `docs/specs/memory-v2/04-protocol.md`),
 carrying the target and the target-rooted path and schema the read needed.
-The storage manager loads each from the target space under that selector,
-and a sync whose frame carried crossings resolves once those loads have
-landed, through their own frames' crossings in turn, so the documents a
-read through the synced ones reaches are local when the sync resolves
-(`followsCrossings`). The pre-sync's plan syncs therefore name what their
-reads reach in other spaces with nothing more to do. Against a server that
-does not advertise `syncCrossingsV1`, the pre-sync falls back to reading:
+The storage manager kicks a load for each from the target space under that
+selector, registered as a pending load and listed while it is in flight
+(`pendingCrossingLoadAddresses`), and the pre-sync awaits those loads by
+document, the ones its identity can resolve, asking again once they settle,
+since a crossing's own frame can report crossings in turn; a target the
+client cannot load, for want of access say, stays absent, and a read of it
+reads that absence as it would have before. The sync itself never waits for
+them: it may hold the one watch refresh in flight, and a crossing's load can
+report a crossing back into its space. Against a server that does not
+advertise `syncCrossingsV1` (`followsCrossings`), the pre-sync falls back to
+reading:
 after a wave's plan syncs land, it reads each plan's inputs under its read
 schema through a read transaction of the plan's own, awaits the loads
 pending after those reads by document (`loadsSettled` over

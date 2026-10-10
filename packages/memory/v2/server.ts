@@ -2417,6 +2417,10 @@ export class Server {
   #deliveredFrameEntries = new WeakMap<SessionEffectMessage, {
     upserts: SessionCacheEntry[];
     removes: SessionCacheEntry[];
+
+    /** The crossing keys the frame marked delivered, forgotten again when
+     * the frame is lost so the next frame carries them. */
+    crossings?: string[];
   }>();
 
   /**
@@ -6667,9 +6671,11 @@ export class Server {
           undefined,
           keyed,
         );
-      // A replacement with no declared holdings tells the client every
-      // crossing again; any other frame tells it only the new ones.
-      const resetCrossings = !incremental && message.holdings === undefined;
+      // A replacement that declares no holdings, or holding nothing, tells
+      // the client every crossing again; any other frame tells it only the
+      // new ones.
+      const resetCrossings = !incremental &&
+        (message.holdings === undefined || message.holdings.length === 0);
       const newCrossings = this.#undeliveredCrossings(
         session,
         [...graphs.values(), ...demandGraphs.values()],
@@ -7524,6 +7530,11 @@ export class Server {
     // its own here). The session-identity recovery below remains as the
     // fallback for frames without a record (none are built today).
     const record = this.#deliveredFrameEntries.get(undelivered);
+    // The lost frame told the client of these crossings, so it did not: the
+    // next frame carries them again.
+    for (const key of record?.crossings ?? []) {
+      session.deliveredCrossings.delete(key);
+    }
     for (const delivery of sync.operationFields ?? []) {
       // A failed send did not advance the client. Forget the delivery cursor so
       // the recomputed frame includes a complete safe snapshot rather than
@@ -8212,6 +8223,7 @@ export class Server {
                 this.#deliveredFrameEntries.set(message, {
                   upserts: [...upserts],
                   removes: [],
+                  crossings: newCrossings.keys,
                 });
               } finally {
                 timing.time(
@@ -8375,7 +8387,10 @@ export class Server {
           this.#assertRoutedAuthority(session);
           // As on the incremental branch: retain the frame's true
           // instance-keyed entries for exact delivery rollback.
-          this.#deliveredFrameEntries.set(message, delivered);
+          this.#deliveredFrameEntries.set(message, {
+            ...delivered,
+            crossings: newCrossings.keys,
+          });
           commitWatchState();
           return message;
         } catch (error) {

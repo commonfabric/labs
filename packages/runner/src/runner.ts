@@ -8851,9 +8851,10 @@ export class Runner {
     pattern: Pattern,
     resultCell: Cell<any>,
     argumentLink: NormalizedFullLink,
-  ): { cells: Cell<any>[]; plans: NodePlan[] } {
+  ): { cells: Cell<any>[]; plans: NodePlan[]; skipped: number } {
     const cells: Cell<any>[] = [];
     const plans: NodePlan[] = [];
+    let skipped = 0;
     for (const node of pattern.nodes) {
       let plan: NodePlan | undefined;
       try {
@@ -8870,6 +8871,7 @@ export class Runner {
           "skipping a node whose bindings did not unwrap",
           error,
         ]);
+        skipped++;
         continue;
       }
       if (plan === undefined) continue;
@@ -8893,7 +8895,7 @@ export class Runner {
         cells.push(this.#runtime.getCellFromLink(link));
       }
     }
-    return { cells, plans };
+    return { cells, plans, skipped };
   }
 
   /**
@@ -8916,19 +8918,24 @@ export class Runner {
   /**
    * Names what the plans' reads reach in other spaces. The server's query
    * walk delivers what a plan's selector reaches within its space and stops
-   * at a link into another, so after the plan syncs land this reads each
-   * plan's inputs under its read schema through a read transaction of the
-   * plan's own: a read that dead-ends on such a link kicks that document's
-   * load. Pending loads for documents a plan's read reached are awaited
-   * before that plan is read again, which reaches one space further; a
-   * plan whose read left no load pending is done. Each round awaits only
-   * loads no earlier round awaited, by document, so a link whose target
-   * never arrives, kicked again by every read, ends the pass rather than
-   * extending it, and a round whose reads leave no new load pending ends
-   * it. The manager's settled
-   * pool is not what is awaited: on a client it holds the runtime's other
-   * work, sinks' first loads and coordinators' republishes among it, which
-   * a resume must not wait behind.
+   * at a link into another. A server that reports those links
+   * (`followsCrossings`) has the storage manager kick each target's load
+   * as the frame arrives, so for a plan in such a space this awaits the
+   * crossing loads in flight, by document and only those the family's
+   * identity can resolve, and asks again once they settle, since a
+   * crossing's own frame can report crossings. For a plan in a space whose
+   * server does not, this reads the plan's inputs under its read schema
+   * through a read transaction of the plan's own after its sync lands: a
+   * read that dead-ends on such a link kicks that document's load. Pending
+   * loads for documents a plan's read reached are awaited before that plan
+   * is read again, which reaches one space further; a plan whose read left
+   * no load pending is done. Either way each round awaits only loads no
+   * earlier round awaited, by document, so a link whose target never
+   * arrives, kicked again by every read, ends the pass rather than
+   * extending it, and a round that leaves no new load pending ends it.
+   * The manager's settled pool is not what is awaited: on a client it
+   * holds the runtime's other work, sinks' first loads and coordinators'
+   * republishes among it, which a resume must not wait behind.
    */
   async #syncCrossSpaceReads(
     plans: readonly NodePlan[],
@@ -8943,14 +8950,41 @@ export class Runner {
       schema: JSONSchema;
     };
     let remaining: PlanRead[] = [];
+    let followed = false;
     for (const plan of plans) {
       if (plan.kind === "pattern") continue;
-      // A plan in a space whose server reports the links its walk followed
-      // out of the space had those loaded by the sync that named it; there
-      // is nothing left for a read to find.
-      if (manager.followsCrossings?.(plan.inputsCell.space) === true) continue;
+      if (manager.followsCrossings?.(plan.inputsCell.space) === true) {
+        followed = true;
+        continue;
+      }
       const schema = this.#planReadSchema(plan);
       if (schema !== undefined) remaining.push({ plan, schema });
+    }
+    const settle = async (keys: Iterable<string>): Promise<void> => {
+      const settleStart = performance.now();
+      try {
+        await manager.loadsSettled!([...keys]);
+      } catch (error) {
+        // A load that failed leaves its document absent; the next round
+        // reads past it, and the run reads the same absence.
+        logger.debug("resume-pre-sync", () => [
+          "a load a cross-space read kicked did not land",
+          error,
+        ]);
+      }
+      logger.time(settleStart, "start", "resumeCrossSpaceSettle");
+    };
+    while (followed && manager.pendingCrossingLoadAddresses !== undefined) {
+      const keys: string[] = [];
+      for (const address of manager.pendingCrossingLoadAddresses()) {
+        if (!canResolveScopeKey(address.scope, readIdentity)) continue;
+        const key = entityKey(address, this.#runtime.scopeKeyIdentity);
+        if (awaited.has(key)) continue;
+        awaited.add(key);
+        keys.push(key);
+      }
+      if (keys.length === 0) break;
+      await settle(keys);
     }
     for (;;) {
       // Each plan reads in a transaction of its own, so the loads its read
@@ -8994,18 +9028,7 @@ export class Runner {
       if (keys.size === 0) return;
       for (const key of keys) awaited.add(key);
       remaining = next;
-      const settleStart = performance.now();
-      try {
-        await manager.loadsSettled([...keys]);
-      } catch (error) {
-        // A load that failed leaves its document absent; the next round
-        // reads past it, and the run reads the same absence.
-        logger.debug("resume-pre-sync", () => [
-          "a load a cross-space read kicked did not land",
-          error,
-        ]);
-      }
-      logger.time(settleStart, "start", "resumeCrossSpaceSettle");
+      await settle(keys);
     }
   }
 
@@ -9046,10 +9069,13 @@ export class Runner {
     while (pending.size > 0) {
       const cells: Cell<any>[] = [];
       const plans: NodePlan[] = [];
-      // The instances with a stored setup this round plans, by family key
-      // and the pattern planned under, recorded once what the round names
-      // has landed.
+      // The instances with a stored setup this round plans whole, by family
+      // key and the pattern planned under, recorded once everything the
+      // round names has landed. An instance with a node the pre-sync could
+      // not plan, or a round with a sync that failed, is not recorded: its
+      // own start then walks its argument as before.
       const planned: [familyKey: string, entryKey: string][] = [];
+      let syncFailed = false;
       const planTx = this.#runtime.edit();
       if (identity !== undefined) planTx.tx.scopeKeyIdentity = identity;
       try {
@@ -9090,10 +9116,12 @@ export class Runner {
                 schema: undefined,
               }),
             );
-            planned.push([
-              this.#getFamilyKey(resultCell, identity),
-              patternIdentityKey(this.#entryRefForPattern(pattern)),
-            ]);
+            if (nodes.skipped === 0) {
+              planned.push([
+                this.#getFamilyKey(resultCell, identity),
+                patternIdentityKey(this.#entryRefForPattern(pattern)),
+              ]);
+            }
           }
         }
       } finally {
@@ -9105,6 +9133,7 @@ export class Runner {
         cells,
         (cell) =>
           this.#syncFamilyCell(cell, identity).catch((error) => {
+            syncFailed = true;
             logger.warn("resume-pre-sync", () => [
               "instance node sync failed; resuming without it",
               error,
@@ -9113,8 +9142,10 @@ export class Runner {
       );
       logger.time(waveStart, "start", "resumeInstanceNodeSyncWave");
       await this.#syncCrossSpaceReads(plans, identity);
-      for (const [familyKey, entryKey] of planned) {
-        this.#presyncNamedInstances.set(familyKey, entryKey);
+      if (!syncFailed) {
+        for (const [familyKey, entryKey] of planned) {
+          this.#presyncNamedInstances.set(familyKey, entryKey);
+        }
       }
     }
   }
