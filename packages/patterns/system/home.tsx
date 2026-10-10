@@ -315,6 +315,32 @@ const renameSpaceHandler = handler<
   spaces.addUnique(entry);
 });
 
+/**
+ * What the host's refusal code `reason` says about the refused inbox, as a
+ * sentence for the person whose inbox it is, or `undefined` for a code it does
+ * not know. The codes are `InboxAdoptionRefusal`'s, from
+ * `packages/piece/src/ops/private-inbox.ts`.
+ */
+function refusalReasonText(reason: string): string | undefined {
+  switch (reason) {
+    case "inbox-home-space":
+      return "It is in your Home space, where nobody else may deliver.";
+    case "inbox-profile-space":
+      return "It is in the profile's own space, where nobody else may deliver.";
+    case "inbox-access-refused":
+      return "Home was refused access to it.";
+    case "inbox-adoption-acl-mismatch":
+      return "Its space does not make you its owner, or does not let others " +
+        "deliver to it.";
+    case "inbox-offers-invalid":
+      return "It holds no list of offers.";
+    case "inbox-receive-missing":
+      return "It has no way to receive offers.";
+    default:
+      return undefined;
+  }
+}
+
 const homeArgumentSchema = toSchema<Record<string, never>>();
 const homeResultSchema = __cf_data(
   withAgentQueueRunLinkSchema(toSchema<HomeOutput>()),
@@ -370,6 +396,13 @@ const Home = pattern(
     // deciding profile points at.
     const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({})
       .for("privateInboxRefusal");
+    // The refusal notice reads the refusal's code and time, and never its
+    // `inbox`: the stored link carries the label the refused inbox's owner
+    // gives its offers. The notice renders after everything else, for the
+    // reason the chats panel does, and the screen's header slot shows it
+    // above the tabs.
+    const refusalReason = privateInboxRefusal.key("refusal").key("reason");
+    const refusedAt = privateInboxRefusal.key("refusal").key("refusedAt");
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
     // create a profile. The actual create UI lives in the profile picker below.
@@ -531,6 +564,36 @@ const Home = pattern(
               {chatManager}
             </cf-tab-panel>
           </cf-tabs>
+
+          <div slot="header">
+            {computed(() => {
+              const at = refusedAt.get();
+              if (typeof at !== "number") return null;
+              const stored = refusalReason.get();
+              const reason = typeof stored === "string" ? stored : "";
+              const explanation = refusalReasonText(reason) ?? "";
+              const code = reason || "none given";
+              const noticed = new Date(at).toLocaleString();
+              return (
+                <div id="home-private-inbox-refusal">
+                  <cf-alert status="warning">
+                    <h4 slot="title">Shares may not reach you</h4>
+                    <cf-vstack slot="description" gap="1">
+                      <span>
+                        One of your profiles points others at an inbox Home
+                        can't use, so what they share with you may not arrive.
+                        {" "}
+                        {explanation}
+                      </span>
+                      <span style={{ fontSize: "12px", color: "#666" }}>
+                        Reason: <code>{code}</code>. First noticed {noticed}.
+                      </span>
+                    </cf-vstack>
+                  </cf-alert>
+                </div>
+              );
+            })}
+          </div>
         </cf-screen>
       ) as VNode,
 
