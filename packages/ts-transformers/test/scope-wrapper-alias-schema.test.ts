@@ -7,6 +7,7 @@ import {
   callSchemas,
   callsNamed,
   emittedSchemas,
+  literalToValue,
   parseModule,
   patternSchemas,
 } from "./transformed-ast.ts";
@@ -1005,6 +1006,90 @@ export default pattern<{ ${declared} }>(({ handle }) => ({
             });
         });
       }
+
+      describe("an optional one in a capture printed from its type", () => {
+        // The capture is printed from the type the cell is read at, which
+        // holds the `undefined` the property's `?` adds, and narrowing it
+        // rebuilds the wrapper around the cell.
+
+        /** The schema of the `.map` callback's own pattern input. */
+        const callbackInput = (module: ts.SourceFile) =>
+          callsNamed(module, "pattern")
+            .map((call) => literalToValue(call.arguments[1]!))
+            .find((schema) =>
+              "element" in (schema as { properties: object }).properties
+            ) as {
+              properties: {
+                params: {
+                  properties: Record<string, unknown>;
+                  required?: string[];
+                };
+              };
+            };
+
+        for (
+          const [cell, read] of [
+            ["Stream<A>", "handle?.send({ a: item.a })"],
+            ["Writable<A>", "handle?.set({ a: item.a })"],
+          ] as const
+        ) {
+          it(`keeps the cap of an optional \`${cell}\` bound by shorthand in a \`.map\` callback`, async () => {
+            const module = await transformed(
+              `import { handler, pattern, Writable, UI, type PerSession, type Stream } from "commonfabric";
+interface A { a: string }
+const use = handler<void, { handle?: PerSession<${cell}>; item: A }>(
+  (_, { handle, item }) => {
+    ${read};
+  },
+);
+export default pattern<{ items: A[]; handle?: PerSession<${cell}> }>(
+  ({ items, handle }) => ({
+    [UI]: <div>{items.map((item) => <cf-button onClick={use({ handle, item })} />)}</div>,
+  }),
+);`,
+            );
+            const { params } = callbackInput(module).properties;
+
+            expect(params.properties.handle).toMatchObject({
+              asCell: [{ scope: "session" }],
+            });
+            expect(params.properties.handle).not.toHaveProperty("anyOf");
+            expect(params.required ?? []).not.toContain("handle");
+          });
+        }
+
+        for (
+          const [cell, read, kind] of [
+            ["Stream<A>", "input.handle ? 1 : 0", "stream"],
+            ["Writable<A>", "input.handle?.get().a", "readonly"],
+          ] as const
+        ) {
+          it(`keeps the cap of an optional \`${cell}\` read through the pattern's input`, async () => {
+            const [input] = callSchemas(
+              await transformed(
+                `import { computed, pattern, Writable, type PerSession, type Stream } from "commonfabric";
+interface A { a: string }
+export default pattern<{ handle?: PerSession<${cell}> }>((input) => ({
+  out: computed(() => ${read}),
+}));`,
+              ),
+              "lift",
+            );
+            const captured = (input!.properties as {
+              input: {
+                properties: Record<string, unknown>;
+                required?: string[];
+              };
+            }).input;
+
+            expect(captured.properties.handle).toMatchObject({
+              asCell: [{ kind, scope: "session" }],
+            });
+            expect(captured.properties.handle).not.toHaveProperty("anyOf");
+            expect(captured.required ?? []).not.toContain("handle");
+          });
+        }
+      });
     });
 
     for (
