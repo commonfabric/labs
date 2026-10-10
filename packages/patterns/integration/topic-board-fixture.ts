@@ -343,8 +343,9 @@ export async function seedTopicBoard(
       // pivot joins over — is derived by a running topic, and the seed's
       // runtime is the one running it: a reader that opens another topic
       // reads this one's published result and runs nothing of it. One read
-      // of the topic's result derives all of it; the result is the topic's
-      // own, not the board's, so this costs the same at any board size.
+      // of the topic's result derives all of it, once per topic rather than
+      // once per write. The result includes the topic's backlinks, which read
+      // the board's crossref table, so this read still grows with the board.
       await created.result.get();
       pieces.push(created);
       topics.push({ fid: created.id, title });
