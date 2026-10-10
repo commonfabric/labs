@@ -364,6 +364,8 @@ export class CFSlider extends BaseElement {
   ) {
     super.willUpdate(changedProperties);
     if (changedProperties.has("value")) {
+      this._binding++;
+      this._queue = undefined;
       this._valueCellController.bind(this.value, numberSchema);
     }
   }
@@ -425,14 +427,33 @@ export class CFSlider extends BaseElement {
 
   /**
    * Moves run in the order they were made. A step on a cell not yet read
-   * waits for the worker; while one waits, later moves queue behind it.
+   * waits for the worker; while one waits, later moves to the same cell queue
+   * behind it. A move belongs to the binding it was made on: binding `value`
+   * anew drops the queue, so no move made for one cell reaches another, and a
+   * read the old cell never answers holds nothing up.
    */
   private _queue: Promise<void> | undefined;
+  private _binding = 0;
 
   private _inOrder(move: () => Promise<void> | void): void {
-    const run = this._queue ? this._queue.then(move) : move();
+    if (this._queue === undefined) {
+      this._track(move());
+      return;
+    }
+    const binding = this._binding;
+    const onBinding = () => {
+      if (binding === this._binding) return move();
+    };
+    // A move that failed is reported, and the queue goes on without it.
+    this._track(this._queue.then(onBinding, (error) => {
+      reportError(error);
+      return onBinding();
+    }));
+  }
+
+  private _track(run: Promise<void> | void): void {
     if (run === undefined) return;
-    const queued: Promise<void> = run.then(() => {
+    const queued: Promise<void> = run.finally(() => {
       if (this._queue === queued) this._queue = undefined;
     });
     this._queue = queued;
@@ -722,6 +743,11 @@ export class CFSlider extends BaseElement {
    * Set the slider value programmatically
    */
   setValue(value: number): void {
+    if (!Number.isFinite(value)) {
+      throw new RangeError(
+        `cf-slider: setValue needs a finite number, got ${value}`,
+      );
+    }
     this._moveTo(value, undefined);
   }
 

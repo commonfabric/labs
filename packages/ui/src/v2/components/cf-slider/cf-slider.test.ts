@@ -191,6 +191,46 @@ describe("CFSlider bound to a cell", () => {
     expect(written(value)).toEqual([51, 30]);
   });
 
+  it("drops moves queued for one cell when another is bound", async () => {
+    const first = createMockCellHandle<number>();
+    const answer = holdReads(first);
+    const element = sliderWith(first);
+    press(element, "ArrowRight");
+    press(element, "End");
+    element.setValue(70);
+
+    // Another cell: every mock shares one id, so a path sets it apart.
+    const second = createMockCellHandle(5, { path: ["other"] });
+    element.value = second;
+    element.willUpdate(new Map([["value", undefined]]));
+    const announced = announcements(element);
+    answer({ value: 50 });
+    await settle();
+
+    expect(written(first)).toEqual([]);
+    expect(written(second)).toEqual([]);
+    expect(announced).toEqual([]);
+  });
+
+  it("moves at once on a new binding, whatever the old cell still waits on", async () => {
+    const stuck = createMockCellHandle<number>();
+    holdReads(stuck);
+    const element = sliderWith(stuck);
+    press(element, "ArrowRight");
+
+    const next = createMockCellHandle(30, { path: ["other"] });
+    element.value = next;
+    element.willUpdate(new Map([["value", undefined]]));
+    press(element, "ArrowRight");
+    await settle();
+    expect(written(next)).toEqual([31]);
+
+    element.value = 20;
+    element.willUpdate(new Map([["value", undefined]]));
+    press(element, "ArrowRight");
+    expect(element.value).toBe(21);
+  });
+
   it("announces a step on a read cell at once", () => {
     const element = sliderWith(createMockCellHandle(30));
     const announced = announcements(element);
@@ -315,6 +355,14 @@ describe("CFSlider given a plain number", () => {
     element.setValue(0.3);
 
     expect(element.value).toBe(0.3);
+  });
+
+  it("refuses a value that is not a finite number", () => {
+    const value = createMockCellHandle(40);
+    const element = sliderWith(value);
+
+    expect(() => element.setValue(NaN)).toThrow(RangeError);
+    expect(writesSent(value)).toEqual([]);
   });
 
   it("keeps a finite value when the step is zero", () => {
