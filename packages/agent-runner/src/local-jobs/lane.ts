@@ -489,8 +489,9 @@ export class LocalJobLane {
   }
 
   /**
-   * Helper that writes an operator-facing line. A log that throws ends no job
-   * and fails no lane, so its throw goes no further.
+   * Helper that writes an operator-facing line. A run is a detached promise,
+   * so a throw from the log would reach no caller and would only leave its job
+   * unfinished in the store; the throw goes no further.
    */
   #report(message: string): void {
     try {

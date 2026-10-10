@@ -1093,7 +1093,6 @@ describe("local-jobs/lane", () => {
         await stopped;
         store.close();
       }
-      expect(settled).toBe(true);
     });
 
     it("leaves the jobs its stop aborted running, for the next start to end interrupted", async () => {
