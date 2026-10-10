@@ -10,7 +10,11 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "./builder/types.ts";
 import { type Cell, isCell } from "./cell.ts";
-import { ContextualFlowControl } from "./cfc.ts";
+import {
+  ContextualFlowControl,
+  resolveExternalRootRefForStructure,
+} from "./cfc.ts";
+import { localDefinitionName } from "./cfc/schema-primitives.ts";
 import { validateSchemaValue } from "./cfc/schema-sanitization.ts";
 import {
   type CellLink,
@@ -54,17 +58,13 @@ const READ_NON_RECURSIVE: IReadOptions = { nonRecursive: true };
 /** Keywords whose subschemas describe the same value against other schemas. */
 const COMBINATOR_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
 
-/** Keywords holding a record of named definitions a local `$ref` can reach. */
-const DEFINITION_KEYWORDS = ["$defs", "definitions"] as const;
-
 /**
  * The schema a value is materialized under before it is validated against
  * `schema`: the paths of `schema` that lead to a declared handle, with those
  * handle declarations, and no constraints. Reading under it returns a Cell at
  * each position `schema` declares a handle, without opening what the handle
  * refers to, and returns everything else as a schemaless read would, links
- * followed. A schema declaring no handle reduces to `true`, which reads
- * exactly as a schemaless read does.
+ * followed. A schema declaring no handle reduces to `true`.
  *
  * A handle's contents are judged where they are read through the handle,
  * against whatever they are then; a check made through the referring document
@@ -73,66 +73,61 @@ const DEFINITION_KEYWORDS = ["$defs", "definitions"] as const;
  * target refuse that write, which the reader avoids by stopping at the handle.
  *
  * Constraints are left out so that the read neither drops nor substitutes a
- * mismatched value: the validator has to see what is stored to refuse it. A
- * union reads as a schemaless value, because which branch a value takes is
- * the validator's question, and a handle one branch declares is not one the
- * reader mints.
+ * mismatched value: the validator has to see what is stored to refuse it. For
+ * the same reason no reference survives into the result unless it names a
+ * reduced definition, since any other would carry the full schema back into
+ * the read. A union reads as a schemaless value, because which branch a value
+ * takes is the validator's question, and a handle one branch declares is not
+ * one the reader mints. So does a position behind a reference to another
+ * schema document, and a reference-form schema whose document has not
+ * arrived: a handle there is judged by its contents, as a value would be.
  */
 export function handleBoundarySchema(schema: JSONSchema): JSONSchema {
   if (!isObjectNotArray(schema)) return true;
-  // A local `$ref` reaches a definition by name, so the definitions are
-  // reduced first, and a definition that leads to no handle reads as `true`
-  // wherever a reference reaches it. Reduction repeats until no definition
-  // changes its answer, since a definition can lead to a handle only through
-  // another one.
-  const definitions = new Map<string, JSONSchema>();
-  const handleDefinitions = new Set<string>();
-  const reduceDefinitions = () => {
-    for (const keyword of DEFINITION_KEYWORDS) {
-      const record = schema[keyword];
-      if (!isObjectNotArray(record)) continue;
-      for (const [name, definition] of Object.entries(record)) {
-        const reduced = reduceToHandles(definition, handleDefinitions);
-        definitions.set(`#/${keyword}/${name}`, reduced);
-      }
-    }
-  };
+  const root = resolveExternalRootRefForStructure(schema);
+  const definitions = isObjectNotArray(root.$defs) ? root.$defs : {};
+  // A definition, or the root, can lead to a handle through a reference to
+  // another, so which of them do is found by repeating the reduction until
+  // the answer stops growing.
+  const leads: HandleLeads = { definitions: new Set(), root: false };
   while (true) {
-    reduceDefinitions();
-    const before = handleDefinitions.size;
-    for (const [ref, reduced] of definitions) {
-      if (reduced !== true) handleDefinitions.add(ref);
+    const reducedDefinitions = Object.entries(definitions).map((
+      [name, definition],
+    ) => [name, reduceToHandles(definition, leads)] as const);
+    const body = reduceToHandles(root, leads);
+    const before = leads.definitions.size + (leads.root ? 1 : 0);
+    for (const [name, definition] of reducedDefinitions) {
+      if (definition !== true) leads.definitions.add(name);
     }
-    if (handleDefinitions.size === before) break;
-  }
-  handleDefinitions.add("#");
-  const root = reduceToHandles(schema, handleDefinitions);
-  if (root === true) return true;
-  const result: Record<string, unknown> = {
-    ...(typeof schema.$id === "string" ? { $id: schema.$id } : {}),
-    ...root,
-  };
-  for (const keyword of DEFINITION_KEYWORDS) {
-    const record = schema[keyword];
-    if (!isObjectNotArray(record)) continue;
-    result[keyword] = Object.fromEntries(
-      Object.keys(record).map((name) => [
-        name,
-        definitions.get(`#/${keyword}/${name}`) ?? true,
-      ]),
+    leads.root ||= body !== true;
+    if (leads.definitions.size + (leads.root ? 1 : 0) > before) continue;
+    if (body === true) return true;
+    const $defs = reducedDefinitions.filter(([name]) =>
+      leads.definitions.has(name)
     );
+    return $defs.length === 0
+      ? body
+      : { ...body, $defs: Object.fromEntries($defs) } as JSONSchema;
   }
-  return result as JSONSchema;
+}
+
+/** Which definitions of the root, and whether the root, lead to a handle. */
+interface HandleLeads {
+  /** Names in the root's `$defs` whose definition leads to a handle. */
+  definitions: Set<string>;
+
+  /** Whether the root leads to a handle, for a `#` reference to it. */
+  root: boolean;
 }
 
 /**
  * Helper for {@link handleBoundarySchema}, which reduces one schema node to
- * the paths below it that lead to a handle. A `$ref` is kept when it names a
- * definition in `handleDefinitions`, or one this reduction cannot see.
+ * the paths below it that lead to a handle. A `$ref` survives only when it
+ * names a definition, or the root, that `leads` says leads to one.
  */
 function reduceToHandles(
   schema: JSONSchema,
-  handleDefinitions: ReadonlySet<string>,
+  leads: HandleLeads,
 ): JSONSchema {
   if (!isObjectNotArray(schema)) return true;
   if (ContextualFlowControl.getAsCellValues(schema).length > 0) {
@@ -144,19 +139,17 @@ function reduceToHandles(
   if (COMBINATOR_KEYWORDS.some((keyword) => schema[keyword] !== undefined)) {
     return true;
   }
-  const reduce = (sub: JSONSchema) => reduceToHandles(sub, handleDefinitions);
-  const result: Record<string, JSONSchema | readonly JSONSchema[]> = {};
-  if (
-    typeof schema.$ref === "string" &&
-    (handleDefinitions.has(schema.$ref) ||
-      !DEFINITION_KEYWORDS.some((keyword) =>
-        schema.$ref!.startsWith(`#/${keyword}/`)
-      ))
-  ) {
+  if (typeof schema.$ref === "string") {
     // Siblings of a `$ref` describe the same value, and a reduced sibling
     // carries no constraint, so the reference alone decides this node.
-    return { $ref: schema.$ref };
+    const name = localDefinitionName(schema.$ref);
+    const leadsToHandle = name === undefined
+      ? schema.$ref === "#" && leads.root
+      : leads.definitions.has(name);
+    return leadsToHandle ? { $ref: schema.$ref } : true;
   }
+  const reduce = (sub: JSONSchema) => reduceToHandles(sub, leads);
+  const result: Record<string, JSONSchema | readonly JSONSchema[]> = {};
   if (isObjectNotArray(schema.properties)) {
     const properties: Record<string, JSONSchema> = {};
     for (const [key, sub] of Object.entries(schema.properties)) {
@@ -194,7 +187,9 @@ export function materializeForValidation(
   schema: JSONSchema,
   tx: IExtendedStorageTransaction,
 ): unknown {
-  return cell.asSchema(handleBoundarySchema(schema)).withTx(tx).get();
+  const boundary = handleBoundarySchema(schema);
+  return cell.asSchema(boundary === true ? undefined : boundary).withTx(tx)
+    .get();
 }
 
 /** Per-validation caches for the unreadable-link view. */

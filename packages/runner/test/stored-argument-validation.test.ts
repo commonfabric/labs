@@ -22,6 +22,7 @@ import { Runtime } from "../src/runtime.ts";
 import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
 import {
   acceptsOpaqueCellOrUnresolvedLink,
+  handleBoundarySchema,
   overlayUnreadableLinkPlaceholders,
   storedArgumentValidationIssue,
 } from "../src/stored-argument-validation.ts";
@@ -721,6 +722,92 @@ describe("stored-argument-validation", () => {
       } finally {
         tx.abort();
       }
+    });
+
+    describe("handleBoundarySchema", () => {
+      it("returns `true` for a schema declaring no handle", () => {
+        expect(handleBoundarySchema(peopleSchema(false))).toBe(true);
+      });
+
+      it("returns the path to each handle and nothing else", () => {
+        expect(handleBoundarySchema(peopleSchema(true))).toEqual({
+          properties: {
+            people: {
+              additionalProperties: {
+                properties: { portrait: { asCell: ["cell"] } },
+                additionalProperties: true,
+              },
+            },
+          },
+          additionalProperties: true,
+        });
+      });
+
+      it("returns `true` for a union whose branch declares a handle", () => {
+        expect(handleBoundarySchema({
+          anyOf: [{ type: "string" }, { type: "object", asCell: ["cell"] }],
+        })).toBe(true);
+      });
+
+      it("keeps a local reference only to a definition leading to a handle", () => {
+        expect(handleBoundarySchema({
+          $ref: "#/$defs/Root",
+          $defs: {
+            Root: {
+              type: "object",
+              properties: {
+                held: { $ref: "#/$defs/Held" },
+                plain: { $ref: "#/$defs/Plain" },
+              },
+            },
+            Held: { type: "object", asCell: ["cell"] },
+            Plain: { type: "object", properties: { x: { type: "number" } } },
+          },
+        })).toEqual({
+          $ref: "#/$defs/Root",
+          $defs: {
+            Root: {
+              properties: { held: { $ref: "#/$defs/Held" } },
+              additionalProperties: true,
+            },
+            Held: { asCell: ["cell"] },
+          },
+        });
+      });
+
+      it("keeps a recursive definition that leads to a handle", () => {
+        const node: JSONSchema = {
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            held: { type: "string", asCell: ["cell"] },
+          },
+        };
+        expect(handleBoundarySchema({
+          $ref: "#/$defs/Node",
+          $defs: { Node: node },
+        })).toEqual({
+          $ref: "#/$defs/Node",
+          $defs: {
+            Node: {
+              properties: {
+                next: { $ref: "#/$defs/Node" },
+                held: { asCell: ["cell"] },
+              },
+              additionalProperties: true,
+            },
+          },
+        });
+      });
+
+      it("returns `true` for a reference to a document that has not arrived", () => {
+        expect(handleBoundarySchema({
+          type: "object",
+          properties: {
+            held: { $ref: "cid:fid1:absent-schema-document" },
+          },
+        })).toBe(true);
+      });
     });
   });
 });
