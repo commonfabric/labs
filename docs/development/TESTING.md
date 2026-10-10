@@ -430,6 +430,13 @@ routes always has a document. The guard turns a file that reached the wrong
 runner into a reported pass over zero assertions, which is how such a file goes
 unnoticed.
 
+A `KeyboardEvent` a test dispatches is untrusted: listeners see it, but the
+browser takes no default action, so it moves no focus and checks no checkbox.
+A test of Tab order, or of what a key does by default, presses the key through
+`pressKey` from `@commonfabric/deno-web-test/commands`, which
+[the deno-web-test README](../../packages/deno-web-test/README.md#pressing-keys)
+describes.
+
 Use this route for a narrow browser boundary such as event propagation or
 layout API behavior. Use the browser integration lane when the test needs the
 running product, multiple identities, durable state, or worker behavior. Pair

@@ -6,14 +6,9 @@ import {
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { sleep } from "@commonfabric/utils/sleep";
 
-import {
-  commandId,
-  DRIVER_BINDING,
-  pressOn,
-  readKeyPress,
-  SETTLE_GLOBAL,
-} from "./commands-protocol.ts";
+import { DRIVER_BINDING, SETTLE_GLOBAL } from "./commands-protocol.ts";
 import { DEFAULT_TEST_TIMEOUT_MS, extractAstralConfig } from "./config.ts";
+import { commandId, pressOn, readKeyPress } from "./driver-commands.ts";
 import { TestResult } from "./interface.ts";
 import { Manifest } from "./manifest.ts";
 import { tsToJs } from "./utils.ts";
