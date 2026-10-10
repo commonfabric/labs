@@ -92,15 +92,11 @@ if (typeof globalThis.Worker === "undefined") {
 }
 
 /**
- * Gives the global scope what Deno's main-thread global scope has and
- * Node's lacks: `self`, and the `EventTarget` methods.
+ * Gives the main thread's global scope `self`, as Deno's has. Its
+ * `EventTarget` methods come from `global-events.mjs`.
  */
 function installWindowScope() {
-  const target = new EventTarget();
   globalThis.self = globalThis;
-  globalThis.addEventListener ??= target.addEventListener.bind(target);
-  globalThis.removeEventListener ??= target.removeEventListener.bind(target);
-  globalThis.dispatchEvent ??= target.dispatchEvent.bind(target);
 }
 
 /**

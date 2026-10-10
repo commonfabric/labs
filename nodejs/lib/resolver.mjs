@@ -24,6 +24,8 @@ import {
 const REPLACEMENTS = {
   "jsr:@db/sqlite": pathToFileURL(path.join(NODEJS_DIR, "lib/sqlite.mjs"))
     .href,
+  "jsr:@denosaurs/plug": pathToFileURL(path.join(NODEJS_DIR, "lib/plug.mjs"))
+    .href,
   "jsr:@deno/esbuild-plugin": pathToFileURL(
     path.join(NODEJS_DIR, "lib/esbuild-plugin.mjs"),
   ).href,
