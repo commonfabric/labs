@@ -11,30 +11,19 @@ import {
   createMockCellHandle,
   writesSent,
 } from "../../test-utils/mock-cell-handle.ts";
+import {
+  type BetweenButtons,
+  betweenButtons,
+} from "../../test-utils/tab-order.ts";
 import { CFSwitch } from "./index.ts";
 
 /** A switch between two buttons, with focus on the button before it. */
-async function mounted(options: { disabled?: boolean } = {}): Promise<{
-  control: CFSwitch;
-  after: HTMLButtonElement;
-  [Symbol.dispose]: () => void;
-}> {
-  const before = document.createElement("button");
+function mounted(
+  options: { disabled?: boolean } = {},
+): Promise<BetweenButtons<CFSwitch>> {
   const control = new CFSwitch();
   control.disabled = options.disabled ?? false;
-  const after = document.createElement("button");
-  document.body.append(before, control, after);
-  await control.updateComplete;
-  before.focus();
-  return {
-    control,
-    after,
-    [Symbol.dispose]: () => {
-      before.remove();
-      control.remove();
-      after.remove();
-    },
-  };
+  return betweenButtons(control);
 }
 
 Deno.test("Tab reaches the switch, and focus rests on the switch itself", async () => {

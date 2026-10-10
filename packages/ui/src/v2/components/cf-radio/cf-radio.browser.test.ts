@@ -8,37 +8,27 @@
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
 
+import {
+  type BetweenButtons,
+  betweenButtons,
+} from "../../test-utils/tab-order.ts";
 import { CFRadio } from "./index.ts";
 
-/** A radio between two buttons, with focus on the button before it. */
-async function mounted(options: { disabled?: boolean } = {}): Promise<{
-  control: CFRadio;
-  after: HTMLButtonElement;
-  changes: unknown[];
-  [Symbol.dispose]: () => void;
-}> {
-  const before = document.createElement("button");
+/**
+ * A radio between two buttons, with focus on the button before it, and the
+ * details of the `cf-change` events it fires.
+ */
+async function mounted(
+  options: { disabled?: boolean } = {},
+): Promise<BetweenButtons<CFRadio> & { changes: unknown[] }> {
   const control = new CFRadio();
   control.value = "yes";
   control.disabled = options.disabled ?? false;
-  const after = document.createElement("button");
   const changes: unknown[] = [];
   control.addEventListener("cf-change", (event) => {
     if (event instanceof CustomEvent) changes.push(event.detail);
   });
-  document.body.append(before, control, after);
-  await control.updateComplete;
-  before.focus();
-  return {
-    control,
-    after,
-    changes,
-    [Symbol.dispose]: () => {
-      before.remove();
-      control.remove();
-      after.remove();
-    },
-  };
+  return { ...await betweenButtons(control), changes };
 }
 
 Deno.test("Tab reaches the radio, and focus rests on the radio itself", async () => {
