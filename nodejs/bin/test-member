@@ -18,10 +18,14 @@ if [[ ! -d "${member}/test" ]]; then
   exit 1
 fi
 
+# Tests run from the member's directory, as `deno task` runs a member's
+# tasks; some tests read fixtures by relative path.
+cd "${member}" || exit 1
+
 files=()
 while IFS= read -r f; do
   files+=("${f}")
-done < <(find "${member}/test" \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*.browser.test.*' | sort)
+done < <(find test \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*.browser.test.*' | sort)
 
 # The Deno tasks run with `ENV=test`; some modules read it.
 ENV=test exec "${dir}/cfnode" --test --test-reporter=spec "$@" "${files[@]}"
