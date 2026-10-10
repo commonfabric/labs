@@ -9,7 +9,7 @@
 // return a C string. Here a "pointer" is an object carrying the string, and
 // `Deno.UnsafePointerView` reads it back.
 //
-// Mapped from `jsr:@denosaurs/plug` by `hooks.mjs`.
+// Mapped from `jsr:@denosaurs/plug` by `resolver.mjs`.
 
 import { columnOriginsOf } from "./sqlite.mjs";
 
