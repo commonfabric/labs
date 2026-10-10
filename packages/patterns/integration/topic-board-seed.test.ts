@@ -4,7 +4,6 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { env } from "@commonfabric/integration";
-import { isCell } from "@commonfabric/runner";
 import {
   initializePiecesController,
   type PieceController,
@@ -66,18 +65,13 @@ describe("topic board seed", () => {
           topics.push(topic);
         }
         for (const [index, topic] of topics.entries()) {
-          // The references the `mention` verb stored. The input declares the
-          // list `Writable`, so the slot reads as a handle on it; a topic that
-          // mentioned nothing holds no list at all.
-          const slot = await topic.input.getCell(["mentioned"]);
-          const stored = slot.get();
-          const mentioned = isCell(stored) ? stored : slot;
-          await mentioned.pull();
+          const mentions = (await topic.result.getCell()).key("mentions");
+          await mentions.pull();
           const targets = crossrefTargets(index, shape);
-          expect(mentioned.get() ?? []).toHaveLength(targets.length);
+          expect(mentions.get()).toHaveLength(targets.length);
           for (const [position, target] of targets.entries()) {
             expect(
-              mentioned.key(position).resolveAsCell()
+              mentions.key(position).resolveAsCell()
                 .equals(topics[target].getCell()),
             ).toBe(true);
           }
