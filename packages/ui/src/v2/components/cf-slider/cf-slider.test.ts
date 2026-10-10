@@ -12,46 +12,21 @@ import {
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFSlider } from "./index.ts";
 
-/**
- * The element's members these tests drive. A Lit element mounts only in a
- * browser, so without one the tests bind `value` as a change of `value` does,
- * run the update hooks by hand, and press keys through the handler the
- * element listens with, on an element that was never connected.
- */
-type SliderInternals = {
-  value: CellHandle<number> | number;
-  min: number;
-  max: number;
-  step: number;
-  addEventListener(type: string, listener: (event: Event) => void): void;
-  getAttribute(name: string): string | null;
-  willUpdate(changedProperties: Map<string, unknown>): void;
-  updated(changedProperties: Map<string, unknown>): void;
-  getPercentageValue(): number;
-  setValue(value: number): void;
-  increment(): void;
-  decrement(): void;
-  _handleKeyDown(event: { key: string; preventDefault(): void }): void;
-  _beginDrag(): void;
-  _isDragging: boolean;
-  disconnectedCallback(): void;
-  _moveTo(value: number, gesture: "drag"): void;
-  _commitDrag(): void;
-};
-
-/** A slider over 0–100 holding `value`, as a change of `value` binds it. */
-function sliderWith(value: CellHandle<number> | number): SliderInternals {
-  const element = new CFSlider() as unknown as SliderInternals;
+/** A slider over 0–100 holding `value`, bound as Lit binds a new value. */
+function sliderWith(
+  value: CellHandle<number | undefined> | number,
+): CFSlider {
+  const element = new CFSlider();
   element.value = value;
-  element.willUpdate(new Map([["value", undefined]]));
+  element.accessForTestingOnly.update({ value: undefined });
   return element;
 }
 
-const press = (element: SliderInternals, key: string) =>
-  element._handleKeyDown({ key, preventDefault: () => {} });
+const press = (element: CFSlider, key: string) =>
+  element.accessForTestingOnly.press(key);
 
 /** What each `cf-change` carried, and where the slider stood as it fired. */
-const announcements = (element: SliderInternals, type = "cf-change") => {
+const announcements = (element: CFSlider, type = "cf-change") => {
   const seen: { detail: unknown; shown: number }[] = [];
   element.addEventListener(type, (event) => {
     if (event instanceof CustomEvent) {
@@ -63,7 +38,7 @@ const announcements = (element: SliderInternals, type = "cf-change") => {
   return seen;
 };
 
-const written = (value: CellHandle<number>) =>
+const written = (value: CellHandle<number | undefined>) =>
   writesSent(value).map((write) => write.value);
 
 /** Lets the mock worker's answers and queued writes go through. */
@@ -78,14 +53,14 @@ async function settle(): Promise<void> {
 
 describe("CFSlider bound to a cell", () => {
   it("shows the cell's value", () => {
-    const element = sliderWith(createMockCellHandle(30));
+    const element = sliderWith(createMockCellHandle<number | undefined>(30));
     expect(element.getPercentageValue()).toBe(30);
-    element.updated(new Map());
+    element.accessForTestingOnly.update({});
     expect(element.getAttribute("aria-valuenow")).toBe("30");
   });
 
   it("writes a key step once, and announces it after the write", async () => {
-    const value = createMockCellHandle(30);
+    const value = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(value);
     const announced = announcements(element);
 
@@ -99,7 +74,7 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("steps from what the worker answers for a cell it has not read", async () => {
-    const value = createMockCellHandle<number>();
+    const value = createMockCellHandle<number | undefined>();
     const answer = holdReads(value);
     const element = sliderWith(value);
     const announced = announcements(element);
@@ -120,7 +95,7 @@ describe("CFSlider bound to a cell", () => {
   it("writes a move to a place at once, without waiting on a read", async () => {
     // A drag on a cell the worker has not answered for yet: each move goes
     // out as it is made, so no move can overtake another.
-    const value = createMockCellHandle<number>();
+    const value = createMockCellHandle<number | undefined>();
     holdReads(value);
     const element = sliderWith(value);
 
@@ -132,7 +107,7 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("writes and announces nothing while the worker refuses the read", async () => {
-    const value = createMockCellHandle(30);
+    const value = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(value);
     const announced = announcements(element);
     pushRefusal(value);
@@ -146,14 +121,14 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("writes and announces nothing for a move that leaves it where it is", async () => {
-    const atMax = createMockCellHandle(100);
+    const atMax = createMockCellHandle<number | undefined>(100);
     const full = sliderWith(atMax);
     const fullAnnounced = announcements(full);
     press(full, "ArrowRight");
     press(full, "End");
 
     // A cell the worker has read and found empty shows the minimum.
-    const empty = createMockCellHandle<number>();
+    const empty = createMockCellHandle<number | undefined>();
     const answer = holdReads(empty);
     const blank = sliderWith(empty);
     // A step that has the worker read the cell, and leaves it empty.
@@ -178,7 +153,7 @@ describe("CFSlider bound to a cell", () => {
 
   it("writes a move to the minimum on a cell it has not read", async () => {
     // The minimum is only what it shows meanwhile; the cell may hold 50.
-    const value = createMockCellHandle<number>();
+    const value = createMockCellHandle<number | undefined>();
     holdReads(value);
     const element = sliderWith(value);
 
@@ -189,7 +164,7 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("lands a step and a later move in the order they were made", async () => {
-    const value = createMockCellHandle<number>();
+    const value = createMockCellHandle<number | undefined>();
     const answer = holdReads(value);
     const element = sliderWith(value);
 
@@ -202,7 +177,7 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("drops moves queued for one cell when another is bound", async () => {
-    const first = createMockCellHandle<number>();
+    const first = createMockCellHandle<number | undefined>();
     const answer = holdReads(first);
     const element = sliderWith(first);
     press(element, "ArrowRight");
@@ -210,9 +185,11 @@ describe("CFSlider bound to a cell", () => {
     element.setValue(70);
 
     // Another cell: every mock shares one id, so a path sets it apart.
-    const second = createMockCellHandle(5, { path: ["other"] });
+    const second = createMockCellHandle<number | undefined>(5, {
+      path: ["other"],
+    });
     element.value = second;
-    element.willUpdate(new Map([["value", undefined]]));
+    element.accessForTestingOnly.update({ value: undefined });
     const announced = announcements(element);
     answer({ value: 50 });
     await settle();
@@ -223,26 +200,28 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("moves at once on a new binding, whatever the old cell still waits on", async () => {
-    const stuck = createMockCellHandle<number>();
+    const stuck = createMockCellHandle<number | undefined>();
     holdReads(stuck);
     const element = sliderWith(stuck);
     press(element, "ArrowRight");
 
-    const next = createMockCellHandle(30, { path: ["other"] });
+    const next = createMockCellHandle<number | undefined>(30, {
+      path: ["other"],
+    });
     element.value = next;
-    element.willUpdate(new Map([["value", undefined]]));
+    element.accessForTestingOnly.update({ value: undefined });
     press(element, "ArrowRight");
     await settle();
     expect(written(next)).toEqual([31]);
 
     element.value = 20;
-    element.willUpdate(new Map([["value", undefined]]));
+    element.accessForTestingOnly.update({ value: undefined });
     press(element, "ArrowRight");
     expect(element.value).toBe(21);
   });
 
   it("announces a step on a read cell at once", () => {
-    const element = sliderWith(createMockCellHandle(30));
+    const element = sliderWith(createMockCellHandle<number | undefined>(30));
     const announced = announcements(element);
 
     press(element, "ArrowRight");
@@ -254,7 +233,7 @@ describe("CFSlider bound to a cell", () => {
 
   it("moves keys between stops: min, each step, and max", async () => {
     // Over 0–10 at step 3 the stops are 0, 3, 6, 9 and 10.
-    const value = createMockCellHandle(7);
+    const value = createMockCellHandle<number | undefined>(7);
     const element = sliderWith(value);
     element.max = 10;
     element.step = 3;
@@ -270,7 +249,7 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("puts a place on its nearest stop, max included", async () => {
-    const value = createMockCellHandle(0);
+    const value = createMockCellHandle<number | undefined>(0);
     const element = sliderWith(value);
     element.max = 10;
     element.step = 3;
@@ -286,15 +265,15 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("reports a drag as it moves, and commits it once on release", async () => {
-    const value = createMockCellHandle(20);
+    const value = createMockCellHandle<number | undefined>(20);
     const element = sliderWith(value);
     const inputs = announcements(element, "cf-input");
     const changes = announcements(element, "cf-change");
 
-    element._beginDrag();
-    element._moveTo(30, "drag");
-    element._moveTo(40, "drag");
-    element._commitDrag();
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(30);
+    element.accessForTestingOnly.dragTo(40);
+    element.accessForTestingOnly.endDrag();
     await settle();
 
     expect(written(value)).toEqual([30, 40]);
@@ -308,19 +287,19 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("commits what the drag wrote, not what another writer did meanwhile", async () => {
-    const value = createMockCellHandle(30);
+    const value = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(value);
     const changes = announcements(element, "cf-change");
 
     // Pressed and held: someone else sets 60, and the person lets go.
-    element._beginDrag();
+    element.accessForTestingOnly.beginDrag();
     pushUpdate(value, 60);
-    element._commitDrag();
+    element.accessForTestingOnly.endDrag();
     // Dragged to 40; someone else sets 60; let go.
-    element._beginDrag();
-    element._moveTo(40, "drag");
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(40);
     pushUpdate(value, 60);
-    element._commitDrag();
+    element.accessForTestingOnly.endDrag();
     await settle();
 
     expect(changes.map((a) => a.detail)).toEqual([
@@ -329,60 +308,49 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("commits nothing to a cell bound mid-drag, or from a removed slider", async () => {
-    const first = createMockCellHandle(30);
+    const first = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(first);
     const changes = announcements(element, "cf-change");
-    element._beginDrag();
-    element._moveTo(40, "drag");
-    element.value = createMockCellHandle(80, { path: ["other"] });
-    element.willUpdate(new Map([["value", undefined]]));
-    element._commitDrag();
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(40);
+    element.value = createMockCellHandle<number | undefined>(80, {
+      path: ["other"],
+    });
+    element.accessForTestingOnly.update({ value: undefined });
+    element.accessForTestingOnly.endDrag();
 
     // Removed mid-drag; a mouseup that still arrives commits nothing.
-    element._beginDrag();
-    element._moveTo(50, "drag");
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(50);
     element.disconnectedCallback();
-    element._commitDrag();
+    element.accessForTestingOnly.endDrag();
     await settle();
 
     expect(changes).toEqual([]);
   });
 
   it("stops a drag when another cell is bound", () => {
-    // The drag's listeners live on the document, which Deno lacks.
-    const removed: string[] = [];
-    Object.defineProperty(globalThis, "document", {
-      configurable: true,
-      value: {
-        removeEventListener: (type: string) => removed.push(type),
-      },
+    const first = createMockCellHandle<number | undefined>(30);
+    const element = sliderWith(first);
+    element.accessForTestingOnly.beginDrag();
+
+    element.value = createMockCellHandle<number | undefined>(80, {
+      path: ["other"],
     });
-    try {
-      const element = sliderWith(createMockCellHandle(30));
-      Object.defineProperty(element, "classList", {
-        value: { remove: () => {} },
-      });
-      element._isDragging = true;
+    element.accessForTestingOnly.update({ value: first });
 
-      element.value = createMockCellHandle(80, { path: ["other"] });
-      element.willUpdate(new Map([["value", undefined]]));
-
-      expect(element._isDragging).toBe(false);
-      expect(removed).toContain("mousemove");
-    } finally {
-      Reflect.deleteProperty(globalThis, "document");
-    }
+    expect(element.accessForTestingOnly.dragging).toBe(false);
   });
 
   it("commits a drag on a cell not yet read, even to the minimum", async () => {
-    const value = createMockCellHandle<number>();
+    const value = createMockCellHandle<number | undefined>();
     holdReads(value);
     const element = sliderWith(value);
     const changes = announcements(element, "cf-change");
 
-    element._beginDrag();
-    element._moveTo(0, "drag");
-    element._commitDrag();
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(0);
+    element.accessForTestingOnly.endDrag();
     await settle();
 
     expect(written(value)).toEqual([0]);
@@ -390,19 +358,19 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("keeps a drag across a fresh handle for the same cell", async () => {
-    const value = createMockCellHandle(30);
+    const value = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(value);
     const changes = announcements(element, "cf-change");
 
-    element._beginDrag();
-    element._moveTo(40, "drag");
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(40);
     // Same id and path: the same persistent cell, as CFC label settling hands
     // over.
-    const fresh = createMockCellHandle(40);
+    const fresh = createMockCellHandle<number | undefined>(40);
     element.value = fresh;
-    element.willUpdate(new Map([["value", value]]));
-    element._moveTo(50, "drag");
-    element._commitDrag();
+    element.accessForTestingOnly.update({ value: value });
+    element.accessForTestingOnly.dragTo(50);
+    element.accessForTestingOnly.endDrag();
     await settle();
 
     // One cell: its writes may go through either handle.
@@ -413,16 +381,16 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("drops the moves still queued when the slider is removed", async () => {
-    const value = createMockCellHandle<number>();
+    const value = createMockCellHandle<number | undefined>();
     const answer = holdReads(value);
     const element = sliderWith(value);
     const changes = announcements(element, "cf-change");
     press(element, "ArrowRight");
-    element._beginDrag();
-    element._moveTo(70, "drag");
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(70);
 
     element.disconnectedCallback();
-    element._commitDrag();
+    element.accessForTestingOnly.endDrag();
     answer({ value: 40 });
     await settle();
 
@@ -433,16 +401,14 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("takes a key pressed mid-drag into the drag", async () => {
-    const value = createMockCellHandle(30);
+    const value = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(value);
     const changes = announcements(element, "cf-change");
 
-    element._beginDrag();
-    element._moveTo(40, "drag");
-    element._isDragging = true;
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(40);
     press(element, "ArrowRight");
-    element._isDragging = false;
-    element._commitDrag();
+    element.accessForTestingOnly.endDrag();
     await settle();
 
     expect(written(value)).toEqual([40, 41]);
@@ -452,14 +418,14 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("commits nothing for a drag released where it began", async () => {
-    const value = createMockCellHandle(20);
+    const value = createMockCellHandle<number | undefined>(20);
     const element = sliderWith(value);
     const changes = announcements(element, "cf-change");
 
-    element._beginDrag();
-    element._moveTo(30, "drag");
-    element._moveTo(20, "drag");
-    element._commitDrag();
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(30);
+    element.accessForTestingOnly.dragTo(20);
+    element.accessForTestingOnly.endDrag();
     await settle();
 
     expect(written(value)).toEqual([30, 20]);
@@ -467,7 +433,7 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("announces nothing for a call from code", async () => {
-    const value = createMockCellHandle(30);
+    const value = createMockCellHandle<number | undefined>(30);
     const element = sliderWith(value);
     const announced = announcements(element);
 
@@ -481,7 +447,7 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("never snaps past the maximum", async () => {
-    const value = createMockCellHandle(8);
+    const value = createMockCellHandle<number | undefined>(8);
     const element = sliderWith(value);
     element.max = 10;
     element.step = 4;
@@ -493,10 +459,10 @@ describe("CFSlider bound to a cell", () => {
   });
 
   it("shows an out-of-range cell clamped, and stays bound to it", () => {
-    const value = createMockCellHandle(150);
+    const value = createMockCellHandle<number | undefined>(150);
     const element = sliderWith(value);
     element.max = 120;
-    element.updated(new Map([["max", undefined]]));
+    element.accessForTestingOnly.update({ max: undefined });
 
     expect(element.getPercentageValue()).toBe(100);
     expect(writesSent(value)).toEqual([]);
@@ -544,13 +510,13 @@ describe("CFSlider given a plain number", () => {
     const element = sliderWith(30);
     const changes = announcements(element, "cf-change");
 
-    element._beginDrag();
-    element._moveTo(40, "drag");
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(40);
     // Each move sets value; Lit then updates with the value it replaced.
-    element.willUpdate(new Map([["value", 30]]));
-    element._moveTo(50, "drag");
-    element.willUpdate(new Map([["value", 40]]));
-    element._commitDrag();
+    element.accessForTestingOnly.update({ value: 30 });
+    element.accessForTestingOnly.dragTo(50);
+    element.accessForTestingOnly.update({ value: 40 });
+    element.accessForTestingOnly.endDrag();
 
     expect(changes.map((a) => a.detail)).toEqual([
       { value: 50, oldValue: 30 },
@@ -562,14 +528,14 @@ describe("CFSlider given a plain number", () => {
     const element = sliderWith(30);
     const changes = announcements(element, "cf-change");
 
-    element._beginDrag();
-    element._moveTo(40, "drag");
-    element.willUpdate(new Map([["value", 30]]));
-    element._moveTo(50, "drag");
-    element.willUpdate(new Map([["value", 40]]));
+    element.accessForTestingOnly.beginDrag();
+    element.accessForTestingOnly.dragTo(40);
+    element.accessForTestingOnly.update({ value: 30 });
+    element.accessForTestingOnly.dragTo(50);
+    element.accessForTestingOnly.update({ value: 40 });
     element.value = 40;
-    element.willUpdate(new Map([["value", 50]]));
-    element._commitDrag();
+    element.accessForTestingOnly.update({ value: 50 });
+    element.accessForTestingOnly.endDrag();
 
     expect(changes.map((a) => a.detail)).toEqual([
       { value: 50, oldValue: 30 },
@@ -588,7 +554,7 @@ describe("CFSlider given a plain number", () => {
   it("brings its value within new bounds", () => {
     const element = sliderWith(90);
     element.max = 50;
-    element.updated(new Map([["max", undefined]]));
+    element.accessForTestingOnly.update({ max: undefined });
 
     expect(element.value).toBe(50);
   });
@@ -604,7 +570,7 @@ describe("CFSlider given a plain number", () => {
   });
 
   it("refuses a value that is not a finite number", () => {
-    const value = createMockCellHandle(40);
+    const value = createMockCellHandle<number | undefined>(40);
     const element = sliderWith(value);
 
     expect(() => element.setValue(NaN)).toThrow(RangeError);

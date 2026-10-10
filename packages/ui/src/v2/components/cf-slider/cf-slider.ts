@@ -1,4 +1,8 @@
-import { css, html, LitElement } from "lit";
+import { css, html, LitElement, type PropertyValues } from "lit";
+import { property } from "lit/decorators.js";
+import { classMap } from "lit/directives/class-map.js";
+import { createRef, ref } from "lit/directives/ref.js";
+import { styleMap } from "lit/directives/style-map.js";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { numberSchema } from "@commonfabric/runner/schemas";
 import { BaseElement } from "../../core/base-element.ts";
@@ -11,6 +15,16 @@ export type SliderOrientation = "horizontal" | "vertical";
 
 /** A person's move, which is announced; a call from code is not. */
 type Gesture = "drag" | "key";
+
+/** Stops a key moves: one for an arrow, ten for a page key. */
+const KEY_STOPS: Readonly<Record<string, number>> = {
+  ArrowLeft: -1,
+  ArrowDown: -1,
+  ArrowRight: 1,
+  ArrowUp: 1,
+  PageDown: -10,
+  PageUp: 10,
+};
 
 /**
  * CFSlider - Range input slider for value selection
@@ -27,7 +41,8 @@ type Gesture = "drag" | "key";
  * @attr {boolean} disabled - Whether the slider is disabled
  * @attr {SliderOrientation} orientation - Slider orientation ("horizontal" | "vertical")
  *
- * Values land on stops: `min`, each `step` above it, and `max`.
+ * Values land on stops: `min`, each `step` above it, and `max`. Mouse, touch
+ * and pen drag alike, each pointer captured until it is released.
  *
  * @fires cf-input - Fired for every move a person makes, once it is written,
  *   with detail: { value, oldValue }
@@ -48,14 +63,6 @@ export class CFSlider extends BaseElement {
     delegatesFocus: true,
   };
 
-  static override properties = {
-    value: { type: Number },
-    min: { type: Number },
-    max: { type: Number },
-    step: { type: Number },
-    disabled: { type: Boolean, reflect: true },
-    orientation: { type: String, reflect: true },
-  };
   // deno-fmt-ignore
   static override styles = [
     BaseElement.baseStyles,
@@ -225,15 +232,13 @@ export class CFSlider extends BaseElement {
         0 0 0 4px var(--cf-slider-color-ring);
     }
 
-    /* Active/dragging state */
-    :host(.dragging) .thumb,
-    .thumb:active {
+    /* Dragging state */
+    .slider.dragging .thumb {
       cursor: grabbing;
       transform: translate(-50%, -50%) scale(1.1);
     }
 
-    .slider.vertical .thumb:active,
-    :host(.dragging) .slider.vertical .thumb {
+    .slider.vertical.dragging .thumb {
       transform: translate(-50%, 50%) scale(1.1);
     }
 
@@ -280,61 +285,91 @@ export class CFSlider extends BaseElement {
   `,
   ];
 
-  declare value: CellHandle<number | undefined> | number | undefined;
-  declare min: number;
-  declare max: number;
-  declare step: number;
-  declare disabled: boolean;
-  declare orientation: SliderOrientation;
+  /** The value: a plain number, or a cell bound with `$value`. */
+  @property({ type: Number })
+  accessor value: CellHandle<number | undefined> | number | undefined = 50;
+
+  @property({ type: Number })
+  accessor min = 0;
+
+  @property({ type: Number })
+  accessor max = 100;
+
+  @property({ type: Number })
+  accessor step = 1;
+
+  @property({ type: Boolean, reflect: true })
+  accessor disabled = false;
+
+  @property({ type: String, reflect: true })
+  accessor orientation: SliderOrientation = "horizontal";
 
   // Immediate: a move is announced only once its write is made.
   // `undefined` is a cell holding nothing, which a move may leave so.
-  private _valueCellController = createCellController<number | undefined>(
-    this,
-    {
-      timing: { strategy: "immediate" },
-    },
-  );
+  #controller = createCellController<number | undefined>(this, {
+    timing: { strategy: "immediate" },
+  });
 
-  private _trackElement: HTMLElement | null = null;
-  private _thumbElement: HTMLElement | null = null;
-  private _rangeElement: HTMLElement | null = null;
+  #track = createRef<HTMLDivElement>();
+
+  /** The pointer dragging the slider, captured until it is released. */
+  #pointer: number | undefined;
+
+  /**
+   * Moves run in the order they were made. A step on a cell not yet read
+   * waits for the worker; while one waits, later moves to the same cell queue
+   * behind it. A move belongs to the binding it was made on: binding `value`
+   * anew drops the queue, so no move made for one cell reaches another, and a
+   * read the old cell never answers holds nothing up.
+   */
+  #queue: Promise<void> | undefined;
+  #binding = 0;
+
+  /**
+   * The drag under way, until it is released: the value shown when it
+   * began, whether that value was known (read) then, and the last value the
+   * drag itself wrote. What other writers do meanwhile is not the drag's.
+   */
+  #drag: { from: number; known: boolean; to?: number } | undefined;
+
+  /**
+   * Gestures without a browser: key presses, and a drag by value rather
+   * than by pointer position; whether a drag is under way; and the update
+   * Lit runs when the named properties change, which an element never
+   * connected does not run on its own.
+   */
+  get accessForTestingOnly(): {
+    press(key: string): void;
+    beginDrag(): void;
+    dragTo(value: number): void;
+    endDrag(): void;
+    readonly dragging: boolean;
+    update(changed: Readonly<Record<string, unknown>>): void;
+  } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
+    return {
+      press: (key) => this.#press(key),
+      update: (changed) => {
+        const properties = new Map(Object.entries(changed));
+        this.willUpdate(properties);
+        this.updated(properties);
+      },
+      beginDrag: () => this.#beginDrag(-1),
+      dragTo: (value) => this.#moveTo(value, "drag"),
+      endDrag: () => this.#endDrag(true),
+      get dragging() {
+        return outerThis.#pointer !== undefined;
+      },
+    };
+  }
 
   constructor() {
     super();
-    this.value = 50;
-    this.min = 0;
-    this.max = 100;
-    this.step = 1;
-    this.disabled = false;
-    this.orientation = "horizontal";
+    this.addEventListener("keydown", (event) => {
+      if (this.#press(event.key)) event.preventDefault();
+    });
   }
-
-  get trackElement(): HTMLElement | null {
-    if (!this._trackElement) {
-      this._trackElement =
-        this.shadowRoot?.querySelector(".track") as HTMLElement || null;
-    }
-    return this._trackElement;
-  }
-
-  get thumbElement(): HTMLElement | null {
-    if (!this._thumbElement) {
-      this._thumbElement =
-        this.shadowRoot?.querySelector(".thumb") as HTMLElement || null;
-    }
-    return this._thumbElement;
-  }
-
-  get rangeElement(): HTMLElement | null {
-    if (!this._rangeElement) {
-      this._rangeElement =
-        this.shadowRoot?.querySelector(".range") as HTMLElement || null;
-    }
-    return this._rangeElement;
-  }
-
-  private _isDragging = false;
 
   override connectedCallback() {
     if (!this.hasAttribute("role")) {
@@ -344,48 +379,115 @@ export class CFSlider extends BaseElement {
       this.setAttribute("exportparts", "base,track,range,thumb");
     }
     super.connectedCallback();
-
-    this._valueCellController.bind(this.value, numberSchema);
+    this.#controller.bind(this.value, numberSchema);
     // A plain value is the slider's own, so it is brought within bounds here.
     // A cell's value belongs to the cell: it is shown clamped, never rewritten.
-    if (!this._valueCellController.hasCell()) {
-      this.value = this._snapToStep(this._current);
+    if (!this.#controller.hasCell()) {
+      this.value = this.#snap(this.#current);
     }
-    this._updateAriaAttributes();
-
-    // Add keyboard event listener
-    this.addEventListener("keydown", this._handleKeyDown);
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this.removeEventListener("keydown", this._handleKeyDown);
+    // A removed slider commits nothing, as a removed native input fires no
+    // change, and the moves still queued go with it, as on a new binding.
+    this.#forgetMoves();
+  }
 
-    // Remove document listeners if dragging; a removed slider commits
-    // nothing, as a removed native input fires no change, and the moves
-    // still queued go with it, as on a new binding.
-    this._binding++;
-    this._queue = undefined;
-    this._drag = undefined;
-    if (this._isDragging) {
-      this._stopDragging();
+  protected override willUpdate(changed: PropertyValues) {
+    super.willUpdate(changed);
+    if (changed.has("value")) {
+      if (!this.#sameBinding(changed.get("value"), this.value)) {
+        // A drag on one cell neither commits to another nor goes on there.
+        this.#forgetMoves();
+      }
+      this.#controller.bind(this.value, numberSchema);
     }
   }
 
-  override willUpdate(
-    changedProperties: Map<string | number | symbol, unknown>,
-  ) {
-    super.willUpdate(changedProperties);
-    if (changedProperties.has("value")) {
-      if (!this._sameBinding(changedProperties.get("value"), this.value)) {
-        this._binding++;
-        this._queue = undefined;
-        // A drag on one cell neither commits to another nor goes on there.
-        this._drag = undefined;
-        if (this._isDragging) this._stopDragging();
-      }
-      this._valueCellController.bind(this.value, numberSchema);
+  protected override updated(changed: PropertyValues) {
+    super.updated(changed);
+    if (
+      !this.#controller.hasCell() &&
+      (changed.has("min") || changed.has("max") || changed.has("step"))
+    ) {
+      // A plain value follows its bounds.
+      const snapped = this.#snap(this.#current);
+      if (snapped !== this.value) this.value = snapped;
     }
+    // A bound cell's value arrives without any property changing, so ARIA
+    // state follows every update rather than named ones.
+    this.setAttribute("aria-valuemin", String(this.min));
+    this.setAttribute("aria-valuemax", String(this.max));
+    this.setAttribute("aria-valuenow", String(this.#current));
+    this.setAttribute("aria-disabled", String(this.disabled));
+    this.setAttribute("aria-orientation", this.orientation);
+    this.tabIndex = this.disabled ? -1 : 0;
+  }
+
+  override render() {
+    const percent = `${this.getPercentageValue()}%`;
+    const vertical = this.orientation === "vertical";
+    return html`
+      <div
+        class="${classMap({
+          slider: true,
+          [this.orientation]: true,
+          disabled: this.disabled,
+          dragging: this.#pointer !== undefined,
+        })}"
+        part="base"
+        @pointerdown="${this.#onPointerDown}"
+        @pointermove="${this.#onPointerMove}"
+        @pointerup="${this.#onPointerUp}"
+        @pointercancel="${this.#onPointerUp}"
+        @lostpointercapture="${this.#onPointerUp}"
+      >
+        <div class="track" part="track" ${ref(this.#track)}>
+          <div
+            class="range"
+            part="range"
+            style="${styleMap(
+              vertical ? { height: percent } : { width: percent },
+            )}"
+          ></div>
+          <div
+            class="thumb"
+            part="thumb"
+            role="presentation"
+            style="${styleMap(
+              vertical ? { bottom: percent } : { left: percent },
+            )}"
+          ></div>
+        </div>
+      </div>
+    `;
+  }
+
+  /** Set the value from code, which fires no event. */
+  setValue(value: number): void {
+    if (!Number.isFinite(value)) {
+      throw new RangeError(
+        `cf-slider: setValue needs a finite number, got ${value}`,
+      );
+    }
+    this.#moveTo(value, undefined);
+  }
+
+  /** Where the shown value sits between `min` and `max`, from 0 to 100. */
+  getPercentageValue(): number {
+    const range = this.max - this.min;
+    return range > 0 ? ((this.#current - this.min) / range) * 100 : 0;
+  }
+
+  /** Move up one stop from code, which fires no event. */
+  increment(): void {
+    this.#moveBy((current) => this.#stopFrom(current, 1), undefined);
+  }
+
+  /** Move down one stop from code, which fires no event. */
+  decrement(): void {
+    this.#moveBy((current) => this.#stopFrom(current, -1), undefined);
   }
 
   /**
@@ -395,40 +497,25 @@ export class CFSlider extends BaseElement {
    * controlled slider echoing its moves back). Switching between a cell and
    * a plain value, or to another cell, is a new binding.
    */
-  private _sameBinding(old: unknown, next: unknown): boolean {
+  #sameBinding(old: unknown, next: unknown): boolean {
     if (isCellHandle(old) && isCellHandle(next)) {
       return sameCellDoc(old.ref(), next.ref());
     }
     return !isCellHandle(old) && !isCellHandle(next);
   }
 
-  override updated(
-    changedProperties: Map<string | number | symbol, unknown>,
-  ) {
-    super.updated(changedProperties);
-
-    if (
-      !this._valueCellController.hasCell() &&
-      (changedProperties.has("min") || changedProperties.has("max") ||
-        changedProperties.has("step"))
-    ) {
-      // Re-clamp and snap the value when constraints change
-      const clampedValue = this._snapToStep(this._current);
-      if (clampedValue !== this.value) {
-        this.value = clampedValue;
-      }
-    }
-
-    // A bound cell's value arrives without any property changing, so the
-    // position and ARIA state follow every update rather than named ones.
-    this._updateAriaAttributes();
-    this._updateSliderPosition();
+  /** Drop the queued moves and any drag, which then commits nothing. */
+  #forgetMoves(): void {
+    this.#binding++;
+    this.#queue = undefined;
+    this.#drag = undefined;
+    this.#endDrag(false);
   }
 
   /** `value` as the slider shows it: within bounds, the minimum if unset. */
-  private _shown(value: unknown): number {
+  #shown(value: unknown): number {
     return typeof value === "number" && Number.isFinite(value)
-      ? this._clampValue(value)
+      ? this.#clamp(value)
       : this.min;
   }
 
@@ -437,9 +524,9 @@ export class CFSlider extends BaseElement {
    * read directly so a move made in this tick is seen by the next one. It may
    * lie out of bounds; `undefined` is a cell holding nothing.
    */
-  private get _held(): number | undefined {
-    const value = this._valueCellController.hasCell()
-      ? this._valueCellController.getValue()
+  get #held(): number | undefined {
+    const value = this.#controller.hasCell()
+      ? this.#controller.getValue()
       : this.value;
     return typeof value === "number" && Number.isFinite(value)
       ? value
@@ -447,48 +534,38 @@ export class CFSlider extends BaseElement {
   }
 
   /** The value shown. */
-  private get _current(): number {
-    return this._shown(this._held);
+  get #current(): number {
+    return this.#shown(this.#held);
   }
 
-  /** Whether `_held` is known: a plain value, or a cell the worker has read. */
-  private get _known(): boolean {
-    const cell = this._valueCellController.getCell();
+  /** Whether `#held` is known: a plain value, or a cell the worker has read. */
+  get #known(): boolean {
+    const cell = this.#controller.getCell();
     return cell === null || !("unread" in cell.lastRead());
   }
 
-  /**
-   * Moves run in the order they were made. A step on a cell not yet read
-   * waits for the worker; while one waits, later moves to the same cell queue
-   * behind it. A move belongs to the binding it was made on: binding `value`
-   * anew drops the queue, so no move made for one cell reaches another, and a
-   * read the old cell never answers holds nothing up.
-   */
-  private _queue: Promise<void> | undefined;
-  private _binding = 0;
-
-  private _inOrder(move: () => Promise<void> | void): void {
-    if (this._queue === undefined) {
-      this._track(move());
+  #inOrder(move: () => Promise<void> | void): void {
+    if (this.#queue === undefined) {
+      this.#enqueue(move());
       return;
     }
-    const binding = this._binding;
+    const binding = this.#binding;
     const onBinding = () => {
-      if (binding === this._binding) return move();
+      if (binding === this.#binding) return move();
     };
     // A move that failed is reported, and the queue goes on without it.
-    this._track(this._queue.then(onBinding, (error) => {
+    this.#enqueue(this.#queue.then(onBinding, (error) => {
       reportError(error);
       return onBinding();
     }));
   }
 
-  private _track(run: Promise<void> | void): void {
+  #enqueue(run: Promise<void> | void): void {
     if (run === undefined) return;
     const queued: Promise<void> = run.finally(() => {
-      if (this._queue === queued) this._queue = undefined;
+      if (this.#queue === queued) this.#queue = undefined;
     });
-    this._queue = queued;
+    this.#queue = queued;
   }
 
   /**
@@ -496,19 +573,19 @@ export class CFSlider extends BaseElement {
    * slider already holds writes nothing; on a cell not yet read that is not
    * known, so the move is written.
    */
-  private _moveTo(value: number, gesture: Gesture | undefined): void {
-    this._inOrder(() => {
-      const held = this._held;
-      const next = this._snapToStep(value);
+  #moveTo(value: number, gesture: Gesture | undefined): void {
+    this.#inOrder(() => {
+      const held = this.#held;
+      const next = this.#snap(value);
       // A place was chosen: an empty cell gets it, even the minimum shown.
-      if (this._known && next === held) return;
-      if (this._valueCellController.hasCell()) {
-        if (this._valueCellController.refusal !== undefined) return;
-        this._valueCellController.setValue(next);
+      if (this.#known && next === held) return;
+      if (this.#controller.hasCell()) {
+        if (this.#controller.refusal !== undefined) return;
+        this.#controller.setValue(next);
       } else {
         this.value = next;
       }
-      this._moved(next, held ?? this._shown(held), gesture);
+      this.#moved(next, held ?? this.#shown(held), gesture);
     });
   }
 
@@ -518,28 +595,28 @@ export class CFSlider extends BaseElement {
    * worker first, so a step is never taken from the minimum shown meanwhile.
    * A step that leaves the value where it is writes nothing.
    */
-  private _moveBy(
+  #moveBy(
     step: (current: number) => number,
     gesture: Gesture | undefined,
   ): void {
-    this._inOrder(() => {
-      if (!this._valueCellController.hasCell()) {
-        const held = this._held;
-        const next = step(this._shown(held));
-        if (next === (held ?? this._shown(held))) return;
+    this.#inOrder(() => {
+      if (!this.#controller.hasCell()) {
+        const held = this.#held;
+        const next = step(this.#shown(held));
+        if (next === (held ?? this.#shown(held))) return;
         this.value = next;
-        this._moved(next, held ?? this._shown(held), gesture);
+        this.#moved(next, held ?? this.#shown(held), gesture);
         return;
       }
       let written: { value: number; oldValue: number } | undefined;
       const announce = () => {
-        if (written) this._moved(written.value, written.oldValue, gesture);
+        if (written) this.#moved(written.value, written.oldValue, gesture);
       };
-      const settled = this._valueCellController.updateValue((held) => {
-        const value = step(this._shown(held));
+      const settled = this.#controller.updateValue((held) => {
+        const value = step(this.#shown(held));
         // Unchanged, empty cell included: nothing is written.
-        if (value === (held ?? this._shown(held))) return held;
-        written = { value, oldValue: held ?? this._shown(held) };
+        if (value === (held ?? this.#shown(held))) return held;
+        written = { value, oldValue: held ?? this.#shown(held) };
         return value;
       });
       // A cell already read is written now, and announced now; one the
@@ -552,45 +629,57 @@ export class CFSlider extends BaseElement {
     });
   }
 
-  /** `cf-input` for a move; `cf-change` too for a key press, which commits it. */
-  private _announce(value: number, oldValue: number, gesture: Gesture): void {
+  /** A move a person made has been written: report it. */
+  #moved(value: number, oldValue: number, gesture: Gesture | undefined): void {
+    if (gesture === undefined) return;
+    if (gesture === "drag" && this.#drag) this.#drag.to = value;
     this.emit("cf-input", { value, oldValue });
+    // A key press commits at once; a drag commits when it is released.
     if (gesture === "key") this.emit("cf-change", { value, oldValue });
   }
 
-  /** A move a person made has been written: report it. */
-  private _moved(
-    value: number,
-    oldValue: number,
-    gesture: Gesture | undefined,
-  ): void {
-    if (gesture === undefined) return;
-    if (gesture === "drag" && this._drag) this._drag.to = value;
-    this._announce(value, oldValue, gesture);
+  /** Handle a key; whether it was the slider's. */
+  #press(key: string): boolean {
+    if (this.disabled) return false;
+    // A key pressed mid-drag is part of the drag.
+    const gesture: Gesture = this.#pointer === undefined ? "key" : "drag";
+    if (key === "Home" || key === "End") {
+      this.#moveTo(key === "Home" ? this.min : this.max, gesture);
+      return true;
+    }
+    const count = KEY_STOPS[key];
+    if (count === undefined) return false;
+    this.#moveBy((current) => this.#stopFrom(current, count), gesture);
+    return true;
   }
 
-  /**
-   * The drag under way, until it is released: the value shown when it
-   * began, whether that value was known (read) then, and the last value the
-   * drag itself wrote. What other writers do meanwhile is not the drag's.
-   */
-  private _drag: { from: number; known: boolean; to?: number } | undefined;
-
-  private _beginDrag(): void {
+  /** Begin a drag by `pointer`, or keep the one under way. */
+  #beginDrag(pointer: number): void {
+    if (this.#pointer !== undefined) return;
+    this.#pointer = pointer;
+    this.requestUpdate();
     // In order, so a step still waiting on the worker lands first.
-    this._inOrder(() => {
-      this._drag ??= {
-        from: this._current,
-        known: this._known,
-      };
+    this.#inOrder(() => {
+      this.#drag ??= { from: this.#current, known: this.#known };
     });
   }
 
-  /** A released drag commits what it wrote, with one `cf-change`. */
-  private _commitDrag(): void {
-    this._inOrder(() => {
-      const drag = this._drag;
-      this._drag = undefined;
+  /**
+   * End the drag under way. `commit` sends one `cf-change` for what it wrote;
+   * a drag ended by a new binding or removal commits nothing.
+   */
+  #endDrag(commit: boolean): void {
+    const pointer = this.#pointer;
+    if (pointer === undefined) return;
+    this.#pointer = undefined;
+    this.requestUpdate();
+    if (this.#track.value?.hasPointerCapture(pointer)) {
+      this.#track.value.releasePointerCapture(pointer);
+    }
+    if (!commit) return;
+    this.#inOrder(() => {
+      const drag = this.#drag;
+      this.#drag = undefined;
       if (drag?.to === undefined) return;
       // From a value not yet read, any write is a change.
       if (drag.known && drag.to === drag.from) return;
@@ -598,78 +687,68 @@ export class CFSlider extends BaseElement {
     });
   }
 
-  override firstUpdated() {
-    // Cache references
-    this._trackElement =
-      this.shadowRoot?.querySelector(".track") as HTMLElement || null;
-    this._thumbElement =
-      this.shadowRoot?.querySelector(".thumb") as HTMLElement || null;
-    this._rangeElement =
-      this.shadowRoot?.querySelector(".range") as HTMLElement || null;
+  #onPointerDown = (event: PointerEvent): void => {
+    const track = this.#track.value;
+    if (this.disabled || event.button !== 0 || track === undefined) return;
+    event.preventDefault();
+    this.focus();
+    track.setPointerCapture(event.pointerId);
+    this.#beginDrag(event.pointerId);
+    // Pressing the track moves there; grabbing the thumb keeps its value.
+    const onThumb = event.composedPath().some((target) =>
+      target instanceof Element && target.classList.contains("thumb")
+    );
+    if (!onThumb) this.#moveToPointer(event);
+  };
 
-    this._updateSliderPosition();
+  #onPointerMove = (event: PointerEvent): void => {
+    if (event.pointerId !== this.#pointer || this.disabled) return;
+    this.#moveToPointer(event);
+  };
+
+  #onPointerUp = (event: PointerEvent): void => {
+    if (event.pointerId === this.#pointer) this.#endDrag(true);
+  };
+
+  #moveToPointer(event: PointerEvent): void {
+    const track = this.#track.value;
+    if (track === undefined) return;
+    const rect = track.getBoundingClientRect();
+    // Vertical sliders put the minimum at the bottom.
+    const fraction = this.orientation === "horizontal"
+      ? (event.clientX - rect.left) / rect.width
+      : 1 - (event.clientY - rect.top) / rect.height;
+    const clamped = Math.max(0, Math.min(1, fraction));
+    this.#moveTo(this.min + clamped * (this.max - this.min), "drag");
   }
 
-  override render() {
-    const sliderClasses = {
-      "slider": true,
-      [this.orientation]: true,
-      "disabled": this.disabled,
-    };
-
-    const classString = Object.entries(sliderClasses)
-      .filter(([_, value]) => value)
-      .map(([key]) => key)
-      .join(" ");
-
-    return html`
-      <div class="${classString}" part="base">
-        <div
-          class="track"
-          part="track"
-          @mousedown="${this._handleTrackMouseDown}"
-          @touchstart="${this._handleTrackTouchStart}"
-        >
-          <div class="range" part="range"></div>
-          <div
-            class="thumb"
-            part="thumb"
-            role="presentation"
-            @mousedown="${this._handleThumbMouseDown}"
-            @touchstart="${this._handleThumbTouchStart}"
-          ></div>
-        </div>
-      </div>
-    `;
-  }
-
-  private _clampValue(value: number): number {
+  #clamp(value: number): number {
     return Math.min(Math.max(value, this.min), this.max);
   }
 
   /** `n` without binary-fraction noise: 3 steps of 0.1 are 0.3. */
-  private _tidy(n: number): number {
+  #tidy(n: number): number {
     return Number(n.toPrecision(15));
   }
 
   /** The step, or 1 where it is not a positive number, as a native range has it. */
-  private get _stepSize(): number {
+  get #stepSize(): number {
     return this.step > 0 && Number.isFinite(this.step) ? this.step : 1;
   }
 
   /** The highest stop a whole number of steps above `min`. */
-  private get _lastStep(): number {
-    const steps = Math.floor((this.max - this.min) / this._stepSize + 1e-9);
-    return this._tidy(this.min + Math.max(0, steps) * this._stepSize);
+  get #lastStep(): number {
+    const steps = Math.floor((this.max - this.min) / this.#stepSize + 1e-9);
+    return this.#tidy(this.min + Math.max(0, steps) * this.#stepSize);
   }
 
   /** The stop nearest `value`. */
-  private _snapToStep(value: number): number {
-    const v = this._clampValue(value);
-    const last = this._lastStep;
+  #snap(value: number): number {
+    const v = this.#clamp(value);
+    const last = this.#lastStep;
     if (v >= last) return v - last < this.max - v ? last : this.max;
-    return this._tidy(
-      this.min + Math.round((v - this.min) / this._stepSize) * this._stepSize,
+    return this.#tidy(
+      this.min + Math.round((v - this.min) / this.#stepSize) * this.#stepSize,
     );
   }
 
@@ -677,205 +756,13 @@ export class CFSlider extends BaseElement {
    * The stop `count` stops above `value`, or below it when `count` is
    * negative: from a value between stops, the first stop that way.
    */
-  private _stopFrom(value: number, count: number): number {
-    const v = this._clampValue(value);
-    const position = (v - this.min) / this._stepSize;
+  #stopFrom(value: number, count: number): number {
+    const v = this.#clamp(value);
+    const position = (v - this.min) / this.#stepSize;
     const index = count > 0
       ? Math.floor(position + 1e-9) + count
       : Math.ceil(position - 1e-9) + count;
-    const stop = this._tidy(this.min + Math.max(0, index) * this._stepSize);
-    return stop > this._lastStep ? this.max : stop;
-  }
-
-  private _getPercentage(): number {
-    const range = this.max - this.min;
-    return range > 0 ? ((this._current - this.min) / range) * 100 : 0;
-  }
-
-  private _updateSliderPosition(): void {
-    if (!this.thumbElement || !this.rangeElement) return;
-
-    const percentage = this._getPercentage();
-
-    if (this.orientation === "horizontal") {
-      this.thumbElement.style.left = `${percentage}%`;
-      this.thumbElement.style.top = "";
-      this.rangeElement.style.width = `${percentage}%`;
-      this.rangeElement.style.height = "";
-    } else {
-      // For vertical sliders, 0% is at the bottom
-      this.thumbElement.style.bottom = `${percentage}%`;
-      this.thumbElement.style.left = "";
-      this.thumbElement.style.top = "";
-      this.rangeElement.style.height = `${percentage}%`;
-      this.rangeElement.style.width = "";
-    }
-  }
-
-  private _updateAriaAttributes() {
-    this.setAttribute("aria-valuemin", this.min.toString());
-    this.setAttribute("aria-valuemax", this.max.toString());
-    this.setAttribute("aria-valuenow", this._current.toString());
-    this.setAttribute("aria-disabled", this.disabled.toString());
-    this.setAttribute("aria-orientation", this.orientation);
-    this.tabIndex = this.disabled ? -1 : 0;
-  }
-
-  private _handleTrackMouseDown = (event: MouseEvent): void => {
-    if (this.disabled) return;
-    event.preventDefault();
-    this._beginDrag();
-    this._updateValueFromPosition(event.clientX, event.clientY);
-    this._startDragging();
-  };
-
-  private _handleTrackTouchStart = (event: TouchEvent): void => {
-    if (this.disabled) return;
-    event.preventDefault();
-    const touch = event.touches[0];
-    this._beginDrag();
-    this._updateValueFromPosition(touch.clientX, touch.clientY);
-    this._startDragging();
-  };
-
-  private _handleThumbMouseDown = (event: MouseEvent): void => {
-    if (this.disabled) return;
-    event.preventDefault();
-    event.stopPropagation();
-    this._beginDrag();
-    this._startDragging();
-  };
-
-  private _handleThumbTouchStart = (event: TouchEvent): void => {
-    if (this.disabled) return;
-    event.preventDefault();
-    event.stopPropagation();
-    this._beginDrag();
-    this._startDragging();
-  };
-
-  private _startDragging(): void {
-    this._isDragging = true;
-    document.addEventListener("mousemove", this._handleMouseMove);
-    document.addEventListener("mouseup", this._handleMouseUp);
-    document.addEventListener("touchmove", this._handleTouchMove, {
-      passive: false,
-    });
-    document.addEventListener("touchend", this._handleTouchEnd);
-    this.classList.add("dragging");
-  }
-
-  private _stopDragging(): void {
-    if (!this._isDragging) return;
-    this._isDragging = false;
-    this._commitDrag();
-    document.removeEventListener("mousemove", this._handleMouseMove);
-    document.removeEventListener("mouseup", this._handleMouseUp);
-    document.removeEventListener("touchmove", this._handleTouchMove);
-    document.removeEventListener("touchend", this._handleTouchEnd);
-    this.classList.remove("dragging");
-  }
-
-  private _handleMouseMove = (event: MouseEvent): void => {
-    if (!this._isDragging || this.disabled) return;
-    event.preventDefault();
-    this._updateValueFromPosition(event.clientX, event.clientY);
-  };
-
-  private _handleTouchMove = (event: TouchEvent): void => {
-    if (!this._isDragging || this.disabled) return;
-    event.preventDefault();
-    const touch = event.touches[0];
-    this._updateValueFromPosition(touch.clientX, touch.clientY);
-  };
-
-  private _handleMouseUp = (): void => {
-    this._stopDragging();
-  };
-
-  private _handleTouchEnd = (): void => {
-    this._stopDragging();
-  };
-
-  private _updateValueFromPosition(
-    clientX: number,
-    clientY: number,
-  ): void {
-    if (!this.trackElement) return;
-
-    const rect = this.trackElement.getBoundingClientRect();
-    let percentage: number;
-
-    if (this.orientation === "horizontal") {
-      const x = clientX - rect.left;
-      percentage = (x / rect.width) * 100;
-    } else {
-      // For vertical sliders, invert the percentage (0% at bottom)
-      const y = clientY - rect.top;
-      percentage = (1 - y / rect.height) * 100;
-    }
-
-    percentage = Math.max(0, Math.min(100, percentage));
-    const range = this.max - this.min;
-    const newValue = this.min + (percentage / 100) * range;
-    this._moveTo(newValue, "drag");
-  }
-
-  private _handleKeyDown = (event: KeyboardEvent): void => {
-    if (this.disabled) return;
-
-    // A key pressed mid-drag is part of the drag.
-    const gesture: Gesture = this._isDragging ? "drag" : "key";
-    if (event.key === "Home" || event.key === "End") {
-      event.preventDefault();
-      this._moveTo(event.key === "Home" ? this.min : this.max, gesture);
-      return;
-    }
-    // Stops to move: one for an arrow, ten for a page key.
-    const counts: Record<string, number> = {
-      ArrowLeft: -1,
-      ArrowDown: -1,
-      ArrowRight: 1,
-      ArrowUp: 1,
-      PageDown: -10,
-      PageUp: 10,
-    };
-    const count = counts[event.key];
-    if (count === undefined) return;
-    event.preventDefault();
-    this._moveBy((current) => this._stopFrom(current, count), gesture);
-  };
-
-  /**
-   * Set the slider value programmatically
-   */
-  setValue(value: number): void {
-    if (!Number.isFinite(value)) {
-      throw new RangeError(
-        `cf-slider: setValue needs a finite number, got ${value}`,
-      );
-    }
-    this._moveTo(value, undefined);
-  }
-
-  /**
-   * Get the current value as a percentage (0-100)
-   */
-  getPercentageValue(): number {
-    return this._getPercentage();
-  }
-
-  /**
-   * Increment the slider value by one step
-   */
-  increment(): void {
-    this._moveBy((current) => this._stopFrom(current, 1), undefined);
-  }
-
-  /**
-   * Decrement the slider value by one step
-   */
-  decrement(): void {
-    this._moveBy((current) => this._stopFrom(current, -1), undefined);
+    const stop = this.#tidy(this.min + Math.max(0, index) * this.#stepSize);
+    return stop > this.#lastStep ? this.max : stop;
   }
 }
