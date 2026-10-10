@@ -476,6 +476,59 @@ export default pattern((state: State) => {
   assertEquals(liftInputSchemas(root), [readSchema, readSchema]);
 });
 
+Deno.test("assert compares a member it hands to equals through its recording", async () => {
+  const root = await transformed(
+    `import { assert, type Cell, computed, equals, pattern } from "commonfabric";
+
+interface Piece {
+  name: string;
+}
+
+interface Refusal {
+  reason: string;
+  inbox: Cell<Piece>;
+}
+
+interface State {
+  refusal?: Refusal;
+  other: Cell<Piece>;
+}
+
+export default pattern((state: State) => {
+  const asserted = assert(() => {
+    const refusal = state.refusal;
+    return refusal !== undefined && refusal.reason === "r" &&
+      equals(refusal.inbox, state.other);
+  });
+  const computedCheck = computed(() => {
+    const refusal = state.refusal;
+    return refusal !== undefined && refusal.reason === "r" &&
+      equals(refusal.inbox, state.other);
+  });
+  return { asserted, computedCheck };
+});`,
+  );
+
+  // `equals` is handed the recording of `refusal.inbox`, not the member
+  // itself. The member is not read, since it is only compared, so an analysis
+  // that stopped at the recording would record no use of it at all, and the
+  // body would be served a refusal without its inbox.
+  const [asserted, computedCheck] = liftInputSchemas(root) as {
+    properties: {
+      state: {
+        properties: {
+          refusal: { anyOf: { properties?: Record<string, unknown> }[] };
+        };
+      };
+    };
+  }[];
+  assertEquals(asserted, computedCheck);
+  assertEquals(
+    asserted?.properties.state.properties.refusal.anyOf[0]?.properties?.inbox,
+    { type: "unknown", asCell: ["comparable"] },
+  );
+});
+
 Deno.test("assert leaves an operator it does not record alone", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => (a.get(), b.get() === 2));

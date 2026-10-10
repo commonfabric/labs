@@ -24,6 +24,7 @@ import {
 import { isBrandedCellType } from "../transformers/cell-type.ts";
 import {
   isTransparentWrapper,
+  outermostRecordedValue,
   outermostTransparentWrapper,
   unwrapAssertCapture,
   unwrapExpression,
@@ -3684,7 +3685,9 @@ export function analyzeFunctionCapabilities(
             const resolvedSource = materializeSourceRef(source);
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
-            const identityOnlyArgumentUse = isIdentityOnlyArgument(usage);
+            const identityOnlyArgumentUse = isIdentityOnlyArgument(
+              outermostRecordedValue(node),
+            );
             // A value below the root that leaves the analysis whole is read
             // in full wherever it lands, so it is charged as a full-shape
             // read rather than a plain one: a plain read at a path keeps the
@@ -3879,7 +3882,7 @@ export function analyzeFunctionCapabilities(
             ) &&
             // A member a known identity call only compares is an identity use,
             // recorded where the call is visited; a read here would end it.
-            !isIdentityOnlyArgument(outermostTransparentWrapper(node))
+            !isIdentityOnlyArgument(outermostRecordedValue(node))
           ) {
             const ref = resolveSourceRef(node);
             if (ref) {
@@ -4261,9 +4264,12 @@ export function analyzeFunctionCapabilities(
         }
         if (identityArgumentCall) {
           for (const argument of node.arguments) {
-            const source = resolveSourceRef(argument);
+            // An `assert` body hands the call each operand through its
+            // recording; the value compared is the one recorded.
+            const value = unwrapAssertCapture(argument);
+            const source = resolveSourceRef(value);
             if (source) {
-              markIdentityUseRef(source, argument, {
+              markIdentityUseRef(source, value, {
                 comparable: identityEqualsCall,
               });
             }

@@ -187,3 +187,26 @@ export function unwrapAssertCapture(expression: ts.Expression): ts.Expression {
   }
   return current;
 }
+
+/**
+ * The expression `expression`'s value is used as: the outermost transparent
+ * wrapper around it, past any operand recording an `assert` body puts around
+ * it. The outward mirror of {@link unwrapAssertCapture}, for a caller asking
+ * which call a value is handed to.
+ */
+export function outermostRecordedValue(
+  expression: ts.Expression,
+): ts.Expression {
+  let current = outermostTransparentWrapper(expression);
+  while (true) {
+    const parent = current.parent;
+    if (
+      !parent || !ts.isCallExpression(parent) ||
+      !isAssertCaptureCall(parent) ||
+      parent.arguments[ASSERT_CAPTURE_VALUE_ARGUMENT] !== current
+    ) {
+      return current;
+    }
+    current = outermostTransparentWrapper(parent);
+  }
+}

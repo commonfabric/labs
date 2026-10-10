@@ -2369,7 +2369,9 @@ computation's input schema:
   checker is available (`policy/capability-analysis.ts`,
   `isKnownIdentityArgumentCall`). An argument is an identity use whether it is
   a binding or a member access (`equals(state.selected, x)`), and is not
-  charged a read (fixture `handler-schema/identity-member-argument`).
+  charged a read (fixture `handler-schema/identity-member-argument`). That
+  holds when an `assert` body hands the call the argument through its operand
+  recording (`test/assert-diagnostics.test.ts`).
 - A whole-root identity use records path `[]` and passthrough. `identityOnly` is
   true only when that root identity path survives normalization and the root has
   no non-identity use, ordinary reads/writes, or wildcard. Nested uses populate
