@@ -897,6 +897,41 @@ ${source}`,
       for (
         const [position, source] of [
           [
+            "a pattern input read through the input",
+            `export default pattern<{ handle?: PerSession<Writable<A> | undefined> }>((input) => ({
+  out: computed(() => input.handle?.get().a),
+}));`,
+          ],
+          [
+            "a handler's state bound in a `.map` callback",
+            `const write = handler<void, { handle?: PerSession<Writable<A> | undefined>; item: A }>(
+  (_, { handle, item }) => {
+    handle?.set(item);
+  },
+);
+export default pattern<{ items: A[]; handle?: PerSession<Writable<A> | undefined> }>(
+  ({ items, handle }) => ({
+    [UI]: <div>{items.map((item) => <cf-button onClick={write({ handle, item })} />)}</div>,
+  }),
+);`,
+          ],
+        ] as const
+      ) {
+        it(`refuses an optional one with \`undefined\` written inside the wrapper as ${position}`, async () => {
+          // A capture's print of the input does not tell this `undefined`
+          // from the one the `?` adds; the declaration does.
+
+          await expect(transformed(
+            `import { computed, handler, pattern, Writable, UI, type PerSession } from "commonfabric";
+interface A { a: string }
+${source}`,
+          )).rejects.toThrow(REFUSAL);
+        });
+      }
+
+      for (
+        const [position, source] of [
+          [
             "a pattern input",
             `export default pattern<{ handle: PerSession<Maybe> }>(({ handle }) => ({
   handle,
