@@ -1,0 +1,81 @@
+/**
+ * A radio button driven by real key presses: Tab reaches it, focus rests on
+ * the host that carries its role, it shows a focus ring, and Space selects it
+ * while Enter does not; Tab passes over a disabled radio, and keys leave it
+ * alone.
+ */
+
+import { expect } from "@std/expect";
+import { pressKey } from "@commonfabric/deno-web-test/commands";
+
+import { CFRadio } from "./index.ts";
+
+/** A radio between two buttons, with focus on the button before it. */
+async function mounted(options: { disabled?: boolean } = {}): Promise<{
+  control: CFRadio;
+  after: HTMLButtonElement;
+  changes: unknown[];
+  [Symbol.dispose]: () => void;
+}> {
+  const before = document.createElement("button");
+  const control = new CFRadio();
+  control.value = "yes";
+  control.disabled = options.disabled ?? false;
+  const after = document.createElement("button");
+  const changes: unknown[] = [];
+  control.addEventListener("cf-change", (event) => {
+    if (event instanceof CustomEvent) changes.push(event.detail);
+  });
+  document.body.append(before, control, after);
+  await control.updateComplete;
+  before.focus();
+  return {
+    control,
+    after,
+    changes,
+    [Symbol.dispose]: () => {
+      before.remove();
+      control.remove();
+      after.remove();
+    },
+  };
+}
+
+Deno.test("Tab reaches the radio, and focus rests on the radio itself", async () => {
+  using page = await mounted();
+  await pressKey("Tab");
+  expect(document.activeElement).toBe(page.control);
+  expect(page.control.shadowRoot?.activeElement).toBeNull();
+});
+
+Deno.test("the focused radio shows a focus ring", async () => {
+  using page = await mounted();
+  const circle = page.control.shadowRoot?.querySelector(".radio");
+  if (!circle) throw new Error("the radio did not render");
+  expect(getComputedStyle(circle).boxShadow).toBe("none");
+  await pressKey("Tab");
+  expect(getComputedStyle(circle).boxShadow).not.toBe("none");
+});
+
+Deno.test("Space selects the focused radio, and Enter does not", async () => {
+  using page = await mounted();
+  await pressKey("Tab");
+  await pressKey("Enter");
+  expect(page.control.checked).toBe(false);
+  await pressKey(" ");
+  await page.control.updateComplete;
+  expect(page.control.checked).toBe(true);
+  expect(page.control.getAttribute("aria-checked")).toBe("true");
+  expect(page.changes).toEqual([{ checked: true, value: "yes" }]);
+});
+
+Deno.test("Tab passes over a disabled radio, and Space leaves it alone", async () => {
+  using page = await mounted({ disabled: true });
+  await pressKey("Tab");
+  expect(document.activeElement).toBe(page.after);
+  page.control.focus();
+  expect(document.activeElement).toBe(page.control);
+  await pressKey(" ");
+  expect(page.control.checked).toBe(false);
+  expect(page.changes).toEqual([]);
+});

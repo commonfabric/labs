@@ -1,4 +1,4 @@
-import { css, html, LitElement } from "lit";
+import { css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { BaseElement } from "../../core/base-element.ts";
 
@@ -25,11 +25,6 @@ import { BaseElement } from "../../core/base-element.ts";
  */
 
 export class CFRadio extends BaseElement {
-  static override shadowRootOptions = {
-    ...LitElement.shadowRootOptions,
-    delegatesFocus: true,
-  };
-
   static override styles = css`
     :host {
       display: inline-block;
@@ -51,11 +46,11 @@ export class CFRadio extends BaseElement {
       opacity: 0.5;
     }
 
-    :host:focus {
+    :host(:focus) {
       outline: none;
     }
 
-    :host:focus-visible .radio {
+    :host(:focus-visible) .radio {
       outline: 2px solid transparent;
       outline-offset: 2px;
       box-shadow:
