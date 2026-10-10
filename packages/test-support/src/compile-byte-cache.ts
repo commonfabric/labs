@@ -2,10 +2,12 @@ import { dirname } from "@std/path";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 // The compiled-module-byte cache, in full. The runtime defines only the
-// `ModuleByteCache` interface it consults during a compile; this test-side
-// module owns the implementation and its disk persistence, and is the only
-// place an instance is created. So the cache is, by construction, a single
-// feature that exists only when tests install it — never in production.
+// `ModuleByteCache` interface it consults during a compile; this module owns
+// the implementation and its disk persistence. A runtime holds one only where
+// something installs it: the test harnesses and `cf` through
+// `createCompileByteCache`, and a toolshed's serving host, whose per-space
+// runtimes share one `ProcessModuleByteCache` so a space's root pattern is
+// transformed and emitted once per process rather than once per space.
 //
 // `createCompileByteCache` returns the instance to inject into test runtimes.
 // The in-memory cache is always created for cross-runtime reuse within the

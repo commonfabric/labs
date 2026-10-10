@@ -22,6 +22,7 @@ import {
 } from "@commonfabric/runner/executor/serving-runtime";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { Identity } from "@commonfabric/identity";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 let host: ExecutorHost | undefined;
 
@@ -254,6 +255,11 @@ export function startServerExecutionHost(options: {
       identity: options.identity,
       apiUrl: options.apiUrl,
       experimental,
+      // One cache for every space this host serves. A space's root pattern
+      // compiles into that space's own storage closure, which a fresh space
+      // never holds; the shared cache is what lets a later space's activation
+      // skip the transform-and-emit step for modules this process compiled.
+      moduleByteCache: new ProcessModuleByteCache(),
     }),
   });
   // Only now, with the loop actually up: what `/api/meta` adds to the base

@@ -413,9 +413,10 @@ export interface ExperimentalOptions {
  * same in every program that contains it), so a hit always returns the bytes the
  * identity addresses.
  *
- * The runtime defines only this interface. The implementation, and its
- * persistence, live in test code, so the cache is instantiated only from tests
- * and never in production.
+ * The runtime defines only this interface. The implementation and its
+ * persistence live in `@commonfabric/test-support`, and a runtime holds one
+ * only where something installs it: the test harnesses, a `cf` run, and a
+ * toolshed's serving host, whose per-space runtimes share one.
  */
 export interface ModuleByteCache {
   /**

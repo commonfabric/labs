@@ -8,7 +8,11 @@
 
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
-import { type ExperimentalOptions, Runtime } from "../runtime.ts";
+import {
+  type ExperimentalOptions,
+  type ModuleByteCache,
+  Runtime,
+} from "../runtime.ts";
 import type { ExecutorHostOptions } from "./host.ts";
 import { LoopbackStorageManager } from "./loopback-storage.ts";
 
@@ -38,6 +42,14 @@ export type ServingRuntimeFactoryOptions = {
    * {@link SERVING_RUNTIME_EXPERIMENTAL} applied on top.
    */
   experimental?: ExperimentalOptions;
+
+  /**
+   * A cache of compiled module bytes every serving runtime the factory builds
+   * shares, so the root pattern a space's activation compiles is transformed
+   * and emitted once per process rather than once per space. Absent, each
+   * runtime compiles from its space's storage closure alone.
+   */
+  moduleByteCache?: ModuleByteCache;
 
   /**
    * Called with each serving runtime's storage manager before the runtime
@@ -85,6 +97,9 @@ export function servingRuntimeFactory(
         ...options.experimental,
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
+      ...(options.moduleByteCache === undefined
+        ? {}
+        : { moduleByteCache: options.moduleByteCache }),
     });
     return Promise.resolve({
       runtime,
