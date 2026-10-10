@@ -73,7 +73,8 @@ const cacheFiles = new WeakMap<ProcessModuleByteCache, string>();
  * the module's content identity scoped by the compiled-set `runtimeVersion`. The
  * emitted bytes are a deterministic function of that key, so a hit always returns
  * the bytes the identity addresses. Holds emitted JS only, never live pattern
- * instances. A byte cap bounds the total retained JS and evicts oldest-first.
+ * instances. A byte cap bounds the total retained artifacts, source maps and
+ * the other companions included, and evicts oldest-first.
  */
 export class ProcessModuleByteCache implements ModuleByteCache {
   /**
@@ -97,10 +98,17 @@ export class ProcessModuleByteCache implements ModuleByteCache {
     return `${runtimeVersion}\0${identity}`;
   }
 
+  /**
+   * What an artifact counts toward the cap: the emitted JavaScript and every
+   * retained companion, measured as serialized text. The compiler hands over
+   * a parsed source map, which weighs as much as the text it parsed from.
+   */
   static #sizeOf(artifact: CompiledModuleArtifact): number {
     let size = artifact.js.length;
     if (typeof artifact.sourceMap === "string") {
       size += artifact.sourceMap.length;
+    } else if (artifact.sourceMap !== undefined) {
+      size += JSON.stringify(artifact.sourceMap).length;
     }
     if (artifact.patternCoverageSpans !== undefined) {
       size += JSON.stringify(artifact.patternCoverageSpans).length;
