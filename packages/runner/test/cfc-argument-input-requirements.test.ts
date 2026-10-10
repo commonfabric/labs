@@ -14,11 +14,16 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
-import type { CfcArgumentInputRequirementsMode } from "../src/cfc/types.ts";
+import { argumentIntegrityRequirements } from "../src/cfc/argument-input-requirements.ts";
+import type {
+  CfcArgumentInputRefusal,
+  CfcArgumentInputRequirementsMode,
+} from "../src/cfc/types.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
+import { isInternalVerifierRead } from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-argument-input-requirements",
@@ -34,13 +39,23 @@ const ALL_OUTPUTS = `
   literal: coarsen({ fix, gate: { always: true } as any }),
   viewRun: coarsen(view as any),
   partial: coarsen({ fix, gate: partialGate as any }),
+  bareRun: coarsenOptional(bare as any),
+  nullableRun: coarsenNullable({ fix, gate: standIn as any }),
+  nestedRun: coarsen({ fix, gate: wrap.key("gate") as any }),
+  derivedRun: coarsen({ fix, gate: reopen(gate as any) as any }),
   openGate: openGate({ gate }),
   forge: forge({ standIn }),
   assemble: assemble({ view, fix }),
-  stampPart: stampPart({ partialGate }),`;
+  pointAtOwner: pointAtOwner({ view, fix, gate }),
+  stampPart: stampPart({ partialGate }),
+  wrapView: wrapView({ wrap, view }),`;
 const HONEST_OUTPUTS = `
   honest: coarsen({ fix, gate: gate as any }),
   openGate: openGate({ gate }),`;
+const REFERENCE_OUTPUTS = `
+  viewRun: coarsen(view as any),
+  openGate: openGate({ gate }),
+  pointAtOwner: pointAtOwner({ view, fix, gate }),`;
 
 const program = (outputs: string): RuntimeProgram => ({
   main: "/main.tsx",
@@ -81,6 +96,35 @@ export const coarsen = lift(
       : "hidden",
 );
 
+/** The coarsener, with a gate that may be null: the requirement sits in a branch. */
+export const coarsenNullable = lift(
+  (
+    args: {
+      fix: Fix;
+      gate: RequiresIntegrity<Gate, readonly ["owner-gate"]> | null;
+    },
+  ): string =>
+    args?.gate?.always === true
+      ? "near " + Math.round(args?.fix?.lat ?? 0)
+      : "hidden",
+);
+
+/** The coarsener, with a gate an argument may leave out. */
+export const coarsenOptional = lift(
+  (
+    args: {
+      fix: Fix;
+      gate?: RequiresIntegrity<Gate, readonly ["owner-gate"]>;
+    },
+  ): string =>
+    args?.gate?.always === true
+      ? "near " + Math.round(args?.fix?.lat ?? 0)
+      : "hidden",
+);
+
+/** Other code's computation over the owner's gate. */
+export const reopen = lift((gate: Gate): Gate => ({ always: gate?.always ?? false }));
+
 /** The owner opens the gate. */
 export const openGate = handler<void, { gate: Writable<OwnerGate> }>(
   (_, { gate }) => {
@@ -101,6 +145,26 @@ export const assemble = handler<
   { view: Writable<{ fix: Fix; gate: Gate }>; fix: Writable<Fix> }
 >((_, { view, fix }) => {
   view.set({ fix, gate: { always: true } } as any);
+});
+
+/** A viewer points its argument at the owner's gate, which it did not choose to write. */
+export const pointAtOwner = handler<
+  void,
+  {
+    view: Writable<{ fix: Fix; gate: Gate }>;
+    fix: Writable<Fix>;
+    gate: Writable<OwnerGate>;
+  }
+>((_, { view, fix, gate }) => {
+  view.set({ fix, gate } as any);
+});
+
+/** Other code makes a document a reference to the viewer's assembly. */
+export const wrapView = handler<
+  void,
+  { wrap: Writable<{ fix: Fix; gate: Gate }>; view: Writable<{ fix: Fix; gate: Gate }> }
+>((_, { wrap, view }) => {
+  wrap.set(view as any);
 });
 
 /** A gate only one field of which the owner stamped. */
@@ -126,12 +190,18 @@ interface Input {
   view: Writable<
     Default<{ fix: Fix; gate: Gate }, { fix: { lat: 0 }; gate: { always: false } }>
   >;
+  wrap: Writable<
+    Default<{ fix: Fix; gate: Gate }, { fix: { lat: 0 }; gate: { always: false } }>
+  >;
+  bare: Writable<Default<{ fix: Fix }, { fix: { lat: 51.6 } }>>;
 }
 
 // The casts only quiet the authoring types, which tell an AddIntegrity gate
 // from a RequiresIntegrity one; the bindings are as written.
-export default pattern<Input>(({ fix, gate, standIn, view, partialGate }) => ({${outputs}
-}));
+export default pattern<Input>(
+  ({ fix, gate, standIn, view, partialGate, wrap, bare }) => ({${outputs}
+  }),
+);
 `,
   }],
 });
@@ -142,17 +212,25 @@ type Outputs = {
   literal?: string;
   viewRun?: string;
   partial?: string;
+  bareRun?: string;
+  nullableRun?: string;
+  nestedRun?: string;
+  derivedRun?: string;
 };
 
-// What each lift run noted, collected from every transaction: the lifts run
-// in transactions the scheduler opens, out of reach of the test.
-let diagnostics: string[] = [];
-const noteCfcDiagnostic = ExtendedStorageTransaction.prototype
-  .noteCfcDiagnostic;
+// Every failed argument requirement, from every transaction: the lifts run in
+// transactions the scheduler opens, out of reach of the test. Each entry also
+// says how many of the verifier's own reads the recording transaction had
+// made by then, which is how observe is shown to read nothing through it.
+type Recorded = { reason: string; verifierReads: number };
+let recorded: Recorded[] = [];
+const recordCfcArgumentInputRefusal = ExtendedStorageTransaction.prototype
+  .recordCfcArgumentInputRefusal;
 
-const argumentDiagnostics = () =>
-  diagnostics.filter((message) =>
-    message.startsWith("argument-input-requirements(observe)")
+const reasons = () => recorded.map(({ reason }) => reason);
+const failedAt = (path: string) =>
+  recorded.filter(({ reason }) =>
+    reason.startsWith(`argument requiredIntegrity failed at ${path} of `)
   );
 
 const run = async (
@@ -213,25 +291,35 @@ const run = async (
 
 describe("cfc argument input requirements", () => {
   beforeEach(() => {
-    diagnostics = [];
-    ExtendedStorageTransaction.prototype.noteCfcDiagnostic = function (
-      this: ExtendedStorageTransaction,
-      message: string,
-    ) {
-      diagnostics.push(message);
-      return noteCfcDiagnostic.call(this, message);
-    };
+    recorded = [];
+    ExtendedStorageTransaction.prototype.recordCfcArgumentInputRefusal =
+      function (
+        this: ExtendedStorageTransaction,
+        refusal: CfcArgumentInputRefusal,
+      ) {
+        recorded.push({
+          reason: refusal.reason,
+          verifierReads: [...(this.getReadActivities?.() ?? [])].filter(
+            (read) => isInternalVerifierRead(read.meta),
+          ).length,
+        });
+        return recordCfcArgumentInputRefusal.call(this, refusal);
+      };
   });
 
   afterEach(() => {
-    ExtendedStorageTransaction.prototype.noteCfcDiagnostic = noteCfcDiagnostic;
+    ExtendedStorageTransaction.prototype.recordCfcArgumentInputRefusal =
+      recordCfcArgumentInputRefusal;
   });
 
   describe("enforce", () => {
-    it("runs the lift on the owner's gate", async () => {
-      await run("enforce", ALL_OUTPUTS, async (send, read) => {
+    it("runs the lift on the owner's gate, closed and open", async () => {
+      await run("enforce", HONEST_OUTPUTS, async (send, read) => {
+        // The gate the pattern's setup wrote carries the owner's stamp.
+        expect((await read()).honest).toBe("hidden");
         await send("openGate");
         expect((await read()).honest).toBe("near 52");
+        expect(failedAt("/gate")).toEqual([]);
       });
     });
 
@@ -239,12 +327,14 @@ describe("cfc argument input requirements", () => {
       await run("enforce", ALL_OUTPUTS, async (send, read) => {
         await send("forge");
         expect((await read()).standInRun).toBeUndefined();
+        expect(failedAt("/gate").length).toBeGreaterThan(0);
       });
     });
 
     it("refuses a gate written in the wiring", async () => {
       await run("enforce", ALL_OUTPUTS, async (_send, read) => {
         expect((await read()).literal).toBeUndefined();
+        expect(failedAt("/gate").length).toBeGreaterThan(0);
       });
     });
 
@@ -265,6 +355,58 @@ describe("cfc argument input requirements", () => {
         expect(outputs.honest).toBe("near 52");
       });
     });
+
+    it("follows a reference partway along a reference's own path", async () => {
+      await run("enforce", ALL_OUTPUTS, async (send, read) => {
+        await send("assemble");
+        await send("wrapView");
+        expect((await read()).nestedRun).toBeUndefined();
+      });
+    });
+
+    it("refuses a gate other code computed from the owner's", async () => {
+      await run("enforce", ALL_OUTPUTS, async (send, read) => {
+        await send("openGate");
+        expect((await read()).derivedRun).toBeUndefined();
+      });
+    });
+
+    it("keeps a requirement that sits in an anyOf branch", async () => {
+      await run("enforce", ALL_OUTPUTS, async (send, read) => {
+        await send("forge");
+        expect((await read()).nullableRun).toBeUndefined();
+      });
+    });
+
+    it("observes nothing at an argument the binding does not reach", async () => {
+      await run("enforce", ALL_OUTPUTS, async (_send, read) => {
+        expect((await read()).bareRun).toBe("hidden");
+      });
+    });
+
+    // Selection among values the owner stamped is not something an input
+    // requirement rules out: the viewer may point at any gate the owner
+    // wrote, a stale one included. Binding two inputs to one item is what
+    // instance-bound integrity is for.
+    it("runs on a reference a viewer made to the owner's gate", async () => {
+      await run("enforce", REFERENCE_OUTPUTS, async (send, read) => {
+        await send("openGate");
+        await send("pointAtOwner");
+        expect((await read()).viewRun).toBe("near 52");
+      });
+    });
+
+    // The contrast for observe's case below: a refusal reached by reading a
+    // stored document records the verifier's reads in the attempt. (A gate
+    // written in the wiring is refused without reading anything.)
+    it("reads through the attempt's own transaction", async () => {
+      await run("enforce", ALL_OUTPUTS, async (send) => {
+        await send("forge");
+        expect(
+          failedAt("/gate").some(({ verifierReads }) => verifierReads > 0),
+        ).toBe(true);
+      });
+    });
   });
 
   describe("observe", () => {
@@ -274,38 +416,38 @@ describe("cfc argument input requirements", () => {
         await send("forge");
         await send("assemble");
         await send("stampPart");
+        await send("wrapView");
+        // Each lift the enforce cases refuse does run when nothing refuses it.
         expect(await read()).toMatchObject({
           honest: "near 52",
           standInRun: "near 52",
           literal: "near 52",
           viewRun: "near 52",
           partial: "near 52",
+          nestedRun: "near 52",
+          derivedRun: "near 52",
+          nullableRun: "near 52",
+          bareRun: "hidden",
         });
-        const flagged = argumentDiagnostics();
-        expect(flagged.length).toBeGreaterThan(0);
-        expect(
-          flagged.every((message) =>
-            message.endsWith("argument requiredIntegrity failed at /gate")
-          ),
-        ).toBe(true);
+        expect(reasons().length).toBeGreaterThan(0);
+        expect(failedAt("/gate").length).toBe(reasons().length);
+      });
+    });
+
+    it("reads nothing through the attempt's transaction", async () => {
+      await run("observe", ALL_OUTPUTS, async (send) => {
+        await send("forge");
+        expect(recorded.length).toBeGreaterThan(0);
+        expect(recorded.every(({ verifierReads }) => verifierReads === 0))
+          .toBe(true);
       });
     });
 
     it("does not flag the lift's runs on the owner's gate", async () => {
       await run("observe", HONEST_OUTPUTS, async (send, read) => {
-        const before = argumentDiagnostics().length;
         await send("openGate");
         expect((await read()).honest).toBe("near 52");
-        expect(argumentDiagnostics().length).toBe(before);
-      });
-    });
-
-    it("flags the lift's run on a stand-in", async () => {
-      await run("observe", ALL_OUTPUTS, async (send, read) => {
-        const before = argumentDiagnostics().length;
-        await send("forge");
-        expect((await read()).standInRun).toBe("near 52");
-        expect(argumentDiagnostics().length).toBeGreaterThan(before);
+        expect(recorded).toEqual([]);
       });
     });
   });
@@ -315,8 +457,25 @@ describe("cfc argument input requirements", () => {
       await run("off", ALL_OUTPUTS, async (send, read) => {
         await send("forge");
         expect((await read()).standInRun).toBe("near 52");
-        expect(argumentDiagnostics()).toEqual([]);
+        expect(recorded).toEqual([]);
       });
+    });
+  });
+
+  // A graph built as data may carry a schema of its own for the node; the
+  // runner unions it with the schema of the code the node's identity names.
+  describe("requirements from two schemas", () => {
+    const required = {
+      type: "object",
+      properties: {
+        gate: { type: "object", ifc: { requiredIntegrity: ["owner-gate"] } },
+      },
+    } as const;
+    it("keeps the code's requirement under a weaker graph schema", () => {
+      expect(
+        argumentIntegrityRequirements([required, { type: "object" }]),
+      ).toEqual([{ path: ["gate"], requiredIntegrity: ["owner-gate"] }]);
+      expect(argumentIntegrityRequirements([{ type: "object" }])).toEqual([]);
     });
   });
 });

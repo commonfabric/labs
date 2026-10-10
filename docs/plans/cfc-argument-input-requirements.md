@@ -253,17 +253,23 @@ keeps a fixed threshold:
         path, before the body runs (`cfc/argument-input-requirements.ts`). It
         reads no log and no memo, so lazy materialization and memoized hops
         cannot hide a read, and a `Cell`-typed argument is covered by what it
-        reaches. References on the declared path are followed; a reference
-        inside the value reached is checked where it is held (§8.2.4 puts the
-        reference's integrity in the dereference's), and every unlabeled leaf
-        of a reached value counts as a public observation.
+        reaches. Every reference on the way to a declared path is followed,
+        one partway along a reference's own path included; a reference inside
+        the value reached is checked where it is held, without link-carried
+        evidence copied from its target. Every leaf of a reached value is an
+        observation, unlabeled ones public. Absence (no document, a missing
+        field, an empty container) is no observation, as in the handler
+        check, rather than the public read the list below assumed for a
+        substituted default.
   - [x] Bind the argument schema to the resolved artifact. The requirements
         are those of the artifact a `$implRef` resolves to, together with the
-        graph's own, so a graph can add a requirement and cannot remove one.
+        graph's own, so a graph can add a requirement and cannot remove one;
+        an `$implRef` resolved only through the engine's index, whose code
+        schema is unknown, is refused.
   - Find out how trigger reads and handler state bindings attribute.
 - [ ] **The check**, under a `SPEC-PENDING` marker at `observe`. Landed for
-      lifts behind `cfcArgumentInputRequirements`; handlers are not checked
-      yet. Deliberately unlike the list below, the binding's own object
+      verified lifts behind `cfcArgumentInputRequirements`; handlers,
+      builtins and `maxConfidentiality` on arguments are not checked yet. Deliberately unlike the list below, the binding's own object
       structure and a document of references at a declared path are plumbing
       the check passes through rather than refuses outright; the specs ruling
       lists the stricter reading as an option.

@@ -1044,6 +1044,9 @@ export const DEFAULT_CFC_DECLARED_MONOTONICITY_MODE:
  */
 export type CfcArgumentInputRequirementsMode = "off" | "observe" | "enforce";
 
+export const DEFAULT_CFC_ARGUMENT_INPUT_REQUIREMENTS_MODE:
+  CfcArgumentInputRequirementsMode = "off";
+
 /** A failed argument input requirement, recorded for the boundary pass. */
 export type CfcArgumentInputRefusal = {
   readonly reason: string;
@@ -1085,6 +1088,7 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
+  argumentInputRequirementsMode: CfcArgumentInputRequirementsMode;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),

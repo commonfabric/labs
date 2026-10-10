@@ -6795,10 +6795,13 @@ export const cfcFloorTrustContext = (
 /**
  * The integrity at each location a whole read of the value at `address`
  * consumes: one list per labeled location, as the read-side gate below takes
- * a read in the transaction's log, and an empty one for each of `leaves` —
- * the value's leaf positions, relative to `address.path` — that no stored
- * label reaches, since a public location is consumed too (§8.10.3).
- * `address.path` is a payload path, as a link's is.
+ * a read in the transaction's log, and one for each of `leaves` — the value's
+ * leaf positions, relative to `address.path` — as its own label resolves
+ * there, empty where no label reaches it, since a public location is consumed
+ * too (§8.10.3). Link-carried entries are left out: they copy a reference's
+ * target evidence onto the reference (§8.2.5), which is not evidence the
+ * reference's holder gave it. `address.path` is a payload path, as a link's
+ * is.
  *
  * For the argument input requirements of a lift (§8.10.3), whose
  * observations are made by following the lift's binding rather than read
@@ -6822,7 +6825,7 @@ export const consumedIntegrityAt = (
   const entries = consumedEntriesForRead(metadata, path, {
     nonRecursive: false,
     consumes: "all",
-  });
+  }).filter((entry) => entry.origin !== "link");
   const observations: (readonly CfcAtom[])[] = consumedLocations(
     stringTupleKey([address.space, address.id, scope]),
     entries,
@@ -6830,9 +6833,9 @@ export const consumedIntegrityAt = (
     false,
   ).map((location) => location.integrity);
   for (const leaf of leaves) {
-    if (labelForEntriesAtPath(entries, [...path, ...leaf]) === undefined) {
-      observations.push([]);
-    }
+    observations.push(
+      labelForEntriesAtPath(entries, [...path, ...leaf])?.integrity ?? [],
+    );
   }
   return observations.length > 0 ? observations : [[]];
 };

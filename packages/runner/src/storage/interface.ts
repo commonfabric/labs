@@ -65,6 +65,7 @@ import { Cell } from "../cell.ts";
 import type {
   CfcAddress,
   CfcArgumentInputRefusal,
+  CfcArgumentInputRequirementsMode,
   CfcContentAddressedLabels,
   CfcDeclaredMonotonicityMode,
   CfcDeclaredWideningExemption,
@@ -2174,9 +2175,19 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T;
 
   /**
-   * Records an argument input requirement this attempt failed (§8.10.3),
-   * which the boundary pass turns into a reason, and marks the transaction
-   * CFC-relevant so that pass runs.
+   * The argument input requirements dial (§8.10.3), set by the Runtime at
+   * transaction creation. Anti-downgrade pinned: once `enforce`, weakening
+   * throws.
+   */
+  setCfcArgumentInputRequirementsMode(
+    mode: CfcArgumentInputRequirementsMode,
+  ): void;
+
+  /**
+   * Records an argument input requirement this attempt failed (§8.10.3), as
+   * the transaction's dial says: under `enforce` the boundary pass turns it
+   * into a reason, and the transaction is marked CFC-relevant so that pass
+   * runs; under `observe` it is a diagnostic; under `off`, nothing.
    */
   recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void;
 

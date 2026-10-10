@@ -34,6 +34,7 @@ import {
   CFC_GRANT_ID_PREFIX,
   type CfcAddress,
   type CfcArgumentInputRefusal,
+  type CfcArgumentInputRequirementsMode,
   type CfcContentAddressedLabels,
   type CfcDeclaredMonotonicityMode,
   type CfcDeclaredWideningExemption,
@@ -60,6 +61,7 @@ import {
   type ConsultedGrant,
   type ConsultedPolicyManifest,
   type ConsumedRead,
+  DEFAULT_CFC_ARGUMENT_INPUT_REQUIREMENTS_MODE,
   DEFAULT_CFC_CONTENT_ADDRESSED_LABELS,
   DEFAULT_CFC_DECLARED_MONOTONICITY_MODE,
   DEFAULT_CFC_DECOMPOSED_ENVELOPES,
@@ -290,6 +292,9 @@ export type CfcInstrumentationHooks = {
 
   /** One structured refusal detail was recorded. Measurement only. */
   onRefusalDetail?(): void;
+
+  /** A lift's argument failed an input requirement it declares. */
+  onArgumentInputRefusal?(): void;
 
   /** One full consumed-label collection was started. Measurement only. */
   onConsumedLabelWalk?(): void;
@@ -583,6 +588,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     policyEvaluationMode: DEFAULT_CFC_POLICY_EVALUATION_MODE,
     labelMetadataProtectionMode: DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
     declaredMonotonicityMode: DEFAULT_CFC_DECLARED_MONOTONICITY_MODE,
+    argumentInputRequirementsMode: DEFAULT_CFC_ARGUMENT_INPUT_REQUIREMENTS_MODE,
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
@@ -936,6 +942,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       policyEvaluation: this.#cfcState.policyEvaluationMode,
       labelMetadataProtection: this.#cfcState.labelMetadataProtectionMode,
       declaredMonotonicity: this.#cfcState.declaredMonotonicityMode,
+      argumentInputRequirements: this.#cfcState.argumentInputRequirementsMode,
     };
   }
 
@@ -1287,7 +1294,33 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#cfcState.moduleDelegations = snapshot;
   }
 
+  #cfcArgumentInputRequirementsPinned = false;
+
+  setCfcArgumentInputRequirementsMode(
+    mode: CfcArgumentInputRequirementsMode,
+  ): void {
+    // Pinned once `enforce`, as the other dials are: code holding the
+    // transaction cannot weaken the check to let a stand-in through.
+    if (this.#cfcArgumentInputRequirementsPinned && mode !== "enforce") {
+      throw new Error(
+        `CFC argument input requirements mode cannot be weakened to "${mode}": ` +
+          `transaction is pinned at "enforce"`,
+      );
+    }
+    this.#cfcState.argumentInputRequirementsMode = mode;
+    if (mode === "enforce") this.#cfcArgumentInputRequirementsPinned = true;
+  }
+
   recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void {
+    const mode = this.#cfcState.argumentInputRequirementsMode;
+    if (mode === "off") return;
+    this.#cfcInstrumentation.onArgumentInputRefusal?.();
+    if (mode === "observe") {
+      this.#cfcState.diagnostics.push(
+        `argument-input-requirements(observe): ${refusal.reason}`,
+      );
+      return;
+    }
     this.#noteCfcActivity();
     // A refusal recorded after a preparation is one that preparation never
     // saw, so the preparation no longer stands.
@@ -4252,6 +4285,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   clearSchemaRefusal(refusal: unknown): void {
     clearSchemaRefusalTx(this, refusal);
     this.#wrapped.clearSchemaRefusal(refusal);
+  }
+
+  setCfcArgumentInputRequirementsMode(
+    mode: CfcArgumentInputRequirementsMode,
+  ): void {
+    this.#wrapped.setCfcArgumentInputRequirementsMode(mode);
   }
 
   recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void {

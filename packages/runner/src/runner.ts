@@ -18,6 +18,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
 
 import {
+  LocalReadUnavailable,
   requireLocalReadCondition,
   restrictToLocalReads,
   usesLocalReads,
@@ -142,7 +143,10 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
+import {
+  forEachSubschema,
+  isSubschema,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { speculationRunContextOf } from "./speculation/overlay-destination.ts";
 import {
   navigateEventContextFromRunInfo,
@@ -203,7 +207,6 @@ import {
   type URI,
 } from "./storage/interface.ts";
 import {
-  ignoreReadForCommit,
   isDurableReadTx,
   machineryRead,
   markDurableReadTx,
@@ -300,17 +303,6 @@ const triggerFlowLogger = getLogger("runner.trigger-flow", {
  * above any plausible number of simultaneously live pieces, so the bound is
  * reached only by a pattern churning through results it will not revisit.
  */
-/**
- * The read metadata of an observe-mode argument input requirement check: the
- * verifier's own reads (§8.10.1), which no scheduling dependency, consumed
- * input set or commit precondition takes up, so that observing changes
- * nothing the attempt does.
- */
-const OBSERVE_ARGUMENT_READ_META = Object.freeze({
-  ...stableInternalVerifierRead,
-  ...ignoreReadForCommit,
-});
-
 const RESULT_SHORTCUT_LIMIT = 4096;
 
 /**
@@ -10676,88 +10668,124 @@ export class Runner {
 
   /**
    * The integrity requirements a lift's code declares on its arguments
-   * (§8.10.3): those of the argument schema its own module declares — the
-   * registered artifact a content-addressed `$implRef` names — and those of
-   * the schema the graph carries for the node. A graph built as data that
-   * names the code under a weaker schema of its own therefore cannot remove
-   * a requirement the code declares.
+   * (§8.10.3), resolved the way `#resolveJavaScriptFunction` resolves the
+   * code: through a content-addressed `$implRef`, the registered artifact's
+   * own argument schema, and otherwise the live module, whose schema is the
+   * code's own. The schema the graph carries for the node adds its
+   * requirements to the code's, so a graph built as data cannot remove one.
+   * `codeSchema` is false when an `$implRef` resolved to an implementation
+   * the artifact index does not hold, so the code's own schema is unknown.
    */
-  #argumentRequirements(module: Module): ArgumentRequirement[] {
+  #argumentRequirements(
+    module: Module,
+  ): { requirements: ArgumentRequirement[]; codeSchema: boolean } {
     const ref = this.#contentAddressedImplRef(module);
-    const artifact = ref === undefined
-      ? undefined
-      : this.#runtime.patternManager.artifactFromIdentitySync(
-        ref.identity,
-        ref.symbol,
-      );
-    const artifactSchema =
-      (typeof artifact === "function" || isObjectOrArray(artifact)) &&
-        "argumentSchema" in artifact
-        ? (artifact as { argumentSchema?: JSONSchema }).argumentSchema
+    if (ref === undefined) {
+      return {
+        requirements: argumentIntegrityRequirements([module.argumentSchema]),
+        codeSchema: true,
+      };
+    }
+    const artifact: unknown = this.#runtime.patternManager
+      .artifactFromIdentitySync(ref.identity, ref.symbol);
+    const artifactSchema: unknown =
+      typeof artifact === "function" || isObjectOrArray(artifact)
+        ? Reflect.get(artifact, "argumentSchema")
         : undefined;
-    return argumentIntegrityRequirements([
-      artifactSchema,
-      module.argumentSchema,
-    ]);
+    const codeSchema = isSubschema(artifactSchema) ? artifactSchema : undefined;
+    return {
+      requirements: argumentIntegrityRequirements([
+        codeSchema,
+        module.argumentSchema,
+      ]),
+      // The artifact index holds the code's own module, and so its schema,
+      // whatever that schema declares. Only an implementation resolved
+      // through the engine's index alone comes without one.
+      codeSchema: artifact !== undefined ||
+        this.#runtime.harness.getVerifiedImplementation?.(
+            ref.identity,
+            ref.symbol,
+          ) === undefined,
+    };
   }
 
   /**
-   * Checks a lift's argument input requirements before its body runs, under
-   * the runtime's `cfcArgumentInputRequirements` dial. `observe` changes
-   * nothing the attempt does: its reads carry no commit precondition, it
-   * reads nothing under a local-read policy (where an unavailable read would
-   * poison the attempt), and a failure, or an error, is only a diagnostic.
+   * Checks a verified lift's argument input requirements before its body
+   * runs, and records each failure on `tx` for its dial
+   * (`recordCfcArgumentInputRefusal`). Under `observe` the check reads
+   * through a transaction of its own that writes nothing, which is then discarded, so
+   * the attempt's reads, commit preconditions, read scope and local-read
+   * basis are exactly what they would have been; an error there is only a
+   * diagnostic. Under `enforce` it reads through `tx` as the verifier's own
+   * reads, and a read it cannot make refuses the commit: retryably when the
+   * input is not available yet, terminally otherwise.
    */
   #checkArgumentInputRequirements(
     tx: IExtendedStorageTransaction,
+    identity: ImplementationIdentity | undefined,
     binding: unknown,
     inputsCell: Cell<any>,
-    requirements: readonly ArgumentRequirement[],
+    argument: { requirements: ArgumentRequirement[]; codeSchema: boolean },
   ): void {
-    const mode = this.#runtime.cfcArgumentInputRequirements;
-    if (mode === "off" || requirements.length === 0) return;
+    const mode = tx.getCfcState().argumentInputRequirementsMode;
+    if (mode === "off" || identity?.kind !== "verified") return;
+    const code = `${identity.moduleIdentity ?? "?"}:${identity.symbol ?? "?"}`;
+    if (!argument.codeSchema) {
+      tx.recordCfcArgumentInputRefusal({
+        reason: `argument schema of ${code} is not available`,
+        verdict: false,
+      });
+      return;
+    }
+    if (argument.requirements.length === 0) return;
     const base = inputsCell.getAsNormalizedFullLink();
-    if (mode === "enforce") {
-      for (
-        const refusal of argumentInputRefusals(
-          tx,
-          binding,
-          base,
-          requirements,
-          stableInternalVerifierRead,
-        )
-      ) {
-        tx.recordCfcArgumentInputRefusal(refusal);
-      }
-      return;
-    }
-    if (usesLocalReads(tx)) {
-      tx.noteCfcDiagnostic(
-        "argument-input-requirements(observe): not checked under local reads",
-      );
-      return;
-    }
-    try {
-      for (
-        const refusal of argumentInputRefusals(
-          tx,
-          binding,
-          base,
-          requirements,
-          OBSERVE_ARGUMENT_READ_META,
-        )
-      ) {
+    if (mode === "observe") {
+      // Owned rather than `readTx()`'s, so it can be discarded; it writes
+      // nothing.
+      const readTx = this.#runtime.edit();
+      try {
+        for (
+          const refusal of argumentInputRefusals(
+            readTx,
+            code,
+            binding,
+            base,
+            argument.requirements,
+            stableInternalVerifierRead,
+          )
+        ) {
+          tx.recordCfcArgumentInputRefusal(refusal);
+        }
+      } catch (error) {
         tx.noteCfcDiagnostic(
-          `argument-input-requirements(observe): ${refusal.reason}`,
+          `argument-input-requirements(observe): ${code} not checked: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         );
+      } finally {
+        readTx.abort();
       }
+      return;
+    }
+    let refusals;
+    try {
+      refusals = argumentInputRefusals(
+        tx,
+        code,
+        binding,
+        base,
+        argument.requirements,
+        stableInternalVerifierRead,
+      );
     } catch (error) {
-      tx.noteCfcDiagnostic(
-        `argument-input-requirements(observe): not checked: ${
+      refusals = [{
+        reason: `argument requiredIntegrity of ${code} not checked: ${
           error instanceof Error ? error.message : String(error)
         }`,
-      );
+        verdict: !(error instanceof LocalReadUnavailable),
+      }];
     }
+    for (const refusal of refusals) tx.recordCfcArgumentInputRefusal(refusal);
   }
 
   #readJavaScriptArgument(
@@ -11941,15 +11969,18 @@ export class Runner {
       let postRun: ((result: any) => any) | undefined;
       try {
         logger.timeStart("action", "readInputs");
-        tx.resetNarrowestReadScope();
         // Before the body, while the transaction has written nothing, so the
-        // stored labels the check reads are the ones the arguments carry.
+        // stored labels the check reads are the ones the arguments carry, and
+        // before the read scope is reset, so what it reads cannot move where
+        // the result is placed.
         this.#checkArgumentInputRequirements(
           tx,
+          policyFacingIdentity,
           inputs,
           inputsCell,
           argumentRequirements,
         );
+        tx.resetNarrowestReadScope();
         // A lift reads its argument, and reads through it while it runs. Both
         // go lazily: the body materializes the paths it touches and nothing
         // else. Turned off again before the result is written, so diffing and

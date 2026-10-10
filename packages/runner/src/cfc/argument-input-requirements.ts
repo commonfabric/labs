@@ -9,12 +9,18 @@
  * The observations are found by following the lift's binding to the values
  * its code can reach at each declared path, rather than from the read log, so
  * they do not depend on which paths a lazily materialized argument happened to
- * touch, nor on reads a memo served. A reference held at a declared path is
- * followed to its target. A reference held deeper, inside the value reached,
- * is checked where it is held, as part of that value: by §8.2.4 a
- * dereference's integrity includes the reference's, so a value whose
- * references carry the requirement passes, and one whose references do not
- * fails, which is the stricter side.
+ * touch, nor on reads a memo served; the reach can only be wider than what the
+ * code read. Every reference on the way to a declared path, including one
+ * partway along a reference's own path, is followed to its target. A
+ * reference held deeper, inside the value reached, is checked where it is
+ * held, on the label its holder gave it: by §8.2.4 a dereference's integrity
+ * includes the reference's, so that is the stricter side, and evidence copied
+ * onto the reference from its target (a link-carried entry, §8.2.5) does not
+ * count for it.
+ *
+ * Absence is not an observation, as in §8.10.3's own check: a declared path
+ * where no value is reached (no document, a missing field, an empty
+ * container) consumes nothing, and the code sees no value there.
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
@@ -44,9 +50,11 @@ export type ArgumentRequirement = {
 };
 
 /**
- * The integrity requirements `schemas` declare on an argument, each path once.
- * A requirement inside an `anyOf` branch is kept whichever branch the value
- * takes, which refuses more than the branch would.
+ * Every integrity requirement `schemas` declare on an argument: one schema
+ * cannot remove a requirement another declares. A requirement inside an
+ * `anyOf` branch is kept whichever branch the value takes, which refuses more
+ * than the branch would (§8.10 leaves branch-local obligations outside the
+ * automatic check).
  */
 export const argumentIntegrityRequirements = (
   schemas: readonly (JSONSchema | undefined)[],
@@ -75,47 +83,40 @@ type ArgumentReach = {
     location: NormalizedFullLink;
     leaves: (readonly string[])[];
   }[];
-  /**
-   * Each place that holds no evidence: a value the binding holds itself, or
-   * no value at all. `throughReference` says whether a reference led there,
-   * in which case its target may only not have synced yet.
-   */
-  readonly unreferenced: { throughReference: boolean }[];
+  /** How many values the binding holds itself, which carry no evidence. */
+  readonly inWiring: number;
 };
 
 /**
  * The leaf positions of a value read from a document, relative to it: each
- * scalar, each empty container, and each reference slot, which is checked
- * where it is held.
+ * scalar and each reference slot, which is checked where it is held. An
+ * empty container has none: like an absent value, it shows nothing.
  */
 const leafPaths = (value: unknown): (readonly string[])[] =>
-  isPrimitiveCellLink(value) || !isObjectOrArray(value) ||
-    Object.keys(value).length === 0
+  isPrimitiveCellLink(value) || !isObjectOrArray(value)
     ? [[]]
     : Object.entries(value).flatMap(([key, child]) =>
       leafPaths(child).map((leaf) => [key, ...leaf])
     );
 
-/** Calls `visit` for the child or children `segment` names, `absent` if none. */
+/** Calls `visit` for the child or children `segment` names, if any. */
 const descend = (
   value: unknown,
   segment: string,
   visit: (child: unknown, key: string) => void,
-  absent: () => void,
 ): void => {
-  if (!isObjectOrArray(value)) return absent();
+  if (!isObjectOrArray(value)) return;
   if (segment === "*") {
     for (const [key, child] of Object.entries(value)) visit(child, key);
     return;
   }
-  if (!Object.hasOwn(value, segment)) return absent();
-  visit(value[segment], segment);
+  if (Object.hasOwn(value, segment)) visit(value[segment], segment);
 };
 
 /**
  * Follows `binding` to what its code can reach at `path`. The binding's own
- * reference slots, and the objects it builds around them, are plumbing; any
- * other value it holds at or below `path` is unreferenced.
+ * reference slots, and the objects it builds around them, are plumbing; a
+ * scalar it holds at or below `path` is a value written in the wiring.
  */
 const reachThroughArgument = (
   tx: IExtendedStorageTransaction,
@@ -125,7 +126,7 @@ const reachThroughArgument = (
   meta: Metadata,
 ): ArgumentReach => {
   const locations: ArgumentReach["locations"] = [];
-  const unreferenced: { throughReference: boolean }[] = [];
+  let inWiring = 0;
   const followed = new Set<string>();
 
   // A value read from a stored document at `location`, with `rest` of the
@@ -139,8 +140,8 @@ const reachThroughArgument = (
       return follow(parseLink(value, location), rest);
     }
     if (rest.length === 0) {
-      if (value === undefined) unreferenced.push({ throughReference: true });
-      else locations.push({ location, leaves: leafPaths(value) });
+      const leaves = value === undefined ? [] : leafPaths(value);
+      if (leaves.length > 0) locations.push({ location, leaves });
       return;
     }
     const [segment, ...remaining] = rest;
@@ -153,61 +154,51 @@ const reachThroughArgument = (
           child,
           remaining,
         ),
-      () => unreferenced.push({ throughReference: true }),
     );
   };
 
+  // Reads the target's document from its root, so a reference partway along
+  // the target's own path is followed like any other.
   const follow = (link: NormalizedFullLink, rest: readonly string[]) => {
+    const walk = [...link.path, ...rest];
     // A cycle of references reaches no value.
     const key = JSON.stringify([
       link.space,
       link.id,
       normalizeCellScope(link.scope),
-      link.path,
-      rest,
+      walk,
     ]);
-    if (followed.has(key)) {
-      unreferenced.push({ throughReference: true });
-      return;
-    }
+    if (followed.has(key)) return;
     followed.add(key);
-    inDocument(link, tx.readValueOrThrow(link, { meta }), rest);
+    const root = { ...link, path: [] };
+    inDocument(root, tx.readValueOrThrow(root, { meta }), walk);
   };
 
   // A value the binding holds at the declared path: its references are
-  // followed, and everything else in it is the wiring's own.
+  // followed, and every scalar in it is the wiring's own.
   const heldAtPath = (value: unknown): void => {
     if (isCellLink(value)) return follow(parseLink(value, base), []);
     if (isObjectOrArray(value)) {
-      const children = Object.values(value);
-      if (children.length === 0) {
-        unreferenced.push({ throughReference: false });
-      }
-      for (const child of children) heldAtPath(child);
+      for (const child of Object.values(value)) heldAtPath(child);
       return;
     }
-    unreferenced.push({ throughReference: false });
+    if (value !== undefined) inWiring += 1;
   };
 
   const inBinding = (value: unknown, rest: readonly string[]): void => {
     if (isCellLink(value)) return follow(parseLink(value, base), rest);
     if (rest.length === 0) return heldAtPath(value);
     const [segment, ...remaining] = rest;
-    descend(
-      value,
-      segment,
-      (child) => inBinding(child, remaining),
-      () => unreferenced.push({ throughReference: false }),
-    );
+    descend(value, segment, (child) => inBinding(child, remaining));
   };
 
   inBinding(binding, path);
-  return { locations, unreferenced };
+  return { locations, inWiring };
 };
 
 /**
- * The argument input requirements `requirements` that the lift bound by
- * `binding` fails, each as a refusal. Reads go through `tx` under `meta`,
+ * The argument input requirements `requirements` that the lift `code`, bound
+ * by `binding`, fails, each as a refusal. Reads go through `tx` under `meta`,
  * which marks them as the verifier's own (§8.10.1), so they are not consumed
  * inputs of anything else in the transaction.
  *
@@ -217,6 +208,7 @@ const reachThroughArgument = (
  */
 export const argumentInputRefusals = (
   tx: IExtendedStorageTransaction,
+  code: string,
   binding: unknown,
   base: NormalizedFullLink,
   requirements: readonly ArgumentRequirement[],
@@ -225,7 +217,7 @@ export const argumentInputRefusals = (
   if (requirements.length === 0) return [];
   if (tx.hasWrites()) {
     return [{
-      reason: "argument requiredIntegrity checked after a write",
+      reason: `argument requiredIntegrity of ${code} checked after a write`,
       verdict: false,
     }];
   }
@@ -239,32 +231,27 @@ export const argumentInputRefusals = (
       requirement.path,
       meta,
     );
-    // Each place a reference led to no value may only not have synced yet;
-    // every other observation is settled.
-    const settled = [
+    const observations: (readonly CfcAtom[])[] = [
       ...reach.locations.flatMap(({ location, leaves }) =>
         consumedIntegrityAt(tx, location, leaves)
       ),
-      ...reach.unreferenced.filter((place) => !place.throughReference).map(
-        (): readonly CfcAtom[] => [],
-      ),
+      ...Array.from({ length: reach.inWiring }, (): readonly CfcAtom[] => []),
     ];
-    const pending = reach.unreferenced.filter((place) => place.throughReference)
-      .map((): readonly CfcAtom[] => []);
-    const satisfied = (observations: readonly (readonly CfcAtom[])[]) =>
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
+    if (
       cfcIntegritySatisfiesFloorCoherently(
         observations,
         requirement.requiredIntegrity,
         trust,
-      );
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
-    if (satisfied([...settled, ...pending])) continue;
+      )
+    ) {
+      continue;
+    }
     refusals.push({
       reason: `argument requiredIntegrity failed at /${
         requirement.path.join("/")
-      }`,
-      // A verdict when the settled observations fail on their own.
-      verdict: !satisfied(settled),
+      } of ${code}`,
+      verdict: true,
     });
   }
   return refusals;

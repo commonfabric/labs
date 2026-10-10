@@ -109,7 +109,6 @@ Deno.test("meta routes", async (t) => {
             cfcLabelMetadataProtection: "enforce",
             cfcDeclaredMonotonicity: "enforce",
             cfcArgumentInputRequirements: "observe",
-            cfcArgumentInputRequirements: "observe",
             cfcPolicySnapshot: { records: [], digest: "digest-1" },
             cfcSinkMaxConfidentiality: { fetchText: [], fetchJson: [] },
           }))),

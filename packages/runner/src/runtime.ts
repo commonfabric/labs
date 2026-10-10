@@ -956,6 +956,12 @@ export interface CfcRuntimeStats {
   /** Structured refusal details recorded across transaction prepares. */
   refusalDetailsRecorded: number;
 
+  /**
+   * Lift arguments that failed an input requirement their code declares
+   * (§8.10.3), under `observe` as under `enforce`.
+   */
+  argumentInputRefusals: number;
+
   /** Full consumed-label collections, including sink and host release checks. */
   consumedLabelWalks: number;
 
@@ -1026,6 +1032,7 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   dereferenceTracesRecorded: 0,
   dereferenceTracesMax: 0,
   refusalDetailsRecorded: 0,
+  argumentInputRefusals: 0,
   consumedLabelWalks: 0,
   overlapWildcardQueries: 0,
   overlapConcreteQueries: 0,
@@ -2679,6 +2686,9 @@ export class Runtime {
     wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
     wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
     wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
+    wrapped.setCfcArgumentInputRequirementsMode(
+      this.cfcArgumentInputRequirements,
+    );
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);
@@ -2744,6 +2754,9 @@ export class Runtime {
       },
       onRefusalDetail: () => {
         this.#cfcStats.refusalDetailsRecorded += 1;
+      },
+      onArgumentInputRefusal: () => {
+        this.#cfcStats.argumentInputRefusals += 1;
       },
       onPreparationWork: (kind, count) => {
         this.#cfcStats[kind] += count;
