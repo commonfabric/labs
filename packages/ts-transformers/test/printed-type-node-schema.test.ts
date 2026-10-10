@@ -580,7 +580,8 @@ export default pattern<Record<string, never>>(() => {
     ) {
       it(`reports \`pattern-result:unknown-type\` for the \`unknown\` field of an anonymous class instance that is ${shape}`, async () => {
         const { diagnostics } = await transformWithMake(
-          `function makeHolding() { return new (class { v = 1; u: unknown = "u"; })(); }
+          `function opaque(): unknown { return "u"; }
+function makeHolding() { return new (class { v = 1; u = opaque(); })(); }
 export default pattern<Record<string, never>>(() => ${result});`,
         );
 

@@ -331,6 +331,7 @@ export default pattern<{ n: number }>(() => ({ out: op(), items: [op()] }));`),
     members: input.members,
     refs: input.xs.map((x) => x.ref),
     wrapped: input.xs.map((x) => ({ x })),
+    bracketed: input.xs["map"]((x) => ({ r: x.ref })),
     echo: input,
   }),
 );`,
@@ -472,6 +473,102 @@ export default pattern(() => ({
       ]]);
     });
 
+    it("reports nothing for a type an author wrote, however a local holds it or a call passes it on, and reports one inferred from an undeclared value", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+interface Note<T> { ref: T }
+function makeNote(): Note<unknown> { return { ref: 1 }; }
+function bag(): Record<string, unknown> { return { a: 1 }; }
+function identity<T>(x: T): T { return x; }
+function wrap<T>(v: T): Note<T> { return { ref: v }; }
+function helper(early = false) {
+  const unused = () => ({ note: wrap(op()) });
+  void unused;
+  if (early) {
+    return { note: makeNote() };
+  }
+  return { note: makeNote() };
+}
+function viaLocal() {
+  const made = makeNote();
+  return made;
+}
+interface Shelf { note: Note<unknown> }
+function shelf(): Shelf { return { note: makeNote() }; }
+function labeled<T>(x: T, label = ""): T {
+  void label;
+  return x;
+}
+class Maker { make() { return { held: makeNote() }; } }
+class Box<T> { constructor(public ref: T) {} }
+class Defaulted<T = unknown> { ref!: T; }
+class Holder { inner = makeNote(); }
+class Chain {
+  next = Chain.make();
+  static make() { return new Chain(); }
+}
+const holder = { note: makeNote() };
+export default pattern(() => {
+  const derived = computed(() => makeNote());
+  const heldDerived = { d: derived };
+  return {
+    result: computed(() => {
+      const wrapped = { note: makeNote() };
+      const listed = [makeNote()];
+      const bagged = { bag: bag() };
+      const boxed = { box: new Box<unknown>(1) };
+      const defaulted = { box: new Defaulted() };
+      const helped = { w: helper() };
+      const made = { w: new Maker().make() };
+      const identified = { n: identity(makeNote()) };
+      const annotated: Holder = new Holder();
+      const typed: typeof holder = holder;
+      let reassigned = { note: makeNote() };
+      reassigned = { note: makeNote() };
+      const flag = [1].length > 0;
+      const chosen = flag ? { note: makeNote() } : { note: makeNote() };
+      const fallback = { note: [makeNote()][0] ?? makeNote() };
+      const grouped = ({ note: makeNote() });
+      const checked = { note: makeNote() } satisfies { note: Note<unknown> };
+      const counted = { note: makeNote(), total: [1].length + 1 };
+      let { note: kept = makeNote() } = { note: makeNote() };
+      kept = makeNote();
+      const accessor = {
+        get note(): Note<unknown> {
+          return makeNote();
+        },
+      };
+      const passed = { n: labeled(makeNote(), "x") };
+      const constant = { note: makeNote() } as const;
+      const shelved = { n: shelf().note };
+      const local = { w: viaLocal() };
+      const recast = { note: wrap(op()) as Note<unknown> };
+      const lifted = { r: makeNote().ref };
+      const inferred = { note: wrap(op()) };
+      return {
+        wrapped, listed, bagged, boxed, defaulted, helped, made, identified,
+        annotated, typed, reassigned, chosen, fallback, grouped, checked,
+        counted, kept, accessor, passed, constant, shelved, local, recast,
+        lifted, inferred,
+      };
+    }),
+    heldDerived,
+    holder: new Holder(),
+    chain: new Chain(),
+    inlineHelper: helper(),
+    inlineIdentity: identity(makeNote()),
+    inlineInferred: wrap(op()),
+    boxInferred: new Box(op()),
+  };
+});`),
+      ).toEqual([[
+        "result.lifted.r",
+        "result.inferred.note.ref",
+        "inlineInferred.ref",
+        "boxInferred.ref",
+      ]]);
+    });
+
     it("reports an input field whose type the input's type takes from a value, taken whole or destructured", async () => {
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
@@ -490,9 +587,14 @@ export default pattern<{ ref: unknown; inner: { ref: unknown } }>(
     it("reports nothing for another pattern's result or a typed `wish()`", async () => {
       expect(
         await reportedPaths(`interface Out { mentions: unknown[] }
+function op(): unknown { return 1; }
+const sample = { ref: op() };
+interface Held { holder: typeof sample }
 const Sub = pattern<{ seed: string }, Out>(() => ({ mentions: [] }));
+const Holding = pattern<{ seed: string }, Held>(() => ({ holder: sample }));
 export default pattern<{ seed: string }>(({ seed }) => ({
   subject: Sub({ seed }),
+  holding: Holding({ seed }),
   profile: wish<{ name: string }>({ query: "#p" }),
 }));`),
       ).toEqual([]);
@@ -577,28 +679,45 @@ export default pattern(() => ({
       ).toEqual([]);
     });
 
-    it("reports a callback reassigned after its declaration, and a callback or a lift read from an object", async () => {
+    it("reports a callback reassigned after its declaration, or a callback or a lift read from an object, only where its return type is not written", async () => {
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
 interface Note { ref: unknown }
-const lifts = { getNote: lift((n: number): Note => ({ ref: n })) };
+function note(): Note { return { ref: 1 }; }
+const lifts = {
+  getNote: lift((n: number): Note => ({ ref: n })),
+  getLoose: lift((n: number) => ({ ref: op(), n })),
+};
 const { getNote: picked } = lifts;
 const { toNote: pickedCallback } = { toNote: (): Note => ({ ref: 1 }) };
+const { toLoose: pickedLoose } = { toLoose: () => ({ ref: op() }) };
 export default pattern(() => ({
   written: computed(() => {
     let toNote = (n: number): Note => ({ ref: n });
     toNote = () => ({ ref: op() });
     return [1].map(toNote);
   }),
+  loose: computed(() => {
+    let toLoose = (n: number) => ({ ref: n as unknown });
+    toLoose = () => ({ ref: op() });
+    return [1].map(toLoose);
+  }),
+  traced: computed(() => {
+    let fromNote = (n: number) => ({ ref: note().ref, n });
+    fromNote = () => ({ ref: op(), n: 0 });
+    return [1].map(fromNote);
+  }),
   member: lifts.getNote(1),
+  looseMember: lifts.getLoose(1),
   destructured: picked(1),
   destructuredCallback: computed(pickedCallback),
+  looseCallback: computed(pickedLoose),
 }));`),
       ).toEqual([[
-        "written[].ref",
-        "member.ref",
-        "destructured.ref",
-        "destructuredCallback.ref",
+        "loose[].ref",
+        "traced[].ref",
+        "looseMember.ref",
+        "looseCallback.ref",
       ]]);
     });
 
@@ -671,6 +790,7 @@ export default pattern(() => ({
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
 function note(): { ref: unknown } { return { ref: 1 }; }
+const sample = { ref: op() };
 export default pattern<{ notes: { ref: unknown }[] }>(({ notes }) => ({
   result: computed(() => {
     const box = { inner: { ref: note().ref } };
@@ -721,6 +841,22 @@ export default pattern<{ notes: { ref: unknown }[] }>(({ notes }) => ({
           return 0;
         },
       },
+      fromSelf: {
+        held: note(),
+        get touch(): number {
+          this.held = note();
+          return 0;
+        },
+      }.held,
+      shapedSelf: {
+        get shaped(): typeof sample {
+          return sample;
+        },
+        get touch(): number {
+          void this.shaped;
+          return 0;
+        },
+      }.shaped,
     };
   }),
 }));`),
@@ -737,6 +873,7 @@ export default pattern<{ notes: { ref: unknown }[] }>(({ notes }) => ({
         "result.merged.extra",
         "result.echoed[].ref",
         "result.inline.ref",
+        "result.shapedSelf.ref",
       ]]);
     });
 
@@ -994,6 +1131,29 @@ class Chosen<T = unknown> {
 }
 function load(): { ref: unknown } { return { ref: 1 }; }
 class Loaded { held = load(); }
+class Named<T = unknown> {
+  ref!: T;
+  constructor(public name: string) {}
+}
+class Labeled<T = unknown> {
+  ref!: T;
+  constructor(public label = "x") {}
+}
+class Pair<T = unknown, U = T> {
+  first!: T;
+  second!: U;
+}
+class Shaped<T = unknown, U = { ref: T }> {
+  inner!: U;
+}
+class Linked<T, U = T> {
+  second!: U;
+  constructor(public first: T) {}
+}
+class Base<V> {
+  constructor(public held: V) {}
+}
+class Derived<T = unknown> extends Base<T> {}
 export default pattern(() => ({
   inferred: new Inferred(),
   written: new Written(2),
@@ -1008,12 +1168,21 @@ export default pattern(() => ({
   chosen: new Chosen(),
   supplied: new Chosen(op()),
   loaded: new Loaded(),
+  named: new Named("x"),
+  labeled: new Labeled("y"),
+  pair: new Pair(),
+  shaped: new Shaped(),
+  linked: new Linked(op()),
+  derived: new Derived(op()),
 }));`),
       ).toEqual([[
         "inferred.ref",
         "boxed.value",
         "passed.value",
         "supplied.value",
+        "linked.second",
+        "linked.first",
+        "derived.held",
       ]]);
     });
 

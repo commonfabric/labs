@@ -274,24 +274,31 @@ function returnedPositions(
     );
   }
   if (!("body" in fn) || fn.body === undefined) return false;
-  if (!ts.isBlock(fn.body)) return expressionPositions(fn.body, scope);
-  // A body that returns nothing gives `undefined`, which holds no position.
-  let positions: DeclaredPositions = true;
+  return returnedExpressions(fn.body).reduce<DeclaredPositions>(
+    (positions, returned) =>
+      alternatives(positions, expressionPositions(returned, scope)),
+    true,
+  );
+}
+
+/**
+ * The expressions a function with `body` returns: the body itself where it is
+ * an expression, or each `return`'s value. A body that returns nothing gives
+ * `undefined`, which holds no position, so it adds none.
+ */
+function returnedExpressions(body: ts.ConciseBody): ts.Expression[] {
+  if (!ts.isBlock(body)) return [body];
+  const returned: ts.Expression[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isFunctionLike(node)) return;
     if (ts.isReturnStatement(node)) {
-      if (node.expression) {
-        positions = alternatives(
-          positions,
-          expressionPositions(node.expression, scope),
-        );
-      }
+      if (node.expression) returned.push(node.expression);
       return;
     }
     ts.forEachChild(node, visit);
   };
-  ts.forEachChild(fn.body, visit);
-  return positions;
+  ts.forEachChild(body, visit);
+  return returned;
 }
 
 /** The positions of the value `expression` evaluates to that an author declared. */
@@ -331,7 +338,7 @@ function expressionPositions(
     // accessor that uses `this` can change the literal it belongs to.
     return scope.held === 0 || changesItself(expression)
       ? false
-      : objectLiteralPositions(expression, scope);
+      : objectLiteralPositions(expression, checker, valueParts(scope));
   }
   if (ts.isArrayLiteralExpression(expression)) {
     if (scope.held === 0) return false;
@@ -454,6 +461,31 @@ function usesThis(node: ts.Node): boolean {
     ts.forEachChild(node, usesThis) === true;
 }
 
+/**
+ * The symbol `symbol` names, read through an import, with the declaration it
+ * is read from, or `undefined` where it has none.
+ */
+function bindingOf(
+  symbol: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+): { resolved: ts.Symbol; declaration: ts.Declaration } | undefined {
+  const resolved = symbol && resolveAlias(symbol, checker);
+  const declaration = resolved?.valueDeclaration ??
+    resolved?.declarations?.[0];
+  return resolved && declaration && { resolved, declaration };
+}
+
+/**
+ * Whether `declaration` declares a function, a class, or an enum, which
+ * declares what its name holds.
+ */
+function namesItsValue(declaration: ts.Declaration): boolean {
+  return ts.isFunctionDeclaration(declaration) ||
+    ts.isClassDeclaration(declaration) ||
+    ts.isEnumDeclaration(declaration) ||
+    ts.isEnumMember(declaration);
+}
+
 /** `symbol`, or what it aliases when it is an import. */
 function resolveAlias(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
   return symbol.flags & ts.SymbolFlags.Alias
@@ -477,31 +509,20 @@ function symbolPositions(
   symbol: ts.Symbol | undefined,
   scope: TraceScope,
 ): DeclaredPositions {
-  if (!symbol) return false;
   const { checker } = scope;
-  const resolved = resolveAlias(symbol, checker);
-  const declaration = resolved.valueDeclaration ?? resolved.declarations?.[0];
-  if (!declaration) return false;
-  // A function, a class, or an enum declares what its name holds.
+  const binding = bindingOf(symbol, checker);
+  if (!binding) return false;
+  const { resolved, declaration } = binding;
+  // The binding's own type declares what any value it holds has under it, as
+  // far as that type was written. A type written out for the binding, or a
+  // function's, a class's or an enum's, is all there is.
+  const ownType = symbolProvenance(resolved, checker, newReading());
   if (
-    ts.isFunctionDeclaration(declaration) ||
-    ts.isClassDeclaration(declaration) ||
-    ts.isEnumDeclaration(declaration) ||
-    ts.isEnumMember(declaration)
+    namesItsValue(declaration) || writtenBindingType(declaration, checker) ||
+    reassigned(resolved, checker)
   ) {
-    return true;
+    return ownType;
   }
-  const written = writtenBindingType(declaration, checker);
-  if (written) {
-    return typePositions(checker.getTypeFromTypeNode(written), checker);
-  }
-  // The binding's own type, where it is written out, declares what any value
-  // it holds has under it.
-  const ownType = writtenPositions(
-    checker.getTypeOfSymbolAtLocation(resolved, declaration),
-    checker,
-  );
-  if (reassigned(resolved, checker)) return ownType;
   if (ts.isBindingElement(declaration)) {
     // A destructured binding holds a field of the value it came from, which
     // the field's written type declares.
@@ -598,14 +619,8 @@ function destructuredPositions(
   element: ts.BindingElement,
   scope: TraceScope,
 ): DeclaredPositions {
-  const path: ts.BindingElement[] = [element];
-  let owner = element.parent.parent;
-  while (ts.isBindingElement(owner)) {
-    path.unshift(owner);
-    owner = owner.parent.parent;
-  }
-  if (!ts.isVariableDeclaration(owner)) return false;
-  const declaration = owner;
+  const { declaration, path } = destructuringPath(element);
+  if (!declaration) return false;
   let positions = heldAs(
     scope,
     path.length,
@@ -623,6 +638,26 @@ function destructuredPositions(
     }
   });
   return positions;
+}
+
+/**
+ * The elements from the outermost down to `element` that bind it, and the
+ * local whose initializer they destructure, if a local's is what they do.
+ */
+function destructuringPath(element: ts.BindingElement): {
+  declaration: ts.VariableDeclaration | undefined;
+  path: ts.BindingElement[];
+} {
+  const path: ts.BindingElement[] = [element];
+  let owner = element.parent.parent;
+  while (ts.isBindingElement(owner)) {
+    path.unshift(owner);
+    owner = owner.parent.parent;
+  }
+  return {
+    declaration: ts.isVariableDeclaration(owner) ? owner : undefined,
+    path,
+  };
 }
 
 /**
@@ -706,7 +741,15 @@ function instancePositions(
   construction: ts.NewExpression,
   scope: TraceScope,
 ): DeclaredPositions {
-  const { checker } = scope;
+  return instanceTypePositions(construction, scope.checker, newReading());
+}
+
+/** `instancePositions()`, read within `reading`. */
+function instanceTypePositions(
+  construction: ts.NewExpression,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
   const constructed = definitionOf(construction.expression, checker);
   const written = constructed &&
       (ts.isClassDeclaration(constructed) || ts.isClassExpression(constructed))
@@ -724,8 +767,11 @@ function instancePositions(
         typeParametersIn(node, checker).every((parameter) =>
           parameter !== undefined && written.has(parameter)
         )
-        ? typePositions(type, checker, true)
-        : writtenPositions(type, checker),
+        ? readType(type, checker, "field", reading)
+        : eitherDeclares(
+          readType(type, checker, "inferred", reading),
+          initializerProvenance(member, checker, reading),
+        ),
     );
   }
   return positions;
@@ -750,23 +796,19 @@ function typeParametersWritten(
   const written = new Set<ts.TypeParameterDeclaration>(
     construction.typeArguments?.length ? own : [],
   );
-  if (!construction.typeArguments?.length && !construction.arguments?.length) {
-    // With no argument to infer it from, a parameter takes its default.
-    const instance = checker.getTypeAtLocation(construction);
-    const chosen = (instance.flags & ts.TypeFlags.Object) !== 0 &&
-        ((instance as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) !==
-          0
-      ? checker.getTypeArguments(instance as ts.TypeReference)
-      : [];
-    own.forEach((parameter, index) => {
-      // A default naming another parameter is never the very type chosen.
+  if (!construction.typeArguments?.length) {
+    // A parameter no argument can infer takes its default.
+    const inferred = typeParametersInferred(constructed, construction, checker);
+    for (const parameter of own) {
       if (
-        parameter.default &&
-        chosen[index] === checker.getTypeFromTypeNode(parameter.default)
+        parameter.default && !inferred.has(parameter) &&
+        typeParametersIn(parameter.default, checker).every((named) =>
+          named !== undefined && written.has(named)
+        )
       ) {
         written.add(parameter);
       }
-    });
+    }
   }
   const visited = new Set<ts.Node>();
   let current: ts.ClassLikeDeclaration = constructed;
@@ -799,21 +841,56 @@ function typeParametersWritten(
 }
 
 /**
- * The declared positions of an object literal's value, by property. A part
- * under a key the trace cannot name, a computed key or a spread value's index
- * signature, may be under any name, so it is an alternative for every name
- * the literal held before it, and a name the literal writes after it replaces
- * it there. A spread value's own parts land in the literal as the spread
- * value holds them. A spread member the spread value may lack, being
- * optional, is an alternative to what the literal held under its name before
- * it, rather than a replacement for it.
+ * The type parameters of `constructed` that an argument `construction` passes
+ * may infer: those the type of the constructor parameter it is passed to
+ * names. A constructor `constructed` inherits gives its parameters' types in
+ * terms of another class, so any of its own may be inferred there.
+ */
+function typeParametersInferred(
+  constructed: ts.ClassLikeDeclaration,
+  construction: ts.NewExpression,
+  checker: ts.TypeChecker,
+): ReadonlySet<ts.TypeParameterDeclaration> {
+  const own: readonly ts.TypeParameterDeclaration[] =
+    constructed.typeParameters ?? [];
+  const passed = construction.arguments ?? [];
+  if (passed.length === 0) return new Set();
+  const declaration = checker.getResolvedSignature(construction)?.declaration;
+  if (
+    !declaration || ts.isJSDocSignature(declaration) ||
+    declaration.parent !== constructed
+  ) {
+    return new Set(own);
+  }
+  const inferred = new Set<ts.TypeParameterDeclaration>();
+  const parameters = declaration.parameters;
+  passed.forEach((_, index) => {
+    const last = parameters[parameters.length - 1];
+    const parameter = parameters[index] ??
+      (last?.dotDotDotToken ? last : undefined);
+    if (!parameter?.type) return;
+    for (const named of typeParametersIn(parameter.type, checker)) {
+      if (named && own.includes(named)) inferred.add(named);
+    }
+  });
+  return inferred;
+}
+
+/**
+ * The declared positions of an object literal's value, by property, each part
+ * read by `parts`. A part under a key the trace cannot name, a computed key or
+ * a spread value's index signature, may be under any name, so it is an
+ * alternative for every name the literal held before it, and a name the
+ * literal writes after it replaces it there. A spread value's own parts land
+ * in the literal as the spread value holds them. A spread member the spread
+ * value may lack, being optional, is an alternative to what the literal held
+ * under its name before it, rather than a replacement for it.
  */
 function objectLiteralPositions(
   literal: ts.ObjectLiteralExpression,
-  scope: TraceScope,
+  checker: ts.TypeChecker,
+  parts: LiteralParts,
 ): DeclaredPositions {
-  const { checker } = scope;
-  const propertyHeld = partHeld(scope.held);
   const positions = new Map<PositionKey, DeclaredPositions>();
   const supply = (key: string, value: DeclaredPositions, optional: boolean) => {
     const before = partAt(positions, key);
@@ -832,7 +909,7 @@ function objectLiteralPositions(
   };
   for (const property of literal.properties) {
     if (ts.isSpreadAssignment(property)) {
-      const spread = expressionPositions(property.expression, scope);
+      const spread = parts.spread(property.expression);
       const type = checker.getTypeAtLocation(property.expression);
       if (checker.getIndexInfosOfType(type).length > 0) {
         supplyUnnamed(below(spread, UNNAMED_POSITIONS));
@@ -848,22 +925,13 @@ function objectLiteralPositions(
     }
     let value: DeclaredPositions;
     if (ts.isPropertyAssignment(property)) {
-      value = heldAs(
-        scope,
-        propertyHeld,
-        () => expressionPositions(property.initializer, scope),
-      );
+      value = parts.value(property.initializer);
     } else if (ts.isShorthandPropertyAssignment(property)) {
-      value = symbolPositions(
+      value = parts.shorthand(
         checker.getShorthandAssignmentValueSymbol(property),
-        scope,
       );
     } else if (ts.isGetAccessorDeclaration(property)) {
-      value = heldAs(
-        scope,
-        propertyHeld,
-        () => returnedPositions(property, scope),
-      );
+      value = parts.getter(property);
     } else if (ts.isMethodDeclaration(property)) {
       value = true;
     } else {
@@ -874,6 +942,37 @@ function objectLiteralPositions(
     else supply(key, value, false);
   }
   return positions;
+}
+
+/** How `objectLiteralPositions()` reads each part of a literal. */
+interface LiteralParts {
+  /** The positions of a value spread into the literal. */
+  spread(expression: ts.Expression): DeclaredPositions;
+
+  /** The positions of a property's value. */
+  value(expression: ts.Expression): DeclaredPositions;
+
+  /** The positions of the value a shorthand property names. */
+  shorthand(symbol: ts.Symbol | undefined): DeclaredPositions;
+
+  /** The positions of the value a getter returns. */
+  getter(getter: ts.GetAccessorDeclaration): DeclaredPositions;
+}
+
+/**
+ * The trace's reading of a literal's parts, each one level further below the
+ * binding that holds the literal.
+ */
+function valueParts(scope: TraceScope): LiteralParts {
+  const partDepth = partHeld(scope.held);
+  return {
+    spread: (expression) => expressionPositions(expression, scope),
+    value: (expression) =>
+      heldAs(scope, partDepth, () => expressionPositions(expression, scope)),
+    shorthand: (symbol) => symbolPositions(symbol, scope),
+    getter: (getter) =>
+      heldAs(scope, partDepth, () => returnedPositions(getter, scope)),
+  };
 }
 
 /**
@@ -1148,7 +1247,24 @@ function callbackPositions(
   scope: TraceScope,
 ): DeclaredPositions {
   const callback = resolveCallback(expression, scope.checker);
-  if (!callback || scope.tracing.has(callback)) return false;
+  if (!callback) {
+    // A function the trace cannot follow, reassigned or read from an object,
+    // returns what its type does, which any function in its place must.
+    const [signature] = expression
+      ? scope.checker.getTypeAtLocation(expression).getCallSignatures()
+      : [];
+    const reading = newReading();
+    return signature
+      ? returnProvenance(signature, scope.checker, reading) ??
+        readType(
+          scope.checker.getReturnTypeOfSignature(signature),
+          scope.checker,
+          "inferred",
+          reading,
+        )
+      : false;
+  }
+  if (scope.tracing.has(callback)) return false;
   scope.tracing.add(callback);
   const positions = heldAs(scope, undefined, () => {
     const parameter = callback.parameters[0];
@@ -1203,21 +1319,20 @@ function arrayMethodPositions(
 }
 
 /**
- * The declared positions of a call's result read from its signature, which
- * declares the fields of what it returns when it writes its return type out
- * without naming a type parameter, whose argument may have been inferred.
+ * The declared positions of a call's result read from where its type was
+ * written, as `callProvenance()` finds it, or from what `writtenPositions()`
+ * reads of that type.
  */
 function signaturePositions(
   call: ts.CallLikeExpression,
   scope: TraceScope,
 ): DeclaredPositions {
   const { checker } = scope;
-  const signature = checker.getResolvedSignature(call);
-  const declaration = signature?.declaration;
-  return signature && declaration && !ts.isJSDocSignature(declaration) &&
-      declaration.type && !mentionsTypeParameter(declaration.type, checker)
-    ? typePositions(checker.getReturnTypeOfSignature(signature), checker)
-    : false;
+  const reading = newReading();
+  return (ts.isCallExpression(call) || ts.isTaggedTemplateExpression(call)
+    ? callProvenance(call, checker, reading)
+    : undefined) ??
+    readType(checker.getTypeAtLocation(call), checker, "inferred", reading);
 }
 
 /**
@@ -1347,13 +1462,12 @@ function objectTypePositions(
     const written = inferred
       ? writesOwnType(property, checker)
       : !infersOwnType(property);
+    const type = checker.getTypeOfSymbol(property);
     fields.set(
       property.name,
-      readType(
-        checker.getTypeOfSymbol(property),
-        checker,
-        written ? "field" : "inferred",
-        reading,
+      written ? readType(type, checker, "field", reading) : eitherDeclares(
+        readType(type, checker, "inferred", reading),
+        initializerProvenance(property, checker, reading),
       ),
     );
   }
@@ -1379,6 +1493,7 @@ function newReading(): TypeReading {
     nested: new Map(),
     read: { written: new Map(), field: new Map(), inferred: new Map() },
     reachedOpen: Infinity,
+    tracing: new Set(),
   };
 }
 
@@ -1406,6 +1521,431 @@ interface TypeReading {
 
   /** The shallowest depth of an open type the read has reached again. */
   reachedOpen: number;
+
+  /**
+   * The declarations whose provenance is being read, so a read never re-enters
+   * one. Reaching one again keeps the read from being reused.
+   */
+  readonly tracing: Set<ts.Node>;
+}
+
+//
+// Type provenance
+//
+
+/**
+ * The positions the static type of `expression` declares, read from where
+ * that type was written: a cast, a call's type arguments or its signature's
+ * written return type, a construction's written or defaulted type arguments,
+ * a binding's annotation. A type inferred from something else is read from
+ * that: a literal's from its parts, a binding's from its initializer, a call's
+ * from what the function's body returns. Whatever later takes the value's
+ * place must have this type, so these positions hold where the value's own
+ * structure does not. A type with no such origin declares what
+ * `writtenPositions()` reads of it.
+ */
+function typeProvenance(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
+  if (
+    ts.isParenthesizedExpression(expression) ||
+    ts.isNonNullExpression(expression) ||
+    ts.isSatisfiesExpression(expression) ||
+    ts.isAwaitExpression(expression)
+  ) {
+    return typeProvenance(expression.expression, checker, reading);
+  }
+  if (
+    ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)
+  ) {
+    if (ts.isConstTypeReference(expression.type)) {
+      return typeProvenance(expression.expression, checker, reading);
+    }
+    if (!mentionsTypeParameter(expression.type, checker)) {
+      return readType(
+        checker.getTypeFromTypeNode(expression.type),
+        checker,
+        "written",
+        reading,
+      );
+    }
+  } else if (isScalarExpression(expression)) {
+    return true;
+  } else if (ts.isIdentifier(expression)) {
+    return expression.text === "undefined" &&
+        !checker.getSymbolAtLocation(expression)?.valueDeclaration
+      ? true
+      : symbolProvenance(
+        checker.getSymbolAtLocation(expression),
+        checker,
+        reading,
+      );
+  } else if (ts.isObjectLiteralExpression(expression)) {
+    return objectLiteralPositions(
+      expression,
+      checker,
+      provenanceParts(checker, reading),
+    );
+  } else if (ts.isArrayLiteralExpression(expression)) {
+    let elements: DeclaredPositions = true;
+    for (const element of expression.elements) {
+      elements = alternatives(
+        elements,
+        ts.isSpreadElement(element)
+          ? below(
+            typeProvenance(element.expression, checker, reading),
+            ELEMENT_POSITIONS,
+          )
+          : ts.isOmittedExpression(element)
+          ? true
+          : typeProvenance(element, checker, reading),
+      );
+    }
+    return new Map([[ELEMENT_POSITIONS, elements]]);
+  } else if (ts.isConditionalExpression(expression)) {
+    return alternatives(
+      typeProvenance(expression.whenTrue, checker, reading),
+      typeProvenance(expression.whenFalse, checker, reading),
+    );
+  } else if (ts.isBinaryExpression(expression)) {
+    switch (expression.operatorToken.kind) {
+      case ts.SyntaxKind.QuestionQuestionToken:
+      case ts.SyntaxKind.BarBarToken:
+      case ts.SyntaxKind.AmpersandAmpersandToken:
+        return alternatives(
+          typeProvenance(expression.left, checker, reading),
+          typeProvenance(expression.right, checker, reading),
+        );
+    }
+  } else if (
+    ts.isPropertyAccessExpression(expression) ||
+    ts.isElementAccessExpression(expression)
+  ) {
+    const type = checker.getTypeAtLocation(expression);
+    // A part read whole whose type is `unknown` declares nothing.
+    if ((type.flags & ts.TypeFlags.Unknown) !== 0) return false;
+    const name = ts.isPropertyAccessExpression(expression)
+      ? expression.name
+      : expression.argumentExpression;
+    if (writesOwnType(checker.getSymbolAtLocation(name), checker)) {
+      return readType(type, checker, "written", reading);
+    }
+    // A part whose type the object's type gives takes the object's
+    // provenance: an element of an array, a member by its name, or, by a key
+    // the trace cannot read, any part.
+    const object = typeProvenance(expression.expression, checker, reading);
+    const element = typeof object === "boolean"
+      ? undefined
+      : object.get(ELEMENT_POSITIONS);
+    return eitherDeclares(
+      readType(type, checker, "inferred", reading),
+      element ??
+        (ts.isIdentifier(name) || ts.isStringLiteralLike(name)
+          ? below(object, name.text)
+          : typeof object === "boolean"
+          ? object
+          : [...object.values()].reduce<DeclaredPositions>(alternatives, true)),
+    );
+  } else if (
+    ts.isCallExpression(expression) ||
+    ts.isTaggedTemplateExpression(expression)
+  ) {
+    const provenance = callProvenance(expression, checker, reading);
+    if (provenance !== undefined) return provenance;
+  } else if (ts.isNewExpression(expression)) {
+    return instanceTypePositions(expression, checker, reading);
+  }
+  return readType(
+    checker.getTypeAtLocation(expression),
+    checker,
+    "inferred",
+    reading,
+  );
+}
+
+/**
+ * The provenance of what `call` returns: its type arguments, its signature's
+ * as `returnProvenance()` reads it, and, where the signature's written return
+ * type is a type parameter, the arguments it is inferred from. `undefined`
+ * where none of these says.
+ */
+function callProvenance(
+  call: ts.CallExpression | ts.TaggedTemplateExpression,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions | undefined {
+  if (call.typeArguments?.length) {
+    return readType(
+      checker.getTypeAtLocation(call),
+      checker,
+      "written",
+      reading,
+    );
+  }
+  const signature = checker.getResolvedSignature(call);
+  const returned = returnProvenance(signature, checker, reading);
+  const declaration = signature?.declaration;
+  return returned !== undefined && ts.isCallExpression(call) && declaration &&
+      !ts.isJSDocSignature(declaration) && declaration.type &&
+      mentionsTypeParameter(declaration.type, checker)
+    ? eitherDeclares(
+      returned,
+      inferredFromProvenance(
+        call,
+        declaration,
+        declaration.type,
+        checker,
+        reading,
+      ),
+    )
+    : returned;
+}
+
+/**
+ * The provenance of what a function with `signature` returns: the return type
+ * its declaration writes, read as written unless it names a type parameter,
+ * whose argument may have been inferred, or, where that type is inferred,
+ * what the declaration's body returns. `undefined` where the declaration
+ * says neither.
+ */
+function returnProvenance(
+  signature: ts.Signature | undefined,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions | undefined {
+  const declaration = signature?.declaration;
+  if (!signature || !declaration || ts.isJSDocSignature(declaration)) {
+    return undefined;
+  }
+  if (declaration.type) {
+    return readType(
+      checker.getReturnTypeOfSignature(signature),
+      checker,
+      mentionsTypeParameter(declaration.type, checker) ? "inferred" : "written",
+      reading,
+    );
+  }
+  const body = "body" in declaration ? declaration.body : undefined;
+  return body
+    ? traceProvenance(
+      declaration,
+      reading,
+      () => returnsProvenance(body, checker, reading),
+    )
+    : undefined;
+}
+
+/**
+ * Where `declaration`'s return type is one of its type parameters, read
+ * through a reactive wrapper, the provenance of the arguments of `call` that
+ * parameter is inferred from: one passed for a parameter of that type, or a
+ * callback returning it, read from what the callback returns. `false` where
+ * no argument is.
+ */
+function inferredFromProvenance(
+  call: ts.CallExpression,
+  declaration: ts.SignatureDeclaration,
+  returnType: ts.TypeNode,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
+  const written = checker.getTypeFromTypeNode(returnType);
+  const returned = unwrapOpaqueLikeType(written, checker) ?? written;
+  if ((returned.flags & ts.TypeFlags.TypeParameter) === 0) return false;
+  let from: DeclaredPositions | undefined;
+  call.arguments.forEach((argument, index) => {
+    const parameter = declaration.parameters[index];
+    if (!parameter?.type) return;
+    const type = checker.getTypeFromTypeNode(parameter.type);
+    if (type === returned) {
+      from = alternatives(
+        from ?? true,
+        typeProvenance(argument, checker, reading),
+      );
+      return;
+    }
+    const [callback] = type.getCallSignatures();
+    const fn = callback &&
+        checker.getReturnTypeOfSignature(callback) === returned
+      ? resolveCallback(argument, checker)
+      : undefined;
+    const body = fn && "body" in fn ? fn.body : undefined;
+    if (fn && body) {
+      from = alternatives(
+        from ?? true,
+        traceProvenance(
+          fn,
+          reading,
+          () => returnsProvenance(body, checker, reading),
+        ),
+      );
+    }
+  });
+  return from ?? false;
+}
+
+/** The provenance of what every return of `body` returns, as alternatives. */
+function returnsProvenance(
+  body: ts.ConciseBody,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
+  return returnedExpressions(body).reduce<DeclaredPositions>(
+    (positions, returned) =>
+      alternatives(positions, typeProvenance(returned, checker, reading)),
+    true,
+  );
+}
+
+/**
+ * The provenance of the type of the binding `symbol` names: its annotation,
+ * or, beside what `writtenPositions()` reads of its type, what it was
+ * initialized with, or the part of an initializer it destructures.
+ */
+function symbolProvenance(
+  symbol: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
+  const binding = bindingOf(symbol, checker);
+  if (!binding) return false;
+  const { resolved, declaration } = binding;
+  if (namesItsValue(declaration)) return true;
+  const written = writtenBindingType(declaration, checker);
+  if (written) {
+    return readType(
+      checker.getTypeFromTypeNode(written),
+      checker,
+      "written",
+      reading,
+    );
+  }
+  const type = checker.getTypeOfSymbolAtLocation(resolved, declaration);
+  const own = readType(type, checker, "inferred", reading);
+  // A binding whose type is `unknown` holds a whole value of no known type,
+  // which declares nothing, whatever field it was first read from.
+  if ((type.flags & ts.TypeFlags.Unknown) !== 0) return own;
+  if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
+    const initializer = declaration.initializer;
+    return eitherDeclares(
+      own,
+      traceProvenance(
+        declaration,
+        reading,
+        () => typeProvenance(initializer, checker, reading),
+      ),
+    );
+  }
+  if (ts.isBindingElement(declaration)) {
+    return eitherDeclares(
+      own,
+      traceProvenance(
+        declaration,
+        reading,
+        () => destructuredProvenance(declaration, checker, reading),
+      ),
+    );
+  }
+  return own;
+}
+
+/**
+ * The provenance of the part of a local's initializer that `element` binds,
+ * with each default an alternative at its own level.
+ */
+function destructuredProvenance(
+  element: ts.BindingElement,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
+  const { declaration, path } = destructuringPath(element);
+  if (!declaration?.initializer) return false;
+  let positions = typeProvenance(declaration.initializer, checker, reading);
+  for (const step of path) {
+    positions = bindingPart(step.parent, step, positions, checker);
+    if (step.initializer) {
+      positions = alternatives(
+        positions,
+        typeProvenance(step.initializer, checker, reading),
+      );
+    }
+  }
+  return positions;
+}
+
+/**
+ * The provenance of the initializer of `member`'s declaration, a property of a
+ * literal, a class field, or a parameter property, whose type that
+ * initializer gave it. `false` for a member with none.
+ */
+function initializerProvenance(
+  member: ts.Symbol,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
+  const declaration = member.valueDeclaration ?? member.declarations?.[0];
+  if (declaration && ts.isShorthandPropertyAssignment(declaration)) {
+    return symbolProvenance(
+      checker.getShorthandAssignmentValueSymbol(declaration),
+      checker,
+      reading,
+    );
+  }
+  const initializer = declaration &&
+      (ts.isPropertyAssignment(declaration) ||
+        ts.isPropertyDeclaration(declaration) || ts.isParameter(declaration))
+    ? declaration.initializer
+    : undefined;
+  return declaration && initializer
+    ? traceProvenance(
+      declaration,
+      reading,
+      () => typeProvenance(initializer, checker, reading),
+    )
+    : false;
+}
+
+/** How `typeProvenance()` reads each part of a literal. */
+function provenanceParts(
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): LiteralParts {
+  return {
+    spread: (expression) => typeProvenance(expression, checker, reading),
+    value: (expression) => typeProvenance(expression, checker, reading),
+    shorthand: (symbol) => symbolProvenance(symbol, checker, reading),
+    getter: (getter) => {
+      return returnProvenance(
+        checker.getSignatureFromDeclaration(getter),
+        checker,
+        reading,
+      ) ?? false;
+    },
+  };
+}
+
+/**
+ * What `read` gives with `reading` reading the provenance of `declaration`,
+ * or `false` where that read is already under way, which also keeps the
+ * types open around it from being reused.
+ */
+function traceProvenance(
+  declaration: ts.Node,
+  reading: TypeReading,
+  read: () => DeclaredPositions,
+): DeclaredPositions {
+  if (reading.tracing.has(declaration)) {
+    reading.reachedOpen = -1;
+    return false;
+  }
+  reading.tracing.add(declaration);
+  try {
+    return read();
+  } finally {
+    reading.tracing.delete(declaration);
+  }
 }
 
 /**
