@@ -20,9 +20,12 @@ of two kinds of reason:
   anti-replay checks: an expired, already-used, or mismatched challenge, or a
   stale signed `exp`. Each reconnect attempt discards the failed transport
   connection before running `hello` on a fresh one that issues a new challenge,
-  so a token-refresh window or a challenge race can heal on the next attempt.
-  A transport without connection-reset support terminates recovery with the
-  original failure instead of retrying a handshake it cannot renew.
+  so a token-refresh window or a challenge race can heal on the next attempt. A
+  transport without connection-reset support terminates recovery with the
+  original failure instead of retrying a handshake it cannot renew. A Mode A
+  router also marks a refusal retriable when it rests on a condition that
+  passes, such as the space's toolshed being down; that heals by waiting, not by
+  a new connection.
 - **Permanent.** An audience or protocol mismatch, a malformed invocation, or an
   ACL capability shortfall (the principal lacks `READ`, a malformed or ownerless
   ACL, a genesis requirement). The same configuration or ACL state produces the
@@ -51,6 +54,13 @@ is read as permanent — the safe default for an authorization decision.
 - A **retriable** authorization race or transport-level disconnect can recover
   on a transport that supports resetting its connection. If restoration fails
   and the transport cannot reset, the client terminates with the original error.
+  A retriable denial of a session that authenticates through `connection.auth`,
+  such as a router's while its toolshed is down, instead holds that session
+  alone (`SpaceSession.held`): it keeps its commits and waiters and retries its
+  reopen on the same connection with the reconnect backoff, while the
+  connection's other sessions keep running. A retried reopen that fails for a
+  reason only a new connection heals restarts the connection, after a backoff
+  that grows until no session is held.
 - A **server that cannot take declared holdings** (no `sessionHoldings` in its
   hello) terminates a session whose consumer installed a holdings provider, the
   same per-session way: the declaration is what makes skipping the older

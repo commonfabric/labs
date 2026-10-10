@@ -108,6 +108,7 @@ export type { CfHarnessHostMountConfig, CfHarnessHostMountMode };
 import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
+  DEFAULT_MAX_MODEL_TURNS,
   type HarnessPromptLoopResult,
 } from "./prompt-loop.ts";
 import { ORIENTATION_GUIDANCE } from "./orientation.ts";
@@ -181,7 +182,6 @@ import {
   harnessResumeRefusal,
 } from "./control-errors.ts";
 
-const DEFAULT_MAX_MODEL_TURNS = 8;
 const DEFAULT_ARTIFACT_DIRNAME = ".cf-harness-artifacts";
 const CLI_OUTPUT_MODES = ["operator", "batch"] as const;
 const CLI_STRING_FLAGS = [
@@ -687,7 +687,7 @@ Options:
   --no-pattern-index-publish    Read the pattern index without contributing to it: a
                                 pattern the model authors and runs is not published back
   --host-mount <spec>           Extra host bind mount (repeatable: name=<id>,source=<host>,target=<sandbox>,mode=readonly|writable)
-  --max-model-turns <n>         Maximum model turns before aborting
+  --max-model-turns <n>         Maximum model turns before aborting (default 32)
   --print-transcript            Print the final transcript JSON after the response
   --describe-capabilities       Print machine-readable capability JSON and exit
   --help                        Show this help text

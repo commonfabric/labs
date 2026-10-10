@@ -3192,13 +3192,17 @@ a handler-body `const` from a plain call gets no cause
 referenced binding:
 
 ```ts
-// Shown inside a pattern body.
+// Shown at module scope.
 // (test: "re-roots reactive identifier members in pattern results")
-const foo = Writable.of(1, /* schema */).for("foo", true);
-return {
+import type { Cell } from "@commonfabric/runner";
+
+function emittedResult(value: Cell<number>) {
+  const foo = value.for("foo", true);
+  return {
     foo: foo.for(["__patternResult", "foo"], true),
     explicit: foo.for(["__patternResult", "explicit"], true),
-};
+  };
+}
 ```
 
 Pattern-factory identifiers are exempt (`isPatternFactoryHelperExpression`),

@@ -137,7 +137,7 @@ Deno.test("parseCfHarnessCliArgs resolves defaults from cwd and positional promp
   assertEquals(parsed.skillNames, []);
   assertEquals(parsed.skillCatalogEnabled, true);
   assertEquals(parsed.artifactRoot, "/tmp/project/.cf-harness-artifacts");
-  assertEquals(parsed.maxModelTurns, 8);
+  assertEquals(parsed.maxModelTurns, 32);
   assertEquals(parsed.printTranscript, false);
   assertEquals(parsed.imageAttachments, []);
 });

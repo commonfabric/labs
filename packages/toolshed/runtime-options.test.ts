@@ -1,4 +1,5 @@
 import { assertEquals, assertStrictEquals } from "@std/assert";
+import { spy } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import type { Runtime, RuntimeOptions } from "@commonfabric/runner";
@@ -30,6 +31,7 @@ Deno.test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env r
     {
       MEMORY_URL: "http://memory.test:8000/",
       API_URL: "http://api.test:9000/",
+      API_INTERNAL_URL: undefined,
     },
     storageManager,
     (name) => name === "EXPERIMENTAL_MODERN_CELL_REP" ? "true" : undefined,
@@ -54,6 +56,54 @@ Deno.test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env r
   assertEquals(options.cfcEnforcementMode, "enforce-strict");
 });
 
+Deno.test("toolshedRuntimeOptions sends self-addressed requests to API_INTERNAL_URL and changes no URL", async () => {
+  // A co-hosted toolshed's own requests take the internal origin (OW55) by
+  // way of the runtime's fetch, and only by way of it: the storage base
+  // stays MEMORY_URL and the pattern base stays the public API_URL, so what
+  // the runtime records and compares is unchanged. Unset, the runtime keeps
+  // the platform fetch, so a deployment without the setting is unchanged.
+
+  const storageManager = {
+    sentinel: true,
+  } as unknown as RuntimeOptions["storageManager"];
+  const base = {
+    MEMORY_URL: "http://memory.test:8000/",
+    API_URL: "https://api.test/",
+  };
+
+  const internal = toolshedRuntimeOptions(
+    { ...base, API_INTERNAL_URL: "http://127.0.0.1:8007" },
+    storageManager,
+    () => undefined,
+  );
+  assertEquals(internal.apiUrl.href, "http://memory.test:8000/");
+  assertEquals(internal.patternEnvironment?.apiUrl.href, "https://api.test/");
+  const sent: string[] = [];
+  const platform = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    sent.push(new Request(input).url);
+    return Promise.resolve(new Response("ok"));
+  }) as typeof fetch;
+  try {
+    await internal.fetch!("https://api.test/api/patterns/x.tsx");
+    await internal.fetch!("https://elsewhere.test/y");
+  } finally {
+    globalThis.fetch = platform;
+  }
+  assertEquals(sent, [
+    "http://127.0.0.1:8007/api/patterns/x.tsx",
+    "https://elsewhere.test/y",
+  ]);
+
+  const unset = toolshedRuntimeOptions(
+    { ...base, API_INTERNAL_URL: undefined },
+    storageManager,
+    () => undefined,
+  );
+  assertEquals(unset.fetch, undefined);
+  assertEquals(unset.patternEnvironment?.apiUrl.href, "https://api.test/");
+});
+
 Deno.test("createToolshedRuntime attaches the OTel bridge only when enabled", async () => {
   // The runtime→OTel bridge attach rides Runtime construction (CT plan: the
   // bridge is a second consumer of the RuntimeTelemetry bus). Off by default;
@@ -65,6 +115,7 @@ Deno.test("createToolshedRuntime attaches the OTel bridge only when enabled", as
   const config = {
     MEMORY_URL: "http://memory.test:8000/",
     API_URL: "http://api.test:9000/",
+    API_INTERNAL_URL: undefined,
     OTEL_SERVICE_NAME: "toolshed-test",
     ENV: "test",
   };
@@ -130,6 +181,7 @@ Deno.test("createToolshedRuntime publishes the posture it resolved", async () =>
       {
         MEMORY_URL: "http://memory.test:8000/",
         API_URL: "http://api.test:9000/",
+        API_INTERNAL_URL: undefined,
         OTEL_ENABLED: false,
         OTEL_SERVICE_NAME: "toolshed-test",
         ENV: "test",
@@ -158,6 +210,53 @@ Deno.test("createToolshedRuntime publishes the posture it resolved", async () =>
     assertEquals(
       posture?.serverExecution,
       SERVER_EXECUTION_DEFAULT_ENABLED,
+    );
+  } finally {
+    await runtime?.dispose();
+    await storageManager.close();
+    publishExperimentalPosture(null);
+    publishCfcPosture(null);
+  }
+});
+
+Deno.test("createToolshedRuntime declares dedicated connections for its own storage manager", async () => {
+  // Under routed Mode A MEMORY_URL routes by the space in the address, so the
+  // toolshed's own storage manager dials dedicated connections whatever the
+  // deployment's flag says (runtime-options.ts), while the posture it
+  // publishes still carries the flag for the clients that open Memory on the
+  // router. The manager keeps the choice private, so observe what the
+  // construction path declares on it.
+
+  const signer = await Identity.fromPassphrase(
+    "runtime-options-own-memory-test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  using declared = spy(storageManager, "setSharedMemoryConnection");
+  publishExperimentalPosture(null);
+  let runtime: Runtime | undefined;
+  try {
+    runtime = createToolshedRuntime(
+      {
+        MEMORY_URL: "http://memory.test:8000/",
+        API_URL: "http://api.test:9000/",
+        API_INTERNAL_URL: undefined,
+        OTEL_ENABLED: false,
+        OTEL_SERVICE_NAME: "toolshed-test",
+        ENV: "test",
+      },
+      storageManager,
+      (name) =>
+        name === "EXPERIMENTAL_SHARED_MEMORY_CONNECTION" ? "true" : undefined,
+    );
+    // The Runtime resolved the deployment's flag and `/api/meta` publishes it
+    // unchanged.
+    assertEquals(runtime.experimental.sharedMemoryConnection, true);
+    assertEquals(experimentalPosture()?.sharedMemoryConnection, true);
+    // The Runtime declared that flag on the manager; the toolshed then
+    // declared dedicated connections for its own sessions, before any opened.
+    assertEquals(
+      declared.calls.map((call) => call.args[0]),
+      [true, false],
     );
   } finally {
     await runtime?.dispose();
