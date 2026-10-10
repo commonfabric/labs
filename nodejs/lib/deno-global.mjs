@@ -7,6 +7,7 @@ import * as http from "node:http";
 import { Readable, Writable } from "node:stream";
 import * as nodeTest from "node:test";
 import { fileURLToPath } from "node:url";
+import * as util from "node:util";
 import { Deno as shim } from "@deno/shim-deno";
 
 // ---------------------------------------------------------------------------
@@ -333,6 +334,30 @@ function refTimer(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Deno.customInspect: an object's `[Symbol.for("Deno.customInspect")]`
+// method is honored by Node's `util.inspect()` (and so `console.log()` and
+// `Deno.inspect()`) through an accessor for Node's own symbol on
+// `Object.prototype`, which yields an adapter wherever Deno's method exists.
+
+const DENO_CUSTOM_INSPECT = Symbol.for("Deno.customInspect");
+
+Object.defineProperty(Object.prototype, util.inspect.custom, {
+  configurable: true,
+  enumerable: false,
+  get() {
+    const denoInspect = this?.[DENO_CUSTOM_INSPECT];
+    if (typeof denoInspect !== "function") return undefined;
+    return function (_depth, options, inspect) {
+      return denoInspect.call(
+        this,
+        (v, o) => inspect(v, o ?? options),
+        options,
+      );
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
 
 /**
  * Wraps a shim function so that a `file:` URL argument becomes a path: Deno's
@@ -348,8 +373,52 @@ function acceptingUrls(fn) {
         args[i] = fileURLToPath(a);
       }
     }
-    return fn.apply(this, args);
+    let result;
+    try {
+      result = fn.apply(this, args);
+    } catch (e) {
+      throw denoError(e);
+    }
+    return result instanceof Promise
+      ? result.catch((e) => {
+        throw denoError(e);
+      })
+      : result;
   };
+}
+
+/** Node error codes and the `Deno.errors` class each corresponds to. */
+const ERROR_CLASSES = {
+  ENOENT: "NotFound",
+  EEXIST: "AlreadyExists",
+  EACCES: "PermissionDenied",
+  EPERM: "PermissionDenied",
+  ECONNREFUSED: "ConnectionRefused",
+  ECONNRESET: "ConnectionReset",
+  ECONNABORTED: "ConnectionAborted",
+  EADDRINUSE: "AddrInUse",
+  EADDRNOTAVAIL: "AddrNotAvailable",
+  EPIPE: "BrokenPipe",
+  ETIMEDOUT: "TimedOut",
+  EBUSY: "Busy",
+  EINTR: "Interrupted",
+  ENOTCONN: "NotConnected",
+};
+
+/**
+ * Converts a Node system error to the `Deno.errors` class Deno would throw.
+ * The shim maps only some of its functions' errors (`realPathSync`, for one,
+ * throws Node's own). An error already converted, or with no counterpart,
+ * passes through.
+ */
+function denoError(e) {
+  const name = ERROR_CLASSES[e?.code];
+  const DenoClass = name && shim.errors[name];
+  if (!DenoClass || e instanceof DenoClass) return e;
+  const converted = new DenoClass(e.message, { cause: e });
+  converted.code = e.code;
+  converted.stack = e.stack;
+  return converted;
 }
 
 const Deno = Object.create(null);
