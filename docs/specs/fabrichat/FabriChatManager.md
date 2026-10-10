@@ -45,6 +45,13 @@ accept it on the user's behalf (see [first contact](#first-contact)). `rooms`
 can also hold a second direct room with the same counterpart, after crossing
 creations.
 
+`direct`'s entries, and the entry a `done` outcome in `requests` carries, hold a
+room as `FabriChatRoom.inSpace(…)` returned it at creation, or as `accept` was
+sent it, while `rooms` holds it as its space's root, as that `wish` finds it:
+the two links differ, and resolve to the same room, so a reader compares room
+links by their space, or with `equals()`, which compares what they resolve to,
+and never as the links themselves.
+
 The handlers write the catalog. Creating a room, or accepting one a manager
 created, registers the room's space (`registerSharedSpaceIn()`), forgetting a
 room archives its entry, at the revision the request names, and finding a direct
