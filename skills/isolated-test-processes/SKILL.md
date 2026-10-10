@@ -84,10 +84,10 @@ command's `--lock` flag.
   "Tests that start Deno" in `docs/development/TESTING.md` has the detail.
 - A child that compiles repository files under a configuration of its own — a
   fixture directory with its own `deno.json`, with a repository module given as
-  `--preload` — writes profiles naming emits the repository's configuration
-  cannot find, and the lane's report then loses those files and fails. Give such
-  a child a `DENO_COVERAGE_DIR` inside its fixture, so its profiles leave with
-  the fixture, as `runFixture` in
+  `--preload` — writes profiles whose emitted files the repository's
+  configuration cannot find, so the lane's report loses those files and the lane
+  fails. Give such a child a `DENO_COVERAGE_DIR` inside its fixture, so its
+  profiles leave with the fixture, as `runFixture` in
   `packages/test-support/test/records/preload.test.ts` does.
 
 ## Common Tells
