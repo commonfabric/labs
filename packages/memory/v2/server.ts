@@ -7027,6 +7027,10 @@ export class Server {
         );
       };
       const attribution = createRootAttribution();
+      // The graphs the added roots were walked into, as the walk left them:
+      // a new graph's state, or an extended graph's STAGED state, which is
+      // where the extension's crossings sit until it commits.
+      const touchedGraphs: TrackedGraphState[] = [];
       for (const [branch, query] of groupedQueries(newWatches)) {
         const existing = graphs.get(branch);
         if (existing === undefined) {
@@ -7047,6 +7051,7 @@ export class Server {
           // leave an already-inserted entry over budget.
           this.#enforceEvaluationCacheBudget();
           graphs.set(branch, tracked.state);
+          touchedGraphs.push(tracked.state);
           this.#addMissedToTrackedIds(addedInterests, [tracked.state]);
           for (const [docKey, entity] of tracked.state.entities) {
             recordUpdate(docKey, entity);
@@ -7060,6 +7065,7 @@ export class Server {
 
         const staged = stageTrackedGraphState(engine, existing);
         graphCommits.push(staged.commit);
+        touchedGraphs.push(staged.value);
         const extended = extendTrackedGraph(
           message.space,
           engine,
@@ -7101,11 +7107,6 @@ export class Server {
       };
       // The crossings the added roots' walks found that this session has
       // not been told of; a branch the additions left alone can hold none.
-      const touchedGraphs: TrackedGraphState[] = [];
-      for (const branch of groupedQueries(newWatches).keys()) {
-        const graph = graphs.get(branch);
-        if (graph !== undefined) touchedGraphs.push(graph);
-      }
       const newCrossings = this.#undeliveredCrossings(session, touchedGraphs);
       if (newCrossings.crossings.length > 0) {
         sync.crossings = newCrossings.crossings;

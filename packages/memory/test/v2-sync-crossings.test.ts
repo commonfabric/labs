@@ -124,6 +124,20 @@ describe("sync crossings", () => {
     ]);
   });
 
+  it("carries the crossing an added watch finds while extending an existing graph", async () => {
+    // The first watch gives the session a graph with no crossing; the
+    // second extends that graph, and its response carries what the
+    // extension's walk found rather than leaving it to a later frame.
+    await reader.watchAddSync([followingWatch("of:local-top")]);
+    const { sync } = await reader.watchAddSync([
+      followingWatch("of:crossing-top"),
+    ]);
+    expect(sync.upserts.map((upsert) => upsert.id)).toEqual([
+      "of:crossing-top",
+    ]);
+    expect(sync.crossings).toEqual([farLeaf]);
+  });
+
   it("tells a session of each crossing once", async () => {
     await reader.watchAddSync([followingWatch("of:crossing-top")]);
     const { sync } = await reader.watchAddSync([
