@@ -362,7 +362,10 @@ export class CFSlider extends BaseElement {
     this.removeEventListener("keydown", this._handleKeyDown);
 
     // Remove document listeners if dragging; a removed slider commits
-    // nothing, as a removed native input fires no change.
+    // nothing, as a removed native input fires no change, and the moves
+    // still queued go with it, as on a new binding.
+    this._binding++;
+    this._queue = undefined;
     this._drag = undefined;
     if (this._isDragging) {
       this._stopDragging();

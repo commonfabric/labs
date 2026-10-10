@@ -412,6 +412,26 @@ describe("CFSlider bound to a cell", () => {
     ]);
   });
 
+  it("drops the moves still queued when the slider is removed", async () => {
+    const value = createMockCellHandle<number>();
+    const answer = holdReads(value);
+    const element = sliderWith(value);
+    const changes = announcements(element, "cf-change");
+    press(element, "ArrowRight");
+    element._beginDrag();
+    element._moveTo(70, "drag");
+
+    element.disconnectedCallback();
+    element._commitDrag();
+    answer({ value: 40 });
+    await settle();
+
+    expect(written(value)).not.toContain(70);
+    expect(changes.map((a) => a.detail)).not.toContainEqual(
+      expect.objectContaining({ value: 70 }),
+    );
+  });
+
   it("takes a key pressed mid-drag into the drag", async () => {
     const value = createMockCellHandle(30);
     const element = sliderWith(value);
