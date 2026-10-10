@@ -112,8 +112,10 @@ function shellQuote(s) {
 function denoTask(args) {
   let i = 0;
   let cwd = process.cwd();
+  let quiet = false;
   for (; i < args.length && args[i].startsWith("-"); i++) {
-    if (args[i] === "--cwd") cwd = path.resolve(args[++i]);
+    if (args[i] === "-q" || args[i] === "--quiet") quiet = true;
+    else if (args[i] === "--cwd") cwd = path.resolve(args[++i]);
     else if (args[i].startsWith("--cwd=")) cwd = path.resolve(args[i].slice(6));
   }
   const name = args[i];
@@ -121,6 +123,8 @@ function denoTask(args) {
   const task = findTask(cwd, name);
   if (task === null) fail(`no task named "${name}"`);
   const extra = args.slice(i + 1).map(shellQuote).join(" ");
+  // Deno announces the task on stderr, as `Task <name> <command> <args>`.
+  if (!quiet) process.stderr.write(`Task ${name} ${task.command} ${extra}\n`);
   runAndExit("/bin/sh", ["-c", `${task.command} ${extra}`], {
     cwd: task.dir,
     env: {
