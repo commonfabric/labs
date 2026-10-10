@@ -104,6 +104,14 @@ export function demandTopicBoard(
 }
 
 /**
+ * Each board's durable result schema, read once. The schema does not change
+ * while a board is seeded, and the stored metadata it is read from is not
+ * always at hand: under server execution a frame can leave the replica
+ * between the result document and the schema document it names.
+ */
+const durableSchemas = new WeakMap<PieceController, JSONSchema>();
+
+/**
  * The board's `index` under its durable result schema: one bounded row per
  * topic, whose address is the topic's own. The schema has to be applied at the
  * result root, where it describes the value, for `key()` to select the row
@@ -111,9 +119,13 @@ export function demandTopicBoard(
  */
 function topicBoardIndex(board: PieceController): Cell<unknown> {
   const result = board.pieces().getResult(board.getCell());
-  const schema = result.getMetaRaw("schema") as JSONSchema | undefined;
+  let schema = durableSchemas.get(board);
   if (schema === undefined) {
-    throw new Error("Topic board result has no durable schema.");
+    schema = result.getMetaRaw("schema") as JSONSchema | undefined;
+    if (schema === undefined) {
+      throw new Error("Topic board result has no durable schema.");
+    }
+    durableSchemas.set(board, schema);
   }
   return result.asSchema(schema).key("index");
 }
