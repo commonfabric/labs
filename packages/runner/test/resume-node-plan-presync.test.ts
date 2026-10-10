@@ -3,7 +3,11 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import {
+  getLoggerCountsBreakdown,
+  getTimingStatsBreakdown,
+  resetAllTimingStats,
+} from "@commonfabric/utils/logger";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,
@@ -259,6 +263,30 @@ class DenyingSpaceSessionFactory implements SessionFactory {
     return { client, session };
   }
 }
+
+// Four lifts over one argument: three read fields of the document the
+// argument links to, one reads through a link in that document into a
+// document in another space.
+const ONE_CROSSING_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "type Leaf = { name?: string };",
+      "type Mid = { next?: Leaf };",
+      "type Top = { next?: Mid; a?: string; b?: string; c?: string };",
+      "export default pattern<{ def: Top }, {",
+      "  label: string; a: string; b: string; c: string;",
+      "}>(({ def }) => ({",
+      "  label: computed(() => `n:${def.next?.next?.name ?? 'none'}`),",
+      "  a: computed(() => `a:${def.a ?? ''}`),",
+      "  b: computed(() => `b:${def.b ?? ''}`),",
+      "  c: computed(() => `c:${def.c ?? ''}`),",
+      "}));",
+    ].join("\n"),
+  }],
+};
 
 describe("resume node plan pre-sync", () => {
   let server: MemoryV2Server.Server;
@@ -752,6 +780,51 @@ describe("resume node plan pre-sync", () => {
       }
     }
     expect(commitConflictCount()).toBe(before);
+  });
+
+  it("reads again only the plans whose reads left a load pending", async () => {
+    const txP = rt1.edit();
+    const leafDoc = rt1.getCell<{ name?: string }>(
+      spaceP,
+      "one crossing leaf",
+      undefined,
+      txP,
+    );
+    leafDoc.withTx(txP).set({ name: "Ada" });
+    rt1.prepareTxForCommit(txP);
+    expect((await txP.commit().settled).error).toBeUndefined();
+    const tx1 = rt1.edit();
+    const midDoc = rt1.getCell<{ next?: unknown }>(
+      space,
+      "one crossing mid",
+      undefined,
+      tx1,
+    );
+    midDoc.withTx(tx1).set({ next: leafDoc });
+    const top = rt1.getCell<
+      { next?: unknown; a?: string; b?: string; c?: string }
+    >(space, "one crossing top", undefined, tx1);
+    top.withTx(tx1).set({ next: midDoc, a: "1", b: "2", c: "3" });
+    rt1.prepareTxForCommit(tx1);
+    expect((await tx1.commit().settled).error).toBeUndefined();
+
+    resetAllTimingStats();
+    const resumed = await createAndResume(
+      ONE_CROSSING_PROGRAM,
+      { def: top },
+      "one crossing parent",
+    );
+    // The first round reads every plan; the one plan whose read dead-ended
+    // on the far document is read once more after that load lands, and
+    // the three whose reads completed are not.
+    const stats = getTimingStatsBreakdown() as Record<
+      string,
+      Record<string, { count: number }>
+    >;
+    expect(stats.runner?.["start/resumeCrossSpaceRead"]?.count).toBe(5);
+    await rt2.idle();
+    expect(resumed.key("label").get()).toBe("n:Ada");
+    expect(resumed.key("a").get()).toBe("a:1");
   });
 
   it("ends the cross-space pass when the far document never arrives", async () => {
