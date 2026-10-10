@@ -387,9 +387,28 @@ function acceptingUrls(fn) {
   };
 }
 
+// `Deno.errors` classes Deno 2 has and the shim lacks.
+for (
+  const name of [
+    "FilesystemLoop",
+    "IsADirectory",
+    "NetworkUnreachable",
+    "NotADirectory",
+    "NotCapable",
+  ]
+) {
+  shim.errors[name] ??= class extends Error {
+    name = name;
+  };
+}
+
 /** Node error codes and the `Deno.errors` class each corresponds to. */
 const ERROR_CLASSES = {
   ENOENT: "NotFound",
+  ENOTDIR: "NotADirectory",
+  EISDIR: "IsADirectory",
+  ELOOP: "FilesystemLoop",
+  ENETUNREACH: "NetworkUnreachable",
   EEXIST: "AlreadyExists",
   EACCES: "PermissionDenied",
   EPERM: "PermissionDenied",
