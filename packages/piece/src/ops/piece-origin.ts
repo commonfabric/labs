@@ -261,7 +261,11 @@ export async function resolvePieceOriginSource(
           `the cross-space host ${ref.host} is not an accepted route for ${sourceSpace}`,
         );
       }
-      if (!runtime.registerSpaceHost(sourceSpace, explicitRoute.toString())) {
+      const registration = await runtime.resolveSpaceHost(
+        sourceSpace,
+        explicitRoute.toString(),
+      );
+      if (!registration.accepted) {
         throw new PieceOriginError(
           `the host ${ref.host} is not available for ${sourceSpace}`,
         );

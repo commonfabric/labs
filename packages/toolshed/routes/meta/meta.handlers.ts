@@ -1,5 +1,6 @@
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
+import env from "@/env.ts";
 import { resolveGitSha, shellServerExecutionDefine } from "@/lib/build-info.ts";
 import { cfcPosture } from "@/lib/cfc-posture.ts";
 import { experimentalPosture } from "@/lib/experimental-posture.ts";
@@ -38,6 +39,14 @@ export const MetaResponseSchema = z.object({
   // An omitted flag means this server said nothing about it, and `null` means
   // it has no Runtime yet; a client keeps its built-in default for either.
   experimental: z.record(z.string(), z.boolean()).nullable(),
+  // Where this deployment's clients open Memory, when that is not the host
+  // they reached this document on: the origin of a memory router in front of
+  // the toolsheds (`MEMORY_PUBLIC_URL`). A deployed client reads it beside the
+  // posture (`settingsForDeployedClient`) and opens Memory there. The shell
+  // reads the same value from the page a compiled toolshed serves it, and
+  // from here when the page states none or another host served it. `null`
+  // leaves Memory on the API host.
+  memoryUrl: z.string().nullable(),
   // The CFC posture this server's Runtime resolved — every enforcement dial
   // with what its rung decides on, the policy-snapshot digest, and EVERY
   // known sink with its ceiling or the reason it releases ungated — so a
@@ -84,6 +93,7 @@ export const index: AppRouteHandler<IndexRoute> = (c) => {
     gitSha: GIT_SHA,
     shellServerExecutionDefine,
     experimental: experimentalPosture(),
+    memoryUrl: env.MEMORY_PUBLIC_URL ?? null,
     cfc: cfcPosture(),
   };
   return c.json(response, HttpStatusCodes.OK);

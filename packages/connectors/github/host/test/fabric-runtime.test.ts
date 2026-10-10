@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { openGithubFabricRuntime } from "../src/fabric-runtime.ts";
 
 describe("openGithubFabricRuntime", () => {
@@ -46,8 +50,17 @@ describe("openGithubFabricRuntime", () => {
   });
 
   it("disposes a runtime whose health check fails", async () => {
-    globalThis.fetch = () =>
-      Promise.resolve(new Response(null, { status: 503 }));
+    // A deployment without a meta route, which says so with a 404, and whose
+    // health check fails.
+    globalThis.fetch = (input) =>
+      Promise.resolve(
+        new Response(null, {
+          status: new URL(input instanceof Request ? input.url : String(input))
+              .pathname === "/api/meta"
+            ? 404
+            : 503,
+        }),
+      );
 
     await expect(openGithubFabricRuntime({
       apiUrl: "https://fabric.example.test",
@@ -105,11 +118,12 @@ describe("openGithubFabricRuntime", () => {
   it("honors CF_ADOPT_SERVER_FLAGS=false without losing the request wiring", async () => {
     // The opt-out keeps a host on its own posture when a deployment
     // publishes something it cannot run. Both arms in one test, because
-    // each is the other's control: without the opt-out the meta document
-    // is requested (so the quiet arm below is the opt-out working, not
-    // the adoption missing), and with it the request must not happen at
-    // all (so the env reader is genuinely wired through — a host reading
-    // nothing would fetch in both arms).
+    // each is the other's control: without the opt-out the published flag
+    // reaches the runtime (so the quiet arm below is the opt-out working,
+    // not the adoption missing), and with it the runtime keeps its default
+    // (so the env reader is genuinely wired through). The meta document is
+    // read in both arms, since it also names where Memory opens.
+    const published = !SERVER_EXECUTION_DEFAULT_ENABLED;
     const requestPaths: string[] = [];
     globalThis.fetch = (input) => {
       const url = new URL(
@@ -119,13 +133,21 @@ describe("openGithubFabricRuntime", () => {
       if (url.pathname === "/api/meta") {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ did: "did:key:z", experimental: {} }),
+            JSON.stringify({
+              did: "did:key:z",
+              experimental: { serverExecution: published },
+            }),
             { headers: { "content-type": "application/json" } },
           ),
         );
       }
       return Promise.resolve(new Response(null, { status: 503 }));
     };
+    const built: Runtime[] = [];
+    using _health = stub(Runtime.prototype, "healthCheck", function () {
+      built.push(this);
+      return Promise.resolve(false);
+    });
     const open = () =>
       expect(openGithubFabricRuntime({
         apiUrl: "https://fabric.example.test",
@@ -136,8 +158,8 @@ describe("openGithubFabricRuntime", () => {
       })).rejects.toThrow("could not connect to https://fabric.example.test");
 
     await open();
-    expect(requestPaths).toContain("/api/meta");
-
+    expect(requestPaths).toEqual(["/api/meta"]);
+    expect(built.at(-1)?.experimental.serverExecution).toBe(published);
     requestPaths.length = 0;
     const previous = Deno.env.get("CF_ADOPT_SERVER_FLAGS");
     Deno.env.set("CF_ADOPT_SERVER_FLAGS", "false");
@@ -147,9 +169,43 @@ describe("openGithubFabricRuntime", () => {
       if (previous === undefined) Deno.env.delete("CF_ADOPT_SERVER_FLAGS");
       else Deno.env.set("CF_ADOPT_SERVER_FLAGS", previous);
     }
-    expect(requestPaths).not.toContain("/api/meta");
-    // The health check still ran: the quiet arm skipped the posture
-    // request specifically, not the startup around it.
-    expect(requestPaths.length).toBeGreaterThan(0);
+    expect(requestPaths).toEqual(["/api/meta"]);
+    expect(built.at(-1)?.experimental.serverExecution).toBe(
+      SERVER_EXECUTION_DEFAULT_ENABLED,
+    );
+  });
+
+  it("opens Memory on the memory URL the deployment publishes", async () => {
+    globalThis.fetch = (input) =>
+      Promise.resolve(
+        new URL(input instanceof Request ? input.url : String(input))
+            .pathname === "/api/meta"
+          ? Response.json({ memoryUrl: "https://router.example.test" })
+          : new Response(null, { status: 503 }),
+      );
+    const memoryHosts: string[] = [];
+    using _open = stub(StorageManager, "open", (options) => {
+      memoryHosts.push(options.memoryHost.href);
+      return StorageManager.emulate({ as: options.as });
+    });
+    const runtimeMemoryUrls: (string | undefined)[] = [];
+    using _health = stub(Runtime.prototype, "healthCheck", function () {
+      runtimeMemoryUrls.push(this.memoryUrl?.href);
+      return Promise.resolve(false);
+    });
+
+    await expect(openGithubFabricRuntime({
+      apiUrl: "https://fabric.example.test",
+      identityPath,
+      space: "github-space",
+      githubHost: "github.com",
+      githubAccount: "acme",
+    })).rejects.toThrow(
+      "could not connect to https://fabric.example.test Memory opens on " +
+        '"https://router.example.test/"',
+    );
+    expect(memoryHosts).toEqual(["https://router.example.test/"]);
+    // The runtime holds it too, so that no host hint moves Memory off it.
+    expect(runtimeMemoryUrls).toEqual(["https://router.example.test/"]);
   });
 });

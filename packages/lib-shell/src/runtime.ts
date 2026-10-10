@@ -100,8 +100,15 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
   apiUrl: URL;
 
   /**
+   * Optional default storage host, forwarded to the worker: Memory opens here
+   * for any space `spaceHostMap` does not list. Everything else stays on
+   * `apiUrl`. Absent, Memory opens on `apiUrl`.
+   */
+  memoryUrl?: URL;
+
+  /**
    * Optional map from space DIDs to HTTP or HTTPS origins, forwarded to the
-   * worker. Spaces absent from the map resolve to `apiUrl`, the default host.
+   * worker. Spaces absent from the map resolve to the default host.
    */
   spaceHostMap?: Record<string, string>;
 
@@ -299,6 +306,7 @@ export async function resolveWorkerUrl(
 export function createRuntimeClientOptions({
   session,
   apiUrl,
+  memoryUrl,
   spaceHostMap,
   experimental,
   cfcEnforcementMode = "enforce-strict",
@@ -330,6 +338,7 @@ export function createRuntimeClientOptions({
 }: {
   session: Session;
   apiUrl: URL;
+  memoryUrl?: URL;
   spaceHostMap?: Record<string, string>;
   experimental?: ExperimentalRuntimeFlags;
   cfcEnforcementMode?: RuntimeCfcEnforcementMode;
@@ -353,6 +362,7 @@ export function createRuntimeClientOptions({
 
   return {
     apiUrl,
+    memoryUrl,
     spaceHostMap,
     identity: session.as,
     spaceDid: session.space,
@@ -926,6 +936,7 @@ export class RuntimeInternals extends EventTarget {
   static async create({
     identity,
     apiUrl,
+    memoryUrl,
     spaceHostMap,
     experimental,
     cfcEnforcementMode,
@@ -971,6 +982,7 @@ export class RuntimeInternals extends EventTarget {
     const clientOptions = createRuntimeClientOptions({
       session,
       apiUrl,
+      memoryUrl,
       spaceHostMap,
       experimental,
       cfcEnforcementMode,

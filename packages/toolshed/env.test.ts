@@ -9,7 +9,7 @@
  * `packages/runner/test/runtime-presets.test.ts`.
  */
 
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { EnvSchema } from "@/env.ts";
 
 Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
@@ -85,4 +85,151 @@ Deno.test("INGEST_SELF_SERVE_ENABLED is off unless explicitly enabled", () => {
 
   assertEquals(flag("true"), true);
   assertEquals(flag("1"), true);
+});
+
+Deno.test("MEMORY_PUBLIC_URL is an HTTP or HTTPS origin, or nothing", () => {
+  const parse = (value: string | undefined) =>
+    EnvSchema.safeParse(
+      value === undefined ? {} : { MEMORY_PUBLIC_URL: value },
+    );
+
+  // Unset or empty: clients open Memory on the API host.
+  assertEquals(parse(undefined).data?.MEMORY_PUBLIC_URL, undefined);
+  assertEquals(parse("").data?.MEMORY_PUBLIC_URL, undefined);
+  // Published as the bare origin, however it is spelled.
+  assertEquals(
+    parse("https://router.example/").data?.MEMORY_PUBLIC_URL,
+    "https://router.example",
+  );
+  // Anything else fails the parse, which refuses startup, and the reason
+  // calls the value a memory URL.
+  for (
+    const [value, reason] of [
+      ["router.example", "Invalid memory URL"],
+      ["wss://router.example", "Unsupported memory URL protocol"],
+      ["https://router.example/api", "Memory URL must not include a path"],
+      [
+        "https://user@router.example",
+        "Memory URL must not include credentials",
+      ],
+    ]
+  ) {
+    const result = parse(value);
+    assert(!result.success, value);
+    const issue = result.error.issues.find((issue) =>
+      issue.path[0] === "MEMORY_PUBLIC_URL"
+    );
+    assertEquals(
+      issue?.message,
+      `MEMORY_PUBLIC_URL must be an HTTP or HTTPS origin: ${reason}`,
+    );
+  }
+});
+
+Deno.test("MEMORY_PUBLIC_URL warns about plain http off loopback", () => {
+  const warned: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warned.push(args);
+  try {
+    const parse = (value: string) =>
+      EnvSchema.safeParse({ MEMORY_PUBLIC_URL: value }).data
+        ?.MEMORY_PUBLIC_URL;
+    // An https page cannot open a ws:// socket, so this one is published
+    // with a warning.
+    assertEquals(
+      parse("http://router.example:9000"),
+      "http://router.example:9000",
+    );
+    assertEquals(warned.length, 1);
+    assert(String(warned[0][0]).includes("http://router.example:9000"));
+    // Loopback and https are what a local run and a deployment use.
+    parse("http://localhost:9000");
+    parse("http://127.0.0.1:9000");
+    parse("https://router.example");
+    assertEquals(warned.length, 1);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+Deno.test("API_INTERNAL_URL is `self`, an HTTP or HTTPS origin, or nothing, beside API_URL", () => {
+  const parse = (
+    value: string | undefined,
+    rest: Record<string, string> = {},
+  ) =>
+    EnvSchema.safeParse({
+      API_URL: "https://toolshed.example",
+      ...rest,
+      ...(value === undefined ? {} : { API_INTERNAL_URL: value }),
+    });
+
+  // Unset or empty: the runtimes' requests go to API_URL, as before.
+  assertEquals(parse(undefined).data?.API_INTERNAL_URL, undefined);
+  assertEquals(parse("  ").data?.API_INTERNAL_URL, undefined);
+  // An origin is kept as the bare origin, however it is spelled, and API_URL
+  // stays what it was: the public origin is not moved by naming an internal
+  // one.
+  const set = parse("HTTP://localhost:8080/").data;
+  assertEquals(set?.API_INTERNAL_URL, "http://localhost:8080");
+  assertEquals(set?.API_URL, "https://toolshed.example");
+  assertEquals(
+    parse("http://[::1]:8080").data?.API_INTERNAL_URL,
+    "http://[::1]:8080",
+  );
+  // `self` is this process's own listener, HOST and PORT, so one shared
+  // .env names each instance of a multi-instance host to itself. A wildcard
+  // or loopback bind is reached on its family's loopback literal, since
+  // `localhost` may resolve to the other family; a bound address is itself.
+  assertEquals(
+    parse("self", { PORT: "8007" }).data?.API_INTERNAL_URL,
+    "http://127.0.0.1:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "localhost" }).data?.API_INTERNAL_URL,
+    "http://127.0.0.1:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "::" }).data?.API_INTERNAL_URL,
+    "http://[::1]:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "10.0.0.5" }).data?.API_INTERNAL_URL,
+    "http://10.0.0.5:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "fd00::5" }).data?.API_INTERNAL_URL,
+    "http://[fd00::5]:8007",
+  );
+  // Anything else fails the parse, which refuses startup.
+  for (
+    const [value, reason] of [
+      ["not a url", "Invalid API_INTERNAL_URL"],
+      // Scheme-less, which URL parsing reads as the scheme `localhost:`.
+      ["localhost:8080", "Unsupported API_INTERNAL_URL protocol"],
+      ["ws://localhost:8080", "Unsupported API_INTERNAL_URL protocol"],
+      [
+        "http://localhost:8080/api",
+        "API_INTERNAL_URL must not include a path",
+      ],
+      [
+        "http://localhost:8080/?x=1",
+        "API_INTERNAL_URL must not include a query",
+      ],
+      [
+        "http://user@localhost:8080",
+        "API_INTERNAL_URL must not include credentials",
+      ],
+      ["Self", "Invalid API_INTERNAL_URL"],
+    ]
+  ) {
+    const result = parse(value);
+    assert(!result.success, value);
+    const issue = result.error.issues.find((issue) =>
+      issue.path[0] === "API_INTERNAL_URL"
+    );
+    assertEquals(
+      issue?.message,
+      `API_INTERNAL_URL must be "self" or an HTTP or HTTPS origin: ${reason}`,
+    );
+  }
 });

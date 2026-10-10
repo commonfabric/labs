@@ -1,12 +1,16 @@
 /** Disposable real toolshed protocol fixture for the Rust router exercise. */
 
-import { Identity } from "@commonfabric/identity";
+import { Identity, isCanonicalEd25519DID } from "@commonfabric/identity";
 import { toFileUrl } from "@std/path";
 
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import type { MemorySpace } from "../../interface.ts";
 import { verifyConnectionAuthorization } from "../../v2/connection-auth.ts";
 import * as Engine from "../../v2/engine.ts";
+import {
+  parseUnlistedPlacement,
+  unlistedToolshed,
+} from "../../v2/routed-directory.ts";
 import { RoutedEpochStore } from "../../v2/routed-epochs.ts";
 import { RoutedMemoryHost } from "../../v2/routed-host.ts";
 import { listenRoutedMemory } from "../../v2/routed-listener.ts";
@@ -25,11 +29,13 @@ export interface RoutedToolshedFixture {
   router: string;
   space: string;
   principals: string[];
+  /** The deployment's cell representation, which every client shares. */
+  modernCellRep: boolean;
 }
 
 /** Seeds an existing ACL-backed space, then starts the actual private protocol. */
 export async function startRoutedToolshed(config: RoutedToolshedFixture) {
-  setModernCellRepConfig(true);
+  setModernCellRepConfig(config.modernCellRep);
   const identity = await Identity.fromRaw(new Uint8Array(32).fill(config.seed));
   const store = toFileUrl(`${config.store}/`);
   Deno.mkdirSync(`${config.store}/engine-v3`, { recursive: true });
@@ -69,21 +75,36 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
   Engine.close(engine);
   const ownership = (space: string): number | undefined => {
     const directory = JSON.parse(Deno.readTextFileSync(config.directory));
+    const here = directory.toolsheds.findIndex((shed: { did: string }) =>
+      shed.did === identity.did()
+    );
     const entry = directory.spaces[space];
-    return entry !== undefined &&
-        directory.toolsheds[entry.toolshed].did === identity.did()
-      ? entry.epoch
+    if (entry !== undefined) {
+      return entry.toolshed === here ? entry.epoch : undefined;
+    }
+    const rule = parseUnlistedPlacement(
+      directory.unlisted,
+      directory.toolsheds.length,
+    );
+    return rule !== undefined && unlistedToolshed(rule, space) === here
+      ? rule.epoch
       : undefined;
   };
   const server = new Server({
     store,
     acl: { mode: "enforce" },
     requireExplicitAcl: true,
-    ownsSpace: (space) => ownership(space) !== undefined,
+    ownsSpace: (space) =>
+      isCanonicalEd25519DID(space) && ownership(space) !== undefined,
+    createsSpace: (space) =>
+      JSON.parse(Deno.readTextFileSync(config.directory)).spaces[space] ===
+        undefined,
     authorizeSessionOpen: verifySessionOpenAuthorization,
     authorizeConnection: verifyConnectionAuthorization,
     sessionOpenAuth: { audience: identity.did() },
-    subscriptionRefreshDelayMs: "manual",
+    // Subscriptions fan out on the server's default delay, as a deployed
+    // toolshed's do. A pattern's reads wait for that fan-out, and in this
+    // child process nothing would flush a manual one.
   });
   const epochs = new RoutedEpochStore(`${config.store}/router-epochs.jsonl`);
   const host = new RoutedMemoryHost({
@@ -92,6 +113,7 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
     deployment: "local-mode-a",
     epochs,
     ownership,
+    limits: { watchesPerSession: 1024 },
     routers: new Map([[config.router, new Set(["127.0.0.1"])]]),
   });
   const listener = await listenRoutedMemory({
@@ -131,7 +153,12 @@ if (import.meta.main) {
         service.host.revokeRouter(command.revoke);
       }
       if (command.fence === true) service.host.fenceOwnership();
-      console.log(JSON.stringify({ acknowledged: true }));
+      console.log(JSON.stringify({
+        acknowledged: true,
+        ...(command.sessionReports === true
+          ? { sessionReports: service.server.sessionReports() }
+          : {}),
+      }));
     }
   }
   await service.close();

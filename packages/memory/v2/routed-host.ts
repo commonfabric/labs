@@ -14,6 +14,7 @@ import { encodeMemoryBoundary, type ServerMessage } from "../v2.ts";
 import {
   decodeRoutedFrame,
   parseRoutedJson,
+  ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_QUEUE_LIMIT,
   routedFlags,
   routedIdentifier,
@@ -38,25 +39,276 @@ import type { Server } from "./server.ts";
 
 type Backend = ReturnType<Server["connectRouted"]>;
 type Grant = { statement: RoutedStatement; digest: string };
+/** One session's quota use: its watch IDs and views, and its holdings. */
+type Usage = { principal: string; count: number; holdings: number };
+/** Sessions, watches and holdings summed over the sessions of a scope. */
+type Totals = { sessions: number; watches: number; holdings: number };
+const NO_USAGE: Readonly<Totals> = { sessions: 0, watches: 0, holdings: 0 };
 type Context = {
   id: Uint8Array;
+  /** `id` in hex, as the link names it. */
+  idHex: string;
   flags: Uint8Array;
   spaces: Map<string, number>;
-  watches: Map<string, { principal: string; count: number; holdings: number }>;
+  /** Usage by session, and by each open in flight; see `#setUsage`. */
+  usage: Map<string, Usage>;
+  totals: Totals;
   grants: Map<string, Grant>;
   released: Set<string>;
-  accepted: Map<string, { digest: string; exp: number }>;
+  /**
+   * Unexpired statements this context accepted, by principal and challenge.
+   * A released principal's are marked, and cannot admit it again.
+   */
+  accepted: Map<string, Accepted>;
+  /** IDs of the unredeemed tickets issued for it. */
+  tickets: Set<string>;
   backend?: Backend;
   socket?: WebSocket;
   closed: boolean;
 };
+type Accepted = {
+  principal: string;
+  digest: string;
+  exp: number;
+  released: boolean;
+};
+
+/**
+ * Capacity a toolshed admits from routers, from its Mode A policy config.
+ * A context is one client connection's use of this toolshed through one
+ * router; "router" counts everything one router link carries, and
+ * "toolshed" everything this toolshed admits from every router. Watches and
+ * holdings are summed over sessions.
+ */
+export interface RoutedHostLimits {
+  /** Client contexts on one router link; at least the router's workers. */
+  contextsPerLink: number;
+  /**
+   * Private sockets from every router: links, data sockets and handshakes.
+   */
+  sockets: number;
+  /** Tickets issued and neither redeemed nor expired, from every router. */
+  tickets: number;
+  /** Principals authenticated in one context at once, as the router's own. */
+  principalsPerContext: number;
+  /**
+   * Principals one context remembers. Unreleased principals remain for the
+   * context's lifetime; released principals remain until their statements
+   * expire. Creating a space proves its key here, so this also bounds the
+   * creation keys awaiting release or expiry on one connection.
+   */
+  principalHistoryPerContext: number;
+  /**
+   * Unexpired client proofs one context holds: at least one for each
+   * remembered principal and a renewal for each active one.
+   */
+  proofsPerContext: number;
+  /**
+   * Requests one context has unanswered on its data socket: at least the
+   * router's per-connection requests in flight, which may all go to one
+   * toolshed.
+   */
+  requestsPerContext: number;
+  sessionsPerContext: number;
+  sessionsPerRouter: number;
+  sessionsPerToolshed: number;
+  sessionsPerPrincipal: number;
+  watchesPerContext: number;
+  watchesPerRouter: number;
+  watchesPerToolshed: number;
+  watchesPerPrincipal: number;
+  /**
+   * Watch IDs one session may hold; its views, at most 64, are apart. A
+   * watch mutation that would leave a session with more is refused for
+   * good. A client restores a session by sending its whole watch set in one
+   * `session.watch.set`, so this is sized together with `frameSlots`: that
+   * many watches must fit one frame. Must equal the router's
+   * `max_watches_per_session` (a check for the infra preflight, as for
+   * `frameSlots`).
+   */
+  watchesPerSession: number;
+  holdingsPerContext: number;
+  holdingsPerRouter: number;
+  holdingsPerToolshed: number;
+  holdingsPerPrincipal: number;
+  /**
+   * JSON values in one frame a data socket receives, counted as the router
+   * counts them: one per value, keys free. A frame over it closes the
+   * socket. Must equal the router's `max_frame_slots` (a check for the infra
+   * preflight, beside the limits it compares already), and a client's
+   * `ROUTED_FRAME_SLOTS` must not exceed it. Sized by the deployment's
+   * largest sync frame against the router worker's memory, not by this
+   * toolshed.
+   */
+  frameSlots: number;
+}
+
+/**
+ * Sized for the proof of concept and a second router. Per-context limits
+ * equal the router's per-connection ones, so a toolshed never refuses what
+ * its router admitted to one connection. The router README's capacity
+ * section has the load model, which inputs are measured and which assumed,
+ * and how to size for other loads and router counts.
+ */
+export const DEFAULT_ROUTED_HOST_LIMITS: Readonly<RoutedHostLimits> = {
+  contextsPerLink: 512,
+  sockets: 2048,
+  tickets: 2048,
+  principalsPerContext: 16,
+  principalHistoryPerContext: 128,
+  proofsPerContext: 160,
+  requestsPerContext: 1024,
+  sessionsPerContext: 1200,
+  sessionsPerRouter: 8192,
+  sessionsPerToolshed: 16384,
+  sessionsPerPrincipal: 2400,
+  watchesPerContext: 40960,
+  watchesPerRouter: 262144,
+  watchesPerToolshed: 524288,
+  watchesPerPrincipal: 81920,
+  // Size this count against the workload's complete restore frame, including
+  // selectors, views and holdings; watch count alone does not bound its size.
+  watchesPerSession: 2048,
+  holdingsPerContext: 327680,
+  holdingsPerRouter: 2097152,
+  holdingsPerToolshed: 4194304,
+  holdingsPerPrincipal: 655360,
+  frameSlots: ROUTED_DEFAULT_SLOT_LIMIT,
+};
+
+/** Views one session may hold; bounds one frame, so it stays fixed. */
+const VIEWS_PER_SESSION = 64;
+
+/**
+ * `overrides` over the defaults. Capacity is the deployment's to size, so
+ * only consistency is checked: each limit is a positive integer, the
+ * per-context, per-router and per-toolshed limits nest, one session's
+ * watch IDs fit its context's, a context's proofs cover its principal
+ * history and a renewal for each active principal, and a link's contexts
+ * can each hold a ticket. {@link routedHostLimitsFor}
+ * checks the limits that depend on how many routers a toolshed admits.
+ *
+ * @throws If a limit is unknown, not a positive safe integer, or out of order.
+ */
+export function routedHostLimits(
+  overrides: Partial<RoutedHostLimits> = {},
+): RoutedHostLimits {
+  for (const key of Object.keys(overrides)) {
+    requireLimit(Object.hasOwn(DEFAULT_ROUTED_HOST_LIMITS, key), key);
+  }
+  const limits = { ...DEFAULT_ROUTED_HOST_LIMITS, ...overrides };
+  for (const [key, value] of Object.entries(limits)) {
+    requireLimit(Number.isSafeInteger(value) && value > 0, key);
+  }
+  for (const kind of ["sessions", "watches", "holdings"] as const) {
+    const context = limits[`${kind}PerContext`],
+      router = limits[`${kind}PerRouter`],
+      toolshed = limits[`${kind}PerToolshed`],
+      principal = limits[`${kind}PerPrincipal`];
+    requireLimit(context <= router, `${kind}PerContext`);
+    requireLimit(router <= toolshed, `${kind}PerRouter`);
+    requireLimit(principal <= toolshed, `${kind}PerPrincipal`);
+  }
+  requireLimit(
+    limits.watchesPerSession <= limits.watchesPerContext,
+    "watchesPerSession",
+  );
+  requireLimit(
+    limits.principalsPerContext <= limits.principalHistoryPerContext,
+    "principalsPerContext",
+  );
+  requireLimit(
+    limits.principalHistoryPerContext + limits.principalsPerContext <=
+      limits.proofsPerContext,
+    "proofsPerContext",
+  );
+  requireLimit(limits.contextsPerLink <= limits.tickets, "tickets");
+  return limits;
+}
+
+/**
+ * {@link routedHostLimits} for a toolshed that admits `routers` routers:
+ * every router's contexts at once fit the sockets, with each link's own, and
+ * the tickets.
+ *
+ * @throws As {@link routedHostLimits}, or if the limits do not fit `routers`.
+ */
+export function routedHostLimitsFor(
+  overrides: Partial<RoutedHostLimits>,
+  routers: number,
+): RoutedHostLimits {
+  const limits = routedHostLimits(overrides);
+  requireLimit(Number.isSafeInteger(routers) && routers > 0, "routers");
+  requireLimit(
+    limits.sockets >= routers * (limits.contextsPerLink + 1),
+    "sockets",
+  );
+  requireLimit(limits.tickets >= routers * limits.contextsPerLink, "tickets");
+  return limits;
+}
+
+/** Throws a configuration error naming the limit that failed. */
+function requireLimit(ok: boolean, field: string): void {
+  if (!ok) throw new Error(`invalid routed limit: ${field}`);
+}
+
+/** Why the toolshed answered one request with a denial. */
+type RefusalReason =
+  | "session-limit"
+  | "watch-limit"
+  | "holdings-limit"
+  | "frame-limit"
+  | "session-not-held"
+  | "principal-expired"
+  | "principal-not-held";
+/** Refusals that pass on their own, so the client holds the session. */
+const RETRIABLE_REFUSALS: ReadonlySet<RefusalReason> = new Set([
+  "session-limit",
+  "watch-limit",
+  "holdings-limit",
+  "principal-expired",
+]);
+
+/**
+ * A request refused on its own: answered, not a closed socket. A capacity
+ * refusal, or one for a grant that expired in flight, is marked retriable;
+ * one past a bound on what one session holds (`frame-limit`), or for a
+ * session or principal the context no longer holds, is final.
+ */
+class RoutedRequestRefusal extends Error {
+  constructor(readonly reason: RefusalReason) {
+    super(`Routed memory ${reason}`);
+  }
+  get retriable(): boolean {
+    return RETRIABLE_REFUSALS.has(this.reason);
+  }
+}
+
+/** Why the toolshed refused a proof, which closes its context. */
+type ProofRefusalReason =
+  | "proof-limit"
+  | "principal-limit"
+  | "principal-history-limit";
+class RoutedProofRefusal extends Error {
+  constructor(readonly reason: ProofRefusalReason) {
+    super(`Routed memory ${reason}`);
+  }
+}
+
 type Link = {
   router: string;
   epoch: Uint8Array;
+  /** `epoch` in hex, as the ledger names it. */
+  epochHex: string;
   peer: string;
   socket: WebSocket;
   contexts: Map<string, Context>;
-  closedContexts: Set<string>;
+  /**
+   * The live context holding each accepted statement, keyed as `accepted`
+   * is: a statement serves one live context at a time. A context's entries
+   * leave with it, and none outlive the link or a restart.
+   */
+  claims: Map<string, Context>;
   sequence: number;
   closed: boolean;
 };
@@ -65,7 +317,6 @@ type Ticket = {
   context: Context;
   link: Link;
   expires: number;
-  redeemed: boolean;
 };
 
 /** Private listener policy, independent of toolshed HTTP or service grants. */
@@ -79,21 +330,37 @@ export interface RoutedHostOptions {
   ownership: (space: string) => number | undefined;
   /** Unix seconds; tests can drive the same verifier deterministically. */
   now?: () => number;
-  /** Durable tombstones, consumed before link admission and retained across restart. */
+  /** Durable link epochs and router revocations, kept across restart. */
   epochs: RoutedEpochStore;
+  /** Capacity, over {@link DEFAULT_ROUTED_HOST_LIMITS}. */
+  limits?: Partial<RoutedHostLimits>;
 }
 
 /** Toolshed authority for authenticated router links and their Mode A tickets. */
 export class RoutedMemoryHost {
   #options: RoutedHostOptions;
+  #limits: RoutedHostLimits;
   #links = new Map<string, Link>();
+  /**
+   * Tickets issued and not yet redeemed, oldest first; each expires 15 s
+   * after issue. A ticket is removed when a data socket redeems it, when
+   * its context closes, and by `#pruneTickets` once it has expired, so a
+   * lookup still checks `expires`.
+   */
   #tickets = new Map<string, Ticket>();
   #sockets = new Set<WebSocket>();
 
   #closed = false;
   #revoked = new Set<string>();
+  /** Session usage per router, per principal and in all; see `#setUsage`. */
+  #routerTotals = new Map<string, Totals>();
+  #principalTotals = new Map<string, Totals>();
+  #toolshedTotals: Totals = { ...NO_USAGE };
 
-  /** Requires enforced ACLs, explicit ACL documents and an engine-turn fence. */
+  /**
+   * Requires enforced ACLs, explicit ACL documents (a space with no history
+   * admits only its own DID, to write its genesis) and an engine-turn fence.
+   */
   constructor(options: RoutedHostOptions) {
     requireRouted(
       options.server.options.acl?.mode === "enforce" &&
@@ -113,6 +380,10 @@ export class RoutedMemoryHost {
           !options.server.options.acl?.delegatingDids?.includes(router),
       );
     }
+    this.#limits = routedHostLimitsFor(
+      options.limits ?? {},
+      options.routers.size,
+    );
     this.#options = options;
   }
 
@@ -152,7 +423,7 @@ export class RoutedMemoryHost {
 
   /** Whether a network peer may enter the bounded private handshake. */
   acceptsPeer(peer: string): boolean {
-    return !this.#closed && this.#sockets.size < 512 &&
+    return !this.#closed && this.#sockets.size < this.#limits.sockets &&
       [...this.#options.routers].some(([router, peers]) =>
         !this.#revoked.has(router) && !this.#options.epochs.revoked(router) &&
         peers.has(peer)
@@ -177,15 +448,22 @@ export class RoutedMemoryHost {
     else this.#attachData(socket, peer);
   }
 
-  #audit(link: Link, context: Context, verdict: string, space?: string): void {
+  #audit(
+    link: Link,
+    context: Context,
+    verdict: string,
+    space?: string,
+    reason?: string,
+  ): void {
     console.info(
       JSON.stringify({
         event: "routed-memory-verdict",
         router: link.router,
-        context: routedHex(context.id),
+        context: context.idHex,
         toolshed: this.#options.identity.did(),
         space,
         verdict,
+        reason,
       }),
     );
   }
@@ -194,45 +472,33 @@ export class RoutedMemoryHost {
     return this.#options.now?.() ?? Math.floor(Date.now() / 1000);
   }
 
+  /**
+   * Drops tickets that expired unredeemed. A closed context's tickets leave
+   * with it, and a closed link closes its contexts.
+   */
   #pruneTickets(): void {
     const now = this.#now();
     for (const [id, ticket] of this.#tickets) {
-      if (
-        (!ticket.redeemed && ticket.expires <= now) || ticket.link.closed ||
-        ticket.context.closed
-      ) this.#tickets.delete(id);
+      if (ticket.expires > now) break;
+      this.#tickets.delete(id);
+      ticket.context.tickets.delete(id);
     }
   }
 
+  /** Closes one context and drops the statements it accepted. */
   #closeContext(link: Link, context: Context): void {
     if (context.closed) return;
     context.closed = true;
     this.#audit(link, context, "context-closed");
-    link.closedContexts.add(routedHex(context.id));
-    try {
-      for (const principal of context.grants.keys()) {
-        this.#options.epochs.release(
-          link.router,
-          this.#options.deployment,
-          routedHex(link.epoch),
-          routedHex(context.id),
-          principal,
-          this.#now(),
-        );
-      }
-    } catch {
-      this.#closed = true;
-      for (const other of [...this.#links.values()]) this.#closeLink(other);
-    }
     context.backend?.close();
     if (context.socket !== undefined) safeClose(context.socket);
-    context.watches.clear();
+    this.#clearUsage(link, context);
     context.grants.clear();
+    for (const key of context.accepted.keys()) link.claims.delete(key);
     context.accepted.clear();
-    link.contexts.delete(routedHex(context.id));
-    for (const [id, ticket] of this.#tickets) {
-      if (ticket.context === context) this.#tickets.delete(id);
-    }
+    link.contexts.delete(context.idHex);
+    for (const id of context.tickets) this.#tickets.delete(id);
+    context.tickets.clear();
   }
 
   #closeLink(link: Link): void {
@@ -240,6 +506,15 @@ export class RoutedMemoryHost {
     link.closed = true;
     for (const context of [...link.contexts.values()]) {
       this.#closeContext(link, context);
+    }
+    try {
+      this.#options.epochs.retire(
+        link.router,
+        link.epochHex,
+        this.#now(),
+      );
+    } catch {
+      // The ledger latches unhealthy, so later admissions fail closed.
     }
     safeClose(link.socket);
     if (this.#links.get(link.router) === link) this.#links.delete(link.router);
@@ -310,10 +585,11 @@ export class RoutedMemoryHost {
           link = {
             router,
             epoch,
+            epochHex: routedHex(epoch),
             peer,
             socket,
             contexts: new Map(),
-            closedContexts: new Set(),
+            claims: new Map(),
             sequence: 0,
             closed: false,
           };
@@ -373,13 +649,10 @@ export class RoutedMemoryHost {
     if (op === 1) {
       const r = new RoutedReader(payload, "mat1");
       const id = r.fixed(16);
-      requireRouted(
-        !link.closedContexts.has(routedHex(id)) &&
-          link.closedContexts.size < 4096,
-      );
       const flags = r.blob();
       const parsed = parseRoutedJson(
         new TextDecoder("utf-8", { fatal: true }).decode(flags),
+        ROUTED_DEFAULT_SLOT_LIMIT,
       );
       requireRouted(equalRoutedBytes(routedFlags(parsed), flags));
       const space = r.text();
@@ -391,28 +664,32 @@ export class RoutedMemoryHost {
       );
       let context = link.contexts.get(routedHex(id));
       if (context === undefined) {
-        requireRouted(link.contexts.size < 256);
+        requireRouted(link.contexts.size < this.#limits.contextsPerLink);
         context = {
           id,
+          idHex: routedHex(id),
           flags,
           spaces: new Map(),
-          watches: new Map(),
+          usage: new Map(),
+          totals: { ...NO_USAGE },
           grants: new Map(),
           released: new Set(),
           accepted: new Map(),
+          tickets: new Set(),
           closed: false,
         };
         link.contexts.set(routedHex(id), context);
       }
       requireRouted(
         !context.closed && equalRoutedBytes(context.flags, flags) &&
-          (context.spaces.has(space) || context.spaces.size < 64),
+          (context.spaces.has(space) ||
+            context.spaces.size < this.#limits.sessionsPerContext),
       );
       requireRouted(
         !context.spaces.has(space) || context.spaces.get(space) === epoch,
       );
       context.spaces.set(space, epoch);
-      requireRouted(this.#tickets.size < 2048);
+      requireRouted(this.#tickets.size < this.#limits.tickets);
       const ticketBytes = crypto.getRandomValues(new Uint8Array(32));
       const ticketId = routedHex(ticketBytes);
       this.#tickets.set(ticketId, {
@@ -420,23 +697,20 @@ export class RoutedMemoryHost {
         context,
         link,
         expires: this.#now() + 15,
-        redeemed: false,
       });
+      context.tickets.add(ticketId);
       return ticketBytes;
     }
     if (op === 6) {
       const r = new RoutedReader(payload, "mvp1");
       const id = r.fixed(16);
-      requireRouted(
-        !link.closedContexts.has(routedHex(id)) &&
-          link.closedContexts.size < 4096,
-      );
       const flags = r.blob();
       requireRouted(
         equalRoutedBytes(
           routedFlags(
             parseRoutedJson(
               new TextDecoder("utf-8", { fatal: true }).decode(flags),
+              ROUTED_DEFAULT_SLOT_LIMIT,
             ),
           ),
           flags,
@@ -446,15 +720,18 @@ export class RoutedMemoryHost {
       r.end();
       let context = link.contexts.get(routedHex(id));
       if (context === undefined) {
-        requireRouted(link.contexts.size < 256);
+        requireRouted(link.contexts.size < this.#limits.contextsPerLink);
         context = {
           id,
+          idHex: routedHex(id),
           flags,
           spaces: new Map(),
-          watches: new Map(),
+          usage: new Map(),
+          totals: { ...NO_USAGE },
           grants: new Map(),
           released: new Set(),
           accepted: new Map(),
+          tickets: new Set(),
           closed: false,
         };
         link.contexts.set(routedHex(id), context);
@@ -468,10 +745,10 @@ export class RoutedMemoryHost {
       const ticket = this.#tickets.get(routedHex(r.fixed(32)));
       const proof = readRoutedProof(r.blob());
       r.end();
+      // A redeemed ticket is no longer in `#tickets`, so it admits no proof.
       requireRouted(
         ticket !== undefined && ticket.link === link &&
-          !ticket.context.closed &&
-          !ticket.redeemed && ticket.expires > this.#now(),
+          !ticket.context.closed && ticket.expires > this.#now(),
       );
       const context = ticket.context;
       await this.#admitProof(link, context, proof);
@@ -487,18 +764,8 @@ export class RoutedMemoryHost {
       if (!context.grants.has(principal) || context.released.has(principal)) {
         return new Uint8Array();
       }
-      try {
-        this.#options.epochs.release(
-          link.router,
-          this.#options.deployment,
-          routedHex(link.epoch),
-          routedHex(context.id),
-          principal,
-          this.#now(),
-        );
-      } catch (error) {
-        this.close();
-        throw error;
+      for (const accepted of context.accepted.values()) {
+        if (accepted.principal === principal) accepted.released = true;
       }
       context.released.add(principal);
       context.backend?.releasePrincipal(principal);
@@ -510,7 +777,8 @@ export class RoutedMemoryHost {
       requireRouted(
         isCanonicalEd25519DID(space) && epoch > 0 &&
           this.#options.ownership(space) === epoch &&
-          (context.spaces.has(space) || context.spaces.size < 64),
+          (context.spaces.has(space) ||
+            context.spaces.size < this.#limits.sessionsPerContext),
       );
       requireRouted(
         !context.spaces.has(space) || context.spaces.get(space) === epoch,
@@ -535,85 +803,153 @@ export class RoutedMemoryHost {
       });
       requireRouted(
         !link.closed && !context.closed && statement.exp > this.#now() &&
-          !this.#options.routers.has(statement.principal),
+          !this.#options.routers.has(statement.principal) &&
+          this.#options.epochs.healthy,
       );
+      const now = this.#now();
       const digest = routedHex(sha256(proof.statement));
       const key = `${statement.principal}:${routedHex(statement.challenge)}`;
+      // A statement serves one live context; once that context closes,
+      // another may present it until it expires.
+      const owner = link.claims.get(key);
+      requireRouted(owner === undefined || owner === context);
       const prior = context.accepted.get(key);
-      requireRouted(prior === undefined || prior.digest === digest);
+      requireRouted(
+        prior === undefined || prior.digest === digest && !prior.released,
+      );
       for (const [key, accepted] of context.accepted) {
-        if (accepted.exp <= this.#now()) context.accepted.delete(key);
+        if (accepted.exp > now) continue;
+        context.accepted.delete(key);
+        link.claims.delete(key);
       }
-      requireRouted(
-        (prior !== undefined || context.accepted.size < 128) &&
-          ((context.grants.get(statement.principal)?.statement.exp ?? 0) >
-                  this.#now() && !context.released.has(statement.principal) ||
-            [...context.grants].filter(([principal, grant]) =>
-                grant.statement.exp > this.#now() &&
-                !context.released.has(principal)
-              ).length < 8),
-      );
-      requireRouted(
-        context.grants.has(statement.principal) || context.grants.size < 64,
-      );
-      this.#options.epochs.claim({
-        router: link.router,
-        deployment: this.#options.deployment,
+      // A released principal whose statement has expired admits nothing
+      // more, so the history forgets it, as the router's does; creating a
+      // space releases its key once its genesis commits.
+      for (const [principal, grant] of context.grants) {
+        if (grant.statement.exp <= now && context.released.has(principal)) {
+          context.grants.delete(principal);
+          context.released.delete(principal);
+        }
+      }
+      const held = (principal: string) =>
+        (context.grants.get(principal)?.statement.exp ?? 0) > now &&
+        !context.released.has(principal);
+      if (
+        prior === undefined &&
+        context.accepted.size >= this.#limits.proofsPerContext
+      ) throw new RoutedProofRefusal("proof-limit");
+      if (
+        !held(statement.principal) &&
+        [...context.grants.keys()].filter(held).length >=
+          this.#limits.principalsPerContext
+      ) throw new RoutedProofRefusal("principal-limit");
+      if (
+        !context.grants.has(statement.principal) &&
+        context.grants.size >= this.#limits.principalHistoryPerContext
+      ) throw new RoutedProofRefusal("principal-history-limit");
+      context.accepted.set(key, {
         principal: statement.principal,
-        challenge: routedHex(statement.challenge),
         digest,
-        epoch: routedHex(link.epoch),
-        context: routedHex(context.id),
         exp: statement.exp,
-      }, this.#now());
-      context.accepted.set(key, { digest, exp: statement.exp });
+        released: false,
+      });
+      link.claims.set(key, context);
       context.grants.set(statement.principal, { statement, digest });
       this.#audit(link, context, "proof-accepted");
       context.released.delete(statement.principal);
       context.backend?.admitRoutedPrincipal(statement.principal, statement.exp);
     } catch (error) {
-      this.#audit(link, context, "proof-denied");
+      this.#audit(
+        link,
+        context,
+        "proof-denied",
+        undefined,
+        error instanceof RoutedProofRefusal ? error.reason : undefined,
+      );
       this.#closeContext(link, context);
       if (!this.#options.epochs.healthy) this.close();
       throw error;
     }
   }
 
-  #quota(link: Link, context: Context): void {
-    const all = [...this.#links.values()].flatMap((l) =>
-      [...l.contexts.values()].map((c) => ({
-        router: l.router,
-        context: c,
-        entries: [...c.watches.values()],
-      }))
-    );
-    const total = (
-      entries: { count: number; holdings: number }[],
-      field: "count" | "holdings",
-    ) => entries.reduce((sum, item) => sum + item[field], 0);
-    const entries = all.flatMap((item) => item.entries);
-    const router = all.filter((item) => item.router === link.router).flatMap((
-      item,
-    ) => item.entries);
-    const local = [...context.watches.values()];
-    requireRouted(
-      local.length <= 64 && router.length <= 1024 && entries.length <= 4096,
-    );
-    requireRouted(
-      total(local, "count") <= 1024 && total(router, "count") <= 4096 &&
-        total(entries, "count") <= 8192,
-    );
-    requireRouted(
-      total(local, "holdings") <= 8192 && total(router, "holdings") <= 32768 &&
-        total(entries, "holdings") <= 65536,
-    );
-    for (const principal of new Set(local.map((item) => item.principal))) {
-      const owned = entries.filter((item) => item.principal === principal);
-      requireRouted(
-        owned.length <= 128 && total(owned, "count") <= 2048 &&
-          total(owned, "holdings") <= 16384,
-      );
+  /**
+   * Sets one session's usage in its context, or removes it when `usage` is
+   * undefined, and moves every total it counts toward by the difference, so
+   * a capacity check reads totals instead of summing sessions.
+   */
+  #setUsage(
+    link: Link,
+    context: Context,
+    key: string,
+    usage: Usage | undefined,
+  ): void {
+    const prior = context.usage.get(key);
+    if (prior !== undefined) this.#count(link.router, context, prior, -1);
+    if (usage === undefined) context.usage.delete(key);
+    else {
+      context.usage.set(key, usage);
+      this.#count(link.router, context, usage, 1);
     }
+  }
+
+  #count(router: string, context: Context, usage: Usage, sign: 1 | -1) {
+    const add = (totals: Totals) => {
+      totals.sessions += sign;
+      totals.watches += sign * usage.count;
+      totals.holdings += sign * usage.holdings;
+    };
+    add(context.totals);
+    add(this.#toolshedTotals);
+    for (
+      const [totals, key] of [
+        [this.#routerTotals, router],
+        [this.#principalTotals, usage.principal],
+      ] as const
+    ) {
+      let scope = totals.get(key);
+      if (scope === undefined) totals.set(key, scope = { ...NO_USAGE });
+      add(scope);
+      if (scope.sessions === 0) totals.delete(key);
+    }
+  }
+
+  #clearUsage(link: Link, context: Context): void {
+    for (const key of [...context.usage.keys()]) {
+      this.#setUsage(link, context, key, undefined);
+    }
+  }
+
+  /**
+   * The capacity limit that `principal`'s change to `context` passed, if
+   * any: sessions, watches or holdings, per context, router link, toolshed
+   * or principal. Only that principal's totals moved, so only its own are
+   * read.
+   */
+  #overCapacity(
+    link: Link,
+    context: Context,
+    principal: string,
+  ): RefusalReason | undefined {
+    const l = this.#limits;
+    const scopes: [Totals, "Context" | "Router" | "Toolshed" | "Principal"][] =
+      [
+        [context.totals, "Context"],
+        [this.#routerTotals.get(link.router) ?? NO_USAGE, "Router"],
+        [this.#toolshedTotals, "Toolshed"],
+        [this.#principalTotals.get(principal) ?? NO_USAGE, "Principal"],
+      ];
+    for (
+      const [kind, reason] of [
+        ["sessions", "session-limit"],
+        ["watches", "watch-limit"],
+        ["holdings", "holdings-limit"],
+      ] as const
+    ) {
+      for (const [totals, scope] of scopes) {
+        if (totals[kind] > l[`${kind}Per${scope}`]) return reason;
+      }
+    }
+    return undefined;
   }
 
   #attachData(socket: WebSocket, peer: string): void {
@@ -699,11 +1035,19 @@ export class RoutedMemoryHost {
         mutations.delete(message.requestId);
         if (mutation !== undefined) {
           if (!sessions.has(mutation.key)) {
-            ticket!.context.watches.delete(mutation.key);
+            this.#setUsage(
+              ticket!.link,
+              ticket!.context,
+              mutation.key,
+              undefined,
+            );
           } else if (message.error !== undefined) {
-            if (mutation.prior === undefined) {
-              ticket!.context.watches.delete(mutation.key);
-            } else ticket!.context.watches.set(mutation.key, mutation.prior);
+            this.#setUsage(
+              ticket!.link,
+              ticket!.context,
+              mutation.key,
+              mutation.prior,
+            );
           } else {
             mutation.session.watches = mutation.watches;
             mutation.session.holdings = mutation.holdings;
@@ -714,7 +1058,7 @@ export class RoutedMemoryHost {
         closes.delete(message.requestId);
         if (closed !== undefined && message.error === undefined) {
           sessions.delete(closed);
-          ticket!.context.watches.delete(closed);
+          this.#setUsage(ticket!.link, ticket!.context, closed, undefined);
         }
         const open = opens.get(message.requestId);
         if (open !== undefined) {
@@ -727,16 +1071,14 @@ export class RoutedMemoryHost {
         }
         opens.delete(message.requestId);
         if (open !== undefined) {
-          if (
-            message.error !== undefined &&
-            open.priorReservation !== undefined &&
-            sessions.has(open.reservation)
-          ) {
-            ticket!.context.watches.set(
-              open.reservation,
-              open.priorReservation,
-            );
-          } else ticket!.context.watches.delete(open.reservation);
+          this.#setUsage(
+            ticket!.link,
+            ticket!.context,
+            open.reservation,
+            message.error !== undefined && sessions.has(open.reservation)
+              ? open.priorReservation
+              : undefined,
+          );
         }
         if (
           open !== undefined && isPlainObject(message.ok) &&
@@ -750,7 +1092,7 @@ export class RoutedMemoryHost {
             holdings: open.holdings,
             views: prior?.views ?? 0,
           });
-          ticket!.context.watches.set(key, {
+          this.#setUsage(ticket!.link, ticket!.context, key, {
             principal: open.principal,
             count: (prior?.watches.size ?? 0) + (prior?.views ?? 0),
             holdings: open.holdings,
@@ -760,7 +1102,7 @@ export class RoutedMemoryHost {
       if (message.type === "session/revoked") {
         const key = `${message.space} ${message.sessionId}`;
         sessions.delete(key);
-        ticket!.context.watches.delete(key);
+        this.#setUsage(ticket!.link, ticket!.context, key, undefined);
       }
       sendBounded(socket, encodeMemoryBoundary(message));
     };
@@ -782,11 +1124,18 @@ export class RoutedMemoryHost {
       const frameBytes = typeof frame === "string"
         ? new TextEncoder().encode(frame).length
         : frame.length;
+      // The request this frame carries, once its identifier is checked, so a
+      // refusal at a capacity limit can answer it.
+      let refusedRequest: string | undefined;
       chain = chain.then(async () => {
         requireRouted(
           !failed && socket.readyState === WebSocket.OPEN && !this.#closed,
         );
-        const parsed = decodeRoutedFrame(frame, compression);
+        const parsed = decodeRoutedFrame(
+          frame,
+          compression,
+          this.#limits.frameSlots,
+        );
         const body = parsed.body;
         if (ticket === undefined) {
           requireRouted(
@@ -801,7 +1150,7 @@ export class RoutedMemoryHost {
           // Check the live ticket before signature verification, then recheck
           // after its await and atomically consume it against this socket nonce.
           requireRouted(
-            selected !== undefined && !selected.redeemed &&
+            selected !== undefined &&
               selected.expires > this.#now() && !selected.link.closed &&
               !selected.context.closed && selected.link.peer === peer,
           );
@@ -835,20 +1184,26 @@ export class RoutedMemoryHost {
           binding.end();
           // Signature verification yields. Recheck the exact live ticket and
           // atomically consume it only after binding it to this socket's nonce.
+          // Another socket may have redeemed it meanwhile, which removed it.
           requireRouted(
             !failed && socket.readyState === WebSocket.OPEN &&
-              !selected.redeemed && selected.expires > this.#now() &&
+              this.#tickets.get(id) === selected &&
+              selected.expires > this.#now() &&
               this.#now() < issued + 15 && !selected.link.closed &&
               !selected.context.closed &&
               !this.#revoked.has(selected.link.router),
           );
-          selected.redeemed = true;
+          // A redeemed ticket is dropped here: a context redeems one for
+          // every data socket it opens, so tickets kept longer would count
+          // against `limits.tickets`.
+          this.#tickets.delete(id);
+          selected.context.tickets.delete(id);
           ticket = selected;
           clearTimeout(deadline);
           const context = selected.context;
           const prior = context.socket;
           context.backend?.close();
-          context.watches.clear();
+          this.#clearUsage(selected.link, context);
           context.socket = socket;
           backend = this.#options.server.connectRouted(
             send,
@@ -914,20 +1269,30 @@ export class RoutedMemoryHost {
               this.#options.ownership(parsed.space),
         );
         routedIdentifier(body.requestId);
-        requireRouted(!pending.has(body.requestId) && pending.size < 256);
+        requireRouted(
+          !pending.has(body.requestId) &&
+            pending.size < this.#limits.requestsPerContext,
+        );
         pending.add(body.requestId);
+        refusedRequest = body.requestId;
         if (body.type === "session.open") {
-          requireRouted(
-            typeof body.principal === "string" &&
-              ticket.context.grants.has(body.principal) &&
-              !ticket.context.released.has(body.principal) &&
-              ticket.context.grants.get(body.principal)!.statement.exp >
-                this.#now(),
-          );
+          requireRouted(typeof body.principal === "string");
+          // The router forwards an open only for a principal it holds, so
+          // one this context no longer holds crossed a release or an expiry
+          // on the way. An expired grant passes once the router has the
+          // client sign again; a released or unknown principal does not.
+          const grant = ticket.context.grants.get(body.principal);
+          if (
+            grant === undefined || ticket.context.released.has(body.principal)
+          ) throw new RoutedRequestRefusal("principal-not-held");
+          if (grant.statement.exp <= this.#now()) {
+            throw new RoutedRequestRefusal("principal-expired");
+          }
           const session = routedObject(body.session);
-          requireRouted(
-            session.actingAs === undefined && sessions.size + opens.size < 64,
-          );
+          requireRouted(session.actingAs === undefined);
+          if (sessions.size + opens.size >= this.#limits.sessionsPerContext) {
+            throw new RoutedRequestRefusal("session-limit");
+          }
           const priorKey = typeof session.sessionId === "string"
             ? `${parsed.space} ${session.sessionId}`
             : undefined;
@@ -939,28 +1304,41 @@ export class RoutedMemoryHost {
           );
           const holdings = body.holdings === undefined
             ? prior?.holdings ?? 0
-            : (body.holdings as unknown[]).length;
+            : routedListLength(body.holdings);
           const reservation = prior === undefined
             ? `pending ${body.requestId}`
             : priorKey!;
-          const priorReservation = ticket.context.watches.get(reservation);
-          ticket.context.watches.set(reservation, {
-            principal: body.principal,
-            count: (prior?.watches.size ?? 0) + (prior?.views ?? 0),
-            holdings,
-          });
-          this.#quota(ticket.link, ticket.context);
+          // Registered first, so a refusal's answer undoes the reservation.
           opens.set(body.requestId, {
             space: parsed.space,
             principal: body.principal,
             holdings,
             reservation,
-            priorReservation,
+            priorReservation: ticket.context.usage.get(reservation),
           });
+          this.#setUsage(ticket.link, ticket.context, reservation, {
+            principal: body.principal,
+            count: (prior?.watches.size ?? 0) + (prior?.views ?? 0),
+            holdings,
+          });
+          const over = this.#overCapacity(
+            ticket.link,
+            ticket.context,
+            body.principal,
+          );
+          if (over !== undefined) throw new RoutedRequestRefusal(over);
         } else {
           routedIdentifier(body.sessionId);
           const session = sessions.get(`${parsed.space} ${body.sessionId}`);
-          requireRouted(session?.space === parsed.space);
+          // A session revoked after the router forwarded this request, as
+          // the creating session is once its genesis ACL commits: the
+          // revocation notice is already on its way to the router, which
+          // then denies the session's requests itself, so this one is
+          // denied as the router would deny it.
+          if (session === undefined) {
+            throw new RoutedRequestRefusal("session-not-held");
+          }
+          requireRouted(session.space === parsed.space);
           if (
             body.type === "session.watch.set" ||
             body.type === "session.watch.add"
@@ -975,56 +1353,52 @@ export class RoutedMemoryHost {
               watches.add(id);
             }
             const key = `${parsed.space} ${body.sessionId}`;
-            const prior = ticket.context.watches.get(key)?.count ?? 0;
-            const usage = [...this.#links.values()].flatMap((link) =>
-              [...link.contexts.values()].map((context) => ({
-                router: link.router,
-                context,
-                entries: [...context.watches.values()],
-              }))
-            );
-            const contextTotal =
-              [...ticket.context.watches.values()].reduce((sum, entry) =>
-                sum + entry.count, 0) - prior + watches.size;
-            const routerTotal = usage.filter((entry) =>
-              entry.router === ticket!.link.router
-            ).reduce((sum, entry) =>
-              sum + entry.entries.reduce((total, item) =>
-                total + item.count, 0), 0) - prior + watches.size;
-            const principalTotal = usage.reduce((sum, entry) =>
-              sum + entry.entries.filter((item) =>
-                item.principal === session.principal
-              ).reduce((total, item) =>
-                total + item.count, 0), 0) - prior + watches.size;
-            const total = usage.reduce((sum, entry) =>
-              sum + entry.entries.reduce((count, item) =>
-                count + item.count, 0), 0) - prior + watches.size;
-            requireRouted(
-              watches.size <= 1024 && contextTotal <= 1024 &&
-                routerTotal <= 4096 && principalTotal <= 2048 && total <= 8192,
-            );
-            const holdings = body.holdings === undefined
-              ? session.holdings
-              : (body.holdings as unknown[]).length;
-            const views = body.views === undefined
-              ? session.views
-              : (body.views as unknown[]).length;
-            requireRouted(views <= 64);
-            const priorUsage = ticket.context.watches.get(key);
-            ticket.context.watches.set(key, {
-              principal: session.principal,
-              count: watches.size + views,
-              holdings,
-            });
-            this.#quota(ticket.link, ticket.context);
+            // Only a `session.watch.set` replaces a session's holdings and
+            // views. The Memory server reads `watches` alone from an add,
+            // so holdings or views named on one change nothing the session
+            // holds, and counting them would put the session's usage below
+            // what the server keeps for it. On either request they must
+            // still be lists.
+            const named = (field: unknown, held: number): number => {
+              if (field === undefined) return held;
+              const length = routedListLength(field);
+              return body.type === "session.watch.set" ? length : held;
+            };
+            const holdings = named(body.holdings, session.holdings);
+            const views = named(body.views, session.views);
+            // Bounds on what one session holds, refused for good: the watch
+            // IDs by `limits.watchesPerSession`, the views by a fixed 64.
+            // The request is well formed, and for a `session.watch.add`
+            // whether it fits depends on the IDs the session already holds,
+            // so it is answered and the socket stays open, as the router
+            // answers it; a `session.watch.set` that names more IDs than a
+            // session may hold is answered the same way.
+            if (
+              watches.size > this.#limits.watchesPerSession ||
+              views > VIEWS_PER_SESSION
+            ) {
+              throw new RoutedRequestRefusal("frame-limit");
+            }
+            // Registered first, so a refusal's answer undoes the reservation.
             mutations.set(body.requestId, {
               key,
               session,
               watches,
               holdings,
               views,
-              prior: priorUsage,
+              prior: ticket.context.usage.get(key),
             });
+            this.#setUsage(ticket.link, ticket.context, key, {
+              principal: session.principal,
+              count: watches.size + views,
+              holdings,
+            });
+            const over = this.#overCapacity(
+              ticket.link,
+              ticket.context,
+              session.principal,
+            );
+            if (over !== undefined) throw new RoutedRequestRefusal(over);
           }
         }
         // Retain the frame's queue budget until its protected Memory turn ends.
@@ -1036,11 +1410,51 @@ export class RoutedMemoryHost {
           closes.set(body.requestId, key);
         }
         await backend.receive(parsed.payload);
-      }).catch(fail).finally(() => {
+      }).catch((error) => {
+        if (!(error instanceof RoutedRequestRefusal)) return fail();
+        // One refused request is denied; the socket and its other sessions
+        // go on, and the answer undoes any reservation.
+        const requestId = refusedRequest;
+        if (requestId === undefined || ticket === undefined) return fail();
+        this.#audit(
+          ticket.link,
+          ticket.context,
+          "request-refused",
+          undefined,
+          error.reason,
+        );
+        try {
+          send({
+            type: "response",
+            requestId,
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+              ...(error.retriable ? { retriable: true } : {}),
+            },
+          } as ServerMessage);
+        } catch {
+          // The answer would pass the socket's output bound, which has
+          // closed it; the context goes with it, as for any failed send.
+          fail();
+        }
+      }).finally(() => {
         pendingBytes -= frameBytes;
       });
     });
   }
+}
+
+/**
+ * The number of entries in a request's `holdings` or `views`, which must be
+ * a JSON list, as the SDK sends and the router requires; anything else is
+ * malformed. A record cannot be counted by its members instead: the frame
+ * parser admits one under `holdings`, and the Memory server decodes a
+ * record tagged `/quote` into the list it wraps, of any length.
+ */
+function routedListLength(list: unknown): number {
+  requireRouted(Array.isArray(list));
+  return list.length;
 }
 
 function safeClose(socket: WebSocket): void {
