@@ -1771,12 +1771,12 @@ Primary behaviors:
 - reads an element access with a static key in place, wherever it is
   written: `row[key]` on a tracked reactive root lowers to `row.key(...)` in
   the pattern body, in JSX, and in a reactive collection callback alike. One
-  rule decides which keys are static, `isStaticElementKey()` in
-  `src/utils/reactive-keys.ts`, and the data-flow analyzer, the shared
-  expression-site policy, the opaque-root path walk, the pattern-body
-  lowering, and the collection-method receiver lowering all ask it. A key is
-  static when it is a literal; a well-known Common Fabric key, the set
-  `COMMON_FABRIC_KEY_NAMES` in
+  rule decides which keys are static, in `src/utils/reactive-keys.ts`, and
+  the data-flow analyzer, the shared expression-site policy, the opaque-root
+  path walk, the pattern-body lowering, and the collection-method receiver
+  lowering all ask it. A key's type fixes the member it names
+  (`hasStaticKeyType()`) when it is a literal; a well-known Common Fabric
+  key, the set `COMMON_FABRIC_KEY_NAMES` in
   `packages/schema-generator/src/typescript/property-name.ts` defines (as of
   this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`); or an expression whose
   type is a single string or number literal, such as a reference to
@@ -1790,12 +1790,22 @@ Primary behaviors:
   `row.key(getKey())`, the key evaluated where the read is. A destructured
   well-known key is keyed by its string instead:
   `const { [NAME]: n, [VIEWS]: v } = Row(...)` reads `.key("$NAME")` and
-  `.key("$VIEWS")`. The data-flow analyzer adds one condition: a key read
-  from a reactive value is not fixed by its type, so `row[field]`, with
-  `field` a pattern input typed `"rendered"`, is a computation over `row` and
-  `field` and lifts. That condition is the analyzer's alone: a site the shared
-  expression-site lowering does not reach, a plain value in a reactive
-  collection callback among them, keys such a read as written (goldens
+  `.key("$VIEWS")`. A key read from a reactive value is the exception: its
+  type may name one member, but the key is a cell, and written out it would
+  hand `.key()` the cell in place of the key. So a key is static
+  (`isStaticElementKey()`) when its type fixes the member and it is not read
+  from a reactive value. The stages that write a key out, through
+  `getStaticKeySegment()`, and the pattern-body lowering ask that. The
+  data-flow analyzer asks the type question and rules a reactive key out from
+  its own analysis, and the expression-site policy asks the type question
+  alone, since it decides whether the access may become a computation, which
+  such an access may. `row[field]`, with `field` a pattern input typed
+  `"rendered"`, is a computation over `row` and `field`:
+  it lifts where the site can hold a computation (a pattern-body value, JSX,
+  the receiver of a collection method in JSX), and is reported as the
+  dynamic key access of §6.5 where it cannot (the receiver of a collection
+  method in a plain value, `lists[field].map(...)`, and a plain value in a
+  reactive collection callback) (goldens
   `closures/pattern-body-factory-result-key-access`,
   `closures/map-pattern-factory-result-key-access`,
   `closures/map-pattern-factory-result-views-access`,

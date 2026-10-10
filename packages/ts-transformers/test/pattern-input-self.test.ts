@@ -4,8 +4,10 @@ import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
+  callsMatching,
   callsNamed,
   collect,
+  extractedCallbackBody,
   parseModule,
   patternSchemas,
 } from "./transformed-ast.ts";
@@ -379,6 +381,51 @@ describe("pattern-input-self", () => {
           ).toEqual([]);
         });
       }
+
+      it("reads `[NAME]` below a dynamic segment off a captured self read", async () => {
+        // The dynamic index makes the whole read a computation. Its lift takes
+        // `input[SELF].items` as a capture of its own, read off the reactive
+        // input where the lift is applied, so the body indexes a plain list.
+
+        const { diagnostics, output } = await compile(`
+          interface Listed extends Input {
+            index: number;
+          }
+
+          interface Named {
+            [NAME]: string;
+          }
+
+          interface ListedOutput {
+            [UI]: VNode;
+            items: Named[];
+          }
+
+          export default pattern<Listed, ListedOutput>((input) => ({
+            items: [],
+            [UI]: <div>{input[SELF].items[input.index][NAME]}</div>,
+          }));
+        `);
+
+        expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+        const root = parseModule(output);
+        const applied = callsMatching(root, /^__cfLift_/).at(-1);
+        const captures = applied?.arguments[0];
+        const selfCapture =
+          captures !== undefined && ts.isObjectLiteralExpression(captures)
+            ? captures.properties.find((property) =>
+              property.name?.getText(root) === "input_SELF__items"
+            )
+            : undefined;
+        expect(selfCapture?.getText(root)).toBe(
+          "input_SELF__items: input[SELF].items",
+        );
+        // The lift body reads no `SELF`, which a plain `input` does not have.
+        expect(
+          collect(extractedCallbackBody(root, "__cfLift_1"), ts.isIdentifier)
+            .filter((id) => id.text === "SELF"),
+        ).toEqual([]);
+      });
     });
 
     it("reports `pattern-context:self-access` for `[SELF]` read off another pattern's result", async () => {

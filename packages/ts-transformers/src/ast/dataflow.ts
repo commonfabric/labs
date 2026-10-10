@@ -14,7 +14,7 @@ import {
   unwrapTransparentWrapperOnce,
 } from "../utils/expression.ts";
 import { isSafeIdentifierText } from "../utils/identifiers.ts";
-import { isStaticElementKey } from "../utils/reactive-keys.ts";
+import { hasStaticKeyType } from "../utils/reactive-keys.ts";
 import {
   detectCallKind,
   isReactiveValueExpression,
@@ -570,12 +570,12 @@ export function createDataFlowAnalyzer(
 
   // Helper: Check if an element access expression has a static key: a
   // literal, a well-known Common Fabric key (`NAME`), or an expression of a
-  // single literal type (`isStaticElementKey()`). Such an access is a path
+  // single literal type (`hasStaticKeyType()`). Such an access is a path
   // read the pattern body lowers in place, `row[NAME]` as `row.key(...)` and
   // `input[SELF]` as the pattern's own result.
   const isStaticElementAccess = (
     expression: ts.ElementAccessExpression,
-  ): boolean => isStaticElementKey(expression.argumentExpression, checker);
+  ): boolean => hasStaticKeyType(expression.argumentExpression, checker);
 
   const isStructuralOpaqueTargetExpression = (
     expression: ts.Expression,

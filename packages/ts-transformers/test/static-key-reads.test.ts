@@ -71,6 +71,25 @@ async function compile(source: string): Promise<ts.SourceFile> {
 }
 
 /**
+ * Compiles `source` after the shared prelude, returning the type of each
+ * error it reports, in report order, and the parsed output.
+ */
+async function compileWithErrors(
+  source: string,
+): Promise<{ errors: string[]; root: ts.SourceFile }> {
+  const { diagnostics, output } = await validateSource(
+    `${PRELUDE}\n${source}`,
+    { types: COMMONFABRIC_TYPES },
+  );
+  return {
+    errors: diagnostics
+      .filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => diagnostic.type),
+    root: parseModule(output),
+  };
+}
+
+/**
  * The arguments of every `<receiver>.key(...)` call under `root`, each
  * argument as its source text, in source order.
  */
@@ -377,6 +396,82 @@ describe("static-key-reads", () => {
 
       expect(hoistedLifts(root)).toEqual(["__cfLift_1"]);
       expect(keyReads(root, "row")).toEqual([]);
+    });
+  });
+  describe("a key of a literal type read from a reactive value", () => {
+    // The key's type names one member, but the key is a cell, so no site may
+    // write it out as a `.key()` argument. Where the site can hold a
+    // computation the read lifts, and where it cannot it is reported.
+
+    const KEYED = `
+      interface Lists {
+        primary: RowInput[];
+        other: RowInput[];
+      }
+
+      interface Keyed {
+        field: "primary";
+        lists: Lists;
+      }
+    `;
+
+    it("lifts the receiver of a collection method in JSX", async () => {
+      const { errors, root } = await compileWithErrors(`
+        ${KEYED}
+        export default pattern<Keyed>(({ field, lists }) => ({
+          [UI]: <div>{lists[field].map((entry) => <i>{entry.piece}</i>)}</div>,
+        }));
+      `);
+
+      expect(errors).toEqual([]);
+      expect(hoistedLifts(root)).toEqual(["__cfLift_1"]);
+      expect(keyReads(root, "lists")).toEqual([]);
+    });
+
+    it("reports `pattern-context:computation` for the receiver of a collection method in a plain value", async () => {
+      const { errors, root } = await compileWithErrors(`
+        ${KEYED}
+        export default pattern<Keyed>(({ field, lists }) => ({
+          pieces: lists[field].map((entry) => entry.piece),
+        }));
+      `);
+
+      expect(errors).toEqual(["pattern-context:computation"]);
+      expect(keyReads(root, "lists")).toEqual([]);
+    });
+
+    it("reports `pattern-context:computation` for a read in a reactive collection callback", async () => {
+      const { errors, root } = await compileWithErrors(`
+        interface ListInput {
+          mode: "rendered";
+          entries: RowInput[];
+        }
+
+        export default pattern<ListInput>(({ mode, entries }) => ({
+          rows: entries.map((entry) => {
+            const row = Row({ piece: entry.piece });
+            return { rendered: row[mode] };
+          }),
+        }));
+      `);
+
+      expect(errors).toEqual(["pattern-context:computation"]);
+      expect(keyReads(extractedCallbackBody(root, "__cfPattern_1"), "row"))
+        .toEqual([]);
+    });
+
+    it("keys the receiver of a collection method by a `const` key", async () => {
+      const { errors, root } = await compileWithErrors(`
+        ${KEYED}
+        const KEY = "primary";
+
+        export default pattern<Keyed>(({ lists }) => ({
+          pieces: lists[KEY].map((entry) => entry.piece),
+        }));
+      `);
+
+      expect(errors).toEqual([]);
+      expect(keyReads(root, "lists")).toEqual([["KEY"]]);
     });
   });
 });

@@ -406,7 +406,7 @@ function rewriteTrackedOpaquePatternBody(
     // A static key names one fixed member, and the lowering reads it in
     // place, so wrapping `obj[UI]` or `obj["name"]` as a dynamic access would
     // put a reactive wrapper around what is already a reactive read.
-    return !isStaticElementKey(expression.argumentExpression, context.checker);
+    return !isStaticElementKey(expression.argumentExpression, context);
   };
 
   const hasJsxExpressionAncestor = (node: ts.Node): boolean => {

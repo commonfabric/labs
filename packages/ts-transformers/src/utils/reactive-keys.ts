@@ -66,18 +66,20 @@ export function isCommonFabricKeyExpression(
 }
 
 /**
- * Whether the code fixes which member `key`, the key of an element access,
- * names. A literal fixes it, and so do a well-known Common Fabric key (`NAME`)
- * and an expression whose type is a single string or number literal, such as
- * a reference to `const KEY = "k"`. Any other key can name any member, which
- * makes the access dynamic, and so does a missing key, which only source
- * that does not parse has.
+ * Whether the type of `key`, the key of an element access, fixes which member
+ * it names. A literal fixes it, and so do a well-known Common Fabric key
+ * (`NAME`) and an expression whose type is a single string or number literal,
+ * such as a reference to `const KEY = "k"`. Any other key can name any
+ * member, and so does a missing key, which only source that does not parse
+ * has.
  *
- * The type is all this reads. A key of a literal type that is read from a
- * reactive value passes, and a caller that would emit the key has to rule
- * that out itself.
+ * The type is all this reads, so a key of a literal type that is read from a
+ * reactive value passes. That suits a caller deciding whether an access may
+ * become a computation, which such a key's access may, and a caller that
+ * rules the key out from an analysis of its own. A caller deciding whether to
+ * write the key out asks `isStaticElementKey()`.
  */
-export function isStaticElementKey(
+export function hasStaticKeyType(
   key: ts.Expression | undefined,
   checker?: ts.TypeChecker,
 ): boolean {
@@ -85,6 +87,36 @@ export function isStaticElementKey(
     getComputedPropertyKeyInfo(key, checker, {
         commonFabricHelperIdentifier: CF_HELPERS_IDENTIFIER,
       }) !== undefined;
+}
+
+/**
+ * Whether `key`, the key of an element access, is static: its type fixes the
+ * member it names (`hasStaticKeyType()`), and it is not read from a reactive
+ * value. A static key makes the access a path read, lowered in place as a
+ * `.key(...)` argument; any other key makes it dynamic.
+ *
+ * A key of a literal type read from a reactive value, such as a pattern input
+ * typed `"k"`, is the case the second condition is for. Its type names one
+ * member, but the key is a cell, and written out it would hand `.key()` the
+ * cell in place of the key.
+ */
+export function isStaticElementKey(
+  key: ts.Expression | undefined,
+  context: TransformationContext,
+): boolean {
+  if (key === undefined || !hasStaticKeyType(key, context.checker)) {
+    return false;
+  }
+  // A literal and a well-known key are constants, so only a key that is
+  // static by its type alone can be reactive.
+  if (
+    ts.isStringLiteral(key) || ts.isNumericLiteral(key) ||
+    ts.isNoSubstitutionTemplateLiteral(key) ||
+    getCommonFabricKeyName(key, context.checker) !== undefined
+  ) {
+    return true;
+  }
+  return !context.analyzeExpression(key).containsReactive;
 }
 
 /**
@@ -98,7 +130,7 @@ export function getStaticKeySegment(
   key: ts.Expression | undefined,
   context: TransformationContext,
 ): string | ts.Expression | undefined {
-  if (key === undefined) {
+  if (key === undefined || !isStaticElementKey(key, context)) {
     return undefined;
   }
   if (
