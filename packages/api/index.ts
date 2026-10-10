@@ -1344,7 +1344,9 @@ export interface IOpaqueCell<T>
     IDerivable<T>,
     IOpaquable<T> {}
 
-export interface OpaqueCell<T>
+// `out` is the variance the checker measures for this interface, as it is for
+// `Cell`, and is declared for the same reason.
+export interface OpaqueCell<out T>
   extends BrandedCell<T, "opaque">, IOpaqueCell<T> {}
 
 export declare const OpaqueCell: CellTypeConstructor<AsOpaqueCell>;
@@ -1627,11 +1629,14 @@ export type FactoryInput<T> =
  * - UnwrapCell<any> = any
  * - UnwrapCell<unknown> = unknown (preserves unknown)
  */
+// A single conditional whose check type is `T` is a form the checker can relate
+// between two instantiations, and `OpaqueCell<out T>` depends on that: its
+// `key()` returns this type, and the declared variance is validated through
+// it. `any` needs no branch of its own. A conditional type checked on `any`
+// evaluates to the union of its branches, which here is `any`.
 export type UnwrapCell<T> =
-  // Preserve any
-  0 extends (1 & T) ? T
-    // Unwrap AnyBrandedCell
-    : T extends AnyBrandedCell<infer S> ? UnwrapCell<S>
+  // Unwrap AnyBrandedCell
+  T extends AnyBrandedCell<infer S> ? UnwrapCell<S>
     // Otherwise return as-is
     : T;
 
