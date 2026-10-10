@@ -207,6 +207,7 @@ import {
   type URI,
 } from "./storage/interface.ts";
 import {
+  internalVerifierRead,
   isDurableReadTx,
   machineryRead,
   markDurableReadTx,
@@ -10710,7 +10711,8 @@ export class Runner {
    * the attempt's reads, commit preconditions, read scope and local-read
    * basis are exactly what they would have been; an error there is only a
    * diagnostic. Under `enforce` it reads through `tx` as the verifier's own
-   * reads, and a read it cannot make refuses the commit: retryably when the
+   * reads, which the scheduler still sees, and a read it cannot make refuses
+   * the commit: retryably when the
    * input is not available yet, terminally otherwise.
    */
   #checkArgumentInputRequirements(
@@ -10777,7 +10779,10 @@ export class Runner {
         binding,
         base,
         argument.requirements,
-        stableInternalVerifierRead,
+        // Not hidden from scheduling: a refused lift runs again when what
+        // the check read changes, so repairing an argument the body never
+        // reaches still reruns it.
+        internalVerifierRead,
         argument.foreignSchema,
       );
     } catch (error) {

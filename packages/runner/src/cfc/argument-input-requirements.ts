@@ -34,6 +34,7 @@ import { isObjectOrArray, isPlainContainer } from "@commonfabric/utils/types";
 import type { JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
+import { addressKey } from "../link-types.ts";
 import {
   isCellLink,
   isPrimitiveCellLink,
@@ -308,20 +309,20 @@ const reachThroughArgument = (
     // the runtime itself resolves, never reaches a value the code is
     // handed; whatever it would show is not evidence, so it counts as the
     // wiring's rather than as absence.
-    const target = JSON.stringify([
-      link.space,
-      link.id,
-      normalizeCellScope(link.scope),
-      link.path,
-    ]);
+    const target = addressKey({
+      ...link,
+      scope: normalizeCellScope(link.scope),
+    });
     if (
       chain.includes(target) || chain.length >= MAX_PATH_RESOLUTION_LENGTH
     ) {
       inWiring += 1;
       return;
     }
-    // The same target and walk observe the same values: once is enough.
-    const key = JSON.stringify([target, rest]);
+    // The same target, walk and default exposure observe the same values:
+    // once is enough. A walk that could be defaulted is not one that could
+    // not, since only it turns absence into a value of the wiring's.
+    const key = JSON.stringify([target, rest, carriesDefault]);
     if (followed.has(key)) return;
     followed.add(key);
     const root = { ...link, path: [] };

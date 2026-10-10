@@ -284,8 +284,8 @@ keeps a fixed threshold:
     - a stand-in at either argument;
     - a literal in the wiring;
     - a substituted default;
-    - an argument assembled in the wiring;
-    - an argument assembled in a document of references;
+    - (passes, as landed: references are plumbing) an argument assembled in
+      the wiring around references, or in a document of references;
     - a graph built as data that carries a weaker schema;
     - a `Cell`-typed argument;
     - two arguments wired to one document;
