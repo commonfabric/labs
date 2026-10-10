@@ -3257,6 +3257,15 @@ export class CfHarnessPromptLoop {
     };
   }
 
+  /**
+   * Whether the run must still name a piece before it ends: it requires one,
+   * has not browsed, and holds no naming receipt.
+   */
+  #pieceOutputOwed(): boolean {
+    return this.#requirePieceOutput && !this.#browsed &&
+      (this.engine.getRunState().assignedPieces?.length ?? 0) === 0;
+  }
+
   #parentToolAllowance(): HarnessParentToolAllowance {
     return this.#parentToolAllowanceMode;
   }
@@ -3922,7 +3931,8 @@ export class CfHarnessPromptLoop {
     for (const message of transcript) {
       await options.onTranscriptEvent?.({ message, transcript });
     }
-    // A normal final answer or an admitted finish_task ends the model loop.
+    // A normal final answer, an admitted finish_task, or an accepted
+    // submit_result ends the model loop.
     let finalAssistantText: string | undefined;
     let taskOutcome: HarnessTaskOutcome = { outcome: "completed" };
     try {
@@ -4100,10 +4110,7 @@ export class CfHarnessPromptLoop {
               "The model returned an empty assistant response with no tool calls",
             );
           }
-          if (
-            !finalizing && this.#requirePieceOutput && !this.#browsed &&
-            (this.engine.getRunState().assignedPieces?.length ?? 0) === 0
-          ) {
+          if (!finalizing && this.#pieceOutputOwed()) {
             const correction: HarnessTranscriptMessage = {
               role: "user",
               content:
@@ -4197,9 +4204,11 @@ export class CfHarnessPromptLoop {
         // An accepted result is the run's return, so the turn that made it
         // is the run's last: the model is asked for nothing further, and a
         // turn it would have spent cannot lose the result. The words written
-        // beside the call are the final answer, and none is an empty one.
+        // beside the call are the final answer, which may be empty. A run
+        // that still owes a piece keeps going until it names one.
         if (
-          invokedToolCalls.some((invoked) => invoked.resultAccepted === true)
+          invokedToolCalls.some((invoked) => invoked.resultAccepted === true) &&
+          !this.#pieceOutputOwed()
         ) {
           finalAssistantText = assistantMessage.content;
         }
