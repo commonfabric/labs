@@ -839,4 +839,41 @@ describe("private inbox across runtimes", () => {
     );
     expect(await stranger.read(["copiedOffers"])).toEqual([]);
   });
+
+  it("replaces an inbox in Home's own private-inbox space with another piece in that space, leaving the refused one's offers in it", async () => {
+    await offer("before the own-space replacement");
+    const before = (await ownerOffers(inbox)).map((each) => each.title);
+    await owner.send("createOwnSpaceProfile");
+    await harness.settle();
+    await owner.send("pointOwnSpaceProfileAtPrivateInbox", { index: 0 });
+    await harness.settleUntil(async () =>
+      await pointed(["ownSpaceHome", "profiles", 0])
+    );
+    await owner.send("refuseOwnSpaceInbox");
+    const refusalPath = ["ownSpaceHome", "privateInboxRefusal", "refusal"];
+    await harness.settleUntil(async () =>
+      (await owner.read([...refusalPath, "reason"])) !== undefined
+    );
+    const heldPath = ["ownSpaceHome", "privateInbox", "piece"];
+    const refusedBefore = await refusals(owner);
+    await owner.send("replaceOwnSpaceInbox", {}, REPLACE_CLICK);
+    await harness.settleUntil(async () =>
+      await refusals(owner) > refusedBefore ||
+      ((await owner.read(heldPath)) !== undefined &&
+        (await owner.link(["ownSpaceHome", "profiles", 0, "inbox", "piece"]))
+            .id === (await owner.link(heldPath)).id)
+    );
+    expect(await refusals(owner)).toBe(refusedBefore);
+
+    const held = await owner.link(heldPath);
+    expect(held.space).toBe(inbox.space);
+    expect(held.id).not.toBe(inbox.id);
+    expect(await ownerOffers(held)).toEqual([]);
+    expect(before).toContain("before the own-space replacement");
+    expect((await ownerOffers(inbox)).map((each) => each.title)).toEqual(
+      before,
+    );
+    expect((await owner.link(["privateInbox", "piece"])).id).toBe(inbox.id);
+    expect(await owner.read(refusalPath)).toBeUndefined();
+  });
 });
