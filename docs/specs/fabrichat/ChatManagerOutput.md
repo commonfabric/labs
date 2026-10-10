@@ -138,7 +138,11 @@ room's members by principal or by profile itself.
 - **`direct`** holds, for each counterpart principal, the entry of the direct
   room this user shares with them. It has at most one entry per counterpart. It
   keeps a direct room's entry even after the room is forgotten, so the
-  conversation with that person is always the same room.
+  conversation with that person is always the same room. Its entry's `room`
+  can be the link the room was created or accepted through, where the same
+  room's entry in `rooms` links its space's root, so a reader compares two
+  room links by their space or by the room each resolves to, never as the
+  links stored.
 - **`requests`** records each request's outcome under the `requestId` its caller
   chose: `pending`, then `done` or `refused`. `done` carries the entry, except
   for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason,
