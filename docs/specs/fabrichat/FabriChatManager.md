@@ -33,7 +33,10 @@ and its `since` and `revision` are its entry's. A direct room's `counterpart` is
 the one `direct` holds the room under, for a room `direct` holds, or else the
 room's creator, as its `about.record` is labeled; a room whose label can't be
 read is listed with no counterpart. A room appears in `rooms` once its root
-resolves and its `about` reads. `direct` holds one entry per counterpart,
+resolves and its `about` reads. `people` is drawn from `rooms` in the same
+session: each listed room's `roster`, read through the room's link, with each
+profile keyed by the principal its own `represents-principal` label attests
+(`principalOf()`). No handler reads it. `direct` holds one entry per counterpart,
 including forgotten rooms, for the direct rooms this manager created or
 accepted, and `openDirect` finds a direct room there and nowhere else. A room
 another manager created and offered the user is there too, once the user's host
@@ -92,6 +95,13 @@ creating another room. A pending `openDirect` is also recorded under its
 and resumes it. Step 1 writes the room's `about` from this user's handler, which
 is what labels it `authored-by` this user.
 
+The manager's rendering composes a group in a draft of the session's own: a
+title, members typed as chat addresses, and members picked from `people`, one
+control per person, which picks the first profile `people` lists for them,
+from the newest room whose roster holds one. Creating the
+group names the picked profiles as `createGroup`'s `profiles`, so each picked
+person is offered the room, and empties the draft.
+
 ## Prerequisites
 
 - **Creating a private space from a pattern**: the same as the room's (see
@@ -116,7 +126,8 @@ Home creates ([the private inbox](../../features/private-inbox.md)) or another
 share inbox the profile points at, and both take the same offer envelope. Any
 principal may write to the inbox's space, and its offers are labeled readable by
 the owner alone, a label that binds only an honest runtime. When a request names
-a member's profile, as `openDirect` does with its `profile`, step 3 offers the
+a member's profile, as `openDirect` does with its `profile` and `createGroup`
+with its `profiles`, step 3 offers the
 room there, in that envelope, from an event of its own that follows the room's
 creation, since the offer names the room's space (see
 [`ChatManagerOutput`](ChatManagerOutput.md#offers)). The same event reads the

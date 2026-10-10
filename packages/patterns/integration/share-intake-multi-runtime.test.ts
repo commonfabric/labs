@@ -11,7 +11,8 @@
  * created, whose space declares its kind and is rooted at the room, and of a
  * direct room that manager offers through the owner's inbox itself, which the
  * intake has the owner's manager accept, and which a start of the owner's with
- * its sender then finds.
+ * its sender then finds, and of a group that manager offers to the owner named
+ * by their profile.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -318,6 +319,60 @@ describe("share intake across runtimes", () => {
         .space,
     ).toBe(room.space);
     expect(Object.keys((await catalog())?.entries ?? {}).length).toBe(listed);
+  });
+
+  it("registers a group the FabriChat manager offers to a member named by profile, and joins them to its roster", async () => {
+    const profile = await owner.link(["profiles", 0]);
+    await sender.send("createChatGroup", {
+      requestId: "profiled group",
+      title: "Profiled group",
+      members: [],
+      // The owner's profile, as the link the manager's people hold.
+      profiles: [{
+        "/": {
+          "link@1": {
+            id: profile.id,
+            path: profile.path,
+            space: profile.space,
+          },
+        },
+      }],
+    }, START_ACTION);
+    await harness.settle();
+    expect(await sender.read(["chatRequests", "profiled group", "status"]))
+      .toBe("done");
+    const room = await sender.link([
+      "chatRequests",
+      "profiled group",
+      "entry",
+      "room",
+    ]);
+
+    // The owner, named by the principal their profile attests, was offered
+    // the group, so the manager queued no notice for them.
+    const notices = (await sender.read(["chatNotices"])) as { id: string }[];
+    expect(notices.map(({ id }) => id)).not.toContain(
+      JSON.stringify([owner.identity.did(), "profiled group"]),
+    );
+
+    // The intake registers the group in the owner's catalog, under its title.
+    await harness.settleUntil(async () =>
+      (await catalog())?.entries[room.space]?.state === "saved"
+    );
+    expect((await catalog())?.entries[room.space]?.title).toBe(
+      "Profiled group",
+    );
+
+    // The group's roster holds its creator and the owner, read through the
+    // field a manager's link declares.
+    await harness.settleUntil(async () =>
+      (await sender.read(["roster", "length"], { piece: room })) === 2
+    );
+    const joined = await sender.link(["roster", 1], { piece: room });
+    expect({ id: joined.id, space: joined.space }).toEqual({
+      id: profile.id,
+      space: profile.space,
+    });
   });
 
   it("registers an offer arriving while the owner's worker runs, without a restart", async () => {

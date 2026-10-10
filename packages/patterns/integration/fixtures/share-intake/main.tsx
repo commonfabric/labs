@@ -4,8 +4,8 @@
  * handlers, and gives a sender handlers of its own that create a space and
  * offer it to the owner through the inbox the owner's profile points at. It
  * also holds a FabriChat manager, with a profile of its own, from which a
- * sender creates a real room to offer, or starts a direct chat with the owner
- * that the manager offers through the owner's inbox itself. Its
+ * sender creates a real room to offer, or starts a direct chat, or a group,
+ * with the owner that the manager offers through the owner's inbox itself. Its
  * `chatManager`, as Home's is, is a second FabriChat manager, whose profile is
  * the owner's first, listing the rooms the intake registers, which the intake
  * has it accept, and from which the owner starts a chat. Fixture for

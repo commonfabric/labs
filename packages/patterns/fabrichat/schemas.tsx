@@ -403,9 +403,11 @@ export const reactionTalliesOf = (
  * and the link's schema is part of every manager handler's declared reads.
  *
  * So the link carries what the room's space shares with every member and
- * costs little to read: what the room says about itself, and how many
- * messages it holds and when the newest was sent, which the room derives from
- * its messages alone. It leaves out the rest of the room's data face. A
+ * costs little to read: what the room says about itself, how many messages it
+ * holds and when the newest was sent, which the room derives from its
+ * messages alone, and its roster, which the room stores. It leaves out the
+ * rest of the room's data face. Its `participants` adds every author to the
+ * roster, so deriving it reads every message. A
  * room's `canSend` is decided per reader, from their own profile, and its
  * `messages.windows` are each session's own, so both reach documents of a
  * member's own, as the room's rendering does. Its `messages.latest` is
@@ -427,6 +429,12 @@ export interface ChatRoomLink {
     /** The newest message's `sentAt`; absent while there are none. */
     newestAt?: FabricEpochNsec;
   };
+
+  /**
+   * The profiles of those who joined the room, in the order they joined, as a
+   * manager reads them: each a link, whose profile is read only through it.
+   */
+  roster?: ManagerProfileCell[];
 }
 
 /** One room in a user's chat manager. */

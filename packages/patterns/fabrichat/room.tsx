@@ -584,6 +584,15 @@ export interface ChatRoomView {
   participants: ProfileCell[];
 
   /**
+   * Those who joined the room itself, each added once through
+   * `addParticipant`, in the order they were added. Unlike `participants`, it
+   * lists no author it doesn't hold, and no participant of another space, so
+   * it is read from the roster alone. Like `participants`, it is a claim, not
+   * proof of access.
+   */
+  roster: ProfileCell[];
+
+  /**
    * One entry for each of `participants`, in their order: the profile, and the
    * principal its `represents-principal` label attests, absent where it
    * attests none or the label can't be read where the list is derived. Like
@@ -890,6 +899,7 @@ export const FabriChatRoomCore = pattern<
     recentActivity: activity,
     recentActivityExpiredThrough: expiredThrough,
     participants,
+    roster: joined,
     participantEntries,
     participantPrincipals,
     addParticipant: join,
@@ -1139,6 +1149,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       recentActivity: room.recentActivity,
       recentActivityExpiredThrough: room.recentActivityExpiredThrough,
       participants: room.participants,
+      roster: room.roster,
       participantEntries: room.participantEntries,
       participantPrincipals: room.participantPrincipals,
       addParticipant: room.addParticipant,
