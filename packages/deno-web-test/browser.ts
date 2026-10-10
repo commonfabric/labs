@@ -127,17 +127,9 @@ export class BrowserController extends EventTarget {
       if (name !== DRIVER_BINDING) {
         return;
       }
-      // A command that throws reports and lets the next one run: a rejected
-      // queue would leave every later press unsettled.
-      queue = queue
-        .then(() => this.#runCommand(page, payload, executionContextId))
-        .catch((e) =>
-          this.#reportCommandFailure(
-            `Command could not be run: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-          )
-        );
+      queue = queue.then(() =>
+        this.#runCommand(page, payload, executionContextId)
+      );
     });
     await celestial.Runtime.addBinding({ name: DRIVER_BINDING });
   }
@@ -147,7 +139,8 @@ export class BrowserController extends EventTarget {
    * document that sent it, `contextId`: a command that is refused or fails
    * rejects there, and so fails the test that sent it. A command with no id
    * cannot be settled, and one whose document is gone has no test left to
-   * fail; either is reported on the console. A test that leaves its file
+   * fail; either is reported on the console. It never rejects, so the
+   * command queued after it always runs. A test that leaves its file
    * without awaiting a press can have that key land in the next file's
    * document.
    */
@@ -171,24 +164,33 @@ export class BrowserController extends EventTarget {
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
-    const settled = await page.unsafelyGetCelestialBindings().Runtime
-      .callFunctionOn({
-        functionDeclaration: `function (name, id, error) {
-          globalThis[name](id, error);
-        }`,
-        executionContextId: contextId,
-        arguments: [{ value: SETTLE_GLOBAL }, { value: id }, { value: error }],
-      });
-    // Celestial resolves a CDP error response, here a document that is gone,
-    // as `undefined` rather than rejecting.
-    if (settled === undefined) {
+    let failure: string | undefined;
+    try {
+      const settled = await page.unsafelyGetCelestialBindings().Runtime
+        .callFunctionOn({
+          functionDeclaration: `function (name, id, error) {
+            globalThis[name](id, error);
+          }`,
+          executionContextId: contextId,
+          arguments: [{ value: SETTLE_GLOBAL }, { value: id }, {
+            value: error,
+          }],
+        });
+      // Celestial resolves a CDP error response, here a document that is
+      // gone, as `undefined` rather than rejecting.
+      if (settled === undefined) {
+        failure = "the document that sent it is gone";
+      } else if (settled.exceptionDetails) {
+        const { exception, text } = settled.exceptionDetails;
+        failure = exception?.description ?? text;
+      }
+    } catch (e) {
+      // Celestial's send throws once the connection to the browser is closed.
+      failure = e instanceof Error ? e.message : String(e);
+    }
+    if (failure !== undefined) {
       this.#reportCommandFailure(
-        `Command ${id} could not be settled: the document that sent it is gone`,
-      );
-    } else if (settled.exceptionDetails) {
-      const { exception, text } = settled.exceptionDetails;
-      this.#reportCommandFailure(
-        `Command ${id} could not be settled: ${exception?.description ?? text}`,
+        `Command ${id} could not be settled: ${failure}`,
       );
     }
   }
