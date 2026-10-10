@@ -44,21 +44,33 @@ for (const path of process.argv.slice(2)) {
   }
 }
 
-const fileCounts = { pass: 0, fail: 0 };
+const failedFiles = new Set();
 for (const [file, status] of files) {
-  fileCounts[status] = (fileCounts[status] ?? 0) + 1;
+  if (status === "fail") failedFiles.add(file);
   if (status === "fail" && !testedFiles.has(file)) {
     const key = file.replace(/^.*?\/test\//, "test/");
     addCause(`[load] ${stderrError.get(key) ?? "(no stderr error)"}`, file);
   }
 }
+for (const { files: fs } of causes.values()) {
+  for (const f of fs) failedFiles.add(f);
+}
+const allFiles = new Set([...files.keys(), ...testedFiles]);
+const fileCounts = {
+  pass: allFiles.size - failedFiles.size,
+  fail: failedFiles.size,
+};
 
 console.log("tests:", JSON.stringify(tests));
-console.log("files reported at top level:", JSON.stringify(fileCounts));
+console.log("files:", JSON.stringify(fileCounts));
 console.log("top failure causes (tests, files, message):");
 const sorted = [...causes].sort((a, b) => b[1].files.size - a[1].files.size);
 for (const [message, { count, files: fs }] of sorted.slice(0, 50)) {
   console.log(
     `${String(count).padStart(5)} ${String(fs.size).padStart(4)}  ${message}`,
   );
+}
+if (process.env.TALLY_FILES) {
+  console.log("failing files:");
+  for (const f of [...failedFiles].sort()) console.log(`  ${f}`);
 }
