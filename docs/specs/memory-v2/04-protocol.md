@@ -1244,6 +1244,14 @@ refusal is permanent. One challenge accepts several keys, once each, so
 authenticating two keys needs no ordering between them. A client holding no
 usable challenge asks for one with `connection.challenge`.
 
+On direct connections the SDK shares a lease renewal's complete outcome with
+mounts for that key, including mounts arriving during the renewal's backoff.
+A retriable refusal keeps those mounts pending while the renewal retries with
+a fresh challenge. Its retry rate is independent of the number of waiting
+mounts. Permanent refusal, connection loss, client closure or failure, and a
+mount's cancellation end its wait. Canceling a mount leaves the renewal and
+other mounts running. Session restoration has its own retry policy.
+
 An authentication is a lease. It runs out at the invocation's `exp`, or an
 hour after it was accepted, whichever is sooner, and the response says
 which. From then on a `session.open` naming the principal is refused, a
