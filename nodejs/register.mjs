@@ -4,7 +4,8 @@
 //
 // `nodejs/bin/cfnode` supplies those flags. This installs the loader hooks
 // that resolve and compile the Deno workspace's modules, and the globals
-// (`Deno`, and the web APIs Deno has and Node lacks) those modules use.
+// (`Deno`, the web APIs Deno has and Node lacks, and the global scope as an
+// event target) those modules use.
 
 import { registerHooks } from "node:module";
 import * as hooks from "./lib/hooks.mjs";
@@ -14,3 +15,4 @@ await import("./lib/deno-global.mjs");
 await import("./lib/web-globals.mjs");
 await import("./lib/fs-file.mjs");
 await import("./lib/global-events.mjs");
+await import("./lib/internal-timers.mjs");

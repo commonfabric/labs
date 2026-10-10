@@ -1,99 +1,97 @@
-// The main thread's global scope as an `EventTarget`, as Deno's is:
-// `addEventListener`, `removeEventListener`, and `dispatchEvent` on
-// `globalThis`, with the `unhandledrejection`, `error`, and `unload` events
-// Deno dispatches there, and `PromiseRejectionEvent`.
+// The global scope as an event target, as Deno (like a browser) has it:
 //
-// The process hooks are installed only while a listener for their event is
-// registered, because a Node `unhandledRejection` or `uncaughtException`
-// listener replaces Node's default handling. Each hook restores that default
-// for an event no listener cancels: it rethrows the reason or error.
+// * `addEventListener()`, `removeEventListener()`, and `dispatchEvent()` on
+//   `globalThis`.
+// * `error` events for uncaught exceptions and `unhandledrejection` events for
+//   unhandled rejections, dispatched before Node's own handling; a listener
+//   that calls `preventDefault()` keeps it from going further.
+// * `unload` on process exit.
+// * `reportError()`, which dispatches an `error` event and, unless a listener
+//   prevents its default, goes on as an uncaught exception.
+// * `ErrorEvent` and `PromiseRejectionEvent`, where Node lacks them.
 //
-// A worker thread's scope is set up by `web-globals.mjs` instead.
+// Only on the main thread: a worker started by the `Worker` shim gets its own
+// global scope from `web-globals.mjs`, whose `message` events this would
+// otherwise replace.
 
-import process from "node:process";
 import { isMainThread } from "node:worker_threads";
 
-class PromiseRejectionEvent extends Event {
-  #promise;
-  #reason;
+if (isMainThread) installGlobalEvents();
 
-  constructor(type, init) {
-    super(type, init);
-    this.#promise = init.promise;
-    this.#reason = init.reason;
+function installGlobalEvents() {
+  const target = new EventTarget();
+  globalThis.addEventListener = target.addEventListener.bind(target);
+  globalThis.removeEventListener = target.removeEventListener.bind(target);
+  globalThis.dispatchEvent = target.dispatchEvent.bind(target);
+
+  if (typeof globalThis.ErrorEvent !== "function") {
+    globalThis.ErrorEvent = class ErrorEvent extends Event {
+      constructor(type, init = {}) {
+        super(type, init);
+        this.message = init.message ?? "";
+        this.filename = init.filename ?? "";
+        this.lineno = init.lineno ?? 0;
+        this.colno = init.colno ?? 0;
+        this.error = init.error;
+      }
+    };
   }
 
-  get promise() {
-    return this.#promise;
+  if (typeof globalThis.PromiseRejectionEvent !== "function") {
+    globalThis.PromiseRejectionEvent = class PromiseRejectionEvent
+      extends Event {
+      constructor(type, init = {}) {
+        super(type, init);
+        this.promise = init.promise;
+        this.reason = init.reason;
+      }
+    };
   }
 
-  get reason() {
-    return this.#reason;
-  }
-}
+  /** An error `reportError()` already dispatched, on its way to Node. */
+  let reportedError = undefined;
+  let hasReportedError = false;
 
-/** Process hooks, by global event type, installed while a listener exists. */
-const HOOKS = {
-  unhandledrejection: {
-    name: "unhandledRejection",
-    handler(reason, promise) {
+  /** Dispatches an `error` event for `error`; returns whether it was handled. */
+  function dispatchError(error) {
+    const event = new ErrorEvent("error", {
+      cancelable: true,
+      error,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return !globalThis.dispatchEvent(event);
+  }
+
+  const originalEmit = process.emit;
+  process.emit = function (name, ...args) {
+    if (name === "uncaughtException") {
+      const [error] = args;
+      if (hasReportedError && reportedError === error) {
+        hasReportedError = false;
+        reportedError = undefined;
+      } else if (dispatchError(error)) {
+        return true;
+      }
+    } else if (name === "unhandledRejection") {
+      const [reason, promise] = args;
       const event = new PromiseRejectionEvent("unhandledrejection", {
         cancelable: true,
         promise,
         reason,
       });
-      globalThis.dispatchEvent(event);
-      if (!event.defaultPrevented) throw reason;
-    },
-  },
-  error: {
-    name: "uncaughtException",
-    handler(error) {
-      const event = new ErrorEvent("error", {
-        cancelable: true,
-        error,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      globalThis.dispatchEvent(event);
-      if (!event.defaultPrevented) {
-        process.removeListener("uncaughtException", HOOKS.error.handler);
-        throw error;
-      }
-    },
-  },
-  unload: {
-    name: "exit",
-    handler() {
-      globalThis.dispatchEvent(new Event("unload"));
-    },
-  },
-};
-
-function install() {
-  const target = new EventTarget();
-  const listeners = new Map();
-
-  globalThis.addEventListener = (type, listener, options) => {
-    target.addEventListener(type, listener, options);
-    const hook = HOOKS[type];
-    if (!hook || !listener) return;
-    let set = listeners.get(type);
-    if (!set) listeners.set(type, set = new Set());
-    if (set.size === 0) process.on(hook.name, hook.handler);
-    set.add(listener);
-  };
-  globalThis.removeEventListener = (type, listener, options) => {
-    target.removeEventListener(type, listener, options);
-    const set = listeners.get(type);
-    if (!set?.delete(listener)) return;
-    if (set.size === 0) {
-      process.removeListener(HOOKS[type].name, HOOKS[type].handler);
+      if (!globalThis.dispatchEvent(event)) return true;
     }
+    return originalEmit.call(this, name, ...args);
   };
-  globalThis.dispatchEvent = (event) => target.dispatchEvent(event);
-}
 
-globalThis.PromiseRejectionEvent ??= PromiseRejectionEvent;
-if (isMainThread && typeof globalThis.addEventListener !== "function") {
-  install();
+  process.on("exit", () => globalThis.dispatchEvent(new Event("unload")));
+
+  globalThis.reportError = function reportError(error) {
+    if (dispatchError(error)) return;
+    process.nextTick(() => {
+      reportedError = error;
+      hasReportedError = true;
+      throw error;
+    });
+  };
 }

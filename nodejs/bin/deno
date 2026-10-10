@@ -4,10 +4,9 @@
 // `Deno.execPath()`: the port's `Deno.execPath()` returns this file. It runs
 // the subcommands the workspace spawns, on Node:
 //
-//   deno run [flags...] <module> [args...]  runs the module through `cfnode`;
-//                                           permission and type-check flags
-//                                           are ignored, `--env-file` loads
-//   deno eval <code>                        evaluates a module body
+//   deno run|eval|test ...                  hands the command line to
+//                                           `deno-as-node`, which translates
+//                                           it to a `cfnode` one
 //   deno task [flags...] <name> [args...]   runs a task from the nearest
 //                                           `deno.json(c)` that defines it,
 //                                           with this directory first on
@@ -22,20 +21,6 @@ import * as path from "node:path";
 import { readDenoConfig } from "../lib/workspace.mjs";
 
 const BIN_DIR = import.meta.dirname;
-const CFNODE = path.join(BIN_DIR, "cfnode");
-
-/** `deno run` flags that take a separate value when not written `--x=v`. */
-const FLAGS_WITH_VALUES = new Set([
-  "-c",
-  "--config",
-  "--import-map",
-  "--lock",
-  "--location",
-  "--seed",
-  "--v8-flags",
-  "--inspect",
-  "--cert",
-]);
 
 function fail(message) {
   process.stderr.write(`deno (Node stand-in): ${message}\n`);
@@ -50,45 +35,6 @@ function runAndExit(command, args, options = {}) {
   process.exit(result.status ?? 1);
 }
 
-/** Splits leading flags off `args`; returns `[nodeArgs, rest]`. */
-function translateRunFlags(args) {
-  const nodeArgs = [];
-  let i = 0;
-  for (; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--") {
-      i++;
-      break;
-    }
-    if (!arg.startsWith("-")) break;
-    if (arg === "--env-file" || arg.startsWith("--env-file=")) {
-      const file = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : ".env";
-      nodeArgs.push(`--env-file-if-exists=${file}`);
-    } else if (FLAGS_WITH_VALUES.has(arg)) {
-      i++;
-    }
-  }
-  return [nodeArgs, args.slice(i)];
-}
-
-function denoRun(args) {
-  const [nodeArgs, rest] = translateRunFlags(args);
-  if (rest.length === 0) fail("`run` needs a module");
-  runAndExit(CFNODE, [...nodeArgs, ...rest]);
-}
-
-function denoEval(args) {
-  const [nodeArgs, rest] = translateRunFlags(args);
-  if (rest.length === 0) fail("`eval` needs code");
-  runAndExit(CFNODE, [
-    ...nodeArgs,
-    "--input-type=module",
-    "-e",
-    rest[0],
-    "--",
-    ...rest.slice(1),
-  ]);
-}
 
 /** The nearest config, walking up from `dir`, whose tasks define `name`. */
 function findTask(dir, name) {
@@ -138,10 +84,11 @@ function denoTask(args) {
 const [subcommand, ...rest] = process.argv.slice(2);
 switch (subcommand) {
   case "run":
-    denoRun(rest);
-    break;
   case "eval":
-    denoEval(rest);
+  case "test":
+    // `deno-as-node` translates these command lines flag by flag
+    // (`--v8-flags`, `--preload`, and the flags Node has no use for).
+    runAndExit(path.join(BIN_DIR, "deno-as-node"), [subcommand, ...rest]);
     break;
   case "task":
     denoTask(rest);
@@ -152,7 +99,7 @@ switch (subcommand) {
     break;
   default:
     if (subcommand !== undefined && fs.existsSync(subcommand)) {
-      denoRun([subcommand, ...rest]);
+      runAndExit(path.join(BIN_DIR, "deno-as-node"), ["run", subcommand, ...rest]);
     }
     fail(`unsupported subcommand: ${subcommand ?? "(none)"}`);
 }
