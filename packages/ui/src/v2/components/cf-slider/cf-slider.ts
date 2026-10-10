@@ -6,6 +6,9 @@ import { createCellController } from "../../core/cell-controller.ts";
 
 export type SliderOrientation = "horizontal" | "vertical";
 
+/** A person's move, which is announced; a call from code is not. */
+type Gesture = "drag" | "key";
+
 /**
  * CFSlider - Range input slider for value selection
  *
@@ -13,15 +16,17 @@ export type SliderOrientation = "horizontal" | "vertical";
  *
  * @attr {number|CellHandle<number>} value - Current slider value. Bound to a
  *   cell (`$value` in a pattern), a move writes the cell and the slider follows
- *   the cell; a plain number is the slider's own state, as before.
+ *   the cell; a plain number is the slider's own state.
  * @attr {number} min - Minimum allowed value (default: 0)
  * @attr {number} max - Maximum allowed value (default: 100)
  * @attr {number} step - Value increment/decrement step (default: 1)
  * @attr {boolean} disabled - Whether the slider is disabled
  * @attr {SliderOrientation} orientation - Slider orientation ("horizontal" | "vertical")
  *
- * @fires cf-change - Fired when value changes with detail: { value, oldValue }
- * @fires cf-input - Fired during dragging with detail: { value, oldValue }
+ * @fires cf-change - Fired when a person moves the value, after the move is
+ *   written, with detail: { value, oldValue }. A call from code
+ *   (`setValue`, `increment`, `decrement`) fires nothing.
+ * @fires cf-input - Fired with cf-change for a move made while dragging
  *
  * @example
  * <cf-slider min="0" max="100" value="50"></cf-slider>
@@ -404,43 +409,66 @@ export class CFSlider extends BaseElement {
   }
 
   /**
-   * Move the value to what `next` makes of the current one. Bound to a cell,
-   * the controller computes it from what the cell holds, asking the worker
-   * first where the cell has not been read, so a step is never taken from the
-   * placeholder shown before it answered. The move is announced as it is
-   * computed, which happens only when the cell can be written, so a refused
-   * read announces nothing. A plain value moves now.
+   * Move to `value`, whatever the slider holds now: a drag, Home or End, or
+   * `setValue`. It needs no read of a bound cell, so it is written at once
+   * and moves land in the order they were made. A move that leaves the shown
+   * value alone writes nothing.
    */
-  private _move(next: (current: number) => number): void {
-    // Snapped, then clamped: a step that does not divide the range would
-    // otherwise snap past the maximum.
-    const target = (current: number) =>
-      this._clampValue(this._snapToStep(next(current)));
-    // Taken now: on a cell not yet read the move is computed after the worker
-    // answers, by which time a short drag may have ended.
-    const dragging = this._isDragging;
+  private _moveTo(value: number, gesture: Gesture | undefined): void {
+    const oldValue = this._current;
+    const next = this._clampValue(this._snapToStep(value));
+    if (next === oldValue) return;
     if (this._valueCellController.hasCell()) {
-      void this._valueCellController.updateValue((held) => {
-        const oldValue = this._shown(held);
-        const value = target(oldValue);
-        // A move that leaves the shown value alone is not announced, and
-        // writes nothing to a cell that holds a value, even one out of bounds.
-        if (value === oldValue) return held ?? value;
-        this._announce(value, oldValue, dragging);
-        return value;
-      });
+      if (this._valueCellController.refusal !== undefined) return;
+      this._valueCellController.setValue(next);
+    } else {
+      this.value = next;
+    }
+    if (gesture) this._announce(next, oldValue, gesture);
+  }
+
+  /**
+   * Move by what `step` makes of the current value: an arrow or page key, or
+   * `increment`/`decrement`. Bound to a cell, the controller computes it from
+   * what the cell holds, asking the worker first where the cell has not been
+   * read, so a step is never taken from the minimum shown in the meantime.
+   * Every write is announced, once it is made; a refused read writes nothing.
+   */
+  private _moveBy(
+    step: (current: number) => number,
+    gesture: Gesture | undefined,
+  ): void {
+    if (!this._valueCellController.hasCell()) {
+      const oldValue = this._current;
+      const next = step(oldValue);
+      if (next === oldValue) return;
+      this.value = next;
+      if (gesture) this._announce(next, oldValue, gesture);
       return;
     }
-    const oldValue = this._current;
-    const value = target(oldValue);
-    if (value === oldValue) return;
-    this.value = value;
-    this._announce(value, oldValue, dragging);
+    let written: { value: number; oldValue: number } | undefined;
+    const announce = () => {
+      if (written && gesture) {
+        this._announce(written.value, written.oldValue, gesture);
+      }
+    };
+    const settled = this._valueCellController.updateValue((held) => {
+      const oldValue = this._shown(held);
+      const value = step(oldValue);
+      // Unchanged: a cell holding a value keeps it, even one out of bounds.
+      if (value === oldValue && typeof held === "number") return held;
+      written = { value, oldValue };
+      return value;
+    });
+    // A cell already read is written now, and announced now; one the worker
+    // is still answering for is announced when its write is made.
+    if (written) announce();
+    else void settled.then(announce);
   }
 
   /** `cf-input` for a move made while dragging, and `cf-change` for every move. */
-  private _announce(value: number, oldValue: number, dragging: boolean): void {
-    if (dragging) this.emit("cf-input", { value, oldValue });
+  private _announce(value: number, oldValue: number, gesture: Gesture): void {
+    if (gesture === "drag") this.emit("cf-input", { value, oldValue });
     this.emit("cf-change", { value, oldValue });
   }
 
@@ -494,8 +522,10 @@ export class CFSlider extends BaseElement {
   }
 
   private _snapToStep(value: number): number {
+    if (!(this.step > 0)) return value;
     const steps = Math.round((value - this.min) / this.step);
-    return this.min + steps * this.step;
+    // Rounded to drop binary-fraction noise: 3 steps of 0.1 are 0.3.
+    return Number((this.min + steps * this.step).toFixed(10));
   }
 
   private _getPercentage(): number {
@@ -623,34 +653,37 @@ export class CFSlider extends BaseElement {
     percentage = Math.max(0, Math.min(100, percentage));
     const range = this.max - this.min;
     const newValue = this.min + (percentage / 100) * range;
-    this._move(() => newValue);
+    this._moveTo(newValue, "drag");
   }
 
   private _handleKeyDown = (event: KeyboardEvent): void => {
     if (this.disabled) return;
 
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      this._moveTo(event.key === "Home" ? this.min : this.max, "key");
+      return;
+    }
     const bigStep = this.step * 10;
-    const moves: Record<string, (current: number) => number> = {
-      ArrowLeft: (current) => current - this.step,
-      ArrowDown: (current) => current - this.step,
-      ArrowRight: (current) => current + this.step,
-      ArrowUp: (current) => current + this.step,
-      PageDown: (current) => current - bigStep,
-      PageUp: (current) => current + bigStep,
-      Home: () => this.min,
-      End: () => this.max,
+    const deltas: Record<string, number> = {
+      ArrowLeft: -this.step,
+      ArrowDown: -this.step,
+      ArrowRight: this.step,
+      ArrowUp: this.step,
+      PageDown: -bigStep,
+      PageUp: bigStep,
     };
-    const move = moves[event.key];
-    if (move === undefined) return;
+    const delta = deltas[event.key];
+    if (delta === undefined) return;
     event.preventDefault();
-    this._move(move);
+    this._moveBy((current) => this._clampValue(current + delta), "key");
   };
 
   /**
    * Set the slider value programmatically
    */
   setValue(value: number): void {
-    this._move(() => value);
+    this._moveTo(value, undefined);
   }
 
   /**
@@ -664,13 +697,19 @@ export class CFSlider extends BaseElement {
    * Increment the slider value by one step
    */
   increment(): void {
-    this._move((current) => current + this.step);
+    this._moveBy(
+      (current) => this._clampValue(this._snapToStep(current + this.step)),
+      undefined,
+    );
   }
 
   /**
    * Decrement the slider value by one step
    */
   decrement(): void {
-    this._move((current) => current - this.step);
+    this._moveBy(
+      (current) => this._clampValue(this._snapToStep(current - this.step)),
+      undefined,
+    );
   }
 }
