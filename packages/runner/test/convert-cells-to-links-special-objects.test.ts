@@ -1,9 +1,10 @@
 /**
- * The two special-object kinds get opposite treatment, and neither is the
+ * The two special-object kinds get different treatment, and neither is the
  * object branch. A `FabricPrimitive` is a leaf and stands whole, where a walk
  * that rebuilt it from its entries would give a bare `{}`. A `FabricInstance`
- * is a container reached by its codec contents, which this walk cannot do, so
- * it refuses rather than converting one wrongly.
+ * is a container reached by its codec contents, which this walk cannot
+ * descend, so it stands whole only when there is nothing inside it to convert,
+ * and the walk refuses it rather than converting one wrongly otherwise.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -13,6 +14,8 @@ import {
   FabricBytes,
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
+import { deepFreeze } from "@commonfabric/data-model";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
 import {
@@ -66,7 +69,18 @@ describe("convert-cells-to-links-special-objects", () => {
     expect((result.x as FabricEpochNsec).value).toBe(1_000_000_000n);
   });
 
-  it("throws for a `FabricInstance` rather than converting one wrongly", () => {
+  it("returns a deep-frozen `FabricInstance` holding only data whole", () => {
+    const instance = deepFreeze(FabricError.fromNativeError(new Error("boom")));
+
+    expect(convertCellsToLinks(instance)).toBe(instance);
+    expect((convertCellsToLinks({ x: instance }) as { x: unknown }).x).toBe(
+      instance,
+    );
+  });
+
+  it("throws for a `FabricInstance` that is not deep-frozen", () => {
+    // What it holds may still change, or may not be fabric data yet, so there
+    // is no telling that nothing inside it needs converting.
     const instance = FabricError.fromNativeError(new Error("boom"));
 
     expect(() => convertCellsToLinks({ x: instance })).toThrow(
@@ -75,11 +89,40 @@ describe("convert-cells-to-links-special-objects", () => {
     );
   });
 
-  it("throws for a JS `Error`, which the conversion mints into one", () => {
+  it("throws for a `FabricInstance` holding a link", () => {
+    const instance = deepFreeze(
+      new FabricError({
+        type: "Error",
+        message: "boom",
+        stack: undefined,
+        cause: linkRefFrom({ id: "of:fid1:linked", path: [] }),
+      }),
+    );
+
+    expect(() => convertCellsToLinks({ x: instance })).toThrow(
+      "Cannot yet handle `FabricError` (a `FabricInstance`) when converting " +
+        "cells to links.",
+    );
+  });
+
+  it("returns a JS `Error` as the `FabricError` the conversion mints", () => {
     // The other way in: the shallow conversion turns a JS `Error` into a
-    // `FabricError` on the way past, so the refusal has to catch what it mints
-    // and not only what a caller hands over already built.
-    expect(() => convertCellsToLinks({ x: new TypeError("nope") })).toThrow(
+    // `FabricError` on the way past, and an error holding nothing but its
+    // strings mints deep-frozen.
+    const result = convertCellsToLinks({ x: new TypeError("nope") }) as {
+      x: unknown;
+    };
+
+    expect(result.x).toBeInstanceOf(FabricError);
+    expect((result.x as FabricError).message).toBe("nope");
+  });
+
+  it("throws for a JS `Error` whose `cause` the mint leaves unconverted", () => {
+    // A shallow mint converts one layer, so the `cause` is still the record it
+    // was given, and the walk cannot reach it to convert it.
+    expect(() =>
+      convertCellsToLinks({ x: new Error("nope", { cause: { k: 1 } }) })
+    ).toThrow(
       "Cannot yet handle `FabricError` (a `FabricInstance`) when converting " +
         "cells to links.",
     );

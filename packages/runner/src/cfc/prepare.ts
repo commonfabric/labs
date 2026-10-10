@@ -114,6 +114,7 @@ import {
   getTransactionWriteAttempts,
   getTransactionWrittenSpaces,
 } from "../storage/transaction-inspection.ts";
+import { canCarryFabricInstanceWhole } from "../whole-instance.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
   PRINCIPAL_CLAIM_KINDS,
@@ -3576,6 +3577,14 @@ const isDeclarablePolicyStore = (
 // such as `cfc` and `source`) are excluded, mirroring the write-side
 // exclusions.
 
+/**
+ * Whether `value` is a `FabricInstance` the walks below can take as a content
+ * leaf without descending it: one holding nothing but fabric data, so no link
+ * or reference inside it goes unseen.
+ */
+const isContentInstance = (value: unknown): boolean =>
+  value instanceof FabricInstance && canCarryFabricInstanceWhole(value);
+
 // A written value made entirely of references (links at every leaf, or
 // empty structure) carries no readable content of its own: the per-slot
 // link entries label each reference precisely, so stamping the covering
@@ -3587,10 +3596,12 @@ const isDeclarablePolicyStore = (
 // `derived` ones — see `pureLinkContainerPaths`.
 // A `FabricPrimitive` is a content leaf like any other: its state is private,
 // so enumerating it finds no members and would classify a byte blob as
-// pure structure. A `FabricInstance` is refused rather than classified.
+// pure structure. So is a `FabricInstance` holding nothing but fabric data,
+// for the same reason; any other instance is refused rather than classified.
 const isPureLinkStructure = (value: unknown): boolean => {
   if (value === undefined) return true;
   if (isPrimitiveCellLink(value)) return true;
+  if (isContentInstance(value)) return false;
   if (Array.isArray(value)) {
     return value.every((member) => isPureLinkStructure(member));
   }
@@ -3646,7 +3657,8 @@ const recordedReferences = (
  * Whether every primitive cell link in `value`, `value` included, is a
  * reference the runtime recorded at its path: the one `references` maps that
  * path to, spelled as a plain reference to that document's root. `path` is
- * where `value` sits in `target`.
+ * where `value` sits in `target`. A `FabricInstance` holding nothing but
+ * fabric data holds no link, so it holds no reference to check.
  */
 const holdsOnlySuppliedReferences = (
   value: unknown,
@@ -3668,6 +3680,7 @@ const holdsOnlySuppliedReferences = (
       canonicalizeLogicalPath(link.path).length === 0 &&
       canonicalizeLogicalPath(reference.path).length === 0;
   }
+  if (isContentInstance(value)) return true;
   if (Array.isArray(value)) {
     return value.every((member, index) =>
       holdsOnlySuppliedReferences(

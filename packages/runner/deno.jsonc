@@ -41,6 +41,7 @@
     "./jsx-runtime": "./src/jsx-runtime.ts",
     "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
     "./shared": "./src/shared.ts",
+    "./whole-instance": "./src/whole-instance.ts",
     "./agent-run": "./src/agent-run.ts",
     "./entity-kind": "./src/entity-kind.ts",
     "./fabric-special-object-brand": "./src/fabric-special-object-brand.ts",

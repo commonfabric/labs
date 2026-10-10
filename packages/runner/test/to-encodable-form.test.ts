@@ -23,6 +23,8 @@ import {
   FabricBytes,
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
+import { deepFreeze } from "@commonfabric/data-model";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
 import {
@@ -190,16 +192,43 @@ describe("to-encodable-form", () => {
     it("refuses a FabricInstance rather than flattening it", () => {
       // A `FabricInstance` is a CONTAINER reached by its codec contents, not by
       // property name. The `for...in` copy would rebuild it from zero
-      // enumerable own-props as `{}`, so it refuses instead -- the same
-      // disposition the sibling binding walk uses.
+      // enumerable own-props as `{}`, so one that may hold something to bind
+      // -- a mutable one, or one holding a link -- is refused instead, the
+      // same disposition the sibling binding walk uses.
       const err = FabricError.fromNativeError(new Error("boom"));
       expect(() => withAliasBindings(err)).toThrow("FabricError");
       expect(() => withAliasBindings({ e: err })).toThrow("FabricError");
 
-      // ...including one the conversion itself mints, from a JS `Error`.
-      expect(() => withAliasBindings({ e: new Error("x") })).toThrow(
-        "FabricError",
+      const linked = deepFreeze(
+        new FabricError({
+          type: "Error",
+          message: "boom",
+          stack: undefined,
+          cause: linkRefFrom({ id: "of:fid1:linked", path: [] }),
+        }),
       );
+      expect(() => withAliasBindings({ e: linked })).toThrow("FabricError");
+
+      // ...including one the conversion itself mints, from a JS `Error` whose
+      // `cause` the shallow mint leaves unconverted.
+      expect(() =>
+        withAliasBindings({ e: new Error("x", { cause: { k: 1 } }) })
+      ).toThrow("FabricError");
+    });
+
+    it("returns a deep-frozen FabricInstance holding only data whole", () => {
+      // Nothing inside one to bind, so it leaves as it is -- as does the
+      // `FabricError` the conversion mints from a JS `Error` holding nothing
+      // but its strings.
+      const err = deepFreeze(FabricError.fromNativeError(new Error("boom")));
+      expect(withAliasBindings(err)).toBe(err);
+      expect((withAliasBindings({ e: err }) as { e: unknown }).e).toBe(err);
+
+      const minted = (withAliasBindings({ e: new TypeError("x") }) as {
+        e: unknown;
+      }).e;
+      expect(minted).toBeInstanceOf(FabricError);
+      expect((minted as FabricError).message).toBe("x");
     });
 
     it("keeps shared and circular structure intact around a converted native", () => {
