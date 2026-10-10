@@ -2164,7 +2164,7 @@ Every run gets 32 root model turns unless its host names another budget. With a
 budget of three turns or more, two turns before the last the host tells the
 model how many remain, so it can finish rather than be cut off; a subagent's run
 is told the same against its own budget. A run that has `submit_result` is told
-to call it on the next turn and answer on the last. `finalizeOnTurnLimit`
+to submit on the next turn; acceptance ends the run. `finalizeOnTurnLimit`
 instead reserves the last root model turn for a partial answer with harness and
 native tools disabled, warning in those terms, and records `budget_finalized`
 with a `gave-up` task outcome. Provider failures, blank answers, and attempted
@@ -2835,9 +2835,12 @@ A run configured with a schema is offered `submit_result`, and its system prompt
 asks for the result through it: the model passes the whole value as `result`,
 the harness validates it against the schema, and the host writes it to the
 structured-result path. A refused value comes back as `invalid_result` with the
-reason, and the model corrects it and submits again; a later valid submission
-replaces an earlier one. This is the way that works under every enforcement mode
-and prompt-slot role — under `enforce-strict`, a run whose prompt is bound as
+reason, and the model corrects it and submits again. An accepted value is the
+run's return: the run completes after the turn that submitted it, without asking
+the model for another, and the words the model wrote beside the call, if any,
+are its final answer. A later valid submission in that same turn replaces an
+earlier one. This is the way that works under every enforcement mode and
+prompt-slot role — under `enforce-strict`, a run whose prompt is bound as
 `context` or `quote` is refused `bash`, `edit_file`, and `write_file`, and so
 cannot write the file itself. A run that does hold such a tool may still write
 the file directly; both ways end at the same path. With `--allow-tool`, name
@@ -2856,7 +2859,9 @@ provided inline with `--structured-result-schema` or read from
 `--structured-result-schema-file`. After the run, cf-harness reads the sidecar,
 validates it with the same JSON Schema validation primitives used by subagent
 `returnSchema`, records `structured_result` in the batch metadata, and exits
-nonzero when the file is missing, invalid JSON, or schema-invalid.
+nonzero when the file is missing, invalid JSON, or schema-invalid. Its
+`validation_error` says which: a missing file reads as no structured result
+submitted, and a schema-invalid one names the field and the reason.
 
 When constraining the parent tool surface to `delegate_task`, authorize the
 child profile separately so the delegation policy transition is explicit:

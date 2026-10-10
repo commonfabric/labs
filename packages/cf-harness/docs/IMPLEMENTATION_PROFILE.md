@@ -223,7 +223,8 @@ write. It takes the value as its input, validates it with the structured-result
 validation the file-based path uses, and the host writes it to the configured
 structured-result file, so the post-run validation, the batch metadata, and the
 agent result writer read one place. A refused value returns a typed
-`invalid_result` error and the model submits again; a later valid submission
+`invalid_result` error and the model submits again. An accepted value ends the
+run after the turn that submitted it; a later valid submission in that turn
 replaces an earlier one. A handle token in the value stays a token, because the
 token is what the result writer resolves. The tool is admitted at every
 enforcement mode and under every prompt-slot role, with the policy reason

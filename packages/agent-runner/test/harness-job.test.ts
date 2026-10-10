@@ -489,8 +489,26 @@ describe("runHarnessJob()", () => {
       expect(result.outcome).toBe("failed");
       if (result.outcome !== "failed") throw new Error("unreachable");
       expect(result.errorCode).toBe("INVALID_RESULT");
+      expect(result.errorDetail).toBe("no structured result was submitted");
       expect(result.report?.modelTurns).toBe(2);
       expect(reported.join("\n")).not.toBe("");
+    });
+
+    it("ends `failed` as `INVALID_RESULT` with the field and the reason, when the result does not match the schema", async () => {
+      const { result } = await runScripted(
+        plainSpec(),
+        async ({ resultPath }) => {
+          await Deno.writeTextFile(resultPath, JSON.stringify({ answer: 7 }));
+          return loopResult(runRoot);
+        },
+      );
+
+      expect(result).toMatchObject({
+        outcome: "failed",
+        errorCode: "INVALID_RESULT",
+        errorDetail:
+          "structured result did not match the schema: answer: value does not match type string",
+      });
     });
 
     it("removes a result file an earlier job left before the job starts", async () => {

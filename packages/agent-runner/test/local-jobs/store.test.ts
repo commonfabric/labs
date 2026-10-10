@@ -322,6 +322,7 @@ describe("local-jobs/store", () => {
         state: "completed",
         result: { answer: "Titan" },
         errorCode: "IGNORED",
+        errorDetail: "IGNORED",
         report: { modelTurns: 2 },
       });
 
@@ -332,6 +333,7 @@ describe("local-jobs/store", () => {
         finishedAt: expect.any(String),
       });
       expect(job?.errorCode).toBeUndefined();
+      expect(job?.errorDetail).toBeUndefined();
       expect(store.events("job-1", 2).map((event) => event.body)).toEqual([
         { state: "completed" },
       ]);
@@ -356,6 +358,27 @@ describe("local-jobs/store", () => {
       });
     });
 
+    it("ends a running job `failed` with the detail of its error, in its view and its last event", () => {
+      const store = running();
+
+      const job = store.finish("job-1", {
+        state: "failed",
+        errorCode: "INVALID_RESULT",
+        errorDetail: "no structured result was submitted",
+      });
+
+      expect(job).toMatchObject({
+        state: "failed",
+        errorCode: "INVALID_RESULT",
+        errorDetail: "no structured result was submitted",
+      });
+      expect(store.events("job-1", 2)[0].body).toEqual({
+        state: "failed",
+        errorCode: "INVALID_RESULT",
+        errorDetail: "no structured result was submitted",
+      });
+    });
+
     it("ends a job asked to stop `cancelled`, whatever its run reported", () => {
       const store = running();
       store.requestCancel("job-1");
@@ -363,10 +386,12 @@ describe("local-jobs/store", () => {
       const job = store.finish("job-1", {
         state: "failed",
         errorCode: "PROVIDER_FAILURE",
+        errorDetail: "the model failed",
       });
 
       expect(job?.state).toBe("cancelled");
       expect(job?.errorCode).toBeUndefined();
+      expect(job?.errorDetail).toBeUndefined();
     });
 
     it("stores a completed job's missing result as `null`, and a failure without a code as none", () => {

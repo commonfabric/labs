@@ -7,7 +7,8 @@
  * enforcing modes. This tool is the host-side way to the same file: it takes
  * the value as its input, validates it against the configured schema, and the
  * host writes it where the file-based path would have left it, so everything
- * downstream reads one place.
+ * downstream reads one place. An accepted value is the run's return: the
+ * prompt loop ends the run after the turn that submitted it.
  *
  * A handle token in the value stays the token the model wrote. The token is
  * what a result writer resolves; the prompt loop exempts this tool's input
@@ -45,7 +46,7 @@ export const submitResultTool: HarnessToolDefinition<
     toolId: "submit_result",
     title: "Submit Result",
     description:
-      "Submit this run's structured result. Pass the whole result as `result`; it is validated against the schema this run was configured with. A refused submission returns `invalid_result` with the reason: correct the value and submit again. A later valid submission replaces an earlier one. Write a handle token where the result refers to something you hold a handle for; do not write out an address. Submit before your final answer.",
+      "Submit this run's structured result. Pass the whole result as `result`; it is validated against the schema this run was configured with. A refused submission returns `invalid_result` with the reason: correct the value and submit again. An accepted submission ends the run after this turn, so make it your last call; a later valid submission in the same turn replaces an earlier one. Write a handle token where the result refers to something you hold a handle for; do not write out an address.",
     // The call changes nothing outside the run's own record: it is how the
     // run returns, as `finish_task` is how it stops.
     effectClass: "read",
