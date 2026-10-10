@@ -1,5 +1,8 @@
 import { css, html, LitElement } from "lit";
+import { type CellHandle } from "@commonfabric/runtime-client";
+import { numberSchema } from "@commonfabric/runner/schemas";
 import { BaseElement } from "../../core/base-element.ts";
+import { createCellController } from "../../core/cell-controller.ts";
 
 export type SliderOrientation = "horizontal" | "vertical";
 
@@ -8,7 +11,9 @@ export type SliderOrientation = "horizontal" | "vertical";
  *
  * @element cf-slider
  *
- * @attr {number} value - Current slider value
+ * @attr {number|CellHandle<number>} value - Current slider value. Bound to a
+ *   cell (`$value` in a pattern), a move writes the cell and the slider follows
+ *   the cell; a plain number is the slider's own state, as before.
  * @attr {number} min - Minimum allowed value (default: 0)
  * @attr {number} max - Maximum allowed value (default: 100)
  * @attr {number} step - Value increment/decrement step (default: 1)
@@ -261,12 +266,16 @@ export class CFSlider extends BaseElement {
   `,
   ];
 
-  declare value: number;
+  declare value: CellHandle<number> | number;
   declare min: number;
   declare max: number;
   declare step: number;
   declare disabled: boolean;
   declare orientation: SliderOrientation;
+
+  private _valueCellController = createCellController<number>(this, {
+    timing: { strategy: "immediate" },
+  });
 
   private _trackElement: HTMLElement | null = null;
   private _thumbElement: HTMLElement | null = null;
@@ -317,8 +326,12 @@ export class CFSlider extends BaseElement {
     }
     super.connectedCallback();
 
-    // Ensure value is within bounds and snapped to step
-    this.value = this._snapToStep(this._clampValue(this.value));
+    this._valueCellController.bind(this.value, numberSchema);
+    // A plain value is the slider's own, so it is brought within bounds here.
+    // A cell's value belongs to the cell: it is shown clamped, never rewritten.
+    if (!this._valueCellController.hasCell()) {
+      this.value = this._snapToStep(this._clampValue(this._current));
+    }
     this._updateAriaAttributes();
 
     // Add keyboard event listener
@@ -335,32 +348,55 @@ export class CFSlider extends BaseElement {
     }
   }
 
+  override willUpdate(
+    changedProperties: Map<string | number | symbol, unknown>,
+  ) {
+    super.willUpdate(changedProperties);
+    if (changedProperties.has("value")) {
+      this._valueCellController.bind(this.value, numberSchema);
+    }
+  }
+
   override updated(
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.updated(changedProperties);
 
     if (
-      changedProperties.has("min") || changedProperties.has("max") ||
-      changedProperties.has("step")
+      !this._valueCellController.hasCell() &&
+      (changedProperties.has("min") || changedProperties.has("max") ||
+        changedProperties.has("step"))
     ) {
       // Re-clamp and snap the value when constraints change
-      const clampedValue = this._snapToStep(
-        this._clampValue(this.value),
-      );
-      if (clampedValue !== this.value) {
+      const clampedValue = this._snapToStep(this._clampValue(this._current));
+      if (clampedValue !== this._current) {
         this.value = clampedValue;
       }
     }
 
-    if (
-      changedProperties.has("value") || changedProperties.has("min") ||
-      changedProperties.has("max") ||
-      changedProperties.has("disabled") ||
-      changedProperties.has("orientation")
-    ) {
-      this._updateAriaAttributes();
-      this._updateSliderPosition();
+    // A bound cell's value arrives without any property changing, so the
+    // position and ARIA state follow every update rather than named ones.
+    this._updateAriaAttributes();
+    this._updateSliderPosition();
+  }
+
+  /**
+   * The value shown: what the bound cell or plain property holds, within
+   * bounds. A cell holding nothing yet shows the minimum.
+   */
+  private get _current(): number {
+    const value = this._valueCellController.getValue();
+    return typeof value === "number" && Number.isFinite(value)
+      ? this._clampValue(value)
+      : this.min;
+  }
+
+  /** Write `next` to the bound cell, or to the plain property. */
+  private _write(next: number): void {
+    if (this._valueCellController.hasCell()) {
+      this._valueCellController.setValue(next);
+    } else {
+      this.value = next;
     }
   }
 
@@ -420,7 +456,7 @@ export class CFSlider extends BaseElement {
 
   private _getPercentage(): number {
     const range = this.max - this.min;
-    return range > 0 ? ((this.value - this.min) / range) * 100 : 0;
+    return range > 0 ? ((this._current - this.min) / range) * 100 : 0;
   }
 
   private _updateSliderPosition(): void {
@@ -446,7 +482,7 @@ export class CFSlider extends BaseElement {
   private _updateAriaAttributes() {
     this.setAttribute("aria-valuemin", this.min.toString());
     this.setAttribute("aria-valuemax", this.max.toString());
-    this.setAttribute("aria-valuenow", this.value.toString());
+    this.setAttribute("aria-valuenow", this._current.toString());
     this.setAttribute("aria-disabled", this.disabled.toString());
     this.setAttribute("aria-orientation", this.orientation);
     this.tabIndex = this.disabled ? -1 : 0;
@@ -545,9 +581,9 @@ export class CFSlider extends BaseElement {
     const newValue = this.min + (percentage / 100) * range;
     const snappedValue = this._snapToStep(newValue);
 
-    if (this.value !== snappedValue) {
-      const oldValue = this.value;
-      this.value = snappedValue;
+    if (this._current !== snappedValue) {
+      const oldValue = this._current;
+      this._write(snappedValue);
       this.emit("cf-input", { value: snappedValue, oldValue });
       this.emit("cf-change", { value: snappedValue, oldValue });
     }
@@ -556,7 +592,7 @@ export class CFSlider extends BaseElement {
   private _handleKeyDown = (event: KeyboardEvent): void => {
     if (this.disabled) return;
 
-    let newValue = this.value;
+    let newValue = this._current;
     const bigStep = this.step * 10;
 
     switch (event.key) {
@@ -591,9 +627,9 @@ export class CFSlider extends BaseElement {
     }
 
     const clampedValue = this._clampValue(newValue);
-    if (clampedValue !== this.value) {
-      const oldValue = this.value;
-      this.value = clampedValue;
+    if (clampedValue !== this._current) {
+      const oldValue = this._current;
+      this._write(clampedValue);
       this.emit("cf-change", { value: clampedValue, oldValue });
     }
   };
@@ -602,7 +638,7 @@ export class CFSlider extends BaseElement {
    * Set the slider value programmatically
    */
   setValue(value: number): void {
-    this.value = this._snapToStep(this._clampValue(value));
+    this._write(this._snapToStep(this._clampValue(value)));
   }
 
   /**
@@ -616,13 +652,13 @@ export class CFSlider extends BaseElement {
    * Increment the slider value by one step
    */
   increment(): void {
-    this.setValue(this.value + this.step);
+    this.setValue(this._current + this.step);
   }
 
   /**
    * Decrement the slider value by one step
    */
   decrement(): void {
-    this.setValue(this.value - this.step);
+    this.setValue(this._current - this.step);
   }
 }
