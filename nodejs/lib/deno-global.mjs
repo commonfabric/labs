@@ -370,6 +370,9 @@ Object.assign(Deno, {
   refTimer,
   // Deno's `args` are the script's arguments only.
   args: process.argv.slice(2),
+  // Code that spawns `Deno.execPath()` gets the port's `deno` stand-in,
+  // which runs `deno run`/`eval`/`task` on Node.
+  execPath: () => fileURLToPath(new URL("../bin/deno", import.meta.url)),
 });
 
 globalThis.Deno = Deno;
