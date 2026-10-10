@@ -2756,6 +2756,12 @@ export class StorageManager implements IStorageManager {
       const space = crossing.space as MemorySpace;
       const id = crossing.id as URI;
       const scope = normalizeCellScope(crossing.scope);
+      // A scoped read of a foreign space is one a serving manager refuses
+      // by construction (ProviderOptions.refuseForeignScopedReads); the
+      // run that reads it is failed at dispatch, so no load is kicked.
+      if (scope !== "space" && this.#refusesForeignScopedReadsIn(space)) {
+        continue;
+      }
       const key = `${space}\0${scope}\0${id}\0${
         JSON.stringify(crossing.path)
       }\0${crossing.schema === undefined ? "" : hashStringOf(crossing.schema)}`;
