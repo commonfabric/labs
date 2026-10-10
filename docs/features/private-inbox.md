@@ -346,13 +346,20 @@ the trusted surface the notice declares, `PrivateInboxRefusalSurface`, with the
 action `ReplaceRefusedPrivateInbox`. So a send of the stream that no such click
 marks is refused, together with everything else its run writes and sends: no
 inbox is created, the refusal stays recorded, and no profile is re-pointed. The
-mark certifies that the event came from Home's rendered button, not that a
-person meant it. It keeps any pattern's code from replacing the inbox, but not a
-principal holding the owner's key, which can mark an event itself, as
-"Policy record: trusted-mark threat model" in
-[`host-embedding.md`](host-embedding.md) says. The second event can be sent
-without a click, but it only re-points profiles from the inbox the owner chose
-to replace.
+mark certifies that the event came from Home's rendered surface, so no pattern's
+code can replace the inbox. A principal holding the owner's key is trusted, and
+may issue the event headlessly, as "Policy record: trusted-mark threat model" in
+[`host-embedding.md`](host-embedding.md) says; keeping untrusted code from that
+key is the system's job. The second event can be sent without a click, but it
+only re-points profiles from the inbox the owner chose to replace.
+
+When the refused inbox is Home's own, in the space named `private-inbox` in
+Home's space, the inbox Home creates is another piece in that same space. The
+refused piece keeps its offers as they were, and Home no longer reads them, as
+it reads no refused inbox. Since the new piece is in the refused one's space,
+replacing helps when what the host refused is the piece, as for
+`inbox-offers-invalid` or `inbox-receive-missing`, and can't help when it is the
+space's access list.
 
 A loom daemon reads its profile's pointer again at intervals, and when the
 pointer names another inbox it adopts that inbox if the inbox's space grants
@@ -369,8 +376,9 @@ pointer.
 The replacement never clears a profile's pointer, only replaces one, so it
 doesn't depend on how a cleared pointer reads.
 
-Replacing, refusing a send no click marks, and re-pointing only the profiles
-that pointed at the refused inbox are tested by
+Replacing, refusing a send no click marks, re-pointing only the profiles that
+pointed at the refused inbox, and replacing Home's own inbox without touching
+its offers are tested by
 `packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with server
 execution on and off, and by `packages/patterns/system/private-inbox.test.tsx`.
 
