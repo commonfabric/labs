@@ -363,6 +363,29 @@ describe("CFSlider bound to a cell", () => {
     expect(changes.map((a) => a.detail)).toEqual([{ value: 0, oldValue: 0 }]);
   });
 
+  it("keeps a drag across a fresh handle for the same cell", async () => {
+    const value = createMockCellHandle(30);
+    const element = sliderWith(value);
+    const changes = announcements(element, "cf-change");
+
+    element._beginDrag();
+    element._moveTo(40, "drag");
+    // Same id and path: the same persistent cell, as CFC label settling hands
+    // over.
+    const fresh = createMockCellHandle(40);
+    element.value = fresh;
+    element.willUpdate(new Map([["value", value]]));
+    element._moveTo(50, "drag");
+    element._commitDrag();
+    await settle();
+
+    // One cell: its writes may go through either handle.
+    expect([...written(value), ...written(fresh)]).toEqual([40, 50]);
+    expect(changes.map((a) => a.detail)).toEqual([
+      { value: 50, oldValue: 30 },
+    ]);
+  });
+
   it("takes a key pressed mid-drag into the drag", async () => {
     const value = createMockCellHandle(30);
     const element = sliderWith(value);
@@ -469,6 +492,38 @@ describe("CFSlider given a plain number", () => {
     press(element, "End");
 
     expect(element.value).toBe(10);
+  });
+
+  it("commits a drag across the updates its own moves cause", () => {
+    const element = sliderWith(30);
+    const changes = announcements(element, "cf-change");
+
+    element._beginDrag();
+    element._moveTo(40, "drag");
+    // Each move sets value; Lit then updates with the value it replaced.
+    element.willUpdate(new Map([["value", 30]]));
+    element._moveTo(50, "drag");
+    element.willUpdate(new Map([["value", 40]]));
+    element._commitDrag();
+
+    expect(changes.map((a) => a.detail)).toEqual([
+      { value: 50, oldValue: 30 },
+    ]);
+  });
+
+  it("ends a drag when its value is set from outside", () => {
+    const element = sliderWith(30);
+    const changes = announcements(element, "cf-change");
+
+    element._beginDrag();
+    element._moveTo(40, "drag");
+    element.willUpdate(new Map([["value", 30]]));
+    element.value = 70;
+    element.willUpdate(new Map([["value", 40]]));
+    element._commitDrag();
+
+    expect(changes).toEqual([]);
+    expect(element.value).toBe(70);
   });
 
   it("sees a move made in the same tick", () => {
