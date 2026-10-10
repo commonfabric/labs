@@ -252,3 +252,19 @@ Deno.test("CFC API surface preserves the authored runtime value shape", () => {
   ]);
   assertEquals(currentPrincipal, { __ctCurrentPrincipal: true });
 });
+
+Deno.test("a CFC alias holds the `null` and `undefined` its payload holds", () => {
+  // The carrier distributes over the payload's members and leaves `null` and
+  // `undefined` beside them, so these assignments type-check.
+  const missing: Confidential<string | null, readonly ["secret"]> = null;
+  const absent: Integrity<{ title: string } | undefined, readonly ["trusted"]> =
+    undefined;
+  const present: Confidential<string | null, readonly ["secret"]> = "alpha";
+  // A generic payload stays one intersection, so its members are read through
+  // the alias.
+  const titleOf = <T extends { title: string }>(
+    value: Confidential<T, readonly ["secret"]>,
+  ): string => value.title;
+  assertEquals([missing, absent, present], [null, undefined, "alpha"]);
+  assertEquals(titleOf({ title: "delta" }), "delta");
+});

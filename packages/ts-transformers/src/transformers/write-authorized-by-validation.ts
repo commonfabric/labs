@@ -148,12 +148,13 @@ function findWriteAuthorizedByReferences(
       return;
     }
 
-    // What a CFC carrier records holds its payload again, as `of`, besides
-    // its metadata: walked whole, it would reach every policy in the payload a
-    // second time. Only its metadata, which may name policies of its own, as
-    // `WritePolicyAnyOf`'s members, is walked.
+    // A CFC carrier's tag holds its payload again, in the stamp it records
+    // and in the members it distributes over, besides its metadata: walked
+    // whole, it would reach every policy in the payload a second time. Only its
+    // metadata, which may name policies of its own, as `WritePolicyAnyOf`'s
+    // members, is walked.
     if (
-      ts.isTypeReferenceNode(current) && isCarrierRecord(current, context)
+      ts.isTypeReferenceNode(current) && isCarrierTag(current, context)
     ) {
       const metadata = current.typeArguments?.[1];
       if (metadata) visit(metadata, typeParamMap);
@@ -174,10 +175,18 @@ function findWriteAuthorizedByReferences(
         for (let i = 0; i < typeParameters.length; i++) {
           const paramName = typeParameters[i]?.name.text;
           const actual = current.typeArguments?.[i];
+          // A parameter the reference leaves out is its default, written in
+          // terms of the parameters before it.
+          const fallback = actual ? undefined : typeParameters[i]?.default;
           if (paramName && actual) {
             nextParamMap.set(
               paramName,
               substituteTypeNode(actual, typeParamMap),
+            );
+          } else if (paramName && fallback) {
+            nextParamMap.set(
+              paramName,
+              substituteTypeNode(fallback, nextParamMap),
             );
           }
         }
@@ -250,40 +259,38 @@ function declaredAlias(
 }
 
 /**
- * Whether `reference` is a CFC carrier's record of its policy, `CfcStamp`, as
- * the carrier itself writes it: within the body of the `Cfc` alias declared
- * beside it, which holds the payload the record names outside the record too
- * (`holdsPayloadBeside()`). An author's own alias of that name, written
- * anywhere else, is an ordinary type whose arguments are walked, and so is a
- * record whose payload nothing else holds.
+ * Whether `reference` is a CFC carrier's tag, `CfcTag`, as the carrier itself
+ * writes it: within the body of the `Cfc` alias declared beside it, which holds
+ * the payload the tag names outside the tag too (`holdsPayloadBeside()`). An
+ * author's own alias of that name, written anywhere else, is an ordinary type
+ * whose arguments are walked, and so is a tag whose payload nothing else holds.
  */
-function isCarrierRecord(
+function isCarrierTag(
   reference: ts.TypeReferenceNode,
   context: TransformationContext,
 ): boolean {
-  const record = declaredAlias(reference, context);
-  if (record?.name.text !== "CfcStamp") return false;
+  const tag = declaredAlias(reference, context);
+  if (tag?.name.text !== "CfcTag") return false;
   let enclosing: ts.Node | undefined = reference.parent;
   while (enclosing && !ts.isTypeAliasDeclaration(enclosing)) {
     enclosing = enclosing.parent;
   }
   return enclosing !== undefined && enclosing.name.text === "Cfc" &&
-    enclosing.getSourceFile() === record.getSourceFile() &&
+    enclosing.getSourceFile() === tag.getSourceFile() &&
     holdsPayloadBeside(enclosing, reference);
 }
 
 /**
- * Whether `carrier`, a `Cfc` alias, holds the payload `record` names beside
- * the record as well: its body intersects the type parameter the record
- * names as its payload with the record, as
- * `T & { readonly __ct_cfc__?: CfcStamp<T, M> }` does, so walking the body
- * reaches every policy in the payload without the record.
+ * Whether `carrier`, a `Cfc` alias, holds the payload `tag` names beside the
+ * tag as well: its body intersects the type parameter the tag names as its
+ * payload with the tag, as `T & CfcTag<T, Meta>` does, so walking the body
+ * reaches every policy in the payload without the tag.
  */
 function holdsPayloadBeside(
   carrier: ts.TypeAliasDeclaration,
-  record: ts.TypeReferenceNode,
+  tag: ts.TypeReferenceNode,
 ): boolean {
-  const payload = record.typeArguments?.[0];
+  const payload = tag.typeArguments?.[0];
   if (
     !payload || !ts.isTypeReferenceNode(payload) ||
     !ts.isIdentifier(payload.typeName) || payload.typeArguments?.length

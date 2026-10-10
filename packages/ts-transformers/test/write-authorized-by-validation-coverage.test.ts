@@ -596,16 +596,16 @@ Deno.test(
 );
 
 Deno.test(
-  "an author's alias named CfcStamp is walked like any other alias",
+  "an author's alias named CfcTag is walked like any other alias",
   async () => {
     const source = `/// <cts-enable />
       import { toSchema, WriteAuthorizedBy } from "commonfabric";
 
       const arbitrary = 123;
-      type CfcStamp<T, M> = T;
+      type CfcTag<T, M> = T;
 
       const schema = toSchema<
-        CfcStamp<WriteAuthorizedBy<{ title: string }, typeof arbitrary>, {}>
+        CfcTag<WriteAuthorizedBy<{ title: string }, typeof arbitrary>, {}>
       >();
 
       export { schema };
@@ -621,15 +621,17 @@ Deno.test(
 );
 
 Deno.test(
-  "a carrier whose payload only its record holds has the payload's writer validated",
+  "a carrier whose payload only its tag holds has the payload's writer validated",
   async () => {
-    // A `Cfc` that does not also intersect its payload with its record holds
-    // that payload in the record alone, so the record is walked whole.
+    // A `Cfc` that does not also intersect its payload with its tag holds
+    // that payload in the tag alone, so the tag is walked whole.
     const source = `/// <cts-enable />
       import { toSchema, type WriteAuthorizedBy } from "commonfabric";
 
-      type CfcStamp<T, M> = { readonly meta?: M; readonly of?: T };
-      type Cfc<T, M> = { readonly __ct_cfc__?: CfcStamp<T, M> };
+      type CfcTag<T, M> = {
+        readonly __ct_cfc__?: { readonly meta?: M; readonly of?: T };
+      };
+      type Cfc<T, M> = CfcTag<T, M>;
 
       const arbitrary = 123;
 
@@ -650,13 +652,15 @@ Deno.test(
 );
 
 Deno.test(
-  "a carrier whose payload only its record holds accepts a supported writer",
+  "a carrier whose payload only its tag holds accepts a supported writer",
   async () => {
     const source = `/// <cts-enable />
       import { handler, toSchema, type WriteAuthorizedBy } from "commonfabric";
 
-      type CfcStamp<T, M> = { readonly meta?: M; readonly of?: T };
-      type Cfc<T, M> = { readonly __ct_cfc__?: CfcStamp<T, M> };
+      type CfcTag<T, M> = {
+        readonly __ct_cfc__?: { readonly meta?: M; readonly of?: T };
+      };
+      type Cfc<T, M> = CfcTag<T, M>;
 
       const saver = handler<void, {}>((_e, _s) => {});
 
@@ -690,5 +694,28 @@ Deno.test(
     `;
     const diagnostics = await cfcDiagnostics(source);
     assertEquals(diagnostics.length, 1);
+  },
+);
+
+Deno.test(
+  "a policy a type parameter's default names is validated where the reference leaves it out",
+  async () => {
+    const source = `/// <cts-enable />
+      import { toSchema, type WriteAuthorizedBy } from "commonfabric";
+
+      const arbitrary = 123;
+      type Guarded<T, P = WriteAuthorizedBy<T, typeof arbitrary>> = P;
+
+      const schema = toSchema<Guarded<string>>();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+    assert(
+      diagnostics[0]!.message.includes(
+        "handler(), module(), requireEventIntegrity()",
+      ),
+    );
   },
 );

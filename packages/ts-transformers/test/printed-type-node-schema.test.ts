@@ -1159,11 +1159,13 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
       }
     });
 
-    describe("a CFC alias whose type the checker reduced", () => {
-      // `Confidential<string | null, …>` is `string & carrier` once
-      // `null & carrier` is nothing, and the reduced type keeps no alias name.
-      // A written reference still names the policy; a type alone has only its
-      // carrier, which holds the labels but cannot spell a writer binding.
+    describe("a CFC alias around a nullable payload", () => {
+      // `Confidential<string | null, …>` is `(string & carrier) | null`: the
+      // carrier distributes over the payload's members and leaves `null`
+      // beside them, so the type keeps both `null` and the alias's name, and
+      // the result reads as the argument does. A writer binding is the
+      // exception, which only a written reference spells, so the result,
+      // read from its type, has none.
       const TITLE_AND_RANK = {
         type: "object",
         properties: { title: { type: "string" }, rank: { type: "number" } },
@@ -1179,7 +1181,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               anyOf: [{ type: "string" }, { type: "null" }],
               ifc: { confidentiality: ["secret"] },
             },
-            { type: "string", ifc: { confidentiality: ["secret"] } },
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
           ],
           [
             "a nullable object written directly",
@@ -1197,9 +1202,14 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { confidentiality: ["secret"] },
             },
             {
-              type: "object",
-              properties: { title: { type: "string" } },
-              required: ["title"],
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { title: { type: "string" } },
+                  required: ["title"],
+                },
+                { type: "null" },
+              ],
               ifc: { confidentiality: ["secret"] },
             },
           ],
@@ -1218,7 +1228,7 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
                 },
               },
             },
-            { type: "string" },
+            { anyOf: [{ type: "string" }, { type: "null" }] },
           ],
           [
             "a nullable projection",
@@ -1236,9 +1246,14 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
             },
             {
-              type: "object",
-              properties: { t: { type: "string" } },
-              required: ["t"],
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { t: { type: "string" } },
+                  required: ["t"],
+                },
+                { type: "null" },
+              ],
               ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
             },
           ],
@@ -1250,7 +1265,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               anyOf: [{ type: "string" }, { type: "null" }],
               ifc: { confidentiality: ["secret"] },
             },
-            { type: "string", ifc: { confidentiality: ["secret"] } },
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
           ],
           [
             "a nullable array in another label's payload",
@@ -1264,8 +1282,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
             {
-              type: "array",
-              items: { type: "string" },
+              anyOf: [
+                { type: "array", items: { type: "string" } },
+                { type: "null" },
+              ],
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
           ],
@@ -1277,7 +1297,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               anyOf: [TITLE_AND_RANK, { type: "null" }],
               ifc: { confidentiality: ["secret"] },
             },
-            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
           ],
           [
             "a nullable intersection in another label's payload",
@@ -1288,7 +1311,7 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
             {
-              ...TITLE_AND_RANK,
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
           ],
@@ -1314,7 +1337,7 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
                 },
               },
             },
-            TITLE_AND_RANK,
+            { anyOf: [TITLE_AND_RANK, { type: "null" }] },
           ],
         ] as const
       ) {
@@ -1326,8 +1349,6 @@ ${declaration}
 export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           }, { types: COMMONFABRIC_TYPES, typeCheck: true });
           const schemas = patternSchemas(parseModule(files["/main.tsx"]!));
-          // The argument is read from its written reference, which keeps
-          // `null`; the result from the reduced type, which has none.
           expect((schemas.input.properties as Schema).a).toEqual(input);
           expect((schemas.output.properties as Schema).a).toEqual(output);
         });
