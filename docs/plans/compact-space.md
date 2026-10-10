@@ -153,10 +153,11 @@ pool.
 **The stage 3 dry run on that file**, `cf space compact --documents computed:
 --dry-run` under the default cut, read-only and 68 seconds: 384,602 instances
 matched, 232,853 of them losing rows, every boundary a patch to materialize;
-2,064,934 revision rows (688.5 MB) and 1,552 snapshot rows behind them;
-payload hollowing reaching 362,875 head-owning commits (8.98 GB) and
+2,064,934 revision rows (688.9 MB) and 1,552 snapshot rows behind them;
+payload hollowing reaching 362,875 head-owning commits (8.99 GB) and
 2,052,340 headless ones (4.03 GB), with the default 24-hour window keeping
-67,010 commits and the genesis receipt exempt. Those are the numbers stage 4
+67,010 commits, the genesis receipt exempt, and the store's foreign keys
+intact. Those are the numbers stage 4
 builds against.
 
 **Most heads are session instances.** Of the 672,073 head rows in
