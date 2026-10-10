@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-10-07\
-Revision: `84dad4e7a9`
+Last verified: 2026-10-09\
+Revision: `06d187bf3a`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -1160,10 +1160,9 @@ The current package provides:
   failure code, because reuse travels through the index rather than through the
   parent. This is the division of labour a data question wants: the root
   orchestrates and never pays for pattern syntax or reads the data, and the
-  child computes over references it cannot read out. It runs on its own turn
-  budget of 24 rather than the default subagent cap of 8, since each
-  compile-error iteration costs a turn, and it carries a return contract — a
-  discriminated union of
+  child computes over references it cannot read out. It runs on the default
+  subagent budget of 32 turns, which a delegation expecting a long compile-error
+  loop may raise, and it carries a return contract — a discriminated union of
   `{ ok: true, resultRef, describes, hashtags?, verificationRef?, verification?: "not-checked" }`
   and `{ ok: false, code, detail?, verificationRef? }` — which is the profile's
   own rather than a default: a `pattern-author` delegation that declares a

@@ -29,6 +29,7 @@ import {
   type TypeWithInternals,
 } from "../type-utils.ts";
 import {
+  isCommonFabricDeclaration,
   isCommonFabricSymbol,
   isImportedFromCommonFabric,
 } from "../typescript/common-fabric-symbols.ts";
@@ -40,8 +41,10 @@ import {
   entityNameRight,
   holdsFreeTypeParameter,
   holdsTypeParameter,
+  readAuthoredTypeNode,
   readMemberAnnotation,
   readThroughIdentityAliases,
+  readUnionMemberNodes,
   typeParameterOfReference,
   typeParameterOfType,
   unwrapTypeParentheses,
@@ -58,13 +61,25 @@ import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
 import {
+  CFC_CARRIER_PROPERTY,
+  cfcCarrierProperty,
+} from "../typescript/cfc-carrier.ts";
+import {
   getScopeBrand,
+  hasNestedScopeBrands,
+  isScopeBrandMember,
   SCOPE_WRAPPER_FOR_SCOPE,
+  type ScopeBrand,
   scopeForWrapperName,
+  scopePayloadType,
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
-import { scopeInsideUnionError } from "../scope-placement.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
+import {
+  scopeAroundCellUnionError,
+  scopeInsideUnionError,
+  scopeUnionUnreadError,
+} from "../scope-placement.ts";
+import { referenceChain, withIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
   holdsUnreadMetadataLabel,
@@ -248,10 +263,117 @@ const applyScopeToAsCellEntry = (
     return { kind: entry, scope };
   }
   if (isObjectOrArray(entry)) {
+    // A cell another scope's wrapper caps is a wrapper nested in another with
+    // no cell between them, whose scope would replace the cap.
+    if (entry.scope !== undefined && entry.scope !== scope) {
+      throw nestedScopeError();
+    }
     return { ...entry, scope };
   }
   return entry;
 };
+
+/** Whether `schema` declares a cell: an object with an `asCell` entry. */
+const isHandleSchema = (schema: unknown): boolean =>
+  isObjectNotArray(schema) &&
+  Array.isArray((schema as MutableJSONSchemaObj).asCell) &&
+  ((schema as MutableJSONSchemaObj).asCell as unknown[]).length > 0;
+
+/** Whether `node`, through parentheses, is `null` or `undefined`. */
+const isNullishTypeNode = (node: ts.TypeNode): boolean => {
+  const unwrapped = unwrapTypeParentheses(node);
+  return unwrapped.kind === ts.SyntaxKind.UndefinedKeyword ||
+    (ts.isLiteralTypeNode(unwrapped) &&
+      unwrapped.literal.kind === ts.SyntaxKind.NullKeyword);
+};
+
+/**
+ * What `member`, a member written in a union, reads as through parentheses
+ * and aliases without type parameters (`readAuthoredTypeNode()`): `"nullish"`
+ * for `null` or `undefined`, the scope wrapper it names, or `undefined` for
+ * anything else.
+ */
+const readScopedUnionMember = (
+  member: ts.TypeNode,
+  checker: ts.TypeChecker,
+): "nullish" | ResolvedScopeWrapper | undefined => {
+  const written = readAuthoredTypeNode(member, checker);
+  return isNullishTypeNode(written)
+    ? "nullish"
+    : resolveScopeWrapperNode(written);
+};
+
+/**
+ * The members `node`, a union, writes (`readUnionMemberNodes()`), but for a
+ * `never`, which adds nothing to the union.
+ */
+const writtenUnionMembers = (
+  node: ts.UnionTypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeNode[] =>
+  readUnionMemberNodes(node, checker).filter((member) =>
+    readAuthoredTypeNode(member, checker).kind !== ts.SyntaxKind.NeverKeyword
+  );
+
+/**
+ * The scope of the wrappers `node`, a union, writes beside `null` or
+ * `undefined`, as `PerUser<A> | null` does, which is the scope wrapper around
+ * the union of their payloads, `PerUser<A | null>`: each member it writes
+ * (`writtenUnionMembers()`), read as `readScopedUnionMember()` reads it, is
+ * `null`, `undefined`, or a wrapper of that one scope naming its payload, and
+ * at least one is a wrapper. `undefined` for any other union.
+ */
+export const scopeOfWrittenScopedUnion = (
+  node: ts.UnionTypeNode,
+  checker: ts.TypeChecker,
+): SchemaScope | undefined => {
+  let scope: SchemaScope | undefined;
+  for (const member of writtenUnionMembers(node, checker)) {
+    const read = readScopedUnionMember(member, checker);
+    if (read === "nullish") continue;
+    if (
+      !read?.node.typeArguments?.length ||
+      (scope !== undefined && read.scope !== scope)
+    ) {
+      return undefined;
+    }
+    scope = read.scope;
+  }
+  return scope;
+};
+
+/**
+ * The branches of the union `schema` is, through its chain of local
+ * references in `definitions` (`referenceChain()`), each as the chain of the
+ * schemas it reaches, and a branch that is itself a union read for its own
+ * branches in turn. A cell is a branch whatever its value holds: an `anyOf`
+ * on or behind it is its value's. A definition met again on the way, as a
+ * recursive one is, adds nothing. `undefined` where `schema` reaches no
+ * `anyOf` before a cell.
+ */
+const unionBranches = (
+  schema: MutableJSONSchemaObj,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+  reached = new Set<MutableJSONSchemaObj>(),
+): MutableJSONSchemaObj[][] | undefined => {
+  const chain = referenceChain(schema, definitions);
+  const union = chain.find((link) =>
+    isHandleSchema(link) || Array.isArray(link.anyOf)
+  );
+  if (!union || isHandleSchema(union)) return undefined;
+  if (reached.has(union)) return [];
+  reached.add(union);
+  return (union.anyOf as MutableJSONSchema[]).flatMap((branch) =>
+    isObjectNotArray(branch)
+      ? unionBranches(branch, definitions, reached) ??
+        [referenceChain(branch, definitions)]
+      : []
+  );
+};
+
+/** The error for a scope wrapper nested in another with no cell between. */
+const nestedScopeError = (): Error =>
+  new Error("Nested scope wrappers require a cell boundary between scopes.");
 
 /**
  * `typeNode` with each reference to a parameter in `paramMap` replaced by its
@@ -408,12 +530,6 @@ const soleConditionalBranch = (
 };
 
 /**
- * The member a CFC metadata carrier holds (`Cfc` in `packages/api/cfc.ts`).
- * It is a phantom: no value holds it.
- */
-export const CFC_CARRIER_PROPERTY = "__ct_cfc__";
-
-/**
  * The default-library aliases that map an object's members, which fold a
  * labelled operand's carrier into the object they build as one more member.
  */
@@ -434,18 +550,6 @@ const PRIMITIVE_KEEPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
   "Partial",
   "Required",
 ]);
-
-/**
- * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
- * metadata carrier, which a CFC alias intersects its payload with.
- */
-const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
-  const properties = member.getProperties();
-  return properties.length === 1 &&
-      properties[0]!.name === CFC_CARRIER_PROPERTY
-    ? properties[0]
-    : undefined;
-};
 
 /**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
@@ -838,7 +942,8 @@ const placeCarriedLabels = (
  * members; which of them a policy was written around, the intersection
  * itself does not say, and each carrier records it (`CarrierStamp.of`). A
  * payload the checker drops from an intersection, as it drops `unknown` and
- * `{}`, is none.
+ * `{}`, is none. A scope wrapper's brand, which a labeled value in a scope
+ * carries too, is no part of the value, and is passed over.
  */
 const cfcCarriedParts = (
   type: ts.Type,
@@ -856,7 +961,7 @@ const cfcCarriedParts = (
           checker,
         )
       ) metadata.push(stamp);
-    } else rest.push(member);
+    } else if (!isScopeBrandMember(member, checker)) rest.push(member);
   }
   return metadata.length > 0 ? { payload: rest, metadata } : undefined;
 };
@@ -1130,16 +1235,30 @@ export function scopeOfAliasChain(
 }
 
 /**
- * Whether `type` is a scope wrapper, reached through its alias chain
- * (`scopeOfAliasChain()`), around a cell. It caps the cell's handle and is
- * itself a wrapper, so a cycle through it is found at the cell's value, not
- * at the wrapper, and the capped handle is written inline at each reference.
+ * The scope of the scope wrapper `type` is: the one its alias chain reaches
+ * (`scopeOfAliasChain()`), and otherwise the one its brand declares
+ * (`getScopeBrand()`), as for a type the checker narrowed or built with no
+ * alias, or a union written beside a wrapper, as `PerUser<A> | null`.
+ */
+export function scopeOfScopeWrapper(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): SchemaScope | undefined {
+  return scopeOfAliasChain(type, checker) ??
+    getScopeBrand(type, checker)?.scope;
+}
+
+/**
+ * Whether `type` is a scope wrapper (`scopeOfScopeWrapper()`) around a cell.
+ * It caps the cell's handle and is itself a wrapper, so a cycle through it is
+ * found at the cell's value, not at the wrapper, and the capped handle is
+ * written inline at each reference.
  */
 export function scopesCellHandle(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): boolean {
-  return scopeOfAliasChain(type, checker) !== undefined &&
+  return scopeOfScopeWrapper(type, checker) !== undefined &&
     (getScopeBrand(type, checker)?.payload.some((members) =>
       members.some((member) =>
         getCellWrapperInfo(member, checker) !== undefined
@@ -1178,6 +1297,17 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (scopeOfAliasChain(type, context.typeChecker) !== undefined) {
+      return true;
+    }
+
+    // Two scopes' brands on one value are refused (`formatType()`), except
+    // where the schema declares no scope, which reads the value as it would
+    // any other brand-only member's.
+    if (
+      this.#scopeBrand(type, context) !== undefined ||
+      (!context.declaresNoScope &&
+        hasNestedScopeBrands(type, context.typeChecker))
+    ) {
       return true;
     }
 
@@ -1260,6 +1390,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       );
     }
 
+    const besideUndefined = this.#formatBesideTakenUndefined(type, context);
+    if (besideUndefined) return besideUndefined;
+
     const aliasType = type as TypeWithInternals;
     const aliasScope = scopeForWrapperName(aliasType.aliasSymbol?.name);
     if (aliasScope !== undefined) {
@@ -1274,7 +1407,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         context,
         undefined,
       );
-      return this.#applyScopeWrapperSemantics(innerSchema, aliasScope);
+      return this.#applyScopeWrapperSemantics(innerSchema, aliasScope, context);
     }
 
     const resolvedScopeAlias = this.#resolveAliasChainInstantiation(
@@ -1292,6 +1425,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           this.#applyScopeWrapperSemantics(
             this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
             scopeForWrapperName(resolvedScopeAlias.aliasName)!,
+            context,
           ),
       );
     }
@@ -1331,6 +1465,29 @@ export class CommonFabricFormatter implements TypeFormatter {
       // The structure may carry the same labels, from the carrier folded into
       // it; labelling it again with them changes nothing.
       return this.#withPlacedLabels(shape, type, view.metadata, context);
+    }
+
+    // Two scopes' brands on one value are a wrapper nested in another with no
+    // cell between them, as the node-driven reading refuses when a node
+    // names both.
+    if (
+      !context.declaresNoScope &&
+      hasNestedScopeBrands(type, context.typeChecker)
+    ) {
+      throw nestedScopeError();
+    }
+
+    // A scope wrapper that no alias names, as a type the checker narrowed or
+    // `PerUser<A> | null`, is named by its brand. Its payload is read from a
+    // union node written for it where there is one.
+    const brand = this.#scopeBrand(type, context);
+    if (brand) {
+      return this.#applyScopeWrapperSemantics(
+        this.#formatWrittenScopedUnion(type, brand, context) ??
+          this.#formatScopePayload(type, brand, context),
+        brand.scope,
+        context,
+      );
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -1714,6 +1871,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       scopeForWrapperName(typeWithAlias?.aliasSymbol?.name) !== undefined
         ? typeWithAlias?.aliasTypeArguments?.[0]
         : undefined;
+    const brand = type && !resolvedInner
+      ? this.#scopeBrand(type, context)
+      : undefined;
     const usableResolvedInner = resolvedInner &&
         !this.#isUnusableInnerType(resolvedInner)
       ? resolvedInner
@@ -1748,6 +1908,8 @@ export class CommonFabricFormatter implements TypeFormatter {
           context,
           undefined,
         );
+      } else if (type && brand) {
+        innerSchema = this.#formatScopePayload(type, brand, context);
       } else {
         for (const node of uninterpreted) {
           context.uninterpretedTypeNodes?.push(node);
@@ -1755,13 +1917,284 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
-    return this.#applyScopeWrapperSemantics(innerSchema, scope);
+    return this.#applyScopeWrapperSemantics(innerSchema, scope, context);
   }
 
+  /**
+   * The scope brand `type` carries (`getScopeBrand()`), or `undefined` where a
+   * scope wrapper reading it has taken the brand off
+   * (`GenerationContext.scopeBrandRead`).
+   */
+  #scopeBrand(
+    type: ts.Type,
+    context: GenerationContext,
+  ): ScopeBrand | undefined {
+    return context.scopeBrandRead?.has(type)
+      ? undefined
+      : getScopeBrand(type, context.typeChecker);
+  }
+
+  /**
+   * The schema of `type`, one scope's wrapper holding no `undefined`, where
+   * the node at this position writes the wrapper beside `undefined`, as a
+   * member's node does once its `?` takes that `undefined` out of the type it
+   * is read at (`handle?: Box<A>` with `type Box<T> = PerUser<T> | undefined`).
+   * The union is the one `#writtenUnion()` finds there, and the wrapper is
+   * read at the member written for it, under the bindings it is written
+   * with, so that what only its syntax names is kept. A cell there is
+   * refused, as a cell beside `undefined` is anywhere, and so is a union
+   * whose other members do not read as one wrapper of that scope
+   * (`readScopedUnionMember()`). `undefined` where the node writes no such
+   * union.
+   */
+  #formatBesideTakenUndefined(
+    type: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    if (type.isUnion() || !context.typeNode) return undefined;
+    const brand = this.#scopeBrand(type, context);
+    const written = brand && this.#writtenUnion(type as ts.UnionType, context);
+    if (!written) return undefined;
+    const checker = context.typeChecker;
+    const members = writtenUnionMembers(written.node, checker).map((member) =>
+      readScopedUnionMember(member, checker)
+    );
+    const values = members.filter((member) => member !== "nullish");
+    if (values.length === members.length) return undefined;
+    const [wrapper, ...rest] = values;
+    if (!wrapper || rest.length > 0 || wrapper.scope !== brand.scope) {
+      throw scopeUnionUnreadError(brand.scope);
+    }
+    const schema = this.formatType(type, {
+      ...written.context,
+      typeNode: wrapper.node,
+    });
+    if (isHandleSchema(schema)) throw scopeAroundCellUnionError(brand.scope);
+    return schema;
+  }
+
+  /**
+   * The schema of the payload the scope wrapper `type` holds, with its `brand`
+   * taken off. A payload the checker cannot intersect again without the brand,
+   * as `A & B` in `PerUser<A & B>`, is `type` itself, whose own `#formatType()`
+   * is in progress. It is read in place rather than as a type met again inside
+   * itself: by this formatter where it claims `type` for anything besides the
+   * brand, such as the labels of a CFC alias, and otherwise by the formatters
+   * after it (`SchemaGenerator.formatStructure()`). Either reads it without the
+   * wrapper's node, which would name the wrapper once more.
+   */
+  #formatScopePayload(
+    type: ts.Type,
+    brand: ScopeBrand,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const payload = scopePayloadType(type, brand, context.typeChecker);
+    const { typeNode: _, ...rest } = context;
+    const payloadContext: GenerationContext = {
+      ...rest,
+      scopeBrandRead: new Set([
+        type,
+        payload,
+        ...(type.isUnion() ? type.types : []),
+      ]),
+    };
+    if (payload !== type) {
+      return this.#schemaGenerator.formatChildType(
+        payload,
+        payloadContext,
+        undefined,
+      );
+    }
+    return this.supportsType(type, payloadContext)
+      ? this.formatType(type, payloadContext)
+      : this.#schemaGenerator.formatStructure(type, payloadContext);
+  }
+
+  /**
+   * The schema of the payload of `type`, a union of scope wrappers of
+   * `brand`'s scope beside `null` or `undefined` written as one, as
+   * `PerUser<A> | null`, or `undefined` where no such union is written for it
+   * (`#writtenUnion()`). The payload is read as `#formatScopePayload()` reads
+   * it, by its type, `A | null`, at the members written for it: the payload
+   * written in each wrapper and each `null` or `undefined`
+   * (`GenerationContext.scopePayloadNodes`), as `PerUser<A | null>` writes
+   * them. What only the syntax says, such as the binding
+   * `PolicyOf<typeof rules>` names, is read as written.
+   */
+  #formatWrittenScopedUnion(
+    type: ts.Type,
+    brand: ScopeBrand,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    const checker = context.typeChecker;
+    const written = type.isUnion()
+      ? this.#writtenUnion(type, context)
+      : undefined;
+    if (!written) return undefined;
+    // Every member of a branded union is one of the brand's wrappers or
+    // `null` or `undefined`, so a union written for it that does not read so
+    // hides its members, and its type alone would lose what only the syntax
+    // names.
+    if (scopeOfWrittenScopedUnion(written.node, checker) !== brand.scope) {
+      throw scopeUnionUnreadError(brand.scope);
+    }
+    // Each wrapper stands for the payload written in it, and a union written
+    // there has its members written beside the `null` or `undefined` outside.
+    const nodes = writtenUnionMembers(written.node, checker).flatMap(
+      (member) => {
+        const read = readScopedUnionMember(member, checker);
+        const payload = read === "nullish"
+          ? undefined
+          : read?.node.typeArguments?.[0];
+        if (!payload) return [member];
+        const unwrapped = unwrapTypeParentheses(payload);
+        return ts.isUnionTypeNode(unwrapped) ? unwrapped.types : [payload];
+      },
+    );
+    // Read under bindings, the union is the declaration's own type, whose
+    // brand gives the payload as the declaration writes it.
+    const writtenBrand = written.type === type
+      ? brand
+      : getScopeBrand(written.type, checker);
+    if (writtenBrand?.scope !== brand.scope) return undefined;
+    const payload = scopePayloadType(written.type, writtenBrand, checker);
+    // The union's instantiation, where it is read under bindings, gives its
+    // payload's (`GenerationContext.instantiatedAs`).
+    const instantiatedType = written.type === type
+      ? context.instantiatedAs
+      : type;
+    const instantiatedBrand = instantiatedType &&
+      getScopeBrand(instantiatedType, checker);
+    const instantiated = instantiatedBrand?.scope === brand.scope
+      ? scopePayloadType(instantiatedType!, instantiatedBrand, checker)
+      : undefined;
+    const { typeNode: _, instantiatedAs: __, ...outer } = written.context;
+    return this.#schemaGenerator.formatChildType(
+      payload,
+      {
+        ...outer,
+        // An alternative of several members is the branded member itself
+        // (`scopePayloadType()`), read as its payload.
+        scopeBrandRead: new Set([
+          payload,
+          ...(payload.isUnion() ? payload.types : []),
+        ]),
+        scopePayloadNodes: { payload, nodes },
+      },
+      undefined,
+      instantiated,
+    );
+  }
+
+  /**
+   * The union node written for `type`, a union, with the type and the context
+   * to read it in: the node at this position, through parentheses and aliases
+   * that bind nothing, read as `type`; and otherwise the body of the alias the
+   * reference at this position names, or, with no node here, the one `type`
+   * is reached by, followed down a chain of aliases, each the whole body of
+   * the one before, to one whose body is a union. A generic alias's body is the
+   * declaration's own type, read with each parameter bound to the argument
+   * the reference to it writes, read under the bindings of the place it is
+   * written, or to the type's argument where none is written, at `type`
+   * (`GenerationContext.instantiatedAs`). `commonfabric`'s own aliases end
+   * the chain.
+   */
+  #writtenUnion(
+    type: ts.UnionType,
+    context: GenerationContext,
+  ):
+    | {
+      readonly node: ts.UnionTypeNode;
+      readonly type: ts.Type;
+      readonly context: GenerationContext;
+    }
+    | undefined {
+    const checker = context.typeChecker;
+    const at = context.typeNode &&
+      readThroughIdentityAliases(context.typeNode, checker);
+    if (at && ts.isUnionTypeNode(at)) {
+      return { node: at, type, context };
+    }
+    if (at && !ts.isTypeReferenceNode(at)) return undefined;
+    const typeDeclaration = this.#getTypeAliasDeclarationForSymbol(
+      type.aliasSymbol,
+      context,
+    );
+    let reference = at;
+    let declaration = reference
+      ? this.#getTypeAliasDeclarationForSymbol(
+        checker.getSymbolAtLocation(reference.typeName),
+        context,
+      )
+      : typeDeclaration;
+    let bound = context.boundTypeParameters;
+    const visited = new Set<ts.TypeAliasDeclaration>();
+    while (
+      declaration && !visited.has(declaration) &&
+      !isCommonFabricDeclaration(declaration)
+    ) {
+      visited.add(declaration);
+      const body = unwrapTypeParentheses(declaration.type);
+      const typeArguments = declaration === typeDeclaration
+        ? type.aliasTypeArguments
+        : undefined;
+      const written = reference?.typeArguments ?? [];
+      const here = new Map<ts.TypeParameterDeclaration, BoundTypeArgument>();
+      for (
+        const [index, parameter] of (declaration.typeParameters ?? [])
+          .entries()
+      ) {
+        // An argument the reference leaves out is its parameter's default,
+        // read with the arguments before it.
+        const node = written[index] ?? (reference && parameter.default);
+        const argument = node &&
+          this.#bindWrittenArgument(
+            node,
+            written[index]
+              ? bound
+              : { arguments: new Map(here), declaredNode: node },
+            context,
+          );
+        const argumentType = typeArguments?.[index];
+        const binding = argument || (argumentType && { type: argumentType });
+        if (!binding) return undefined;
+        here.set(parameter, binding);
+      }
+      bound = here.size > 0
+        ? { arguments: here, declaredNode: body }
+        : undefined;
+      if (ts.isUnionTypeNode(body)) {
+        const { boundTypeParameters: _, ...outer } = context;
+        return {
+          node: body,
+          type: this.#writtenArgumentType(body, context),
+          context: bound
+            ? { ...outer, boundTypeParameters: bound, instantiatedAs: type }
+            : outer,
+        };
+      }
+      if (!ts.isTypeReferenceNode(body)) return undefined;
+      reference = body;
+      declaration = this.#getTypeAliasDeclarationForSymbol(
+        checker.getSymbolAtLocation(body.typeName),
+        context,
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * `schema`, a scope wrapper's payload, in `scope`: the cap on its cell's
+   * handle where it is a cell, and otherwise the scope of its slot. A schema
+   * that declares no scope (`GenerationContext.declaresNoScope`) is the
+   * payload alone.
+   */
   #applyScopeWrapperSemantics(
     schema: MutableJSONSchema,
     scope: SchemaScope,
+    context: GenerationContext,
   ): MutableJSONSchema {
+    if (context.declaresNoScope) return schema;
     if (typeof schema === "boolean") {
       return schema === false ? { not: true, scope } : { scope };
     }
@@ -1774,11 +2207,46 @@ export class CommonFabricFormatter implements TypeFormatter {
       };
     }
 
-    if (schema.scope !== undefined) {
-      throw new Error(
-        "Nested scope wrappers require a cell boundary between scopes.",
-      );
+    // A cell an alias names may be a definition the payload only references,
+    // as a labelled cell's alias is hoisted. The cap is on its handle here, so
+    // the cell is written here, as written in place, beside the labels the
+    // references to it declare; the definition stays as it is for references
+    // that hold no scope.
+    const reached = referenceChain(schema, context.definitions);
+    const cellAt = reached.findIndex((link, index) =>
+      index > 0 && isHandleSchema(link)
+    );
+    if (cellAt > 0) {
+      const { $ref: _, ifc: __, ...beside } = schema;
+      const cell = reached[cellAt]!;
+      const [first, ...rest] = cell.asCell as AsCellEntry[];
+      let written: MutableJSONSchema = {
+        ...cell,
+        ...beside,
+        asCell: [applyScopeToAsCellEntry(first!, scope), ...rest],
+      };
+      for (const link of reached.slice(0, cellAt)) {
+        if (isObjectOrArray(link.ifc)) {
+          written = withIfcLabels(written, link.ifc);
+        }
+      }
+      return written;
     }
+
+    // A cell beside anything, `null` and `undefined` included, is an `anyOf`
+    // branch, where the cap on following its handle would sit apart from the
+    // slot's scope (`scopeAroundCellUnionError()`). The union, and the cell in
+    // it, may each be a definition a reference names, as an alias of either is
+    // hoisted.
+    if (
+      unionBranches(schema, context.definitions)?.some((branch) =>
+        branch.some(isHandleSchema)
+      )
+    ) {
+      throw scopeAroundCellUnionError(scope);
+    }
+
+    if (schema.scope !== undefined) throw nestedScopeError();
 
     return { ...schema, scope };
   }
@@ -4375,7 +4843,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       // where the wrapper is still visible.
       const memberScope = resolveScopeWrapperNode(memberNode)?.scope ??
         scopeOfAliasChain(memberType, context.typeChecker);
-      if (memberScope !== undefined) {
+      if (memberScope !== undefined && !context.declaresNoScope) {
         throw scopeInsideUnionError(memberScope);
       }
 

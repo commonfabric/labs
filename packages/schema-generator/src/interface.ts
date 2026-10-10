@@ -80,6 +80,14 @@ export interface SchemaGenerationOptions {
   readonly widenLiterals?: boolean;
 
   /**
+   * Generate a schema that declares no scope: each scope wrapper is read as
+   * its payload, with no `scope` and no cap on a cell's `asCell` entry. A
+   * lift's result whose type its author did not write is generated this way,
+   * since the runtime stores it at the narrowest scope its callback reads.
+   */
+  readonly declaresNoScope?: boolean;
+
+  /**
    * Receives each diagnostic, a warning or an error; without a callback the
    * generator logs it. An error says the schema generated is not one to accept.
    */
@@ -191,6 +199,9 @@ export interface GenerationContext {
   /** Widen literal types to base types during schema generation */
   widenLiterals?: boolean;
 
+  /** The schema declares no scope (`SchemaGenerationOptions.declaresNoScope`). */
+  declaresNoScope?: boolean;
+
   /** Receives recoverable schema-generation problems. */
   onDiagnostic?: (diagnostic: SchemaGenerationDiagnostic) => void;
 
@@ -222,8 +233,10 @@ export interface GenerationContext {
 
   /**
    * Reads only the CFC labels a type attaches at its top: a type that no CFC
-   * wrapper holds, other than a union or an intersection, whose members can
-   * carry labels to it, is read as accepting anything, and not formatted.
+   * wrapper holds is read as accepting anything, and not formatted, except a
+   * union or an intersection, whose members can carry labels to it, and
+   * `null` and `undefined`, which tell a value that may be missing apart from
+   * its value member.
    */
   labelsOnly?: boolean;
 
@@ -234,6 +247,27 @@ export interface GenerationContext {
    * node, it is not passed on to a child.
    */
   carriersRead?: ts.Type;
+
+  /**
+   * Types whose scope brand the scope wrapper reading them has taken off, read
+   * here as its payload: the type the brand was read from, the payload type
+   * itself (`scopePayloadType()`) where it is distinct, and each member of it
+   * as a union.
+   */
+  scopeBrandRead?: ReadonlySet<ts.Type>;
+
+  /**
+   * The members written for `payload`, the payload of a union of scope
+   * wrappers beside `null` or `undefined` written as one, `PerUser<A> | null`:
+   * the payload written in each wrapper, and each `null` or `undefined`, as
+   * the members of `A | null` written in `PerUser<A | null>` are. The union
+   * formatter reads `payload` at these nodes, as it reads a union at the
+   * union node written for it.
+   */
+  scopePayloadNodes?: {
+    readonly payload: ts.Type;
+    readonly nodes: readonly ts.TypeNode[];
+  };
 
   /**
    * Type parameters read as their arguments, for a node read from the

@@ -16,7 +16,9 @@ import {
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
 import {
+  MAX_ROUTED_LEASE_SECONDS,
   readRoutedHex,
+  ROUTED_CHALLENGE_SECONDS,
   routedBase64,
   routedStatementPayload,
 } from "@commonfabric/memory/v2/routed-wire";
@@ -39,6 +41,23 @@ const logger = getLogger("storage.v2.remote", {
 });
 
 /**
+ * JSON values in one routed frame this SDK sends or accepts, counted as the
+ * router counts them: one per value, keys free. It matches the router's
+ * default `max_frame_slots` and the toolshed's default `limits.frameSlots`,
+ * and must not exceed the deployment's router/toolshed cap: the router and
+ * the toolshed close the socket a larger frame arrives on, so the SDK refuses
+ * one here, compressed or raw, before it is sent, and closes on receiving one.
+ * The SDK does not learn the deployment's cap.
+ */
+export const ROUTED_FRAME_SLOTS = 150_000;
+
+/** A raw routed frame, checked as its receiver checks it before it is sent. */
+function checkedRoutedText(payload: string): string {
+  decodeRoutedFrame(payload, false, ROUTED_FRAME_SLOTS);
+  return payload;
+}
+
+/**
  * The connection a session was opened on, as far as the session's holder may
  * use it. A `MemoryClient.Client` holding one session is one, and so is a
  * holder's share of a client that holds several.
@@ -58,6 +77,14 @@ export interface SessionConnection {
    * nothing else can be using it.
    */
   close(): Promise<void>;
+
+  /**
+   * Ends the connection's authentication of `principal`, for a key no later
+   * session will use, such as a created space's. Only a share of a
+   * connection that outlives the session has one; a connection that closes
+   * with its session has nothing to release.
+   */
+  releasePrincipal?(principal: string): Promise<void>;
 }
 
 export interface SessionFactory {
@@ -163,8 +190,10 @@ const storageAddressForMemoryHost = (host: URL): URL => {
 export const SESSION_OPEN_TTL_SECONDS = 300;
 
 /**
- * Lease a signed `connection.auth` asks for, in seconds: the server caps it
- * at its own limit, and the client renews ahead of whatever it granted.
+ * Lease a signed direct `connection.auth` asks for, in seconds: the server
+ * caps it at its own limit, and the client renews ahead of whatever it
+ * granted. A routed statement asks for MAX_ROUTED_LEASE_SECONDS, the longest
+ * a router admits.
  */
 export const CONNECTION_AUTH_LEASE_SECONDS = 3600;
 
@@ -301,8 +330,10 @@ export class WebSocketTransport implements MemoryClient.Transport {
       const connection = await opening;
       const frame = compressionEnabled
         ? routed
-          ? encodeRoutedFrame(payload)
+          ? encodeRoutedFrame(payload, ROUTED_FRAME_SLOTS)
           : await encodeCompressedMemoryMessage(payload)
+        : routed
+        ? checkedRoutedText(payload)
         : payload;
       if (this.#socket !== connection.socket) {
         throw MemoryClient.connectionError(
@@ -403,9 +434,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
                 : frame instanceof ArrayBuffer
                 ? new Uint8Array(frame)
                 : frame;
-              payload =
-                decodeRoutedFrame(routedFrame, this.#receiveCompressionEnabled)
-                  .payload;
+              payload = decodeRoutedFrame(
+                routedFrame,
+                this.#receiveCompressionEnabled,
+                ROUTED_FRAME_SLOTS,
+              ).payload;
             } else if (this.#receiveCompressionEnabled) {
               payload = await decodeCompressedMemoryMessage(frame);
             } else {
@@ -664,8 +697,9 @@ export async function createSignedConnectionAuth(
           challenge: readRoutedHex(context.challenge.value, 32),
           iat,
           exp: Math.min(
-            iat + CONNECTION_AUTH_LEASE_SECONDS,
-            context.challenge.expiresAt - 60 + CONNECTION_AUTH_LEASE_SECONDS,
+            iat + MAX_ROUTED_LEASE_SECONDS,
+            context.challenge.expiresAt - ROUTED_CHALLENGE_SECONDS +
+              MAX_ROUTED_LEASE_SECONDS,
           ),
         }).sign(signer),
       ),
@@ -742,6 +776,14 @@ class SharedSessionConnection implements SessionConnection {
     if (this.#closed) return;
     this.#closed = true;
     await this.#session.close();
+  }
+
+  /**
+   * Ends the shared connection's authentication of `principal`, which a
+   * router counts against the connection until it is released.
+   */
+  async releasePrincipal(principal: string): Promise<void> {
+    await this.#client.release(principal);
   }
 }
 
@@ -841,15 +883,6 @@ export class RemoteSessionFactory implements SessionFactory {
     });
   }
 
-  #createSessionOpenAuth(
-    signer: Signer,
-    space: MemorySpace,
-    session: MemoryClient.MountOptions,
-    context: MemoryClient.SessionOpenAuthContext,
-  ): Promise<MemoryClient.SessionOpenAuth> {
-    return createSignedSessionOpenAuth(signer, space, session, context);
-  }
-
   create(
     space: MemorySpace,
     signer = this.#defaultSigner,
@@ -862,6 +895,26 @@ export class RemoteSessionFactory implements SessionFactory {
     return this.#sharedConnections
       ? this.#createShared(space, signer, mountOptions, signal)
       : this.#createDedicated(space, signer, mountOptions, signal);
+  }
+
+  /**
+   * Helper for `create()`, which returns both authentication signers for the
+   * key. The server's capabilities select authentication independently of
+   * whether the factory shares connections.
+   */
+  #sessionPrincipal(signer: Signer): MemoryClient.SessionPrincipal {
+    return {
+      did: signer.did(),
+      authorizeConnection: (context) =>
+        createSignedConnectionAuth(signer, context),
+      authorizeSessionOpen: (space, descriptor, context) =>
+        createSignedSessionOpenAuth(
+          signer,
+          space as MemorySpace,
+          descriptor,
+          context,
+        ),
+    };
   }
 
   /**
@@ -884,18 +937,12 @@ export class RemoteSessionFactory implements SessionFactory {
       signal,
     );
     try {
-      const session = await client.mount(space, mountOptions, {
-        did: signer.did(),
-        authorizeConnection: (context) =>
-          createSignedConnectionAuth(signer, context),
-        authorizeSessionOpen: (targetSpace, descriptor, context) =>
-          this.#createSessionOpenAuth(
-            signer,
-            targetSpace as MemorySpace,
-            descriptor,
-            context,
-          ),
-      }, signal);
+      const session = await client.mount(
+        space,
+        mountOptions,
+        this.#sessionPrincipal(signer),
+        signal,
+      );
       return {
         client: new SharedSessionConnection(client, session),
         session,
@@ -1028,17 +1075,7 @@ export class RemoteSessionFactory implements SessionFactory {
         const session = await client.mount(
           space,
           mountOptions,
-          (
-            targetSpace: string,
-            descriptor: MemoryClient.MountOptions,
-            context: MemoryClient.SessionOpenAuthContext,
-          ) =>
-            this.#createSessionOpenAuth(
-              signer,
-              targetSpace as MemorySpace,
-              descriptor,
-              context,
-            ),
+          this.#sessionPrincipal(signer),
           signal,
         );
         if (signal?.aborted) throw abortError();

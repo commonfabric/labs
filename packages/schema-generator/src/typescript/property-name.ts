@@ -4,7 +4,7 @@ import { isCellInternalMarkerName } from "./cell-brand.ts";
 import { isCommonFabricDeclaration } from "./common-fabric-symbols.ts";
 
 const COMMON_FABRIC_HELPERS_IDENTIFIER = "__cfHelpers";
-const COMMON_FABRIC_KEY_NAMES = ["NAME", "UI", "SELF", "FS"] as const;
+const COMMON_FABRIC_KEY_NAMES = ["NAME", "UI", "SELF", "FS", "VIEWS"] as const;
 const COMMON_FABRIC_KEY_NAME_SET = new Set<CommonFabricKeyName>(
   COMMON_FABRIC_KEY_NAMES,
 );

@@ -46,10 +46,6 @@ import {
   type HarnessResearchRunSummary,
 } from "../src/contracts/research.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
-import {
-  DEFAULT_SUBAGENT_MAX_MODEL_TURNS,
-  PATTERN_AUTHOR_SUBAGENT_MAX_MODEL_TURNS,
-} from "../src/contracts/subagent.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import { createPatternSkillsFixture } from "./support/pattern-skills-fixture.ts";
 import {
@@ -1495,39 +1491,6 @@ describe("prompt-loop cross-agent address handles", () => {
       "Current user goal:\nTrack attendance with the existing pieces.",
     );
     expect(childUserPrompt).not.toContain("Use the described mail input.");
-  });
-
-  it("runs a `pattern-author` child on the profile's own turn budget rather than the run default", async () => {
-    const loop = new CfHarnessPromptLoop({
-      apiKey: "test-key",
-      engine: new CfHarnessEngine({
-        sandboxRuntime: new FakeSandboxRuntime(),
-        runId: "run-subagent-pattern-author-budget",
-        model: "gpt-5.4",
-      }),
-      allowedSubagentProfiles: ["pattern-author"],
-      fetchFn: scriptedFetch([
-        delegateCallTurn("call-delegate", {
-          goal: "Author a pattern.",
-          profile: "pattern-author",
-        }),
-        finalTurn(JSON.stringify({ ok: false, reason: "No fabric session." })),
-        finalTurn("Parent done."),
-      ]),
-    });
-
-    const result = await loop.runPrompt({
-      prompt: "Delegate the authoring.",
-      promptSlotBinding: directPromptSlotBinding,
-    });
-
-    const runRef = result.runState.subagentRuns?.[0];
-    expect(runRef?.manifest.maxModelTurns).toBe(
-      PATTERN_AUTHOR_SUBAGENT_MAX_MODEL_TURNS,
-    );
-    expect(runRef?.manifest.maxModelTurns).not.toBe(
-      DEFAULT_SUBAGENT_MAX_MODEL_TURNS,
-    );
   });
 
   it("returns the failure branch from a `pattern-author` child that cannot succeed, distinguishable from success by shape", async () => {

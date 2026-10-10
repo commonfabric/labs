@@ -7,7 +7,8 @@ Proposed requirements for the router phases of the
 The opt-in Mode A implementation is specified in
 [the routed protocol](../specs/memory-v2/routed-mode-a.md); public deployment
 remains subject to the acceptance gates below. Other router phases are proposed.
-They depend on the direct connection-auth protocol described in that design. The first public stage serves existing spaces
+They depend on the direct connection-auth protocol described in that design.
+The first public stage serves the spaces its directory places
 through one client WebSocket that can reach several toolsheds. It uses the
 design's Mode A: one upstream connection per client per toolshed. Mode B needs a
 separate security review before deployment. That review must establish a
@@ -25,11 +26,26 @@ assess the shared multiplexer compromise and crash blast radius, including
 sharding per toolshed. Section 5.3 of the multiplexing design must be reconciled
 with those constraints before Mode B is implemented.
 
-This stage assumes that space creation is restricted, spaces have the intended
-access-control documents, and no legacy spaces are served. Those are deployment
-prerequisites, not properties established by the router. The router protects
-Memory WebSockets; public HTTP routes need their own ingress and authorization
-review.
+This stage assumes that spaces have the intended access-control documents. That
+is a deployment prerequisite, not a property established by the router. Legacy
+spaces, which have history but no ACL, are refused until a service DID gives
+them an ACL, which it may do at any time. Space creation is open to any
+authenticated client when the directory has an `unlisted` rule (requirement 9);
+a registry the router enforces is planned to restrict it. Because any client can
+then own a space, operator requests such as disk-source registration are refused
+to the router's clients and accepted elsewhere only from service DIDs. The
+router protects Memory WebSockets; public HTTP routes need their own ingress and
+authorization review.
+
+### Amendments
+
+- 2026-10-08, owner Will Kelly: a toolshed keeps a client context's accepted
+  statements only while the context lives, and a routed lease is at most ten
+  minutes, not an hour. Changed: the trust boundary (the router-replay window,
+  stated as an unenforced trust dependency), requirements 1, 4 and 5, and the
+  public-stage acceptance gates. Each change is marked "(Amended 2026-10-08;
+  was: ...)" with the text it replaced, or "(Amended 2026-10-08; added.)".
+  Pending review by Bernhard, who wrote these requirements (#8292).
 
 ## Trust boundary
 
@@ -47,9 +63,24 @@ Consequently, compromise of a router permits acting as its authenticated clients
 while their backend contexts remain valid. Process isolation limits which router
 can be compromised; it does not make traffic through a compromised router
 end-to-end authenticated. This authority must be represented explicitly in the
-threat model and operational response. With the one-hour lease proposed below,
+threat model and operational response. With the ten-minute lease below,
 compromise can preserve a disconnected client's authority for the remainder of
-that hour. The listener remains a shared ingress boundary: compromise can
+that lease. (Amended 2026-10-08; was: a one-hour lease.)
+
+Toolsheds drop a client context's accepted statements when the context closes,
+when its router link closes, and when the toolshed restarts (requirements 1, 4
+and 5 below). This leaves an unenforced trust dependency on the router, stated
+here as one: a compromised router can re-present a closed context's statement,
+in a new context or on a new link epoch, for the rest of that statement's
+ten-minute lease, and no toolshed check prevents it. Beyond what holding the
+context open already allows, this lets the router restore that authority after
+something outside its control closed the context: link loss, a toolshed
+restart or an operator. Keeping closed contexts' statements in a durable ledger
+until they expired protected only those cases, and let any client fill that
+ledger by cycling connections. The ten-minute lease bounds how long the window
+lasts. (Amended 2026-10-08; added.)
+
+The listener remains a shared ingress boundary: compromise can
 interfere with connections it accepts. If it terminates TLS and retains the
 certificate private key, compromise exposes that key too.
 
@@ -77,10 +108,20 @@ certificate private key, compromise exposes that key too.
    Each toolshed binds the statement to one router client-context ID and permits
    at most one live backend context for it. Re-presentation for recovery
    atomically replaces the old context; presentation for another client-context
-   ID is rejected. A new router-link epoch requires a new client signature. Both
+   ID is rejected. A new router-link epoch requires a new client signature.
+   A conforming router asks for one: for a statement signed before a
+   toolshed's current link it pushes `connection/challenge` and holds the open
+   until the client has signed again. The toolshed enforces these bindings
+   only while the context that accepted the statement lives. Once that context
+   closes, or its link closes, or the toolshed restarts, its statements are
+   dropped, and no toolshed check then stops a router from presenting one in
+   another context or on a new link epoch until it expires. That dependency on
+   the router is accepted; see the trust boundary. (Amended 2026-10-08; was:
+   these bindings held until the statement expired.) Both
    peers reject expired or malformed proofs, an `iat` beyond the bounded
    positive clock skew from attested receipt, and a client-chosen `exp` beyond
-   one hour from either the signed `iat` or the attested receipt.
+   ten minutes from either the signed `iat` or the attested receipt. (Amended
+   2026-10-08; was: one hour.)
    The forwarding protocol in the multiplexing design must carry this evidence
    before Mode A is implemented.
 2. **Authenticate the forwarding channel.** Every router has its own identity
@@ -108,16 +149,21 @@ certificate private key, compromise exposes that key too.
    control operation revokes a context and its sessions; it is distinct from
    `connection.release`. Router-link loss invalidates its epoch, upstream
    connections, contexts, and sessions; restoration requires fresh client
-   authentication.
+   authentication from an honest router, which the toolshed does not enforce
+   within a statement's lease; see the trust boundary. (Amended 2026-10-08;
+   was: restoration requires fresh client authentication.)
 5. **Bound the life of delegated authority.** Specify two distinct lifetimes: a
    single-use challenge valid for at most one minute to complete authentication,
-   and an authorization lease of at most one hour for the resulting client
-   context. The signed statement's `exp` can serve as the lease expiry, but the
+   and an authorization lease of at most ten minutes for the resulting client
+   context. (Amended 2026-10-08; was: one hour.)
+   The signed statement's `exp` can serve as the lease expiry, but the
    toolshed must enforce it after admission. The client renews with a new
    challenge and signature before expiry; forwarding the old statement must not
    extend the lease. A statement may establish one live context on each toolshed
-   until its expiry, so this choice also accepts a one-hour proof-presentation
-   window through its issuing router. The toolshed must expire a context and
+   at a time until its expiry, so this choice also accepts a ten-minute
+   proof-presentation window through its issuing router, closed contexts'
+   statements included. (Amended 2026-10-08; was: one live context until its
+   expiry, a one-hour window.) The toolshed must expire a context and
    close or revoke its sessions when renewal fails. A router's disconnect
    assertion alone cannot prove client liveness if the router is compromised.
    In routed mode, `connection.release` prevents new session opens as that
@@ -146,10 +192,13 @@ certificate private key, compromise exposes that key too.
 ## Routing and input handling
 
 9. **Use an authoritative space directory.** The router accepts a canonical
-   space DID, looks up its assigned toolshed, and denies unknown spaces in this
-   public stage. A client cannot supply an upstream address. Route changes need
-   a fenced ownership epoch so a stale router cannot keep sending writes to the
-   former owner; resume must reauthorize on the new toolshed.
+   space DID and looks up its assigned toolshed. The directory places a DID it
+   does not list by its `unlisted` rule, which derives the toolshed from the
+   DID's last character and stays fixed for the deployment, and without that
+   rule denies it. A client cannot supply an upstream address; choosing its DID
+   selects a toolshed only through the rule, which grants no authority. Route
+   changes need a fenced ownership epoch so a stale router cannot keep sending
+   writes to the former owner; resume must reauthorize on the new toolshed.
 10. **Treat routing metadata as untrusted.** A binary envelope's cleartext space
     DID is a routing hint. The toolshed must decompress and parse the
     authenticated message, compare its canonical `space` and session binding
@@ -195,15 +244,23 @@ certificate private key, compromise exposes that key too.
     connection and upstream TLS sessions, cannot create or connect sockets, and
     asks a credential-free directory process for a canonical space DID rather
     than naming an upstream address. The directory process passes an
-    unnegotiated TCP connection and a single-use ticket to the worker and closes
-    its copy of the socket; the worker performs upstream TLS and verifies the
-    toolshed. Only a separate link agent holds the router identity key, issues
+    unnegotiated TCP connection and a single-use ticket to the worker; the worker
+    performs upstream TLS and verifies the toolshed. The directory process
+    retains at most one pending socket per worker and refuses further placement
+    while setup is pending. After the link agent confirms that no binding was
+    issued, rollback shuts down that socket before acknowledging the worker,
+    revoking any descriptor the worker retained. Successful setup commits the
+    assignment irreversibly and closes the directory process's copy without
+    shutdown. Only a separate link agent holds the router identity key, issues
     client challenges, obtains toolshed-issued tickets, and controls router
     links. The pristine process creates a narrow worker-to-link-agent IPC
     channel so the link agent can bind each challenge and proof receipt to that
     channel's client context. Broker services never trust a context ID supplied
-    in a message. The link agent accepts bounded, fixed-format IPC metadata and
-    hashes opaque statements without parsing Memory payloads. Processes have the
+    in a message. The link agent accepts bounded, fixed-format IPC metadata. It
+    verifies the fixed-format `mra1` client statement (signature, principal,
+    router, deployment, challenge, issue time and lease) before admitting a
+    worker, so admission depends on no toolshed, and it parses no Memory
+    payload; each toolshed still verifies the statement itself. Processes have the
     minimum network access for their roles: the listener has no egress, workers
     cannot create sockets, and the directory process can reach only the
     directory and assigned toolsheds. Network namespaces or equivalent egress
@@ -241,20 +298,31 @@ certificate private key, compromise exposes that key too.
 
 - A proof signed for Router A fails through Router B. One router challenge
   accepts one client submission; the resulting statement can reach several
-  toolsheds but cannot establish parallel or differently named contexts on one
-  toolshed or survive a router-link epoch change. Recovery atomically replaces
-  the old context.
+  toolsheds but cannot establish parallel or differently named live contexts on
+  one toolshed. Recovery atomically replaces the old context. Once its context
+  or link closes, no toolshed check stops the router from presenting it again
+  until it expires, a new router-link epoch included. (Amended 2026-10-08;
+  was: nor survive a router-link epoch change.)
 - After a routed `session.open` returns toolshed authentication metadata, a
   second key and a lease renewal still sign for the router and deployment from
   the client's `hello.ok`.
-- A challenge expires within one minute; a client-chosen lease longer than one
-  hour is rejected. A statement received after its challenge expired is
-  rejected; one received in time may reach another assigned toolshed until its
-  lease expires. Renewing with the same proof cannot extend a backend context.
+- A challenge expires within one minute; a client-chosen lease longer than ten
+  minutes is rejected. (Amended 2026-10-08; was: one hour.) A statement
+  received after its challenge expired is rejected; one received in time may
+  reach another assigned toolshed until its lease expires. Renewing with the
+  same proof cannot extend a backend context.
 - Disconnecting a client or killing its router eventually removes its backend
   authority within the documented lease; an expired proof cannot reopen it.
-- The router denies unknown spaces in this public stage, and a client cannot
-  select a toolshed or create a space by choosing a new DID.
+- A toolshed restart does not end client sessions: the router treats a refusal
+  that rests on a passing condition, such as a down toolshed, an unreadable
+  directory or a placement or topology change, as temporary, so clients
+  reconnect and replay their pending commits. Other refusals stay permanent.
+- Without an `unlisted` rule the router denies spaces the directory does not
+  list. With one, a client creates a space only by holding its key, and only
+  where the rule places it: a routed open of a DID with no store creates nothing
+  unless that DID opens it there, only that DID may write the genesis ACL, and a
+  populated space without an ACL is refused. Disk-source registration is refused
+  to the router's clients and accepted elsewhere only from service DIDs.
 - Incompatible client flags are rejected even when the router's upstream
   advertises compatible flags. A header/body space mismatch, ambiguous JSON, and
   a compressed expansion attack fail before any write or watch is admitted.

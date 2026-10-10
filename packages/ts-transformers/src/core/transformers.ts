@@ -37,6 +37,16 @@ export type SchemaHint = {
    * names a value binding that the print cannot spell.
    */
   readonly spelledBy?: ts.TypeNode;
+
+  /**
+   * Set on a lift's result type where it is printed from the callback's
+   * inferred return type, with no return type its author wrote. The schema it
+   * names declares no scope: the runtime stores a lift's result at the
+   * narrowest scope its callback reads, and a type inferred through `??` or a
+   * union keeps or drops a scope wrapper by how TypeScript reduces it, so it
+   * says nothing the reads do not.
+   */
+  readonly declaresNoScope?: true;
 };
 
 export type ReactiveCapability =

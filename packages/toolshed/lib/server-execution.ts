@@ -12,6 +12,7 @@
 import {
   type EnvReader,
   experimentalOptionsFromEnv,
+  type RuntimeFetch,
 } from "@commonfabric/runner";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
@@ -211,6 +212,9 @@ export function startServerExecutionHost(options: {
   /** The patterns/compile base — the serving runtimes' `apiUrl`. */
   apiUrl: URL;
 
+  /** The serving runtimes' outbound fetch; unset, the platform fetch. */
+  fetch?: RuntimeFetch;
+
   envGet?: EnvReader;
 }): ExecutorHost | undefined {
   const envGet = options.envGet ?? Deno.env.get;
@@ -254,6 +258,7 @@ export function startServerExecutionHost(options: {
       server: options.server,
       identity: options.identity,
       apiUrl: options.apiUrl,
+      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       experimental,
       // One cache for every space this host serves. A space's root pattern
       // compiles into that space's own storage closure, which a fresh space

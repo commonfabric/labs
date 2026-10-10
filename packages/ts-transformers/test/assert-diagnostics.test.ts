@@ -476,6 +476,66 @@ export default pattern((state: State) => {
   assertEquals(liftInputSchemas(root), [readSchema, readSchema]);
 });
 
+Deno.test("assert compares a member it hands an identity call", async () => {
+  const root = await transformed(
+    `import { assert, computed, equals, pattern, Writable } from "commonfabric";
+
+interface Item {
+  name: string;
+}
+
+interface Refusal {
+  reason: string;
+  inbox: Writable<Item>;
+  unused: number;
+}
+
+interface Holder {
+  refusal?: Refusal;
+}
+
+export default pattern(() => {
+  const holder = new Writable<Holder>({});
+  const other = new Writable<Item>({ name: "x" });
+  const asserted = assert(() => {
+    const refusal = holder.get().refusal;
+    return refusal !== undefined && refusal.reason === "no" &&
+      equals(refusal.inbox, other);
+  });
+  const computedCheck = computed(() => {
+    const refusal = holder.get().refusal;
+    return refusal !== undefined && refusal.reason === "no" &&
+      equals(refusal.inbox, other);
+  });
+  return { asserted, computedCheck };
+});`,
+  );
+
+  const holderSchema = {
+    type: "object",
+    properties: {
+      refusal: {
+        type: "object",
+        properties: {
+          reason: { type: "string" },
+          inbox: { type: "unknown", asCell: ["comparable"] },
+        },
+        required: ["reason", "inbox"],
+      },
+    },
+    asCell: ["readonly"],
+  };
+
+  // The recording sits between `refusal.inbox` and the `equals` that compares
+  // it. The member is charged no read where it stands, so an identity use the
+  // call did not record through the recording would drop `inbox` from the
+  // schema, and `equals` would compare `undefined`.
+  const holderSchemas = liftInputSchemas(root).map((schema) =>
+    (schema as { properties: { holder: unknown } }).properties.holder
+  );
+  assertEquals(holderSchemas, [holderSchema, holderSchema]);
+});
+
 Deno.test("assert leaves an operator it does not record alone", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => (a.get(), b.get() === 2));

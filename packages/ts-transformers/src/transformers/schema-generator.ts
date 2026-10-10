@@ -112,6 +112,8 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
         // Build options for schema generation
         const generationOptions: SchemaGenerationOptions = {
           ...(widenLiterals !== undefined ? { widenLiterals } : {}),
+          ...(context.state.lookupSchemaHint(schemaTypeArg)?.declaresNoScope &&
+            { declaresNoScope: true }),
           onDiagnostic: (diagnostic) => {
             const original = diagnostic.node &&
               ts.getOriginalNode(diagnostic.node);

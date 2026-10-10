@@ -138,7 +138,8 @@ provide, the document says so, under the heading "Prerequisites".
 - **Container.** A space that shows chats among other things, such as a space
   whose root is the `loom` pattern (`packages/patterns/loom/`). A container
   may name its own chat, a room in its space, as the `loom` pattern's root
-  does with its `chatRoom` link.
+  does with its `chatRoom` link, and its `ensureChatRoom` creates that room,
+  with no panel showing it.
 - **Placement.** One room placed in a container: a `FabriChatPlacement` piece in
   the container's space, holding a link to the room. It has no rendering.
 - **Adapter.** A `FabriChatAdapter` piece that renders one placement for hosts
@@ -256,9 +257,10 @@ names the ones it needs, and they are gathered here:
   as well ([random space identities](../random-space-identities.md)).
 - **Delivering a notice.** A room is offered to its recipient through the
   share inbox their profile points at when the request that creates it names
-  their profile. A member whose profile the request doesn't name is reached by
-  nothing but a notice, and nothing delivers a notice to a principal who shares
-  no space with the sender end to end (see
+  their profile. A member whose profile the request doesn't name, or whose
+  profile points at no inbox, is reached by nothing but a notice, and nothing
+  delivers a notice to a principal who shares no space with the sender end to
+  end (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -378,10 +380,14 @@ from this design, as below.
   recipient's inbox, and their host's share intake vets it and registers the
   room's space in their Home's shared-space catalog
   ([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
-  where their manager lists it. A room is offered only to someone the request
-  names by profile: an `openDirect` naming `profile`, or a participant's chip,
-  whose click names the participant's profile. The manager's own start controls
-  name a counterpart by principal, and a group's members are principals.
+  where their manager lists it, and then sends the room to their manager's
+  `accept`, with `keepArchived`, which records a direct room in their `direct`.
+  The sender adds to the room's participants each member it offers the room to,
+  and queues a notice only for a member offered nothing. A room is offered only
+  to someone the request names by profile, when the profile points at an inbox:
+  an `openDirect` naming `profile`, or a participant's chip, whose click names
+  the participant's profile. The manager's own start controls name a
+  counterpart by principal, and a group's members are principals.
   Nothing delivers a notice yet (see
   [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
