@@ -237,21 +237,25 @@ The watch is set once for the mailbox, whichever deployment or syncer sets
 it, since it names the topic and not a receiver. Renewing it from more than
 one place is harmless.
 
-Of what Gmail push uses, only the push path has to face the internet. Mint
-is called by the syncer on the user's machine, with the user's own signing
-key, so it needs only the reach the syncer already has to its toolshed, a
-private network included. Where a deployment sits behind something that
-admits public traffic by path, Gmail push needs `/api/spaces/*/ingest-push/*`
-open and nothing wider: the push route refuses everything without a token
-Google signed, and the control plane gains nothing from being reachable from
-outside.
+Gmail push uses two of toolshed's routes, and only one of them has to face
+the internet. The push route, `POST /api/spaces/:space/ingest-push/gmail`, is
+what Pub/Sub calls, and it refuses everything without a token Google signed.
+The channel verbs under `/api/spaces/:space/ingest-channels/` (mint, list,
+rotate, revoke) and `POST /api/ingest-channels/list` are called by the syncer
+on the user's machine, with the user's own signing key, so they need only the
+reach the syncer already has to its toolshed, a private network included.
+Where a deployment sits behind something that admits public traffic by path,
+Gmail push needs `/api/spaces/*/ingest-push/*` open and nothing else for its
+own sake.
 
-That says nothing about the data plane, which Gmail push does not use. The
-data plane is `POST /api/spaces/:space/ingest/:id` and its older spelling
-`POST /api/ingest/:id`, where a device channel's holder posts records with
-the channel's bearer token; the location beacon posts there from a phone.
-Whether that path has to stay open is decided by where those phones post
-from, and a rule narrowed for Gmail push must leave it as it was.
+A third route is not Gmail push's and must not be closed on its account:
+`POST /api/ingest/:id`, and the newer spelling `POST /api/spaces/:space/ingest/:id`
+that mint has printed since 2026-10-08, where the holder of a device channel
+posts records with the channel's bearer token. The location beacon on a phone
+posts there, from wherever the phone is; its code lives in another
+repository and was paired against the older spelling, so it most likely still
+uses `POST /api/ingest/:id`. A rule narrowed for Gmail push leaves whatever
+that route has today in place, under both spellings.
 
 ## The OAuth client and a Gmail token
 

@@ -221,9 +221,11 @@ Three facts decide the shape.
   already has to its toolshed: a private network is fine.
   The push is Google's call, signed by a service account the toolshed was
   configured to accept, so where a deployment faces the internet at all, the
-  push route is the one path Gmail push needs to; the data plane a device
-  channel posts to is a separate question, as
-  [the setup document](gmail-push-setup.md#several-deployments) says. A
+  push route is the one path Gmail push needs to. The route a device channel's
+  holder posts records to, `POST /api/ingest/:id` and its space-qualified
+  spelling, which the location beacon uses from a phone, is a separate
+  question that
+  [the setup document](gmail-push-setup.md#several-deployments) states. A
   deployment on a private
   network faces it nowhere, and a relay inside the network makes the same
   call with the same token instead.
