@@ -1,6 +1,7 @@
 import {
   action,
   assert,
+  type Cell,
   NAME,
   pattern,
   TESTS,
@@ -9,10 +10,12 @@ import {
 } from "commonfabric";
 import {
   findElementByExactText,
+  findNodeById,
   findNodeByProp,
   hasText,
 } from "../test/vnode-helpers.ts";
 import Home from "./home.tsx";
+import PrivateInbox, { type PrivateInboxPiece } from "./private-inbox.tsx";
 
 type SpaceEntry = { name: string; did?: string };
 
@@ -22,6 +25,20 @@ function entryFor(
   did: string,
 ): SpaceEntry | undefined {
   return (list ?? []).find((entry) => entry.did === did);
+}
+
+/** When the test's refusals were first recorded. */
+const REFUSED_AT = Date.UTC(2026, 9, 9, 12, 0, 0);
+
+/** Home's private-inbox refusal notice in the rendering `ui`, if it shows. */
+function refusalNoticeIn(ui: unknown): unknown {
+  return findNodeById(ui, "home-private-inbox-refusal");
+}
+
+/** An inbox's result, as the link a refusal record keeps. */
+function linkOf(inbox: unknown): Cell<PrivateInboxPiece>;
+function linkOf(inbox: unknown): unknown {
+  return inbox;
 }
 
 export default pattern(() => {
@@ -197,6 +214,48 @@ export default pattern(() => {
     !hasText(home[UI], "No spaces yet. Create one below.")
   );
 
+  // The refusal notice shows while Home records a refusal, with the host's code
+  // as given, a sentence saying what a code Home knows means, and when Home
+  // first recorded it; it is gone once the record is cleared.
+  const refusedInbox = PrivateInbox({ offers: [] });
+  const assert_no_refusal_notice = assert(() =>
+    refusalNoticeIn(home[UI]) === undefined
+  );
+  const action_record_refusal = action(() => {
+    home.privateInboxRefusal.set({
+      refusal: {
+        reason: "inbox-adoption-acl-mismatch",
+        inbox: linkOf(refusedInbox),
+        refusedAt: REFUSED_AT,
+      },
+    });
+  });
+  const assert_refusal_notice_shown = assert(() =>
+    hasText(refusalNoticeIn(home[UI]), "Shares may not reach you") &&
+    hasText(
+      refusalNoticeIn(home[UI]),
+      "Reason: inbox-adoption-acl-mismatch.",
+    ) &&
+    hasText(refusalNoticeIn(home[UI]), "does not make you its owner") &&
+    hasText(refusalNoticeIn(home[UI]), new Date(REFUSED_AT).toLocaleString())
+  );
+  const action_record_unknown_refusal = action(() => {
+    home.privateInboxRefusal.set({
+      refusal: {
+        reason: "inbox-from-a-newer-host",
+        inbox: linkOf(refusedInbox),
+        refusedAt: REFUSED_AT,
+      },
+    });
+  });
+  const assert_unknown_code_shown_as_given = assert(() =>
+    hasText(refusalNoticeIn(home[UI]), "Reason: inbox-from-a-newer-host.") &&
+    !hasText(refusalNoticeIn(home[UI]), "does not make you its owner")
+  );
+  const action_clear_refusal = action(() => {
+    home.privateInboxRefusal.set({});
+  });
+
   return {
     [TESTS]: [
       { assertion: assert_initial_profile_missing },
@@ -233,6 +292,13 @@ export default pattern(() => {
       { action: action_remove_adopted_space },
       { assertion: assert_empty_space_notice },
       { assertion: assert_initial_profile_missing },
+      { assertion: assert_no_refusal_notice },
+      { action: action_record_refusal },
+      { assertion: assert_refusal_notice_shown },
+      { action: action_record_unknown_refusal },
+      { assertion: assert_unknown_code_shown_as_given },
+      { action: action_clear_refusal },
+      { assertion: assert_no_refusal_notice },
     ],
   };
 });

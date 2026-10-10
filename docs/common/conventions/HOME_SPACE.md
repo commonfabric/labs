@@ -201,7 +201,8 @@ inbox any longer. Nothing else clears it automatically in between, though the
 owner's own code can also clear it, or record a refusal, by sending Home's
 `ensurePrivateInbox` stream. It is read from Home's root like any other field of
 Home, the root being the link the `#default` wish answers with, as "Custom Home
-Pattern" below says. A profile created once Home holds the inbox is pointed at
+Pattern" below says, and Home shows it as a notice above its tabs, by its code
+and time alone. A profile created once Home holds the inbox is pointed at
 it as it is created; one created earlier is pointed by the next ensure. Home
 decides only when an ensure runs, so a pointer that moves is decided at the
 first bring-up of Home in the next runtime worker to start, once the current

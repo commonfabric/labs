@@ -203,8 +203,9 @@ of the inbox's result through it, such as `offers`: read that way, the run joins
 the inbox's label and the event is lost. The copy Home's refusal record stores
 is a different matter: it names the refused inbox's result document, as an
 adoption's link does, so like Home's holder it carries the label the refused
-inbox's owner gives its offers, and any reader of the record, such as a notice
-in Home's UI, reads it as the typed link.
+inbox's owner gives its offers, and any reader of the record's `inbox` reads it
+as the typed link. The notice in Home's UI, as "When the host refuses an inbox"
+says, reads the record's `reason` and `refusedAt` and never its `inbox`.
 
 `private-inbox.pointer-type.test.ts` fails to compile if any reader's pointer
 type, the host's, the ensure's and the pointing step's, the seed step's, the
@@ -280,12 +281,21 @@ of Home.
 The record is a field of Home's result, `privateInboxRefusal`, so `cf` and an
 agent each read it as they read any other field of Home, at Home's root, the
 link the `#default` wish answers with in the Home space
-(`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern"). Nothing in
-Home's UI shows it yet. Being a field of Home, it lives in the owner's Home
-space. Home's `ensurePrivateInbox` is a stream on its result, and its handler
+(`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern"). Being a
+field of Home, it lives in the owner's Home space. Home's `ensurePrivateInbox` is a stream on its result, and its handler
 does not ask who sent an event, so the owner's own code can record a refusal of
 any listed profile's inbox, with any code, or clear the record, as it can move
 Home between two inboxes its profiles advertise.
+
+While the record holds a refusal, Home shows a notice above its tabs, whichever
+tab is open, saying that what others share may not arrive. It shows the code,
+with a sentence saying what the code means when it is one of the host's codes
+that Home knows, and `refusedAt`, in the viewer's local time. It reads the
+record's `reason` and `refusedAt` and nothing else, so it never reads through
+the record's link to the refused inbox, and nothing the refused inbox's owner
+labels reaches Home's rendering. A code Home doesn't know is shown as given. The
+notice goes when the record is cleared. `packages/patterns/system/home.test.tsx`
+tests it.
 
 A notice alone can only say that shares may not reach the owner. The record is
 shaped so that a remedy can sit beside it in Home's result as an owner-only
