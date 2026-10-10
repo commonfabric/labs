@@ -42,6 +42,33 @@ const readBack = (ws: WordSearch, index: number): string =>
 
 const key = (d: { dRow: number; dCol: number }) => `${d.dRow},${d.dCol}`;
 
+/**
+ * How many distinct sets of cells spell `word` along `directions`, counted by
+ * brute force over every start and direction, independently of the generator.
+ */
+const copies = (
+  ws: WordSearch,
+  word: string,
+  directions: { dRow: number; dCol: number }[],
+): number => {
+  const found = new Set<string>();
+  for (let row = 0; row < ws.rows; row++) {
+    for (let col = 0; col < ws.cols; col++) {
+      for (const { dRow, dCol } of directions) {
+        const cells = [...word].map((_, i) => [row + dRow * i, col + dCol * i]);
+        const spelled = cells.every(([r, c], i) =>
+          r >= 0 && r < ws.rows && c >= 0 && c < ws.cols &&
+          ws.grid[r][c] === word[i]
+        );
+        if (spelled) {
+          found.add(cells.map(([r, c]) => r * ws.cols + c).sort().join(","));
+        }
+      }
+    }
+  }
+  return found.size;
+};
+
 describe("directionsFor", () => {
   it("gives right and down when both switches are off", () => {
     expect(directionsFor({ diagonals: false, backwards: false }).map(key))
@@ -84,7 +111,7 @@ describe("generateWordSearch", () => {
   it("hides every word so it reads back off the grid", () => {
     for (const seed of [1, 2, 3, 42, 99999]) {
       const ws = generateWordSearch(options({ seed }));
-      expect(ws.unplaced).toEqual([]);
+      expect(ws.skipped).toEqual([]);
       expect(ws.placements.map((p) => p.word).sort()).toEqual(
         WORDS.map(normalizeWord).sort(),
       );
@@ -131,17 +158,91 @@ describe("generateWordSearch", () => {
 
   it("reports a word too long for the grid instead of dropping it", () => {
     const ws = generateWordSearch(
-      options({ rows: 5, cols: 5, words: ["toolongword", "cat"] }),
+      options({ rows: 5, cols: 5, words: ["Too long word", "cat"] }),
     );
-    expect(ws.unplaced).toEqual(["TOOLONGWORD"]);
+    expect(ws.skipped).toEqual([{ label: "Too long word", reason: "no-room" }]);
     expect(ws.placements.map((p) => p.word)).toEqual(["CAT"]);
   });
 
-  it("merges repeats and blanks after normalizing", () => {
+  it("reports a word with too few letters instead of dropping it", () => {
     const ws = generateWordSearch(
-      options({ words: ["Kiwi", "kiwi!", " ", "K I W I"] }),
+      options({ words: ["a", "123", "日本", "ox"] }),
     );
-    expect(ws.placements.map((p) => p.word)).toEqual(["KIWI"]);
+    expect(ws.skipped).toEqual([
+      { label: "a", reason: "too-short" },
+      { label: "123", reason: "too-short" },
+      { label: "日本", reason: "too-short" },
+    ]);
+    expect(ws.placements.map((p) => p.word)).toEqual(["OX"]);
+  });
+
+  it("keeps each word as it was written for the list", () => {
+    const ws = generateWordSearch(options({ words: ["Café au lait", "fig"] }));
+    expect(ws.placements.map((p) => [p.word, p.label])).toEqual([
+      ["CAFEAULAIT", "Café au lait"],
+      ["FIG", "fig"],
+    ]);
+  });
+
+  it("hides every word exactly once, however short", () => {
+    const short = ["cat", "dog", "sun", "ant", "bee", "ox", "pop", "noon"];
+    for (const [diagonals, backwards] of [[false, false], [true, true]]) {
+      const directions = directionsFor({ diagonals, backwards });
+      for (let seed = 0; seed < 60; seed++) {
+        const ws = generateWordSearch(
+          options({
+            words: short,
+            rows: 8,
+            cols: 8,
+            diagonals,
+            backwards,
+            seed,
+          }),
+        );
+        for (const p of ws.placements) {
+          expect({ seed, word: p.word, copies: copies(ws, p.word, directions) })
+            .toEqual({ seed, word: p.word, copies: 1 });
+        }
+      }
+    }
+  });
+
+  it("finds a word spelled inside a longer one there, not twice", () => {
+    for (let seed = 0; seed < 30; seed++) {
+      const ws = generateWordSearch(
+        options({ words: ["catalog", "cat"], rows: 8, cols: 8, seed }),
+      );
+      const [catalog, cat] = ws.placements;
+      expect(placementCells(cat, 8))
+        .toEqual(placementCells(catalog, 8).slice(0, 3));
+    }
+  });
+
+  it("lets words cross where their letters agree", () => {
+    const crossed = Array.from(
+      { length: 20 },
+      (_, seed) => generateWordSearch(options({ seed, rows: 9, cols: 9 })),
+    ).some((ws) => {
+      const all = ws.placements.flatMap((p) => placementCells(p, ws.cols));
+      return new Set(all).size < all.length;
+    });
+    expect(crossed).toBe(true);
+  });
+
+  it("fills the empty cells with varied letters", () => {
+    const ws = generateWordSearch(options({ words: ["kiwi"] }));
+    const used = new Set(placementCells(ws.placements[0], ws.cols));
+    const filler = [...ws.grid.join("")].filter((_, i) => !used.has(i));
+    expect(new Set(filler).size).toBeGreaterThan(15);
+  });
+
+  it("merges repeats after normalizing, keeping the first spelling", () => {
+    const ws = generateWordSearch(
+      options({ words: ["Kiwi", "kiwi!", "K I W I"] }),
+    );
+    expect(ws.placements.map((p) => [p.word, p.label])).toEqual([
+      ["KIWI", "Kiwi"],
+    ]);
   });
 
   it("refuses a size outside the supported range", () => {

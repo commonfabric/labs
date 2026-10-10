@@ -2,6 +2,13 @@
  * Word search generation: lay a list of words into a letter grid along a chosen
  * set of directions, then fill the rest with random letters.
  *
+ * Every hidden word can be found exactly once. The filler alone would spell a
+ * short word again in about a third of puzzles, and an answer key that marks
+ * one of two copies is wrong, so both placement and fill refuse any letter that
+ * would complete a second run of a word. A run is identified by the cells it
+ * covers, so a palindrome read both ways is one run, and a word spelled inside
+ * another ("CAT" in "CATALOG") is found there rather than hidden twice.
+ *
  * Generation is a pure function of its options. Randomness comes from a seeded
  * generator rather than `Math.random()`, for two reasons: a pattern recomputes
  * reactively, and an unseeded puzzle would reshuffle under the reader on every
@@ -35,7 +42,7 @@ export interface DirectionOptions {
 }
 
 export interface WordSearchOptions extends DirectionOptions {
-  /** Words to hide. Normalized by `normalizeWord`; blanks and repeats drop. */
+  /** Words to hide, as written. Repeats (after normalizing) are merged. */
   words: readonly string[];
   rows: number;
   cols: number;
@@ -45,9 +52,22 @@ export interface WordSearchOptions extends DirectionOptions {
 
 /** Where one word sits: its first letter's cell and the direction it runs. */
 export interface Placement extends Direction {
+  /** The letters in the grid, from `normalizeWord`. */
   word: string;
+  /** The word as it was written, for the list a solver reads. */
+  label: string;
   row: number;
   col: number;
+}
+
+/** A word left out of the puzzle, and why. */
+export interface Skipped {
+  label: string;
+  /**
+   * `too-short`: fewer than `MIN_WORD_LENGTH` letters A–Z after normalizing.
+   * `no-room`: no run of the grid could take it without repeating a word.
+   */
+  reason: "too-short" | "no-room";
 }
 
 export interface WordSearch {
@@ -56,15 +76,13 @@ export interface WordSearch {
   /** One string of `cols` letters per row. */
   grid: string[];
   placements: Placement[];
-  /**
-   * Words that could not be placed: longer than the grid allows in every
-   * permitted direction, or crowded out by words placed before them.
-   */
-  unplaced: string[];
+  skipped: Skipped[];
 }
 
 export const MIN_SIZE = 4;
 export const MAX_SIZE = 30;
+/** A one-letter word would be found in every cell that holds its letter. */
+export const MIN_WORD_LENGTH = 2;
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -80,13 +98,16 @@ export const directionsFor = (options: DirectionOptions): Direction[] => {
     : forwards;
 };
 
+/** `text` with combining accents removed: "Café" becomes "Cafe". */
+export const stripAccents = (text: string): string =>
+  text.normalize("NFD").replace(/[̀-ͯ]/g, "");
+
 /**
  * The letters of `word` as they go in the grid: accents dropped, upper case,
  * and anything that is not A–Z removed, so "Café au lait" becomes "CAFEAULAIT".
  */
 export const normalizeWord = (word: string): string =>
-  word.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase()
-    .replace(/[^A-Z]/g, "");
+  stripAccents(word).toUpperCase().replace(/[^A-Z]/g, "");
 
 /**
  * Split free text into words: one per line or comma-separated item, so a
@@ -107,6 +128,16 @@ const seededRandom = (seed: number): () => number => {
   };
 };
 
+/** `items` in an order drawn from `random` (Fisher–Yates). */
+const shuffled = <T>(items: readonly T[], random: () => number): T[] => {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+};
+
 const checkSize = (name: string, value: number): void => {
   if (!Number.isInteger(value) || value < MIN_SIZE || value > MAX_SIZE) {
     throw new RangeError(
@@ -115,65 +146,190 @@ const checkSize = (name: string, value: number): void => {
   }
 };
 
+/** A grid being built: `null` marks a cell nothing has been written to. */
+interface Board {
+  rows: number;
+  cols: number;
+  cells: (string | null)[];
+  directions: Direction[];
+}
+
+/** The cells `word` would cover from (row, col) along `d`, or null if it runs off the grid. */
+const runCells = (
+  board: Board,
+  word: string,
+  row: number,
+  col: number,
+  d: Direction,
+): number[] | null => {
+  const endRow = row + d.dRow * (word.length - 1);
+  const endCol = col + d.dCol * (word.length - 1);
+  if (
+    endRow < 0 || endRow >= board.rows || endCol < 0 || endCol >= board.cols
+  ) {
+    return null;
+  }
+  return Array.from(
+    { length: word.length },
+    (_, i) => (row + d.dRow * i) * board.cols + col + d.dCol * i,
+  );
+};
+
+const spells = (board: Board, word: string, cells: number[]): boolean =>
+  cells.every((cell, i) => board.cells[cell] === word[i]);
+
+/** A run's identity: the cells it covers, in either reading order. */
+const runKey = (cells: number[]): string =>
+  [...cells].sort((a, b) => a - b).join(",");
+
+/**
+ * Every run of `word` the board already spells, one per set of cells, so a
+ * palindrome read both ways is one run. `through`, when given, limits the
+ * search to runs that cover that cell.
+ */
+const runsOf = (
+  board: Board,
+  word: string,
+  through?: number,
+): Map<string, Omit<Placement, "word" | "label">> => {
+  const runs = new Map<string, Omit<Placement, "word" | "label">>();
+  const starts = through === undefined
+    ? board.cells.map((_, cell) => ({ cell, offsets: [0] }))
+    : [{
+      cell: through,
+      offsets: [...word].flatMap((letter, i) =>
+        letter === board.cells[through] ? [i] : []
+      ),
+    }];
+  for (const { cell, offsets } of starts) {
+    for (const d of board.directions) {
+      for (const offset of offsets) {
+        const row = Math.floor(cell / board.cols) - d.dRow * offset;
+        const col = (cell % board.cols) - d.dCol * offset;
+        const cells = runCells(board, word, row, col, d);
+        if (cells === null || !spells(board, word, cells)) continue;
+        const key = runKey(cells);
+        if (!runs.has(key)) runs.set(key, { row, col, ...d });
+      }
+    }
+  }
+  return runs;
+};
+
 export const generateWordSearch = (options: WordSearchOptions): WordSearch => {
   const { rows, cols } = options;
   checkSize("rows", rows);
   checkSize("cols", cols);
   const random = seededRandom(options.seed);
-  const directions = directionsFor(options);
+  const board: Board = {
+    rows,
+    cols,
+    cells: new Array(rows * cols).fill(null),
+    directions: directionsFor(options),
+  };
 
-  // Longest first: long words have the fewest places to go, so they get the
-  // emptiest grid. Ties break alphabetically so the order is deterministic.
-  const words = [...new Set(options.words.map(normalizeWord))]
-    .filter((w) => w !== "")
-    .sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
-
-  const cells: (string | null)[] = new Array(rows * cols).fill(null);
-  const placements: Placement[] = [];
-  const unplaced: string[] = [];
-
-  for (const word of words) {
-    // Every legal spot, so a word that fits anywhere is placed: this is an
-    // exhaustive search, not a bounded number of random tries.
-    const candidates: Placement[] = [];
-    for (const { dRow, dCol } of directions) {
-      for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-          const endRow = row + dRow * (word.length - 1);
-          const endCol = col + dCol * (word.length - 1);
-          if (endRow < 0 || endRow >= rows || endCol < 0 || endCol >= cols) {
-            continue;
-          }
-          let fits = true;
-          for (let i = 0; i < word.length && fits; i++) {
-            const existing = cells[(row + dRow * i) * cols + col + dCol * i];
-            fits = existing === null || existing === word[i];
-          }
-          if (fits) candidates.push({ word, row, col, dRow, dCol });
-        }
-      }
+  // The first spelling of each word names it; later repeats merge into it.
+  const entries = new Map<string, string>();
+  const skipped: Skipped[] = [];
+  for (const raw of options.words) {
+    const label = raw.trim();
+    const word = normalizeWord(label);
+    if (word.length < MIN_WORD_LENGTH) {
+      skipped.push({ label, reason: "too-short" });
+    } else if (!entries.has(word)) {
+      entries.set(word, label);
     }
-    if (candidates.length === 0) {
-      unplaced.push(word);
+  }
+  // Longest first: long words have the fewest places to go, so they get the
+  // emptiest grid, and a short word spelled inside a long one is found there.
+  // Ties break alphabetically so the order is deterministic.
+  const words = [...entries.keys()].sort((a, b) =>
+    b.length - a.length || (a < b ? -1 : a > b ? 1 : 0)
+  );
+  // Letters just written to `cells` repeat no word. A run through one of
+  // them is new, since every earlier run lay wholly on earlier letters, so it
+  // is allowed only inside `own`, the cells of the word being placed: that
+  // word's own run, or a shorter word it spells ("CAT" in "CATALOG"), and then
+  // only if it is that word's one run on the whole board.
+  const repeatsNothing = (cells: number[], own: number[] = []) => {
+    const ownKey = runKey(own);
+    return cells.every((cell) =>
+      words.every((w) =>
+        [...runsOf(board, w, cell).keys()].every((key) =>
+          key === ownKey ||
+          (key.split(",").every((c) => own.includes(Number(c))) &&
+            runsOf(board, w).size === 1)
+        )
+      )
+    );
+  };
+
+  const placements: Placement[] = [];
+  for (const word of words) {
+    const label = entries.get(word)!;
+    const [existing] = runsOf(board, word).values();
+    if (existing) {
+      placements.push({ word, label, ...existing });
       continue;
     }
-    const chosen = candidates[Math.floor(random() * candidates.length)];
-    for (let i = 0; i < word.length; i++) {
-      cells[
-        (chosen.row + chosen.dRow * i) * cols + chosen.col + chosen.dCol * i
-      ] = word[i];
+    // Try every legal run in a seeded order, so a word that fits anywhere is
+    // placed: this is an exhaustive search, not a bounded number of tries.
+    const candidates = board.directions.flatMap((d) =>
+      board.cells.flatMap((_, cell) => {
+        const row = Math.floor(cell / cols);
+        const col = cell % cols;
+        const cells = runCells(board, word, row, col, d);
+        return cells !== null &&
+            cells.every((c, i) =>
+              board.cells[c] === null || board.cells[c] === word[i]
+            )
+          ? [{ row, col, d, cells }]
+          : [];
+      })
+    );
+    const chosen = shuffled(candidates, random).find(({ cells }) => {
+      const written = cells.filter((c) => board.cells[c] === null);
+      written.forEach((c) => (board.cells[c] = word[cells.indexOf(c)]));
+      if (repeatsNothing(written, cells)) return true;
+      written.forEach((c) => (board.cells[c] = null));
+      return false;
+    });
+    if (chosen) {
+      placements.push({
+        word,
+        label,
+        row: chosen.row,
+        col: chosen.col,
+        ...chosen.d,
+      });
+    } else {
+      skipped.push({ label, reason: "no-room" });
     }
-    placements.push(chosen);
   }
 
-  const filled = cells.map((c) =>
-    c ?? ALPHABET[Math.floor(random() * ALPHABET.length)]
-  );
+  // Each empty cell takes the first letter, in a seeded order, that completes
+  // no run of any word through it. Such a run would be a second copy: a
+  // placed word's own run never covers an empty cell.
+  board.cells.forEach((value, cell) => {
+    if (value !== null) return;
+    const letter = shuffled([...ALPHABET], random).find((candidate) => {
+      board.cells[cell] = candidate;
+      return repeatsNothing([cell]);
+    });
+    if (letter === undefined) {
+      throw new Error(
+        `No letter for cell ${cell} keeps every word unique: ${
+          words.join(", ")
+        }`,
+      );
+    }
+  });
+
   const grid = Array.from(
     { length: rows },
-    (_, r) => filled.slice(r * cols, (r + 1) * cols).join(""),
+    (_, r) => board.cells.slice(r * cols, (r + 1) * cols).join(""),
   );
-  return { rows, cols, grid, placements, unplaced };
+  return { rows, cols, grid, placements, skipped };
 };
 
 /** The cells a placement covers, as `row * cols + col` indices. */
