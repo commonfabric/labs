@@ -797,6 +797,16 @@ the validating transaction defers to reactive reads; a readable wrong-typed
 value is refused. Preflight does not establish that every linked value is
 available.
 
+A position the argument schema declares a handle (`asCell`) holds a reference,
+and validation checks that it holds one without reading what it refers to,
+whether that is another document or a value stored inline. The contents are
+judged where they are read through the handle, which a schema-aware read does
+against whatever they hold then; a malformed document behind a handle does not
+refuse the argument, and is not a dependency of the validating transaction. A
+by-value position is materialized and judged as before, links followed. A
+union, and a position reached through a reference to another schema document,
+reads by value whatever its branches declare.
+
 When validation needs to distinguish unreadable links from literal absence, its
 fallback builds a view whose fields follow stored links as validation reads
 them. Fields the schema does not inspect need no recursive expansion. The view
