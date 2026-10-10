@@ -14,7 +14,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
-import { argumentIntegrityRequirements } from "../src/cfc/argument-input-requirements.ts";
+import {
+  argumentInputRefusals,
+  argumentIntegrityRequirements,
+} from "../src/cfc/argument-input-requirements.ts";
 import type {
   CfcArgumentInputRefusal,
   CfcArgumentInputRequirementsMode,
@@ -23,7 +26,10 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
-import { isInternalVerifierRead } from "../src/storage/reactivity-log.ts";
+import {
+  isInternalVerifierRead,
+  stableInternalVerifierRead,
+} from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-argument-input-requirements",
@@ -429,7 +435,9 @@ describe("cfc argument input requirements", () => {
           nullableRun: "near 52",
           bareRun: "hidden",
         });
-        expect(reasons().length).toBeGreaterThan(0);
+        // Seven lifts run on a gate the owner did not write; each is flagged
+        // on each of its runs, and nothing else is.
+        expect(reasons().length).toBeGreaterThanOrEqual(7);
         expect(failedAt("/gate").length).toBe(reasons().length);
       });
     });
@@ -476,6 +484,83 @@ describe("cfc argument input requirements", () => {
         argumentIntegrityRequirements([required, { type: "object" }]),
       ).toEqual([{ path: ["gate"], requiredIntegrity: ["owner-gate"] }]);
       expect(argumentIntegrityRequirements([{ type: "object" }])).toEqual([]);
+    });
+  });
+
+  // Absence consumes nothing, unless a schema the code did not declare could
+  // fill it: the code would then be handed the value that schema chose.
+  describe("absence that a foreign default fills", () => {
+    const requirements = [{
+      path: ["gate"],
+      requiredIntegrity: ["owner-gate"],
+    }];
+    const withMissingGate = async (
+      body: (
+        refusals: (
+          binding: unknown,
+          graphDefaults: boolean,
+        ) => readonly unknown[],
+        link: (schema?: unknown) => unknown,
+      ) => void,
+    ) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const tx = runtime.edit();
+        const empty = runtime.getCell(space, "missing gate", undefined, tx);
+        const base = empty.getAsNormalizedFullLink();
+        const link = (schema?: unknown) => ({
+          "/": {
+            "link@1": {
+              id: base.id,
+              space: base.space,
+              path: ["gate"],
+              ...(schema === undefined ? {} : { schema }),
+            },
+          },
+        });
+        body(
+          (binding, graphDefaults) =>
+            argumentInputRefusals(
+              tx,
+              "code",
+              binding,
+              base,
+              requirements,
+              stableInternalVerifierRead,
+              graphDefaults,
+            ),
+          link,
+        );
+        tx.abort();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    it("observes nothing at a gate that is not there", async () => {
+      await withMissingGate((refusals, link) => {
+        expect(refusals({ gate: link() }, false)).toEqual([]);
+      });
+    });
+
+    it("refuses a gate a reference's own schema would default", async () => {
+      await withMissingGate((refusals, link) => {
+        expect(
+          refusals({ gate: link({ default: { always: true } }) }, false),
+        ).toHaveLength(1);
+      });
+    });
+
+    it("refuses a gate the graph's own schema would default", async () => {
+      await withMissingGate((refusals, link) => {
+        expect(refusals({ gate: link() }, true)).toHaveLength(1);
+        expect(refusals({}, true)).toHaveLength(1);
+      });
     });
   });
 });

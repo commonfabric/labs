@@ -20,7 +20,11 @@
  *
  * Absence is not an observation, as in §8.10.3's own check: a declared path
  * where no value is reached (no document, a missing field, an empty
- * container) consumes nothing, and the code sees no value there.
+ * container) consumes nothing, and the code sees no value there. The
+ * exception is an absence a schema other than the code's own could fill with
+ * a `default` — one a reference on the way carries, or the graph's when it
+ * differs from the code's: the code would be handed the value that schema
+ * chose, which is a value written in the wiring.
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
@@ -73,6 +77,23 @@ export const argumentIntegrityRequirements = (
   return requirements;
 };
 
+/** A lift's argument requirements, as the runner resolves them. */
+export type ArgumentRequirementResolution = {
+  readonly requirements: ArgumentRequirement[];
+  /** Whether the code's own argument schema was found. */
+  readonly codeSchema: boolean;
+  /** Whether a schema other than the code's declares a `default`. */
+  readonly graphDefaults: boolean;
+};
+
+/** Whether `schema` declares a `default` anywhere. */
+export const schemaDeclaresDefault = (schema: unknown): boolean =>
+  Array.isArray(schema)
+    ? schema.some(schemaDeclaresDefault)
+    : isObjectOrArray(schema) &&
+      (Object.hasOwn(schema, "default") ||
+        Object.values(schema).some(schemaDeclaresDefault));
+
 /** What a lift's binding gives one declared argument path. */
 type ArgumentReach = {
   /**
@@ -83,7 +104,10 @@ type ArgumentReach = {
     location: NormalizedFullLink;
     leaves: (readonly string[])[];
   }[];
-  /** How many values the binding holds itself, which carry no evidence. */
+  /**
+   * How many values carry no evidence: those the binding holds itself, and
+   * each absence a schema other than the code's could fill with a `default`.
+   */
   readonly inWiring: number;
 };
 
@@ -99,18 +123,20 @@ const leafPaths = (value: unknown): (readonly string[])[] =>
       leafPaths(child).map((leaf) => [key, ...leaf])
     );
 
-/** Calls `visit` for the child or children `segment` names, if any. */
+/** Calls `visit` for the child or children `segment` names, `absent` if none. */
 const descend = (
   value: unknown,
   segment: string,
   visit: (child: unknown, key: string) => void,
+  absent: () => void,
 ): void => {
-  if (!isObjectOrArray(value)) return;
+  if (!isObjectOrArray(value)) return absent();
   if (segment === "*") {
     for (const [key, child] of Object.entries(value)) visit(child, key);
     return;
   }
-  if (Object.hasOwn(value, segment)) visit(value[segment], segment);
+  if (!Object.hasOwn(value, segment)) return absent();
+  visit(value[segment], segment);
 };
 
 /**
@@ -124,10 +150,18 @@ const reachThroughArgument = (
   base: NormalizedFullLink,
   path: readonly string[],
   meta: Metadata,
+  graphDefaults: boolean,
 ): ArgumentReach => {
   const locations: ArgumentReach["locations"] = [];
   let inWiring = 0;
   const followed = new Set<string>();
+
+  // Absence is no observation, unless a schema the code did not declare —
+  // the graph's, or one a reference on the way carries — could hand the code
+  // a `default` there instead: that value is the wiring's.
+  const absent = (defaulting: boolean) => {
+    if (defaulting) inWiring += 1;
+  };
 
   // A value read from a stored document at `location`, with `rest` of the
   // declared path still to walk.
@@ -135,12 +169,14 @@ const reachThroughArgument = (
     location: NormalizedFullLink,
     value: unknown,
     rest: readonly string[],
+    defaulting: boolean,
   ): void => {
     if (isPrimitiveCellLink(value)) {
-      return follow(parseLink(value, location), rest);
+      return follow(parseLink(value, location), rest, defaulting);
     }
     if (rest.length === 0) {
-      const leaves = value === undefined ? [] : leafPaths(value);
+      if (value === undefined) return absent(defaulting);
+      const leaves = leafPaths(value);
       if (leaves.length > 0) locations.push({ location, leaves });
       return;
     }
@@ -153,14 +189,21 @@ const reachThroughArgument = (
           { ...location, path: [...location.path, key] },
           child,
           remaining,
+          defaulting,
         ),
+      () => absent(defaulting),
     );
   };
 
   // Reads the target's document from its root, so a reference partway along
   // the target's own path is followed like any other.
-  const follow = (link: NormalizedFullLink, rest: readonly string[]) => {
+  const follow = (
+    link: NormalizedFullLink,
+    rest: readonly string[],
+    defaulting: boolean,
+  ) => {
     const walk = [...link.path, ...rest];
+    const carriesDefault = defaulting || schemaDeclaresDefault(link.schema);
     // A cycle of references reaches no value.
     const key = JSON.stringify([
       link.space,
@@ -168,16 +211,23 @@ const reachThroughArgument = (
       normalizeCellScope(link.scope),
       walk,
     ]);
-    if (followed.has(key)) return;
+    if (followed.has(key)) return absent(carriesDefault);
     followed.add(key);
     const root = { ...link, path: [] };
-    inDocument(root, tx.readValueOrThrow(root, { meta }), walk);
+    inDocument(
+      root,
+      tx.readValueOrThrow(root, { meta }),
+      walk,
+      carriesDefault,
+    );
   };
 
   // A value the binding holds at the declared path: its references are
   // followed, and every scalar in it is the wiring's own.
   const heldAtPath = (value: unknown): void => {
-    if (isCellLink(value)) return follow(parseLink(value, base), []);
+    if (isCellLink(value)) {
+      return follow(parseLink(value, base), [], graphDefaults);
+    }
     if (isObjectOrArray(value)) {
       for (const child of Object.values(value)) heldAtPath(child);
       return;
@@ -186,10 +236,17 @@ const reachThroughArgument = (
   };
 
   const inBinding = (value: unknown, rest: readonly string[]): void => {
-    if (isCellLink(value)) return follow(parseLink(value, base), rest);
+    if (isCellLink(value)) {
+      return follow(parseLink(value, base), rest, graphDefaults);
+    }
     if (rest.length === 0) return heldAtPath(value);
     const [segment, ...remaining] = rest;
-    descend(value, segment, (child) => inBinding(child, remaining));
+    descend(
+      value,
+      segment,
+      (child) => inBinding(child, remaining),
+      () => absent(graphDefaults),
+    );
   };
 
   inBinding(binding, path);
@@ -213,6 +270,7 @@ export const argumentInputRefusals = (
   base: NormalizedFullLink,
   requirements: readonly ArgumentRequirement[],
   meta: Metadata,
+  graphDefaults = false,
 ): CfcArgumentInputRefusal[] => {
   if (requirements.length === 0) return [];
   if (tx.hasWrites()) {
@@ -230,6 +288,7 @@ export const argumentInputRefusals = (
       base,
       requirement.path,
       meta,
+      graphDefaults,
     );
     const observations: (readonly CfcAtom[])[] = [
       ...reach.locations.flatMap(({ location, leaves }) =>
@@ -237,7 +296,7 @@ export const argumentInputRefusals = (
       ),
       ...Array.from({ length: reach.inWiring }, (): readonly CfcAtom[] => []),
     ];
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/62
     if (
       cfcIntegritySatisfiesFloorCoherently(
         observations,

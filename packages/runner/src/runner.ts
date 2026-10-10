@@ -84,7 +84,8 @@ import {
 import {
   argumentInputRefusals,
   argumentIntegrityRequirements,
-  type ArgumentRequirement,
+  type ArgumentRequirementResolution,
+  schemaDeclaresDefault,
 } from "./cfc/argument-input-requirements.ts";
 import {
   recordNewDocumentProtectedDefaults,
@@ -10667,45 +10668,38 @@ export class Runner {
   }
 
   /**
-   * The integrity requirements a lift's code declares on its arguments
-   * (§8.10.3), resolved the way `#resolveJavaScriptFunction` resolves the
-   * code: through a content-addressed `$implRef`, the registered artifact's
-   * own argument schema, and otherwise the live module, whose schema is the
-   * code's own. The schema the graph carries for the node adds its
-   * requirements to the code's, so a graph built as data cannot remove one.
-   * `codeSchema` is false when an `$implRef` resolved to an implementation
-   * the artifact index does not hold, so the code's own schema is unknown.
+   * The integrity requirements of a verified lift (§8.10.3): those of the
+   * argument schema the artifact its running identity names declares — the
+   * identity its outputs are stamped with, not whatever module carried the
+   * function here — together with those of the schema the graph carries for
+   * the node, which can add a requirement and cannot remove one. `codeSchema`
+   * is false when no artifact is indexed under that identity, so the code's
+   * own schema is unknown. `graphDefaults` is true when the graph's schema
+   * is not the code's and declares a `default`, which would hand the code a
+   * value the graph chose where the binding reaches none.
    */
   #argumentRequirements(
-    module: Module,
-  ): { requirements: ArgumentRequirement[]; codeSchema: boolean } {
-    const ref = this.#contentAddressedImplRef(module);
-    if (ref === undefined) {
-      return {
-        requirements: argumentIntegrityRequirements([module.argumentSchema]),
-        codeSchema: true,
-      };
+    identity: Extract<ImplementationIdentity, { kind: "verified" }>,
+    graphSchema: JSONSchema | undefined,
+  ): ArgumentRequirementResolution {
+    const artifact: unknown =
+      identity.moduleIdentity === undefined || identity.symbol === undefined
+        ? undefined
+        : this.#runtime.patternManager.artifactFromIdentitySync(
+          identity.moduleIdentity,
+          identity.symbol,
+        );
+    if (typeof artifact !== "function" && !isObjectOrArray(artifact)) {
+      return { requirements: [], codeSchema: false, graphDefaults: false };
     }
-    const artifact: unknown = this.#runtime.patternManager
-      .artifactFromIdentitySync(ref.identity, ref.symbol);
-    const artifactSchema: unknown =
-      typeof artifact === "function" || isObjectOrArray(artifact)
-        ? Reflect.get(artifact, "argumentSchema")
-        : undefined;
-    const codeSchema = isSubschema(artifactSchema) ? artifactSchema : undefined;
+    const declared: unknown = Reflect.get(artifact, "argumentSchema");
+    const codeSchema = isSubschema(declared) ? declared : undefined;
     return {
-      requirements: argumentIntegrityRequirements([
-        codeSchema,
-        module.argumentSchema,
-      ]),
-      // The artifact index holds the code's own module, and so its schema,
-      // whatever that schema declares. Only an implementation resolved
-      // through the engine's index alone comes without one.
-      codeSchema: artifact !== undefined ||
-        this.#runtime.harness.getVerifiedImplementation?.(
-            ref.identity,
-            ref.symbol,
-          ) === undefined,
+      requirements: argumentIntegrityRequirements([codeSchema, graphSchema]),
+      codeSchema: true,
+      graphDefaults: graphSchema !== undefined &&
+        !deepEqual(graphSchema, codeSchema) &&
+        schemaDeclaresDefault(graphSchema),
     };
   }
 
@@ -10725,11 +10719,18 @@ export class Runner {
     identity: ImplementationIdentity | undefined,
     binding: unknown,
     inputsCell: Cell<any>,
-    argument: { requirements: ArgumentRequirement[]; codeSchema: boolean },
+    graphSchema: JSONSchema | undefined,
+    resolved: Map<string, ArgumentRequirementResolution>,
   ): void {
     const mode = tx.getCfcState().argumentInputRequirementsMode;
     if (mode === "off" || identity?.kind !== "verified") return;
     const code = `${identity.moduleIdentity ?? "?"}:${identity.symbol ?? "?"}`;
+    let argument = resolved.get(code);
+    if (argument === undefined) {
+      argument = this.#argumentRequirements(identity, graphSchema);
+      // Only a found artifact is remembered: one not indexed yet may be later.
+      if (argument.codeSchema) resolved.set(code, argument);
+    }
     if (!argument.codeSchema) {
       tx.recordCfcArgumentInputRefusal({
         reason: `argument schema of ${code} is not available`,
@@ -10741,7 +10742,8 @@ export class Runner {
     const base = inputsCell.getAsNormalizedFullLink();
     if (mode === "observe") {
       // Owned rather than `readTx()`'s, so it can be discarded; it writes
-      // nothing.
+      // nothing. It reads the replica's current state, not this attempt's
+      // view, which only a diagnostic can afford.
       const readTx = this.#runtime.edit();
       try {
         for (
@@ -10752,6 +10754,7 @@ export class Runner {
             base,
             argument.requirements,
             stableInternalVerifierRead,
+            argument.graphDefaults,
           )
         ) {
           tx.recordCfcArgumentInputRefusal(refusal);
@@ -10776,6 +10779,7 @@ export class Runner {
         base,
         argument.requirements,
         stableInternalVerifierRead,
+        argument.graphDefaults,
       );
     } catch (error) {
       refusals = [{
@@ -11887,9 +11891,12 @@ export class Runner {
       byScope: new Map(),
     };
     let previouslyInvalidArgument = false;
-    // Fixed for the node: the code and the graph's schema do not change
-    // between runs.
-    const argumentRequirements = this.#argumentRequirements(module);
+    // The argument requirements of each identity this node runs under,
+    // resolved on its first run.
+    const argumentRequirements = new Map<
+      string,
+      ArgumentRequirementResolution
+    >();
     const fnSource = fn.toString();
     // See the handler's counterpart above: what names the node, reduced once
     // here rather than on every action invocation.
@@ -11978,6 +11985,7 @@ export class Runner {
           policyFacingIdentity,
           inputs,
           inputsCell,
+          module.argumentSchema,
           argumentRequirements,
         );
         tx.resetNarrowestReadScope();
