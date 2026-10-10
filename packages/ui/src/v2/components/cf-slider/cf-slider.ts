@@ -273,8 +273,11 @@ export class CFSlider extends BaseElement {
   declare disabled: boolean;
   declare orientation: SliderOrientation;
 
+  // A drag would otherwise write the cell once per snapped mousemove; the
+  // throttle's leading edge keeps the first write immediate, and the end of a
+  // drag flushes the last.
   private _valueCellController = createCellController<number>(this, {
-    timing: { strategy: "immediate" },
+    timing: { strategy: "throttle", delay: 50 },
   });
 
   private _trackElement: HTMLElement | null = null;
@@ -368,8 +371,8 @@ export class CFSlider extends BaseElement {
         changedProperties.has("step"))
     ) {
       // Re-clamp and snap the value when constraints change
-      const clampedValue = this._snapToStep(this._clampValue(this._current));
-      if (clampedValue !== this._current) {
+      const clampedValue = this._snapToStep(this._current);
+      if (clampedValue !== this.value) {
         this.value = clampedValue;
       }
     }
@@ -380,24 +383,60 @@ export class CFSlider extends BaseElement {
     this._updateSliderPosition();
   }
 
-  /**
-   * The value shown: what the bound cell or plain property holds, within
-   * bounds. A cell holding nothing yet shows the minimum.
-   */
-  private get _current(): number {
-    const value = this._valueCellController.getValue();
+  /** `value` as the slider shows it: within bounds, the minimum if unset. */
+  private _shown(value: unknown): number {
     return typeof value === "number" && Number.isFinite(value)
       ? this._clampValue(value)
       : this.min;
   }
 
-  /** Write `next` to the bound cell, or to the plain property. */
-  private _write(next: number): void {
+  /**
+   * The value shown: what the bound cell holds, or the plain property. The
+   * plain property is read directly, so a move made in this tick is seen by
+   * the next one rather than after Lit's update rebinds the controller.
+   */
+  private get _current(): number {
+    return this._shown(
+      this._valueCellController.hasCell()
+        ? this._valueCellController.getValue()
+        : this.value,
+    );
+  }
+
+  /**
+   * Move the value to what `next` makes of the current one. Bound to a cell,
+   * the controller computes it from what the cell holds, asking the worker
+   * first where the cell has not been read, so a step is never taken from the
+   * placeholder shown before it answered. The move is announced as it is
+   * computed, which happens only when the cell can be written, so a refused
+   * read announces nothing. A plain value moves now.
+   */
+  private _move(next: (current: number) => number): void {
+    const target = (current: number) =>
+      this._snapToStep(this._clampValue(next(current)));
     if (this._valueCellController.hasCell()) {
-      this._valueCellController.setValue(next);
-    } else {
-      this.value = next;
+      void this._valueCellController.updateValue((held) => {
+        const oldValue = this._shown(held);
+        const value = target(oldValue);
+        // A move that leaves the shown value alone writes nothing, even to a
+        // cell holding a value out of bounds.
+        if (value === oldValue && typeof held === "number") return held;
+        this._announce(value, oldValue);
+        return value;
+      });
+      return;
     }
+    const oldValue = this._current;
+    const value = target(oldValue);
+    if (value === oldValue) return;
+    this.value = value;
+    this._announce(value, oldValue);
+  }
+
+  /** `cf-input` while dragging, and `cf-change` for every move. */
+  private _announce(value: number, oldValue: number): void {
+    if (this._isDragging) this.emit("cf-input", { value, oldValue });
+    this.emit("cf-change", { value, oldValue });
   }
 
   override firstUpdated() {
@@ -535,6 +574,7 @@ export class CFSlider extends BaseElement {
     document.removeEventListener("touchmove", this._handleTouchMove);
     document.removeEventListener("touchend", this._handleTouchEnd);
     this.classList.remove("dragging");
+    this._valueCellController.flush();
   }
 
   private _handleMouseMove = (event: MouseEvent): void => {
@@ -579,66 +619,34 @@ export class CFSlider extends BaseElement {
     percentage = Math.max(0, Math.min(100, percentage));
     const range = this.max - this.min;
     const newValue = this.min + (percentage / 100) * range;
-    const snappedValue = this._snapToStep(newValue);
-
-    if (this._current !== snappedValue) {
-      const oldValue = this._current;
-      this._write(snappedValue);
-      this.emit("cf-input", { value: snappedValue, oldValue });
-      this.emit("cf-change", { value: snappedValue, oldValue });
-    }
+    this._move(() => newValue);
   }
 
   private _handleKeyDown = (event: KeyboardEvent): void => {
     if (this.disabled) return;
 
-    let newValue = this._current;
     const bigStep = this.step * 10;
-
-    switch (event.key) {
-      case "ArrowLeft":
-      case "ArrowDown":
-        event.preventDefault();
-        newValue -= this.step;
-        break;
-      case "ArrowRight":
-      case "ArrowUp":
-        event.preventDefault();
-        newValue += this.step;
-        break;
-      case "PageDown":
-        event.preventDefault();
-        newValue -= bigStep;
-        break;
-      case "PageUp":
-        event.preventDefault();
-        newValue += bigStep;
-        break;
-      case "Home":
-        event.preventDefault();
-        newValue = this.min;
-        break;
-      case "End":
-        event.preventDefault();
-        newValue = this.max;
-        break;
-      default:
-        return;
-    }
-
-    const clampedValue = this._clampValue(newValue);
-    if (clampedValue !== this._current) {
-      const oldValue = this._current;
-      this._write(clampedValue);
-      this.emit("cf-change", { value: clampedValue, oldValue });
-    }
+    const moves: Record<string, (current: number) => number> = {
+      ArrowLeft: (current) => current - this.step,
+      ArrowDown: (current) => current - this.step,
+      ArrowRight: (current) => current + this.step,
+      ArrowUp: (current) => current + this.step,
+      PageDown: (current) => current - bigStep,
+      PageUp: (current) => current + bigStep,
+      Home: () => this.min,
+      End: () => this.max,
+    };
+    const move = moves[event.key];
+    if (move === undefined) return;
+    event.preventDefault();
+    this._move(move);
   };
 
   /**
    * Set the slider value programmatically
    */
   setValue(value: number): void {
-    this._write(this._snapToStep(this._clampValue(value)));
+    this._move(() => value);
   }
 
   /**
@@ -652,13 +660,13 @@ export class CFSlider extends BaseElement {
    * Increment the slider value by one step
    */
   increment(): void {
-    this.setValue(this._current + this.step);
+    this._move((current) => current + this.step);
   }
 
   /**
    * Decrement the slider value by one step
    */
   decrement(): void {
-    this.setValue(this._current - this.step);
+    this._move((current) => current - this.step);
   }
 }
