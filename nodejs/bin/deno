@@ -1,0 +1,101 @@
+#!/usr/bin/env node
+//
+// A stand-in for the `deno` executable, for code under Node that spawns
+// `Deno.execPath()`: the port's `Deno.execPath()` returns this file. It runs
+// the subcommands the workspace spawns, on Node:
+//
+//   deno run|eval|test ...                  hands the command line to
+//                                           `deno-as-node`, which translates
+//                                           it to a `cfnode` one
+//   deno task [flags...] <name> [args...]   runs a task from the nearest
+//                                           `deno.json(c)` that defines it,
+//                                           with this directory first on
+//                                           `PATH` so that `deno` in the
+//                                           task is this file again
+//
+// Anything else is refused with a message naming it.
+
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { readDenoConfig } from "../lib/workspace.mjs";
+
+const BIN_DIR = import.meta.dirname;
+
+function fail(message) {
+  process.stderr.write(`deno (Node stand-in): ${message}\n`);
+  process.exit(1);
+}
+
+/** Runs a command with inherited stdio and exits with its status. */
+function runAndExit(command, args, options = {}) {
+  const result = spawnSync(command, args, { stdio: "inherit", ...options });
+  if (result.error) fail(result.error.message);
+  if (result.signal) process.kill(process.pid, result.signal);
+  process.exit(result.status ?? 1);
+}
+
+
+/** The nearest config, walking up from `dir`, whose tasks define `name`. */
+function findTask(dir, name) {
+  for (let d = path.resolve(dir);; d = path.dirname(d)) {
+    const config = readDenoConfig(d)?.config;
+    const task = config?.tasks?.[name];
+    if (task !== undefined) {
+      return {
+        dir: d,
+        command: typeof task === "string" ? task : task.command,
+      };
+    }
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+function shellQuote(s) {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
+function denoTask(args) {
+  let i = 0;
+  let cwd = process.cwd();
+  for (; i < args.length && args[i].startsWith("-"); i++) {
+    if (args[i] === "--cwd") cwd = path.resolve(args[++i]);
+    else if (args[i].startsWith("--cwd=")) cwd = path.resolve(args[i].slice(6));
+  }
+  const name = args[i];
+  if (name === undefined) fail("`task` needs a task name");
+  const task = findTask(cwd, name);
+  if (task === null) fail(`no task named "${name}"`);
+  const extra = args.slice(i + 1).map(shellQuote).join(" ");
+  runAndExit("/bin/sh", ["-c", `${task.command} ${extra}`], {
+    cwd: task.dir,
+    env: {
+      ...process.env,
+      INIT_CWD: process.env.INIT_CWD ?? process.cwd(),
+      PATH: `${BIN_DIR}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+}
+
+const [subcommand, ...rest] = process.argv.slice(2);
+switch (subcommand) {
+  case "run":
+  case "eval":
+  case "test":
+    // `deno-as-node` translates these command lines flag by flag
+    // (`--v8-flags`, `--preload`, and the flags Node has no use for).
+    runAndExit(path.join(BIN_DIR, "deno-as-node"), [subcommand, ...rest]);
+    break;
+  case "task":
+    denoTask(rest);
+    break;
+  case "--version":
+  case "-V":
+    console.log(`deno (Node stand-in) node ${process.version}`);
+    break;
+  default:
+    if (subcommand !== undefined && fs.existsSync(subcommand)) {
+      runAndExit(path.join(BIN_DIR, "deno-as-node"), ["run", subcommand, ...rest]);
+    }
+    fail(`unsupported subcommand: ${subcommand ?? "(none)"}`);
+}

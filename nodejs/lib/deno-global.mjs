@@ -9,8 +9,8 @@ import * as nodeTest from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as util from "node:util";
 import { Deno as shim } from "@deno/shim-deno";
-import { attachWebSocketUpgrade, upgradeWebSocket } from "./deno-websocket.mjs";
 import { bindTcpSync } from "./tcp-bind.mjs";
+import { serveUpgrades, upgradeWebSocket } from "./websocket-upgrade.mjs";
 
 // ---------------------------------------------------------------------------
 // Deno.test
@@ -162,9 +162,7 @@ class ChildProcess {
  * The stand-in for the `deno` executable: `Deno.execPath()` names it, and a
  * `Deno.Command` for `deno` runs it.
  */
-const DENO_AS_NODE = fileURLToPath(
-  new URL("../bin/deno-as-node", import.meta.url),
-);
+const DENO_AS_NODE = fileURLToPath(new URL("../bin/deno", import.meta.url));
 
 class Command {
   #command;
@@ -257,7 +255,7 @@ async function writeResponse(res, response) {
   }
   const cookies = response.headers.getSetCookie?.() ?? [];
   if (cookies.length > 0) headers["set-cookie"] = cookies;
-  res.writeHead(response.status, response.statusText, headers);
+  res.writeHead(response.status, response.statusText || undefined, headers);
   if (response.body) {
     for await (const chunk of response.body) res.write(chunk);
   }
@@ -300,14 +298,11 @@ function serve(...args) {
     }
   });
 
-  attachWebSocketUpgrade(server, toRequest, handler, (req) => ({
-    remoteAddr: {
-      transport: "tcp",
-      hostname: req.socket.remoteAddress,
-      port: req.socket.remotePort,
-    },
-    completed: new Promise((resolve) => req.socket.on("close", resolve)),
-  }));
+  serveUpgrades(
+    server,
+    (req) => toRequest(req, new AbortController()),
+    handler,
+  );
 
   let resolveFinished;
   const finished = new Promise((resolve) => (resolveFinished = resolve));
